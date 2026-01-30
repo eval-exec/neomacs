@@ -33,6 +33,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "termhooks.h"
 #include "coding.h"
 #include "font.h"
+#include "dispextern.h"
 
 /* GTK4 objects for each frame */
 struct neomacs_frame_data
@@ -865,6 +866,25 @@ If the parameters specify a display, that display is used.  */)
   gui_default_parameter (f, parms, Qbackground_color, build_string ("white"),
 			 "background", "Background", RES_TYPE_STRING);
 
+  /* Initialize faces - MUST be done before adjust_frame_size */
+  init_frame_faces (f);
+
+  /* Process min-width and min-height parameters before adjust_frame_size */
+  tem = gui_display_get_arg (dpyinfo, parms, Qmin_width, NULL, NULL,
+			     RES_TYPE_NUMBER);
+  if (FIXNUMP (tem))
+    store_frame_param (f, Qmin_width, tem);
+  tem = gui_display_get_arg (dpyinfo, parms, Qmin_height, NULL, NULL,
+			     RES_TYPE_NUMBER);
+  if (FIXNUMP (tem))
+    store_frame_param (f, Qmin_height, tem);
+
+  /* Call adjust_frame_size - this initializes glyph matrices.
+     CRITICAL: This sets glyphs_initialized_p which is required for redisplay! */
+  adjust_frame_size (f, FRAME_COLS (f) * FRAME_COLUMN_WIDTH (f),
+		     FRAME_LINES (f) * FRAME_LINE_HEIGHT (f), 5, true,
+		     Qx_create_frame_1);
+
   /* Initialize cursor */
   FRAME_NEOMACS_OUTPUT (f)->cursor_pixel = dpyinfo->black_pixel;
   FRAME_NEOMACS_OUTPUT (f)->cursor_foreground_pixel = dpyinfo->white_pixel;
@@ -876,6 +896,10 @@ If the parameters specify a display, that display is used.  */)
   block_input ();
   neomacs_create_frame_widgets (f);
   unblock_input ();
+
+  /* Make the frame visible */
+  gui_default_parameter (f, parms, Qvisibility, Qt,
+			 "visibility", "Visibility", RES_TYPE_SYMBOL);
 
   return unbind_to (count, frame);
 }
