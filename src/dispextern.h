@@ -156,6 +156,16 @@ typedef Emacs_Pixmap XImagePtr;
 typedef XImagePtr XImagePtr_or_DC;
 #endif /* HAVE_PGTK */
 
+#ifdef HAVE_NEOMACS
+#include "neomacsgui.h"
+/* Following typedef needed to accommodate the MSDOS port, believe it or not.  */
+typedef struct neomacs_display_info Display_Info;
+typedef Emacs_Pixmap XImagePtr;
+typedef XImagePtr XImagePtr_or_DC;
+typedef Emacs_Pixmap Emacs_Pix_Container;
+typedef Emacs_Pixmap Emacs_Pix_Context;
+#endif /* HAVE_NEOMACS */
+
 #ifdef HAVE_HAIKU
 #include "haikugui.h"
 typedef struct haiku_display_info Display_Info;

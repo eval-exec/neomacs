@@ -27459,6 +27459,10 @@ display_menu_bar (struct window *w)
   if (FRAME_PGTK_P (f))
     return;
 #endif
+#if defined (HAVE_NEOMACS)
+  if (FRAME_NEOMACS_P (f))
+    return;
+#endif
 
 #if defined (USE_X_TOOLKIT) || defined (USE_GTK)
   if (FRAME_X_P (f))

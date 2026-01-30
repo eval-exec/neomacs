@@ -38,6 +38,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "androidterm.h"
 #endif
 
+#ifdef HAVE_NEOMACS
+#include "neomacsterm.h"
+#endif
+
 #if defined HAVE_ANDROID && !defined ANDROID_STUBIFY
 #include "sfntfont.h"
 #endif
@@ -2428,6 +2432,10 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
       syms_of_fontset ();
       syms_of_xsettings ();
 #endif /* HAVE_PGTK */
+#ifdef HAVE_NEOMACS
+      syms_of_neomacsterm ();
+      syms_of_fontset ();
+#endif /* HAVE_NEOMACS */
 #ifdef HAVE_HAIKU
       syms_of_haikuterm ();
       syms_of_haikufns ();

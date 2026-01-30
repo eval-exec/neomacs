@@ -3940,12 +3940,13 @@ struct frame;
 
 /* Define if the windowing system provides a menu bar.  */
 #if defined (USE_X_TOOLKIT) || defined (HAVE_NTGUI) \
-  || defined (HAVE_NS) || defined (USE_GTK) || defined (HAVE_HAIKU)
+  || defined (HAVE_NS) || defined (USE_GTK) || defined (HAVE_HAIKU) \
+  || defined (HAVE_NEOMACS)
 #define HAVE_EXT_MENU_BAR true
 #endif
 
 /* Define if the windowing system provides a tool-bar.  */
-#if defined (USE_GTK) || defined (HAVE_NS)
+#if defined (USE_GTK) || defined (HAVE_NS) || defined (HAVE_NEOMACS)
 #define HAVE_EXT_TOOL_BAR true
 #endif
 

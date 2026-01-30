@@ -572,6 +572,7 @@ AC_ARG_WITH([ns],[AS_HELP_STRING([--with-ns],
 On by default on macOS.])],[],[with_ns=maybe])
 OPTION_DEFAULT_OFF([w32], [use native MS Windows GUI in a Cygwin build])
 OPTION_DEFAULT_OFF([pgtk], [use GTK to support window systems other than X])
+OPTION_DEFAULT_OFF([neomacs], [use Neomacs GPU-accelerated display engine with GTK4])
 
 OPTION_DEFAULT_ON([gpm],[don't use -lgpm for mouse support on a GNU/Linux console])
 OPTION_DEFAULT_IFAVAILABLE([dbus],[compile with D-Bus support])
@@ -2697,13 +2698,17 @@ AS_IF([test x"$REALLY_ANDROID" = "xyes"],
     [AC_DEFINE([USER_FULL_NAME], [pw->pw_gecos])],
     [AC_DEFINE([USER_FULL_NAME], [NULL])])])
 
+if test "${with_neomacs}" = "yes"; then
+  window_system=neomacs
+fi
+
 if test "${with_pgtk}" = "yes"; then
   window_system=pgtk
 fi
 
 if test "${ANDROID}" != "yes"; then
   AC_PATH_X
-  if test "$no_x" != yes && test "${with_pgtk}" != "yes"; then
+  if test "$no_x" != yes && test "${with_pgtk}" != "yes" && test "${with_neomacs}" != "yes"; then
     window_system=x11
   fi
 fi
@@ -3201,6 +3206,12 @@ dnl use the toolkit if we have gtk, or X11R5 or newer.
     HAVE_PGTK=yes
     AC_DEFINE([HAVE_PGTK], [1], [Define to 1 if you have pure Gtk+-3.])
   ;;
+  neomacs )
+    term_header=neomacsterm.h
+    USE_X_TOOLKIT=none
+    HAVE_NEOMACS=yes
+    AC_DEFINE([HAVE_NEOMACS], [1], [Define to 1 if using Neomacs GPU display engine.])
+  ;;
   haiku )
     term_header=haikuterm.h
   ;;
@@ -3210,6 +3221,7 @@ dnl use the toolkit if we have gtk, or X11R5 or newer.
 esac
 
 AC_SUBST([HAVE_PGTK])
+AC_SUBST([HAVE_NEOMACS])
 
 if test "$window_system" = none && test "X$with_x" != "Xno"; then
    AC_CHECK_PROG([HAVE_XSERVER], [X], [true], [false])
@@ -3906,6 +3918,34 @@ if test "$window_system" = "pgtk"; then
 fi
 AC_SUBST([PGTK_OBJ])
 AC_SUBST([PGTK_LIBS])
+
+NEOMACS_OBJ=
+NEOMACS_LIBS=
+NEOMACS_CFLAGS=
+if test "$window_system" = "neomacs"; then
+  NEOMACS_OBJ="neomacsterm.o"
+  dnl Check for the Rust library
+  NEOMACS_RUST_LIB_DIR="${srcdir}/rust/neomacs-display/target/release"
+  if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.a"; then
+    NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display"
+  else
+    dnl Try debug build
+    NEOMACS_RUST_LIB_DIR="${srcdir}/rust/neomacs-display/target/debug"
+    if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.a"; then
+      NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display"
+    else
+      AC_MSG_ERROR([Neomacs display library not found. Build it with: cd rust/neomacs-display && cargo build --release])
+    fi
+  fi
+  dnl Link GTK4 and GStreamer
+  PKG_CHECK_MODULES([GTK4], [gtk4], [], [AC_MSG_ERROR([GTK4 required for Neomacs])])
+  PKG_CHECK_MODULES([GSTREAMER], [gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0], [], [AC_MSG_ERROR([GStreamer required for Neomacs])])
+  NEOMACS_CFLAGS="$GTK4_CFLAGS $GSTREAMER_CFLAGS"
+  NEOMACS_LIBS="$NEOMACS_LIBS $GTK4_LIBS $GSTREAMER_LIBS -lpthread -lm -ldl"
+fi
+AC_SUBST([NEOMACS_OBJ])
+AC_SUBST([NEOMACS_LIBS])
+AC_SUBST([NEOMACS_CFLAGS])
 
 AC_CHECK_FUNCS([malloc_trim])
 
@@ -4682,6 +4722,16 @@ else # "${HAVE_X11}" != "yes"
 	fi
       fi
     fi
+  elif test $window_system = neomacs; then
+    dnl Neomacs uses Rust/Pango for font rendering but needs fontconfig for font discovery
+    EMACS_CHECK_MODULES([FONTCONFIG], [fontconfig >= 2.2.0])
+    EMACS_CHECK_MODULES([FREETYPE], [freetype2])
+    if test "$HAVE_FONTCONFIG" != yes -o "$HAVE_FREETYPE" != yes; then
+      AC_MSG_ERROR([fontconfig and freetype is required for Neomacs.])
+    fi
+    HAVE_LIBOTF=no
+    AC_DEFINE([HAVE_FREETYPE], [1],
+	      [Define to 1 if using the freetype and fontconfig libraries.])
   else
     HAVE_XFT=no
     HAVE_FREETYPE=no
@@ -7213,6 +7263,10 @@ if test "${HAVE_X_WINDOWS}" = "yes" ; then
 fi
 
 if test "${window_system}" = "pgtk"; then
+   FONT_OBJ="ftfont.o ftcrfont.o"
+fi
+
+if test "${window_system}" = "neomacs"; then
    FONT_OBJ="ftfont.o ftcrfont.o"
 fi
 
