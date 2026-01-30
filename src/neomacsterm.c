@@ -41,6 +41,7 @@ static struct redisplay_interface neomacs_redisplay_interface;
 
 /* Prototypes for internal functions */
 static void neomacs_initialize_display_info (struct neomacs_display_info *);
+static const char *neomacs_get_string_resource (void *, const char *, const char *);
 
 
 /* ============================================================================
@@ -147,11 +148,19 @@ neomacs_create_terminal (struct neomacs_display_info *dpyinfo)
 
   terminal->name = xstrdup ("neomacs");
 
+  /* Set up keyboard for this terminal */
+  terminal->kboard = allocate_kboard (Qneomacs);
+  /* Don't let the initial kboard remain current longer than necessary. */
+  if (current_kboard == initial_kboard)
+    current_kboard = terminal->kboard;
+  terminal->kboard->reference_count++;
+
   /* Set up terminal hooks */
   terminal->delete_terminal_hook = neomacs_delete_terminal;
   terminal->update_begin_hook = neomacs_update_begin;
   terminal->update_end_hook = neomacs_update_end;
   terminal->defined_color_hook = neomacs_defined_color;
+  terminal->get_string_resource_hook = neomacs_get_string_resource;
 
   /* More hooks would be set up here... */
 
@@ -188,6 +197,14 @@ void
 neomacs_flush_display (struct frame *f)
 {
   /* The Rust backend handles flushing internally */
+}
+
+/* Get a string resource value (for X resources / defaults) */
+static const char *
+neomacs_get_string_resource (void *rdb, const char *name, const char *class)
+{
+  /* Neomacs doesn't support X resources, return NULL */
+  return NULL;
 }
 
 
@@ -623,6 +640,40 @@ syms_of_neomacsterm (void)
   defsubr (&Sx_display_grayscale_p);
 
   DEFSYM (Qneomacs, "neomacs");
+
+  /* Required variables for cus-start */
+  DEFVAR_BOOL ("x-use-underline-position-properties",
+	       x_use_underline_position_properties,
+     doc: /* SKIP: real doc in xterm.c.  */);
+  x_use_underline_position_properties = 1;
+
+  DEFVAR_BOOL ("x-underline-at-descent-line",
+	       x_underline_at_descent_line,
+     doc: /* SKIP: real doc in xterm.c.  */);
+  x_underline_at_descent_line = 0;
+
+  DEFVAR_LISP ("x-toolkit-scroll-bars", Vx_toolkit_scroll_bars,
+     doc: /* SKIP: real doc in xterm.c.  */);
+  Vx_toolkit_scroll_bars = intern_c_string ("gtk");
+
+  DEFVAR_LISP ("x-ctrl-keysym", Vx_ctrl_keysym,
+	       doc: /* SKIP: real doc in xterm.c.  */);
+  Vx_ctrl_keysym = Qnil;
+  DEFVAR_LISP ("x-alt-keysym", Vx_alt_keysym,
+	       doc: /* SKIP: real doc in xterm.c.  */);
+  Vx_alt_keysym = Qnil;
+  DEFVAR_LISP ("x-hyper-keysym", Vx_hyper_keysym,
+	       doc: /* SKIP: real doc in xterm.c.  */);
+  Vx_hyper_keysym = Qnil;
+  DEFVAR_LISP ("x-meta-keysym", Vx_meta_keysym,
+	       doc: /* SKIP: real doc in xterm.c.  */);
+  Vx_meta_keysym = Qnil;
+  DEFVAR_LISP ("x-super-keysym", Vx_super_keysym,
+	       doc: /* SKIP: real doc in xterm.c.  */);
+  Vx_super_keysym = Qnil;
+
+  /* Tell Emacs about this window system */
+  Fprovide (Qneomacs, Qnil);
 }
 
 #endif /* HAVE_NEOMACS */

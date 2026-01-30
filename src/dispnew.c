@@ -7306,6 +7306,14 @@ init_display_interactive (void)
     }
 #endif
 
+#ifdef HAVE_NEOMACS
+  if (!inhibit_window_system && !will_dump_p ())
+    {
+      Vinitial_window_system = Qneomacs;
+      return;
+    }
+#endif
+
 #ifdef HAVE_HAIKU
   if (!inhibit_window_system && !will_dump_p ())
     {

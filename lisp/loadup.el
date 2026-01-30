@@ -364,6 +364,10 @@
       (load "touch-screen")
       (load "term/common-win")
       (load "term/pgtk-win")))
+(if (featurep 'neomacs)
+    (progn
+      (load "term/common-win")
+      (load "term/neomacs-win")))
 (if (fboundp 'x-create-frame)
     ;; Do it after loading term/foo-win.el since the value of the
     ;; mouse-wheel-*-event vars depends on those files being loaded or not.

@@ -50,6 +50,12 @@ pub unsafe extern "C" fn neomacs_display_init(backend: BackendType) -> *mut Neom
     // Create the backend
     match backend {
         BackendType::Gtk4 => {
+            // Initialize GTK4 library first
+            if let Err(e) = gtk4::init() {
+                eprintln!("Failed to initialize GTK4: {}", e);
+                return ptr::null_mut();
+            }
+            
             let mut gtk4 = Gtk4Backend::new();
             if let Err(e) = gtk4.init() {
                 eprintln!("Failed to initialize GTK4 backend: {}", e);

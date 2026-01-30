@@ -292,8 +292,14 @@ extern cairo_t *neomacs_begin_cr_clip (struct frame *f);
 extern void neomacs_end_cr_clip (struct frame *f);
 extern void neomacs_set_cr_source_with_color (struct frame *f, unsigned long color, bool check_alpha);
 
+/* Display and terminal */
+extern struct neomacs_display_info *neomacs_open_display (const char *);
+extern struct terminal *neomacs_create_terminal (struct neomacs_display_info *);
+extern void neomacs_delete_terminal (struct terminal *);
+
 /* Lisp symbols */
 extern void syms_of_neomacsterm (void);
+extern void syms_of_neomacsfns (void);
 
 /* Toolbar support */
 extern void update_frame_tool_bar (struct frame *f);

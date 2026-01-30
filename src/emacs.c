@@ -193,7 +193,7 @@ bool inhibit_window_system;
    data on the first attempt to change it inside asynchronous code.  */
 bool running_asynch_code;
 
-#if defined (HAVE_X_WINDOWS) || defined (HAVE_PGTK) || defined (HAVE_NS)
+#if defined (HAVE_X_WINDOWS) || defined (HAVE_PGTK) || defined (HAVE_NS) || defined (HAVE_NEOMACS)
 /* If true, -d was specified, meaning we're using some window system.  */
 bool display_arg;
 #endif
@@ -2090,7 +2090,7 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
   {
     int count_before = skip_args;
 
-#if defined (HAVE_X_WINDOWS) || defined (HAVE_PGTK)
+#if defined (HAVE_X_WINDOWS) || defined (HAVE_PGTK) || defined (HAVE_NEOMACS)
     char *displayname = 0;
 
     /* Skip any number of -d options, but only use the last one.  */
@@ -2122,7 +2122,7 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 	  }
 	argv[count_before + 1] = (char *) "-d";
       }
-#endif	/* HAVE_X_WINDOWS */
+#endif	/* HAVE_X_WINDOWS || HAVE_PGTK || HAVE_NEOMACS */
 
     if (! no_site_lisp)
       {
@@ -2434,6 +2434,7 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif /* HAVE_PGTK */
 #ifdef HAVE_NEOMACS
       syms_of_neomacsterm ();
+      syms_of_neomacsfns ();
       syms_of_fontset ();
 #endif /* HAVE_NEOMACS */
 #ifdef HAVE_HAIKU

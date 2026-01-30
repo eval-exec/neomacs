@@ -3923,7 +3923,7 @@ NEOMACS_OBJ=
 NEOMACS_LIBS=
 NEOMACS_CFLAGS=
 if test "$window_system" = "neomacs"; then
-  NEOMACS_OBJ="neomacsterm.o"
+  NEOMACS_OBJ="neomacsterm.o neomacsfns.o"
   dnl Check for the Rust library - use absolute path
   NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/release"
   if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.a"; then
