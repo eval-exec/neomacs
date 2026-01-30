@@ -14,6 +14,7 @@ use crate::core::glyph::{Glyph, GlyphRow, GlyphType, GlyphData};
 use crate::core::face::{Face, FaceCache};
 use crate::core::types::{Color, Rect};
 use super::image::ImageCache;
+use super::video::VideoCache;
 
 /// Renderer that converts our scene graph to Cairo drawing commands.
 pub struct Gtk4Renderer {
@@ -28,6 +29,9 @@ pub struct Gtk4Renderer {
     
     /// Image cache
     image_cache: ImageCache,
+    
+    /// Video cache
+    video_cache: VideoCache,
 }
 
 impl Default for Gtk4Renderer {
@@ -43,6 +47,7 @@ impl Gtk4Renderer {
             face_cache: FaceCache::new(),
             layout_cache: HashMap::new(),
             image_cache: ImageCache::new(),
+            video_cache: VideoCache::new(),
         }
     }
     
@@ -281,6 +286,28 @@ impl Gtk4Renderer {
                         self.render_image(cr, image_id, x as f32, y as f32, glyph.pixel_width, glyph.height());
                     }
                 }
+                GlyphType::Video => {
+                    // Flush any pending text
+                    if !text_buffer.is_empty() {
+                        self.render_text_run(
+                            cr,
+                            context,
+                            &text_buffer,
+                            text_start_x,
+                            baseline_y,
+                            current_face_id.unwrap_or(0),
+                        );
+                        text_buffer.clear();
+                        current_face_id = None;
+                    }
+                    // Render video
+                    if let GlyphData::Video { video_id } = glyph.data {
+                        #[cfg(feature = "video")]
+                        self.render_video(cr, video_id, x as f32, y as f32, glyph.pixel_width, glyph.height());
+                        #[cfg(not(feature = "video"))]
+                        self.render_video_placeholder(cr, x as f32, y as f32, glyph.pixel_width, glyph.height());
+                    }
+                }
                 _ => {
                     // Flush text for other glyph types
                     if !text_buffer.is_empty() {
@@ -429,6 +456,60 @@ impl Gtk4Renderer {
         cr.stroke().ok();
     }
     
+    /// Render a video glyph
+    #[cfg(feature = "video")]
+    fn render_video(&self, cr: &cairo::Context, video_id: u32, x: f32, y: f32, width: i32, height: i32) {
+        if let Some(player) = self.video_cache.get(video_id) {
+            if let Some(surface) = player.get_frame() {
+                cr.save().ok();
+                
+                // Scale video to fit glyph dimensions
+                let scale_x = width as f64 / surface.width() as f64;
+                let scale_y = height as f64 / surface.height() as f64;
+                
+                cr.translate(x as f64, y as f64);
+                cr.scale(scale_x, scale_y);
+                
+                cr.set_source_surface(&surface, 0.0, 0.0).ok();
+                cr.paint().ok();
+                
+                cr.restore().ok();
+            } else {
+                // No frame available yet, show placeholder
+                self.render_video_placeholder(cr, x, y, width, height);
+            }
+        } else {
+            // Video not loaded, show placeholder
+            self.render_video_placeholder(cr, x, y, width, height);
+        }
+    }
+    
+    /// Render placeholder for video (when no frame available)
+    fn render_video_placeholder(&self, cr: &cairo::Context, x: f32, y: f32, width: i32, height: i32) {
+        // Dark box with play symbol
+        cr.set_source_rgba(0.1, 0.1, 0.1, 1.0);
+        cr.rectangle(x as f64, y as f64, width as f64, height as f64);
+        cr.fill().ok();
+
+        // Draw border
+        cr.set_source_rgba(0.3, 0.3, 0.3, 1.0);
+        cr.set_line_width(1.0);
+        cr.rectangle(x as f64 + 0.5, y as f64 + 0.5, (width - 1) as f64, (height - 1) as f64);
+        cr.stroke().ok();
+
+        // Draw play triangle in center
+        let cx = x as f64 + width as f64 / 2.0;
+        let cy = y as f64 + height as f64 / 2.0;
+        let size = (width.min(height) as f64 * 0.3).min(30.0);
+        
+        cr.set_source_rgba(0.5, 0.5, 0.5, 1.0);
+        cr.move_to(cx - size / 2.0, cy - size / 2.0);
+        cr.line_to(cx + size / 2.0, cy);
+        cr.line_to(cx - size / 2.0, cy + size / 2.0);
+        cr.close_path();
+        cr.fill().ok();
+    }
+    
     /// Get mutable access to image cache
     pub fn image_cache_mut(&mut self) -> &mut ImageCache {
         &mut self.image_cache
@@ -437,6 +518,21 @@ impl Gtk4Renderer {
     /// Get image cache
     pub fn image_cache(&self) -> &ImageCache {
         &self.image_cache
+    }
+    
+    /// Get mutable access to video cache
+    pub fn video_cache_mut(&mut self) -> &mut VideoCache {
+        &mut self.video_cache
+    }
+    
+    /// Get video cache
+    pub fn video_cache(&self) -> &VideoCache {
+        &self.video_cache
+    }
+    
+    /// Update all video players (call periodically)
+    pub fn update_videos(&mut self) {
+        self.video_cache.update_all();
     }
 }
 

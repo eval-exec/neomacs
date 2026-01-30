@@ -343,6 +343,141 @@ pub unsafe extern "C" fn neomacs_display_end_row(handle: *mut NeomacsDisplay) {
     let _ = handle;
 }
 
+// ============================================================================
+// Image Management
+// ============================================================================
+
+/// Load an image from file path
+/// Returns image_id on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_load_image(
+    handle: *mut NeomacsDisplay,
+    path: *const c_char,
+) -> u32 {
+    if handle.is_null() || path.is_null() {
+        return 0;
+    }
+
+    let display = &mut *handle;
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    // Access image cache through backend
+    if let Some(backend) = display.gtk4_backend.as_mut() {
+        // This would need to be implemented on the backend
+        // For now return 0
+    }
+    
+    0
+}
+
+/// Add a video glyph to the current row
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_add_video_glyph(
+    handle: *mut NeomacsDisplay,
+    video_id: u32,
+    pixel_width: c_int,
+    pixel_height: c_int,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let display = &mut *handle;
+    
+    if let Some(window) = display.scene.windows.last_mut() {
+        if let Some(row) = window.rows.last_mut() {
+            let glyph = Glyph {
+                glyph_type: GlyphType::Video,
+                charcode: 0,
+                face_id: 0,
+                pixel_width,
+                ascent: pixel_height,
+                descent: 0,
+                charpos: 0,
+                left_box_line: false,
+                right_box_line: false,
+                padding: false,
+                data: GlyphData::Video { video_id },
+            };
+            row.glyphs.push(glyph);
+        }
+    }
+}
+
+/// Load a video from URI
+/// Returns video_id on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_load_video(
+    handle: *mut NeomacsDisplay,
+    uri: *const c_char,
+) -> u32 {
+    if handle.is_null() || uri.is_null() {
+        return 0;
+    }
+
+    let _display = &mut *handle;
+    let _uri_str = match CStr::from_ptr(uri).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    // Video loading would need backend access
+    // For now return 0
+    0
+}
+
+/// Play a loaded video
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_video_play(
+    handle: *mut NeomacsDisplay,
+    video_id: u32,
+) -> c_int {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let _display = &mut *handle;
+    let _ = video_id;
+    
+    // Would need backend access
+    0
+}
+
+/// Pause a video
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_video_pause(
+    handle: *mut NeomacsDisplay,
+    video_id: u32,
+) -> c_int {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let _display = &mut *handle;
+    let _ = video_id;
+    
+    0
+}
+
+/// Stop a video
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_video_stop(
+    handle: *mut NeomacsDisplay,
+    video_id: u32,
+) -> c_int {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let _display = &mut *handle;
+    let _ = video_id;
+    
+    0
+}
+
 /// End frame and render
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_end_frame(handle: *mut NeomacsDisplay) -> c_int {
