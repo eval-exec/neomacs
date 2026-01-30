@@ -32,12 +32,46 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "termchar.h"
 #include "font.h"
 #include "pdumper.h"
+#include "fontset.h"
 
 /* List of Neomacs display info structures */
 struct neomacs_display_info *neomacs_display_list = NULL;
 
-/* The redisplay interface for Neomacs frames */
-static struct redisplay_interface neomacs_redisplay_interface;
+/* Forward declarations */
+extern frame_parm_handler neomacs_frame_parm_handlers[];
+
+/* The redisplay interface for Neomacs frames - statically initialized.
+   All function pointers are declared extern in neomacsterm.h */
+static struct redisplay_interface neomacs_redisplay_interface = {
+  .frame_parm_handlers = neomacs_frame_parm_handlers,
+  .produce_glyphs = gui_produce_glyphs,
+  .write_glyphs = gui_write_glyphs,
+  .insert_glyphs = gui_insert_glyphs,
+  .clear_end_of_line = gui_clear_end_of_line,
+  .scroll_run_hook = neomacs_scroll_run,
+  .after_update_window_line_hook = NULL,
+  .update_window_begin_hook = NULL,
+  .update_window_end_hook = NULL,
+  .flush_display = neomacs_flush_display,
+  .clear_window_mouse_face = gui_clear_window_mouse_face,
+  .get_glyph_overhangs = gui_get_glyph_overhangs,
+  .fix_overlapping_area = gui_fix_overlapping_area,
+  .draw_fringe_bitmap = neomacs_draw_fringe_bitmap,
+  .define_fringe_bitmap = NULL,
+  .destroy_fringe_bitmap = NULL,
+  .compute_glyph_string_overhangs = NULL,
+  .draw_glyph_string = neomacs_draw_glyph_string,
+  .define_frame_cursor = NULL,
+  .clear_frame_area = neomacs_clear_frame_area,
+  .clear_under_internal_border = NULL,
+  .draw_window_cursor = neomacs_draw_window_cursor,
+  .draw_vertical_window_border = NULL,
+  .draw_window_divider = NULL,
+  .shift_glyphs_for_insert = NULL,
+  .show_hourglass = NULL,
+  .hide_hourglass = NULL,
+  .default_font_parameter = NULL,
+};
 
 /* Prototypes for internal functions */
 static void neomacs_initialize_display_info (struct neomacs_display_info *);
@@ -161,6 +195,7 @@ neomacs_create_terminal (struct neomacs_display_info *dpyinfo)
   terminal->update_end_hook = neomacs_update_end;
   terminal->defined_color_hook = neomacs_defined_color;
   terminal->get_string_resource_hook = neomacs_get_string_resource;
+  terminal->set_new_font_hook = neomacs_new_font;
 
   /* More hooks would be set up here... */
 
@@ -475,39 +510,78 @@ neomacs_set_cr_source_with_color (struct frame *f, unsigned long color,
 
 
 /* ============================================================================
- * Redisplay Interface
+ * Font Handling
  * ============================================================================ */
 
-/* Initialize the redisplay interface */
-static void
-neomacs_setup_redisplay_interface (void)
+/* Set a new font for frame F.  This is called when a frame's font
+   parameter is changed.  */
+Lisp_Object
+neomacs_new_font (struct frame *f, Lisp_Object font_object, int fontset)
 {
-  neomacs_redisplay_interface.produce_glyphs = NULL;  /* Use default */
-  neomacs_redisplay_interface.write_glyphs = NULL;    /* Use default */
-  neomacs_redisplay_interface.insert_glyphs = NULL;   /* Use default */
-  neomacs_redisplay_interface.clear_end_of_line = NULL;
-  neomacs_redisplay_interface.scroll_run_hook = neomacs_scroll_run;
-  neomacs_redisplay_interface.after_update_window_line_hook = NULL;
-  neomacs_redisplay_interface.update_window_begin_hook = NULL;
-  neomacs_redisplay_interface.update_window_end_hook = NULL;
-  neomacs_redisplay_interface.flush_display = neomacs_flush_display;
-  neomacs_redisplay_interface.clear_window_mouse_face = NULL;
-  neomacs_redisplay_interface.get_glyph_overhangs = NULL;
-  neomacs_redisplay_interface.fix_overlapping_area = NULL;
-  neomacs_redisplay_interface.draw_fringe_bitmap = neomacs_draw_fringe_bitmap;
-  neomacs_redisplay_interface.define_fringe_bitmap = NULL;
-  neomacs_redisplay_interface.destroy_fringe_bitmap = NULL;
-  neomacs_redisplay_interface.compute_glyph_string_overhangs = NULL;
-  neomacs_redisplay_interface.draw_glyph_string = neomacs_draw_glyph_string;
-  neomacs_redisplay_interface.clear_frame_area = neomacs_clear_frame_area;
-  neomacs_redisplay_interface.clear_under_internal_border = NULL;
-  neomacs_redisplay_interface.draw_window_cursor = neomacs_draw_window_cursor;
-  neomacs_redisplay_interface.draw_vertical_window_border = NULL;
-  neomacs_redisplay_interface.draw_window_divider = NULL;
-  neomacs_redisplay_interface.shift_glyphs_for_insert = NULL;
-  neomacs_redisplay_interface.show_hourglass = NULL;
-  neomacs_redisplay_interface.hide_hourglass = NULL;
+  struct font *font = XFONT_OBJECT (font_object);
+  int font_ascent, font_descent;
+
+  if (fontset < 0)
+    fontset = fontset_from_font (font_object);
+  FRAME_FONTSET (f) = fontset;
+
+  if (FRAME_FONT (f) == font)
+    {
+      /* This font is already set in frame F.  There's nothing more to do.  */
+      return font_object;
+    }
+
+  FRAME_FONT (f) = font;
+
+  FRAME_BASELINE_OFFSET (f) = font->baseline_offset;
+  FRAME_COLUMN_WIDTH (f) = font->average_width;
+  get_font_ascent_descent (font, &font_ascent, &font_descent);
+  FRAME_LINE_HEIGHT (f) = font_ascent + font_descent;
+
+  /* We could use a more elaborate calculation here.  */
+  FRAME_TAB_BAR_HEIGHT (f) = FRAME_TAB_BAR_LINES (f) * FRAME_LINE_HEIGHT (f);
+
+  /* Compute the scroll bar width in character columns.  */
+  if (FRAME_CONFIG_SCROLL_BAR_WIDTH (f) > 0)
+    {
+      int wid = FRAME_COLUMN_WIDTH (f);
+      FRAME_CONFIG_SCROLL_BAR_COLS (f)
+	= (FRAME_CONFIG_SCROLL_BAR_WIDTH (f) + wid - 1) / wid;
+    }
+  else
+    {
+      int wid = FRAME_COLUMN_WIDTH (f);
+      FRAME_CONFIG_SCROLL_BAR_COLS (f) = (14 + wid - 1) / wid;
+    }
+
+  /* Compute the scroll bar height in character lines.  */
+  if (FRAME_CONFIG_SCROLL_BAR_HEIGHT (f) > 0)
+    {
+      int height = FRAME_LINE_HEIGHT (f);
+      FRAME_CONFIG_SCROLL_BAR_LINES (f)
+	= (FRAME_CONFIG_SCROLL_BAR_HEIGHT (f) + height - 1) / height;
+    }
+  else
+    {
+      int height = FRAME_LINE_HEIGHT (f);
+      FRAME_CONFIG_SCROLL_BAR_LINES (f) = (14 + height - 1) / height;
+    }
+
+  /* Invalidate face cache since fonts changed.  */
+  if (FRAME_FACE_CACHE (f))
+    {
+      struct face_cache *c = FRAME_FACE_CACHE (f);
+      if (c)
+	c->used = 0;
+    }
+
+  return font_object;
 }
+
+
+/* ============================================================================
+ * Redisplay Interface
+ * ============================================================================ */
 
 
 /* ============================================================================
@@ -624,14 +698,32 @@ free_frame_tool_bar (struct frame *f)
 
 
 /* ============================================================================
+ * Menu Bar Support
+ * ============================================================================ */
+
+/* Update the menu bar for frame F.  Currently a stub.  */
+void
+set_frame_menubar (struct frame *f, bool deep_p)
+{
+  /* TODO: Implement menu bar via Rust/GTK4 */
+}
+
+/* Free the menu bar resources for frame F.  Currently a stub.  */
+void
+free_frame_menubar (struct frame *f)
+{
+  /* TODO: Implement menu bar cleanup */
+}
+
+
+/* ============================================================================
  * Initialization
  * ============================================================================ */
 
 void
 syms_of_neomacsterm (void)
 {
-  /* Set up redisplay interface */
-  neomacs_setup_redisplay_interface ();
+  /* Redisplay interface is now statically initialized */
 
   defsubr (&Sneomacs_available_p);
   defsubr (&Sneomacs_display_list);

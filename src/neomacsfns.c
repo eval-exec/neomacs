@@ -46,7 +46,289 @@ struct neomacs_frame_data
 /* Forward declarations */
 static void neomacs_set_title (struct frame *f);
 static struct neomacs_display_info *check_neomacs_display_info (Lisp_Object);
+static int x_decode_color (struct frame *f, Lisp_Object color_name, int mono_color);
 
+/* ============================================================================
+ * Color decoding
+ * ============================================================================ */
+
+/* Given a color name, return the color value for it.
+   MONO_COLOR is returned if the color can't be found. */
+static int
+x_decode_color (struct frame *f, Lisp_Object color_name, int mono_color)
+{
+  Emacs_Color cdef;
+
+  CHECK_STRING (color_name);
+
+  /* Just return mono_color for now - proper color parsing would need
+     to use GDK or similar. */
+  if (NILP (color_name) || !STRINGP (color_name))
+    return mono_color;
+
+  /* Try to parse as #RRGGBB */
+  const char *name = SSDATA (color_name);
+  if (name[0] == '#' && strlen (name) == 7)
+    {
+      unsigned int r, g, b;
+      if (sscanf (name + 1, "%02x%02x%02x", &r, &g, &b) == 3)
+	return (r << 16) | (g << 8) | b;
+    }
+
+  /* Simple color name lookup */
+  if (strcmp (name, "black") == 0)
+    return 0x000000;
+  if (strcmp (name, "white") == 0)
+    return 0xFFFFFF;
+  if (strcmp (name, "red") == 0)
+    return 0xFF0000;
+  if (strcmp (name, "green") == 0)
+    return 0x00FF00;
+  if (strcmp (name, "blue") == 0)
+    return 0x0000FF;
+  if (strcmp (name, "yellow") == 0)
+    return 0xFFFF00;
+  if (strcmp (name, "cyan") == 0)
+    return 0x00FFFF;
+  if (strcmp (name, "magenta") == 0)
+    return 0xFF00FF;
+  if (strcmp (name, "gray") == 0 || strcmp (name, "grey") == 0)
+    return 0x808080;
+
+  return mono_color;
+}
+
+/* ============================================================================
+ * Frame parameter handlers
+ * ============================================================================ */
+
+static void
+neomacs_set_foreground_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  unsigned long fg;
+
+  if (STRINGP (arg))
+    {
+      fg = x_decode_color (f, arg, BLACK_PIX_DEFAULT (f));
+      FRAME_NEOMACS_OUTPUT (f)->foreground_pixel = fg;
+      update_face_from_frame_parameter (f, Qforeground_color, arg);
+    }
+}
+
+static void
+neomacs_set_background_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  unsigned long bg;
+
+  if (STRINGP (arg))
+    {
+      bg = x_decode_color (f, arg, WHITE_PIX_DEFAULT (f));
+      FRAME_NEOMACS_OUTPUT (f)->background_pixel = bg;
+      update_face_from_frame_parameter (f, Qbackground_color, arg);
+    }
+}
+
+static void
+neomacs_set_cursor_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Set cursor color */
+  if (STRINGP (arg))
+    FRAME_NEOMACS_OUTPUT (f)->cursor_pixel = x_decode_color (f, arg, BLACK_PIX_DEFAULT (f));
+}
+
+static void
+neomacs_set_cursor_type (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  set_frame_cursor_types (f, arg);
+}
+
+static void
+neomacs_set_mouse_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Mouse color - not used in Neomacs currently */
+}
+
+static void
+neomacs_set_border_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Border color - not used in Neomacs currently */
+}
+
+static void
+neomacs_set_menu_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval)
+{
+  /* Menu bar lines - not implemented yet */
+}
+
+static void
+neomacs_set_tab_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval)
+{
+  /* Tab bar lines - not implemented yet */
+}
+
+static void
+neomacs_set_tool_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval)
+{
+  /* Tool bar lines - not implemented yet */
+}
+
+static void
+neomacs_set_internal_border_width (struct frame *f, Lisp_Object value, Lisp_Object oldval)
+{
+  /* Internal border width - not implemented yet */
+}
+
+static void
+neomacs_set_child_frame_border_width (struct frame *f, Lisp_Object value, Lisp_Object oldval)
+{
+  /* Child frame border width - not implemented yet */
+}
+
+static void
+neomacs_explicitly_set_name (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  neomacs_set_title (f);
+}
+
+static void
+neomacs_set_icon_name (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Icon name - not implemented yet */
+}
+
+static void
+neomacs_set_icon_type (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Icon type - not implemented yet */
+}
+
+static void
+neomacs_set_scroll_bar_foreground (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Scroll bar foreground - not implemented yet */
+}
+
+static void
+neomacs_set_scroll_bar_background (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Scroll bar background - not implemented yet */
+}
+
+static void
+neomacs_set_sticky (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Sticky - not implemented yet */
+}
+
+static void
+neomacs_set_tool_bar_position (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Tool bar position - not implemented yet */
+}
+
+static void
+neomacs_set_undecorated (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Undecorated - not implemented yet */
+}
+
+static void
+neomacs_set_parent_frame (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Parent frame - not implemented yet */
+}
+
+static void
+neomacs_set_skip_taskbar (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Skip taskbar - not implemented yet */
+}
+
+static void
+neomacs_set_no_focus_on_map (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* No focus on map - not implemented yet */
+}
+
+static void
+neomacs_set_no_accept_focus (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* No accept focus - not implemented yet */
+}
+
+static void
+neomacs_set_z_group (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Z group - not implemented yet */
+}
+
+static void
+neomacs_set_override_redirect (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Override redirect - not implemented yet */
+}
+
+static void
+neomacs_set_alpha_background (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  /* Alpha background - not implemented yet */
+}
+
+/* Frame parameter handlers table - must match the order in frame.c frame_parms table */
+frame_parm_handler neomacs_frame_parm_handlers[] =
+  {
+    gui_set_autoraise,			/* autoraise */
+    gui_set_autolower,			/* autolower */
+    neomacs_set_background_color,	/* background-color */
+    neomacs_set_border_color,		/* border-color */
+    gui_set_border_width,		/* border-width */
+    neomacs_set_cursor_color,		/* cursor-color */
+    neomacs_set_cursor_type,		/* cursor-type */
+    gui_set_font,			/* font */
+    neomacs_set_foreground_color,	/* foreground-color */
+    neomacs_set_icon_name,		/* icon-name */
+    neomacs_set_icon_type,		/* icon-type */
+    neomacs_set_child_frame_border_width, /* child-frame-border-width */
+    neomacs_set_internal_border_width,	/* internal-border-width */
+    gui_set_right_divider_width,	/* right-divider-width */
+    gui_set_bottom_divider_width,	/* bottom-divider-width */
+    neomacs_set_menu_bar_lines,		/* menu-bar-lines */
+    neomacs_set_mouse_color,		/* mouse-color */
+    neomacs_explicitly_set_name,	/* name */
+    gui_set_scroll_bar_width,		/* scroll-bar-width */
+    gui_set_scroll_bar_height,		/* scroll-bar-height */
+    NULL,				/* title - set via set_name */
+    gui_set_unsplittable,		/* unsplittable */
+    gui_set_vertical_scroll_bars,	/* vertical-scroll-bars */
+    gui_set_horizontal_scroll_bars,	/* horizontal-scroll-bars */
+    gui_set_visibility,			/* visibility */
+    neomacs_set_tab_bar_lines,		/* tab-bar-lines */
+    neomacs_set_tool_bar_lines,		/* tool-bar-lines */
+    neomacs_set_scroll_bar_foreground,	/* scroll-bar-foreground */
+    neomacs_set_scroll_bar_background,	/* scroll-bar-background */
+    gui_set_screen_gamma,		/* screen-gamma */
+    gui_set_line_spacing,		/* line-spacing */
+    gui_set_left_fringe,		/* left-fringe */
+    gui_set_right_fringe,		/* right-fringe */
+    NULL,				/* wait-for-wm */
+    gui_set_fullscreen,			/* fullscreen */
+    gui_set_font_backend,		/* font-backend */
+    gui_set_alpha,			/* alpha */
+    neomacs_set_sticky,			/* sticky */
+    neomacs_set_tool_bar_position,	/* tool-bar-position */
+    NULL,				/* inhibit-double-buffering */
+    neomacs_set_undecorated,		/* undecorated */
+    neomacs_set_parent_frame,		/* parent-frame */
+    neomacs_set_skip_taskbar,		/* skip-taskbar */
+    neomacs_set_no_focus_on_map,	/* no-focus-on-map */
+    neomacs_set_no_accept_focus,	/* no-accept-focus */
+    neomacs_set_z_group,		/* z-group */
+    neomacs_set_override_redirect,	/* override-redirect */
+    gui_set_no_special_glyphs,		/* no-special-glyphs */
+    neomacs_set_alpha_background,	/* alpha-background */
+    gui_set_borders_respect_alpha_background, /* borders-respect-alpha-background */
+    NULL,				/* use-frame-synchronization */
+  };
 
 /* ============================================================================
  * Display Info Utilities
@@ -280,6 +562,16 @@ If the parameters specify a display, that display is used.  */)
   f->border_width = 0;
   f->internal_border_width = 0;
 
+  /* Register font drivers for this frame */
+  register_font_driver (&ftcrfont_driver, f);
+#ifdef HAVE_HARFBUZZ
+  register_font_driver (&ftcrhbfont_driver, f);
+#endif
+
+  /* Enable font backends - this must be done before opening fonts */
+  gui_default_parameter (f, parms, Qfont_backend, Qnil,
+			 "fontBackend", "FontBackend", RES_TYPE_STRING);
+
   /* Set default dimensions */
   int width = 80;
   int height = 36;
@@ -307,6 +599,36 @@ If the parameters specify a display, that display is used.  */)
   if (STRINGP (name))
     Fmodify_frame_parameters (frame,
                               list1 (Fcons (Qname, name)));
+
+  /* Set up font - required before face realization */
+  {
+    Lisp_Object font = gui_display_get_arg (dpyinfo, parms, Qfont, "font", "Font",
+					    RES_TYPE_STRING);
+    if (!FONTP (font) && !STRINGP (font))
+      {
+	const char *names[] = {
+	  "monospace-10",
+	  "Monospace-10",
+	  "fixed",
+	  NULL
+	};
+	for (int i = 0; names[i]; i++)
+	  {
+	    font = font_open_by_name (f, build_unibyte_string (names[i]));
+	    if (!NILP (font))
+	      break;
+	  }
+      }
+    if (!NILP (font))
+      gui_default_parameter (f, parms, Qfont, font, "font", "Font",
+			     RES_TYPE_STRING);
+  }
+
+  /* Set foreground and background colors - REQUIRED for face realization */
+  gui_default_parameter (f, parms, Qforeground_color, build_string ("black"),
+			 "foreground", "Foreground", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qbackground_color, build_string ("white"),
+			 "background", "Background", RES_TYPE_STRING);
 
   /* Initialize cursor */
   FRAME_NEOMACS_OUTPUT (f)->cursor_pixel = dpyinfo->black_pixel;

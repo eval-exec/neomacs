@@ -238,6 +238,10 @@ struct neomacs_output
 #define FRAME_NEOMACS_PIXEL_WIDTH(f) (FRAME_NEOMACS_OUTPUT(f)->pixel_width)
 #define FRAME_NEOMACS_PIXEL_HEIGHT(f) (FRAME_NEOMACS_OUTPUT(f)->pixel_height)
 
+/* Default colors */
+#define BLACK_PIX_DEFAULT(f) 0x000000
+#define WHITE_PIX_DEFAULT(f) 0xFFFFFF
+
 /* Font macros */
 #define FRAME_FONT(f) (FRAME_X_OUTPUT(f)->font)
 #define FRAME_FONTSET(f) (FRAME_X_OUTPUT(f)->fontset)
@@ -262,6 +266,9 @@ extern struct neomacs_display_info *neomacs_open_display (const char *);
 /* Frame creation */
 extern void neomacs_default_font_parameter (struct frame *, Lisp_Object);
 extern struct frame *neomacs_create_frame (Lisp_Object, struct neomacs_display_info *);
+
+/* Font handling */
+extern Lisp_Object neomacs_new_font (struct frame *, Lisp_Object, int);
 
 /* Display update hooks */
 extern void neomacs_update_begin (struct frame *);
