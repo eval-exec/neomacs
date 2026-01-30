@@ -1,6 +1,7 @@
 //! GTK4/GSK GPU-accelerated display backend.
 
 mod renderer;
+mod image;
 
 use std::sync::{Arc, Mutex};
 

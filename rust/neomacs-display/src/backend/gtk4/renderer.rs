@@ -13,6 +13,7 @@ use crate::core::scene::{Scene, WindowScene, Node, NodeKind, CursorStyle};
 use crate::core::glyph::{Glyph, GlyphRow, GlyphType, GlyphData};
 use crate::core::face::{Face, FaceCache};
 use crate::core::types::{Color, Rect};
+use super::image::ImageCache;
 
 /// Renderer that converts our scene graph to Cairo drawing commands.
 pub struct Gtk4Renderer {
@@ -24,6 +25,9 @@ pub struct Gtk4Renderer {
     
     /// Cached Pango layouts for performance
     layout_cache: HashMap<u32, pango::Layout>,
+    
+    /// Image cache
+    image_cache: ImageCache,
 }
 
 impl Default for Gtk4Renderer {
@@ -38,6 +42,7 @@ impl Gtk4Renderer {
             pango_context: None,
             face_cache: FaceCache::new(),
             layout_cache: HashMap::new(),
+            image_cache: ImageCache::new(),
         }
     }
     
@@ -271,9 +276,9 @@ impl Gtk4Renderer {
                         text_buffer.clear();
                         current_face_id = None;
                     }
-                    // TODO: Render image
+                    // Render image
                     if let GlyphData::Image { image_id } = glyph.data {
-                        self.render_image_placeholder(cr, x as f32, y as f32, glyph.pixel_width, glyph.height());
+                        self.render_image(cr, image_id, x as f32, y as f32, glyph.pixel_width, glyph.height());
                     }
                 }
                 _ => {
@@ -381,7 +386,29 @@ impl Gtk4Renderer {
         cr.restore().ok();
     }
 
-    /// Render a placeholder for images (until image loading is implemented)
+    /// Render an image glyph
+    fn render_image(&self, cr: &cairo::Context, image_id: u32, x: f32, y: f32, width: i32, height: i32) {
+        if let Some(cached_image) = self.image_cache.get(image_id) {
+            cr.save().ok();
+            
+            // Scale image to fit glyph dimensions
+            let scale_x = width as f64 / cached_image.width as f64;
+            let scale_y = height as f64 / cached_image.height as f64;
+            
+            cr.translate(x as f64, y as f64);
+            cr.scale(scale_x, scale_y);
+            
+            cr.set_source_surface(&cached_image.surface, 0.0, 0.0).ok();
+            cr.paint().ok();
+            
+            cr.restore().ok();
+        } else {
+            // Image not loaded, show placeholder
+            self.render_image_placeholder(cr, x, y, width, height);
+        }
+    }
+
+    /// Render a placeholder for images (for images not yet loaded)
     fn render_image_placeholder(&self, cr: &cairo::Context, x: f32, y: f32, width: i32, height: i32) {
         // Draw a gray box with an X
         cr.set_source_rgba(0.3, 0.3, 0.3, 1.0);
@@ -400,6 +427,16 @@ impl Gtk4Renderer {
         cr.move_to((x as i32 + width) as f64, y as f64);
         cr.line_to(x as f64, (y as i32 + height) as f64);
         cr.stroke().ok();
+    }
+    
+    /// Get mutable access to image cache
+    pub fn image_cache_mut(&mut self) -> &mut ImageCache {
+        &mut self.image_cache
+    }
+    
+    /// Get image cache
+    pub fn image_cache(&self) -> &ImageCache {
+        &self.image_cache
     }
 }
 
