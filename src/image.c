@@ -150,6 +150,10 @@ typedef struct ns_bitmap_record Bitmap_Record;
 typedef struct pgtk_bitmap_record Bitmap_Record;
 #endif /* HAVE_PGTK */
 
+#ifdef HAVE_NEOMACS
+typedef struct neomacs_bitmap_record Bitmap_Record;
+#endif /* HAVE_NEOMACS */
+
 #if (defined HAVE_X_WINDOWS \
      && ! (defined HAVE_NTGUI || defined USE_CAIRO || defined HAVE_NS))
 /* W32_TODO : Color tables on W32.  */

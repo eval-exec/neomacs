@@ -26,6 +26,9 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #ifdef HAVE_NEOMACS
 
+/* Cairo is used for font rendering with ftcrfont */
+#include <cairo.h>
+
 /* Include the generated Rust FFI header */
 #include "neomacs_display.h"
 
@@ -40,6 +43,15 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 /* Forward declarations */
 struct neomacs_display_info;
 struct neomacs_output;
+
+/* Bitmap record for image caching */
+struct neomacs_bitmap_record
+{
+  char *file;
+  int refcount;
+  int height, width, depth;
+  cairo_pattern_t *pattern;
+};
 
 /* Neomacs display info structure - one per display connection */
 struct neomacs_display_info
@@ -91,6 +103,17 @@ struct neomacs_display_info
 
   /* Xism - resource database placeholder */
   XrmDatabase rdb;
+
+  /* Number of fonts loaded */
+  int n_fonts;
+
+  /* Bitmap storage for images */
+  struct neomacs_bitmap_record *bitmaps;
+  ptrdiff_t bitmaps_size;
+  ptrdiff_t bitmaps_last;
+
+  /* Number of planes for image support */
+  int n_image_planes;
 
   /* Focus management */
   struct frame *focus_frame;
@@ -263,12 +286,20 @@ extern void neomacs_expose_frame (struct frame *);
 extern void neomacs_frame_up_to_date (struct frame *);
 extern void neomacs_focus_frame (struct frame *, bool);
 
+/* Cairo integration for font rendering (ftcrfont.c) */
+typedef struct _cairo cairo_t;  /* Forward declaration */
+extern cairo_t *neomacs_begin_cr_clip (struct frame *f);
+extern void neomacs_end_cr_clip (struct frame *f);
+extern void neomacs_set_cr_source_with_color (struct frame *f, unsigned long color, bool check_alpha);
+
 /* Lisp symbols */
 extern void syms_of_neomacsterm (void);
 
 /* Toolbar support */
 extern void update_frame_tool_bar (struct frame *f);
 extern void free_frame_tool_bar (struct frame *f);
+
+/* Note: x_create_gc and x_free_gc are defined as static functions in xfaces.c */
 
 #endif /* HAVE_NEOMACS */
 

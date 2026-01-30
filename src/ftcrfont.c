@@ -28,6 +28,8 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "haikuterm.h"
 #include "haiku_support.h"
 #include "termchar.h"
+#elif defined HAVE_NEOMACS
+#include "neomacsterm.h"
 #else
 #include "pgtkterm.h"
 #endif
@@ -565,6 +567,8 @@ ftcrfont_draw (struct glyph_string *s,
 #ifndef USE_BE_CAIRO
 #ifdef HAVE_X_WINDOWS
   cr = x_begin_cr_clip (f, s->gc);
+#elif defined (HAVE_NEOMACS)
+  cr = neomacs_begin_cr_clip (f);
 #else
   cr = pgtk_begin_cr_clip (f);
 #endif
@@ -587,6 +591,9 @@ ftcrfont_draw (struct glyph_string *s,
 #ifndef USE_BE_CAIRO
 #ifdef HAVE_X_WINDOWS
       x_set_cr_source_with_gc_background (f, s->gc, s->hl != DRAW_CURSOR);
+#elif defined (HAVE_NEOMACS)
+      neomacs_set_cr_source_with_color (f, s->gc->background,
+				     s->hl != DRAW_CURSOR);
 #else
       pgtk_set_cr_source_with_color (f, s->xgcv.background,
 				     s->hl != DRAW_CURSOR);
@@ -616,6 +623,8 @@ ftcrfont_draw (struct glyph_string *s,
 #ifndef USE_BE_CAIRO
 #ifdef HAVE_X_WINDOWS
   x_set_cr_source_with_gc_foreground (f, s->gc, false);
+#elif defined (HAVE_NEOMACS)
+  neomacs_set_cr_source_with_color (f, s->gc->foreground, false);
 #else
   pgtk_set_cr_source_with_color (f, s->xgcv.foreground, false);
 #endif
@@ -631,6 +640,8 @@ ftcrfont_draw (struct glyph_string *s,
 #ifndef USE_BE_CAIRO
 #ifdef HAVE_X_WINDOWS
   x_end_cr_clip (f);
+#elif defined (HAVE_NEOMACS)
+  neomacs_end_cr_clip (f);
 #else
   pgtk_end_cr_clip (f);
 #endif

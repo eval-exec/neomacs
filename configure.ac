@@ -3924,13 +3924,13 @@ NEOMACS_LIBS=
 NEOMACS_CFLAGS=
 if test "$window_system" = "neomacs"; then
   NEOMACS_OBJ="neomacsterm.o"
-  dnl Check for the Rust library
-  NEOMACS_RUST_LIB_DIR="${srcdir}/rust/neomacs-display/target/release"
+  dnl Check for the Rust library - use absolute path
+  NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/release"
   if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.a"; then
     NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display"
   else
     dnl Try debug build
-    NEOMACS_RUST_LIB_DIR="${srcdir}/rust/neomacs-display/target/debug"
+    NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/debug"
     if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.a"; then
       NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display"
     else
@@ -3940,8 +3940,17 @@ if test "$window_system" = "neomacs"; then
   dnl Link GTK4 and GStreamer
   PKG_CHECK_MODULES([GTK4], [gtk4], [], [AC_MSG_ERROR([GTK4 required for Neomacs])])
   PKG_CHECK_MODULES([GSTREAMER], [gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0], [], [AC_MSG_ERROR([GStreamer required for Neomacs])])
-  NEOMACS_CFLAGS="$GTK4_CFLAGS $GSTREAMER_CFLAGS"
-  NEOMACS_LIBS="$NEOMACS_LIBS $GTK4_LIBS $GSTREAMER_LIBS -lpthread -lm -ldl"
+  dnl Cairo is required for font rendering with ftcrfont
+  CAIRO_REQUIRED=1.12.0
+  CAIRO_MODULE="cairo >= $CAIRO_REQUIRED"
+  EMACS_CHECK_MODULES([CAIRO], [$CAIRO_MODULE])
+  if test $HAVE_CAIRO = yes; then
+    AC_DEFINE([USE_CAIRO], [1], [Define to 1 if using cairo.])
+  else
+    AC_MSG_ERROR([cairo required for Neomacs but not found.])
+  fi
+  NEOMACS_CFLAGS="$GTK4_CFLAGS $GSTREAMER_CFLAGS $CAIRO_CFLAGS"
+  NEOMACS_LIBS="$NEOMACS_LIBS $GTK4_LIBS $GSTREAMER_LIBS $CAIRO_LIBS -lpthread -lm -ldl"
 fi
 AC_SUBST([NEOMACS_OBJ])
 AC_SUBST([NEOMACS_LIBS])

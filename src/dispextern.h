@@ -162,8 +162,7 @@ typedef XImagePtr XImagePtr_or_DC;
 typedef struct neomacs_display_info Display_Info;
 typedef Emacs_Pixmap XImagePtr;
 typedef XImagePtr XImagePtr_or_DC;
-typedef Emacs_Pixmap Emacs_Pix_Container;
-typedef Emacs_Pixmap Emacs_Pix_Context;
+/* Emacs_Pix_Container and Emacs_Pix_Context are already defined by USE_CAIRO above */
 #endif /* HAVE_NEOMACS */
 
 #ifdef HAVE_HAIKU
@@ -1470,6 +1469,9 @@ struct glyph_string
 #endif
 #if defined (HAVE_PGTK)
   Emacs_GC xgcv;
+#endif
+#if defined (HAVE_NEOMACS)
+  Emacs_GC *gc;
 #endif
 
   /* A pointer to the first glyph in the string.  This glyph

@@ -630,6 +630,28 @@ x_free_gc (struct frame *f, struct android_gc *gc)
 
 #endif
 
+#ifdef HAVE_NEOMACS
+
+/* Neomacs emulation of GCs */
+
+static Emacs_GC *
+x_create_gc (struct frame *f,
+	     unsigned long mask,
+	     Emacs_GC *xgcv)
+{
+  Emacs_GC *gc = xmalloc (sizeof *gc);
+  *gc = *xgcv;
+  return gc;
+}
+
+static void
+x_free_gc (struct frame *f, Emacs_GC *gc)
+{
+  xfree (gc);
+}
+
+#endif  /* HAVE_NEOMACS */
+
 /***********************************************************************
 			   Frames and faces
  ***********************************************************************/

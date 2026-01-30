@@ -46,8 +46,10 @@ typedef unichar XChar2b;
 /* Cursor is an opaque pointer in Neomacs (we use GdkCursor internally) */
 typedef void *Emacs_Cursor;
 
-/* Pixmap is an opaque handle */
+/* Pixmap is defined by USE_CAIRO in dispextern.h when using Cairo */
+#ifndef USE_CAIRO
 typedef void *Emacs_Pixmap;
+#endif
 
 /* Color is an unsigned long (ARGB) */
 typedef unsigned long Color;
@@ -62,12 +64,14 @@ typedef void *Display;
 typedef void *XrmDatabase;
 
 
-/* Rectangle similar to XRectangle.  */
+/* Rectangle similar to XRectangle - only define if not using X11 */
+#ifndef HAVE_X_WINDOWS
 typedef struct
 {
   int x, y;
   unsigned width, height;
 } XRectangle;
+#endif
 
 /* Gravity constants for frame positioning */
 #define ForgetGravity		0
@@ -126,5 +130,13 @@ typedef struct
 
 /* RGB pixel color type */
 typedef unsigned long RGB_PIXEL_COLOR;
+
+/* GC values mask bits - GCForeground and GCBackground are defined in
+   dispextern.h, we just need GCGraphicsExposures for xfaces.c */
+#ifndef GCGraphicsExposures
+#define GCGraphicsExposures     (1L<<16)
+#endif
+
+/* Note: Emacs_GC is defined in dispextern.h, not here */
 
 #endif /* __NEOMACSGUI_H__ */

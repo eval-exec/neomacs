@@ -415,6 +415,49 @@ neomacs_focus_frame (struct frame *f, bool raise_flag)
 
 
 /* ============================================================================
+ * Cairo Integration for Font Rendering (ftcrfont.c)
+ * ============================================================================ */
+
+#include <cairo.h>
+
+/* Current Cairo context for drawing - thread-local for safety */
+static cairo_t *neomacs_current_cr = NULL;
+
+/* Begin Cairo clip region for drawing.  Returns a Cairo context.  */
+cairo_t *
+neomacs_begin_cr_clip (struct frame *f)
+{
+  /* For now, we return a placeholder - actual implementation will get
+     the Cairo context from the GTK4 drawing area via the Rust FFI.  */
+  /* TODO: Get Cairo context from Rust display engine */
+  return neomacs_current_cr;
+}
+
+/* End Cairo clip region.  */
+void
+neomacs_end_cr_clip (struct frame *f)
+{
+  /* Restore previous clip region if needed */
+}
+
+/* Set Cairo source color for drawing.  */
+void
+neomacs_set_cr_source_with_color (struct frame *f, unsigned long color,
+                                   bool check_alpha)
+{
+  if (!neomacs_current_cr)
+    return;
+
+  /* Extract RGB components from unsigned long color (0xAARRGGBB format) */
+  double r = ((color >> 16) & 0xff) / 255.0;
+  double g = ((color >> 8) & 0xff) / 255.0;
+  double b = (color & 0xff) / 255.0;
+
+  cairo_set_source_rgb (neomacs_current_cr, r, g, b);
+}
+
+
+/* ============================================================================
  * Redisplay Interface
  * ============================================================================ */
 
@@ -477,6 +520,72 @@ DEFUN ("neomacs-display-list", Fneomacs_display_list, Sneomacs_display_list, 0, 
   return result;
 }
 
+DEFUN ("x-hide-tip", Fx_hide_tip, Sx_hide_tip, 0, 0, 0,
+       doc: /* Hide the current tooltip window, if there is any.
+Value is t if tooltip was open, nil otherwise.  */)
+  (void)
+{
+  /* TODO: Implement tooltip hiding */
+  return Qnil;
+}
+
+DEFUN ("xw-display-color-p", Fxw_display_color_p, Sxw_display_color_p, 0, 1, 0,
+       doc: /* Return t if the display supports color.  */)
+  (Lisp_Object terminal)
+{
+  /* Neomacs always supports full color via GTK4 */
+  return Qt;
+}
+
+DEFUN ("x-display-grayscale-p", Fx_display_grayscale_p, Sx_display_grayscale_p, 0, 1, 0,
+       doc: /* Return t if the display can show shades of gray.  */)
+  (Lisp_Object terminal)
+{
+  /* Neomacs displays support both color and grayscale */
+  return Qnil;  /* Return nil meaning we support full color, not just grayscale */
+}
+
+
+/* ============================================================================
+ * Miscellaneous Functions
+ * ============================================================================ */
+
+/* Called from frame.c to get display info for x-get-resource.  */
+struct neomacs_display_info *
+check_x_display_info (Lisp_Object frame)
+{
+  struct frame *f;
+
+  if (NILP (frame))
+    f = SELECTED_FRAME ();
+  else
+    {
+      CHECK_FRAME (frame);
+      f = XFRAME (frame);
+    }
+
+  if (!FRAME_NEOMACS_P (f))
+    error ("Frame is not a Neomacs frame");
+
+  return FRAME_NEOMACS_DISPLAY_INFO (f);
+}
+
+/* Get a human-readable name for a keysym.  */
+char *
+get_keysym_name (int keysym)
+{
+  /* For GTK4, we could use gdk_keyval_name, but for now return NULL */
+  /* This function is used for debugging and error messages */
+  return NULL;
+}
+
+/* Set mouse pixel position on frame F.  */
+void
+frame_set_mouse_pixel_position (struct frame *f, int pix_x, int pix_y)
+{
+  /* TODO: Implement with GTK4 */
+}
+
 
 /* ============================================================================
  * Toolbar Support
@@ -509,6 +618,9 @@ syms_of_neomacsterm (void)
 
   defsubr (&Sneomacs_available_p);
   defsubr (&Sneomacs_display_list);
+  defsubr (&Sx_hide_tip);
+  defsubr (&Sxw_display_color_p);
+  defsubr (&Sx_display_grayscale_p);
 
   DEFSYM (Qneomacs, "neomacs");
 }
