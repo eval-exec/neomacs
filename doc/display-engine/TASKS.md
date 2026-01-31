@@ -89,7 +89,7 @@
 | **Phase 4** | Image Support | ✅ Complete |
 | **Phase 5** | Video Support (GStreamer) | ✅ Complete (overlay only) |
 | **Phase 6** | WPE WebKit Support | ✅ Complete (overlay only) |
-| **Phase 7** | GPU Zero-Copy Pipeline | ⏳ Pending |
+| **Phase 7** | GPU Zero-Copy Pipeline | 🔧 **In Progress** (VA-API decode done) |
 | **Phase 8** | Animation System | ⏳ Pending |
 | **Phase 9** | Inline Display (`xdisp.c`) | 🔥 **HIGH PRIORITY** |
 | **Phase 10** | Emacs Build Integration | 🔧 Partial |
@@ -442,35 +442,47 @@
 
 **Goal**: Eliminate CPU→GPU memory copies for video and large images.
 
-### Current State (Before)
-| Type | Decode | Texture | Copy? |
-|------|--------|---------|-------|
-| Image | CPU (GdkPixbuf) | MemoryTexture | ⚠️ CPU→GPU copy |
-| Video | CPU (GStreamer appsink) | MemoryTexture | ⚠️ CPU→GPU copy |
-| WebKit | GPU (WPE) | DmabufTexture | ✅ Zero-copy |
+### Current State (2024-01-31)
+| Type | Decode | Texture | Copy? | Status |
+|------|--------|---------|-------|--------|
+| Image | CPU (GdkPixbuf) | MemoryTexture | ⚠️ CPU→GPU copy | Working |
+| Video | **GPU (VA-API)** | MemoryTexture | ⚠️ GPU→CPU→GPU | **Partial** (see 7.2) |
+| WebKit | GPU (WPE) | DmabufTexture | ✅ Zero-copy | Working |
 
-### Target State (After)
+### Target State (Full Zero-Copy)
 | Type | Decode | Texture | Copy? |
 |------|--------|---------|-------|
 | Image (small) | CPU | MemoryTexture | CPU→GPU (fast, small data) |
 | Image (large) | CPU | DmabufTexture | ✅ Zero-copy upload |
-| Video | GPU (VA-API) | DmabufTexture | ✅ Zero-copy |
+| Video | GPU (VA-API) | **DmabufTexture** | ✅ Zero-copy |
 | WebKit | GPU (WPE) | DmabufTexture | ✅ Zero-copy |
 
-### 7.1 Video Hardware Decoding (High Priority)
-- [ ] Enable VA-API hardware decoding in GStreamer pipeline
-- [ ] Use `vaapidecode`, `vah264dec`, `vah265dec` elements
-- [ ] Fallback chain: VA-API → NVDEC → CPU decode
-- [ ] Export decoded frames via DMA-BUF (`vapostproc` → `dmabuf`)
-- [ ] Create `GdkDmabufTexture` from exported buffer
-- [ ] Test 4K@60fps performance (target: <5% CPU usage)
+### 7.1 Video Hardware Decoding ✅ COMPLETE
+- [x] Enable VA-API hardware decoding in GStreamer pipeline
+- [x] Use `playbin` (auto-selects `vah264dec`, `vah265dec`, etc.)
+- [x] Fallback chain: VA-API → software decode
+- [x] Tested with 1920x1080 H.264 video
+- [x] `GpuVideoPlayer` struct with VA-API support
+- [x] `VideoCache` now uses `GpuVideoPlayer`
 
-### 7.2 Video DMA-BUF Export
-- [ ] Create `DmaBufVideoSink` custom GStreamer element
-- [ ] Use `gst_video_frame_map()` with `GST_MAP_READ` for DMA-BUF FD
-- [ ] Use `GdkDmabufTextureBuilder` for texture creation
-- [ ] Handle format negotiation (NV12, P010, BGRA)
-- [ ] Handle modifier negotiation with GSK
+### 7.2 Video DMA-BUF Export ⏳ PARTIAL
+**Current**: VA-API decode on GPU, vapostproc converts to BGRA (GPU), output to system memory
+**Blocked**: Full DMA-BUF export requires appsink to advertise GstVideoMeta support
+
+- [x] Add `gstreamer-allocators` crate for DMA-BUF detection
+- [x] Add `DmaBufMemory` type checking code
+- [x] Add `GdkDmabufTextureBuilder` creation code
+- [x] VA-API decode + vapostproc BGRA output working
+- [ ] **BLOCKED: vapostproc requires VideoMeta in allocation query**
+  - appsink doesn't add GstVideoMeta to allocation query
+  - Need custom allocation query handling or different approach
+- [ ] Alternative approaches to investigate:
+  - Use custom sink element with VideoMeta support
+  - Use GL pipeline (glupload→gldownload) with EGL sharing
+  - Use vaapidecodebin with dmabuf-backends
+- [ ] Extract DMA-BUF FD from GStreamer buffer
+- [ ] Create `GdkDmabufTexture` from FD
+- [ ] Test 4K@60fps performance (target: <5% CPU usage)
 
 ### 7.3 Image DMA-BUF Upload (Medium Priority)
 - [ ] Use `GdkDmabufTextureBuilder` for large images (>1MP)
@@ -478,12 +490,6 @@
 - [ ] Map buffer, decode image, unmap
 - [ ] Threshold: use DMA-BUF only for images > 1 megapixel
 - [ ] Keep MemoryTexture for small images (faster for small data)
-
-### 7.4 GStreamer GL Pipeline (Alternative Approach)
-- [ ] Use `glupload` element for GPU texture import
-- [ ] Use `gldownload` with DMA-BUF export
-- [ ] Share EGL context between GStreamer and GTK4
-- [ ] Handle GL context threading
 
 ---
 
