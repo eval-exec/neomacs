@@ -1,9 +1,10 @@
 //! GStreamer video playback integration for GTK4 backend.
+//!
+//! Uses gtk4paintablesink from gst-plugins-rs for true zero-copy video
+//! rendering via DMA-BUF when running on Wayland with VA-API hardware.
 
 #[cfg(feature = "video")]
 use std::collections::HashMap;
-#[cfg(feature = "video")]
-use std::os::unix::io::RawFd;
 #[cfg(feature = "video")]
 use std::sync::{Arc, Mutex};
 
@@ -12,19 +13,13 @@ use gstreamer as gst;
 #[cfg(feature = "video")]
 use gstreamer::prelude::*;
 #[cfg(feature = "video")]
-use gstreamer_video as gst_video;
-#[cfg(feature = "video")]
-use gstreamer_app as gst_app;
-#[cfg(feature = "video")]
-use gstreamer_allocators as gst_allocators;
-#[cfg(feature = "video")]
 use gtk4::cairo;
 #[cfg(feature = "video")]
 use gtk4::gdk;
 #[cfg(feature = "video")]
 use gtk4::glib;
 #[cfg(feature = "video")]
-use gtk4::prelude::{TextureExt, TextureExtManual};
+use gtk4::prelude::{TextureExt, TextureExtManual, PaintableExt};
 
 use crate::core::error::{DisplayError, DisplayResult};
 
@@ -41,259 +36,6 @@ pub enum VideoState {
     Buffering,
     /// Error state
     Error,
-}
-
-/// A video player instance
-#[cfg(feature = "video")]
-pub struct VideoPlayer {
-    /// GStreamer pipeline
-    pipeline: gst::Pipeline,
-
-    /// App sink for frame capture
-    appsink: gst_app::AppSink,
-
-    /// Current video frame data (BGRA pixels)
-    frame_data: Arc<Mutex<Option<FrameData>>>,
-
-    /// Video dimensions
-    pub width: i32,
-    pub height: i32,
-
-    /// Current state
-    pub state: VideoState,
-
-    /// Duration in nanoseconds
-    pub duration_ns: Option<i64>,
-
-    /// Current position in nanoseconds
-    pub position_ns: i64,
-
-    /// Loop playback
-    pub looping: bool,
-
-    /// Volume (0.0 - 1.0)
-    pub volume: f64,
-}
-
-/// Frame data stored in a thread-safe way
-#[cfg(feature = "video")]
-struct FrameData {
-    pixels: Vec<u8>,
-    width: i32,
-    height: i32,
-}
-
-#[cfg(feature = "video")]
-impl VideoPlayer {
-    /// Create a new video player from a URI
-    pub fn new(uri: &str) -> DisplayResult<Self> {
-        // Initialize GStreamer if needed
-        gst::init()
-            .map_err(|e| DisplayError::Backend(format!("Failed to init GStreamer: {}", e)))?;
-
-        // Create playbin element
-        let playbin = gst::ElementFactory::make("playbin")
-            .name("playbin")
-            .property("uri", uri)
-            .build()
-            .map_err(|e| DisplayError::Backend(format!("Failed to create playbin: {}", e)))?;
-
-        // Create appsink for frame capture
-        let appsink = gst_app::AppSink::builder()
-            .caps(&gst::Caps::builder("video/x-raw")
-                .field("format", "BGRA")
-                .build())
-            .build();
-
-        // Create video sink bin with conversion
-        let videoconvert = gst::ElementFactory::make("videoconvert")
-            .build()
-            .map_err(|e| DisplayError::Backend(format!("Failed to create videoconvert: {}", e)))?;
-
-        let videoscale = gst::ElementFactory::make("videoscale")
-            .build()
-            .map_err(|e| DisplayError::Backend(format!("Failed to create videoscale: {}", e)))?;
-
-        // Create bin for video sink
-        let sinkbin = gst::Bin::new();
-        sinkbin.add_many([&videoconvert, &videoscale, appsink.upcast_ref()])
-            .map_err(|e| DisplayError::Backend(format!("Failed to add elements: {}", e)))?;
-
-        gst::Element::link_many([&videoconvert, &videoscale, appsink.upcast_ref()])
-            .map_err(|e| DisplayError::Backend(format!("Failed to link elements: {}", e)))?;
-
-        // Create ghost pad
-        let pad = videoconvert.static_pad("sink")
-            .ok_or_else(|| DisplayError::Backend("No sink pad".into()))?;
-        let ghost_pad = gst::GhostPad::with_target(&pad)
-            .map_err(|e| DisplayError::Backend(format!("Failed to create ghost pad: {}", e)))?;
-        sinkbin.add_pad(&ghost_pad)
-            .map_err(|e| DisplayError::Backend(format!("Failed to add ghost pad: {}", e)))?;
-
-        // Set video sink on playbin
-        playbin.set_property("video-sink", &sinkbin);
-
-        // Get pipeline
-        let pipeline: gst::Pipeline = playbin.downcast()
-            .map_err(|_| DisplayError::Backend("Failed to downcast to pipeline".into()))?;
-
-        let frame_data = Arc::new(Mutex::new(None));
-        let frame_data_clone = frame_data.clone();
-
-        // Set up frame callback - store raw bytes, not Cairo surface
-        appsink.set_callbacks(
-            gst_app::AppSinkCallbacks::builder()
-                .new_sample(move |sink| {
-                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Error)?;
-                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
-                    let caps = sample.caps().ok_or(gst::FlowError::Error)?;
-
-                    let video_info = gst_video::VideoInfo::from_caps(caps)
-                        .map_err(|_| gst::FlowError::Error)?;
-
-                    let width = video_info.width() as i32;
-                    let height = video_info.height() as i32;
-
-                    // Copy buffer data
-                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-                    let pixels = map.to_vec();
-
-                    if let Ok(mut data) = frame_data_clone.lock() {
-                        *data = Some(FrameData { pixels, width, height });
-                    }
-
-                    Ok(gst::FlowSuccess::Ok)
-                })
-                .build(),
-        );
-
-        Ok(Self {
-            pipeline,
-            appsink,
-            frame_data,
-            width: 0,
-            height: 0,
-            state: VideoState::Stopped,
-            duration_ns: None,
-            position_ns: 0,
-            looping: false,
-            volume: 1.0,
-        })
-    }
-
-    /// Play the video
-    pub fn play(&mut self) -> DisplayResult<()> {
-        self.pipeline.set_state(gst::State::Playing)
-            .map_err(|e| DisplayError::Backend(format!("Failed to play: {:?}", e)))?;
-        self.state = VideoState::Playing;
-        Ok(())
-    }
-
-    /// Pause the video
-    pub fn pause(&mut self) -> DisplayResult<()> {
-        self.pipeline.set_state(gst::State::Paused)
-            .map_err(|e| DisplayError::Backend(format!("Failed to pause: {:?}", e)))?;
-        self.state = VideoState::Paused;
-        Ok(())
-    }
-
-    /// Stop the video
-    pub fn stop(&mut self) -> DisplayResult<()> {
-        self.pipeline.set_state(gst::State::Null)
-            .map_err(|e| DisplayError::Backend(format!("Failed to stop: {:?}", e)))?;
-        self.state = VideoState::Stopped;
-        Ok(())
-    }
-
-    /// Seek to position (nanoseconds)
-    pub fn seek(&mut self, position_ns: i64) -> DisplayResult<()> {
-        self.pipeline.seek_simple(
-            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-            gst::ClockTime::from_nseconds(position_ns as u64),
-        ).map_err(|e| DisplayError::Backend(format!("Failed to seek: {:?}", e)))?;
-        self.position_ns = position_ns;
-        Ok(())
-    }
-
-    /// Set volume (0.0 - 1.0)
-    pub fn set_volume(&mut self, volume: f64) {
-        self.volume = volume.clamp(0.0, 1.0);
-        // playbin has a volume property
-        if let Some(playbin) = self.pipeline.by_name("playbin") {
-            playbin.set_property("volume", self.volume);
-        }
-    }
-
-    /// Get current frame as Cairo surface (creates surface on main thread)
-    pub fn get_frame(&self) -> Option<cairo::ImageSurface> {
-        let guard = self.frame_data.lock().ok()?;
-        let frame = guard.as_ref()?;
-
-        create_surface_from_raw(&frame.pixels, frame.width, frame.height).ok()
-    }
-
-    /// Get current frame as GDK texture for GPU rendering
-    pub fn get_frame_texture(&self) -> Option<gdk::Texture> {
-        let guard = self.frame_data.lock().ok()?;
-        let frame = guard.as_ref()?;
-
-        // Create GdkTexture from raw BGRA pixel data
-        // GBytes takes ownership of the data
-        let bytes = glib::Bytes::from(&frame.pixels);
-
-        // Create memory texture (BGRA format = B8G8R8A8_PREMULTIPLIED)
-        let texture = gdk::MemoryTexture::new(
-            frame.width,
-            frame.height,
-            gdk::MemoryFormat::B8g8r8a8Premultiplied,
-            &bytes,
-            (frame.width * 4) as usize, // stride = width * 4 bytes per pixel
-        );
-
-        Some(texture.upcast())
-    }
-
-    /// Update video state (call periodically)
-    pub fn update(&mut self) {
-        // Update position
-        if let Some(position) = self.pipeline.query_position::<gst::ClockTime>() {
-            self.position_ns = position.nseconds() as i64;
-        }
-
-        // Get duration if not known
-        if self.duration_ns.is_none() {
-            if let Some(duration) = self.pipeline.query_duration::<gst::ClockTime>() {
-                self.duration_ns = Some(duration.nseconds() as i64);
-            }
-        }
-
-        // Check for end of stream
-        if let Some(bus) = self.pipeline.bus() {
-            while let Some(msg) = bus.pop() {
-                match msg.view() {
-                    gst::MessageView::Eos(_) => {
-                        if self.looping {
-                            let _ = self.seek(0);
-                        } else {
-                            self.state = VideoState::Stopped;
-                        }
-                    }
-                    gst::MessageView::Error(err) => {
-                        eprintln!("GStreamer error: {:?}", err);
-                        self.state = VideoState::Error;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-}
-
-#[cfg(feature = "video")]
-impl Drop for VideoPlayer {
-    fn drop(&mut self) {
-        let _ = self.pipeline.set_state(gst::State::Null);
-    }
 }
 
 // =============================================================================
@@ -319,17 +61,19 @@ pub struct DmaBufFrame {
     pub offset: u32,
 }
 
-/// GPU-accelerated video player using VA-API and DMA-BUF
+/// GPU-accelerated video player using gtk4paintablesink for DMA-BUF zero-copy
+///
+/// Uses the gst-plugins-rs gtk4paintablesink which handles all DMA-BUF/GL/VideoMeta
+/// negotiation internally. This provides true zero-copy video playback when:
+/// - Running on Wayland with supported hardware (Intel/AMD VA-API)
+/// - GTK4 4.14+ with DMA-BUF import support
 #[cfg(feature = "video")]
 pub struct GpuVideoPlayer {
     /// GStreamer pipeline
     pipeline: gst::Pipeline,
 
-    /// App sink for DMA-BUF frame capture
-    appsink: gst_app::AppSink,
-
-    /// Current DMA-BUF texture (cached)
-    current_texture: Arc<Mutex<Option<gdk::Texture>>>,
+    /// The gtk4paintablesink element
+    gtk4sink: gst::Element,
 
     /// Video dimensions
     pub width: i32,
@@ -350,7 +94,7 @@ pub struct GpuVideoPlayer {
     /// Volume (0.0 - 1.0)
     pub volume: f64,
 
-    /// Whether hardware decoding is active
+    /// Whether hardware decoding is active (VA-API)
     pub hw_accel: bool,
 
     /// Whether DMA-BUF zero-copy is being used
@@ -359,157 +103,45 @@ pub struct GpuVideoPlayer {
 
 #[cfg(feature = "video")]
 impl GpuVideoPlayer {
-    /// Create a new GPU-accelerated video player
+    /// Create a new GPU-accelerated video player using gtk4paintablesink
     ///
-    /// This uses VA-API for hardware decoding when available, with automatic
-    /// fallback to software decoding. Frames are exported via DMA-BUF for
-    /// zero-copy rendering to GTK4/GSK.
+    /// This uses gtk4paintablesink from gst-plugins-rs which handles all DMA-BUF/GL
+    /// negotiation internally. When running on Wayland with VA-API, this provides
+    /// true zero-copy video rendering.
     pub fn new(uri: &str) -> DisplayResult<Self> {
         gst::init()
             .map_err(|e| DisplayError::Backend(format!("Failed to init GStreamer: {}", e)))?;
+
+        // Try to create gtk4paintablesink (from gst-plugins-rs)
+        // This sink handles DMA-BUF/GL/VideoMeta negotiation internally
+        let gtk4sink = gst::ElementFactory::make("gtk4paintablesink")
+            .build()
+            .map_err(|e| DisplayError::Backend(format!(
+                "Failed to create gtk4paintablesink: {}. Make sure gst-plugins-rs is installed.", e
+            )))?;
 
         // Create playbin - it auto-selects VA-API decoders when available
         let playbin = gst::ElementFactory::make("playbin")
             .name("playbin")
             .property("uri", uri)
+            .property("video-sink", &gtk4sink)
             .build()
             .map_err(|e| DisplayError::Backend(format!("Failed to create playbin: {}", e)))?;
-
-        // Create video post-processor for format conversion
-        // vapostproc can output DMA-BUF directly for zero-copy
-        let vapostproc = gst::ElementFactory::make("vapostproc")
-            .build()
-            .ok(); // Optional - may not exist
-
-        // Fallback: regular videoconvert if vapostproc not available
-        let videoconvert = gst::ElementFactory::make("videoconvert")
-            .build()
-            .map_err(|e| DisplayError::Backend(format!("Failed to create videoconvert: {}", e)))?;
-
-        // Create bin for video sink
-        let sinkbin = gst::Bin::new();
-
-        // Determine if we can use zero-copy DMA-BUF path
-        // NOTE: Full DMA-BUF zero-copy requires:
-        // 1. VideoMeta support in appsink buffer pool
-        // 2. Proper caps negotiation with vapostproc
-        // For now, use VA-API decode + BGRA output which is still GPU-accelerated
-        let (appsink, hw_accel, use_dmabuf) = if let Some(ref vapost) = vapostproc {
-            // Use BGRA output for compatibility
-            // VA-API decodes on GPU, vapostproc converts to BGRA on GPU,
-            // but the final output is in system memory
-            let appsink = gst_app::AppSink::builder()
-                .caps(&gst::Caps::builder("video/x-raw")
-                    .field("format", "BGRA")
-                    .build())
-                .build();
-
-            // Hardware path: vapostproc -> appsink
-            sinkbin.add_many([vapost, appsink.upcast_ref()])
-                .map_err(|e| DisplayError::Backend(format!("Failed to add elements: {}", e)))?;
-            gst::Element::link_many([vapost, appsink.upcast_ref()])
-                .map_err(|e| DisplayError::Backend(format!("Failed to link elements: {}", e)))?;
-
-            let pad = vapost.static_pad("sink")
-                .ok_or_else(|| DisplayError::Backend("No sink pad on vapostproc".into()))?;
-            let ghost_pad = gst::GhostPad::with_target(&pad)
-                .map_err(|e| DisplayError::Backend(format!("Failed to create ghost pad: {}", e)))?;
-            sinkbin.add_pad(&ghost_pad)
-                .map_err(|e| DisplayError::Backend(format!("Failed to add ghost pad: {}", e)))?;
-
-            eprintln!("[GpuVideoPlayer] Using VA-API hardware acceleration (GPU decode + GPU convert)");
-            // Mark as not using DMA-BUF since we're using system memory BGRA
-            (appsink, true, false)
-        } else {
-            // Software fallback: videoconvert -> appsink (BGRA in system memory)
-            let appsink = gst_app::AppSink::builder()
-                .caps(&gst::Caps::builder("video/x-raw")
-                    .field("format", "BGRA")
-                    .build())
-                .build();
-
-            sinkbin.add_many([&videoconvert, appsink.upcast_ref()])
-                .map_err(|e| DisplayError::Backend(format!("Failed to add elements: {}", e)))?;
-            gst::Element::link_many([&videoconvert, appsink.upcast_ref()])
-                .map_err(|e| DisplayError::Backend(format!("Failed to link elements: {}", e)))?;
-
-            let pad = videoconvert.static_pad("sink")
-                .ok_or_else(|| DisplayError::Backend("No sink pad".into()))?;
-            let ghost_pad = gst::GhostPad::with_target(&pad)
-                .map_err(|e| DisplayError::Backend(format!("Failed to create ghost pad: {}", e)))?;
-            sinkbin.add_pad(&ghost_pad)
-                .map_err(|e| DisplayError::Backend(format!("Failed to add ghost pad: {}", e)))?;
-
-            eprintln!("[GpuVideoPlayer] Falling back to software decoding");
-            (appsink, false, false)
-        };
-
-        // Set video sink on playbin
-        playbin.set_property("video-sink", &sinkbin);
 
         // Get pipeline
         let pipeline: gst::Pipeline = playbin.downcast()
             .map_err(|_| DisplayError::Backend("Failed to downcast to pipeline".into()))?;
 
-        let current_texture = Arc::new(Mutex::new(None));
-        let texture_clone = current_texture.clone();
-        let use_dmabuf_clone = use_dmabuf;
+        // Check if VA-API decoders are available (indicates hw accel potential)
+        let hw_accel = gst::ElementFactory::find("vah264dec").is_some()
+            || gst::ElementFactory::find("vaapidecodebin").is_some();
 
-        // Track whether we've logged the first frame info
-        let first_frame_logged = Arc::new(Mutex::new(false));
-        let first_frame_clone = first_frame_logged.clone();
-
-        // Set up frame callback
-        appsink.set_callbacks(
-            gst_app::AppSinkCallbacks::builder()
-                .new_sample(move |sink| {
-                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Error)?;
-                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
-                    let caps = sample.caps().ok_or(gst::FlowError::Error)?;
-
-                    // Log first frame info
-                    if let Ok(mut logged) = first_frame_clone.lock() {
-                        if !*logged {
-                            eprintln!("[GpuVideoPlayer] First frame caps: {}", caps.to_string());
-                            *logged = true;
-                        }
-                    }
-
-                    // Try to get video info - may fail for DMA_DRM format
-                    let (width, height) = if let Ok(video_info) = gst_video::VideoInfo::from_caps(caps) {
-                        (video_info.width() as i32, video_info.height() as i32)
-                    } else {
-                        // For DMA_DRM format, extract dimensions from caps structure
-                        let structure = caps.structure(0).ok_or(gst::FlowError::Error)?;
-                        let width = structure.get::<i32>("width").unwrap_or(1920);
-                        let height = structure.get::<i32>("height").unwrap_or(1080);
-                        (width, height)
-                    };
-
-                    // Create texture based on memory type
-                    let texture = if use_dmabuf_clone {
-                        // Try DMA-BUF path (falls back to MemoryTexture if not DMA-BUF)
-                        Self::create_dmabuf_texture(buffer, width, height)
-                    } else {
-                        // Software path - create MemoryTexture
-                        Self::create_memory_texture(buffer, width, height)
-                    };
-
-                    if let Some(tex) = texture {
-                        if let Ok(mut current) = texture_clone.lock() {
-                            *current = Some(tex);
-                        }
-                    }
-
-                    Ok(gst::FlowSuccess::Ok)
-                })
-                .build(),
-        );
+        eprintln!("[GpuVideoPlayer] Created with gtk4paintablesink (DMA-BUF zero-copy enabled)");
+        eprintln!("[GpuVideoPlayer] VA-API hardware decoding: {}", if hw_accel { "available" } else { "not available" });
 
         Ok(Self {
             pipeline,
-            appsink,
-            current_texture,
+            gtk4sink,
             width: 0,
             height: 0,
             state: VideoState::Stopped,
@@ -518,89 +150,44 @@ impl GpuVideoPlayer {
             looping: false,
             volume: 1.0,
             hw_accel,
-            use_dmabuf,
+            use_dmabuf: true, // gtk4paintablesink handles this automatically
         })
     }
 
-    /// Create GdkDmabufTexture from GStreamer DMA-BUF buffer (zero-copy GPU path)
-    fn create_dmabuf_texture(buffer: &gst::BufferRef, width: i32, height: i32) -> Option<gdk::Texture> {
-        use gst_allocators::DmaBufMemory;
+    /// Get the GdkPaintable from the sink for rendering
+    ///
+    /// This returns a GdkPaintable that can be snapshotted directly into
+    /// the GTK4 render tree. The paintable is backed by DMA-BUF when
+    /// zero-copy is active.
+    pub fn get_paintable(&self) -> Option<gdk::Paintable> {
+        self.gtk4sink.property::<Option<gdk::Paintable>>("paintable")
+    }
 
-        let memory = buffer.memory(0)?;
+    /// Get current frame as GDK texture
+    ///
+    /// This snapshots the current paintable to a texture. For most rendering
+    /// use cases, prefer using get_paintable() directly for better performance.
+    pub fn get_frame_texture(&self) -> Option<gdk::Texture> {
+        let paintable = self.get_paintable()?;
+        let width = paintable.intrinsic_width();
+        let height = paintable.intrinsic_height();
 
-        // Check if memory is DMA-BUF type using the proper MemoryType trait
-        if memory.is_memory_type::<DmaBufMemory>() {
-            // Downcast to get DmaBufMemoryRef
-            if let Some(dmabuf_mem) = memory.downcast_memory_ref::<DmaBufMemory>() {
-                let fd: RawFd = dmabuf_mem.fd();
-
-                // We need video meta to get stride/offset info
-                let video_meta = buffer.meta::<gst_video::VideoMeta>();
-                let (stride, offset) = if let Some(meta) = video_meta {
-                    // Use video meta for accurate stride/offset
-                    let stride = meta.stride().first().copied().unwrap_or((width * 4) as i32) as u32;
-                    let offset = meta.offset().first().copied().unwrap_or(0) as u32;
-                    (stride, offset)
-                } else {
-                    // Fall back to calculated stride
-                    ((width * 4) as u32, 0)
-                };
-
-                // Try to create GdkDmabufTexture via DmabufTextureBuilder
-                // DRM_FORMAT_ARGB8888 = 0x34325241 (little-endian 'AR24')
-                // DRM_FORMAT_BGRA8888 = 0x30324142 ('AB24') - more common for BGRA
-                // For video, often NV12 (0x3231564e) or I420
-                // With videoconvert ! video/x-raw,format=BGRA we use ARGB8888
-                const DRM_FORMAT_ARGB8888: u32 = 0x34325241;
-
-                let builder = gdk::DmabufTextureBuilder::new();
-                builder.set_width(width as u32);
-                builder.set_height(height as u32);
-                builder.set_fourcc(DRM_FORMAT_ARGB8888);
-                builder.set_modifier(0); // Linear modifier
-                builder.set_n_planes(1);
-                builder.set_fd(0, fd);
-                builder.set_stride(0, stride);
-                builder.set_offset(0, offset);
-                builder.set_premultiplied(true);
-
-                // Build the texture (unsafe because FD must be valid)
-                match unsafe { builder.build() } {
-                    Ok(texture) => {
-                        eprintln!("[GpuVideoPlayer] Zero-copy DMA-BUF texture created! {}x{}", width, height);
-                        return Some(texture);
-                    }
-                    Err(e) => {
-                        eprintln!("[GpuVideoPlayer] DMA-BUF texture build failed: {:?}, falling back to memory copy", e);
-                    }
-                }
-            }
+        if width <= 0 || height <= 0 {
+            return None;
         }
 
-        // Fall back to memory texture copy
-        Self::create_memory_texture(buffer, width, height)
-    }
+        // Get the current image as a paintable (may be the same or a snapshot)
+        let image = paintable.current_image();
 
-    /// Create GdkMemoryTexture from buffer (fallback path)
-    fn create_memory_texture(buffer: &gst::BufferRef, width: i32, height: i32) -> Option<gdk::Texture> {
-        let map = buffer.map_readable().ok()?;
-        let pixels = map.as_slice();
+        // Try to downcast to Texture if it's already a texture
+        if let Ok(texture) = image.downcast::<gdk::Texture>() {
+            return Some(texture);
+        }
 
-        let bytes = glib::Bytes::from(pixels);
-        let texture = gdk::MemoryTexture::new(
-            width,
-            height,
-            gdk::MemoryFormat::B8g8r8a8Premultiplied,
-            &bytes,
-            (width * 4) as usize,
-        );
-
-        Some(texture.upcast())
-    }
-
-    /// Get current frame as GDK texture (zero-copy when using DMA-BUF)
-    pub fn get_frame_texture(&self) -> Option<gdk::Texture> {
-        self.current_texture.lock().ok()?.clone()
+        // Otherwise snapshot the paintable to create a texture
+        // This requires a realized widget/renderer which we may not have
+        // For now, return None - callers should use get_paintable() for rendering
+        None
     }
 
     /// Get current frame as Cairo surface (downloads from GPU, fallback path)

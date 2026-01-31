@@ -46,6 +46,7 @@ pkgs.mkShell {
     gst_all_1.gst-plugins-good
     gst_all_1.gst-plugins-bad
     gst_all_1.gst-plugins-ugly
+    gst_all_1.gst-plugins-rs  # For gtk4paintablesink (DMA-BUF zero-copy)
     
     # libsoup for HTTP
     libsoup_3
