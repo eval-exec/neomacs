@@ -13,6 +13,31 @@ pub mod wpe;
 #[cfg(feature = "wpe-webkit")]
 pub mod webkit;
 
+// Stub WebKitCache when webkit is disabled
+#[cfg(not(feature = "wpe-webkit"))]
+pub mod webkit {
+    use gtk4::gdk;
+    
+    /// Stub WebKitCache for when webkit is disabled
+    pub struct WebKitCache;
+    
+    impl WebKitCache {
+        pub fn new() -> Self { Self }
+        pub fn get(&self, _id: u32) -> Option<&StubView> { None }
+    }
+    
+    impl Default for WebKitCache {
+        fn default() -> Self { Self::new() }
+    }
+    
+    /// Stub view
+    pub struct StubView;
+    
+    impl StubView {
+        pub fn texture(&self) -> Option<&gdk::Texture> { None }
+    }
+}
+
 /// Display backend trait
 /// 
 /// Implementations provide platform-specific rendering.
