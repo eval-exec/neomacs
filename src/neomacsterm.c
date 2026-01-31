@@ -320,7 +320,9 @@ neomacs_update_end (struct frame *f)
     {
       /* For GPU widget, also set the scene */
       if (output->use_gpu_widget && dpyinfo && dpyinfo->display_handle)
-        neomacs_display_render_to_widget (dpyinfo->display_handle, output->drawing_area);
+        {
+          neomacs_display_render_to_widget (dpyinfo->display_handle, output->drawing_area);
+        }
       
       gtk_widget_queue_draw (GTK_WIDGET (output->drawing_area));
     }
@@ -501,9 +503,6 @@ neomacs_draw_glyph_string (struct glyph_string *s)
   struct neomacs_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
   cairo_t *cr;
 
-  /* Track current row for Rust scene graph */
-  static int current_row_y = -1;
-
   if (!output)
     return;
 
@@ -513,19 +512,16 @@ neomacs_draw_glyph_string (struct glyph_string *s)
       /* Forward glyph data to Rust scene graph */
       if (dpyinfo && dpyinfo->display_handle && s->first_glyph && s->row)
         {
-          /* Check if we need to start a new row */
+          /* Always call begin_row - pass X position for glyph replacement */
           int row_y = s->row->y;
-          if (row_y != current_row_y)
-            {
-              /* Start a new row */
-              current_row_y = row_y;
-              neomacs_display_begin_row (dpyinfo->display_handle,
-                                         row_y,
-                                         s->row->height,
-                                         s->row->ascent,
-                                         s->row->mode_line_p ? 1 : 0,
-                                         0);  /* header_line not in glyph_row */
-            }
+          
+          neomacs_display_begin_row (dpyinfo->display_handle,
+                                     row_y,
+                                     s->x,  /* Starting X position for this glyph string */
+                                     s->row->height,
+                                     s->row->ascent,
+                                     s->row->mode_line_p ? 1 : 0,
+                                     0);  /* header_line not in glyph_row */
 
           /* Add glyphs to Rust scene graph */
           int face_id = s->face ? s->face->id : 0;
@@ -673,19 +669,15 @@ neomacs_draw_glyph_string (struct glyph_string *s)
   /* Forward glyph data to Rust scene graph if available */
   if (dpyinfo && dpyinfo->display_handle && s->first_glyph && s->row)
     {
-      /* Check if we need to start a new row */
+      /* Always call begin_row - pass X position for glyph replacement */
       int row_y = s->row->y;
-      if (row_y != current_row_y)
-        {
-          /* Start a new row */
-          current_row_y = row_y;
-          neomacs_display_begin_row (dpyinfo->display_handle,
-                                     row_y,
-                                     s->row->height,
-                                     s->row->ascent,
-                                     s->row->mode_line_p ? 1 : 0,
-                                     0);  /* header_line not in glyph_row */
-        }
+      neomacs_display_begin_row (dpyinfo->display_handle,
+                                 row_y,
+                                 s->x,  /* Starting X position for this glyph string */
+                                 s->row->height,
+                                 s->row->ascent,
+                                 s->row->mode_line_p ? 1 : 0,
+                                 0);  /* header_line not in glyph_row */
 
       /* Add glyphs to Rust scene graph */
       int face_id = s->face ? s->face->id : 0;

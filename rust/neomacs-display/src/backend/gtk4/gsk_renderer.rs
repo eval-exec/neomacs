@@ -356,12 +356,14 @@ impl GskRenderer {
         webkit_cache: Option<&WebKitCache>,
     ) -> Option<Vec<gsk::RenderNode>> {
         let mut nodes: Vec<gsk::RenderNode> = Vec::new();
-        let mut x = base_x;
         let baseline_y = base_y + row.ascent as f32;
         let row_height = row.height as f32;
 
-        // Render each glyph at Emacs's exact position
+        // Render each glyph at its stored X position (no accumulation)
         for glyph in &row.glyphs {
+            // Use the glyph's stored X position directly
+            let x = base_x + glyph.x as f32;
+            
             // Get face for styling - look in scene first, then fall back to renderer cache
             let face = scene.get_face(glyph.face_id)
                 .or_else(|| self.face_cache.get(glyph.face_id))
@@ -385,13 +387,11 @@ impl GskRenderer {
                     } else if glyph.charcode > 0 {
                         char::from_u32(glyph.charcode).unwrap_or('\u{FFFD}')
                     } else {
-                        x += glyph.pixel_width as f32;
                         continue;
                     };
 
                     // Skip null/control characters and spaces
                     if c == '\0' || c.is_control() || c == ' ' {
-                        x += glyph.pixel_width as f32;
                         continue;
                     }
 
@@ -473,12 +473,10 @@ impl GskRenderer {
                         }
                     }
 
-                    // Advance by Emacs's pixel_width (exact positioning)
-                    x += glyph.pixel_width as f32;
+                    // No longer accumulating x - each glyph uses its stored position
                 }
                 GlyphType::Stretch => {
-                    // Stretch glyphs are whitespace - just advance x
-                    x += glyph.pixel_width as f32;
+                    // Stretch glyphs are whitespace - nothing to render
                 }
                 GlyphType::Image => {
                     // Render image from cache
@@ -508,7 +506,6 @@ impl GskRenderer {
                             nodes.push(placeholder_node.upcast());
                         }
                     }
-                    x += glyph.pixel_width as f32;
                 }
                 GlyphType::Video => {
                     // Render video frame
@@ -585,7 +582,6 @@ impl GskRenderer {
                             nodes.push(icon_node.upcast());
                         }
                     }
-                    x += glyph.pixel_width as f32;
                 }
                 GlyphType::Wpe => {
                     // Render WebKit view
@@ -634,10 +630,9 @@ impl GskRenderer {
                             nodes.push(icon_node.upcast());
                         }
                     }
-                    x += glyph.pixel_width as f32;
                 }
                 _ => {
-                    x += glyph.pixel_width as f32;
+                    // Other glyph types - no rendering needed
                 }
             }
         }

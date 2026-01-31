@@ -78,9 +78,11 @@ void neomacs_display_set_cursor(struct NeomacsDisplay *handle,
 
 /**
  * Begin a new glyph row for the current window
+ * x: starting X position for this glyph string
  */
 void neomacs_display_begin_row(struct NeomacsDisplay *handle,
                                int y,
+                               int x,
                                int height,
                                int ascent,
                                int modeLine,

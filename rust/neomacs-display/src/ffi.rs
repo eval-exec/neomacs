@@ -24,8 +24,10 @@ pub struct NeomacsDisplay {
     video_cache: VideoCache, // Video player cache
     image_cache: ImageCache, // Image cache
     current_row_y: i32,     // Y position of current row being built
+    current_row_x: i32,     // X position for next glyph in current row
     current_window_id: i32, // ID of current window being updated
     in_frame: bool,         // Whether we're currently in a frame update
+    frame_counter: u64,     // Frame counter for tracking row updates
 }
 
 impl NeomacsDisplay {
@@ -59,8 +61,10 @@ pub unsafe extern "C" fn neomacs_display_init(backend: BackendType) -> *mut Neom
         video_cache: VideoCache::new(),
         image_cache: ImageCache::new(),
         current_row_y: -1,
+        current_row_x: 0,
         current_window_id: -1,
         in_frame: false,
+        frame_counter: 0,
     });
 
     // Create the backend
@@ -142,10 +146,12 @@ pub unsafe extern "C" fn neomacs_display_begin_frame(handle: *mut NeomacsDisplay
     }
 
     let display = &mut *handle;
-    // Just mark that we're in a frame update cycle
-    // Don't clear the scene - Emacs does incremental updates and we need to preserve content
-    // between frame updates (e.g. cursor blink doesn't repopulate all glyphs)
+    // Increment frame counter - used to track which rows need clearing
+    display.frame_counter += 1;
+    // Mark that we're in a frame update cycle
     display.in_frame = true;
+    // Don't clear rows here - Emacs does incremental updates
+    // Rows will be cleared individually when begin_row is called
 }
 
 /// Add a window to the current frame
@@ -166,20 +172,14 @@ pub unsafe extern "C" fn neomacs_display_add_window(
 
     let display = &mut *handle;
 
-    // Track current window
+    // Track current window (for backward compatibility, though we use single window)
     display.current_window_id = window_id;
 
-    // Find or create window - don't clear rows (Emacs does incremental updates)
-    if let Some(existing) = display.scene.windows.iter_mut().find(|w| w.window_id == window_id) {
-        // Update window properties but keep existing rows
-        existing.bounds = Rect::new(x, y, width, height);
-        existing.background = Color::from_pixel(bg_color);
-        existing.selected = selected != 0;
-        // DON'T clear rows - Emacs will update specific rows
-    } else {
-        // New window
+    // Use single window approach - update first window or create if none
+    if display.scene.windows.is_empty() {
+        // Create the one and only window
         let window = WindowScene {
-            window_id,
+            window_id: 0,  // Use fixed ID 0
             bounds: Rect::new(x, y, width, height),
             background: Color::from_pixel(bg_color),
             rows: Vec::new(),
@@ -190,6 +190,17 @@ pub unsafe extern "C" fn neomacs_display_add_window(
             header_line_height: 0,
         };
         display.scene.windows.push(window);
+    } else {
+        // Update the single window's properties (use largest bounds)
+        let window = &mut display.scene.windows[0];
+        // Expand bounds to encompass all Emacs windows
+        let new_right = (x + width).max(window.bounds.x + window.bounds.width);
+        let new_bottom = (y + height).max(window.bounds.y + window.bounds.height);
+        window.bounds.width = new_right - window.bounds.x.min(x);
+        window.bounds.height = new_bottom - window.bounds.y.min(y);
+        window.bounds.x = window.bounds.x.min(x);
+        window.bounds.y = window.bounds.y.min(y);
+        window.selected = selected != 0 || window.selected;
     }
 }
 
@@ -240,6 +251,7 @@ pub unsafe extern "C" fn neomacs_display_set_cursor(
 pub unsafe extern "C" fn neomacs_display_begin_row(
     handle: *mut NeomacsDisplay,
     y: c_int,
+    x: c_int,  // Starting X position for this glyph string
     height: c_int,
     ascent: c_int,
     mode_line: c_int,
@@ -250,37 +262,58 @@ pub unsafe extern "C" fn neomacs_display_begin_row(
     }
 
     let display = &mut *handle;
+    let current_frame = display.frame_counter;
 
-    // Track current row Y for glyph additions
+    // Track current row Y and X for glyph additions
     display.current_row_y = y;
+    display.current_row_x = x;  // Set starting X for this glyph string
 
-    // Find window by current_window_id
-    let window_id = display.current_window_id;
-    if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == window_id) {
-        // Look for existing row at this Y position
-        if let Some(existing_row) = window.rows.iter_mut().find(|r| r.y == y) {
-            // Replace existing row content
-            existing_row.glyphs.clear();
-            existing_row.height = height;
-            existing_row.visible_height = height;
-            existing_row.ascent = ascent;
-            existing_row.mode_line = mode_line != 0;
-            existing_row.header_line = header_line != 0;
-        } else {
-            // Add new row
-            let row = GlyphRow {
-                glyphs: Vec::new(),
-                y,
-                height,
-                visible_height: height,
-                ascent,
-                enabled: true,
-                cursor_in_row: false,
-                mode_line: mode_line != 0,
-                header_line: header_line != 0,
-            };
-            window.rows.push(row);
-        }
+    // Use the FIRST window for all content (ignore window_id)
+    // This simplifies everything since we render to a single GTK widget
+    let window = if display.scene.windows.is_empty() {
+        // Create default window if none exists
+        display.scene.windows.push(crate::core::scene::WindowScene {
+            window_id: 0,
+            bounds: crate::core::Rect::new(0.0, 0.0, 
+                display.scene.width as f32, display.scene.height as f32),
+            background: crate::core::Color::from_u8(0, 0, 0, 255),
+            rows: Vec::new(),
+            cursor: None,
+            scroll_offset: 0.0,
+            selected: true,
+            mode_line_height: 0,
+            header_line_height: 0,
+        });
+        &mut display.scene.windows[0]
+    } else {
+        &mut display.scene.windows[0]
+    };
+    
+    // Look for existing row at this Y position
+    if let Some(existing_row) = window.rows.iter_mut().find(|r| r.y == y) {
+        // DON'T clear the entire row - instead we use X-position based replacement
+        // when adding glyphs. This preserves content that Emacs doesn't redraw.
+        
+        // Update the properties
+        existing_row.height = height;
+        existing_row.visible_height = height;
+        existing_row.ascent = ascent;
+        existing_row.mode_line = mode_line != 0;
+        existing_row.header_line = header_line != 0;
+    } else {
+        // Add new row
+        window.rows.push(GlyphRow {
+            glyphs: Vec::new(),
+            y,
+            height,
+            visible_height: height,
+            ascent,
+            enabled: true,
+            cursor_in_row: false,
+            mode_line: mode_line != 0,
+            header_line: header_line != 0,
+            last_frame_cleared: current_frame,
+        });
     }
 }
 
@@ -300,16 +333,26 @@ pub unsafe extern "C" fn neomacs_display_add_char_glyph(
 
     let display = &mut *handle;
     let current_y = display.current_row_y;
-    let window_id = display.current_window_id;
+    let current_x = display.current_row_x;
     let c = char::from_u32(charcode).unwrap_or('\u{FFFD}');
 
-    // Find window by current_window_id, then find row by current_row_y
-    if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == window_id) {
+    // Use first window for all content
+    if let Some(window) = display.scene.windows.first_mut() {
         if let Some(row) = window.rows.iter_mut().find(|r| r.y == current_y) {
+            // Remove any existing glyphs that overlap this X range
+            let x_start = current_x;
+            let x_end = current_x + pixel_width;
+            row.glyphs.retain(|g| {
+                // Keep glyphs that don't overlap with our new glyph's X range
+                let g_end = g.x + g.pixel_width;
+                g_end <= x_start || g.x >= x_end
+            });
+            
             let glyph = Glyph {
                 glyph_type: GlyphType::Char,
                 charcode,
                 face_id,
+                x: current_x,
                 pixel_width,
                 ascent,
                 descent,
@@ -322,6 +365,9 @@ pub unsafe extern "C" fn neomacs_display_add_char_glyph(
                 },
             };
             row.glyphs.push(glyph);
+            
+            // Advance X position for next glyph
+            display.current_row_x += pixel_width;
         }
     }
 }
@@ -340,15 +386,24 @@ pub unsafe extern "C" fn neomacs_display_add_stretch_glyph(
 
     let display = &mut *handle;
     let current_y = display.current_row_y;
-    let window_id = display.current_window_id;
+    let current_x = display.current_row_x;
 
-    // Find window by current_window_id, then find row by current_row_y
-    if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == window_id) {
+    // Use first window for all content
+    if let Some(window) = display.scene.windows.first_mut() {
         if let Some(row) = window.rows.iter_mut().find(|r| r.y == current_y) {
+            // Remove any existing glyphs that overlap this X range
+            let x_start = current_x;
+            let x_end = current_x + pixel_width;
+            row.glyphs.retain(|g| {
+                let g_end = g.x + g.pixel_width;
+                g_end <= x_start || g.x >= x_end
+            });
+            
             let glyph = Glyph {
                 glyph_type: GlyphType::Stretch,
                 charcode: 0,
                 face_id,
+                x: current_x,
                 pixel_width,
                 ascent: height,
                 descent: 0,
@@ -359,6 +414,9 @@ pub unsafe extern "C" fn neomacs_display_add_stretch_glyph(
                 data: GlyphData::Stretch { width: pixel_width },
             };
             row.glyphs.push(glyph);
+            
+            // Advance X position
+            display.current_row_x += pixel_width;
         }
     }
 }
@@ -377,15 +435,24 @@ pub unsafe extern "C" fn neomacs_display_add_image_glyph(
 
     let display = &mut *handle;
     let current_y = display.current_row_y;
-    let window_id = display.current_window_id;
+    let current_x = display.current_row_x;
 
-    // Find window by current_window_id, then find row by current_row_y
-    if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == window_id) {
+    // Use first window for all content
+    if let Some(window) = display.scene.windows.first_mut() {
         if let Some(row) = window.rows.iter_mut().find(|r| r.y == current_y) {
+            // Remove overlapping glyphs
+            let x_start = current_x;
+            let x_end = current_x + pixel_width;
+            row.glyphs.retain(|g| {
+                let g_end = g.x + g.pixel_width;
+                g_end <= x_start || g.x >= x_end
+            });
+            
             let glyph = Glyph {
                 glyph_type: GlyphType::Image,
                 charcode: 0,
                 face_id: 0,
+                x: current_x,
                 pixel_width,
                 ascent: pixel_height,
                 descent: 0,
@@ -396,6 +463,9 @@ pub unsafe extern "C" fn neomacs_display_add_image_glyph(
                 data: GlyphData::Image { image_id },
             };
             row.glyphs.push(glyph);
+            
+            // Advance X position
+            display.current_row_x += pixel_width;
         }
     }
 }
@@ -548,15 +618,24 @@ pub unsafe extern "C" fn neomacs_display_add_video_glyph(
 
     let display = &mut *handle;
     let current_y = display.current_row_y;
-    let window_id = display.current_window_id;
+    let current_x = display.current_row_x;
 
-    // Find window by current_window_id, then find row by current_row_y
-    if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == window_id) {
+    // Use first window for all content
+    if let Some(window) = display.scene.windows.first_mut() {
         if let Some(row) = window.rows.iter_mut().find(|r| r.y == current_y) {
+            // Remove overlapping glyphs
+            let x_start = current_x;
+            let x_end = current_x + pixel_width;
+            row.glyphs.retain(|g| {
+                let g_end = g.x + g.pixel_width;
+                g_end <= x_start || g.x >= x_end
+            });
+            
             let glyph = Glyph {
                 glyph_type: GlyphType::Video,
                 charcode: 0,
                 face_id: 0,
+                x: current_x,
                 pixel_width,
                 ascent: pixel_height,
                 descent: 0,
@@ -567,6 +646,9 @@ pub unsafe extern "C" fn neomacs_display_add_video_glyph(
                 data: GlyphData::Video { video_id },
             };
             row.glyphs.push(glyph);
+            
+            // Advance X position
+            display.current_row_x += pixel_width;
         }
     }
 }
@@ -1188,6 +1270,7 @@ pub unsafe extern "C" fn neomacs_display_render_to_widget(
 
     // Always build and set the scene (needed for floating videos even without glyphs)
     display.scene.build();
+    
     let cloned_scene = display.scene.clone();
     widget.set_scene(cloned_scene);
 
@@ -1795,14 +1878,25 @@ pub unsafe extern "C" fn neomacs_display_add_wpe_glyph(
     }
 
     let display = &mut *handle;
+    let current_y = display.current_row_y;
+    let current_x = display.current_row_x;
 
-    // Add to the current row
-    if let Some(window) = display.scene.windows.last_mut() {
-        if let Some(row) = window.rows.last_mut() {
+    // Use first window for all content
+    if let Some(window) = display.scene.windows.first_mut() {
+        if let Some(row) = window.rows.iter_mut().find(|r| r.y == current_y) {
+            // Remove overlapping glyphs
+            let x_start = current_x;
+            let x_end = current_x + pixel_width;
+            row.glyphs.retain(|g| {
+                let g_end = g.x + g.pixel_width;
+                g_end <= x_start || g.x >= x_end
+            });
+            
             let glyph = Glyph {
                 glyph_type: GlyphType::Wpe,
                 charcode: 0,
                 face_id: 0,
+                x: current_x,
                 pixel_width,
                 ascent: pixel_height,
                 descent: 0,
@@ -1813,6 +1907,9 @@ pub unsafe extern "C" fn neomacs_display_add_wpe_glyph(
                 data: GlyphData::Wpe { view_id },
             };
             row.glyphs.push(glyph);
+            
+            // Advance X position
+            display.current_row_x += pixel_width;
         }
     }
 }

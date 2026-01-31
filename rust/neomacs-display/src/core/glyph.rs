@@ -43,6 +43,9 @@ pub struct Glyph {
     /// Face ID for styling
     pub face_id: u32,
 
+    /// X position in pixels (for position-based replacement)
+    pub x: i32,
+
     /// Width in pixels
     pub pixel_width: i32,
 
@@ -74,6 +77,7 @@ impl Default for Glyph {
             glyph_type: GlyphType::Char,
             charcode: 0,
             face_id: 0,
+            x: 0,
             pixel_width: 0,
             ascent: 0,
             descent: 0,
@@ -216,6 +220,9 @@ pub struct GlyphRow {
 
     /// Header line row?
     pub header_line: bool,
+
+    /// Frame counter when this row was last cleared (for incremental updates)
+    pub last_frame_cleared: u64,
 }
 
 impl GlyphRow {

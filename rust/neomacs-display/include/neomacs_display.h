@@ -89,6 +89,7 @@ void neomacs_display_set_cursor(struct NeomacsDisplay *handle,
  */
 void neomacs_display_begin_row(struct NeomacsDisplay *handle,
                                int y,
+                               int x,
                                int height,
                                int ascent,
                                int modeLine,
