@@ -446,7 +446,10 @@ enum glyph_type
   XWIDGET_GLYPH,
 
   /* Glyph is a video frame (Neomacs).  */
-  VIDEO_GLYPH
+  VIDEO_GLYPH,
+
+  /* Glyph is a WebKit browser view (Neomacs).  */
+  WEBKIT_GLYPH
 };
 
 
@@ -607,6 +610,9 @@ struct glyph
 #ifdef HAVE_NEOMACS
     /* Video ID for video glyphs (type == VIDEO_GLYPH).  */
     uint32_t video_id;
+
+    /* WebKit view ID for webkit glyphs (type == WEBKIT_GLYPH).  */
+    uint32_t webkit_id;
 #endif
 
 #ifdef HAVE_XWIDGETS
@@ -2295,7 +2301,12 @@ enum display_element_type
   IT_CONTINUATION,
 
   /* Xwidget.  */
-  IT_XWIDGET
+  IT_XWIDGET,
+
+#ifdef HAVE_NEOMACS
+  /* WebKit browser view (Neomacs).  */
+  IT_WEBKIT
+#endif
 };
 
 
@@ -2736,6 +2747,11 @@ struct it
 
   /* If what == IT_XWIDGET.  */
   struct xwidget *xwidget;
+
+#ifdef HAVE_NEOMACS
+  /* If what == IT_WEBKIT, the WebKit view id.  */
+  uint32_t webkit_id;
+#endif
 
   /* Values from `slice' property.  */
   struct it_slice slice;

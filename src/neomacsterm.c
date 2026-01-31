@@ -650,6 +650,13 @@ neomacs_draw_glyph_string (struct glyph_string *s)
                                                 s->first_glyph->pixel_width,
                                                 s->row->height);
               break;
+            case WEBKIT_GLYPH:
+              /* Handle WebKit glyphs */
+              neomacs_display_add_wpe_glyph (dpyinfo->display_handle,
+                                              s->first_glyph->u.webkit_id,
+                                              s->first_glyph->pixel_width,
+                                              s->row->height);
+              break;
             default:
               break;
             }
@@ -740,6 +747,14 @@ neomacs_draw_glyph_string (struct glyph_string *s)
                                            s->first_glyph->u.video_id,
                                            s->first_glyph->pixel_width,
                                            s->row->height);
+          break;
+
+        case WEBKIT_GLYPH:
+          /* Handle WebKit glyphs */
+          neomacs_display_add_wpe_glyph (dpyinfo->display_handle,
+                                          s->first_glyph->u.webkit_id,
+                                          s->first_glyph->pixel_width,
+                                          s->row->height);
           break;
           
         default:
@@ -833,6 +848,10 @@ neomacs_draw_glyph_string (struct glyph_string *s)
 
     case VIDEO_GLYPH:
       /* Video glyph rendering is handled by Rust - no Cairo fallback needed */
+      break;
+
+    case WEBKIT_GLYPH:
+      /* WebKit glyph rendering is handled by Rust - no Cairo fallback needed */
       break;
 
     default:
