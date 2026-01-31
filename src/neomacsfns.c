@@ -985,6 +985,10 @@ neomacs_create_frame_widgets (struct frame *f)
 	PangoContext *pango_ctx = gtk_widget_get_pango_context (drawing_area);
 	if (pango_ctx)
 	  neomacs_display_init_pango (dpyinfo->display_handle, pango_ctx);
+
+	/* For GPU widget, also initialize with widget reference for video callbacks */
+	if (use_gpu_widget)
+	  neomacs_display_widget_init_pango (dpyinfo->display_handle, drawing_area);
       }
   }
 

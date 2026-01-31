@@ -1140,7 +1140,7 @@ pub unsafe extern "C" fn neomacs_display_widget_init_pango(
     widget: *mut c_void,
 ) {
     use gtk4::glib::translate::from_glib_none;
-    use gtk4::prelude::WidgetExt;
+    use gtk4::prelude::{WidgetExt, Cast};
 
     if handle.is_null() || widget.is_null() {
         return;
@@ -1152,6 +1152,10 @@ pub unsafe extern "C" fn neomacs_display_widget_init_pango(
     // Get Pango context from widget and initialize renderer
     let context = widget.pango_context();
     display.renderer.init_with_context(context);
+
+    // Set widget for video frame invalidation callbacks early
+    // This ensures the widget is available when videos start producing frames
+    set_video_widget(Some(widget.clone().upcast::<gtk4::Widget>()));
 }
 
 /// Render scene to a NeomacsWidget using GSK (GPU-accelerated)
@@ -1179,23 +1183,15 @@ pub unsafe extern "C" fn neomacs_display_render_to_widget(
     // This allows video paintables to trigger redraws when new frames arrive
     set_video_widget(Some(widget.clone().upcast::<gtk4::Widget>()));
 
-    // Count glyphs
-    let total_glyphs: usize = display.scene.windows.iter()
-        .map(|w| w.rows.iter().map(|r| r.glyphs.len()).sum::<usize>())
-        .sum();
+    // Set caches for widget rendering (thread-local storage)
+    // The widget's snapshot() method will use these during GTK's draw cycle
+    set_widget_video_cache(&display.video_cache as *const VideoCache);
+    set_widget_image_cache(&mut display.image_cache as *mut ImageCache);
 
-    if total_glyphs > 0 {
-        // Build the scene and set it on the widget
-        display.scene.build();
-        let cloned_scene = display.scene.clone();
-
-        // Set caches for widget rendering (thread-local storage)
-        // The widget's snapshot() method will use these during GTK's draw cycle
-        set_widget_video_cache(&display.video_cache as *const VideoCache);
-        set_widget_image_cache(&mut display.image_cache as *mut ImageCache);
-
-        widget.set_scene(cloned_scene);
-    }
+    // Always build and set the scene (needed for floating videos even without glyphs)
+    display.scene.build();
+    let cloned_scene = display.scene.clone();
+    widget.set_scene(cloned_scene);
 
     0
 }

@@ -9,6 +9,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 #[cfg(feature = "video")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "video")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "video")]
 use gstreamer as gst;
@@ -21,19 +23,49 @@ use gtk4::gdk;
 #[cfg(feature = "video")]
 use gtk4::glib;
 #[cfg(feature = "video")]
-use gtk4::prelude::{TextureExt, TextureExtManual, PaintableExt, WidgetExt};
+use gtk4::prelude::{TextureExt, TextureExtManual, PaintableExt, WidgetExt, WidgetExtManual};
 
 // Thread-local widget reference for video frame invalidation callbacks
 #[cfg(feature = "video")]
 thread_local! {
     static VIDEO_WIDGET: RefCell<Option<gtk4::Widget>> = const { RefCell::new(None) };
+    static TIMEOUT_SOURCE_ID: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
 }
+
+// Flag to indicate new frame is available (set by GStreamer thread, read by timeout)
+#[cfg(feature = "video")]
+static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Set the widget for video frame invalidation callbacks
 #[cfg(feature = "video")]
 pub fn set_video_widget(widget: Option<gtk4::Widget>) {
     VIDEO_WIDGET.with(|w| {
-        *w.borrow_mut() = widget;
+        // Remove old timeout source if any
+        TIMEOUT_SOURCE_ID.with(|id| {
+            if let Some(source_id) = id.borrow_mut().take() {
+                source_id.remove();
+            }
+        });
+        
+        // Set new widget
+        *w.borrow_mut() = widget.clone();
+        
+        // Add timeout source for video frame updates (~60fps)
+        // This runs on the GLib main context which Emacs processes
+        if widget.is_some() {
+            let source_id = glib::timeout_add_local(std::time::Duration::from_millis(16), || {
+                // Check if a new frame is pending
+                if FRAME_PENDING.swap(false, Ordering::Relaxed) {
+                    if let Some(widget) = get_video_widget() {
+                        widget.queue_draw();
+                    }
+                }
+                glib::ControlFlow::Continue
+            });
+            TIMEOUT_SOURCE_ID.with(|id| {
+                *id.borrow_mut() = Some(source_id);
+            });
+        }
     });
 }
 
@@ -183,13 +215,15 @@ impl GpuVideoPlayer {
     /// This is essential for video playback: when gtk4paintablesink produces a new
     /// frame, it emits invalidate-contents on the paintable. We need to listen for
     /// this and queue a redraw on the Emacs widget.
+    ///
+    /// The signal fires from GStreamer's streaming thread, so we just set an atomic
+    /// flag. The tick callback (running on the main thread via frame clock) checks
+    /// this flag and queues the redraw.
     fn connect_invalidate_signal(&self) {
         if let Some(paintable) = self.get_paintable() {
-            paintable.connect_invalidate_contents(|_paintable| {
-                // Queue redraw on the widget stored in thread-local
-                if let Some(widget) = get_video_widget() {
-                    widget.queue_draw();
-                }
+            paintable.connect_invalidate_contents(move |_paintable| {
+                // Set flag - the tick callback will read this and queue_draw
+                FRAME_PENDING.store(true, Ordering::Relaxed);
             });
         }
     }

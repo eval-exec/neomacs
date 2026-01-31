@@ -3940,6 +3940,8 @@ if test "$window_system" = "neomacs"; then
   dnl Link GTK4 and GStreamer
   PKG_CHECK_MODULES([GTK4], [gtk4], [], [AC_MSG_ERROR([GTK4 required for Neomacs])])
   PKG_CHECK_MODULES([GSTREAMER], [gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0], [], [AC_MSG_ERROR([GStreamer required for Neomacs])])
+  dnl GLib is required for event loop integration (xgselect)
+  PKG_CHECK_MODULES([GLIB], [glib-2.0], [], [AC_MSG_ERROR([GLib required for Neomacs video playback])])
   dnl Cairo is required for font rendering with ftcrfont
   CAIRO_REQUIRED=1.12.0
   CAIRO_MODULE="cairo >= $CAIRO_REQUIRED"
@@ -3949,8 +3951,8 @@ if test "$window_system" = "neomacs"; then
   else
     AC_MSG_ERROR([cairo required for Neomacs but not found.])
   fi
-  NEOMACS_CFLAGS="$GTK4_CFLAGS $GSTREAMER_CFLAGS $CAIRO_CFLAGS"
-  NEOMACS_LIBS="$NEOMACS_LIBS $GTK4_LIBS $GSTREAMER_LIBS $CAIRO_LIBS -lpthread -lm -ldl"
+  NEOMACS_CFLAGS="$GTK4_CFLAGS $GSTREAMER_CFLAGS $CAIRO_CFLAGS $GLIB_CFLAGS"
+  NEOMACS_LIBS="$NEOMACS_LIBS $GTK4_LIBS $GSTREAMER_LIBS $CAIRO_LIBS $GLIB_LIBS -lpthread -lm -ldl"
 fi
 AC_SUBST([NEOMACS_OBJ])
 AC_SUBST([NEOMACS_LIBS])
@@ -6450,8 +6452,8 @@ AC_CACHE_CHECK([whether GLib is linked in], [emacs_cv_links_glib],
 OLDLIBS="$LIBS"
 CFLAGS="$CFLAGS $GTK_CFLAGS $RSVG_CFLAGS $DBUS_CFLAGS $SETTINGS_CFLAGS"
 LIBS="$LIBS $GTK_LIBS $RSVG_LIBS $DBUS_LIBS $SETTINGS_LIBS"
-CFLAGS="$CFLAGS $NOTIFY_CFLAGS $CAIRO_CFLAGS"
-LIBS="$LIBS $NOTIFY_LIBS $CAIRO_LIBS"
+CFLAGS="$CFLAGS $NOTIFY_CFLAGS $CAIRO_CFLAGS $NEOMACS_CFLAGS"
+LIBS="$LIBS $NOTIFY_LIBS $CAIRO_LIBS $NEOMACS_LIBS"
 AC_LINK_IFELSE([AC_LANG_PROGRAM(
 	[[#include <glib.h>
 	]],
@@ -6466,6 +6468,12 @@ if test "${emacs_cv_links_glib}" = "yes"; then
     XGSELOBJ=xgselect.o
   fi
 fi
+
+dnl Neomacs requires GLib for video playback event loop integration
+if test "${HAVE_NEOMACS}" = "yes" && test "${emacs_cv_links_glib}" != "yes"; then
+  AC_MSG_ERROR([Neomacs requires GLib for video playback. Please install GLib development files and ensure pkg-config can find glib-2.0, or pass CFLAGS and LDFLAGS with GLib paths.])
+fi
+
 AC_SUBST([XGSELOBJ])
 
 AC_DEFUN([EMACS_PAPER_WIDTH],

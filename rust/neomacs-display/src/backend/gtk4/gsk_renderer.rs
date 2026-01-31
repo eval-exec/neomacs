@@ -171,6 +171,7 @@ impl GskRenderer {
 
                         // Try to get current image as a texture for direct rendering
                         let current_image = paintable.current_image();
+                        
                         if let Ok(texture) = current_image.clone().downcast::<gdk::Texture>() {
                             // We have a texture, render it directly
                             let video_rect = graphene::Rect::new(
@@ -182,7 +183,7 @@ impl GskRenderer {
                             let texture_node = gsk::TextureNode::new(&texture, &video_rect);
                             nodes.push(texture_node.upcast());
                         } else {
-                            // Snapshot the paintable - use simpler approach without clip
+                            // Snapshot the paintable
                             let snapshot = gtk4::Snapshot::new();
                             snapshot.save();
                             snapshot.translate(&graphene::Point::new(floating.x, floating.y));
