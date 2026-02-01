@@ -413,11 +413,12 @@ pub unsafe extern "C" fn neomacs_display_begin_row(
         w
     } else {
         // Create default window if none exists for this ID
+        // Use scene background (dark by default) instead of white
         display.scene.windows.push(crate::core::scene::WindowScene {
             window_id: current_window_id,
             bounds: crate::core::Rect::new(0.0, 0.0,
                 display.scene.width as f32, display.scene.height as f32),
-            background: crate::core::Color::from_u8(255, 255, 255, 255),
+            background: display.scene.background, // Match scene background
             rows: Vec::new(),
             cursor: None,
             scroll_offset: 0.0,
@@ -869,9 +870,6 @@ pub unsafe extern "C" fn neomacs_display_set_background(
     for window in &mut display.scene.windows {
         window.background = bg;
     }
-    
-    eprintln!("DEBUG: Set background color to {:08x} -> ({:.2}, {:.2}, {:.2})", 
-              color, bg.r, bg.g, bg.b);
 }
 
 // ============================================================================

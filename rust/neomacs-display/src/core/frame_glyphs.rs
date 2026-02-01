@@ -140,13 +140,13 @@ impl FrameGlyphBuffer {
         Self {
             width: 0.0,
             height: 0.0,
-            background: Color::WHITE,
+            background: Color::BLACK, // Default to dark (Emacs default theme)
             glyphs: Vec::with_capacity(10000), // Pre-allocate for typical frame
             window_regions: Vec::with_capacity(16),
             prev_window_regions: Vec::with_capacity(16),
             layout_changed: false,
             current_face_id: 0,
-            current_fg: Color::BLACK,
+            current_fg: Color::WHITE, // Default foreground white for dark theme
             current_bg: None,
             current_bold: false,
             current_italic: false,

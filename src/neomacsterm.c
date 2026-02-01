@@ -222,7 +222,7 @@ neomacs_initialize_display_info (struct neomacs_display_info *dpyinfo)
   dpyinfo->n_planes = 24;
   dpyinfo->black_pixel = 0x000000;
   dpyinfo->white_pixel = 0xffffff;
-  dpyinfo->background_pixel = 0xffffff;
+  dpyinfo->background_pixel = 0x000000;  /* Default to black for dark theme */
   dpyinfo->smallest_char_width = 8;
   dpyinfo->smallest_font_height = 16;
   dpyinfo->supports_argb = true;

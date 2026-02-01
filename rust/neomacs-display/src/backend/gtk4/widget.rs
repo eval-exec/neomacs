@@ -49,14 +49,18 @@ pub fn set_widget_image_cache(cache: *mut ImageCache) {
 
 /// Set the frame glyph buffer for hybrid rendering (called from FFI before queue_draw)
 /// Now CLONES the buffer so it survives Emacs clearing it for the next frame.
+/// Only updates if buffer has content - preserves last valid frame to prevent flickering.
 pub fn set_widget_frame_glyphs(buffer: *const FrameGlyphBuffer) {
     WIDGET_FRAME_GLYPHS.with(|c| {
-        *c.borrow_mut() = if buffer.is_null() { 
-            None 
-        } else { 
-            // Clone the buffer so GTK can render even after Emacs clears the original
-            Some(unsafe { (*buffer).clone() })
-        };
+        if buffer.is_null() {
+            // Don't clear - keep last valid buffer to prevent flicker
+            return;
+        }
+        let new_buffer = unsafe { (*buffer).clone() };
+        // Only update if we have content - prevents black flash from empty buffers
+        if !new_buffer.glyphs.is_empty() {
+            *c.borrow_mut() = Some(new_buffer);
+        }
     });
 }
 
