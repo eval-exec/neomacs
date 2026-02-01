@@ -250,6 +250,7 @@ void neomacs_display_clear_floating_image(struct NeomacsDisplay *handle, uint32_
 
 /**
  * End frame and render
+ * Returns 0 on success, 1 if layout changed (Emacs should force refresh), -1 on error
  */
 int neomacs_display_end_frame(struct NeomacsDisplay *handle);
 

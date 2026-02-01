@@ -3,6 +3,9 @@
 //! This widget uses GtkSnapshot for true GPU rendering via GSK render nodes,
 //! bypassing the Cairo software rasterization path.
 //!
+//! Glyphs accumulate in FrameGlyphBuffer - Emacs incremental redisplay only
+//! sends changed content. Window backgrounds cover old content in changed areas.
+//!
 //! Enable logging with: RUST_LOG=neomacs_display::backend::gtk4::widget=debug
 
 use std::cell::RefCell;
@@ -25,7 +28,8 @@ use super::image::ImageCache;
 thread_local! {
     pub static WIDGET_VIDEO_CACHE: RefCell<Option<*const VideoCache>> = const { RefCell::new(None) };
     pub static WIDGET_IMAGE_CACHE: RefCell<Option<*mut ImageCache>> = const { RefCell::new(None) };
-    pub static WIDGET_FRAME_GLYPHS: RefCell<Option<*const FrameGlyphBuffer>> = const { RefCell::new(None) };
+    // Store CLONED glyphs, not a pointer - pointer becomes invalid when Emacs clears buffer
+    pub static WIDGET_FRAME_GLYPHS: RefCell<Option<FrameGlyphBuffer>> = const { RefCell::new(None) };
     pub static WIDGET_USE_HYBRID: RefCell<bool> = const { RefCell::new(true) };
 }
 
@@ -44,9 +48,15 @@ pub fn set_widget_image_cache(cache: *mut ImageCache) {
 }
 
 /// Set the frame glyph buffer for hybrid rendering (called from FFI before queue_draw)
+/// Now CLONES the buffer so it survives Emacs clearing it for the next frame.
 pub fn set_widget_frame_glyphs(buffer: *const FrameGlyphBuffer) {
     WIDGET_FRAME_GLYPHS.with(|c| {
-        *c.borrow_mut() = if buffer.is_null() { None } else { Some(buffer) };
+        *c.borrow_mut() = if buffer.is_null() { 
+            None 
+        } else { 
+            // Clone the buffer so GTK can render even after Emacs clears the original
+            Some(unsafe { (*buffer).clone() })
+        };
     });
 }
 
@@ -90,11 +100,10 @@ impl ObjectImpl for NeomacsWidgetInner {
 
 impl NeomacsWidgetInner {
     fn snapshot_impl(&self, snapshot: &Snapshot) {
-        warn!("SNAPSHOT CALLED");
         let widget = self.obj();
         let width = widget.width() as f32;
         let height = widget.height() as f32;
-        warn!("SNAPSHOT size={}x{}", width, height);
+        debug!("snapshot: size={}x{}", width, height);
 
         // Initialize Pango context for legacy renderer (GSK renderer still uses Pango)
         if !*self.pango_initialized.borrow() {
@@ -106,16 +115,18 @@ impl NeomacsWidgetInner {
 
         // Check if using hybrid mode
         let use_hybrid = WIDGET_USE_HYBRID.with(|c| *c.borrow());
-        warn!("snapshot: use_hybrid={}, size={}x{}", use_hybrid, width, height);
 
         if use_hybrid {
-            // Hybrid path: render from FrameGlyphBuffer (uses cosmic-text)
-            let frame_glyphs = WIDGET_FRAME_GLYPHS.with(|c| {
-                c.borrow().map(|ptr| unsafe { &*ptr })
+            // Hybrid path: render from CLONED FrameGlyphBuffer (uses cosmic-text)
+            // We clone the buffer when setting it, so it survives Emacs clearing
+            // the original for the next frame.
+            let frame_glyphs: Option<FrameGlyphBuffer> = WIDGET_FRAME_GLYPHS.with(|c| {
+                c.borrow().clone()  // Clone the Option<FrameGlyphBuffer>
             });
 
-            if let Some(buffer) = frame_glyphs {
-                warn!("snapshot: HAVE buffer with {} glyphs, frame={}x{}", buffer.len(), buffer.width, buffer.height);
+            if let Some(ref buffer) = frame_glyphs {
+                debug!("snapshot: buffer with {} glyphs", buffer.len());
+
                 // Get video cache from thread-local
                 let video_cache = WIDGET_VIDEO_CACHE.with(|c| {
                     c.borrow().map(|ptr| unsafe { &*ptr })
@@ -127,22 +138,12 @@ impl NeomacsWidgetInner {
 
                 // Build render node with hybrid renderer
                 let mut renderer = self.hybrid_renderer.borrow_mut();
-                
-                // DEBUG: Try direct snapshot append to test basic rendering
-                let test_rect = graphene::Rect::new(50.0, 50.0, 200.0, 100.0);
-                let test_color = gtk4::gdk::RGBA::new(0.0, 0.0, 1.0, 1.0); // blue
-                snapshot.append_color(&test_color, &test_rect);
-                warn!("snapshot: Added BLUE test rect at (50,50)");
-                
+
                 if let Some(node) = renderer.build_render_node(buffer, video_cache, image_cache) {
-                    warn!("snapshot: APPENDING render node");
                     snapshot.append_node(&node);
-                } else {
-                    warn!("snapshot: NO render node returned!");
                 }
             } else {
                 // No frame glyphs - draw background
-                warn!("snapshot: NO frame_glyphs, drawing dark background");
                 let rect = graphene::Rect::new(0.0, 0.0, width, height);
                 let color = gtk4::gdk::RGBA::new(0.1, 0.1, 0.12, 1.0);
                 snapshot.append_color(&color, &rect);

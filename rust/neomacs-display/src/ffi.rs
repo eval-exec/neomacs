@@ -181,24 +181,18 @@ pub unsafe extern "C" fn neomacs_display_begin_frame(handle: *mut NeomacsDisplay
     // Mark that we're in a frame update cycle
     display.in_frame = true;
 
-    debug!("begin_frame: frame={}, hybrid={}", display.frame_counter, display.use_hybrid);
+    debug!("begin_frame: frame={}, hybrid={}, glyphs={}", 
+           display.frame_counter, display.use_hybrid, display.frame_glyphs.len());
 
-    // Hybrid path: Update dimensions but preserve glyphs for incremental redisplay
-    // Window region tracking happens in add_window, stale glyph cleanup in end_frame
+    // DON'T clear glyphs - accumulate them for incremental redisplay.
+    // Emacs sends only changed content; old content is retained.
+    // When add_char is called, it removes overlapping old glyphs.
     if display.use_hybrid {
         display.frame_glyphs.width = display.scene.width;
         display.frame_glyphs.height = display.scene.height;
         display.frame_glyphs.background = display.scene.background;
-        // Clear window regions from previous frame - will be rebuilt by add_window calls
-        display.frame_glyphs.window_regions.clear();
-        // Clear backgrounds, cursors, and borders - they're redrawn each frame
-        display.frame_glyphs.glyphs.retain(|g| {
-            matches!(g, crate::core::frame_glyphs::FrameGlyph::Char { .. }
-                     | crate::core::frame_glyphs::FrameGlyph::Stretch { .. }
-                     | crate::core::frame_glyphs::FrameGlyph::Image { .. }
-                     | crate::core::frame_glyphs::FrameGlyph::Video { .. }
-                     | crate::core::frame_glyphs::FrameGlyph::WebKit { .. })
-        });
+        // Start frame - saves previous window regions for layout change detection
+        display.frame_glyphs.start_frame();
     }
 
     // NOTE: Don't clear rows here - Emacs does incremental updates
@@ -1216,6 +1210,7 @@ pub unsafe extern "C" fn neomacs_display_clear_floating_image(
 }
 
 /// End frame and render
+/// Returns 0 on success, 1 if layout changed (Emacs should force refresh), -1 on error
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_end_frame(handle: *mut NeomacsDisplay) -> c_int {
     if handle.is_null() {
@@ -1228,25 +1223,15 @@ pub unsafe extern "C" fn neomacs_display_end_frame(handle: *mut NeomacsDisplay) 
     // Reset frame flag
     display.in_frame = false;
 
-    // Hybrid path: remove glyphs outside current window regions
-    // This cleans up stale glyphs from deleted windows (C-x 0, C-x 1)
+    debug!("end_frame: frame={}, glyphs={}, regions={}", 
+           current_frame, display.frame_glyphs.len(), display.frame_glyphs.window_regions.len());
+
+    // End frame - this handles layout change detection and stale glyph removal
+    let mut layout_cleared = false;
     if display.use_hybrid {
-        display.frame_glyphs.remove_stale_glyphs();
+        layout_cleared = display.frame_glyphs.end_frame();
+        debug!("After end_frame: {} glyphs, cleared={}", display.frame_glyphs.len(), layout_cleared);
     }
-
-    debug!("end_frame: frame={}, glyphs={}", current_frame, display.frame_glyphs.len());
-
-    // NOTE: Don't remove stale windows - Emacs uses incremental redisplay
-    // which may not touch unchanged windows. Windows are only removed when
-    // Emacs explicitly deletes them and does a full redisplay.
-    // The stale window logic was causing C-x 3 right window to disappear.
-    //
-    // For C-x 1 (delete-other-windows), a full redisplay happens which
-    // touches all remaining windows. Deleted windows will have their bounds
-    // updated to 0x0 or be completely replaced.
-    //
-    // TODO: Consider adding explicit window deletion tracking if needed.
-    // display.scene.windows.retain(|w| w.last_frame_touched == current_frame);
 
     // Build scene if it has content
     let scene_rows: usize = display.scene.windows.iter().map(|w| w.rows.len()).sum();
@@ -1286,7 +1271,7 @@ pub unsafe extern "C" fn neomacs_display_end_frame(handle: *mut NeomacsDisplay) 
 
     display.scene.clear_dirty();
 
-    0
+    if layout_cleared { 1 } else { 0 }
 }
 
 /// Render the scene to an external Cairo context

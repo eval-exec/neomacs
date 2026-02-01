@@ -38,6 +38,7 @@ struct wl_display;
 #include "termhooks.h"
 #include "termchar.h"
 #include "font.h"
+#include "dispextern.h"  /* For mark_window_display_accurate, set_window_update_flags */
 #include "pdumper.h"
 #include "fontset.h"
 
@@ -384,6 +385,9 @@ neomacs_update_begin (struct frame *f)
 {
   struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
 
+  /* Don't mark windows inaccurate - let Emacs do incremental updates.
+     Our GPU backend accumulates glyphs and handles overlaps.  */
+
   if (dpyinfo && dpyinfo->display_handle)
     neomacs_display_begin_frame (dpyinfo->display_handle);
 }
@@ -394,9 +398,19 @@ neomacs_update_end (struct frame *f)
 {
   struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
   struct neomacs_output *output = FRAME_NEOMACS_OUTPUT (f);
+  int result = 0;
 
   if (dpyinfo && dpyinfo->display_handle)
-    neomacs_display_end_frame (dpyinfo->display_handle);
+    result = neomacs_display_end_frame (dpyinfo->display_handle);
+
+  /* If Rust cleared glyphs due to layout change (result=1), mark windows inaccurate
+     so Emacs will resend all content on the next frame.  */
+  if (result == 1)
+    {
+      mark_window_display_accurate (FRAME_ROOT_WINDOW (f), false);
+      /* Request another redisplay to populate the cleared buffer */
+      SET_FRAME_GARBAGED (f);
+    }
 
   /* Queue a redraw of the drawing area */
   if (output && output->drawing_area)

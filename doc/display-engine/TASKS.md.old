@@ -1,0 +1,1167 @@
+# Neomacs - Modern Rust Display Engine
+
+## Project Overview
+
+**Neomacs** is a fork of GNU Emacs with a modernized GPU-accelerated display engine written in Rust.
+
+### Project Decisions
+
+| Decision | Choice |
+|----------|--------|
+| **Project Type** | Fork (maintained separately from GNU Emacs) |
+| **Platform** | Linux only (initially) |
+| **Display Server** | Wayland-first (via GTK4) |
+| **GPU Rendering** | GTK4/GSK (uses Vulkan internally) |
+| **Text Rendering** | Pango (via GTK4) |
+| **Video Backend** | GStreamer (VA-API hardware decoding) |
+| **Browser Embedding** | WPE WebKit (DMA-BUF zero-copy) |
+| **Implementation** | Rust with C FFI |
+| **Compatibility** | 90% (minor Lisp breakage acceptable) |
+| **Backends** | TTY + GTK4 only (remove X11, W32, NS, etc.) |
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Emacs Core (C)                               │
+│  Lisp interpreter, buffers, windows, faces, overlays            │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  │ C FFI
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              libneomacs_display (Rust)                          │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    C API Layer (ffi.rs)                  │   │
+│  └─────────────────────────────────┬───────────────────────┘   │
+│                                    │                            │
+│  ┌─────────────────────────────────▼───────────────────────┐   │
+│  │              Display Engine Core (Rust)                  │   │
+│  │  scene.rs, layout.rs, damage.rs, animation.rs           │   │
+│  └─────────────────────────────────┬───────────────────────┘   │
+│                                    │                            │
+│  ┌──────────────┬──────────────────┼──────────────┬────────┐   │
+│  │ TTY Backend  │  GTK4 Backend    │ Video        │ WebKit │   │
+│  │ (tty.rs)     │  (gtk4-rs/GSK)   │ (gstreamer)  │ (wpe)  │   │
+│  └──────────────┴──────────────────┴──────────────┴────────┘   │
+│                            │                                    │
+│                            ▼                                    │
+│           GPU: DMA-BUF → GdkDmabufTexture → GSK → Vulkan       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### GPU Pipeline (Zero-Copy)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     GPU Memory (VRAM)                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   Video (VA-API)──┐    WebKit (WPE)──┐    Image (large)──┐     │
+│         │         │          │        │         │         │     │
+│         ▼         │          ▼        │         ▼         │     │
+│   ┌─────────┐     │   ┌─────────┐     │   ┌─────────┐     │     │
+│   │ DMA-BUF │     │   │ DMA-BUF │     │   │ DMA-BUF │     │     │
+│   └────┬────┘     │   └────┬────┘     │   └────┬────┘     │     │
+│        │          │        │          │        │          │     │
+│        └──────────┴────────┴──────────┴────────┘          │     │
+│                           │                                │     │
+│                           ▼                                │     │
+│                  GdkDmabufTexture                          │     │
+│                           │                                │     │
+│                           ▼                                │     │
+│                    GSK TextureNode                         │     │
+│                           │                                │     │
+│                           ▼                                │     │
+│                  Vulkan/GL Compositor                      │     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Progress Summary
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| **Phase 1** | Foundation & Project Setup | ✅ Complete |
+| **Phase 2** | TTY Backend | ⏳ Pending |
+| **Phase 3** | GTK4 Backend - Basic Rendering | ✅ Complete |
+| **Phase 4** | Image Support | ✅ Complete |
+| **Phase 5** | Video Support (GStreamer) | ✅ Complete (overlay only) |
+| **Phase 6** | WPE WebKit Support | ✅ Complete (overlay only) |
+| **Phase 7** | GPU Zero-Copy Pipeline | 🔧 **In Progress** (VA-API decode done) |
+| **Phase 8** | Animation System | ⏳ Pending |
+| **Phase 9** | ~~Inline Display (`xdisp.c`)~~ | ❌ **REPLACED** by Phase 14 |
+| **Phase 10** | Emacs Build Integration | 🔧 Partial |
+| **Phase 11** | Remove Legacy Backends | ⏳ Pending |
+| **Phase 12** | Testing & Documentation | ⏳ Pending |
+| **Phase 13** | Polish & Optimization | ⏳ Pending |
+| **Phase 14** | **Rust Redisplay Engine** | 🔥 **NEW - HIGH PRIORITY** |
+
+### Inline Display Status
+
+| Type | Overlay/Floating | Inline (display property) |
+|------|------------------|---------------------------|
+| **Image** | ✅ Works | ✅ Works (`(image :file ...)`) |
+| **Video** | ✅ Works | ❌ **NEEDS IMPLEMENTATION** |
+| **WebKit** | ✅ Works | ❌ **NEEDS IMPLEMENTATION** |
+
+---
+
+## Phase 14: Rust Redisplay Engine 🔥 NEW
+
+### Overview
+
+**Decision:** Rewrite Emacs redisplay engine (`xdisp.c`) in pure Rust.
+
+**Rationale:**
+- Current hybrid approach (Emacs incremental redisplay + Rust rendering) has fundamental architectural mismatch
+- Emacs assumes backend retains pixels; our GPU approach rebuilds each frame
+- Rust ecosystem provides excellent libraries for text layout (cosmic-text, tree-sitter)
+- Clean architecture enables GPU-native rendering with animations
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     EMACS (C)                                │
+│  Buffers (text storage), Windows (geometry), Faces           │
+└─────────────────────────────────────────────────────────────┘
+                              │ FFI (read-only access)
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│              RUST REDISPLAY ENGINE                           │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              cosmic-text Buffer                       │   │
+│  │  • Text content (from Emacs buffer via FFI)           │   │
+│  │  • Line wrapping (automatic)                          │   │
+│  │  • Font shaping (automatic)                           │   │
+│  │  • Bidi support (automatic)                           │   │
+│  │  • Glyph positions (computed)                         │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                              │                               │
+│                              ▼                               │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              tree-sitter (syntax highlighting)        │   │
+│  │  • Incremental parsing                                │   │
+│  │  • Syntax → face/color mapping                        │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                              │                               │
+│                              ▼                               │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              GSK Renderer (GPU)                       │   │
+│  │  • Render glyphs via GTK4/GSK                         │   │
+│  │  • Hardware accelerated                               │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Rust Ecosystem Mapping
+
+| Emacs Component | Rust Equivalent | Status |
+|-----------------|-----------------|--------|
+| Buffer text storage | Read from Emacs via FFI | To implement |
+| Text shaping | `cosmic-text` | ✅ Already using |
+| Font rendering | `cosmic-text` + `swash` | ✅ Already using |
+| Line wrapping | `cosmic-text` (built-in) | ✅ Available |
+| Bidi (RTL text) | `cosmic-text` (built-in) | ✅ Available |
+| Syntax highlighting | `tree-sitter` | To implement |
+| GPU rendering | GTK4/GSK | ✅ Already using |
+
+### What cosmic-text Provides (FREE)
+
+- ✅ Line wrapping (word-aware)
+- ✅ Font fallback (missing glyphs)
+- ✅ Bidi text (Arabic, Hebrew)
+- ✅ Complex scripts (Devanagari, Thai, etc.)
+- ✅ Variable-width fonts
+- ✅ Text shaping (ligatures, kerning)
+- ✅ Multi-line layout
+
+### Implementation Phases
+
+#### Phase 14.1: cosmic-text Buffer Integration (1 week)
+- [ ] Create `WindowBuffer` struct wrapping `cosmic_text::Buffer`
+- [ ] Set up `FontSystem` with system fonts
+- [ ] Test with hardcoded text content
+- [ ] Render via existing GSK pipeline
+- [ ] Verify line wrapping works
+
+**Key code:**
+```rust
+use cosmic_text::{Buffer, FontSystem, Metrics, Shaping, Attrs};
+
+pub struct WindowBuffer {
+    font_system: FontSystem,
+    buffer: Buffer,
+}
+
+impl WindowBuffer {
+    pub fn new(width: f32, height: f32, font_size: f32) -> Self {
+        let mut font_system = FontSystem::new();
+        let metrics = Metrics::new(font_size, font_size * 1.2);
+        let mut buffer = Buffer::new(&mut font_system, metrics);
+        buffer.set_size(&mut font_system, Some(width), Some(height));
+        Self { font_system, buffer }
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        self.buffer.set_text(
+            &mut self.font_system,
+            text,
+            Attrs::new(),
+            Shaping::Advanced,
+        );
+    }
+
+    pub fn layout_runs(&self) -> impl Iterator<Item = LayoutRun> {
+        self.buffer.layout_runs()
+    }
+}
+```
+
+#### Phase 14.2: Emacs Buffer FFI (1 week)
+- [ ] Add FFI to read buffer text: `emacs_buffer_contents()`
+- [ ] Add FFI to get buffer size: `emacs_buffer_size()`
+- [ ] Add FFI to get window-start position: `emacs_window_start()`
+- [ ] Add FFI to get point position: `emacs_window_point()`
+- [ ] Sync cosmic-text buffer with Emacs buffer content
+- [ ] Handle buffer modifications (insert/delete)
+
+**FFI signatures:**
+```rust
+extern "C" {
+    fn emacs_buffer_substring(
+        buf: *mut c_void,
+        start: usize,
+        end: usize,
+        out: *mut c_char,
+        out_len: usize,
+    ) -> usize;
+    
+    fn emacs_buffer_size(buf: *mut c_void) -> usize;
+    fn emacs_window_buffer(win: *mut c_void) -> *mut c_void;
+    fn emacs_window_start(win: *mut c_void) -> usize;
+    fn emacs_window_point(win: *mut c_void) -> usize;
+    fn emacs_window_dimensions(win: *mut c_void, width: *mut i32, height: *mut i32);
+}
+```
+
+#### Phase 14.3: Window & Cursor (1 week)
+- [ ] Track multiple windows (split views)
+- [ ] Map Emacs point → screen (x, y) position
+- [ ] Render cursor (box, bar, hollow styles)
+- [ ] Handle window resize
+- [ ] Implement basic scrolling (window-start changes)
+- [ ] Render window borders/dividers
+
+#### Phase 14.4: Face & Style Support (1 week)
+- [ ] Map Emacs face-id → cosmic-text `Attrs`
+- [ ] Support foreground/background colors
+- [ ] Support bold/italic/underline
+- [ ] Handle default face
+- [ ] Handle mode-line face
+- [ ] Render mode line text
+
+**Face mapping:**
+```rust
+pub fn face_to_attrs(face: &EmacsFace) -> Attrs {
+    Attrs::new()
+        .color(cosmic_text::Color::rgba(face.fg.r, face.fg.g, face.fg.b, 255))
+        .weight(if face.bold { Weight::BOLD } else { Weight::NORMAL })
+        .style(if face.italic { Style::Italic } else { Style::Normal })
+}
+```
+
+#### Phase 14.5: tree-sitter Integration (1-2 weeks)
+- [ ] Add `tree-sitter` dependency
+- [ ] Load grammar for current major mode
+- [ ] Parse buffer content incrementally
+- [ ] Map syntax nodes → faces
+- [ ] Apply syntax highlighting to cosmic-text spans
+- [ ] Handle incremental updates on buffer change
+
+**Syntax highlighting:**
+```rust
+use tree_sitter::{Parser, Language};
+
+pub struct SyntaxHighlighter {
+    parser: Parser,
+    tree: Option<Tree>,
+}
+
+impl SyntaxHighlighter {
+    pub fn highlight(&mut self, text: &str) -> Vec<(Range<usize>, FaceId)> {
+        let tree = self.parser.parse(text, self.tree.as_ref()).unwrap();
+        // Walk tree, map node types to faces
+        // Return ranges with face IDs
+    }
+}
+```
+
+#### Phase 14.6: Advanced Features (2+ weeks)
+- [ ] Selection/region highlighting
+- [ ] Overlay support (basic)
+- [ ] Fringe indicators
+- [ ] Line numbers
+- [ ] Text properties (partial)
+- [ ] Images inline
+- [ ] Smooth scrolling animation
+
+### Timeline
+
+| Phase | Duration | Milestone |
+|-------|----------|-----------|
+| 14.1 cosmic-text | 1 week | Text renders with layout |
+| 14.2 Buffer FFI | 1 week | Real Emacs buffer content |
+| 14.3 Window/Cursor | 1 week | Multiple windows, cursor |
+| 14.4 Faces | 1 week | Colors and styles |
+| 14.5 tree-sitter | 1-2 weeks | Syntax highlighting |
+| **MVP Total** | **5-6 weeks** | Usable for editing |
+| 14.6 Advanced | 2+ weeks | Feature parity |
+
+### Files to Create/Modify
+
+**New Rust files:**
+- `rust/neomacs-display/src/redisplay/mod.rs` - Module root
+- `rust/neomacs-display/src/redisplay/buffer.rs` - WindowBuffer with cosmic-text
+- `rust/neomacs-display/src/redisplay/window.rs` - Window management
+- `rust/neomacs-display/src/redisplay/cursor.rs` - Cursor rendering
+- `rust/neomacs-display/src/redisplay/face.rs` - Face/style mapping
+- `rust/neomacs-display/src/redisplay/syntax.rs` - tree-sitter integration
+
+**C files to modify:**
+- `src/neomacsterm.c` - Add buffer FFI functions
+- `src/neomacsfns.c` - Add window FFI functions
+
+### Success Criteria
+
+- [ ] Open file, text displays correctly with line wrap
+- [ ] Cursor visible and moves with point
+- [ ] C-x 2 / C-x 3 split windows work
+- [ ] C-x 0 delete window works (no artifacts!)
+- [ ] Scrolling works (C-v, M-v, mouse wheel)
+- [ ] Syntax highlighting for emacs-lisp-mode
+- [ ] Mode line displays
+
+### Dependencies
+
+**Cargo.toml additions:**
+```toml
+[dependencies]
+cosmic-text = "0.12"  # Already have
+tree-sitter = "0.22"
+tree-sitter-rust = "0.21"      # Example grammar
+tree-sitter-elisp = "..."      # Need to find/create
+```
+
+---
+
+## Implementation Tasks
+
+---
+
+## Phase 1: Foundation & Project Setup ✅
+
+### 1.1 Project Structure ✅
+- [x] Create `rust/neomacs-display/` crate directory
+- [x] Set up `Cargo.toml` with dependencies (gtk4, gsk4, pango, gstreamer)
+- [x] Configure `cbindgen.toml` for C header generation
+- [x] Create `build.rs` for build-time tasks
+- [x] Create `shell.nix` for NixOS development
+- [x] Create `Makefile` for build automation
+- [ ] Set up CI/CD for Rust crate (cargo test, clippy, fmt)
+- [ ] Add LICENSE (GPL3 to match Emacs)
+- [ ] Create README.md for the Rust crate
+
+### 1.2 Core Types ✅
+- [x] Define `GlyphType` enum (Char, Image, Video, Wpe, etc.)
+- [x] Define `Glyph` struct with `#[repr(C)]` for FFI
+- [x] Define `Face` struct for text styling
+- [x] Define `Color` type (RGBA)
+- [x] Define `Rect`, `Point`, `Size` geometry types
+- [x] Define `Transform` for 2D transformations
+- [x] Write unit tests for core types
+
+### 1.3 Scene Graph ✅
+- [x] Define `NodeKind` enum (Container, TextRun, Image, Video, Wpe, ColorRect)
+- [x] Define `Node` struct with bounds, opacity, clip, transform
+- [x] Implement `Scene` struct as root container
+- [x] Implement `WindowScene` struct for window representation
+- [x] Implement scene graph builder methods
+- [x] Write unit tests for scene graph
+
+### 1.4 C FFI Layer ✅
+- [x] Create `ffi.rs` module
+- [x] Implement `neomacs_display_init()` / `neomacs_display_shutdown()`
+- [x] Implement `neomacs_display_begin_frame()` / `neomacs_display_end_frame()`
+- [x] Implement `neomacs_display_add_window()` / `neomacs_display_set_cursor()`
+- [x] Implement animation FFI functions
+- [ ] Generate C header with cbindgen
+- [ ] Test FFI with simple C test program
+
+### 1.5 Animation System ✅
+- [x] Implement `Animation` struct with easing functions
+- [x] Implement `AnimationManager` for cursor blink, smooth scroll
+- [x] Write unit tests for animation
+
+### 1.6 Backend Trait ✅
+- [x] Define `DisplayBackend` trait
+- [x] Create GTK4 backend skeleton
+- [x] Create TTY backend skeleton
+
+---
+
+## Phase 2: TTY Backend ⏳
+
+### 2.1 Terminal Output
+- [ ] Create `backend/tty.rs` module
+- [ ] Implement `DisplayBackend` trait for TTY
+- [ ] Implement terminal capability detection (terminfo)
+- [ ] Implement ANSI escape sequence generation
+- [ ] Implement cursor positioning
+- [ ] Implement color output (16, 256, truecolor)
+
+### 2.2 Character Cell Rendering
+- [ ] Convert scene graph to character cell grid
+- [ ] Implement text rendering (UTF-8)
+- [ ] Implement face/attribute rendering (bold, underline, etc.)
+- [ ] Implement box-drawing characters for UI elements
+- [ ] Handle wide characters (CJK)
+
+### 2.3 TTY Optimizations
+- [ ] Implement dirty region tracking
+- [ ] Implement differential updates (only changed cells)
+- [ ] Implement scroll optimization (terminal scroll regions)
+- [ ] Benchmark TTY rendering performance
+
+---
+
+## Phase 3: GTK4 Backend - Basic Rendering ✅
+
+### 3.1 GTK4 Application Setup ✅
+- [x] Create `backend/gtk4/mod.rs` module
+- [x] Initialize GTK4 with `gtk4::init()`
+- [x] Create `GtkDrawingArea` as rendering canvas
+- [x] Set up `set_draw_func` for frame rendering
+- [x] Handle window resize events
+- [ ] Create full `GtkApplication` integration
+- [ ] Handle window close/destroy events
+- [ ] Implement graceful shutdown
+
+### 3.2 Cairo Drawing API ✅
+- [x] Implement `DisplayBackend` trait for GTK4
+- [x] Implement Cairo rectangle rendering (`rectangle()`, `fill()`)
+- [x] Implement color rendering (`set_source_rgba()`)
+- [x] Implement clipping (`clip()`)
+- [x] Implement transforms (`save()`, `restore()`, `translate()`)
+- [x] Create renderer module (`backend/gtk4/renderer.rs`)
+- [ ] Port to GtkSnapshot API (for newer GTK4)
+
+### 3.3 Text Rendering with Pango ✅
+- [x] Get `PangoContext` from DrawingArea
+- [x] Create `PangoLayout` for text runs
+- [x] Implement `set_font_description()` for fonts
+- [x] Implement `set_text()` for content
+- [x] Implement text rendering with `pangocairo::show_layout()`
+- [ ] Implement text measurement (`get_pixel_size()`)
+- [ ] Handle foreground colors per-run
+- [ ] Implement underline, strikethrough via Pango attributes
+- [ ] Test CJK characters rendering
+- [ ] Test emoji rendering
+
+### 3.4 Glyph Atlas (GPU Text Caching)
+- [ ] Create `core/atlas.rs` module
+- [ ] Research if custom atlas needed (Pango/GSK may handle this)
+- [ ] If needed: implement texture atlas allocation (bin packing)
+- [ ] If needed: implement glyph rasterization to atlas
+- [ ] If needed: implement glyph cache lookup (font + codepoint → coords)
+- [ ] If needed: implement atlas texture upload to GPU
+- [ ] If needed: implement atlas eviction/regeneration
+- [ ] Benchmark text rendering performance vs current Emacs
+- [ ] Profile GPU usage during text rendering
+
+### 3.5 Input Handling (GTK4 Event Controllers)
+- [ ] Create `backend/gtk4/input.rs` module
+- [ ] Create `EventControllerKey` for keyboard input
+- [ ] Implement `connect_key_pressed` handler
+- [ ] Implement `connect_key_released` handler
+- [ ] Convert `gdk4::Key` to Emacs key events
+- [ ] Handle modifier keys (Ctrl, Alt, Shift, Super)
+- [ ] Create `GestureClick` for mouse clicks
+- [ ] Implement `connect_pressed` / `connect_released`
+- [ ] Handle single, double, triple clicks
+- [ ] Create `EventControllerMotion` for mouse movement
+- [ ] Implement `connect_motion` for hover/tracking
+- [ ] Create `EventControllerScroll` for scroll wheel
+- [ ] Implement `connect_scroll` for wheel events
+- [ ] Handle smooth scrolling (touchpad)
+- [ ] Forward input events to Emacs event queue
+- [ ] Test keyboard input with special keys (F1-F12, arrows, etc.)
+- [ ] Test mouse input in different window regions
+
+### 3.6 Frame Clock and Animation Loop
+- [ ] Get `GdkFrameClock` from drawing area
+- [ ] Implement `connect_update` callback
+- [ ] Calculate delta time from `frame_time()`
+- [ ] Call `begin_updating()` to start receiving updates
+- [ ] Update animations in frame clock callback
+- [ ] Call `queue_draw()` when content changes
+- [ ] Implement frame rate limiting (if needed)
+- [ ] Verify vsync synchronization
+- [ ] Test smooth 60fps updates
+
+### 3.7 Cursor Rendering ✅
+- [x] Implement box cursor (filled rectangle)
+- [x] Implement bar cursor (thin line)
+- [x] Implement underline cursor
+- [x] Implement hollow cursor (unfocused)
+- [x] Implement cursor rendering in glyph rows
+- [x] Handle cursor color from face
+- [ ] Implement cursor blinking via frame clock
+- [ ] Test cursor in different modes
+
+---
+
+## Phase 4: Image Support ✅
+
+### 4.1 Image Loading ✅
+- [x] Create `backend/gtk4/image.rs` module
+- [x] Implement ImageCache for efficient storage
+- [x] Implement image loading from file path (PNG, JPEG, GIF, etc.)
+- [x] Implement image loading from raw bytes
+- [x] Implement Pixbuf to Cairo surface conversion (RGBA→BGRA)
+- [ ] Handle animated GIFs (see 4.4)
+
+### 4.2 Image Rendering ✅
+- [x] Integrate ImageCache into Gtk4Renderer
+- [x] Implement render_image() method
+- [x] Implement image scaling to glyph dimensions
+- [x] Implement image placeholder (when not loaded)
+- [ ] Implement image clipping (partial display)
+- [ ] Implement image transforms (rotation, flip)
+- [ ] Support SVG rendering at any scale
+
+### 4.3 Image FFI (Partial)
+- [x] Implement `neomacs_display_add_image_glyph()` FFI
+- [x] Implement `neomacs_display_load_image()` FFI (stub)
+- [ ] Implement `emacs_display_image_size()` FFI
+- [ ] Implement `emacs_display_free_image()` FFI
+
+### 4.4 Animated Image Support (GIF, APNG, WebP)
+- [x] Define AnimationFrame struct with frame + delay
+- [x] Implement GIF frame extraction via PixbufAnimation
+- [x] Implement advance_animation() for frame cycling
+- [ ] Integrate with GTK4 frame clock (single animation loop)
+- [ ] Implement per-frame delay handling
+- [ ] Implement loop modes (forever, count, once)
+- [ ] Benchmark: 10+ animated GIFs simultaneously
+
+---
+
+## Phase 5: Video Support (GStreamer) ✅
+
+### 5.1 GStreamer Setup ✅
+- [x] Create `backend/gtk4/video.rs` module
+- [x] Initialize GStreamer
+- [x] Create video pipeline (playbin + appsink)
+- [x] Use videoconvert + videoscale for format conversion
+- [x] Capture frames as BGRA raw bytes
+- [x] Handle pipeline state changes
+- [x] Handle end-of-stream (via bus messages)
+- [x] Handle errors (via bus messages)
+
+### 5.2 Video Playback Control ✅
+- [x] Implement play/pause/stop
+- [x] Implement seek (nanosecond precision)
+- [x] Implement volume control
+- [x] Get current position and duration
+- [x] Implement loop mode flag
+- [ ] Implement playback speed control
+
+### 5.3 Video Rendering ✅
+- [x] Create VideoCache for multiple video players
+- [x] Convert raw BGRA to Cairo ImageSurface (on main thread)
+- [x] Convert raw BGRA to GdkTexture (for GPU rendering)
+- [x] Integrate VideoCache into GskRenderer
+- [x] Implement render_video() method
+- [x] Implement video placeholder rendering
+- [x] Handle video glyphs in build_row_nodes()
+- [ ] Implement aspect ratio preservation
+
+### 5.4 Video FFI ✅
+- [x] Implement `neomacs_display_add_video_glyph()` FFI
+- [x] Implement `neomacs_display_load_video()` FFI
+- [x] Implement `neomacs_display_video_play()` FFI
+- [x] Implement `neomacs_display_video_pause()` FFI
+- [x] Implement `neomacs_display_video_stop()` FFI
+- [ ] Implement `emacs_display_video_seek()` FFI
+- [ ] Implement `emacs_display_video_set_volume()` FFI
+- [ ] Implement `emacs_display_video_get_state()` FFI
+
+### 5.5 Video Lisp API ✅
+- [x] Define `neomacs-video-load` Lisp function
+- [x] Define `neomacs-video-play`, `neomacs-video-pause`, `neomacs-video-stop` functions
+- [x] Define `neomacs-video-overlay`, `neomacs-video-overlay-clear` functions
+- [x] Create `lisp/neomacs-video.el` helper package
+- [ ] Define `neomacs-video-seek`, `neomacs-video-set-volume` functions
+- [ ] Define `neomacs-video-duration`, `neomacs-video-current-time` functions
+
+### 5.6 Video Testing ✅
+- [x] Test 720p (1280x720) H.264 video - PASSED
+- [x] Test 1080p (1920x1080) Theora video - PASSED
+- [x] Verify frame decoding (BGRA pixels captured)
+- [x] Video overlay API implemented and tested
+- [ ] Test 4K video playback
+- [ ] Benchmark video CPU/GPU usage
+- [ ] Visual verification of video overlay rendering
+
+---
+
+## Phase 6: WPE WebKit Support ✅
+
+### 6.1 WPE Backend Setup ✅
+- [x] Create `backend/wpe/` module (backend.rs, view.rs, dmabuf.rs, sys.rs)
+- [x] Generate WPE Rust bindings via bindgen (libwpe, wpebackend-fdo, wpe-webkit)
+- [x] Initialize WPE WebKit context with EGL display
+- [x] Create WPE view backend for offscreen rendering
+- [x] Set up DMA-BUF export (EGLImage → GdkDmabufTexture)
+
+### 6.2 WebKit View Management ✅
+- [x] Create WebKit web view (WpeWebView wrapper)
+- [x] Load URI (`webkit_web_view_load_uri`)
+- [x] Handle navigation (go_back, go_forward, reload, stop)
+- [x] Get page state (title, url, progress, loading)
+- [x] Handle JavaScript execution (`webkit_web_view_evaluate_javascript`)
+
+### 6.3 WPE Rendering ✅
+- [x] Receive rendered buffers from WPE (export_fdo_egl_image callback)
+- [x] Convert EGLImage to GdkDmabufTexture via DmaBufExporter
+- [x] Integrate WebKitCache with GSK renderer
+- [x] Render WebKit views as GskTextureNode
+- [x] Handle continuous updates (frame_available flag)
+
+### 6.4 Input Forwarding ✅
+- [x] Forward keyboard events (`wpe_view_backend_dispatch_keyboard_event`)
+- [x] Forward mouse/pointer events (`wpe_view_backend_dispatch_pointer_event`)
+- [x] Forward scroll/axis events (`wpe_view_backend_dispatch_axis_event`)
+- [x] Convenience methods: click(), scroll()
+
+### 6.5 WPE FFI ✅
+- [x] Implement `neomacs_display_webkit_init()` FFI
+- [x] Implement `neomacs_display_webkit_create()` FFI
+- [x] Implement `neomacs_display_webkit_destroy()` FFI
+- [x] Implement `neomacs_display_webkit_load_uri()` FFI
+- [x] Implement `neomacs_display_webkit_go_back()` FFI
+- [x] Implement `neomacs_display_webkit_go_forward()` FFI
+- [x] Implement `neomacs_display_webkit_reload()` FFI
+- [x] Implement `neomacs_display_webkit_execute_js()` FFI
+- [x] Implement `neomacs_display_webkit_send_key()` FFI
+- [x] Implement `neomacs_display_webkit_send_pointer()` FFI
+- [x] Implement `neomacs_display_webkit_send_scroll()` FFI
+- [x] Implement `neomacs_display_webkit_click()` FFI
+- [x] Implement `neomacs_display_webkit_get_title()` FFI
+- [x] Implement `neomacs_display_webkit_get_url()` FFI
+- [x] Implement `neomacs_display_webkit_get_progress()` FFI
+- [x] Implement `neomacs_display_webkit_is_loading()` FFI
+- [x] Implement `neomacs_display_set_floating_webkit()` FFI
+- [x] Implement `neomacs_display_hide_floating_webkit()` FFI
+
+### 6.6 WPE Lisp API ✅
+- [x] Define `neomacs-webkit-init` Lisp function
+- [x] Define `neomacs-webkit-create` Lisp function
+- [x] Define `neomacs-webkit-destroy` Lisp function
+- [x] Define `neomacs-webkit-load-uri` Lisp function
+- [x] Define `neomacs-webkit-go-back`, `neomacs-webkit-go-forward` functions
+- [x] Define `neomacs-webkit-reload` Lisp function
+- [x] Define `neomacs-webkit-execute-js` Lisp function
+- [x] Define `neomacs-webkit-floating`, `neomacs-webkit-floating-clear` functions
+- [x] Define `neomacs-webkit-send-key`, `neomacs-webkit-send-pointer` functions
+- [x] Define `neomacs-webkit-send-scroll`, `neomacs-webkit-click` functions
+- [x] Define `neomacs-webkit-get-title`, `neomacs-webkit-get-url` functions
+- [x] Define `neomacs-webkit-get-progress`, `neomacs-webkit-loading-p` functions
+- [x] Create `lisp/neomacs-webkit.el` helper package with:
+  - `neomacs-webkit-browse` interactive command
+  - `neomacs-webkit-mode` major mode with keybindings
+  - Mode line with title and loading progress
+  - Mouse click and scroll handlers
+
+---
+
+## Phase 7: GPU Zero-Copy Pipeline ⏳
+
+**Goal**: Eliminate CPU→GPU memory copies for video and large images.
+
+### Current State (2024-01-31)
+| Type | Decode | Texture | Copy? | Status |
+|------|--------|---------|-------|--------|
+| Image | CPU (GdkPixbuf) | MemoryTexture | ⚠️ CPU→GPU copy | Working |
+| Video | **GPU (VA-API)** | **GdkPaintable** | ✅ Zero-copy | **gtk4paintablesink** |
+| WebKit | GPU (WPE) | DmabufTexture | ✅ Zero-copy | Working |
+
+### Target State (Full Zero-Copy)
+| Type | Decode | Texture | Copy? |
+|------|--------|---------|-------|
+| Image (small) | CPU | MemoryTexture | CPU→GPU (fast, small data) |
+| Image (large) | CPU | DmabufTexture | ✅ Zero-copy upload |
+| Video | GPU (VA-API) | **DmabufTexture** | ✅ Zero-copy |
+| WebKit | GPU (WPE) | DmabufTexture | ✅ Zero-copy |
+
+### 7.1 Video Hardware Decoding ✅ COMPLETE
+- [x] Enable VA-API hardware decoding in GStreamer pipeline
+- [x] Use `playbin` (auto-selects `vah264dec`, `vah265dec`, etc.)
+- [x] Fallback chain: VA-API → software decode
+- [x] Tested with 1920x1080 H.264 video
+- [x] `GpuVideoPlayer` struct with VA-API support
+- [x] `VideoCache` now uses `GpuVideoPlayer`
+
+### 7.2 Video DMA-BUF Export ✅ COMPLETE
+**Solution**: Use `gtk4paintablesink` from gst-plugins-rs instead of appsink
+
+`gtk4paintablesink` handles all DMA-BUF/GL/VideoMeta negotiation internally and provides
+a `GdkPaintable` that can be snapshotted directly into our render tree.
+
+**Capabilities**:
+- `video/x-raw(memory:DMABuf)` - DMA-BUF zero-copy ✅
+- `video/x-raw(memory:GLMemory)` - GL texture ✅
+- `video/x-raw(memory:SystemMemory)` - Fallback ✅
+
+- [x] Research gtk4paintablesink as solution
+- [x] Add gst-plugins-rs/gtk4 plugin to nix environment (shell.nix)
+- [x] Replace appsink with gtk4paintablesink in GpuVideoPlayer
+- [x] Get GdkPaintable from sink's `paintable` property
+- [x] Remove old VideoPlayer struct and gst_app/gst_allocators deps
+- [ ] Snapshot paintable into render tree (needs VideoCache update)
+- [ ] Test DMA-BUF zero-copy path works (check logs)
+- [ ] Test 4K@60fps performance (target: <5% CPU usage)
+
+### 7.3 Image DMA-BUF Upload (Medium Priority)
+- [ ] Use `GdkDmabufTextureBuilder` for large images (>1MP)
+- [ ] Create DMA-BUF via `gbm_bo_create()` or `drm` allocator
+- [ ] Map buffer, decode image, unmap
+- [ ] Threshold: use DMA-BUF only for images > 1 megapixel
+- [ ] Keep MemoryTexture for small images (faster for small data)
+
+---
+
+## Phase 8: Animation System ⏳
+
+### 8.1 Animation Core
+- [ ] Create `core/animation.rs` module
+- [ ] Define animation types (scroll, fade, transform)
+- [ ] Implement easing functions (linear, ease-in-out, cubic, etc.)
+- [ ] Implement animation timeline/scheduler
+- [ ] Handle animation completion callbacks
+
+### 8.2 Smooth Scrolling
+- [ ] Implement smooth scroll animation
+- [ ] Integrate with GTK4 frame clock
+- [ ] Handle scroll velocity/momentum
+- [ ] Handle scroll interruption
+
+### 8.3 Cursor Animation
+- [ ] Implement cursor blink animation
+- [ ] Implement cursor smooth movement (optional)
+
+### 8.4 Transition Effects
+- [ ] Implement fade in/out for windows
+- [ ] Implement buffer switch transitions (optional)
+
+---
+
+## Phase 9: Inline Display Support ✅ C CODE COMPLETE
+
+**Goal**: Support `(video :id N)` and `(webkit :id N)` display properties in buffer text, just like `(image ...)` works today.
+
+### Current Inline Support Status
+
+| Type | Display Property | xdisp.c | Status |
+|------|------------------|---------|--------|
+| **Image** | `(image :file "x.png")` | ✅ `Qimage`, `produce_image_glyph()` | ✅ **WORKS** |
+| **Video** | `(video :id N :width W :height H)` | ✅ Full support | ✅ **C CODE COMPLETE** |
+| **WebKit** | `(webkit :id N :width W :height H)` | ✅ Full support | ✅ **C CODE COMPLETE** |
+
+### Usage Example
+```elisp
+;; Image (already works)
+(put-text-property 1 2 'display '(image :file "/path/to/image.png"))
+
+;; Video display property (renders placeholder, needs VideoCache lookup)
+(put-text-property 1 2 'display '(video :id 1 :width 640 :height 480))
+
+;; WebKit display property (renders placeholder, needs WebKitCache lookup)
+(put-text-property 1 2 'display '(webkit :id 2 :width 800 :height 600))
+```
+
+### 9.1 Display Property Infrastructure ✅ COMPLETE
+- [x] Add VIDEO_GLYPH to `enum glyph_type` in dispextern.h
+- [x] Add IT_VIDEO to `enum it_method` in dispextern.h
+- [x] Add video_id to glyph union and iterator struct
+- [x] Add video_width, video_height to iterator struct
+- [x] Add WEBKIT_GLYPH to `enum glyph_type` in dispextern.h
+- [x] Add IT_WEBKIT to `enum it_method` in dispextern.h
+- [x] Add webkit_id to glyph union and iterator struct
+
+### 9.2 xdisp.c Symbols and Parsing ✅ COMPLETE
+- [x] Add `Qvideo` symbol via DEFSYM (neomacsterm.c)
+- [x] Add `Qwebkit` symbol via DEFSYM (neomacsterm.c)
+- [x] Add `QCid` symbol via DEFSYM (neomacsterm.c)
+- [x] Add VIDEOP() and WEBKITP() predicates (lisp.h)
+- [x] Add video/webkit to handle_display_spec exclusion list
+- [x] Parse `(video :id N :width W :height H)` in `handle_single_display_spec()`
+- [x] Parse `(webkit :id N :width W :height H)` in `handle_single_display_spec()`
+
+### 9.3 Glyph Production Functions ✅ COMPLETE
+- [x] Implement `produce_video_glyph()` (similar to `produce_xwidget_glyph()`)
+- [x] Implement `produce_webkit_glyph()`
+- [x] Set glyph dimensions from :width/:height properties
+- [x] Handle ascent/descent calculation
+- [x] Add IT_VIDEO and IT_WEBKIT cases to produce_glyphs switch
+
+### 9.4 Iterator/Display Infrastructure ✅ COMPLETE
+- [x] Add GET_FROM_VIDEO and GET_FROM_WEBKIT to push_it() switch
+- [x] Add GET_FROM_VIDEO and GET_FROM_WEBKIT to pop_it() switch
+- [x] Add GET_FROM_VIDEO and GET_FROM_WEBKIT to set_iterator_to_next()
+- [x] Implement next_element_from_video() and next_element_from_webkit()
+- [x] Add to get_next_element[] dispatch table
+
+### 9.5 Glyph String Building ✅ COMPLETE
+- [x] Implement fill_video_glyph_string()
+- [x] Implement fill_webkit_glyph_string()
+- [x] Define BUILD_VIDEO_GLYPH_STRING macro
+- [x] Define BUILD_WEBKIT_GLYPH_STRING macro
+- [x] Add VIDEO_GLYPH case to BUILD_GLYPH_STRINGS_2
+- [x] Add WEBKIT_GLYPH case to BUILD_GLYPH_STRINGS_2
+
+### 9.6 Rust Renderer Integration ✅ COMPLETE
+- [x] Handle VIDEO_GLYPH in gsk_renderer.rs - looks up from VideoCache
+- [x] Handle WEBKIT_GLYPH in gsk_renderer.rs - looks up from WebKitCache
+- [x] Look up video paintable from VideoCache by glyph.u.video_id
+- [x] Look up webkit texture from WebKitCache by glyph.u.webkit_id
+- [x] Snapshot paintable/texture at glyph position
+- [x] Fall back to placeholder if no texture available
+- [x] Wire video/image caches through thread-local for widget path
+- [x] Connect paintable's invalidate-contents signal to trigger widget redraw
+- [x] Set VIDEO_WIDGET in render_to_widget for signal callbacks
+- [x] Verified working with SMPTE color bars test video
+
+**Video playback is now working!** The signal-based approach successfully
+integrates gtk4paintablesink with Emacs rendering:
+1. GStreamer produces frames via gtk4paintablesink
+2. Paintable emits `invalidate-contents` signal
+3. Signal handler calls `widget.queue_draw()`
+4. Widget redraws with new video frame via GSK
+
+### 9.7 Future Enhancements
+- [ ] Dynamic dimension retrieval from cache instead of display property
+- [ ] Slice support for partial video/webkit display
+- [ ] Handle video/webkit resize on window resize
+- [ ] Handle cursor movement over video/webkit glyphs
+- [ ] Handle mouse click on video/webkit glyphs
+
+---
+
+## Phase 10: Emacs Build Integration 🔧
+
+### 10.1 Build System Integration
+- [ ] Add Rust build to Emacs `configure.ac`
+- [ ] Add cargo build to `Makefile.in`
+- [ ] Link `libneomacs_display.so` with Emacs
+- [ ] Add `--with-neomacs` configure option
+- [ ] Handle cross-compilation
+
+### 10.2 Modify dispnew.c
+- [ ] Include generated C header
+- [ ] Initialize Rust display engine on startup
+- [ ] Replace `update_frame` to call Rust FFI
+- [ ] Convert `glyph_matrix` to Rust `Glyph` array
+- [ ] Handle backend selection (TTY vs GTK4)
+
+### 10.3 Modify keyboard.c
+- [ ] Forward input to video/wpe when cursor on those glyphs
+- [ ] Handle video playback shortcuts
+- [ ] Handle WPE input mode
+
+### 10.4 New Lisp Primitives (Already Done)
+- [x] Add video primitives to `src/neomacsterm.c`
+- [x] Add WebKit primitives to `src/neomacsterm.c`
+- [x] Register primitives in `syms_of_neomacsterm`
+
+---
+
+## Phase 11: Remove Legacy Backends ⏳
+
+### 11.1 Remove X11 Backend
+- [ ] Remove `xterm.c`, `xterm.h`
+- [ ] Remove `xfns.c`
+- [ ] Remove X11-specific code from `gtkutil.c`
+- [ ] Update configure.ac
+- [ ] Update Makefile.in
+
+### 11.2 Remove Windows Backend
+- [ ] Remove `w32term.c`, `w32term.h`
+- [ ] Remove `w32fns.c`
+- [ ] Remove `w32*.c` files
+- [ ] Update configure.ac
+
+### 11.3 Remove macOS Backend
+- [ ] Remove `nsterm.m`, `nsterm.h`
+- [ ] Remove `nsfns.m`
+- [ ] Remove `ns*.m` files
+- [ ] Update configure.ac
+
+### 11.4 Remove Other Backends
+- [ ] Remove Haiku backend (`haikuterm.c`, etc.)
+- [ ] Remove Android backend (`androidterm.c`, etc.)
+- [ ] Remove MS-DOS backend (`msdos.c`)
+- [ ] Remove old X menu code (`oldXMenu/`)
+
+### 11.5 Cleanup
+- [ ] Remove `output_method` enum entries (keep initial, termcap, neomacs)
+- [ ] Remove unused conditionals (`HAVE_X_WINDOWS`, `HAVE_NS`, etc.)
+- [ ] Remove unused header includes
+- [ ] Update documentation
+
+---
+
+## Phase 12: Testing & Documentation ⏳
+
+### 12.1 Rust Unit Tests
+- [ ] Test core types serialization
+- [ ] Test scene graph construction
+- [ ] Test glyph atlas packing
+- [ ] Test animation interpolation
+- [ ] Test TTY escape sequence generation
+
+### 12.2 Integration Tests
+- [ ] Test C FFI from test harness
+- [ ] Test GTK4 rendering with screenshot comparison
+- [ ] Test video playback
+- [ ] Test WPE WebKit loading
+
+### 12.3 Emacs Integration Tests
+- [ ] Test basic text display
+- [ ] Test face rendering (colors, styles)
+- [ ] Test image display
+- [ ] Test video insertion and playback
+- [ ] Test WPE view insertion and navigation
+- [ ] Test smooth scrolling
+
+### 12.4 Performance Benchmarks
+- [ ] Benchmark text rendering throughput
+- [ ] Benchmark large buffer scrolling
+- [ ] Benchmark image loading
+- [ ] Benchmark video playback CPU/GPU usage
+- [ ] Compare with old display engine
+
+### 12.5 Documentation
+- [ ] Write Rust API documentation (rustdoc)
+- [ ] Write C FFI documentation
+- [ ] Write Lisp API documentation (docstrings)
+- [ ] Update Emacs manual for new features
+- [ ] Write developer guide for extending display engine
+
+---
+
+## Phase 13: Polish & Optimization ⏳
+
+### 13.1 Performance Optimization
+- [ ] Profile and optimize hot paths
+- [ ] Reduce memory allocations
+- [ ] Optimize scene graph updates (incremental)
+- [ ] Optimize glyph atlas usage
+- [ ] Enable GPU shader optimizations
+
+### 13.2 Error Handling
+- [ ] Graceful fallback on GPU failure
+- [ ] Handle video codec errors
+- [ ] Handle WPE crash recovery
+- [ ] Log errors to Emacs `*Messages*`
+
+### 13.3 Accessibility
+- [ ] Ensure screen reader compatibility
+- [ ] Support high contrast themes
+- [ ] Support reduced motion preferences
+- [ ] Support system font scaling
+
+### 13.4 Platform Testing
+- [ ] Test on Linux (X11 via XWayland)
+- [ ] Test on Linux (Wayland native)
+- [ ] Test on macOS (via GTK4)
+- [ ] Test on Windows (via GTK4/MSYS2)
+
+---
+
+## Phase 14: Frontend Comprehensive Testing 🧪
+
+Systematic testing of all Emacs frontend features with the new GPU display engine.
+
+### 14.1 Window Management
+| Test | Command | Expected | Status |
+|------|---------|----------|--------|
+| Split below | `C-x 2` | Two windows stacked vertically | ⬜ |
+| Split right | `C-x 3` | Two windows side by side | ⬜ |
+| Enlarge window | `C-x ^` | Active window gets taller | ⬜ |
+| Shrink window | `C-x v` | Active window gets shorter | ⬜ |
+| Enlarge horizontal | `C-x }` | Active window gets wider | ⬜ |
+| Shrink horizontal | `C-x {` | Active window gets narrower | ⬜ |
+| Delete window | `C-x 0` | Close current window | ⬜ |
+| Delete others | `C-x 1` | Keep only current window | ⬜ |
+| Other window | `C-x o` | Switch to other window | ⬜ |
+| Balance windows | `C-x +` | All windows equal size | ⬜ |
+
+### 14.2 Mode Line & Echo Area
+| Test | Action | Expected | Status |
+|------|--------|----------|--------|
+| Mode line display | Visual check | Shows buffer, line, mode | ⬜ |
+| Mode line update | Edit buffer | Mode line shows `**` (modified) | ⬜ |
+| Echo area message | `M-: (message "test")` | Shows "test" in echo area | ⬜ |
+| Minibuffer prompt | `M-x` | Shows "M-x" prompt | ⬜ |
+| Minibuffer completion | `M-x desc TAB` | Completion popup/inline | ⬜ |
+| Error messages | Invalid command | Error in echo area (red?) | ⬜ |
+
+### 14.3 Text Scaling & Fonts
+| Test | Command | Expected | Status |
+|------|---------|----------|--------|
+| Text scale increase | `C-x C-+` | Text gets larger | ⬜ |
+| Text scale decrease | `C-x C--` | Text gets smaller | ⬜ |
+| Text scale reset | `C-x C-0` | Text returns to default | ⬜ |
+| Bold face | `(insert (propertize "bold" 'face 'bold))` | Bold text renders | ⬜ |
+| Italic face | `(insert (propertize "italic" 'face 'italic))` | Italic text renders | ⬜ |
+| Custom color | `(insert (propertize "red" 'face '(:foreground "red")))` | Red text | ⬜ |
+| Different font | `M-x set-frame-font` | Font changes globally | ⬜ |
+| Mixed fonts | Buffer with multiple faces | All faces render correctly | ⬜ |
+
+### 14.4 Cursor & Point
+| Test | Action | Expected | Status |
+|------|--------|----------|--------|
+| Block cursor | Default | Solid block cursor | ⬜ |
+| Cursor movement | Arrow keys | Cursor moves smoothly | ⬜ |
+| Cursor at EOL | End of line | Cursor visible at line end | ⬜ |
+| Cursor in empty buffer | New buffer | Cursor at position 1 | ⬜ |
+| Cursor blink | Wait | Cursor blinks (if enabled) | ⬜ |
+| Bar cursor | `(setq cursor-type 'bar)` | Thin bar cursor | ⬜ |
+
+### 14.5 Selection & Region
+| Test | Action | Expected | Status |
+|------|--------|----------|--------|
+| Mark set | `C-SPC` | Mark set message | ⬜ |
+| Region highlight | `C-SPC`, move | Selection highlights | ⬜ |
+| Copy region | `M-w` | Region copied, highlight clears | ⬜ |
+| Kill region | `C-w` | Region deleted | ⬜ |
+| Rectangle select | `C-x SPC` | Rectangle mode | ⬜ |
+
+### 14.6 Scrolling
+| Test | Command | Expected | Status |
+|------|---------|----------|--------|
+| Scroll down | `C-v` | Content scrolls down | ⬜ |
+| Scroll up | `M-v` | Content scrolls up | ⬜ |
+| Line scroll | `C-n` at bottom | Single line scroll | ⬜ |
+| Scroll other window | `C-M-v` | Other window scrolls | ⬜ |
+| Mouse wheel | Scroll wheel | Smooth scrolling | ⬜ |
+| Horizontal scroll | Long line | Horizontal scroll works | ⬜ |
+
+### 14.7 Line Numbers & Margins
+| Test | Command | Expected | Status |
+|------|---------|----------|--------|
+| Line numbers | `M-x display-line-numbers-mode` | Numbers appear in margin | ⬜ |
+| Relative line numbers | `(setq display-line-numbers 'relative)` | Relative to cursor | ⬜ |
+| Fringe indicators | Git changes | Fringe shows indicators | ⬜ |
+| Left margin | `(setq left-margin-width 5)` | Left margin appears | ⬜ |
+
+### 14.8 Syntax Highlighting
+| Test | Action | Expected | Status |
+|------|--------|----------|--------|
+| Emacs Lisp | Open `.el` file | Keywords colored | ⬜ |
+| Comments | `;; comment` | Comments in distinct color | ⬜ |
+| Strings | `"string"` | Strings in distinct color | ⬜ |
+| Font-lock refresh | Edit code | Colors update correctly | ⬜ |
+
+### 14.9 Special Displays
+| Test | Action | Expected | Status |
+|------|--------|----------|--------|
+| Dired | `C-x d` | Directory listing | ⬜ |
+| Help buffer | `C-h f` | Help with links | ⬜ |
+| Compilation | `M-x compile` | Output with colors | ⬜ |
+| Shell | `M-x shell` | Interactive shell | ⬜ |
+| Term | `M-x term` | Terminal emulator | ⬜ |
+
+### 14.10 Mouse & Input
+| Test | Action | Expected | Status |
+|------|--------|----------|--------|
+| Click to position | Mouse click | Cursor moves to click | ⬜ |
+| Double-click select | Double-click word | Word selected | ⬜ |
+| Triple-click select | Triple-click line | Line selected | ⬜ |
+| Right-click menu | Right-click | Context menu appears | ⬜ |
+| Drag select | Click and drag | Selection follows | ⬜ |
+
+### 14.11 Frames
+| Test | Command | Expected | Status |
+|------|---------|----------|--------|
+| New frame | `C-x 5 2` | New window opens | ⬜ |
+| Delete frame | `C-x 5 0` | Frame closes | ⬜ |
+| Frame resize | Drag border | Frame resizes, content reflows | ⬜ |
+| Frame maximize | Window button | Full screen, content scales | ⬜ |
+
+---
+
+## Milestones
+
+| Milestone | Phases | Status |
+|-----------|--------|--------|
+| **M1: Basic Rendering** | 1, 3 | ✅ GTK4 text rendering works |
+| **M2: Feature Parity** | 4 | ✅ Images work like current Emacs |
+| **M3: Video Support** | 5 | ✅ Video playback in buffers |
+| **M4: WebKit Support** | 6 | ✅ WPE WebKit embedding works |
+| **M5: GPU Zero-Copy** | 7 | ⏳ Video/Image DMA-BUF pipeline |
+| **M6: Smooth UX** | 8 | ⏳ Animations and smooth scrolling |
+| **M7: Inline Display** | 9 | ⏳ `(video :id N)` display property |
+| **M8: Full Integration** | 10 | 🔧 Emacs builds with new engine |
+| **M9: Cleanup** | 11 | ⏳ Legacy backends removed |
+| **M10: Release Ready** | 12-13 | ⏳ Tested, documented, optimized |
+
+---
+
+## Dependencies
+
+### Rust Crates
+- `gtk4` (0.9+) - GTK4 bindings
+- `gdk4` (0.9+) - GDK4 bindings  
+- `gsk4` (0.9+) - GSK bindings
+- `pango` (0.20+) - Text rendering
+- `cairo-rs` (0.20+) - 2D graphics
+- `gstreamer` (0.23+) - Video playback
+- `gstreamer-video` (0.23+) - Video utilities
+
+### System Libraries
+- GTK4 (4.10+)
+- GStreamer (1.20+)
+- WPE WebKit (2.38+)
+- libwpe, wpebackend-fdo
+- Pango (1.50+)
+- Cairo (1.16+)
+- VA-API (for hardware video decoding)
+- Mesa (for DMA-BUF)
+
+---
+
+## Open Questions
+
+1. ~~**WPE Rust bindings**: Do mature bindings exist?~~ → Solved: bindgen for C APIs
+2. **GTK4 minimum version**: What's the minimum GTK4 version to support?
+3. **Fallback rendering**: Should we support software rendering fallback?
+4. **Thread model**: How to handle Rust async with Emacs event loop?
+5. **Memory sharing**: How to efficiently share buffer text with Rust?
+
+---
+
+## References
+
+- [gtk4-rs Documentation](https://gtk-rs.org/gtk4-rs/stable/latest/docs/gtk4/)
+- [gstreamer-rs Documentation](https://gstreamer.freedesktop.org/documentation/rust/)
+- [WPE WebKit](https://wpewebkit.org/)
+- [VA-API](https://github.com/intel/libva)
+- [DMA-BUF](https://docs.kernel.org/driver-api/dma-buf.html)
+- [GdkDmabufTexture](https://docs.gtk.org/gdk4/class.DmabufTexture.html)
+- [Emacs Internals](https://www.gnu.org/software/emacs/manual/html_node/elisp/Display.html)
