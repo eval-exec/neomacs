@@ -1,16 +1,18 @@
 //! WPE WebKit backend for headless browser rendering.
 //!
 //! This module provides WPE WebKit integration for embedding web content
-//! in Emacs buffers. Unlike WebKitGTK, WPE renders to EGL/DMA-BUF textures
-//! that can be composited without a GTK widget tree.
+//! in Emacs buffers using the WPE Platform API for GPU-accelerated rendering.
 //!
 //! Architecture:
-//! - libwpe: Core abstraction (view-backend, input events)
-//! - wpebackend-fdo: FreeDesktop.org backend with EGL export
+//! - WPE Platform API: Modern display/view/buffer abstraction
 //! - wpe-webkit: WebKit engine (GObject API)
+//! - dma-buf: Zero-copy GPU buffer sharing
 
 #[cfg(feature = "wpe-webkit")]
 mod sys;
+
+#[cfg(feature = "wpe-webkit")]
+mod platform;
 
 #[cfg(feature = "wpe-webkit")]
 mod backend;
@@ -29,3 +31,6 @@ pub use view::{WpeWebView, WpeViewState};
 
 #[cfg(feature = "wpe-webkit")]
 pub use dmabuf::DmaBufExporter;
+
+#[cfg(feature = "wpe-webkit")]
+pub use platform::{WpePlatformDisplay, WpePlatformView};

@@ -43,7 +43,9 @@ pub struct WebKitView {
 impl WebKitView {
     /// Create a new WebKit view
     pub fn new(wpe_backend: &WpeBackend, width: i32, height: i32) -> DisplayResult<Self> {
-        let wpe_view = WpeWebView::new(wpe_backend, width as u32, height as u32)?;
+        let platform_display = wpe_backend.platform_display()
+            .ok_or_else(|| DisplayError::WebKit("WPE Platform display not initialized".into()))?;
+        let wpe_view = WpeWebView::new(platform_display, width as u32, height as u32)?;
         Ok(Self { wpe_view })
     }
 

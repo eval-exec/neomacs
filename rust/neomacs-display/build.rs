@@ -11,6 +11,9 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
 
+    // Allow the wpe_platform_available cfg flag
+    println!("cargo::rustc-check-cfg=cfg(wpe_platform_available)");
+
     // Generate C headers with cbindgen
     generate_c_headers(&crate_dir);
 
@@ -79,6 +82,9 @@ fn generate_wpe_bindings(out_dir: &PathBuf) {
     } else {
         println!("cargo:warning=wpe-webkit not found, WPE WebKit support disabled");
     }
+
+    // Generate WPE Platform API bindings (for dma-buf GPU rendering)
+    generate_wpe_platform_bindings(out_dir);
 }
 
 #[cfg(feature = "wpe-webkit")]
@@ -278,6 +284,10 @@ fn generate_wpe_fdo_bindings(out_dir: &PathBuf, wpe_fdo: &pkg_config::Library) {
             r#"
             #include <wpe/fdo.h>
             #include <wpe/fdo-egl.h>
+            #include <wpe/unstable/fdo-shm.h>
+            #include <wpe/unstable/fdo-dmabuf.h>
+            // Include wayland-server for wl_shm_buffer functions
+            #include <wayland-server-core.h>
             "#,
         )
         .allowlist_function("wpe_fdo_.*")
@@ -286,6 +296,16 @@ fn generate_wpe_fdo_bindings(out_dir: &PathBuf, wpe_fdo: &pkg_config::Library) {
         .allowlist_type("wpe_view_backend_exportable_fdo.*")
         .allowlist_type("EGLImageKHR")
         .allowlist_var("WPE_FDO_.*")
+        // wl_shm_buffer functions for SHM mode
+        .allowlist_function("wl_shm_buffer_get_data")
+        .allowlist_function("wl_shm_buffer_get_stride")
+        .allowlist_function("wl_shm_buffer_get_format")
+        .allowlist_function("wl_shm_buffer_get_width")
+        .allowlist_function("wl_shm_buffer_get_height")
+        .allowlist_function("wl_shm_buffer_begin_access")
+        .allowlist_function("wl_shm_buffer_end_access")
+        // wl_shm format constants
+        .allowlist_var("WL_SHM_FORMAT_.*")
         .generate_comments(true)
         .derive_debug(true)
         .derive_default(true)
@@ -304,6 +324,20 @@ fn generate_wpe_fdo_bindings(out_dir: &PathBuf, wpe_fdo: &pkg_config::Library) {
         }
     }
 
+    // Need wayland-server headers for wl_shm_buffer
+    if let Ok(wayland_server) = pkg_config::Config::new().probe("wayland-server") {
+        for path in &wayland_server.include_paths {
+            builder = builder.clang_arg(format!("-I{}", path.display()));
+        }
+        // Link wayland-server
+        for lib in &wayland_server.libs {
+            println!("cargo:rustc-link-lib={}", lib);
+        }
+        for path in &wayland_server.link_paths {
+            println!("cargo:rustc-link-search={}", path.display());
+        }
+    }
+
     let bindings = builder
         .generate()
         .expect("Failed to generate wpe-fdo bindings");
@@ -319,4 +353,123 @@ fn generate_wpe_fdo_bindings(out_dir: &PathBuf, wpe_fdo: &pkg_config::Library) {
     for path in &wpe_fdo.link_paths {
         println!("cargo:rustc-link-search={}", path.display());
     }
+}
+
+#[cfg(feature = "wpe-webkit")]
+fn generate_wpe_platform_bindings(out_dir: &PathBuf) {
+    // Check if wpe-platform-2.0 is available
+    let wpe_platform = match pkg_config::Config::new().probe("wpe-platform-2.0") {
+        Ok(lib) => lib,
+        Err(e) => {
+            println!("cargo:warning=wpe-platform-2.0 not found: {}, skipping WPE Platform bindings", e);
+            return;
+        }
+    };
+
+    // Also get headless platform
+    let wpe_headless = pkg_config::Config::new()
+        .probe("wpe-platform-headless-2.0")
+        .ok();
+
+    let mut builder = bindgen::Builder::default()
+        .header_contents(
+            "wpe_platform_wrapper.h",
+            r#"
+            #include <wpe/wpe-platform.h>
+            #include <wpe/headless/wpe-headless.h>
+            #include <glib-object.h>
+            "#,
+        )
+        // WPEDisplay functions
+        .allowlist_function("wpe_display_.*")
+        .allowlist_type("WPEDisplay.*")
+        // WPEView functions
+        .allowlist_function("wpe_view_.*")
+        .allowlist_type("WPEView.*")
+        // WPEBuffer functions
+        .allowlist_function("wpe_buffer_.*")
+        .allowlist_type("WPEBuffer.*")
+        // WPEToplevel functions
+        .allowlist_function("wpe_toplevel_.*")
+        .allowlist_type("WPEToplevel.*")
+        // WPEEvent functions
+        .allowlist_function("wpe_event_.*")
+        .allowlist_type("WPEEvent.*")
+        // WPERectangle
+        .allowlist_type("WPERectangle")
+        // GObject/GLib functions we need
+        .allowlist_function("g_object_unref")
+        .allowlist_function("g_object_ref")
+        .allowlist_function("g_error_free")
+        .allowlist_function("g_bytes_get_data")
+        .allowlist_function("g_bytes_unref")
+        .allowlist_function("g_bytes_get_size")
+        .allowlist_function("g_signal_connect_data")
+        // GObject/GLib types we need
+        .allowlist_type("GError")
+        .allowlist_type("GBytes")
+        .allowlist_type("gboolean")
+        .allowlist_type("gpointer")
+        .allowlist_type("guint")
+        .allowlist_type("gsize")
+        .allowlist_type("GType")
+        .allowlist_type("GQuark")
+        .allowlist_type("gdouble")
+        .generate_comments(true)
+        .derive_debug(true)
+        .derive_default(true);
+
+    // Add include paths from wpe-platform-2.0
+    for path in &wpe_platform.include_paths {
+        builder = builder.clang_arg(format!("-I{}", path.display()));
+    }
+
+    // Add headless include paths if available
+    if let Some(ref headless) = wpe_headless {
+        for path in &headless.include_paths {
+            builder = builder.clang_arg(format!("-I{}", path.display()));
+        }
+    }
+
+    // Need glib headers
+    if let Ok(glib) = pkg_config::Config::new().probe("glib-2.0") {
+        for path in &glib.include_paths {
+            builder = builder.clang_arg(format!("-I{}", path.display()));
+        }
+    }
+
+    // Need EGL headers
+    if let Ok(egl) = pkg_config::Config::new().probe("egl") {
+        for path in &egl.include_paths {
+            builder = builder.clang_arg(format!("-I{}", path.display()));
+        }
+    }
+
+    let bindings = builder
+        .generate()
+        .expect("Failed to generate wpe-platform bindings");
+
+    bindings
+        .write_to_file(out_dir.join("wpe_platform_sys.rs"))
+        .expect("Failed to write wpe_platform_sys.rs");
+
+    // Link wpe-platform
+    for lib in &wpe_platform.libs {
+        println!("cargo:rustc-link-lib={}", lib);
+    }
+    for path in &wpe_platform.link_paths {
+        println!("cargo:rustc-link-search={}", path.display());
+    }
+
+    // Link headless platform if available
+    if let Some(ref headless) = wpe_headless {
+        for lib in &headless.libs {
+            println!("cargo:rustc-link-lib={}", lib);
+        }
+        for path in &headless.link_paths {
+            println!("cargo:rustc-link-search={}", path.display());
+        }
+    }
+
+    println!("cargo:rustc-cfg=wpe_platform_available");
 }
