@@ -56,6 +56,7 @@ static void neomacs_set_horizontal_scroll_bar (struct window *w, int portion,
 static void neomacs_condemn_scroll_bars (struct frame *frame);
 static void neomacs_redeem_scroll_bar (struct window *w);
 static void neomacs_judge_scroll_bars (struct frame *f);
+static void neomacs_clear_frame (struct frame *f);
 
 /* Event queue for buffering input events from GTK callbacks */
 struct neomacs_event_queue_t
@@ -373,6 +374,7 @@ neomacs_create_terminal (struct neomacs_display_info *dpyinfo)
 
   /* Set up terminal hooks */
   terminal->delete_terminal_hook = neomacs_delete_terminal;
+  terminal->clear_frame_hook = neomacs_clear_frame;
   terminal->update_begin_hook = neomacs_update_begin;
   terminal->update_end_hook = neomacs_update_end;
   terminal->defined_color_hook = neomacs_defined_color;
@@ -422,10 +424,16 @@ neomacs_update_begin (struct frame *f)
 
   if (dpyinfo && dpyinfo->display_handle)
     {
-      /* Clear all cursors and borders at frame start to prevent ghost artifacts
-         when focus changes or windows are deleted */
+      /* Clear all cursors at frame start to prevent ghost cursors
+         when focus changes between windows */
       neomacs_display_clear_all_cursors (dpyinfo->display_handle);
-      neomacs_display_clear_all_borders (dpyinfo->display_handle);
+
+      /* Clear borders when window configuration changes (e.g., C-x 1, C-x 0).
+         This prevents stale borders from persisting after windows are deleted.
+         For incremental updates, borders persist and are redrawn as needed. */
+      if (windows_or_buffers_changed)
+        neomacs_display_clear_all_borders (dpyinfo->display_handle);
+
       neomacs_display_begin_frame (dpyinfo->display_handle);
     }
 }
@@ -1246,6 +1254,28 @@ neomacs_after_update_window_line (struct window *w, struct glyph_row *desired_ro
     }
 }
 
+/* Clear entire frame (used on full redisplay) */
+static void
+neomacs_clear_frame (struct frame *f)
+{
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+  struct face *face = FACE_FROM_ID_OR_NULL (f, DEFAULT_FACE_ID);
+
+  if (!face)
+    return;
+
+  mark_window_cursors_off (XWINDOW (FRAME_ROOT_WINDOW (f)));
+
+  block_input ();
+
+  /* Clear borders since window configuration is likely changing */
+  if (dpyinfo && dpyinfo->display_handle)
+    neomacs_display_clear_all_borders (dpyinfo->display_handle);
+
+  neomacs_clear_frame_area (f, 0, 0, FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f));
+  unblock_input ();
+}
+
 /* Clear a rectangle on the frame */
 void
 neomacs_clear_frame_area (struct frame *f, int x, int y, int width, int height)
@@ -1289,9 +1319,6 @@ neomacs_draw_vertical_window_border (struct window *w, int x, int y0, int y1)
   struct face *face;
   unsigned long fg;
 
-if (0) fprintf (stderr, "DEBUG C draw_vertical_border: x=%d, y0=%d, y1=%d, dpyinfo=%p, handle=%p\n",
-           x, y0, y1, (void*)dpyinfo, dpyinfo ? (void*)dpyinfo->display_handle : NULL);
-
   if (!output)
     return;
 
@@ -1307,14 +1334,12 @@ if (0) fprintf (stderr, "DEBUG C draw_vertical_border: x=%d, y0=%d, y1=%d, dpyin
     {
       /* Convert to ARGB format with full opacity */
       uint32_t color = (0xFF << 24) | (fg & 0xFFFFFF);
-if (0) fprintf (stderr, "DEBUG C: calling neomacs_display_draw_border\n");
       neomacs_display_draw_border (dpyinfo->display_handle,
                                    x, y0, 1, y1 - y0, color);
     }
   else if (output->cr_context)
     {
       /* Fallback to Cairo */
-if (0) fprintf (stderr, "DEBUG C: using Cairo fallback\n");
       cairo_t *cr = output->cr_context;
       double r = RED_FROM_ULONG (fg) / 255.0;
       double g = GREEN_FROM_ULONG (fg) / 255.0;
