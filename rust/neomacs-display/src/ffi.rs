@@ -734,6 +734,7 @@ pub unsafe extern "C" fn neomacs_display_set_face(
     face_id: u32,
     foreground: u32,  // 0xRRGGBB
     background: u32,  // 0xRRGGBB
+    font_family: *const c_char, // Font family name (e.g., "monospace", "Sans")
     font_weight: u16, // 400=normal, 700=bold
     is_italic: c_int,
     underline_style: c_int, // 0=none, 1=line, 2=wave, 3=double, 4=dotted, 5=dashed
@@ -748,7 +749,18 @@ pub unsafe extern "C" fn neomacs_display_set_face(
 
     let display = &mut *handle;
 
-    trace!("set_face: id={}, fg=0x{:06x}, bg=0x{:06x}, weight={}", face_id, foreground, background, font_weight);
+    // Convert font family from C string (defensively)
+    let font_family_str = if font_family.is_null() {
+        "monospace".to_string()
+    } else {
+        // Safety: need to verify the C string is valid
+        match std::ffi::CStr::from_ptr(font_family).to_str() {
+            Ok(s) if !s.is_empty() => s.to_string(),
+            _ => "monospace".to_string(),
+        }
+    };
+
+    trace!("set_face: id={}, fg=0x{:06x}, bg=0x{:06x}, family={}, weight={}", face_id, foreground, background, font_family_str, font_weight);
 
     // Convert colors from 0xRRGGBB to Color
     let fg = Color {
@@ -830,7 +842,7 @@ pub unsafe extern "C" fn neomacs_display_set_face(
         overline_color: None,
         strike_through_color: None,
         box_color: bx_color,
-        font_family: "monospace".to_string(),
+        font_family: font_family_str.clone(),
         font_size: 14.0,
         font_weight,
         attributes: attrs,
@@ -843,10 +855,11 @@ pub unsafe extern "C" fn neomacs_display_set_face(
     if display.use_hybrid {
         let bg_opt = if background == 0 { None } else { Some(bg) };
         let ul_color_opt = if underline_color != 0 { ul_color } else { None };
-        display.frame_glyphs.set_face(
+        display.frame_glyphs.set_face_with_font(
             face_id,
             fg,
             bg_opt,
+            &font_family_str,
             font_weight >= 700,
             is_italic != 0,
             underline_style as u8,

@@ -71,6 +71,7 @@ impl HybridRenderer {
         c: char,
         face_id: u32,
         fg: &Color,
+        font_family: &str,
         bold: bool,
         italic: bool,
     ) -> Option<&CachedGlyph> {
@@ -84,7 +85,7 @@ impl HybridRenderer {
             return self.glyph_atlas.get(&key);
         }
 
-        warn!("Rasterizing '{}' (face_id={}, fg={:?}, bold={}, italic={}, scale={})", c, face_id, fg, bold, italic, self.scale_factor);
+        warn!("Rasterizing '{}' (face_id={}, fg={:?}, font='{}', bold={}, italic={}, scale={})", c, face_id, fg, font_family, bold, italic, self.scale_factor);
 
         // Need to rasterize - create a temporary face with the foreground color
         let mut attrs = crate::core::face::FaceAttributes::empty();
@@ -103,7 +104,7 @@ impl HybridRenderer {
             overline_color: None,
             strike_through_color: None,
             box_color: None,
-            font_family: "monospace".to_string(),
+            font_family: font_family.to_string(),
             font_size: 13.0,
             font_weight: if bold { 700 } else { 400 },
             attributes: attrs,
@@ -214,7 +215,7 @@ impl HybridRenderer {
         // Process regular glyphs (excluding backgrounds, which were handled above)
         let mut char_count = 0;
         for glyph in regular_glyphs {
-            self.render_glyph(&glyph, &mut nodes, &mut video_cache, &mut image_cache, webkit_cache, &mut char_count, false);
+            self.render_glyph(&glyph, buffer, &mut nodes, &mut video_cache, &mut image_cache, webkit_cache, &mut char_count, false);
         }
 
         // Process overlay glyphs LAST so they render on top
@@ -226,7 +227,7 @@ impl HybridRenderer {
             }
         }
         for glyph in overlay_glyphs {
-            self.render_glyph(&glyph, &mut nodes, &mut video_cache, &mut image_cache, webkit_cache, &mut char_count, true);
+            self.render_glyph(&glyph, buffer, &mut nodes, &mut video_cache, &mut image_cache, webkit_cache, &mut char_count, true);
         }
 
         // Render floating images on top
@@ -339,7 +340,7 @@ impl HybridRenderer {
         let mut char_count = 0;
         for glyph in &regular_glyphs {
             if !matches!(glyph, FrameGlyph::Background { .. }) {
-                self.render_glyph(glyph, &mut nodes, &mut video_cache, &mut image_cache, &mut char_count, false);
+                self.render_glyph(glyph, buffer, &mut nodes, &mut video_cache, &mut image_cache, &mut char_count, false);
             }
         }
 
@@ -352,7 +353,7 @@ impl HybridRenderer {
             }
         }
         for glyph in overlay_glyphs {
-            self.render_glyph(&glyph, &mut nodes, &mut video_cache, &mut image_cache, &mut char_count, true);
+            self.render_glyph(&glyph, buffer, &mut nodes, &mut video_cache, &mut image_cache, &mut char_count, true);
         }
 
         // Render floating images
@@ -385,6 +386,7 @@ impl HybridRenderer {
     fn render_glyph(
         &mut self,
         glyph: &FrameGlyph,
+        buffer: &FrameGlyphBuffer,
         nodes: &mut Vec<gsk::RenderNode>,
         video_cache: &mut Option<&mut VideoCache>,
         image_cache: &mut Option<&mut ImageCache>,
@@ -392,26 +394,28 @@ impl HybridRenderer {
         char_count: &mut usize,
         _is_overlay_pass: bool,
     ) {
-        self.render_glyph_inner(glyph, nodes, video_cache, image_cache, webkit_cache, char_count, _is_overlay_pass)
+        self.render_glyph_inner(glyph, buffer, nodes, video_cache, image_cache, webkit_cache, char_count, _is_overlay_pass)
     }
 
     #[cfg(not(feature = "wpe-webkit"))]
     fn render_glyph(
         &mut self,
         glyph: &FrameGlyph,
+        buffer: &FrameGlyphBuffer,
         nodes: &mut Vec<gsk::RenderNode>,
         video_cache: &mut Option<&mut VideoCache>,
         image_cache: &mut Option<&mut ImageCache>,
         char_count: &mut usize,
         _is_overlay_pass: bool,
     ) {
-        self.render_glyph_inner(glyph, nodes, video_cache, image_cache, char_count, _is_overlay_pass)
+        self.render_glyph_inner(glyph, buffer, nodes, video_cache, image_cache, char_count, _is_overlay_pass)
     }
 
     #[cfg(feature = "wpe-webkit")]
     fn render_glyph_inner(
         &mut self,
         glyph: &FrameGlyph,
+        buffer: &FrameGlyphBuffer,
         nodes: &mut Vec<gsk::RenderNode>,
         video_cache: &mut Option<&mut VideoCache>,
         image_cache: &mut Option<&mut ImageCache>,
@@ -450,9 +454,12 @@ impl HybridRenderer {
                     return;
                 }
 
+                // Get font family for this face
+                let font_family = buffer.get_face_font(*face_id);
+
                 // Get or rasterize glyph
                 let scale = self.scale_factor;
-                if let Some(cached) = self.get_or_rasterize_glyph(*char, *face_id, fg, *bold, *italic) {
+                if let Some(cached) = self.get_or_rasterize_glyph(*char, *face_id, fg, font_family, *bold, *italic) {
                     // Position glyph using bearing (bearing is already in device pixels, divide by scale)
                     let glyph_x = x + cached.bearing_x / scale;
                     let glyph_y = y + ascent - cached.bearing_y / scale;
@@ -660,6 +667,7 @@ impl HybridRenderer {
     fn render_glyph_inner(
         &mut self,
         glyph: &FrameGlyph,
+        buffer: &FrameGlyphBuffer,
         nodes: &mut Vec<gsk::RenderNode>,
         video_cache: &mut Option<&mut VideoCache>,
         image_cache: &mut Option<&mut ImageCache>,
@@ -693,8 +701,10 @@ impl HybridRenderer {
                 if *char == ' ' || *char == '\t' || *char == '\n' {
                     return;
                 }
+                // Get font family for this face
+                let font_family = buffer.get_face_font(*face_id);
                 let scale = self.scale_factor;
-                if let Some(cached) = self.get_or_rasterize_glyph(*char, *face_id, fg, *bold, *italic) {
+                if let Some(cached) = self.get_or_rasterize_glyph(*char, *face_id, fg, font_family, *bold, *italic) {
                     // Scale down from device pixels to logical pixels for rendering
                     let tex_rect = graphene::Rect::new(
                         *x + cached.bearing_x / scale,

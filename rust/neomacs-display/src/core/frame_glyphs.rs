@@ -5,6 +5,7 @@
 //! window state - Emacs provides positions, we just render.
 
 use crate::core::types::{Color, Rect};
+use std::collections::HashMap;
 
 /// A single glyph to render
 #[derive(Debug, Clone)]
@@ -146,10 +147,14 @@ pub struct FrameGlyphBuffer {
     current_face_id: u32,
     current_fg: Color,
     current_bg: Option<Color>,
+    current_font_family: String,
     current_bold: bool,
     current_italic: bool,
     current_underline: u8,
     current_underline_color: Option<Color>,
+
+    /// Font family cache: face_id -> font_family
+    pub face_fonts: HashMap<u32, String>,
 }
 
 impl FrameGlyphBuffer {
@@ -165,10 +170,12 @@ impl FrameGlyphBuffer {
             current_face_id: 0,
             current_fg: Color::WHITE, // Default foreground white for dark theme
             current_bg: None,
+            current_font_family: "monospace".to_string(),
             current_bold: false,
             current_italic: false,
             current_underline: 0,
             current_underline_color: None,
+            face_fonts: HashMap::new(),
         }
     }
     
@@ -185,10 +192,12 @@ impl FrameGlyphBuffer {
             current_face_id: 0,
             current_fg: Color::WHITE, // Default foreground white for dark theme
             current_bg: None,
+            current_font_family: "monospace".to_string(),
             current_bold: false,
             current_italic: false,
             current_underline: 0,
             current_underline_color: None,
+            face_fonts: HashMap::new(),
         }
     }
 
@@ -229,6 +238,21 @@ impl FrameGlyphBuffer {
         self.glyphs.clear();
     }
 
+    /// Set current face attributes for subsequent char glyphs (with font family)
+    pub fn set_face_with_font(&mut self, face_id: u32, fg: Color, bg: Option<Color>,
+                    font_family: &str, bold: bool, italic: bool, underline: u8, underline_color: Option<Color>) {
+        self.current_face_id = face_id;
+        self.current_fg = fg;
+        self.current_bg = bg;
+        self.current_font_family = font_family.to_string();
+        self.current_bold = bold;
+        self.current_italic = italic;
+        self.current_underline = underline;
+        self.current_underline_color = underline_color;
+        // Store font family for this face_id
+        self.face_fonts.insert(face_id, font_family.to_string());
+    }
+
     /// Set current face attributes for subsequent char glyphs
     pub fn set_face(&mut self, face_id: u32, fg: Color, bg: Option<Color>,
                     bold: bool, italic: bool, underline: u8, underline_color: Option<Color>) {
@@ -239,6 +263,16 @@ impl FrameGlyphBuffer {
         self.current_italic = italic;
         self.current_underline = underline;
         self.current_underline_color = underline_color;
+    }
+
+    /// Get font family for a face_id
+    pub fn get_face_font(&self, face_id: u32) -> &str {
+        self.face_fonts.get(&face_id).map(|s| s.as_str()).unwrap_or("monospace")
+    }
+
+    /// Get current font family
+    pub fn get_current_font_family(&self) -> &str {
+        &self.current_font_family
     }
 
     /// Get current face background color (for stretch glyphs)

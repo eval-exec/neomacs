@@ -901,6 +901,14 @@ neomacs_draw_glyph_string (struct glyph_string *s)
                                 (GREEN_FROM_ULONG(bg) << 8) |
                                 BLUE_FROM_ULONG(bg));
 
+              /* Get font family from lface */
+              const char *font_family = NULL;  /* NULL means default */
+              if (face->lface != NULL) {
+                Lisp_Object family_attr = face->lface[LFACE_FAMILY_INDEX];
+                if (!NILP (family_attr) && STRINGP (family_attr))
+                  font_family = SSDATA (family_attr);
+              }
+
               /* Get font weight and slant from lface attributes */
               int font_weight = 400;  /* normal */
               int is_italic = 0;
@@ -955,6 +963,7 @@ neomacs_draw_glyph_string (struct glyph_string *s)
                                         face_id,
                                         fg_rgb,
                                         bg_rgb,
+                                        font_family,
                                         font_weight,
                                         is_italic,
                                         underline_style,
