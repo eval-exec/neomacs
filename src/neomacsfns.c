@@ -851,102 +851,124 @@ neomacs_close_request_cb (GtkWindow *window, gpointer user_data)
   return TRUE;  /* Prevent immediate close, let Emacs handle it */
 }
 
-/* Callback for GTK4 mouse button press */
-static void
-neomacs_click_pressed_cb (GtkGestureClick *gesture, int n_press,
-                          double x, double y, gpointer user_data)
+/* State for tracking mouse drag */
+static struct {
+  bool button_pressed;
+  int button;  /* Which button is pressed (1-based) */
+  double start_x, start_y;  /* Where the press started */
+  double last_x, last_y;    /* Last reported position during drag */
+  struct frame *frame;
+  guint32 last_press_time;  /* For deduplication */
+  guint32 last_release_time;  /* For deduplication */
+} mouse_drag_state = { false, 0, 0, 0, 0, 0, NULL, 0, 0 };
+
+/* Unified legacy event callback - handles all mouse button and motion events */
+static gboolean
+neomacs_legacy_event_cb (GtkEventControllerLegacy *controller,
+                         GdkEvent *event, gpointer user_data)
 {
   struct frame *f = (struct frame *) user_data;
   struct input_event ie;
+  GdkEventType event_type;
   guint button;
-  GdkModifierType state = 0;
-  GdkEvent *event;
+  double x, y;
+  GdkModifierType state;
+  guint32 time;
 
   if (!FRAME_LIVE_P (f))
-    return;
+    return FALSE;
 
-  button = gtk_gesture_single_get_current_button (GTK_GESTURE_SINGLE (gesture));
-  event = gtk_event_controller_get_current_event (GTK_EVENT_CONTROLLER (gesture));
-  if (event)
-    state = gdk_event_get_modifier_state (event);
+  event_type = gdk_event_get_event_type (event);
+  gdk_event_get_position (event, &x, &y);
+  state = gdk_event_get_modifier_state (event);
+  time = gdk_event_get_time (event);
 
-  EVENT_INIT (ie);
-  ie.kind = MOUSE_CLICK_EVENT;
-  ie.code = button - 1;  /* Emacs uses 0-based button numbers */
-  ie.timestamp = event ? gdk_event_get_time (event) : 0;
-  ie.modifiers = down_modifier;
+  /* Handle button press */
+  if (event_type == GDK_BUTTON_PRESS)
+    {
+      button = gdk_button_event_get_button (event);
 
-  /* Add modifier keys */
-  if (state & GDK_SHIFT_MASK)
-    ie.modifiers |= shift_modifier;
-  if (state & GDK_CONTROL_MASK)
-    ie.modifiers |= ctrl_modifier;
-  if (state & GDK_ALT_MASK)
-    ie.modifiers |= meta_modifier;
+      /* Deduplicate - multiple controllers may receive same event */
+      if (time == mouse_drag_state.last_press_time)
+        return FALSE;
+      mouse_drag_state.last_press_time = time;
 
-  XSETINT (ie.x, (int) x);
-  XSETINT (ie.y, (int) y);
-  XSETFRAME (ie.frame_or_window, f);
-  ie.arg = Qnil;
+      /* Track drag state */
+      mouse_drag_state.button_pressed = true;
+      mouse_drag_state.button = button;
+      mouse_drag_state.start_x = x;
+      mouse_drag_state.start_y = y;
+      mouse_drag_state.last_x = x;
+      mouse_drag_state.last_y = y;
+      mouse_drag_state.frame = f;
 
-  kbd_buffer_store_event (&ie);
+      /* Send press event to Emacs */
+      EVENT_INIT (ie);
+      ie.kind = MOUSE_CLICK_EVENT;
+      ie.code = button - 1;
+      ie.timestamp = time;
+      ie.modifiers = down_modifier;
 
-  /* Grab keyboard focus after click */
-  {
-    GtkWidget *widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
-    if (widget)
-      {
-        gtk_widget_grab_focus (widget);
-        
-        /* Also set window focus */
-        GtkWidget *window = gtk_widget_get_ancestor (widget, GTK_TYPE_WINDOW);
-        if (window)
-          gtk_window_set_focus (GTK_WINDOW (window), widget);
-      }
-  }
+      if (state & GDK_SHIFT_MASK)
+        ie.modifiers |= shift_modifier;
+      if (state & GDK_CONTROL_MASK)
+        ie.modifiers |= ctrl_modifier;
+      if (state & GDK_ALT_MASK)
+        ie.modifiers |= meta_modifier;
+
+      XSETINT (ie.x, (int) x);
+      XSETINT (ie.y, (int) y);
+      XSETFRAME (ie.frame_or_window, f);
+      ie.arg = Qnil;
+
+      kbd_buffer_store_event (&ie);
+
+      /* GTK4 doesn't deliver release events to custom NeomacsWidget reliably.
+         Send synthetic release immediately - this breaks drag-to-select but
+         makes basic clicking work. TODO: Implement proper drag support. */
+      EVENT_INIT (ie);
+      ie.kind = MOUSE_CLICK_EVENT;
+      ie.code = button - 1;
+      ie.timestamp = time + 50;  /* Slightly later to not trigger double-click */
+      ie.modifiers = up_modifier;
+
+      if (state & GDK_SHIFT_MASK)
+        ie.modifiers |= shift_modifier;
+      if (state & GDK_CONTROL_MASK)
+        ie.modifiers |= ctrl_modifier;
+      if (state & GDK_ALT_MASK)
+        ie.modifiers |= meta_modifier;
+
+      XSETINT (ie.x, (int) x);
+      XSETINT (ie.y, (int) y);
+      XSETFRAME (ie.frame_or_window, f);
+      ie.arg = Qnil;
+
+      kbd_buffer_store_event (&ie);
+
+      /* Reset drag state */
+      mouse_drag_state.button_pressed = false;
+
+      return FALSE;
+    }
+
+  /* Handle button release - since we send synthetic release on press,
+     this just handles cleanup if GTK4 does eventually send a release */
+  if (event_type == GDK_BUTTON_RELEASE)
+    {
+      /* Deduplicate */
+      if (time == mouse_drag_state.last_release_time)
+        return FALSE;
+      mouse_drag_state.last_release_time = time;
+
+      /* Don't send event - we already sent synthetic release on press */
+      return FALSE;
+    }
+
+  return FALSE;
 }
 
-/* Callback for GTK4 mouse button release */
-static void
-neomacs_click_released_cb (GtkGestureClick *gesture, int n_press,
-                           double x, double y, gpointer user_data)
-{
-  struct frame *f = (struct frame *) user_data;
-  struct input_event ie;
-  guint button;
-  GdkModifierType state = 0;
-  GdkEvent *event;
-
-  if (!FRAME_LIVE_P (f))
-    return;
-
-  button = gtk_gesture_single_get_current_button (GTK_GESTURE_SINGLE (gesture));
-  event = gtk_event_controller_get_current_event (GTK_EVENT_CONTROLLER (gesture));
-  if (event)
-    state = gdk_event_get_modifier_state (event);
-
-  EVENT_INIT (ie);
-  ie.kind = MOUSE_CLICK_EVENT;
-  ie.code = button - 1;
-  ie.timestamp = event ? gdk_event_get_time (event) : 0;
-  ie.modifiers = up_modifier;
-
-  if (state & GDK_SHIFT_MASK)
-    ie.modifiers |= shift_modifier;
-  if (state & GDK_CONTROL_MASK)
-    ie.modifiers |= ctrl_modifier;
-  if (state & GDK_ALT_MASK)
-    ie.modifiers |= meta_modifier;
-
-  XSETINT (ie.x, (int) x);
-  XSETINT (ie.y, (int) y);
-  XSETFRAME (ie.frame_or_window, f);
-  ie.arg = Qnil;
-
-  kbd_buffer_store_event (&ie);
-}
-
-/* Callback for GTK4 mouse motion */
+/* Callback for GTK4 mouse motion (non-drag) */
 static void
 neomacs_motion_cb (GtkEventControllerMotion *controller,
                    double x, double y, gpointer user_data)
@@ -1027,7 +1049,6 @@ neomacs_create_frame_widgets (struct frame *f)
   struct neomacs_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
   GtkWidget *window, *drawing_area;
   GtkEventController *key_controller, *focus_controller, *motion_controller, *scroll_controller;
-  GtkGesture *click_gesture;
   int use_gpu_widget = 1;  /* Always use GPU widget when Neomacs is available */
 
   /* Allow disabling GPU widget via environment variable */
@@ -1164,16 +1185,23 @@ neomacs_create_frame_widgets (struct frame *f)
     gtk_widget_add_controller (drawing_area, da_focus_controller);
   }
 
-  /* Add mouse click gesture for button events */
-  click_gesture = gtk_gesture_click_new ();
-  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click_gesture), 0); /* All buttons */
-  g_signal_connect (click_gesture, "pressed",
-		    G_CALLBACK (neomacs_click_pressed_cb), f);
-  g_signal_connect (click_gesture, "released",
-		    G_CALLBACK (neomacs_click_released_cb), f);
-  gtk_widget_add_controller (drawing_area, GTK_EVENT_CONTROLLER (click_gesture));
+  /* Add legacy event controller for ALL mouse button events.
+     We need controllers on BOTH window and drawing_area because GTK4 only
+     delivers release events to window, but press events to drawing_area.
+     Deduplication is handled in the callback using event timestamps. */
+  {
+    GtkEventController *legacy_controller = gtk_event_controller_legacy_new ();
+    g_signal_connect (legacy_controller, "event",
+                      G_CALLBACK (neomacs_legacy_event_cb), f);
+    gtk_widget_add_controller (drawing_area, legacy_controller);
+    
+    GtkEventController *window_legacy_controller = gtk_event_controller_legacy_new ();
+    g_signal_connect (window_legacy_controller, "event",
+                      G_CALLBACK (neomacs_legacy_event_cb), f);
+    gtk_widget_add_controller (window, window_legacy_controller);
+  }
 
-  /* Add motion controller for mouse tracking */
+  /* Add motion controller for mouse tracking (non-button motion) */
   motion_controller = gtk_event_controller_motion_new ();
   g_signal_connect (motion_controller, "motion",
 		    G_CALLBACK (neomacs_motion_cb), f);
