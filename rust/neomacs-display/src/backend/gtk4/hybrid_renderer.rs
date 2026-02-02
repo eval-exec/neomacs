@@ -191,7 +191,7 @@ impl HybridRenderer {
         // Process regular glyphs (excluding backgrounds, which were handled above)
         let mut char_count = 0;
         for glyph in regular_glyphs {
-            self.render_glyph(&glyph, &mut nodes, &mut video_cache, &mut image_cache, &mut char_count, false);
+            self.render_glyph(&glyph, &mut nodes, &mut video_cache, &mut image_cache, webkit_cache, &mut char_count, false);
         }
 
         // Process overlay glyphs LAST so they render on top
@@ -203,7 +203,7 @@ impl HybridRenderer {
             }
         }
         for glyph in overlay_glyphs {
-            self.render_glyph(&glyph, &mut nodes, &mut video_cache, &mut image_cache, &mut char_count, true);
+            self.render_glyph(&glyph, &mut nodes, &mut video_cache, &mut image_cache, webkit_cache, &mut char_count, true);
         }
 
         // Render floating images on top
@@ -358,12 +358,41 @@ impl HybridRenderer {
     }
 
     /// Render a single glyph to the nodes list
+    #[cfg(feature = "wpe-webkit")]
     fn render_glyph(
         &mut self,
         glyph: &FrameGlyph,
         nodes: &mut Vec<gsk::RenderNode>,
         video_cache: &mut Option<&mut VideoCache>,
         image_cache: &mut Option<&mut ImageCache>,
+        webkit_cache: Option<&WebKitCache>,
+        char_count: &mut usize,
+        _is_overlay_pass: bool,
+    ) {
+        self.render_glyph_inner(glyph, nodes, video_cache, image_cache, webkit_cache, char_count, _is_overlay_pass)
+    }
+
+    #[cfg(not(feature = "wpe-webkit"))]
+    fn render_glyph(
+        &mut self,
+        glyph: &FrameGlyph,
+        nodes: &mut Vec<gsk::RenderNode>,
+        video_cache: &mut Option<&mut VideoCache>,
+        image_cache: &mut Option<&mut ImageCache>,
+        char_count: &mut usize,
+        _is_overlay_pass: bool,
+    ) {
+        self.render_glyph_inner(glyph, nodes, video_cache, image_cache, char_count, _is_overlay_pass)
+    }
+
+    #[cfg(feature = "wpe-webkit")]
+    fn render_glyph_inner(
+        &mut self,
+        glyph: &FrameGlyph,
+        nodes: &mut Vec<gsk::RenderNode>,
+        video_cache: &mut Option<&mut VideoCache>,
+        image_cache: &mut Option<&mut ImageCache>,
+        webkit_cache: Option<&WebKitCache>,
         char_count: &mut usize,
         _is_overlay_pass: bool,
     ) {
@@ -574,13 +603,152 @@ impl HybridRenderer {
             }
 
             FrameGlyph::WebKit {
-                webkit_id: _,
+                webkit_id,
                 x,
                 y,
                 width,
                 height,
             } => {
-                // TODO: Look up webkit from cache and render
+                let rect = graphene::Rect::new(*x, *y, *width, *height);
+                
+                // Try to get texture from webkit cache
+                if let Some(cache) = webkit_cache {
+                    if let Some(view) = cache.get(*webkit_id) {
+                        if let Some(texture) = view.texture() {
+                            let texture_node = gsk::TextureNode::new(texture, &rect);
+                            nodes.push(texture_node.upcast());
+                            return;
+                        }
+                    }
+                }
+                
+                // Fallback: render placeholder
+                let placeholder = gdk::RGBA::new(0.1, 0.1, 0.2, 1.0);
+                nodes.push(gsk::ColorNode::new(&placeholder, &rect).upcast());
+            }
+        }
+    }
+
+    #[cfg(not(feature = "wpe-webkit"))]
+    fn render_glyph_inner(
+        &mut self,
+        glyph: &FrameGlyph,
+        nodes: &mut Vec<gsk::RenderNode>,
+        video_cache: &mut Option<&mut VideoCache>,
+        image_cache: &mut Option<&mut ImageCache>,
+        char_count: &mut usize,
+        _is_overlay_pass: bool,
+    ) {
+        match glyph {
+            FrameGlyph::Background { .. } => {
+                // Already processed in background pass
+            }
+
+            FrameGlyph::Char {
+                char,
+                x,
+                y,
+                width,
+                height,
+                ascent,
+                fg,
+                bg,
+                face_id,
+                ..
+            } => {
+                *char_count += 1;
+                if let Some(bg_color) = bg {
+                    let rect = graphene::Rect::new(*x, *y, *width, *height);
+                    nodes.push(gsk::ColorNode::new(&color_to_gdk(bg_color), &rect).upcast());
+                }
+                if *char == ' ' || *char == '\t' || *char == '\n' {
+                    return;
+                }
+                if let Some(cached) = self.get_or_rasterize_glyph(*char, *face_id, fg) {
+                    let tex_rect = graphene::Rect::new(*x, *y + (*ascent - cached.ascent), cached.width, cached.height);
+                    let texture_node = gsk::TextureNode::new(&cached.texture, &tex_rect);
+                    nodes.push(texture_node.upcast());
+                }
+            }
+
+            FrameGlyph::Stretch { x, y, width, height, bg, .. } => {
+                let rect = graphene::Rect::new(*x, *y, *width, *height);
+                nodes.push(gsk::ColorNode::new(&color_to_gdk(bg), &rect).upcast());
+            }
+
+            FrameGlyph::Cursor { x, y, width, height, style, color, .. } => {
+                let cursor_color = color_to_gdk(color);
+                match style {
+                    0 => {
+                        let rect = graphene::Rect::new(*x, *y, *width, *height);
+                        nodes.push(gsk::ColorNode::new(&cursor_color, &rect).upcast());
+                    }
+                    1 => {
+                        let rect = graphene::Rect::new(*x, *y, 2.0, *height);
+                        nodes.push(gsk::ColorNode::new(&cursor_color, &rect).upcast());
+                    }
+                    2 => {
+                        let rect = graphene::Rect::new(*x, *y + *height - 2.0, *width, 2.0);
+                        nodes.push(gsk::ColorNode::new(&cursor_color, &rect).upcast());
+                    }
+                    3 => {
+                        let thickness = 1.0;
+                        let top = graphene::Rect::new(*x, *y, *width, thickness);
+                        nodes.push(gsk::ColorNode::new(&cursor_color, &top).upcast());
+                        let bottom = graphene::Rect::new(*x, *y + *height - thickness, *width, thickness);
+                        nodes.push(gsk::ColorNode::new(&cursor_color, &bottom).upcast());
+                        let left = graphene::Rect::new(*x, *y, thickness, *height);
+                        nodes.push(gsk::ColorNode::new(&cursor_color, &left).upcast());
+                        let right = graphene::Rect::new(*x + *width - thickness, *y, thickness, *height);
+                        nodes.push(gsk::ColorNode::new(&cursor_color, &right).upcast());
+                    }
+                    _ => {}
+                }
+            }
+
+            FrameGlyph::Border { x, y, width, height, color } => {
+                let rect = graphene::Rect::new(*x, *y, *width, *height);
+                nodes.push(gsk::ColorNode::new(&color_to_gdk(color), &rect).upcast());
+            }
+
+            FrameGlyph::Image { image_id, x, y, width, height } => {
+                if let Some(ref mut cache) = image_cache {
+                    if let Some(img) = cache.get_mut(*image_id) {
+                        if let Some(texture) = img.get_texture() {
+                            let rect = graphene::Rect::new(*x, *y, *width, *height);
+                            let texture_node = gsk::TextureNode::new(&texture, &rect);
+                            nodes.push(texture_node.upcast());
+                            return;
+                        }
+                    }
+                }
+                let rect = graphene::Rect::new(*x, *y, *width, *height);
+                let placeholder = gdk::RGBA::new(0.3, 0.3, 0.4, 1.0);
+                nodes.push(gsk::ColorNode::new(&placeholder, &rect).upcast());
+            }
+
+            FrameGlyph::Video { video_id, x, y, width, height } => {
+                let rect = graphene::Rect::new(*x, *y, *width, *height);
+                let mut rendered = false;
+                #[cfg(feature = "video")]
+                if let Some(ref mut cache) = video_cache {
+                    if let Some(player) = cache.get_mut(*video_id) {
+                        if let Some(texture) = player.get_texture() {
+                            let texture_node = gsk::TextureNode::new(&texture, &rect);
+                            nodes.push(texture_node.upcast());
+                            rendered = true;
+                            player.count_frame();
+                        }
+                    }
+                }
+                if !rendered {
+                    let placeholder = gdk::RGBA::new(0.2, 0.2, 0.3, 1.0);
+                    nodes.push(gsk::ColorNode::new(&placeholder, &rect).upcast());
+                }
+            }
+
+            FrameGlyph::WebKit { x, y, width, height, .. } => {
+                // No webkit support in non-wpe build
                 let rect = graphene::Rect::new(*x, *y, *width, *height);
                 let placeholder = gdk::RGBA::new(0.1, 0.1, 0.2, 1.0);
                 nodes.push(gsk::ColorNode::new(&placeholder, &rect).upcast());

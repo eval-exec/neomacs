@@ -2655,7 +2655,20 @@ pub unsafe extern "C" fn neomacs_display_add_wpe_glyph(
     let current_y = display.current_row_y;
     let current_x = display.current_row_x;
 
-    // Use first window for all content
+    // Hybrid path: add to frame glyph buffer
+    if display.use_hybrid {
+        display.frame_glyphs.add_webkit(
+            view_id,
+            current_x as f32,
+            current_y as f32,
+            pixel_width as f32,
+            pixel_height as f32,
+        );
+        display.current_row_x += pixel_width;
+        return;
+    }
+
+    // Legacy scene graph path
     if let Some(window) = display.scene.windows.first_mut() {
         if let Some(row) = window.rows.iter_mut().find(|r| r.y == current_y) {
             // Remove overlapping glyphs
