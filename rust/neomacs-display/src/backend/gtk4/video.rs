@@ -29,10 +29,10 @@ use gtk4::prelude::{TextureExt, TextureExtManual, PaintableExt, WidgetExt, Widge
 #[cfg(feature = "video")]
 thread_local! {
     static VIDEO_WIDGET: RefCell<Option<gtk4::Widget>> = const { RefCell::new(None) };
-    static TIMEOUT_SOURCE_ID: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
 }
 
-// Flag to indicate new frame is available (set by GStreamer thread, read by timeout)
+// Flag to indicate new frame is available (set by GStreamer thread via invalidate-contents signal,
+// read by tick callback on main thread)
 #[cfg(feature = "video")]
 static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -40,31 +40,21 @@ static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "video")]
 pub fn set_video_widget(widget: Option<gtk4::Widget>) {
     VIDEO_WIDGET.with(|w| {
-        // Remove old timeout source if any
-        TIMEOUT_SOURCE_ID.with(|id| {
-            if let Some(source_id) = id.borrow_mut().take() {
-                source_id.remove();
-            }
-        });
-        
         // Set new widget
         *w.borrow_mut() = widget.clone();
         
-        // Add timeout source for video frame updates (~60fps)
-        // This runs on the GLib main context which Emacs processes
-        // We always redraw when videos are playing to ensure smooth playback
-        if widget.is_some() {
-            let source_id = glib::timeout_add_local(std::time::Duration::from_millis(16), || {
-                // Always redraw - each video's paintable maintains its current frame
-                // This ensures all videos play at their native frame rate
-                let _ = FRAME_PENDING.swap(false, Ordering::Relaxed);
-                if let Some(widget) = get_video_widget() {
+        // Add tick callback that only redraws when a new frame is pending
+        // This is more efficient than a fixed 16ms timer - it only redraws
+        // when the GStreamer paintable signals a new frame via invalidate-contents
+        if let Some(ref w) = widget {
+            // Use add_tick_callback for vsync-synchronized updates
+            // This runs once per display refresh, checking if a new frame is ready
+            w.add_tick_callback(|widget, _frame_clock| {
+                // Only redraw if a new frame is pending (set by invalidate-contents signal)
+                if FRAME_PENDING.swap(false, Ordering::Relaxed) {
                     widget.queue_draw();
                 }
                 glib::ControlFlow::Continue
-            });
-            TIMEOUT_SOURCE_ID.with(|id| {
-                *id.borrow_mut() = Some(source_id);
             });
         }
     });
