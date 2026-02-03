@@ -389,18 +389,27 @@ impl WpeWebView {
             }
 
             // Check for new frame from callback
+            log::trace!("WPE update: callback_data ptr = {:?}", self.callback_data);
             if let Some(callback_data) = self.callback_data.as_ref() {
+                let frame_avail = callback_data.frame_available.load(Ordering::Acquire);
+                log::trace!("WPE update: frame_available = {}", frame_avail);
                 if callback_data.frame_available.swap(false, Ordering::Acquire) {
                     self.needs_redraw = true;
 
                     // Get texture from callback data (thread-safe)
                     if let Ok(mut guard) = callback_data.latest_texture.lock() {
                         if let Some(texture) = guard.take() {
-                            log::trace!("WPE: Got new texture {}x{}", texture.width(), texture.height());
+                            log::info!("WPE update: Got new texture {}x{}", texture.width(), texture.height());
                             self.texture = Some(texture);
+                        } else {
+                            log::warn!("WPE update: frame_available was true but no texture in guard");
                         }
+                    } else {
+                        log::warn!("WPE update: failed to lock latest_texture mutex");
                     }
                 }
+            } else {
+                log::warn!("WPE update: callback_data.as_ref() returned None");
             }
         }
     }
@@ -417,7 +426,31 @@ impl WpeWebView {
     }
 
     /// Get the current texture (latest rendered frame)
+    /// This checks callback_data directly to get the most recent frame
     pub fn texture(&self) -> Option<Texture> {
+        // First check if there's a newer texture in callback_data
+        unsafe {
+            log::trace!("texture(): callback_data ptr = {:?}", self.callback_data);
+            if let Some(callback_data) = self.callback_data.as_ref() {
+                log::trace!("texture(): trying to lock latest_texture");
+                match callback_data.latest_texture.lock() {
+                    Ok(guard) => {
+                        log::trace!("texture(): lock acquired, has_texture = {}", guard.is_some());
+                        if let Some(ref tex) = *guard {
+                            log::trace!("texture(): returning texture {}x{}", tex.width(), tex.height());
+                            return Some(tex.clone());
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("texture(): failed to lock: {:?}", e);
+                    }
+                }
+            } else {
+                log::trace!("texture(): callback_data is null");
+            }
+        }
+        // Fall back to cached texture
+        log::trace!("texture(): falling back to cached texture, has_texture = {}", self.texture.is_some());
         self.texture.clone()
     }
 
@@ -440,47 +473,200 @@ impl WpeWebView {
     }
 
     /// Send keyboard event to WebKit via WPE Platform
-    pub fn send_keyboard_event(&self, key_code: u32, hardware_key_code: u32, pressed: bool, modifiers: u32) {
+    pub fn send_keyboard_event(&self, keyval: u32, keycode: u32, pressed: bool, modifiers: u32) {
         unsafe {
-            // TODO: Use WPE Platform event API
-            // wpe_view_dispatch_keyboard_event() etc.
-            log::trace!("WPE Platform: Keyboard event: key={} pressed={}", key_code, pressed);
+            let event_type = if pressed {
+                plat::WPEEventType_WPE_EVENT_KEYBOARD_KEY_DOWN
+            } else {
+                plat::WPEEventType_WPE_EVENT_KEYBOARD_KEY_UP
+            };
+
+            // Convert Emacs modifiers to WPE modifiers
+            let wpe_modifiers = Self::convert_modifiers(modifiers);
+
+            // Get current time in milliseconds
+            let time = Self::get_time_ms();
+
+            let event = plat::wpe_event_keyboard_new(
+                event_type,
+                self.wpe_view,
+                plat::WPEInputSource_WPE_INPUT_SOURCE_KEYBOARD,
+                time,
+                wpe_modifiers,
+                keycode,
+                keyval,
+            );
+
+            if !event.is_null() {
+                plat::wpe_view_event(self.wpe_view, event);
+                plat::wpe_event_unref(event);
+                log::debug!("WPE Platform: Keyboard event keyval={} keycode={} pressed={}", keyval, keycode, pressed);
+            } else {
+                log::warn!("WPE Platform: Failed to create keyboard event");
+            }
         }
     }
 
     /// Send pointer/mouse event to WebKit via WPE Platform
     pub fn send_pointer_event(&self, event_type: u32, x: i32, y: i32, button: u32, state: u32, modifiers: u32) {
         unsafe {
-            // TODO: Use WPE Platform event API
-            log::trace!("WPE Platform: Pointer event at ({}, {})", x, y);
+            // Convert Emacs modifiers to WPE modifiers
+            let wpe_modifiers = Self::convert_modifiers(modifiers);
+            let time = Self::get_time_ms();
+
+            // event_type: 1=motion, 2=button
+            match event_type {
+                1 => {
+                    // Motion event
+                    let event = plat::wpe_event_pointer_move_new(
+                        plat::WPEEventType_WPE_EVENT_POINTER_MOVE,
+                        self.wpe_view,
+                        plat::WPEInputSource_WPE_INPUT_SOURCE_MOUSE,
+                        time,
+                        wpe_modifiers,
+                        x as f64,
+                        y as f64,
+                        0.0, // delta_x
+                        0.0, // delta_y
+                    );
+
+                    if !event.is_null() {
+                        plat::wpe_view_event(self.wpe_view, event);
+                        plat::wpe_event_unref(event);
+                        log::trace!("WPE Platform: Pointer move at ({}, {})", x, y);
+                    }
+                }
+                2 => {
+                    // Button event
+                    let wpe_event_type = if state != 0 {
+                        plat::WPEEventType_WPE_EVENT_POINTER_DOWN
+                    } else {
+                        plat::WPEEventType_WPE_EVENT_POINTER_UP
+                    };
+
+                    // WPE button numbers: 1=left, 2=middle, 3=right
+                    let wpe_button = button;
+                    let press_count = if state != 0 { 1 } else { 0 };
+
+                    let event = plat::wpe_event_pointer_button_new(
+                        wpe_event_type,
+                        self.wpe_view,
+                        plat::WPEInputSource_WPE_INPUT_SOURCE_MOUSE,
+                        time,
+                        wpe_modifiers,
+                        wpe_button,
+                        x as f64,
+                        y as f64,
+                        press_count,
+                    );
+
+                    if !event.is_null() {
+                        plat::wpe_view_event(self.wpe_view, event);
+                        plat::wpe_event_unref(event);
+                        log::debug!("WPE Platform: Pointer button {} {} at ({}, {})",
+                                   button, if state != 0 { "press" } else { "release" }, x, y);
+                    }
+                }
+                _ => {
+                    log::warn!("WPE Platform: Unknown pointer event type {}", event_type);
+                }
+            }
         }
     }
 
     /// Send scroll/wheel event to WebKit via WPE Platform
     pub fn send_axis_event(&self, x: i32, y: i32, axis: u32, value: i32, modifiers: u32) {
         unsafe {
-            // TODO: Use WPE Platform event API
-            log::trace!("WPE Platform: Scroll event axis={} value={} at ({}, {})", axis, value, x, y);
+            let wpe_modifiers = Self::convert_modifiers(modifiers);
+            let time = Self::get_time_ms();
+
+            // axis: 0=horizontal, 1=vertical
+            let (delta_x, delta_y) = if axis == 0 {
+                (value as f64, 0.0)
+            } else {
+                (0.0, value as f64)
+            };
+
+            let event = plat::wpe_event_scroll_new(
+                self.wpe_view,
+                plat::WPEInputSource_WPE_INPUT_SOURCE_MOUSE,
+                time,
+                wpe_modifiers,
+                delta_x,
+                delta_y,
+                0, // precise_deltas: FALSE
+                0, // is_stop: FALSE
+                x as f64,
+                y as f64,
+            );
+
+            if !event.is_null() {
+                plat::wpe_view_event(self.wpe_view, event);
+                plat::wpe_event_unref(event);
+                log::debug!("WPE Platform: Scroll delta=({}, {}) at ({}, {})", delta_x, delta_y, x, y);
+            }
         }
     }
 
     /// Click at position (convenience method)
     pub fn click(&self, x: i32, y: i32, button: u32) {
+        // Send motion to position first
+        self.send_pointer_event(1, x, y, 0, 0, 0);
         // Send press then release
         self.send_pointer_event(2, x, y, button, 1, 0); // button press
         self.send_pointer_event(2, x, y, button, 0, 0); // button release
-        log::trace!("WPE Platform: Click at ({}, {}) button={}", x, y, button);
+        log::debug!("WPE Platform: Click at ({}, {}) button={}", x, y, button);
     }
 
     /// Scroll at position (convenience method)
     pub fn scroll(&self, x: i32, y: i32, delta_x: i32, delta_y: i32) {
+        // First move pointer to position
+        self.send_pointer_event(1, x, y, 0, 0, 0);
+        
+        // Send scroll events
         if delta_x != 0 {
             self.send_axis_event(x, y, 0, delta_x, 0); // horizontal
         }
         if delta_y != 0 {
             self.send_axis_event(x, y, 1, delta_y, 0); // vertical
         }
-        log::trace!("WPE Platform: Scroll at ({}, {}) delta=({}, {})", x, y, delta_x, delta_y);
+        log::debug!("WPE Platform: Scroll at ({}, {}) delta=({}, {})", x, y, delta_x, delta_y);
+    }
+
+    /// Convert Emacs modifiers to WPE modifiers
+    fn convert_modifiers(emacs_modifiers: u32) -> u32 {
+        let mut wpe_mods = 0u32;
+        
+        // Emacs modifier bits (from lisp.h):
+        // shift_modifier = 1, ctrl_modifier = 4, meta_modifier = 8, alt_modifier = 16
+        const EMACS_SHIFT: u32 = 1;
+        const EMACS_CTRL: u32 = 4;
+        const EMACS_META: u32 = 8;
+        const EMACS_ALT: u32 = 16;
+
+        if emacs_modifiers & EMACS_SHIFT != 0 {
+            wpe_mods |= plat::WPEModifiers_WPE_MODIFIER_KEYBOARD_SHIFT;
+        }
+        if emacs_modifiers & EMACS_CTRL != 0 {
+            wpe_mods |= plat::WPEModifiers_WPE_MODIFIER_KEYBOARD_CONTROL;
+        }
+        if emacs_modifiers & EMACS_META != 0 {
+            wpe_mods |= plat::WPEModifiers_WPE_MODIFIER_KEYBOARD_META;
+        }
+        if emacs_modifiers & EMACS_ALT != 0 {
+            wpe_mods |= plat::WPEModifiers_WPE_MODIFIER_KEYBOARD_ALT;
+        }
+
+        wpe_mods
+    }
+
+    /// Get current time in milliseconds (for event timestamps)
+    fn get_time_ms() -> u32 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| (d.as_millis() & 0xFFFFFFFF) as u32)
+            .unwrap_or(0)
     }
 }
 
@@ -533,7 +719,9 @@ unsafe extern "C" fn buffer_rendered_callback(
     log::debug!("buffer_rendered_callback: received buffer {}x{}", width, height);
 
     // Try DMA-BUF zero-copy path first
-    if callback_data.gdk_display_ptr != 0 {
+    // TEMPORARILY DISABLED for debugging - force pixel fallback
+    let use_dmabuf = false;
+    if use_dmabuf && callback_data.gdk_display_ptr != 0 {
         if let Some(dmabuf_info) = buffer_dmabuf_info(buffer) {
             // Reconstruct GdkDisplay from pointer
             let gdk_display: gdk4::Display = glib::translate::from_glib_none(
@@ -547,6 +735,15 @@ unsafe extern "C" fn buffer_rendered_callback(
                         *guard = Some(texture);
                     }
                     callback_data.frame_available.store(true, Ordering::Release);
+                    
+                    // Queue widget redraw on main thread
+                    glib::MainContext::default().invoke(|| {
+                        if let Some(widget) = crate::backend::gtk4::get_video_widget() {
+                            use gtk4::prelude::WidgetExt;
+                            widget.queue_draw();
+                        }
+                    });
+                    
                     return;
                 }
                 Err(e) => {
@@ -647,10 +844,22 @@ unsafe extern "C" fn buffer_rendered_callback(
     log::info!("buffer_rendered_callback: created texture {}x{}", width, height);
 
     // Store the texture (thread-safe)
+    log::info!("buffer_rendered_callback: storing texture in callback_data ptr={:p}", callback_data);
     if let Ok(mut guard) = callback_data.latest_texture.lock() {
         *guard = Some(texture.upcast());
+        log::info!("buffer_rendered_callback: texture stored successfully");
+    } else {
+        log::warn!("buffer_rendered_callback: failed to lock latest_texture mutex");
     }
     callback_data.frame_available.store(true, Ordering::Release);
+    
+    // Queue widget redraw on main thread
+    glib::MainContext::default().invoke(|| {
+        if let Some(widget) = crate::backend::gtk4::get_video_widget() {
+            use gtk4::prelude::WidgetExt;
+            widget.queue_draw();
+        }
+    });
 }
 
 /// C callback for decide-policy signal from WebKitWebView

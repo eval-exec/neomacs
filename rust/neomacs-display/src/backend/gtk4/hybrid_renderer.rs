@@ -9,7 +9,7 @@
 
 use gtk4::prelude::*;
 use gtk4::{gdk, gsk, graphene};
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 
 use crate::core::frame_glyphs::{FrameGlyph, FrameGlyphBuffer};
 use crate::core::types::Color;
@@ -486,7 +486,7 @@ impl HybridRenderer {
                         let texture_node = gsk::TextureNode::new(&texture, &webkit_rect);
                         nodes.push(texture_node.upcast());
                     } else {
-                        // Loading placeholder - dark rectangle
+                        // Loading placeholder - cyan rectangle
                         debug!("No texture for webkit view {}, showing placeholder", floating.webkit_id);
                         let webkit_rect = graphene::Rect::new(
                             floating.x,
@@ -494,7 +494,7 @@ impl HybridRenderer {
                             floating.width,
                             floating.height,
                         );
-                        let placeholder_color = gdk::RGBA::new(0.1, 0.1, 0.15, 1.0);
+                        let placeholder_color = gdk::RGBA::new(0.0, 0.8, 0.8, 0.7);  // Semi-transparent cyan
                         let placeholder_node = gsk::ColorNode::new(&placeholder_color, &webkit_rect);
                         nodes.push(placeholder_node.upcast());
                     }

@@ -72,7 +72,7 @@ pub fn set_video_widget(widget: Option<gtk4::Widget>) {
 
 /// Get the widget for video frame invalidation callbacks
 #[cfg(feature = "video")]
-fn get_video_widget() -> Option<gtk4::Widget> {
+pub fn get_video_widget() -> Option<gtk4::Widget> {
     VIDEO_WIDGET.with(|w| w.borrow().clone())
 }
 

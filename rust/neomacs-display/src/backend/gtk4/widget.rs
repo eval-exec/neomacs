@@ -430,6 +430,8 @@ impl NeomacsWidgetInner {
             let floating_webkits: Vec<FloatingWebKit> = WIDGET_FLOATING_WEBKITS.with(|c| {
                 c.borrow().clone()
             });
+            
+            log::trace!("snapshot_impl: floating_webkits.len() = {}", floating_webkits.len());
 
             if let Some(ref buffer) = frame_glyphs {
 
@@ -460,16 +462,18 @@ impl NeomacsWidgetInner {
                     
                     // Set scale factor for HiDPI rendering
                     let scale_factor = widget.scale_factor() as f32;
+                    trace!("snapshot_impl: Using SHARED renderer, scale_factor={}", scale_factor);
                     renderer.set_scale_factor(scale_factor);
                     
                     // Check if we have a snapshot to use for transition
                     if let Some(snapshot_tex) = take_snapshot_texture() {
-                        info!("Widget: Passing snapshot to shared renderer");
+                        debug!("Widget: Passing snapshot to shared renderer");
                         renderer.set_snapshot_texture(snapshot_tex);
                     }
                     
                     renderer.build_render_node(buffer, video_cache, image_cache, &floating_images, &floating_webkits, webkit_cache)
                 } else {
+                    trace!("snapshot_impl: Using LOCAL renderer");
                     // Use the widget's local renderer (no animation support)
                     let mut renderer = self.hybrid_renderer.borrow_mut();
                     
@@ -513,6 +517,7 @@ impl NeomacsWidgetInner {
                         }
                     }
                     
+                    log::debug!("snapshot_impl: appending render node, bounds={:?}", node.bounds());
                     snapshot.append_node(&node);
                     
                     // Start animation tick if animations need continuous updates

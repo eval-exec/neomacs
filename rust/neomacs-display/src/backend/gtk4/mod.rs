@@ -23,7 +23,7 @@ pub use hybrid_renderer::HybridRenderer;
 pub use widget::{NeomacsWidget, set_widget_video_cache, set_widget_image_cache, set_widget_frame_glyphs, set_widget_use_hybrid, set_widget_resize_callback, set_widget_floating_images, set_widget_floating_webkits, set_widget_mouse_button_callback, set_widget_mouse_motion_callback, set_widget_mouse_scroll_callback, request_snapshot_capture, take_snapshot_texture, has_snapshot_texture, enable_frame_caching, is_frame_caching_enabled, prepare_snapshot_from_last_frame, set_widget_hybrid_renderer, start_animation_tick, stop_animation_tick, is_animation_tick_running};
 #[cfg(feature = "wpe-webkit")]
 pub use widget::set_widget_webkit_cache;
-pub use video::{VideoCache, set_video_widget};
+pub use video::{VideoCache, set_video_widget, get_video_widget};
 pub use image::ImageCache;
 
 /// Shared state for the GTK4 backend
