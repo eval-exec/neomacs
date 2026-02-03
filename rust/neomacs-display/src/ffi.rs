@@ -290,11 +290,11 @@ pub unsafe extern "C" fn neomacs_display_add_window(
 
     // Legacy scene graph path...
     // Find existing window by ID or create new one
-    let window_idx = display.scene.windows.iter().position(|w| w.window_id == window_id);
+    let window_idx = display.get_target_scene().windows.iter().position(|w| w.window_id == window_id);
 
     if let Some(idx) = window_idx {
         // Update existing window
-        let window = &mut display.scene.windows[idx];
+        let window = &mut display.get_target_scene().windows[idx];
 
         // Check if bounds changed
         let old_height = window.bounds.height;
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn neomacs_display_add_window(
             header_line_height: 0,
             last_frame_touched: current_frame,
         };
-        display.scene.windows.push(window);
+        display.get_target_scene().windows.push(window);
     }
 }
 
@@ -366,8 +366,11 @@ pub unsafe extern "C" fn neomacs_display_set_cursor(
     }
 
     // Legacy scene graph path...
+    // Compute cursor visibility before borrowing target scene
+    let cursor_visible = visible != 0 && display.animations.cursor_visible();
+
     // Find the window by ID
-    if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == window_id) {
+    if let Some(window) = display.get_target_scene().windows.iter_mut().find(|w| w.window_id == window_id) {
         window.cursor = Some(CursorState {
             x,
             y,
@@ -381,7 +384,7 @@ pub unsafe extern "C" fn neomacs_display_set_cursor(
                 _ => CursorStyle::Box,
             },
             color: Color::from_pixel(color),
-            visible: visible != 0 && display.animations.cursor_visible(),
+            visible: cursor_visible,
         });
     }
 }
@@ -413,7 +416,7 @@ pub unsafe extern "C" fn neomacs_display_draw_border(
     }
 
     // Legacy path
-    display.scene.add_border(
+    display.get_target_scene().add_border(
         x as f32,
         y as f32,
         width as f32,
@@ -461,7 +464,8 @@ pub unsafe extern "C" fn neomacs_display_begin_row(
 
     // Legacy scene graph path below...
     // Find the current window by ID
-    let window = display.scene.windows
+    let target_scene = display.get_target_scene();
+    let window = target_scene.windows
         .iter_mut()
         .find(|w| w.window_id == current_window_id);
 
@@ -470,11 +474,11 @@ pub unsafe extern "C" fn neomacs_display_begin_row(
     } else {
         // Create default window if none exists for this ID
         // Use scene background (dark by default) instead of white
-        display.scene.windows.push(crate::core::scene::WindowScene {
+        target_scene.windows.push(crate::core::scene::WindowScene {
             window_id: current_window_id,
             bounds: crate::core::Rect::new(0.0, 0.0,
-                display.scene.width as f32, display.scene.height as f32),
-            background: display.scene.background, // Match scene background
+                target_scene.width as f32, target_scene.height as f32),
+            background: target_scene.background, // Match scene background
             rows: Vec::new(),
             cursor: None,
             scroll_offset: 0.0,
@@ -483,7 +487,7 @@ pub unsafe extern "C" fn neomacs_display_begin_row(
             header_line_height: 0,
             last_frame_touched: current_frame,
         });
-        display.scene.windows.last_mut().unwrap()
+        target_scene.windows.last_mut().unwrap()
     };
 
     // Convert frame-absolute Y to window-relative Y
@@ -566,7 +570,7 @@ pub unsafe extern "C" fn neomacs_display_add_char_glyph(
         let current_window_id = display.current_window_id;
 
         // Find the correct window by ID
-        if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == current_window_id) {
+        if let Some(window) = display.get_target_scene().windows.iter_mut().find(|w| w.window_id == current_window_id) {
             // Convert frame-absolute Y to window-relative Y
             let relative_y = current_y - window.bounds.y as i32;
             // Convert frame-absolute X to window-relative X
@@ -650,7 +654,7 @@ pub unsafe extern "C" fn neomacs_display_add_stretch_glyph(
         let current_window_id = display.current_window_id;
 
         // Find the correct window by ID
-        if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == current_window_id) {
+        if let Some(window) = display.get_target_scene().windows.iter_mut().find(|w| w.window_id == current_window_id) {
             // Convert frame-absolute Y to window-relative Y
             let relative_y = current_y - window.bounds.y as i32;
             // Convert frame-absolute X to window-relative X
@@ -725,7 +729,7 @@ pub unsafe extern "C" fn neomacs_display_add_image_glyph(
     let current_window_id = display.current_window_id;
 
     // Find the correct window by ID
-    if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == current_window_id) {
+    if let Some(window) = display.get_target_scene().windows.iter_mut().find(|w| w.window_id == current_window_id) {
         // Convert frame-absolute Y to window-relative Y
         let relative_y = current_y - window.bounds.y as i32;
         // Convert frame-absolute X to window-relative X
@@ -917,7 +921,7 @@ pub unsafe extern "C" fn neomacs_display_set_face(
     }
 
     // Register face in the scene
-    display.scene.set_face(face.clone());
+    display.get_target_scene().set_face(face.clone());
 }
 
 /// Set the frame/scene background color
@@ -939,10 +943,11 @@ pub unsafe extern "C" fn neomacs_display_set_background(
         a: 1.0,
     };
 
-    display.scene.background = bg;
+    let target_scene = display.get_target_scene();
+    target_scene.background = bg;
 
     // Also set background for existing windows
-    for window in &mut display.scene.windows {
+    for window in &mut target_scene.windows {
         window.background = bg;
     }
 }
@@ -984,7 +989,7 @@ pub unsafe extern "C" fn neomacs_display_add_video_glyph(
     let current_window_id = display.current_window_id;
 
     // Find the correct window by ID
-    if let Some(window) = display.scene.windows.iter_mut().find(|w| w.window_id == current_window_id) {
+    if let Some(window) = display.get_target_scene().windows.iter_mut().find(|w| w.window_id == current_window_id) {
         // Convert frame-absolute Y to window-relative Y
         let relative_y = current_y - window.bounds.y as i32;
         // Convert frame-absolute X to window-relative X
@@ -1201,10 +1206,11 @@ pub unsafe extern "C" fn neomacs_display_set_floating_video(
     let display = &mut *handle;
 
     // Remove existing floating video for this ID
-    display.scene.remove_floating_video(video_id);
+    let target_scene = display.get_target_scene();
+    target_scene.remove_floating_video(video_id);
 
     // Add new floating video
-    display.scene.add_floating_video(
+    target_scene.add_floating_video(
         video_id,
         x as f32,
         y as f32,
@@ -1224,7 +1230,7 @@ pub unsafe extern "C" fn neomacs_display_clear_floating_video(
     }
 
     let display = &mut *handle;
-    display.scene.remove_floating_video(video_id);
+    display.get_target_scene().remove_floating_video(video_id);
 }
 
 /// Set a floating image at a specific screen position
@@ -1244,10 +1250,11 @@ pub unsafe extern "C" fn neomacs_display_set_floating_image(
     let display = &mut *handle;
 
     // Remove existing floating image for this ID
-    display.scene.remove_floating_image(image_id);
+    let target_scene = display.get_target_scene();
+    target_scene.remove_floating_image(image_id);
 
     // Add new floating image
-    display.scene.add_floating_image(
+    target_scene.add_floating_image(
         image_id,
         x as f32,
         y as f32,
@@ -1267,7 +1274,7 @@ pub unsafe extern "C" fn neomacs_display_clear_floating_image(
     }
 
     let display = &mut *handle;
-    display.scene.remove_floating_image(image_id);
+    display.get_target_scene().remove_floating_image(image_id);
 }
 
 /// Clear a rectangular area of the display
@@ -2007,17 +2014,18 @@ pub unsafe extern "C" fn neomacs_display_set_floating_webkit(
     let display = &mut *handle;
 
     // Remove existing webkit with same ID
-    display.scene.floating_webkits.retain(|w| w.webkit_id != webkit_id);
+    let target_scene = display.get_target_scene();
+    target_scene.floating_webkits.retain(|w| w.webkit_id != webkit_id);
 
     // Add webkit at position
-    display.scene.add_floating_webkit(
+    target_scene.add_floating_webkit(
         webkit_id,
         x as f32,
         y as f32,
         width as f32,
         height as f32,
     );
-    info!("neomacs_display_set_floating_webkit: now have {} floating webkits", display.scene.floating_webkits.len());
+    info!("neomacs_display_set_floating_webkit: now have {} floating webkits", target_scene.floating_webkits.len());
 }
 
 /// Hide a floating WebKit view
@@ -2031,7 +2039,7 @@ pub unsafe extern "C" fn neomacs_display_hide_floating_webkit(
     }
 
     let display = &mut *handle;
-    display.scene.remove_floating_webkit(webkit_id);
+    display.get_target_scene().remove_floating_webkit(webkit_id);
 }
 
 /// Find which floating webkit view is at the given coordinates
@@ -2365,7 +2373,7 @@ pub unsafe extern "C" fn neomacs_display_add_wpe_glyph(
     }
 
     // Legacy scene graph path
-    if let Some(window) = display.scene.windows.first_mut() {
+    if let Some(window) = display.get_target_scene().windows.first_mut() {
         if let Some(row) = window.rows.iter_mut().find(|r| r.y == current_y) {
             // Remove overlapping glyphs
             let x_start = current_x;
