@@ -17,13 +17,13 @@
 
 ;;; Code:
 
-(defvar neomacs-webkit-test-url "https://example.com"
+(defvar neomacs-webkit-test-url "https://youtube.com"
   "URL to load for testing.")
 
-(defvar neomacs-webkit-test-width 600
+(defvar neomacs-webkit-test-width 800
   "Width of test WebKit view.")
 
-(defvar neomacs-webkit-test-height 400
+(defvar neomacs-webkit-test-height 600
   "Height of test WebKit view.")
 
 (defun neomacs-webkit-test-run ()
@@ -68,7 +68,7 @@
 
   ;; Auto-exit after delay when run non-interactively
   (when noninteractive
-    (run-at-time 8 nil (lambda () (kill-emacs 0)))))
+    (run-at-time 15 nil (lambda () (kill-emacs 0)))))
 
 ;; Auto-run when loaded
 (add-hook 'emacs-startup-hook #'neomacs-webkit-test-run)
