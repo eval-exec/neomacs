@@ -681,7 +681,7 @@ impl WgpuRenderer {
             &frame_glyphs.background,
         );
 
-        // 2. Process glyphs in order: backgrounds first, then stretches
+        // 2. Process backgrounds and stretches (rendered before text)
         for glyph in &frame_glyphs.glyphs {
             match glyph {
                 FrameGlyph::Background { bounds, color } => {
@@ -704,6 +704,14 @@ impl WgpuRenderer {
                 } => {
                     self.add_rect(&mut rect_vertices, *x, *y, *width, *height, bg);
                 }
+                _ => {} // Chars, cursors, borders handled separately
+            }
+        }
+
+        // Collect cursors and borders (to be rendered after text)
+        let mut cursor_vertices: Vec<RectVertex> = Vec::new();
+        for glyph in &frame_glyphs.glyphs {
+            match glyph {
                 FrameGlyph::Border {
                     x,
                     y,
@@ -711,7 +719,7 @@ impl WgpuRenderer {
                     height,
                     color,
                 } => {
-                    self.add_rect(&mut rect_vertices, *x, *y, *width, *height, color);
+                    self.add_rect(&mut cursor_vertices, *x, *y, *width, *height, color);
                 }
                 FrameGlyph::Cursor {
                     x,
@@ -721,9 +729,9 @@ impl WgpuRenderer {
                     color,
                     ..
                 } => {
-                    self.add_rect(&mut rect_vertices, *x, *y, *width, *height, color);
+                    self.add_rect(&mut cursor_vertices, *x, *y, *width, *height, color);
                 }
-                _ => {} // Chars handled separately
+                _ => {}
             }
         }
 
@@ -756,7 +764,7 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
             });
 
-            // Draw rectangles (backgrounds, stretches, borders, cursors)
+            // Draw rectangles (backgrounds, stretches - before text)
             if !rect_vertices.is_empty() {
                 let rect_buffer =
                     self.device
@@ -832,6 +840,22 @@ impl WgpuRenderer {
                         render_pass.draw(start..start + 6, 0..1);
                     }
                 }
+            }
+
+            // Draw cursors and borders (after text)
+            if !cursor_vertices.is_empty() {
+                let cursor_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Cursor Vertex Buffer"),
+                            contents: bytemuck::cast_slice(&cursor_vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+
+                render_pass.set_pipeline(&self.rect_pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, cursor_buffer.slice(..));
+                render_pass.draw(0..cursor_vertices.len() as u32, 0..1);
             }
         }
 
