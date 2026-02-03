@@ -626,14 +626,22 @@ impl WinitBackend {
         frame_glyphs: &FrameGlyphBuffer,
         faces: &HashMap<u32, Face>,
     ) {
+        log::debug!("end_frame_for_window: window_id={}, glyphs={}", window_id, frame_glyphs.glyphs.len());
+
         let renderer = match &self.renderer {
             Some(r) => r,
-            None => return,
+            None => {
+                log::debug!("end_frame_for_window: no renderer");
+                return;
+            }
         };
 
         let state = match self.windows.get_mut(&window_id) {
             Some(s) => s,
-            None => return,
+            None => {
+                log::debug!("end_frame_for_window: no window state for id={}", window_id);
+                return;
+            }
         };
 
         let output = match state.surface.get_current_texture() {
@@ -648,7 +656,10 @@ impl WinitBackend {
 
         // Get mutable reference to glyph atlas
         if let Some(ref mut glyph_atlas) = self.glyph_atlas {
+            log::debug!("end_frame_for_window: calling render_frame_glyphs");
             renderer.render_frame_glyphs(&view, frame_glyphs, glyph_atlas, faces);
+        } else {
+            log::debug!("end_frame_for_window: no glyph_atlas");
         }
 
         output.present();

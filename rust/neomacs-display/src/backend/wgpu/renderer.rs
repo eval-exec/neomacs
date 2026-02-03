@@ -652,6 +652,14 @@ impl WgpuRenderer {
         glyph_atlas: &mut WgpuGlyphAtlas,
         faces: &HashMap<u32, Face>,
     ) {
+        log::debug!(
+            "render_frame_glyphs: {}x{}, {} glyphs, {} faces",
+            frame_glyphs.width,
+            frame_glyphs.height,
+            frame_glyphs.glyphs.len(),
+            faces.len()
+        );
+
         // Update uniforms for current frame size
         let uniforms = Uniforms {
             screen_size: [frame_glyphs.width, frame_glyphs.height],
@@ -799,6 +807,8 @@ impl WgpuRenderer {
                     }
                 }
             }
+
+            log::debug!("render_frame_glyphs: {} char glyphs to render", glyph_data.len());
 
             // Create single vertex buffer for all glyphs
             if !glyph_data.is_empty() {

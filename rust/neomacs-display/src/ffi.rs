@@ -2547,6 +2547,9 @@ pub extern "C" fn neomacs_display_end_frame_window(
 ) {
     let display = unsafe { &mut *handle };
 
+    log::debug!("neomacs_display_end_frame_window: window_id={}, glyphs={}, faces={}",
+        window_id, display.frame_glyphs.glyphs.len(), display.faces.len());
+
     #[cfg(feature = "winit-backend")]
     if let Some(ref mut backend) = display.winit_backend {
         // Render frame_glyphs to the winit window
@@ -2555,6 +2558,8 @@ pub extern "C" fn neomacs_display_end_frame_window(
             &display.frame_glyphs,
             &display.faces,
         );
+    } else {
+        log::debug!("neomacs_display_end_frame_window: no winit_backend");
     }
 
     // Reset current window tracking after rendering is complete
