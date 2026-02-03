@@ -1,6 +1,8 @@
 //! Winit + wgpu GPU-accelerated display backend.
 
 #[cfg(feature = "winit-backend")]
+mod vertex;
+#[cfg(feature = "winit-backend")]
 mod renderer;
 #[cfg(feature = "winit-backend")]
 mod backend;
