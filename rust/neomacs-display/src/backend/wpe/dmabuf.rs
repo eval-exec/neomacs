@@ -1,16 +1,52 @@
-//! DMA-BUF texture conversion.
+//! DMA-BUF export from EGLImages.
 //!
-//! Converts EGLImages from WPE WebKit to GdkTextures using DMA-BUF
-//! for zero-copy GPU-to-GPU transfer.
+//! Exports EGLImages from WPE WebKit to DMA-BUF file descriptors
+//! for zero-copy import into wgpu.
 
 use std::ffi::CStr;
 use std::ptr;
 
-use gdk4::prelude::*;
-use gdk4::Texture;
-
 use crate::core::error::{DisplayError, DisplayResult};
 use super::sys::egl;
+
+/// Exported DMA-BUF data (no GTK4 dependency)
+#[derive(Debug)]
+pub struct ExportedDmaBuf {
+    /// File descriptors per plane (up to 4)
+    pub fds: [i32; 4],
+    /// Stride per plane in bytes
+    pub strides: [u32; 4],
+    /// Offset per plane in bytes
+    pub offsets: [u32; 4],
+    /// Number of planes
+    pub num_planes: u32,
+    /// DRM fourcc format code
+    pub fourcc: u32,
+    /// DRM modifier
+    pub modifier: u64,
+    /// Width in pixels
+    pub width: u32,
+    /// Height in pixels
+    pub height: u32,
+}
+
+impl ExportedDmaBuf {
+    /// Close file descriptors
+    pub fn close_fds(&mut self) {
+        for i in 0..self.num_planes as usize {
+            if self.fds[i] >= 0 {
+                unsafe { libc::close(self.fds[i]); }
+                self.fds[i] = -1;
+            }
+        }
+    }
+}
+
+impl Drop for ExportedDmaBuf {
+    fn drop(&mut self) {
+        self.close_fds();
+    }
+}
 
 /// DMA-BUF texture exporter using EGL MESA extensions.
 pub struct DmaBufExporter {
@@ -103,16 +139,16 @@ impl DmaBufExporter {
         self.supported
     }
 
-    /// Convert an EGLImage to a GdkTexture using DMA-BUF.
+    /// Export an EGLImage to DMA-BUF file descriptors.
     ///
-    /// Returns a GdkDmabufTexture that can be used for GPU-accelerated compositing.
-    pub fn egl_image_to_texture(
+    /// Returns an ExportedDmaBuf containing file descriptors and metadata
+    /// for zero-copy import into wgpu.
+    pub fn export_egl_image(
         &self,
         egl_image: *mut libc::c_void,
         width: u32,
         height: u32,
-        gdk_display: &gdk4::Display,
-    ) -> DisplayResult<Texture> {
+    ) -> DisplayResult<ExportedDmaBuf> {
         if !self.supported {
             return Err(DisplayError::WebKit("DMA-BUF export not supported".into()));
         }
@@ -163,43 +199,31 @@ impl DmaBufExporter {
                 return Err(DisplayError::WebKit("eglExportDMABUFImageMESA failed".into()));
             }
 
-            // Create GdkDmabufTextureBuilder
-            let builder = gdk4::DmabufTextureBuilder::new();
-            builder.set_display(gdk_display);
-            builder.set_width(width);
-            builder.set_height(height);
-            builder.set_fourcc(fourcc as u32);
-            builder.set_modifier(modifier);
-            builder.set_n_planes(num_planes as u32);
+            log::trace!(
+                "DMA-BUF exported: {}x{}, fourcc={:08x}, planes={}, modifier={:016x}",
+                width, height, fourcc, num_planes, modifier
+            );
 
-            // Set plane info
-            for i in 0..num_planes as usize {
-                if fds[i] >= 0 {
-                    builder.set_fd(i as u32, fds[i]);
-                    builder.set_stride(i as u32, strides[i] as u32);
-                    builder.set_offset(i as u32, offsets[i] as u32);
-                }
-            }
-
-            // Build the texture
-            match builder.build() {
-                Ok(texture) => {
-                    log::trace!(
-                        "DMA-BUF texture created: {}x{}, fourcc={:08x}, planes={}, modifier={:016x}",
-                        width, height, fourcc, num_planes, modifier
-                    );
-                    Ok(texture.upcast::<Texture>())
-                }
-                Err(e) => {
-                    // Close file descriptors on error
-                    for i in 0..num_planes as usize {
-                        if fds[i] >= 0 {
-                            libc::close(fds[i]);
-                        }
-                    }
-                    Err(DisplayError::WebKit(format!("Failed to build DmabufTexture: {}", e)))
-                }
-            }
+            Ok(ExportedDmaBuf {
+                fds,
+                strides: [
+                    strides[0] as u32,
+                    strides[1] as u32,
+                    strides[2] as u32,
+                    strides[3] as u32,
+                ],
+                offsets: [
+                    offsets[0] as u32,
+                    offsets[1] as u32,
+                    offsets[2] as u32,
+                    offsets[3] as u32,
+                ],
+                num_planes: num_planes as u32,
+                fourcc: fourcc as u32,
+                modifier,
+                width,
+                height,
+            })
         }
     }
 }
