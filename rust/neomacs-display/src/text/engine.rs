@@ -4,7 +4,9 @@ use cosmic_text::{
     Attrs, Buffer, Color as CosmicColor, Family, FontSystem, Metrics,
     ShapeBuffer, SwashCache, Weight, Style,
 };
+#[cfg(feature = "gtk4-backend")]
 use gtk4::gdk;
+#[cfg(feature = "gtk4-backend")]
 use gtk4::prelude::Cast;
 
 use crate::core::types::Color;
@@ -201,6 +203,7 @@ impl TextEngine {
     }
 
     /// Create a GdkTexture from RGBA pixel data (premultiplied alpha)
+    #[cfg(feature = "gtk4-backend")]
     pub fn create_texture(width: u32, height: u32, pixels: &[u8]) -> Option<gdk::Texture> {
         if width == 0 || height == 0 || pixels.is_empty() {
             return None;

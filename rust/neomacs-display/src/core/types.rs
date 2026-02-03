@@ -41,6 +41,7 @@ impl Color {
         Self::from_u8(r, g, b, a)
     }
 
+    #[cfg(feature = "gtk4-backend")]
     pub fn to_gdk(&self) -> gdk4::RGBA {
         gdk4::RGBA::new(self.r, self.g, self.b, self.a)
     }
@@ -75,6 +76,7 @@ impl Point {
 
     pub const ZERO: Self = Self::new(0.0, 0.0);
 
+    #[cfg(feature = "gtk4-backend")]
     pub fn to_graphene(&self) -> gtk4::graphene::Point {
         gtk4::graphene::Point::new(self.x, self.y)
     }
@@ -109,6 +111,7 @@ impl Size {
 
     pub const ZERO: Self = Self::new(0.0, 0.0);
 
+    #[cfg(feature = "gtk4-backend")]
     pub fn to_graphene(&self) -> gtk4::graphene::Size {
         gtk4::graphene::Size::new(self.width, self.height)
     }
@@ -163,6 +166,7 @@ impl Rect {
             && self.bottom() > other.y
     }
 
+    #[cfg(feature = "gtk4-backend")]
     pub fn to_graphene(&self) -> gtk4::graphene::Rect {
         gtk4::graphene::Rect::new(self.x, self.y, self.width, self.height)
     }
@@ -198,6 +202,7 @@ impl Transform {
         }
     }
 
+    #[cfg(feature = "gtk4-backend")]
     pub fn to_gsk(&self) -> gsk4::Transform {
         gsk4::Transform::new()
             .translate(&gtk4::graphene::Point::new(self.matrix[4], self.matrix[5]))

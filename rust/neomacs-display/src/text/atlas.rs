@@ -1,6 +1,10 @@
 //! Glyph texture atlas for efficient GPU rendering
 //!
 //! Caches rasterized glyphs in a GPU texture atlas for batched rendering.
+//!
+//! This module is only available with the `gtk4-backend` feature.
+
+#![cfg(feature = "gtk4-backend")]
 
 use gtk4::gdk;
 use std::collections::HashMap;

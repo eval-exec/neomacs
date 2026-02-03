@@ -11,20 +11,20 @@ repository = "https://github.com/eval-exec/neomacs-1"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-# GTK4 bindings
-gtk4 = "0.9"
-gdk4 = { version = "0.9", features = ["v4_14"] }
-gsk4 = "0.9"
-gio = "0.20"
-glib = "0.20"
-graphene-rs = { version = "0.22.0-alpha.2", package = "graphene-rs" }
+# GTK4 bindings (optional - for gtk4-backend feature)
+gtk4 = { version = "0.9", optional = true }
+gdk4 = { version = "0.9", features = ["v4_14"], optional = true }
+gsk4 = { version = "0.9", optional = true }
+gio = { version = "0.20", optional = true }
+glib = { version = "0.20", optional = true }
+graphene-rs = { version = "0.22.0-alpha.2", package = "graphene-rs", optional = true }
 
 # Text rendering - Pure Rust stack
 cosmic-text = "0.12"
 
-# Legacy Pango (for fallback/transition)
-pango = "0.20"
-pangocairo = "0.20"
+# Legacy Pango (optional - for gtk4-backend feature)
+pango = { version = "0.20", optional = true }
+pangocairo = { version = "0.20", optional = true }
 
 # GStreamer for video
 gstreamer = { version = "0.23", optional = true }
@@ -59,7 +59,7 @@ pkg-config = "0.3"
 
 [features]
 default = ["winit-backend", "video", "wpe-webkit"]
-gtk4-backend = []
+gtk4-backend = ["gtk4", "gdk4", "gsk4", "gio", "glib", "graphene-rs", "pango", "pangocairo"]
 winit-backend = ["winit", "wgpu", "raw-window-handle", "arboard", "bytemuck", "pollster"]
 tty-backend = []
 video = ["gstreamer", "gstreamer-video"]

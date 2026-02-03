@@ -215,7 +215,17 @@ void neomacs_display_add_video_glyph(struct NeomacsDisplay *handle,
 uint32_t neomacs_display_load_video(struct NeomacsDisplay *handle, const char *uri);
 
 /**
+ * Load a video from URI (stub when gtk4 not available)
+ */
+uint32_t neomacs_display_load_video(struct NeomacsDisplay *handle, const char *uri);
+
+/**
  * Play a loaded video
+ */
+int neomacs_display_video_play(struct NeomacsDisplay *handle, uint32_t videoId);
+
+/**
+ * Play a loaded video (stub when gtk4 not available)
  */
 int neomacs_display_video_play(struct NeomacsDisplay *handle, uint32_t videoId);
 
@@ -225,7 +235,17 @@ int neomacs_display_video_play(struct NeomacsDisplay *handle, uint32_t videoId);
 int neomacs_display_video_pause(struct NeomacsDisplay *handle, uint32_t videoId);
 
 /**
+ * Pause a video (stub when gtk4 not available)
+ */
+int neomacs_display_video_pause(struct NeomacsDisplay *handle, uint32_t videoId);
+
+/**
  * Stop a video
+ */
+int neomacs_display_video_stop(struct NeomacsDisplay *handle, uint32_t videoId);
+
+/**
+ * Stop a video (stub when gtk4 not available)
  */
 int neomacs_display_video_stop(struct NeomacsDisplay *handle, uint32_t videoId);
 
@@ -237,8 +257,18 @@ int neomacs_display_video_stop(struct NeomacsDisplay *handle, uint32_t videoId);
 int neomacs_display_video_set_loop(struct NeomacsDisplay *handle, uint32_t videoId, int loopCount);
 
 /**
+ * Set video loop mode (stub when gtk4 not available)
+ */
+int neomacs_display_video_set_loop(struct NeomacsDisplay *handle, uint32_t videoId, int loopCount);
+
+/**
  * Update video frame (called from Emacs redisplay)
  * Returns 0 on success, -1 on failure
+ */
+int neomacs_display_video_update(struct NeomacsDisplay *handle, uint32_t videoId);
+
+/**
+ * Update video frame (stub when gtk4 not available)
  */
 int neomacs_display_video_update(struct NeomacsDisplay *handle, uint32_t videoId);
 
@@ -246,6 +276,8 @@ int neomacs_display_video_update(struct NeomacsDisplay *handle, uint32_t videoId
  * Load an image from a file path
  * Returns image_id on success, 0 on failure
  */
+uint32_t neomacs_display_load_image(struct NeomacsDisplay *handle, const char *path);
+
 uint32_t neomacs_display_load_image(struct NeomacsDisplay *handle, const char *path);
 
 /**
@@ -256,10 +288,20 @@ uint32_t neomacs_display_load_image_data(struct NeomacsDisplay *handle,
                                          const uint8_t *data,
                                          uintptr_t len);
 
+uint32_t neomacs_display_load_image_data(struct NeomacsDisplay *handle,
+                                         const uint8_t *data,
+                                         uintptr_t len);
+
 /**
  * Load an image from raw bytes with optional scaling
  * Returns image_id on success, 0 on failure
  */
+uint32_t neomacs_display_load_image_data_scaled(struct NeomacsDisplay *handle,
+                                                const uint8_t *data,
+                                                uintptr_t len,
+                                                int maxWidth,
+                                                int maxHeight);
+
 uint32_t neomacs_display_load_image_data_scaled(struct NeomacsDisplay *handle,
                                                 const uint8_t *data,
                                                 uintptr_t len,
@@ -276,10 +318,22 @@ uint32_t neomacs_display_load_image_argb32(struct NeomacsDisplay *handle,
                                            int height,
                                            int stride);
 
+uint32_t neomacs_display_load_image_argb32(struct NeomacsDisplay *handle,
+                                           const uint8_t *data,
+                                           int width,
+                                           int height,
+                                           int stride);
+
 /**
  * Load an image from raw RGB24 pixel data (no alpha)
  * Returns image_id on success, 0 on failure
  */
+uint32_t neomacs_display_load_image_rgb24(struct NeomacsDisplay *handle,
+                                          const uint8_t *data,
+                                          int width,
+                                          int height,
+                                          int stride);
+
 uint32_t neomacs_display_load_image_rgb24(struct NeomacsDisplay *handle,
                                           const uint8_t *data,
                                           int width,
@@ -292,11 +346,18 @@ uint32_t neomacs_display_load_image_rgb24(struct NeomacsDisplay *handle,
  */
 uint32_t neomacs_display_load_image_file(struct NeomacsDisplay *handle, const char *path);
 
+uint32_t neomacs_display_load_image_file(struct NeomacsDisplay *handle, const char *path);
+
 /**
  * Load an image from a file path with scaling
  * If max_width or max_height is 0, that dimension is not constrained
  * Returns image_id on success, 0 on failure
  */
+uint32_t neomacs_display_load_image_file_scaled(struct NeomacsDisplay *handle,
+                                                const char *path,
+                                                int maxWidth,
+                                                int maxHeight);
+
 uint32_t neomacs_display_load_image_file_scaled(struct NeomacsDisplay *handle,
                                                 const char *path,
                                                 int maxWidth,
@@ -309,6 +370,8 @@ uint32_t neomacs_display_load_image_file_scaled(struct NeomacsDisplay *handle,
  */
 uint32_t neomacs_display_load_image_file_direct(struct NeomacsDisplay *handle, const char *path);
 
+uint32_t neomacs_display_load_image_file_direct(struct NeomacsDisplay *handle, const char *path);
+
 /**
  * Load an image directly as GdkTexture with scaling
  * Returns image_id on success, 0 on failure
@@ -318,10 +381,20 @@ uint32_t neomacs_display_load_image_file_direct_scaled(struct NeomacsDisplay *ha
                                                        int maxWidth,
                                                        int maxHeight);
 
+uint32_t neomacs_display_load_image_file_direct_scaled(struct NeomacsDisplay *handle,
+                                                       const char *path,
+                                                       int maxWidth,
+                                                       int maxHeight);
+
 /**
  * Get image dimensions
  * Returns 0 on success, -1 on failure
  */
+int neomacs_display_get_image_size(struct NeomacsDisplay *handle,
+                                   uint32_t imageId,
+                                   int *width,
+                                   int *height);
+
 int neomacs_display_get_image_size(struct NeomacsDisplay *handle,
                                    uint32_t imageId,
                                    int *width,
@@ -337,8 +410,19 @@ int neomacs_display_query_image_file_size(struct NeomacsDisplay *handle,
                                           int *height);
 
 /**
+ * Query image file dimensions without loading into cache (stub when gtk4 not available)
+ * Returns -1 (not implemented)
+ */
+int neomacs_display_query_image_file_size(struct NeomacsDisplay *handle,
+                                          const char *path,
+                                          int *width,
+                                          int *height);
+
+/**
  * Free an image from cache
  */
+int neomacs_display_free_image(struct NeomacsDisplay *handle, uint32_t imageId);
+
 int neomacs_display_free_image(struct NeomacsDisplay *handle, uint32_t imageId);
 
 /**
@@ -411,12 +495,27 @@ int neomacs_display_end_frame(struct NeomacsDisplay *handle);
 int neomacs_display_render_to_cairo(struct NeomacsDisplay *handle, void *cairoContext);
 
 /**
+ * Render the scene to an external Cairo context (stub when gtk4 not available)
+ */
+int neomacs_display_render_to_cairo(struct NeomacsDisplay *handle, void *cairoContext);
+
+/**
  * Initialize the renderer with a Pango context (call after widget is realized)
  */
 void neomacs_display_init_pango(struct NeomacsDisplay *handle, void *pangoContext);
 
 /**
+ * Initialize the renderer with a Pango context (stub when gtk4 not available)
+ */
+void neomacs_display_init_pango(struct NeomacsDisplay *handle, void *pangoContext);
+
+/**
  * Enable or disable GSK rendering
+ */
+void neomacs_display_set_gsk_enabled(struct NeomacsDisplay *handle, int enabled);
+
+/**
+ * Enable or disable GSK rendering (stub when gtk4 not available)
  */
 void neomacs_display_set_gsk_enabled(struct NeomacsDisplay *handle, int enabled);
 
@@ -458,6 +557,11 @@ int neomacs_display_is_initialized(struct NeomacsDisplay *handle);
 void *neomacs_display_create_widget(void);
 
 /**
+ * Create a GPU-accelerated NeomacsWidget (stub when gtk4 not available)
+ */
+void *neomacs_display_create_widget(void);
+
+/**
  * Set the scene on a NeomacsWidget (triggers GPU-accelerated redraw)
  *
  * # Safety
@@ -467,10 +571,20 @@ void *neomacs_display_create_widget(void);
 int neomacs_display_widget_set_scene(struct NeomacsDisplay *handle, void *widget);
 
 /**
+ * Set the scene on a NeomacsWidget (stub when gtk4 not available)
+ */
+int neomacs_display_widget_set_scene(struct NeomacsDisplay *handle, void *widget);
+
+/**
  * Initialize the GSK renderer's Pango context from a NeomacsWidget
  *
  * # Safety
  * handle must be valid, widget must be a realized NeomacsWidget
+ */
+void neomacs_display_widget_init_pango(struct NeomacsDisplay *handle, void *widget);
+
+/**
+ * Initialize the GSK renderer's Pango context from a NeomacsWidget (stub when gtk4 not available)
  */
 void neomacs_display_widget_init_pango(struct NeomacsDisplay *handle, void *widget);
 
@@ -485,8 +599,18 @@ void neomacs_display_widget_init_pango(struct NeomacsDisplay *handle, void *widg
 int neomacs_display_render_to_widget(struct NeomacsDisplay *handle, void *widget);
 
 /**
+ * Render scene to a NeomacsWidget (stub when gtk4 not available)
+ */
+int neomacs_display_render_to_widget(struct NeomacsDisplay *handle, void *widget);
+
+/**
  * Set the resize callback for the NeomacsWidget
  * The callback will be called whenever the widget is resized
+ */
+void neomacs_display_set_resize_callback(ResizeCallbackFn callback, void *userData);
+
+/**
+ * Set the resize callback (stub when gtk4 not available)
  */
 void neomacs_display_set_resize_callback(ResizeCallbackFn callback, void *userData);
 
@@ -497,14 +621,29 @@ void neomacs_display_set_resize_callback(ResizeCallbackFn callback, void *userDa
 void neomacs_display_set_mouse_button_callback(MouseButtonCallbackFn callback, void *userData);
 
 /**
+ * Set the mouse button callback (stub when gtk4 not available)
+ */
+void neomacs_display_set_mouse_button_callback(MouseButtonCallbackFn callback, void *userData);
+
+/**
  * Set the mouse motion callback for the NeomacsWidget
  * Called on mouse movement
  */
 void neomacs_display_set_mouse_motion_callback(MouseMotionCallbackFn callback, void *userData);
 
 /**
+ * Set the mouse motion callback (stub when gtk4 not available)
+ */
+void neomacs_display_set_mouse_motion_callback(MouseMotionCallbackFn callback, void *userData);
+
+/**
  * Set the mouse scroll callback for the NeomacsWidget
  * Called on scroll wheel events
+ */
+void neomacs_display_set_mouse_scroll_callback(MouseScrollCallbackFn callback, void *userData);
+
+/**
+ * Set the mouse scroll callback (stub when gtk4 not available)
  */
 void neomacs_display_set_mouse_scroll_callback(MouseScrollCallbackFn callback, void *userData);
 
@@ -690,6 +829,13 @@ int neomacs_display_set_animation_option(struct NeomacsDisplay *handle,
                                          const char *value);
 
 /**
+ * Set an animation configuration option (stub when gtk4 not available)
+ */
+int neomacs_display_set_animation_option(struct NeomacsDisplay *handle,
+                                         const char *key,
+                                         const char *value);
+
+/**
  * Get an animation configuration option
  *
  * Returns the value as a newly-allocated C string (caller must free with neomacs_display_free_string)
@@ -697,6 +843,11 @@ int neomacs_display_set_animation_option(struct NeomacsDisplay *handle,
  */
 char *neomacs_display_get_animation_option(struct NeomacsDisplay *handle,
                                            const char *key);
+
+/**
+ * Get an animation configuration option (stub when gtk4 not available)
+ */
+char *neomacs_display_get_animation_option(struct NeomacsDisplay *handle, const char *key);
 
 /**
  * Free a string returned by neomacs_display_get_animation_option
@@ -712,8 +863,18 @@ void neomacs_display_free_string(char *s);
 int neomacs_display_update_animation(struct NeomacsDisplay *handle, double dt);
 
 /**
+ * Update cursor animation state (stub when gtk4 not available)
+ */
+int neomacs_display_update_animation(struct NeomacsDisplay *handle, double dt);
+
+/**
  * Check if animation needs continuous redraw
  * Returns 1 if continuous redraw needed, 0 otherwise
+ */
+int neomacs_display_animation_active(struct NeomacsDisplay *handle);
+
+/**
+ * Check if animation needs continuous redraw (stub when gtk4 not available)
  */
 int neomacs_display_animation_active(struct NeomacsDisplay *handle);
 
@@ -729,9 +890,21 @@ int neomacs_display_start_buffer_transition(struct NeomacsDisplay *handle,
                                             int durationMs);
 
 /**
+ * Trigger a buffer transition animation (stub when gtk4 not available)
+ */
+int neomacs_display_start_buffer_transition(struct NeomacsDisplay *handle,
+                                            const char *effect,
+                                            int durationMs);
+
+/**
  * Prepare for buffer transition (capture snapshot before buffer changes)
  * Call this BEFORE switching buffers
  * Returns 1 on success, 0 on failure
+ */
+int neomacs_display_prepare_buffer_transition(struct NeomacsDisplay *handle);
+
+/**
+ * Prepare for buffer transition (stub when gtk4 not available)
  */
 int neomacs_display_prepare_buffer_transition(struct NeomacsDisplay *handle);
 
@@ -743,8 +916,18 @@ int neomacs_display_prepare_buffer_transition(struct NeomacsDisplay *handle);
 int neomacs_display_trigger_buffer_transition(struct NeomacsDisplay *handle);
 
 /**
+ * Trigger buffer transition animation (stub when gtk4 not available)
+ */
+int neomacs_display_trigger_buffer_transition(struct NeomacsDisplay *handle);
+
+/**
  * Check if buffer transition is ready (has snapshot)
  * Returns 1 if ready, 0 if not
+ */
+int neomacs_display_has_transition_snapshot(struct NeomacsDisplay *handle);
+
+/**
+ * Check if buffer transition is ready (stub when gtk4 not available)
  */
 int neomacs_display_has_transition_snapshot(struct NeomacsDisplay *handle);
 
