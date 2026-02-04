@@ -3242,11 +3242,10 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
                         out.scroll_delta_y = delta_y;
                         out.modifiers = modifiers;
                     }
-                    InputEvent::WindowResize { width, height, scale_factor } => {
+                    InputEvent::WindowResize { width, height } => {
                         out.kind = NEOMACS_EVENT_RESIZE;
                         out.width = width;
                         out.height = height;
-                        out.scale_factor = scale_factor;
                     }
                     InputEvent::WindowClose => {
                         out.kind = NEOMACS_EVENT_CLOSE;

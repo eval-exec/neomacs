@@ -85,11 +85,8 @@ struct RenderApp {
     // Current modifier state (NEOMACS_*_MASK flags)
     modifiers: u32,
 
-    // Last known cursor position (in logical coordinates)
+    // Last known cursor position
     mouse_pos: (f32, f32),
-
-    // HiDPI scale factor (1.0, 2.0, etc.) - from winit
-    scale_factor: f64,
 
     // WebKit state
     #[cfg(feature = "wpe-webkit")]
@@ -124,7 +121,6 @@ impl RenderApp {
             faces: HashMap::new(),
             modifiers: 0,
             mouse_pos: (0.0, 0.0),
-            scale_factor: 1.0,
             #[cfg(feature = "wpe-webkit")]
             wpe_backend: None,
             #[cfg(feature = "wpe-webkit")]
@@ -628,7 +624,6 @@ impl RenderApp {
             &self.faces,
             self.width,
             self.height,
-            self.scale_factor,
         );
 
         // Present the frame
@@ -693,39 +688,19 @@ impl RenderApp {
 impl ApplicationHandler for RenderApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
-            // Use LogicalSize so Emacs's requested size (800x600) is logical pixels
-            // On a 2x HiDPI display, this creates a 1600x1200 physical pixel window
             let attrs = Window::default_attributes()
                 .with_title(&self.title)
-                .with_inner_size(winit::dpi::LogicalSize::new(self.width, self.height));
+                .with_inner_size(winit::dpi::PhysicalSize::new(self.width, self.height));
 
             match event_loop.create_window(attrs) {
                 Ok(window) => {
                     log::info!("Render thread: window created");
-
-                    // Get HiDPI scale factor from window
-                    self.scale_factor = window.scale_factor();
-                    log::info!("HiDPI scale factor: {}", self.scale_factor);
-
                     let window = Arc::new(window);
 
                     // Initialize wgpu with the window
                     self.init_wgpu(window.clone());
 
-                    self.window = Some(window.clone());
-
-                    // Send initial resize event with logical size and scale factor
-                    let physical_size = window.inner_size();
-                    let logical_size = physical_size.to_logical::<u32>(self.scale_factor);
-                    log::info!("Initial size: physical={}x{}, logical={}x{}, scale={}",
-                        physical_size.width, physical_size.height,
-                        logical_size.width, logical_size.height,
-                        self.scale_factor);
-                    self.comms.send_input(InputEvent::WindowResize {
-                        width: logical_size.width,
-                        height: logical_size.height,
-                        scale_factor: self.scale_factor as f32,
-                    });
+                    self.window = Some(window);
                 }
                 Err(e) => {
                     log::error!("Failed to create window: {:?}", e);
@@ -747,22 +722,17 @@ impl ApplicationHandler for RenderApp {
                 event_loop.exit();
             }
 
-            WindowEvent::Resized(physical_size) => {
-                // Convert physical size to logical size for Emacs
-                let logical_size = physical_size.to_logical::<u32>(self.scale_factor);
-                log::info!("WindowEvent::Resized: physical={}x{}, logical={}x{}, scale={}",
-                    physical_size.width, physical_size.height,
-                    logical_size.width, logical_size.height,
-                    self.scale_factor);
+            WindowEvent::Resized(size) => {
+                log::info!("WindowEvent::Resized: {}x{}", size.width, size.height);
 
-                // Handle wgpu surface resize (uses physical size)
-                self.handle_resize(physical_size.width, physical_size.height);
+                // Handle wgpu surface resize
+                self.handle_resize(size.width, size.height);
 
-                // Notify Emacs of the resize (logical coordinates)
+                // Notify Emacs of the resize
+                log::info!("Sending WindowResize event to Emacs: {}x{}", size.width, size.height);
                 self.comms.send_input(InputEvent::WindowResize {
-                    width: logical_size.width,
-                    height: logical_size.height,
-                    scale_factor: self.scale_factor as f32,
+                    width: size.width,
+                    height: size.height,
                 });
             }
 
@@ -806,13 +776,10 @@ impl ApplicationHandler for RenderApp {
             }
 
             WindowEvent::CursorMoved { position, .. } => {
-                // Convert to logical coordinates for Emacs
-                let logical_x = (position.x / self.scale_factor) as f32;
-                let logical_y = (position.y / self.scale_factor) as f32;
-                self.mouse_pos = (logical_x, logical_y);
+                self.mouse_pos = (position.x as f32, position.y as f32);
                 self.comms.send_input(InputEvent::MouseMove {
-                    x: logical_x,
-                    y: logical_y,
+                    x: position.x as f32,
+                    y: position.y as f32,
                     modifiers: self.modifiers,
                 });
             }
@@ -851,22 +818,6 @@ impl ApplicationHandler for RenderApp {
                 }
                 if state.super_key() {
                     self.modifiers |= NEOMACS_SUPER_MASK;
-                }
-            }
-
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                log::info!("HiDPI scale factor changed: {} -> {}", self.scale_factor, scale_factor);
-                self.scale_factor = scale_factor;
-
-                // Send resize event with new scale factor
-                if let Some(ref window) = self.window {
-                    let physical_size = window.inner_size();
-                    let logical_size = physical_size.to_logical::<u32>(self.scale_factor);
-                    self.comms.send_input(InputEvent::WindowResize {
-                        width: logical_size.width,
-                        height: logical_size.height,
-                        scale_factor: self.scale_factor as f32,
-                    });
                 }
             }
 

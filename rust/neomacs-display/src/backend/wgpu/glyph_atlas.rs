@@ -20,8 +20,6 @@ pub struct GlyphKey {
     /// Font size in pixels (for text-scale-increase support)
     /// Using u32 bits of f32 for hashing
     pub font_size_bits: u32,
-    /// HiDPI scale factor (1, 2, 3) - glyphs are rasterized at this scale
-    pub scale: u32,
 }
 
 /// A cached glyph with its wgpu texture and bind group
@@ -92,7 +90,6 @@ impl WgpuGlyphAtlas {
         });
 
         // Create sampler for glyph textures
-        // Use Linear filtering for smooth anti-aliased text
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Glyph Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -126,7 +123,6 @@ impl WgpuGlyphAtlas {
     ///
     /// If the glyph is already cached, returns a reference to it.
     /// Otherwise, rasterizes the glyph, uploads to GPU, and caches it.
-    /// The glyph is rasterized at the scale specified in the key for HiDPI support.
     pub fn get_or_create(
         &mut self,
         device: &wgpu::Device,
@@ -139,11 +135,10 @@ impl WgpuGlyphAtlas {
             return self.cache.get(key);
         }
 
-        // Rasterize the glyph at the specified scale for HiDPI
+        // Rasterize the glyph
         let c = char::from_u32(key.charcode)?;
-        let scale = key.scale.max(1) as f32;  // Ensure at least 1x scale
         let (width, height, alpha_data, bearing_x, bearing_y) =
-            self.rasterize_glyph(c, face, scale)?;
+            self.rasterize_glyph(c, face)?;
 
         if width == 0 || height == 0 {
             log::debug!("glyph_atlas: skipping empty glyph '{}' ({}x{})", c, width, height);
@@ -241,22 +236,18 @@ impl WgpuGlyphAtlas {
     /// Rasterize a single glyph and return alpha mask data
     ///
     /// Returns (width, height, alpha_data, bearing_x, bearing_y)
-    /// The `scale` parameter is for HiDPI: 2.0 means rasterize at 2x resolution
     fn rasterize_glyph(
         &mut self,
         c: char,
         face: Option<&Face>,
-        scale: f32,
     ) -> Option<(u32, u32, Vec<u8>, f32, f32)> {
         // Create attributes from face
         let attrs = self.face_to_attrs(face);
 
         // Use font_size from face if available, otherwise default
-        // DO NOT scale font_size here - cosmic_text's physical() will handle scaling
-        let base_font_size = face.map(|f| f.font_size).unwrap_or(self.default_font_size);
-        let font_size = base_font_size;
+        let font_size = face.map(|f| f.font_size).unwrap_or(self.default_font_size);
 
-        // Create metrics with the base font size (not scaled)
+        // Create metrics with the face's font size
         let metrics = Metrics::new(font_size, self.default_line_height);
 
         // Create a small buffer for single character
@@ -273,9 +264,8 @@ impl WgpuGlyphAtlas {
         // Get the glyph info
         for run in buffer.layout_runs() {
             for glyph in run.glyphs.iter() {
-                // Rasterize at the requested scale for HiDPI
-                // This gives us higher resolution pixels without changing the glyph's logical size
-                let physical_glyph = glyph.physical((0.0, 0.0), scale);
+                // Rasterize at 1x scale
+                let physical_glyph = glyph.physical((0.0, 0.0), 1.0);
 
                 if let Some(image) = self
                     .swash_cache
@@ -327,21 +317,12 @@ impl WgpuGlyphAtlas {
         let mut attrs = Attrs::new();
 
         if let Some(f) = face {
-            // Font family - try to use the specific font name
-            let family_lower = f.font_family.to_lowercase();
-            log::debug!("face_to_attrs: font_family='{}' size={} (face_id={})",
-                f.font_family, f.font_size, f.id);
-            attrs = match family_lower.as_str() {
-                "monospace" | "mono" | "" => attrs.family(Family::Monospace),
+            // Font family
+            attrs = match f.font_family.to_lowercase().as_str() {
+                "monospace" | "mono" => attrs.family(Family::Monospace),
                 "serif" => attrs.family(Family::Serif),
-                "sans-serif" | "sans" | "sansserif" => attrs.family(Family::SansSerif),
-                // For specific font names, leak the string to get 'static lifetime
-                // This is acceptable because font names are reused many times
-                _ => {
-                    let leaked: &'static str = Box::leak(f.font_family.clone().into_boxed_str());
-                    log::debug!("face_to_attrs: using specific font '{}'", leaked);
-                    attrs.family(Family::Name(leaked))
-                }
+                "sans-serif" | "sans" => attrs.family(Family::SansSerif),
+                _ => attrs.family(Family::Monospace),
             };
 
             // Font weight

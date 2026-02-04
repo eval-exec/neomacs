@@ -51,7 +51,6 @@ pub struct NeomacsInputEvent {
     pub scroll_delta_y: f32,
     pub width: u32,
     pub height: u32,
-    pub scale_factor: f32,  // HiDPI scale factor (1.0, 2.0, etc.)
 }
 
 impl Default for NeomacsInputEvent {
@@ -70,7 +69,6 @@ impl Default for NeomacsInputEvent {
             scroll_delta_y: 0.0,
             width: 0,
             height: 0,
-            scale_factor: 1.0,
         }
     }
 }

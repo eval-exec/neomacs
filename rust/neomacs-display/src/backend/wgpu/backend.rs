@@ -715,8 +715,6 @@ impl WinitBackend {
         // Get mutable reference to glyph atlas
         if let Some(ref mut glyph_atlas) = self.glyph_atlas {
             log::debug!("end_frame_for_window: calling render_frame_glyphs");
-            // TODO: Get actual scale factor for HiDPI support in legacy backend path
-            let scale_factor = 1.0;
             renderer.render_frame_glyphs(
                 &view,
                 frame_glyphs,
@@ -724,7 +722,6 @@ impl WinitBackend {
                 faces,
                 state.config.width,
                 state.config.height,
-                scale_factor,
             );
         } else {
             log::debug!("end_frame_for_window: no glyph_atlas");

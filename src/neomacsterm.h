@@ -121,9 +121,6 @@ struct neomacs_display_info
   /* DPI resolution of this screen */
   double resx, resy;
 
-  /* HiDPI scale factor (1.0, 2.0, etc.) */
-  double scale_factor;
-
   /* Root window ID */
   Window root_window;
 

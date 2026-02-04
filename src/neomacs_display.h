@@ -187,7 +187,6 @@ typedef struct NeomacsInputEvent {
   float scrollDeltaY;
   uint32_t width;
   uint32_t height;
-  float scale_factor;  /* HiDPI scale factor (1.0, 2.0, etc.) */
 } NeomacsInputEvent;
 
 #define VA_STATUS_SUCCESS 0

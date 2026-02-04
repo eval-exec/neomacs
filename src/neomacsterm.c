@@ -263,10 +263,9 @@ neomacs_initialize_display_info (struct neomacs_display_info *dpyinfo)
   dpyinfo->connection = -1;
   dpyinfo->gdpy = NULL;
 
-  /* Initialize DPI and scale factor to reasonable defaults */
+  /* Initialize DPI to a reasonable default - required for font sizing */
   dpyinfo->resx = 96;
   dpyinfo->resy = 96;
-  dpyinfo->scale_factor = 1.0;
 
   /* Get the GDK display */
   GdkDisplay *gdpy = gdk_display_get_default ();
@@ -3259,35 +3258,21 @@ neomacs_display_wakeup_handler (int fd, void *data)
         case NEOMACS_EVENT_RESIZE:
           {
             struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
-            int new_width = ev->width;    /* Logical width */
-            int new_height = ev->height;  /* Logical height */
-            double new_scale = ev->scale_factor;
+            int new_width = ev->width;
+            int new_height = ev->height;
 
-            /* Update dpyinfo dimensions and scale factor */
+            /* Update dpyinfo dimensions */
             if (dpyinfo)
               {
                 dpyinfo->width = new_width;
                 dpyinfo->height = new_height;
-
-                /* Update HiDPI scale factor and DPI */
-                if (new_scale > 0.0)
-                  {
-                    dpyinfo->scale_factor = new_scale;
-                    /* Update DPI based on scale factor (base DPI 96) */
-                    dpyinfo->resx = 96.0 * new_scale;
-                    dpyinfo->resy = 96.0 * new_scale;
-                  }
               }
 
-            /* Update the Rust display handle with physical dimensions */
+            /* Update the Rust display handle */
             if (dpyinfo && dpyinfo->display_handle)
-              {
-                int physical_width = (int)(new_width * dpyinfo->scale_factor);
-                int physical_height = (int)(new_height * dpyinfo->scale_factor);
-                neomacs_display_resize (dpyinfo->display_handle, physical_width, physical_height);
-              }
+              neomacs_display_resize (dpyinfo->display_handle, new_width, new_height);
 
-            /* Update the Emacs frame size (logical coordinates) */
+            /* Update the Emacs frame size - queue for later since we're in event handler */
             if (FRAME_PIXEL_WIDTH (f) != new_width
                 || FRAME_PIXEL_HEIGHT (f) != new_height)
               {
