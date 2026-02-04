@@ -248,11 +248,13 @@ impl WgpuGlyphAtlas {
         let font_size = face.map(|f| f.font_size).unwrap_or(self.default_font_size);
 
         // Create metrics with the face's font size
-        let metrics = Metrics::new(font_size, self.default_line_height);
+        let line_height = font_size * 1.3;
+        let metrics = Metrics::new(font_size, line_height);
 
         // Create a small buffer for single character
+        // Make buffer large enough for large fonts
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(&mut self.font_system, Some(100.0), Some(50.0));
+        buffer.set_size(&mut self.font_system, Some(font_size * 4.0), Some(font_size * 3.0));
         buffer.set_text(
             &mut self.font_system,
             &c.to_string(),
@@ -317,12 +319,18 @@ impl WgpuGlyphAtlas {
         let mut attrs = Attrs::new();
 
         if let Some(f) = face {
-            // Font family
-            attrs = match f.font_family.to_lowercase().as_str() {
-                "monospace" | "mono" => attrs.family(Family::Monospace),
+            // Font family - support specific font names
+            let family_lower = f.font_family.to_lowercase();
+            attrs = match family_lower.as_str() {
+                "monospace" | "mono" | "" => attrs.family(Family::Monospace),
                 "serif" => attrs.family(Family::Serif),
-                "sans-serif" | "sans" => attrs.family(Family::SansSerif),
-                _ => attrs.family(Family::Monospace),
+                "sans-serif" | "sans" | "sansserif" => attrs.family(Family::SansSerif),
+                // For specific font names, leak the string to get 'static lifetime
+                // This is acceptable because font names are reused many times
+                _ => {
+                    let leaked: &'static str = Box::leak(f.font_family.clone().into_boxed_str());
+                    attrs.family(Family::Name(leaked))
+                }
             };
 
             // Font weight
