@@ -971,6 +971,7 @@ impl WgpuRenderer {
 
             for glyph in &frame_glyphs.glyphs {
                 if let FrameGlyph::Image { image_id, x, y, width, height } = glyph {
+                    log::debug!("Rendering image {} at ({}, {}) size {}x{}", image_id, x, y, width, height);
                     // Check if image texture is ready
                     if let Some(cached) = self.image_cache.get(*image_id) {
                         // Create vertices for image quad (white color = no tinting)

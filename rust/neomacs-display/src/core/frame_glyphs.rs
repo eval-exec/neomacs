@@ -465,13 +465,33 @@ impl FrameGlyphBuffer {
     }
 
     /// Add an image glyph
+    /// Add an image glyph
+    /// Removes any existing image glyph with the same ID first to handle scrolling
     pub fn add_image(&mut self, image_id: u32, x: f32, y: f32, width: f32, height: f32) {
+        // Remove any existing image glyph with the same ID (handles scrolling)
+        // This prevents duplicate images when the same image is redrawn at a different position
+        self.glyphs.retain(|g| {
+            if let FrameGlyph::Image { image_id: id, .. } = g {
+                *id != image_id
+            } else {
+                true
+            }
+        });
         self.remove_overlapping(x, y, width, height);
         self.glyphs.push(FrameGlyph::Image { image_id, x, y, width, height });
     }
 
     /// Add a video glyph
+    /// Removes any existing video glyph with the same ID first to handle scrolling
     pub fn add_video(&mut self, video_id: u32, x: f32, y: f32, width: f32, height: f32) {
+        // Remove any existing video glyph with the same ID (handles scrolling)
+        self.glyphs.retain(|g| {
+            if let FrameGlyph::Video { video_id: id, .. } = g {
+                *id != video_id
+            } else {
+                true
+            }
+        });
         self.remove_overlapping(x, y, width, height);
         self.glyphs.push(FrameGlyph::Video { video_id, x, y, width, height });
     }
