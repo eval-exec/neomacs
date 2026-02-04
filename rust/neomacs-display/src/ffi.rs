@@ -1015,6 +1015,19 @@ pub unsafe extern "C" fn neomacs_display_load_video(
 
     log::info!("load_video: path={}", path_str);
 
+    // Threaded path: send command to render thread
+    #[cfg(all(feature = "winit-backend", feature = "video"))]
+    if let Some(ref state) = THREADED_STATE {
+        let id = VIDEO_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let cmd = RenderCommand::VideoCreate {
+            id,
+            path: path_str.to_string(),
+        };
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+        log::info!("load_video: threaded path, id={}", id);
+        return id;
+    }
+
     #[cfg(all(feature = "winit-backend", feature = "video"))]
     if let Some(ref mut backend) = display.winit_backend {
         if let Some(renderer) = backend.renderer_mut() {
