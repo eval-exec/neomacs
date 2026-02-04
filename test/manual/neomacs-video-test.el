@@ -8,7 +8,7 @@
 
 (require 'neomacs-video nil t)
 
-(defvar video-test-file "/home/exec/Videos/4k2.webm"
+(defvar video-test-file "/home/exec/Videos/4k_f1.mp4"
   "Path to test video file.")
 
 (defvar video-test-id nil
