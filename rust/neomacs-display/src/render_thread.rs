@@ -31,10 +31,7 @@ use crate::backend::wpe::sys::platform as plat;
 #[cfg(feature = "wpe-webkit")]
 use crate::backend::wpe::{WpeBackend, WpeWebView};
 
-#[cfg(all(feature = "wpe-webkit", target_os = "linux"))]
-use crate::backend::wgpu::WgpuWebKitCache;
-
-// Video cache is managed by WgpuRenderer
+// All GPU caches (image, video, webkit) are managed by WgpuRenderer
 
 /// Shared storage for image dimensions accessible from both threads
 pub type SharedImageDimensions = Arc<Mutex<HashMap<u32, (u32, u32)>>>;
@@ -105,10 +102,6 @@ struct RenderApp {
 
     #[cfg(feature = "wpe-webkit")]
     webkit_views: HashMap<u32, WpeWebView>,
-
-    #[cfg(all(feature = "wpe-webkit", target_os = "linux"))]
-    webkit_texture_cache: Option<WgpuWebKitCache>,
-    // Note: video_cache is managed by WgpuRenderer, not RenderApp
 }
 
 impl RenderApp {
@@ -140,8 +133,6 @@ impl RenderApp {
             wpe_backend: None,
             #[cfg(feature = "wpe-webkit")]
             webkit_views: HashMap::new(),
-            #[cfg(all(feature = "wpe-webkit", target_os = "linux"))]
-            webkit_texture_cache: None,
         }
     }
 
@@ -268,12 +259,9 @@ impl RenderApp {
                     log::warn!("Failed to initialize WPE backend: {:?}", e);
                 }
             }
-
-            // Initialize WebKit texture cache
-            self.webkit_texture_cache = Some(WgpuWebKitCache::new(&device));
         }
 
-        // Video cache is managed by the renderer
+        // All GPU caches (image, video, webkit) are managed by the renderer
         #[cfg(feature = "video")]
         log::info!("Video cache initialized");
     }
@@ -385,8 +373,9 @@ impl RenderApp {
                     #[cfg(feature = "wpe-webkit")]
                     {
                         self.webkit_views.remove(&id);
-                        if let Some(ref mut cache) = self.webkit_texture_cache {
-                            cache.remove(id);
+                        // Clean up the renderer's webkit cache
+                        if let Some(ref mut renderer) = self.renderer {
+                            renderer.remove_webkit_view(id);
                         }
                     }
                 }

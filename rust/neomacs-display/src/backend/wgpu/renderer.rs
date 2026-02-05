@@ -877,6 +877,12 @@ impl WgpuRenderer {
         self.webkit_cache.update_view_from_pixels(view_id, width, height, pixels, &self.device, &self.queue)
     }
 
+    /// Remove a webkit view from the cache.
+    #[cfg(feature = "wpe-webkit")]
+    pub fn remove_webkit_view(&mut self, view_id: u32) {
+        self.webkit_cache.remove(view_id);
+    }
+
     /// Process pending webkit frames from WPE views.
     /// This imports DMA-BUF frames into the wgpu texture cache.
     /// Also pumps GLib main context to process WebKit events.
