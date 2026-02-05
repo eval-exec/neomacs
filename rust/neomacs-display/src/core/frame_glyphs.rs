@@ -512,17 +512,31 @@ impl FrameGlyphBuffer {
                 true
             }
         });
+
+        // Remove any OTHER video that overlaps with this video's position
+        // This handles the case where different videos end up at the same screen position
+        let x_end = x + width;
+        let y_end = y + height;
+        self.glyphs.retain(|g| {
+            if let FrameGlyph::Video { x: gx, y: gy, width: gw, height: gh, .. } = g {
+                let gx_end = *gx + *gw;
+                let gy_end = *gy + *gh;
+                // Keep if no overlap
+                gx_end <= x || *gx >= x_end || gy_end <= y || *gy >= y_end
+            } else {
+                true
+            }
+        });
+
         self.remove_overlapping(x, y, width, height);
         self.glyphs.push(FrameGlyph::Video { video_id, x, y, width, height });
     }
 
     /// Add a webkit glyph
-    /// Removes any existing webkit glyph with the same ID first to handle scrolling
+    /// Removes any existing webkit glyph with the same ID first, then removes
+    /// any other webkits that overlap with this webkit's position.
     pub fn add_webkit(&mut self, webkit_id: u32, x: f32, y: f32, width: f32, height: f32) {
         // Remove any existing webkit glyph with the same ID (handles scrolling)
-        // This is necessary because webkit glyphs are skipped by remove_overlapping
-        // and clear_area to prevent accidental removal, but we need to update position
-        // when the same view is redrawn at a different location
         self.glyphs.retain(|g| {
             if let FrameGlyph::WebKit { webkit_id: id, .. } = g {
                 *id != webkit_id
@@ -530,6 +544,22 @@ impl FrameGlyphBuffer {
                 true
             }
         });
+
+        // Remove any OTHER webkit that overlaps with this webkit's position
+        // This handles the case where different webkits end up at the same screen position
+        let x_end = x + width;
+        let y_end = y + height;
+        self.glyphs.retain(|g| {
+            if let FrameGlyph::WebKit { x: gx, y: gy, width: gw, height: gh, .. } = g {
+                let gx_end = *gx + *gw;
+                let gy_end = *gy + *gh;
+                // Keep if no overlap
+                gx_end <= x || *gx >= x_end || gy_end <= y || *gy >= y_end
+            } else {
+                true
+            }
+        });
+
         self.remove_overlapping(x, y, width, height);
         self.glyphs.push(FrameGlyph::WebKit { webkit_id, x, y, width, height });
     }
