@@ -1396,22 +1396,7 @@ pub unsafe extern "C" fn neomacs_display_load_image_file(
     handle: *mut NeomacsDisplay,
     path: *const c_char,
 ) -> u32 {
-    if handle.is_null() || path.is_null() {
-        return 0;
-    }
-    let display = &mut *handle;
-    let path_str = match std::ffi::CStr::from_ptr(path).to_str() {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-
-    #[cfg(feature = "winit-backend")]
-    if let Some(ref mut backend) = display.winit_backend {
-        if let Some(renderer) = backend.renderer_mut() {
-            return renderer.load_image_file(path_str, 0, 0);
-        }
-    }
-    0
+    neomacs_display_load_image_file_scaled(handle, path, 0, 0)
 }
 
 /// Load an image from a file path with scaling (async)
@@ -1425,7 +1410,6 @@ pub unsafe extern "C" fn neomacs_display_load_image_file_scaled(
     if handle.is_null() || path.is_null() {
         return 0;
     }
-    let display = &mut *handle;
     let path_str = match std::ffi::CStr::from_ptr(path).to_str() {
         Ok(s) => s,
         Err(_) => return 0,
@@ -1433,6 +1417,23 @@ pub unsafe extern "C" fn neomacs_display_load_image_file_scaled(
 
     log::info!("load_image_file_scaled: path={}, max={}x{}", path_str, max_width, max_height);
 
+    // Threaded path: send command to render thread
+    #[cfg(feature = "winit-backend")]
+    if let Some(ref state) = THREADED_STATE {
+        let id = IMAGE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let cmd = RenderCommand::ImageLoadFile {
+            id,
+            path: path_str.to_string(),
+            max_width: max_width.max(0) as u32,
+            max_height: max_height.max(0) as u32,
+        };
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+        log::info!("load_image_file_scaled: threaded path, id={}", id);
+        return id;
+    }
+
+    // Non-threaded path: direct renderer access
+    let display = &mut *handle;
     #[cfg(feature = "winit-backend")]
     if let Some(ref mut backend) = display.winit_backend {
         if let Some(renderer) = backend.renderer_mut() {
@@ -1528,6 +1529,14 @@ pub unsafe extern "C" fn neomacs_display_free_image(
     handle: *mut NeomacsDisplay,
     image_id: u32,
 ) -> c_int {
+    // Threaded path: send command to render thread
+    #[cfg(feature = "winit-backend")]
+    if let Some(ref state) = THREADED_STATE {
+        let cmd = RenderCommand::ImageFree { id: image_id };
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+        return 0;
+    }
+
     if handle.is_null() {
         return -1;
     }
@@ -2006,6 +2015,10 @@ thread_local! {
     pub static WEBKIT_CACHE: RefCell<Option<WebKitViewCache>> = const { RefCell::new(None) };
     static WPE_BACKEND: RefCell<Option<WpeBackend>> = const { RefCell::new(None) };
 }
+
+/// Atomic counter for generating image IDs in threaded mode
+#[cfg(feature = "winit-backend")]
+static IMAGE_ID_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
 /// Atomic counter for generating WebKit view IDs in threaded mode
 #[cfg(feature = "wpe-webkit")]

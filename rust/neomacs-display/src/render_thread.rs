@@ -307,6 +307,20 @@ impl RenderApp {
                     log::info!("Render thread received shutdown command");
                     should_exit = true;
                 }
+                RenderCommand::ImageLoadFile { id, path, max_width, max_height } => {
+                    log::info!("Loading image {}: {} (max {}x{})", id, path, max_width, max_height);
+                    if let Some(ref mut renderer) = self.renderer {
+                        renderer.load_image_file_with_id(id, &path, max_width, max_height);
+                    } else {
+                        log::warn!("Renderer not initialized, cannot load image {}", id);
+                    }
+                }
+                RenderCommand::ImageFree { id } => {
+                    log::debug!("Freeing image {}", id);
+                    if let Some(ref mut renderer) = self.renderer {
+                        renderer.free_image(id);
+                    }
+                }
                 RenderCommand::WebKitCreate { id, width, height } => {
                     log::info!("Creating WebKit view: id={}, {}x{}", id, width, height);
                     #[cfg(feature = "wpe-webkit")]

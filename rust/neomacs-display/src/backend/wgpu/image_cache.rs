@@ -437,7 +437,13 @@ impl ImageCache {
     /// Returns image ID immediately, texture loads in background
     pub fn load_file(&mut self, path: &str, max_width: u32, max_height: u32) -> u32 {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        self.load_file_with_id(id, path, max_width, max_height);
+        id
+    }
 
+    /// Load image from file with a pre-allocated ID (for threaded mode)
+    /// This allows the calling code to allocate the ID before sending a command.
+    pub fn load_file_with_id(&mut self, id: u32, path: &str, max_width: u32, max_height: u32) {
         // Query dimensions first (fast)
         if let Some(dims) = Self::query_file_dimensions(path) {
             // Apply max constraints to dimensions
@@ -453,8 +459,12 @@ impl ImageCache {
             max_width,
             max_height,
         });
+    }
 
-        id
+    /// Allocate the next available image ID without loading anything.
+    /// Used by threaded mode to pre-allocate IDs before sending commands.
+    pub fn allocate_id(&self) -> u32 {
+        self.next_id.fetch_add(1, Ordering::SeqCst)
     }
 
     /// Load image from data (async)

@@ -99,6 +99,10 @@
               gst_all_1.gst-plugins-ugly
               gst_all_1.gst-libav
               gst_all_1.gst-plugins-rs
+              gst_all_1.gst-vaapi
+
+              # VA-API for hardware video decoding (used by gst-va plugin)
+              libva
 
               # libsoup for HTTP
               libsoup_3
@@ -156,6 +160,7 @@
               gdk-pixbuf.dev
               gst_all_1.gstreamer.dev
               gst_all_1.gst-plugins-base.dev
+              libva
               fontconfig.dev
               freetype.dev
               harfbuzz.dev

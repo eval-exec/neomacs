@@ -331,6 +331,8 @@ NEOMACS_CFLAGS=@NEOMACS_CFLAGS@
 
 ## Neomacs Rust display library
 ## Set NEOMACS_DEBUG=1 to build debug version (default is release)
+## If NEOMACS_PREBUILT=yes, the library is pre-built externally (e.g., nix)
+NEOMACS_PREBUILT = @NEOMACS_PREBUILT@
 NEOMACS_RUST_DIR = $(top_srcdir)/rust/neomacs-display
 NEOMACS_RUST_LIB = libneomacs_display.so
 ifdef NEOMACS_DEBUG
@@ -722,14 +724,21 @@ endif
 
 ## Build Neomacs Rust display library
 ## The library is built with cargo and copied to src/ for linking
+## If NEOMACS_PREBUILT=yes, skip building (library is pre-built externally)
 .PHONY: neomacs-rust
 neomacs-rust: $(NEOMACS_RUST_LIB)
 
+ifneq ($(NEOMACS_PREBUILT),yes)
 $(NEOMACS_RUST_LIB): $(NEOMACS_RUST_TARGET)
 	$(AM_V_GEN)cp -f $< $@
 
 $(NEOMACS_RUST_TARGET): FORCE
 	$(AM_V_at)cd $(NEOMACS_RUST_DIR) && cargo build $(NEOMACS_CARGO_FLAGS)
+else
+# Pre-built library - no local build needed
+$(NEOMACS_RUST_LIB):
+	@echo "Using pre-built neomacs-display library"
+endif
 
 ## We have to create $(etc) here because init_cmdargs tests its
 ## existence when setting Vinstallation_directory (FIXME?).

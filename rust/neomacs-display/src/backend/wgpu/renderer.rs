@@ -735,6 +735,11 @@ impl WgpuRenderer {
         self.image_cache.load_file(path, max_width, max_height)
     }
 
+    /// Load image from file path with a pre-allocated ID (for threaded mode)
+    pub fn load_image_file_with_id(&mut self, id: u32, path: &str, max_width: u32, max_height: u32) {
+        self.image_cache.load_file_with_id(id, path, max_width, max_height)
+    }
+
     /// Load image from data (async - returns immediately)
     pub fn load_image_data(&mut self, data: &[u8], max_width: u32, max_height: u32) -> u32 {
         self.image_cache.load_data(data, max_width, max_height)

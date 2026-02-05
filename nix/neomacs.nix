@@ -40,6 +40,7 @@
 , mesa
 , libdrm
 , libgbm
+, libva
 , wayland
 , wayland-protocols
 , wpewebkit
@@ -81,6 +82,8 @@ let
       gdk-pixbuf
       gst_all_1.gstreamer
       gst_all_1.gst-plugins-base
+      gst_all_1.gst-plugins-bad  # Contains gst-va plugin (gstva-1.0)
+      libva                       # VA-API for hardware video decoding
       libGL
       libxkbcommon
       wayland
@@ -101,6 +104,8 @@ let
       gdk-pixbuf.dev
       gst_all_1.gstreamer.dev
       gst_all_1.gst-plugins-base.dev
+      gst_all_1.gst-plugins-bad.dev  # For gstva-1.0
+      libva                           # For libva
       libGL.dev
       libxkbcommon.dev
       wayland.dev
@@ -208,12 +213,14 @@ in stdenv.mkDerivation {
 
   preConfigure = ''
     echo "Using pre-built neomacs-display from: ${neomacs-display}"
+    export NEOMACS_DISPLAY_LIB="${neomacs-display}/lib"
+    export NEOMACS_DISPLAY_INCLUDE="${neomacs-display}/include"
     ./autogen.sh
   '';
 
   configureFlags = [
     "--with-neomacs"
-    "--with-native-compilation"
+    "--with-native-compilation=no"  # Disabled temporarily due to libgccjit nix issue
     "--with-gnutls"
     "--with-xml2"
     "--with-tree-sitter"

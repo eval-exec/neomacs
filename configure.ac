@@ -3922,20 +3922,32 @@ AC_SUBST([PGTK_LIBS])
 NEOMACS_OBJ=
 NEOMACS_LIBS=
 NEOMACS_CFLAGS=
+NEOMACS_PREBUILT=no
 if test "$window_system" = "neomacs"; then
   NEOMACS_OBJ="neomacsterm.o neomacsfns.o"
   dnl Check for the Rust library - use dynamic library (.so)
-  NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/release"
-  if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.so"; then
-    dnl Use dynamic linking - faster iteration during development
+  dnl First check NEOMACS_DISPLAY_LIB environment variable (for nix/external builds)
+  if test -n "$NEOMACS_DISPLAY_LIB" && test -f "${NEOMACS_DISPLAY_LIB}/libneomacs_display.so"; then
+    NEOMACS_RUST_LIB_DIR="$NEOMACS_DISPLAY_LIB"
     NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display -Wl,-rpath,${NEOMACS_RUST_LIB_DIR}"
+    NEOMACS_PREBUILT=yes
+    if test -n "$NEOMACS_DISPLAY_INCLUDE"; then
+      NEOMACS_CFLAGS="-I${NEOMACS_DISPLAY_INCLUDE}"
+    fi
   else
-    dnl Try debug build
-    NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/debug"
+    dnl Fall back to in-tree release build
+    NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/release"
     if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.so"; then
+      dnl Use dynamic linking - faster iteration during development
       NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display -Wl,-rpath,${NEOMACS_RUST_LIB_DIR}"
     else
-      AC_MSG_ERROR([Neomacs display library not found. Build it with: cd rust/neomacs-display && cargo build --release])
+      dnl Try debug build
+      NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/debug"
+      if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.so"; then
+        NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display -Wl,-rpath,${NEOMACS_RUST_LIB_DIR}"
+      else
+        AC_MSG_ERROR([Neomacs display library not found. Build it with: cd rust/neomacs-display && cargo build --release])
+      fi
     fi
   fi
   dnl Link GTK4 and GStreamer
@@ -3965,6 +3977,7 @@ fi
 AC_SUBST([NEOMACS_OBJ])
 AC_SUBST([NEOMACS_LIBS])
 AC_SUBST([NEOMACS_CFLAGS])
+AC_SUBST([NEOMACS_PREBUILT])
 
 AC_CHECK_FUNCS([malloc_trim])
 

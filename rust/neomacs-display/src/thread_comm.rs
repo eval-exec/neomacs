@@ -72,6 +72,15 @@ pub enum InputEvent {
 pub enum RenderCommand {
     /// Shutdown the render thread
     Shutdown,
+    /// Load image from file (async, ID pre-allocated)
+    ImageLoadFile {
+        id: u32,
+        path: String,
+        max_width: u32,
+        max_height: u32,
+    },
+    /// Free an image from cache
+    ImageFree { id: u32 },
     /// Create a WebKit view
     WebKitCreate { id: u32, width: u32, height: u32 },
     /// Load URL in WebKit view
