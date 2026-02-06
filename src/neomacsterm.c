@@ -884,6 +884,15 @@ neomacs_extract_full_frame (struct frame *f)
       }
   }
 
+  /* The tab-bar window is a pseudo-window NOT part of the root window tree.
+     Extract it separately so tab-bar items are rendered. */
+  if (WINDOWP (f->tab_bar_window))
+    {
+      struct window *tw = XWINDOW (f->tab_bar_window);
+      if (tw->current_matrix)
+        neomacs_extract_window_glyphs (tw, NULL);
+    }
+
   /* The minibuffer/echo area window is NOT part of the root window tree.
      Extract it separately so echo area text is rendered. */
   {
