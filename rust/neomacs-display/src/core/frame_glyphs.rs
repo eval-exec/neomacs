@@ -1,8 +1,8 @@
-//! Frame glyph buffer for hybrid rendering.
+//! Frame glyph buffer for matrix-based full-frame rendering.
 //!
-//! This module implements a simple buffer that collects glyphs during
-//! Emacs redisplay. Unlike the scene graph approach, we don't track
-//! window state - Emacs provides positions, we just render.
+//! Each frame, the C-side matrix walker extracts ALL visible glyphs from
+//! Emacs's current_matrix and rebuilds this buffer from scratch. No
+//! incremental overlap tracking is needed.
 
 use crate::core::types::{Color, Rect};
 use std::collections::HashMap;
@@ -123,7 +123,10 @@ impl FrameGlyph {
     }
 }
 
-/// Buffer collecting glyphs for current frame
+/// Buffer collecting glyphs for current frame.
+///
+/// With matrix-based rendering, this buffer is cleared and rebuilt from scratch
+/// each frame by the C-side matrix walker. No incremental state management needed.
 #[derive(Debug, Default, Clone)]
 pub struct FrameGlyphBuffer {
     /// Frame dimensions
@@ -139,10 +142,10 @@ pub struct FrameGlyphBuffer {
     /// Window regions for this frame (rebuilt each frame by add_window calls)
     pub window_regions: Vec<Rect>,
 
-    /// Window regions from previous frame (for detecting layout changes)
+    /// Window regions from previous frame (kept for compatibility)
     pub prev_window_regions: Vec<Rect>,
 
-    /// Flag: layout changed last frame, clear glyphs at start of next frame
+    /// Flag: layout changed last frame (kept for compatibility)
     pub layout_changed: bool,
 
     /// Current face attributes (set before adding char glyphs)
@@ -165,13 +168,13 @@ impl FrameGlyphBuffer {
         Self {
             width: 0.0,
             height: 0.0,
-            background: Color::BLACK, // Default to dark (Emacs default theme)
-            glyphs: Vec::with_capacity(10000), // Pre-allocate for typical frame
+            background: Color::BLACK,
+            glyphs: Vec::with_capacity(10000),
             window_regions: Vec::with_capacity(16),
             prev_window_regions: Vec::with_capacity(16),
             layout_changed: false,
             current_face_id: 0,
-            current_fg: Color::WHITE, // Default foreground white for dark theme
+            current_fg: Color::WHITE,
             current_bg: None,
             current_font_family: "monospace".to_string(),
             current_bold: false,
@@ -188,54 +191,36 @@ impl FrameGlyphBuffer {
         Self {
             width,
             height,
-            background: Color::BLACK, // Default to dark (Emacs default theme)
-            glyphs: Vec::with_capacity(10000), // Pre-allocate for typical frame
-            window_regions: Vec::with_capacity(16),
-            prev_window_regions: Vec::with_capacity(16),
-            layout_changed: false,
-            current_face_id: 0,
-            current_fg: Color::WHITE, // Default foreground white for dark theme
-            current_bg: None,
-            current_font_family: "monospace".to_string(),
-            current_bold: false,
-            current_italic: false,
-            current_font_size: 14.0,
-            current_underline: 0,
-            current_underline_color: None,
-            face_fonts: HashMap::new(),
+            ..Self::new()
         }
     }
 
-    /// Start new frame - prepare for new content
-    pub fn start_frame(&mut self) {
-        // Save current window regions to previous (for comparison at end of frame)
-        std::mem::swap(&mut self.prev_window_regions, &mut self.window_regions);
-        // Clear current regions - they'll be populated during this frame
+    /// Clear all glyphs for a fresh full-frame rebuild.
+    /// Called at the start of each frame by the matrix walker.
+    pub fn clear_all(&mut self) {
+        self.glyphs.clear();
         self.window_regions.clear();
     }
 
-    /// End frame - remove glyphs when layout changes
-    /// Returns true if glyphs were cleared (caller should force Emacs to resend)
+    /// Start new frame - prepare for new content (compatibility shim)
+    pub fn start_frame(&mut self) {
+        std::mem::swap(&mut self.prev_window_regions, &mut self.window_regions);
+        self.window_regions.clear();
+    }
+
+    /// End frame (compatibility shim, always returns false now)
     pub fn end_frame(&mut self) -> bool {
-        // NOTE: We can't rely on window_regions count because Emacs does incremental
-        // updates - only changed windows call update_window_begin. So during a cursor
-        // blink, only 1 window might be updated even though 3 exist.
-        //
-        // For now, don't auto-clear based on region count. The overlapping removal
-        // in add_char handles content updates, and explicit resize/clear operations
-        // handle layout changes.
-        
         false
     }
-    
-    /// Check and reset layout_changed flag
+
+    /// Check and reset layout_changed flag (compatibility)
     pub fn take_layout_changed(&mut self) -> bool {
         let was_changed = self.layout_changed;
         self.layout_changed = false;
         was_changed
     }
 
-    /// Clear buffer for new frame
+    /// Clear buffer for new frame (legacy API)
     pub fn begin_frame(&mut self, width: f32, height: f32, background: Color) {
         self.width = width;
         self.height = height;
@@ -255,7 +240,6 @@ impl FrameGlyphBuffer {
         self.current_font_size = font_size;
         self.current_underline = underline;
         self.current_underline_color = underline_color;
-        // Store font family for this face_id
         self.face_fonts.insert(face_id, font_family.to_string());
     }
 
@@ -286,262 +270,34 @@ impl FrameGlyphBuffer {
         self.current_bg
     }
 
-    /// Add a window background rectangle and record the window region
+    /// Add a window background rectangle and record the window region.
+    /// With full-frame rebuild, no stale-background removal is needed.
     pub fn add_background(&mut self, x: f32, y: f32, width: f32, height: f32, color: Color) {
-        // Record this window region
         self.window_regions.push(Rect::new(x, y, width, height));
-
-        let x_end = x + width;
-        let y_end = y + height;
-
-        // Remove any existing Background glyph that:
-        // 1. Starts at the same position (window resized) OR
-        // 2. Overlaps with the new background
-        // This prevents stale backgrounds from covering mode-lines after window splits.
-        self.glyphs.retain(|g| {
-            if let FrameGlyph::Background { bounds, .. } = g {
-                // Remove if same top-left corner (window resized, e.g. after C-x 2)
-                if (bounds.x - x).abs() < 1.0 && (bounds.y - y).abs() < 1.0 {
-                    return false;
-                }
-                // Remove if the new background completely contains the old one
-                // (e.g., a single full-width window replacing split windows)
-                let bx_end = bounds.x + bounds.width;
-                let by_end = bounds.y + bounds.height;
-                if bounds.x >= x && bx_end <= x_end && bounds.y >= y && by_end <= y_end {
-                    return false;
-                }
-                true
-            } else {
-                true
-            }
-        });
-
         self.glyphs.push(FrameGlyph::Background {
             bounds: Rect::new(x, y, width, height),
             color,
         });
     }
 
-    /// Remove stale glyphs only if window layout indicates windows were deleted
-    /// Called at end of frame.
-    /// Only removes stale glyphs when a single full-width window is drawn,
-    /// which happens after C-x 0 or C-x 1 (delete-other-windows).
-    pub fn remove_stale_glyphs_if_layout_changed(&mut self) {
-        // No current regions means no windows were updated this frame (incremental)
-        // Keep all existing glyphs
-        if self.window_regions.is_empty() {
-            return;
-        }
-
-        // Check if any window covers the full frame width
-        // This indicates a full redisplay after window deletion (C-x 0, C-x 1)
-        let has_full_width_window = self.window_regions.iter().any(|r| {
-            r.x < 1.0 && (r.width - self.width).abs() < 10.0
-        });
-
-        if !has_full_width_window {
-            // Windows were split/resized but not deleted - keep all glyphs
-            // The right window wasn't updated because its content didn't change
-            return;
-        }
-
-        // A full-width window was drawn - remove glyphs outside current regions
-        self.glyphs.retain(|g| {
-            let (gx, gy) = match g {
-                FrameGlyph::Char { x, y, .. } => (*x, *y),
-                FrameGlyph::Stretch { x, y, .. } => (*x, *y),
-                FrameGlyph::Image { x, y, .. } => (*x, *y),
-                FrameGlyph::Video { x, y, .. } => (*x, *y),
-                FrameGlyph::WebKit { x, y, .. } => (*x, *y),
-                // Keep backgrounds, cursors, borders - they're added fresh each frame
-                _ => return true,
-            };
-
-            // Keep if glyph is inside ANY window region
-            self.window_regions.iter().any(|r| {
-                gx >= r.x && gx < r.x + r.width &&
-                gy >= r.y && gy < r.y + r.height
-            })
-        });
-    }
-
-    /// Remove glyphs that are outside all current window regions
-    /// Call this at end of frame to clean up stale glyphs from deleted windows
+    /// No-op kept for API compatibility. With full-frame rebuild, stale glyphs
+    /// are impossible since the buffer is cleared each frame.
     #[allow(dead_code)]
-    pub fn remove_stale_glyphs(&mut self) {
-        if self.window_regions.is_empty() {
-            return;
-        }
+    pub fn remove_stale_glyphs_if_layout_changed(&mut self) {}
 
-        self.glyphs.retain(|g| {
-            let (gx, gy) = match g {
-                FrameGlyph::Char { x, y, .. } => (*x, *y),
-                FrameGlyph::Stretch { x, y, .. } => (*x, *y),
-                FrameGlyph::Image { x, y, .. } => (*x, *y),
-                FrameGlyph::Video { x, y, .. } => (*x, *y),
-                FrameGlyph::WebKit { x, y, .. } => (*x, *y),
-                // Keep backgrounds, cursors, borders - they're added fresh each frame
-                _ => return true,
-            };
+    /// No-op kept for API compatibility.
+    #[allow(dead_code)]
+    pub fn remove_stale_glyphs(&mut self) {}
 
-            // Keep if glyph is inside ANY window region
-            self.window_regions.iter().any(|r| {
-                gx >= r.x && gx < r.x + r.width &&
-                gy >= r.y && gy < r.y + r.height
-            })
-        });
-    }
+    /// No-op kept for API compatibility. With full-frame rebuild, clear_area
+    /// is not needed since we rebuild from scratch.
+    pub fn clear_area(&mut self, _x: f32, _y: f32, _width: f32, _height: f32) {}
 
-    /// Remove glyphs that overlap with the given rectangle
-    /// Uses actual vertical overlap (Y ranges intersect) for proper clearing.
-    /// Image/Video glyphs are NOT removed here - they are managed by add_image/add_video.
-    /// If new_is_overlay is false, overlay glyphs are preserved (content shouldn't erase mode-line).
-    fn remove_overlapping(&mut self, x: f32, y: f32, width: f32, height: f32, new_is_overlay: bool, caller: &str) {
-        let x_end = x + width;
-        let y_end = y + height;
-        let before_count = self.glyphs.len();
-        self.glyphs.retain(|g| {
-            let (gx, gy, gw, gh, is_overlay) = match g {
-                FrameGlyph::Char { x, y, width, height, is_overlay, .. } => (*x, *y, *width, *height, *is_overlay),
-                FrameGlyph::Stretch { x, y, width, height, is_overlay, .. } => (*x, *y, *width, *height, *is_overlay),
-                // Keep Image/Video glyphs - they are managed by add_image/add_video
-                FrameGlyph::Image { .. } => return true,
-                FrameGlyph::Video { .. } => return true,
-                // Keep WebKit glyphs - persistent embedded views
-                FrameGlyph::WebKit { .. } => return true,
-                // Keep backgrounds, cursors, borders - managed separately
-                _ => return true,
-            };
-            // Don't let non-overlay glyphs remove overlay glyphs (content shouldn't erase mode-line)
-            if is_overlay && !new_is_overlay {
-                return true;
-            }
-            let gx_end = gx + gw;
-            let gy_end = gy + gh;
-            // Keep if no X overlap OR no Y overlap (actual rectangle intersection)
-            gx_end <= x || gx >= x_end || gy_end <= y || gy >= y_end
-        });
-        let after_count = self.glyphs.len();
-        if before_count != after_count && before_count.saturating_sub(after_count) > 10 {
-            log::warn!("remove_overlapping[{}]: ({},{}) {}x{} removed {} glyphs ({} -> {})",
-                caller, x, y, width, height, before_count - after_count, before_count, after_count);
-        }
-    }
+    /// No-op kept for API compatibility.
+    pub fn clear_media_in_area(&mut self, _x: f32, _y: f32, _width: f32, _height: f32) {}
 
-    /// Clear only media glyphs (Image, Video, WebKit) in a rectangular area.
-    /// Called at the start of update_window_begin to clear stale media glyphs
-    /// before Emacs sends new positions. This is necessary because:
-    /// 1. clear_area doesn't remove media glyphs (to prevent removal during text redraw)
-    /// 2. But when scrolling, media glyphs at old positions need to be cleared
-    /// 3. Emacs only sends media glyphs that ARE visible, not those that WERE visible
-    pub fn clear_media_in_area(&mut self, x: f32, y: f32, width: f32, height: f32) {
-        let x_end = x + width;
-        let y_end = y + height;
-
-        log::info!("clear_media_in_area: ({},{}) {}x{}", x, y, width, height);
-
-        self.glyphs.retain(|g| {
-            let (gx, gy, gw, gh) = match g {
-                FrameGlyph::Image { x, y, width, height, .. } => (*x, *y, *width, *height),
-                FrameGlyph::Video { x, y, width, height, .. } => (*x, *y, *width, *height),
-                FrameGlyph::WebKit { x, y, width, height, .. } => (*x, *y, *width, *height),
-                // Keep all non-media glyphs
-                _ => return true,
-            };
-            let gx_end = gx + gw;
-            let gy_end = gy + gh;
-            // Keep if glyph does NOT overlap with the clear area
-            let keep = gx_end <= x || gx >= x_end || gy_end <= y || gy >= y_end;
-            if !keep {
-                log::info!("  -> clearing media glyph at ({},{}) {}x{}", gx, gy, gw, gh);
-            }
-            keep
-        });
-    }
-
-    /// Clear all glyphs in a rectangular area
-    /// Called by gui_clear_end_of_line and related functions
-    /// Note: Image and Video glyphs are NOT removed here - they are managed by add_image/add_video
-    pub fn clear_area(&mut self, x: f32, y: f32, width: f32, height: f32) {
-        let x_end = x + width;
-        let y_end = y + height;
-
-        // Debug: count low-Y glyphs before clearing
-        let low_y_count_before = self.glyphs.iter()
-            .filter(|g| matches!(g, FrameGlyph::Char { y, .. } if *y < 100.0))
-            .count();
-        let total_before = self.glyphs.len();
-
-        self.glyphs.retain(|g| {
-            let (gx, gy, gw, gh) = match g {
-                FrameGlyph::Char { x, y, width, height, .. } => (*x, *y, *width, *height),
-                FrameGlyph::Stretch { x, y, width, height, .. } => (*x, *y, *width, *height),
-                // Keep Image and Video glyphs - they are managed by add_image/add_video
-                // which handles removing same-ID images and overlapping images.
-                // Line-by-line clear_area calls during text redraw should NOT remove images.
-                FrameGlyph::Image { .. } => return true,
-                FrameGlyph::Video { .. } => return true,
-                // WebKit glyphs: remove if the clear area covers the webkit's top edge
-                // This handles scrolling (where webkit moves up and out of view)
-                // while protecting against mode-line clears (which are at the bottom)
-                FrameGlyph::WebKit { x: wx, y: wy, width: ww, height: wh, .. } => {
-                    let gx_end = *wx + *ww;
-                    // Check horizontal overlap
-                    let h_overlap = *wx < x_end && gx_end > x;
-                    // Remove if clear area starts at or above webkit's top AND has horizontal overlap
-                    // This catches scroll operations that move webkit out of view
-                    let covers_top = y <= *wy && y_end > *wy && h_overlap;
-                    // Also remove if fully contained (for completeness)
-                    let gy_end = *wy + *wh;
-                    let fully_contained = *wx >= x && gx_end <= x_end && *wy >= y && gy_end <= y_end;
-                    return !(covers_top || fully_contained);
-                }
-                // Keep backgrounds, cursors, borders - managed separately
-                _ => return true,
-            };
-            let gx_end = gx + gw;
-            let gy_end = gy + gh;
-            // Keep if glyph does NOT overlap with the clear area
-            gx_end <= x || gx >= x_end || gy_end <= y || gy >= y_end
-        });
-
-        // Debug: log if low-Y glyphs were removed
-        let low_y_count_after = self.glyphs.iter()
-            .filter(|g| matches!(g, FrameGlyph::Char { y, .. } if *y < 100.0))
-            .count();
-        let total_after = self.glyphs.len();
-
-        if low_y_count_after < low_y_count_before {
-            log::warn!("clear_area: removed {} low-Y chars (before={}, after={}), area=({},{}) {}x{}, total: {} -> {}",
-                low_y_count_before - low_y_count_after, low_y_count_before, low_y_count_after,
-                x, y, width, height, total_before, total_after);
-        }
-    }
-
-    /// Add a character glyph (removes overlapping glyphs first)
+    /// Add a character glyph. No overlap removal needed with full-frame rebuild.
     pub fn add_char(&mut self, char: char, x: f32, y: f32, width: f32, height: f32, ascent: f32, is_overlay: bool) {
-        // Debug: track glyph counts at different Y ranges
-        let count_before = self.glyphs.len();
-        let low_y_count_before = self.glyphs.iter()
-            .filter(|g| matches!(g, FrameGlyph::Char { y, .. } if *y < 100.0))
-            .count();
-
-        // Remove any existing glyphs at this position
-        self.remove_overlapping(x, y, width, height, is_overlay, "add_char");
-
-        let count_after_remove = self.glyphs.len();
-        let low_y_count_after_remove = self.glyphs.iter()
-            .filter(|g| matches!(g, FrameGlyph::Char { y, .. } if *y < 100.0))
-            .count();
-
-        // Log if low-Y glyphs were removed
-        if low_y_count_after_remove < low_y_count_before {
-            log::warn!("add_char: remove_overlapping removed {} low-Y glyphs (before={}, after={}), adding char '{}' at ({},{})",
-                low_y_count_before - low_y_count_after_remove, low_y_count_before, low_y_count_after_remove,
-                char, x, y);
-        }
-
         self.glyphs.push(FrameGlyph::Char {
             char,
             x,
@@ -561,124 +317,28 @@ impl FrameGlyphBuffer {
         });
     }
 
-    /// Add a stretch (whitespace) glyph (removes overlapping glyphs first)
+    /// Add a stretch (whitespace) glyph. No overlap removal needed.
     pub fn add_stretch(&mut self, x: f32, y: f32, width: f32, height: f32, bg: Color, is_overlay: bool) {
-        self.remove_overlapping(x, y, width, height, is_overlay, "add_stretch");
         self.glyphs.push(FrameGlyph::Stretch { x, y, width, height, bg, is_overlay });
-    }
-
-    /// Helper to add a media glyph (image, video, webkit) with proper overlap handling.
-    ///
-    /// This handles the common pattern for media glyphs:
-    /// 1. Remove any existing glyph with the same ID
-    /// 2. Remove any other glyph of the same type that overlaps with this position
-    /// 3. Remove overlapping char/stretch glyphs
-    /// 4. Add the new glyph
-    fn add_media_glyph(
-        &mut self,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        is_same_id: impl Fn(&FrameGlyph) -> bool,
-        get_same_type_bounds: impl Fn(&FrameGlyph) -> Option<(f32, f32, f32, f32)>,
-        glyph: FrameGlyph,
-    ) {
-        // Debug: log existing media glyphs
-        let existing: Vec<_> = self.glyphs.iter().filter_map(|g| get_same_type_bounds(g)).collect();
-        let glyph_info = match &glyph {
-            FrameGlyph::Image { image_id, .. } => format!("Image(id={})", image_id),
-            FrameGlyph::Video { video_id, .. } => format!("Video(id={})", video_id),
-            FrameGlyph::WebKit { webkit_id, .. } => format!("WebKit(id={})", webkit_id),
-            _ => "Unknown".to_string(),
-        };
-        log::info!("add_media_glyph: {} at ({},{}) {}x{}, existing={:?}",
-            glyph_info, x, y, width, height, existing);
-
-        // Remove any existing glyph with the same ID (handles repositioning)
-        self.glyphs.retain(|g| !is_same_id(g));
-
-        // Remove any other glyph of the same type that overlaps with this position
-        // This handles the case where different media elements end up at the same
-        // screen position (e.g., after scrolling)
-        let x_end = x + width;
-        let y_end = y + height;
-        let before_count = self.glyphs.iter().filter(|g| get_same_type_bounds(g).is_some()).count();
-        self.glyphs.retain(|g| {
-            if let Some((gx, gy, gw, gh)) = get_same_type_bounds(g) {
-                let gx_end = gx + gw;
-                let gy_end = gy + gh;
-                // Keep if no overlap
-                let keep = gx_end <= x || gx >= x_end || gy_end <= y || gy >= y_end;
-                if !keep {
-                    log::info!("  -> removing overlapping glyph at ({},{}) {}x{}", gx, gy, gw, gh);
-                }
-                keep
-            } else {
-                true
-            }
-        });
-        let after_count = self.glyphs.iter().filter(|g| get_same_type_bounds(g).is_some()).count();
-        if before_count != after_count {
-            log::info!("  -> overlap removal: {} -> {} glyphs", before_count, after_count);
-        }
-
-        // Remove overlapping char/stretch glyphs (media glyphs are not overlays)
-        self.remove_overlapping(x, y, width, height, false, &glyph_info);
-
-        // Add the new glyph
-        self.glyphs.push(glyph);
     }
 
     /// Add an image glyph
     pub fn add_image(&mut self, image_id: u32, x: f32, y: f32, width: f32, height: f32) {
-        self.add_media_glyph(
-            x, y, width, height,
-            |g| matches!(g, FrameGlyph::Image { image_id: id, .. } if *id == image_id),
-            |g| match g {
-                FrameGlyph::Image { x, y, width, height, .. } => Some((*x, *y, *width, *height)),
-                _ => None,
-            },
-            FrameGlyph::Image { image_id, x, y, width, height },
-        );
+        self.glyphs.push(FrameGlyph::Image { image_id, x, y, width, height });
     }
 
     /// Add a video glyph
     pub fn add_video(&mut self, video_id: u32, x: f32, y: f32, width: f32, height: f32) {
-        self.add_media_glyph(
-            x, y, width, height,
-            |g| matches!(g, FrameGlyph::Video { video_id: id, .. } if *id == video_id),
-            |g| match g {
-                FrameGlyph::Video { x, y, width, height, .. } => Some((*x, *y, *width, *height)),
-                _ => None,
-            },
-            FrameGlyph::Video { video_id, x, y, width, height },
-        );
+        self.glyphs.push(FrameGlyph::Video { video_id, x, y, width, height });
     }
 
     /// Add a webkit glyph
     pub fn add_webkit(&mut self, webkit_id: u32, x: f32, y: f32, width: f32, height: f32) {
-        self.add_media_glyph(
-            x, y, width, height,
-            |g| matches!(g, FrameGlyph::WebKit { webkit_id: id, .. } if *id == webkit_id),
-            |g| match g {
-                FrameGlyph::WebKit { x, y, width, height, .. } => Some((*x, *y, *width, *height)),
-                _ => None,
-            },
-            FrameGlyph::WebKit { webkit_id, x, y, width, height },
-        );
+        self.glyphs.push(FrameGlyph::WebKit { webkit_id, x, y, width, height });
     }
 
-    /// Add cursor - removes any existing cursor for the same window first
+    /// Add cursor
     pub fn add_cursor(&mut self, window_id: i32, x: f32, y: f32, width: f32, height: f32, style: u8, color: Color) {
-        // Remove any existing cursor for THIS window only (other windows keep their cursors)
-        self.glyphs.retain(|g| {
-            if let FrameGlyph::Cursor { window_id: wid, .. } = g {
-                *wid != window_id
-            } else {
-                true
-            }
-        });
         self.glyphs.push(FrameGlyph::Cursor { window_id, x, y, width, height, style, color });
     }
 

@@ -464,40 +464,364 @@ neomacs_update_begin (struct frame *f)
     }
 }
 
+/* ============================================================================
+ * Matrix Walker: Full-Frame Glyph Extraction
+ * ============================================================================ */
+
+/* Helper: resolve face and send it to Rust via set_face FFI.
+   This mirrors what neomacs_draw_glyph_string does for face setup. */
+static void
+neomacs_send_face (void *handle, struct frame *f, struct face *face)
+{
+  if (!face)
+    return;
+
+  unsigned long fg = face->foreground;
+  unsigned long bg = face->background;
+
+  if (face->foreground_defaulted_p)
+    fg = FRAME_FOREGROUND_PIXEL (f);
+  if (face->background_defaulted_p)
+    bg = FRAME_BACKGROUND_PIXEL (f);
+
+  uint32_t fg_rgb = ((RED_FROM_ULONG (fg) << 16) |
+                     (GREEN_FROM_ULONG (fg) << 8) |
+                     BLUE_FROM_ULONG (fg));
+  uint32_t bg_rgb = ((RED_FROM_ULONG (bg) << 16) |
+                     (GREEN_FROM_ULONG (bg) << 8) |
+                     BLUE_FROM_ULONG (bg));
+
+  const char *font_family = NULL;
+  if (face->lface != NULL)
+    {
+      Lisp_Object family_attr = face->lface[LFACE_FAMILY_INDEX];
+      if (!NILP (family_attr) && STRINGP (family_attr))
+        font_family = SSDATA (family_attr);
+    }
+
+  int font_weight = 400;
+  Lisp_Object weight_attr = face->lface[LFACE_WEIGHT_INDEX];
+  if (!NILP (weight_attr) && SYMBOLP (weight_attr))
+    {
+      int w = FONT_WEIGHT_NAME_NUMERIC (weight_attr);
+      if (w > 0) font_weight = w;
+    }
+
+  int is_italic = 0;
+  Lisp_Object slant_attr = face->lface[LFACE_SLANT_INDEX];
+  if (!NILP (slant_attr) && SYMBOLP (slant_attr))
+    {
+      int s = FONT_SLANT_NAME_NUMERIC (slant_attr);
+      if (s != 100) is_italic = 1;
+    }
+
+  int underline_style = 0;
+  uint32_t underline_color = fg_rgb;
+  if (face->underline != FACE_NO_UNDERLINE)
+    {
+      underline_style = 1;
+      if (face->underline == FACE_UNDERLINE_WAVE)
+        underline_style = 2;
+    }
+
+  int box_type = 0;
+  uint32_t box_color = fg_rgb;
+  int box_line_width = 0;
+  if (face->box != FACE_NO_BOX)
+    {
+      box_type = 1;
+      box_line_width = eabs (face->box_vertical_line_width);
+      if (box_line_width == 0) box_line_width = 1;
+      if (!face->box_color_defaulted_p)
+        box_color = ((RED_FROM_ULONG (face->box_color) << 16) |
+                     (GREEN_FROM_ULONG (face->box_color) << 8) |
+                     BLUE_FROM_ULONG (face->box_color));
+    }
+
+  int font_size = 14;
+  if (face->font)
+    font_size = face->font->pixel_size;
+
+  neomacs_display_set_face (handle, face->id,
+                            fg_rgb, bg_rgb, font_family,
+                            font_weight, is_italic, font_size,
+                            underline_style, underline_color,
+                            box_type, box_color, box_line_width);
+}
+
+/* Callback for foreach_window: extract all visible glyphs from a window's
+   current_matrix and send them to the Rust display engine via FFI. */
+static bool
+neomacs_extract_window_glyphs (struct window *w, void *user_data)
+{
+  struct frame *f = XFRAME (w->frame);
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+  void *handle = dpyinfo->display_handle;
+  struct glyph_matrix *matrix = w->current_matrix;
+
+  if (!matrix || !handle)
+    return true;  /* continue iterating */
+
+  /* Add this window to the scene */
+  int win_x = WINDOW_LEFT_EDGE_X (w);
+  int win_y = WINDOW_TOP_EDGE_Y (w);
+  int win_w = WINDOW_PIXEL_WIDTH (w);
+  int win_h = WINDOW_PIXEL_HEIGHT (w);
+  unsigned long bg = FRAME_BACKGROUND_PIXEL (f);
+  int selected = (w == XWINDOW (f->selected_window)) ? 1 : 0;
+
+  neomacs_display_add_window (handle,
+                              (intptr_t) w,
+                              (float) win_x, (float) win_y,
+                              (float) win_w, (float) win_h,
+                              (uint32_t) bg, selected);
+
+  /* Walk all rows in current_matrix */
+  for (int row_idx = 0; row_idx < matrix->nrows; row_idx++)
+    {
+      struct glyph_row *row = &matrix->rows[row_idx];
+      if (!row->enabled_p)
+        continue;
+
+      /* Convert window-relative Y to frame-absolute Y */
+      int frame_y = WINDOW_TO_FRAME_PIXEL_Y (w, row->y);
+      int is_mode_line = row->mode_line_p;
+      int is_tab_line = row->tab_line_p;
+      int last_face_id = -1;
+
+      /* Walk glyphs in all 3 areas: LEFT_MARGIN, TEXT, RIGHT_MARGIN */
+      for (int area = LEFT_MARGIN_AREA; area < LAST_AREA; area++)
+        {
+          struct glyph *glyph = row->glyphs[area];
+          struct glyph *end = glyph + row->used[area];
+          int glyph_x;
+
+          /* Calculate starting X for this area */
+          if (area == TEXT_AREA)
+            glyph_x = window_box_left (w, TEXT_AREA);
+          else if (area == LEFT_MARGIN_AREA)
+            glyph_x = window_box_left (w, LEFT_MARGIN_AREA);
+          else
+            glyph_x = window_box_left (w, RIGHT_MARGIN_AREA);
+
+          while (glyph < end)
+            {
+              /* Resolve the face for this glyph */
+              struct face *face = FACE_FROM_ID_OR_NULL (f, glyph->face_id);
+              if (!face)
+                face = FACE_FROM_ID_OR_NULL (f, DEFAULT_FACE_ID);
+
+              /* Send face if it changed */
+              if (face && (int) glyph->face_id != last_face_id)
+                {
+                  neomacs_send_face (handle, f, face);
+                  last_face_id = glyph->face_id;
+                }
+
+              /* Set up row context via begin_row */
+              neomacs_display_begin_row (handle,
+                                         frame_y,
+                                         glyph_x,
+                                         row->height,
+                                         row->ascent,
+                                         is_mode_line || is_tab_line ? 1 : 0,
+                                         0);
+
+              switch (glyph->type)
+                {
+                case CHAR_GLYPH:
+                  {
+                    unsigned int charcode = glyph->u.ch;
+                    int ascent_val = face && face->font ? FONT_BASE (face->font) : row->ascent;
+                    int descent_val = face && face->font ? FONT_DESCENT (face->font) : 0;
+                    neomacs_display_add_char_glyph (handle, charcode,
+                                                    glyph->face_id,
+                                                    glyph->pixel_width,
+                                                    ascent_val, descent_val);
+                  }
+                  break;
+
+                case COMPOSITE_GLYPH:
+                case GLYPHLESS_GLYPH:
+                  {
+                    /* For composite/glyphless, use the character code or a placeholder */
+                    unsigned int charcode = glyph->u.ch;
+                    if (glyph->type == GLYPHLESS_GLYPH)
+                      charcode = ' ';  /* Placeholder for glyphless */
+                    neomacs_display_add_char_glyph (handle, charcode,
+                                                    glyph->face_id,
+                                                    glyph->pixel_width,
+                                                    row->ascent, 0);
+                  }
+                  break;
+
+                case STRETCH_GLYPH:
+                  neomacs_display_add_stretch_glyph (handle,
+                                                      glyph->pixel_width,
+                                                      row->height,
+                                                      glyph->face_id);
+                  break;
+
+                case IMAGE_GLYPH:
+                  {
+                    /* Look up the image and get its GPU ID */
+                    struct image *img = IMAGE_FROM_ID (f, glyph->u.img_id);
+                    if (img)
+                      {
+                        uint32_t gpu_id = neomacs_get_or_load_image (dpyinfo, img);
+                        if (gpu_id != 0)
+                          {
+                            int img_w = img->width > 0 ? img->width : glyph->pixel_width;
+                            int img_h = img->height > 0 ? img->height : (glyph->ascent + glyph->descent);
+                            neomacs_display_add_image_glyph (handle, gpu_id,
+                                                              img_w, img_h);
+                          }
+                      }
+                  }
+                  break;
+
+#ifdef HAVE_NEOMACS
+                case VIDEO_GLYPH:
+                  {
+                    int glyph_height = glyph->ascent + glyph->descent;
+                    neomacs_display_add_video_glyph (handle,
+                                                      glyph->u.video_id,
+                                                      glyph->pixel_width,
+                                                      glyph_height > 0 ? glyph_height : row->height);
+                  }
+                  break;
+
+                case WEBKIT_GLYPH:
+                  {
+                    int glyph_height = glyph->ascent + glyph->descent;
+                    neomacs_display_add_wpe_glyph (handle,
+                                                    glyph->u.webkit_id,
+                                                    glyph->pixel_width,
+                                                    glyph_height > 0 ? glyph_height : row->height);
+                  }
+                  break;
+#endif
+
+                default:
+                  /* XWIDGET_GLYPH etc. - skip */
+                  break;
+                }
+
+              glyph_x += glyph->pixel_width;
+              glyph++;
+            }
+        }
+    }
+
+  return true;  /* continue iterating to next window */
+}
+
+/* Walk current_matrix for ALL windows in the frame and extract complete
+   glyph data.  Called from neomacs_update_end after Emacs has finished
+   all window updates.  This replaces the incremental glyph accumulation
+   model with a full-frame snapshot. */
+static void
+neomacs_extract_full_frame (struct frame *f)
+{
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+  struct neomacs_output *output = FRAME_NEOMACS_OUTPUT (f);
+
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return;
+
+  /* Only for GPU widget mode */
+  if (!output || !output->use_gpu_widget)
+    return;
+
+  /* Walk all leaf windows and extract their glyphs from current_matrix.
+     We can't use foreach_window (it's static in window.c), so traverse
+     the window tree ourselves. */
+  {
+    /* Simple iterative tree walk using Emacs window tree structure */
+    struct window *root = XWINDOW (FRAME_ROOT_WINDOW (f));
+    /* Stack-based traversal: find all leaf windows */
+    struct window *stack[64];
+    int sp = 0;
+    stack[sp++] = root;
+
+    while (sp > 0)
+      {
+        struct window *w = stack[--sp];
+        if (WINDOWP (w->contents))
+          {
+            /* Internal window - push children */
+            struct window *child = XWINDOW (w->contents);
+            while (child)
+              {
+                if (sp < 64)
+                  stack[sp++] = child;
+                child = NILP (child->next) ? NULL : XWINDOW (child->next);
+              }
+          }
+        else
+          {
+            /* Leaf window - extract glyphs */
+            neomacs_extract_window_glyphs (w, NULL);
+          }
+      }
+  }
+
+  /* Now extract cursor position and vertical borders */
+
+  /* Draw vertical window borders */
+  {
+    Lisp_Object rest;
+    struct window *w;
+
+    for (rest = f->root_window; !NILP (rest); )
+      {
+        w = XWINDOW (rest);
+        if (WINDOWP (w->contents))
+          {
+            /* Internal window - check for vertical border between children */
+            rest = w->contents;
+          }
+        else
+          {
+            /* Leaf window - move to next sibling or up */
+            while (!NILP (rest) && NILP (XWINDOW (rest)->next))
+              {
+                rest = XWINDOW (rest)->parent;
+                if (NILP (rest))
+                  break;
+              }
+            if (!NILP (rest))
+              rest = XWINDOW (rest)->next;
+          }
+      }
+  }
+}
+
 /* Called at the end of updating a frame */
 void
 neomacs_update_end (struct frame *f)
 {
   struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
   struct neomacs_output *output = FRAME_NEOMACS_OUTPUT (f);
-  int result = 0;
 
   if (dpyinfo && dpyinfo->display_handle)
     {
-      /* Use window-targeted end_frame if we have a winit window */
+      /* Extract complete frame from current_matrix (matrix-based full-frame rendering).
+         This walks ALL windows and sends ALL visible glyphs to Rust. */
+      neomacs_extract_full_frame (f);
+
+      /* Signal end of frame to Rust (sends frame to render thread) */
       if (output && output->window_id > 0)
         neomacs_display_end_frame_window (dpyinfo->display_handle, output->window_id);
       else
-        result = neomacs_display_end_frame (dpyinfo->display_handle);
-    }
-
-  /* If Rust cleared glyphs due to layout change (result=1), mark windows inaccurate
-     so Emacs will resend all content on the next frame.  */
-  if (result == 1)
-    {
-      mark_window_display_accurate (FRAME_ROOT_WINDOW (f), false);
-      /* Request another redisplay to populate the cleared buffer */
-      SET_FRAME_GARBAGED (f);
+        neomacs_display_end_frame (dpyinfo->display_handle);
     }
 
   /* Queue a redraw of the drawing area */
   if (output && output->drawing_area)
     {
-      /* For GPU widget, also set the scene */
       if (output->use_gpu_widget && dpyinfo && dpyinfo->display_handle)
-        {
-          neomacs_display_render_to_widget (dpyinfo->display_handle, output->drawing_area);
-        }
+        neomacs_display_render_to_widget (dpyinfo->display_handle, output->drawing_area);
 
       gtk_widget_queue_draw (GTK_WIDGET (output->drawing_area));
     }
@@ -517,23 +841,9 @@ neomacs_update_window_begin (struct window *w)
   dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
   output = FRAME_NEOMACS_OUTPUT (f);
 
-  /* Disable scroll optimization for neomacs windows.
-
-     The scroll_run_hook mechanism relies on current_matrix rows being "enabled"
-     (marked as valid) from the previous frame. However, during Emacs startup
-     and window resizing, adjust_glyph_matrix clears all enabled_p flags when
-     the matrix width changes, making it impossible for rows to accumulate
-     enabled state. This causes scroll optimization to fail, and since xdisp.c
-     expects scroll_run_hook to copy unchanged content, half the screen ends up
-     blank after scrolling.
-
-     By setting no_scrolling_p, we disable the matrix-level scroll optimization
-     in dispnew.c's scrolling_window(). However, xdisp.c may still call
-     scroll_run_hook directly in try_scrolling() - see neomacs_scroll_run
-     which handles that case by calling scroll_blit for pixel-level scrolling.
-
-     If scroll_run_hook isn't called (common case), Emacs will redraw all
-     changed rows, which is correct for our incremental glyph model. */
+  /* Disable matrix-level scroll optimization.  With full-frame rendering
+     from current_matrix, we don't need scroll optimization.  Keeping this
+     ensures Emacs redraws all changed rows rather than trying to reuse them. */
   if (w->desired_matrix)
     w->desired_matrix->no_scrolling_p = true;
 
@@ -547,9 +857,6 @@ neomacs_update_window_begin (struct window *w)
       unsigned long bg = FRAME_BACKGROUND_PIXEL (f);
       int selected = (w == XWINDOW (f->selected_window)) ? 1 : 0;
 
-if (0) fprintf (stderr, "DEBUG add_window: x=%d y=%d w=%d h=%d bg=%08lx\n",
-               x, y, width, height, bg);
-
       neomacs_display_add_window (dpyinfo->display_handle,
                                   (intptr_t) w,  /* window_id */
                                   (float) x, (float) y,
@@ -557,16 +864,9 @@ if (0) fprintf (stderr, "DEBUG add_window: x=%d y=%d w=%d h=%d bg=%08lx\n",
                                   (uint32_t) bg,
                                   selected);
 
-      /* Note: We do NOT clear media glyphs here because:
-         1. Multiple windows update per frame (text, mode-line, minibuffer)
-         2. Clearing in each window_begin would clear media from OTHER windows
-         3. add_media_glyph handles overlap detection - removes same-ID images
-            and images at overlapping positions
-         4. For scroll operations, images are repositioned and overlaps handled
-
-         The key insight is that Emacs sends add_image for each visible image
-         with updated positions. The overlap detection in add_media_glyph
-         removes stale images when new ones are added at the same position. */
+      /* With full-frame rendering, the entire glyph buffer is cleared at
+         begin_frame and rebuilt from current_matrix.  No incremental cleanup
+         needed. */
     }
 }
 
@@ -1806,15 +2106,13 @@ neomacs_scroll_run (struct window *w, struct run *run)
   struct neomacs_output *output = FRAME_NEOMACS_OUTPUT (f);
   int x, y, width, height, from_y, to_y, bottom_y;
 
-  fprintf(stderr, "neomacs_scroll_run called: current_y=%d desired_y=%d height=%d nrows=%d\n",
-          run->current_y, run->desired_y, run->height, run->nrows);
-
   if (!dpyinfo || !dpyinfo->display_handle)
     return;
 
-  /* For GPU widget mode, use pixel buffer scroll blit for efficiency.
-     This copies pixels within the GPU pixel buffer, matching Emacs's
-     expectation that pixel data persists between frames. */
+  /* With full-frame rendering from current_matrix, scroll blitting is no
+     longer needed.  The entire frame is rebuilt each update.  However, we
+     still send the command for compatibility (it's a no-op on the render
+     thread). */
   if (output && output->use_gpu_widget)
     {
       /* Get frame-relative bounding box of the text display area of W,

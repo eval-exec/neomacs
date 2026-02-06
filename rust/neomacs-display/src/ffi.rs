@@ -145,18 +145,13 @@ pub unsafe extern "C" fn neomacs_display_resize(
                     || (display.frame_glyphs.height - new_height).abs() > 1.0;
 
     if size_changed {
-        log::info!("neomacs_display_resize: {}x{} -> {}x{}, clearing {} glyphs",
+        log::info!("neomacs_display_resize: {}x{} -> {}x{}",
             display.frame_glyphs.width, display.frame_glyphs.height,
-            width, height, display.frame_glyphs.glyphs.len());
+            width, height);
         display.scene = Scene::new(new_width, new_height);
         display.frame_glyphs.width = new_width;
         display.frame_glyphs.height = new_height;
-        display.frame_glyphs.glyphs.clear();  // Clear all glyphs - Emacs will resend
-        display.frame_glyphs.window_regions.clear();
-        display.frame_glyphs.prev_window_regions.clear();
-    } else {
-        log::debug!("neomacs_display_resize: size unchanged ({}x{}), keeping {} glyphs",
-            width, height, display.frame_glyphs.glyphs.len());
+        display.frame_glyphs.clear_all();
     }
 
     if let Some(backend) = display.get_backend() {
@@ -172,28 +167,19 @@ pub unsafe extern "C" fn neomacs_display_begin_frame(handle: *mut NeomacsDisplay
     }
 
     let display = &mut *handle;
-    // Increment frame counter - used to track which rows need clearing
     display.frame_counter += 1;
-    // Mark that we're in a frame update cycle
     display.in_frame = true;
 
-    debug!("begin_frame: frame={}, hybrid={}, glyphs={} chars={}",
-           display.frame_counter, display.use_hybrid, display.frame_glyphs.len(),
-           display.frame_glyphs.glyphs.iter().filter(|g| matches!(g, FrameGlyph::Char { .. })).count());
+    debug!("begin_frame: frame={}", display.frame_counter);
 
-    // DON'T clear glyphs - accumulate them for incremental redisplay.
-    // Emacs sends only changed content; old content is retained.
-    // When add_char is called, it removes overlapping old glyphs.
+    // Matrix-based full-frame rendering: clear everything and rebuild from scratch.
+    // The matrix walker in neomacs_update_end will re-add ALL visible glyphs.
     if display.use_hybrid {
         display.frame_glyphs.width = display.scene.width;
         display.frame_glyphs.height = display.scene.height;
         display.frame_glyphs.background = display.scene.background;
-        // Start frame - saves previous window regions for layout change detection
-        display.frame_glyphs.start_frame();
+        display.frame_glyphs.clear_all();
     }
-
-    // NOTE: Don't clear rows here - Emacs does incremental updates
-    // Rows will be cleared individually when begin_row is called
 }
 
 /// Add a window to the current frame
@@ -506,48 +492,6 @@ pub unsafe extern "C" fn neomacs_display_add_char_glyph(
 
         // Hybrid path: append directly to frame glyph buffer
         if display.use_hybrid {
-            // For overlay rows (mode-line/echo-area), fill background gap on the left
-            // The gap is from window's left edge to where the first character starts
-            let window_x = display.current_window_x;
-
-            // Debug: log overlay row info with pixel_width
-            if display.current_row_is_overlay {
-                log::debug!("OVERLAY char '{}' at x={}, width={}, window_x={}, current_bg={:?}",
-                    c, current_x, pixel_width, window_x, display.frame_glyphs.get_current_bg());
-            }
-
-            // For overlay rows (mode-line/echo-area), ensure full coverage from left edge
-            // This handles both the gap case (current_x > window_x) and the edge case (current_x == window_x)
-            // where we need to ensure the mode-line background starts exactly at the window edge
-            if display.current_row_is_overlay && (current_x as f32) >= window_x {
-                if let Some(bg) = display.frame_glyphs.get_current_bg() {
-                    // Check if we haven't already filled this row's left edge (with Stretch or Char at window_x)
-                    let already_filled = display.frame_glyphs.glyphs.iter().any(|g| {
-                        match g {
-                            crate::core::frame_glyphs::FrameGlyph::Stretch { x, y, is_overlay: true, .. } |
-                            crate::core::frame_glyphs::FrameGlyph::Char { x, y, is_overlay: true, .. } => {
-                                (*x - window_x).abs() < 1.0 && (*y - current_y as f32).abs() < 1.0
-                            }
-                            _ => false,
-                        }
-                    });
-                    if !already_filled {
-                        // Fill from window edge to the first character position
-                        // For current_x == window_x, this is a zero-width stretch (no visual effect)
-                        // but ensures we've "visited" this position for the already_filled check
-                        let gap_width = (current_x as f32 - window_x).max(1.0); // At least 1 pixel to ensure coverage
-                        display.frame_glyphs.add_stretch(
-                            window_x,
-                            current_y as f32,
-                            gap_width,
-                            display.current_row_height as f32,
-                            bg,
-                            true, // is_overlay
-                        );
-                    }
-                }
-            }
-
             display.frame_glyphs.add_char(
                 c,
                 current_x as f32,
@@ -887,47 +831,8 @@ pub unsafe extern "C" fn neomacs_display_set_face(
 
     let new_font_size = if font_size > 0 { font_size as f32 } else { 14.0 };
 
-    // Detect text-scale changes: When text-scale-increase is used, Emacs creates NEW faces
-    // with larger font_size values (typically IDs > 22). We need to clear glyphs when this
-    // happens because the text layout will be different.
-    //
-    // Get baseline font size from face 0 (the default face). If face 0 doesn't exist yet,
-    // we're in initial setup and shouldn't clear anything.
-    let baseline_font_size = display.faces.get(&0).map(|f| f.font_size);
-
-    let should_clear = if let Some(baseline) = baseline_font_size {
-        // We have a baseline - check for font size changes
-        if let Some(existing_face) = display.faces.get(&face_id) {
-            // Existing face - check if size changed
-            (existing_face.font_size - new_font_size).abs() > 0.1
-        } else {
-            // New face - clear if this is a scaled face (font_size differs from baseline)
-            // This detects text-scale-increase creating new scaled faces
-            (new_font_size - baseline).abs() > 0.1
-        }
-    } else {
-        // No baseline yet (face 0 not created) - don't clear during initial setup
-        false
-    };
-
-    if should_clear {
-        log::debug!("Text scale change detected: face {}: size={}, clearing non-overlay glyphs",
-                   face_id, new_font_size);
-        // Only clear non-overlay glyphs (buffer content).
-        // Preserve overlay glyphs (modeline, echo area) since they don't change with text-scale.
-        display.frame_glyphs.glyphs.retain(|g| {
-            match g {
-                crate::core::frame_glyphs::FrameGlyph::Char { is_overlay, .. } => *is_overlay,
-                crate::core::frame_glyphs::FrameGlyph::Stretch { is_overlay, .. } => *is_overlay,
-                // Keep cursors, borders, backgrounds, images, etc.
-                crate::core::frame_glyphs::FrameGlyph::Cursor { .. } => true,
-                crate::core::frame_glyphs::FrameGlyph::Border { .. } => true,
-                crate::core::frame_glyphs::FrameGlyph::Background { .. } => true,
-                _ => false, // Clear images, videos, webkit (unlikely to be affected but safer)
-            }
-        });
-        display.frame_glyphs.window_regions.clear();
-    }
+    // No text-scale clearing needed: with full-frame rebuild, the buffer is
+    // always cleared at the start of each frame and rebuilt from scratch.
 
     let face = Face {
         id: face_id,
@@ -1699,19 +1604,11 @@ pub unsafe extern "C" fn neomacs_display_clear_area(
 
     let display = &mut *handle;
 
-    // For hybrid path, clear the area in frame_glyphs
+    // With full-frame rebuild, clear_area is a no-op (buffer is rebuilt from scratch)
     if display.use_hybrid {
-        let before = display.frame_glyphs.glyphs.len();
         display.frame_glyphs.clear_area(
-            x as f32,
-            y as f32,
-            width as f32,
-            height as f32,
+            x as f32, y as f32, width as f32, height as f32,
         );
-        let after = display.frame_glyphs.glyphs.len();
-        // Log ALL clear_area calls to trace what's happening
-        log::debug!("neomacs_display_clear_area: ({},{}) {}x{} glyphs: {} -> {} (removed {})",
-            x, y, width, height, before, after, before.saturating_sub(after));
     }
 }
 
@@ -3051,15 +2948,17 @@ pub extern "C" fn neomacs_display_begin_frame_window(
 ) {
     let display = unsafe { &mut *handle };
 
-    log::debug!("neomacs_display_begin_frame_window: window_id={}, current glyphs={}",
-        window_id, display.frame_glyphs.glyphs.len());
+    log::debug!("neomacs_display_begin_frame_window: window_id={}", window_id);
 
     // Track which window we're currently rendering to
     display.current_render_window_id = window_id;
 
+    // Matrix-based full-frame rendering: clear everything.
+    // The matrix walker will re-add ALL visible glyphs from current_matrix.
+    display.frame_glyphs.clear_all();
+
     #[cfg(feature = "winit-backend")]
     if let Some(ref mut backend) = display.winit_backend {
-        // This clears the window's scene to prepare for new content
         backend.begin_frame_for_window(window_id);
     }
 }
@@ -3074,62 +2973,32 @@ pub extern "C" fn neomacs_display_end_frame_window(
 ) {
     let display = unsafe { &mut *handle };
 
-    // Count char glyphs to detect partial updates (cursor-only frames)
-    let char_count = display.frame_glyphs.glyphs.iter()
-        .filter(|g| matches!(g, FrameGlyph::Char { .. }))
-        .count();
-
-    // Debug: find min/max Y of char glyphs
-    let (min_y, max_y) = display.frame_glyphs.glyphs.iter()
-        .filter_map(|g| match g {
-            FrameGlyph::Char { y, .. } => Some(*y),
-            _ => None,
-        })
-        .fold((f32::MAX, f32::MIN), |(min, max), y| (min.min(y), max.max(y)));
-
-    log::debug!("neomacs_display_end_frame_window: window_id={}, glyphs={}, chars={}, faces={}, Y range: {:.0}..{:.0}",
-        window_id, display.frame_glyphs.glyphs.len(), char_count, display.faces.len(), min_y, max_y);
+    log::debug!("neomacs_display_end_frame_window: window_id={}, glyphs={}",
+        window_id, display.frame_glyphs.glyphs.len());
 
     #[cfg(feature = "winit-backend")]
     {
-        // In threaded mode, send frame to render thread
-        // Safety: THREADED_STATE is only modified during init/shutdown
-        let is_threaded = unsafe { THREADED_STATE.is_some() };
-        log::info!("end_frame_window: threaded={}, chars={}", is_threaded, char_count);
-
         if let Some(ref state) = unsafe { THREADED_STATE.as_ref() } {
-            // Only send frames that have character content.
-            // Skip cursor-only or background-only frames to preserve previous full frame.
-            // This handles Emacs's incremental update model where cursor blinks
-            // don't resend all text content.
-            if char_count > 0 {
-                // Clone frame glyphs and send to render thread
-                let frame = display.frame_glyphs.clone();
-                log::info!("SENDING FRAME: {} glyphs, Y range {:.0}..{:.0}",
-                    frame.glyphs.len(), min_y, max_y);
-                let _ = state.emacs_comms.frame_tx.try_send(frame);
-            } else {
-                log::debug!("neomacs_display_end_frame_window: skipping frame with no char glyphs");
-            }
+            // Matrix-based full-frame rendering: always send the complete frame.
+            // The buffer was cleared at begin_frame and rebuilt by the matrix walker,
+            // so it always contains the complete visible state.
+            let frame = display.frame_glyphs.clone();
+            log::debug!("Sending frame: {} glyphs", frame.glyphs.len());
+            let _ = state.emacs_comms.frame_tx.try_send(frame);
         } else if let Some(ref mut backend) = display.winit_backend {
-            // Non-threaded mode: render directly
             backend.end_frame_for_window(
                 window_id,
                 &display.frame_glyphs,
                 &display.faces,
             );
-        } else {
-            log::debug!("neomacs_display_end_frame_window: no winit_backend and not in threaded mode");
         }
     }
 
     #[cfg(not(feature = "winit-backend"))]
     {
         let _ = window_id;
-        log::debug!("neomacs_display_end_frame_window: winit-backend feature not enabled");
     }
 
-    // Reset current window tracking after rendering is complete
     display.current_render_window_id = 0;
 }
 
