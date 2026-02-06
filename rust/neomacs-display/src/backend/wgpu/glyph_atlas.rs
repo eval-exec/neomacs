@@ -24,7 +24,7 @@ pub struct GlyphKey {
 
 /// A cached glyph with its wgpu texture and bind group
 pub struct CachedGlyph {
-    /// Texture containing this glyph (R8Unorm format - alpha mask)
+    /// Texture containing this glyph
     pub texture: wgpu::Texture,
     /// Texture view for sampling
     pub view: wgpu::TextureView,
@@ -38,6 +38,10 @@ pub struct CachedGlyph {
     pub bearing_x: f32,
     /// Bearing Y (offset from baseline)
     pub bearing_y: f32,
+    /// True if this is a color glyph (RGBA texture, e.g. color emoji).
+    /// Color glyphs should be rendered with the image pipeline (direct RGBA),
+    /// not the glyph pipeline (alpha-mask tinted with foreground color).
+    pub is_color: bool,
 }
 
 /// Wgpu-based glyph atlas for text rendering
@@ -152,21 +156,25 @@ impl WgpuGlyphAtlas {
                 c, key.charcode, key.face_id, face.is_some());
             return None;
         }
-        let (width, height, alpha_data, bearing_x, bearing_y) = rasterize_result?;
+        let (width, height, pixel_data, bearing_x, bearing_y, is_color) = rasterize_result?;
 
         if width == 0 || height == 0 {
             log::debug!("glyph_atlas: skipping empty glyph '{}' ({}x{})", c, width, height);
             return None;
         }
 
-        // Check alpha data has valid content
-        let max_alpha = alpha_data.iter().copied().max().unwrap_or(0);
-        log::debug!("glyph_atlas: rasterized '{}' {}x{} bearing ({:.1},{:.1}) max_alpha={}",
-            c, width, height, bearing_x, bearing_y, max_alpha);
+        log::debug!("glyph_atlas: rasterized '{}' {}x{} bearing ({:.1},{:.1}) color={}",
+            c, width, height, bearing_x, bearing_y, is_color);
 
-        // Create texture (R8Unorm for alpha mask)
+        // Color glyphs use Rgba8UnormSrgb (4 bytes/pixel), mask glyphs use R8Unorm (1 byte/pixel)
+        let (format, bytes_per_pixel) = if is_color {
+            (wgpu::TextureFormat::Rgba8UnormSrgb, 4u32)
+        } else {
+            (wgpu::TextureFormat::R8Unorm, 1u32)
+        };
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Glyph Texture"),
+            label: Some(if is_color { "Color Glyph Texture" } else { "Glyph Texture" }),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -175,7 +183,7 @@ impl WgpuGlyphAtlas {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -188,10 +196,10 @@ impl WgpuGlyphAtlas {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &alpha_data,
+            &pixel_data,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(width),
+                bytes_per_row: Some(width * bytes_per_pixel),
                 rows_per_image: Some(height),
             },
             wgpu::Extent3d {
@@ -242,19 +250,22 @@ impl WgpuGlyphAtlas {
             height,
             bearing_x,
             bearing_y,
+            is_color,
         };
         self.cache.insert(key.clone(), cached_glyph);
         self.cache.get(key)
     }
 
-    /// Rasterize a single glyph and return alpha mask data
+    /// Rasterize a single glyph and return pixel data
     ///
-    /// Returns (width, height, alpha_data, bearing_x, bearing_y)
+    /// Returns (width, height, pixel_data, bearing_x, bearing_y, is_color)
+    /// - For mask glyphs: pixel_data is R8 alpha, is_color=false
+    /// - For color glyphs: pixel_data is RGBA, is_color=true
     fn rasterize_glyph(
         &mut self,
         c: char,
         face: Option<&Face>,
-    ) -> Option<(u32, u32, Vec<u8>, f32, f32)> {
+    ) -> Option<(u32, u32, Vec<u8>, f32, f32, bool)> {
         // Create attributes from face
         let attrs = self.face_to_attrs(face);
 
@@ -297,30 +308,38 @@ impl WgpuGlyphAtlas {
                     let bearing_x = image.placement.left as f32;
                     let bearing_y = image.placement.top as f32;
 
-                    // Extract alpha channel based on content type
-                    let alpha_data = match image.content {
+                    // Log font and content type for debugging emoji rendering
+                    let font_family_str = face.map(|f| f.font_family.as_str()).unwrap_or("(none)");
+                    log::debug!(
+                        "rasterize_glyph: char='{}' (U+{:04X}) font='{}' content={:?} size={}x{}",
+                        c, c as u32, font_family_str, image.content, width, height
+                    );
+
+                    // Extract pixel data based on content type
+                    let (pixel_data, is_color) = match image.content {
                         cosmic_text::SwashContent::Mask => {
-                            // Already an alpha mask
-                            image.data.clone()
+                            // Alpha mask (R8 format)
+                            (image.data.clone(), false)
                         }
                         cosmic_text::SwashContent::Color => {
-                            // Extract alpha from RGBA
-                            image.data.chunks(4).map(|chunk| chunk[3]).collect()
+                            // Full RGBA color data (e.g. color emoji)
+                            (image.data.clone(), true)
                         }
                         cosmic_text::SwashContent::SubpixelMask => {
-                            // Average RGB for alpha
-                            image
+                            // Convert subpixel RGB to alpha mask
+                            let alpha: Vec<u8> = image
                                 .data
                                 .chunks(3)
                                 .map(|chunk| {
                                     ((chunk[0] as u16 + chunk[1] as u16 + chunk[2] as u16) / 3)
                                         as u8
                                 })
-                                .collect()
+                                .collect();
+                            (alpha, false)
                         }
                     };
 
-                    return Some((width, height, alpha_data, bearing_x, bearing_y));
+                    return Some((width, height, pixel_data, bearing_x, bearing_y, is_color));
                 }
             }
         }

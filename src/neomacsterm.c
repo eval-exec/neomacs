@@ -42,6 +42,7 @@ struct wl_display;
 #include "dispextern.h"  /* For mark_window_display_accurate, set_window_update_flags */
 #include "pdumper.h"
 #include "fontset.h"
+#include "composite.h"  /* For composition_gstring_from_id, LGSTRING_GLYPH, etc. */
 #include "process.h"  /* For add_read_fd, delete_read_fd */
 
 /* List of Neomacs display info structures */
@@ -491,8 +492,19 @@ neomacs_send_face (void *handle, struct frame *f, struct face *face)
                      (GREEN_FROM_ULONG (bg) << 8) |
                      BLUE_FROM_ULONG (bg));
 
+  /* Get the actual font family from the realized font object, not the
+     logical face.  face->lface[LFACE_FAMILY_INDEX] is the requested family
+     (e.g. "Hack"), but Emacs's fontset system may select a different font
+     for certain characters (e.g. "Noto Color Emoji" for emoji).  The
+     realized font in face->font has the actual family used.  */
   const char *font_family = NULL;
-  if (face->lface != NULL)
+  if (face->font)
+    {
+      Lisp_Object family_attr = face->font->props[FONT_FAMILY_INDEX];
+      if (!NILP (family_attr) && SYMBOLP (family_attr))
+        font_family = SSDATA (SYMBOL_NAME (family_attr));
+    }
+  if (!font_family && face->lface != NULL)
     {
       Lisp_Object family_attr = face->lface[LFACE_FAMILY_INDEX];
       if (!NILP (family_attr) && STRINGP (family_attr))
@@ -642,13 +654,80 @@ neomacs_extract_window_glyphs (struct window *w, void *user_data)
                   break;
 
                 case COMPOSITE_GLYPH:
+                  {
+                    /* For automatic compositions (e.g. emoji), extract characters
+                       from the composition using lgstring (grapheme cluster string). */
+                    if (glyph->u.cmp.automatic)
+                      {
+                        int cmp_id = glyph->u.cmp.id;
+                        int cmp_from = glyph->slice.cmp.from;
+                        Lisp_Object gstring = composition_gstring_from_id (cmp_id);
+
+                        if (!NILP (gstring))
+                          {
+                            Lisp_Object glyph_obj = LGSTRING_GLYPH (gstring, cmp_from);
+                            if (!NILP (glyph_obj))
+                              {
+                                unsigned int charcode = LGLYPH_CHAR (glyph_obj);
+
+                                /* Use face_for_char to resolve the correct font face
+                                   for this character.  For emoji, this finds the emoji
+                                   font (e.g. Noto Color Emoji) via fontset fallback,
+                                   rather than using the base text font (e.g. Hack).  */
+                                int char_face_id = face_for_char (f, face, charcode, -1, Qnil);
+                                struct face *char_face = FACE_FROM_ID_OR_NULL (f, char_face_id);
+                                if (!char_face)
+                                  char_face = face;
+
+                                if (char_face_id != last_face_id)
+                                  {
+                                    neomacs_send_face (handle, f, char_face);
+                                    last_face_id = char_face_id;
+                                  }
+
+                                int ascent_val = char_face->font ? FONT_BASE (char_face->font) : row->ascent;
+                                int descent_val = char_face->font ? FONT_DESCENT (char_face->font) : 0;
+                                neomacs_display_add_char_glyph (handle, charcode,
+                                                                (uint32_t) char_face_id,
+                                                                glyph->pixel_width,
+                                                                ascent_val, descent_val);
+                              }
+                          }
+                      }
+                    else
+                      {
+                        /* Non-automatic (static) composition - use composition table */
+                        int cmp_id = glyph->u.cmp.id;
+                        struct composition *cmp = composition_table[cmp_id];
+                        if (cmp && cmp->glyph_len > 0)
+                          {
+                            unsigned int charcode = COMPOSITION_GLYPH (cmp, 0);
+
+                            int char_face_id = face_for_char (f, face, charcode, -1, Qnil);
+                            struct face *char_face = FACE_FROM_ID_OR_NULL (f, char_face_id);
+                            if (!char_face)
+                              char_face = face;
+
+                            if (char_face_id != last_face_id)
+                              {
+                                neomacs_send_face (handle, f, char_face);
+                                last_face_id = char_face_id;
+                              }
+
+                            int ascent_val = char_face->font ? FONT_BASE (char_face->font) : row->ascent;
+                            int descent_val = char_face->font ? FONT_DESCENT (char_face->font) : 0;
+                            neomacs_display_add_char_glyph (handle, charcode,
+                                                            (uint32_t) char_face_id,
+                                                            glyph->pixel_width,
+                                                            ascent_val, descent_val);
+                          }
+                      }
+                  }
+                  break;
+
                 case GLYPHLESS_GLYPH:
                   {
-                    /* For composite/glyphless, use the character code or a placeholder */
-                    unsigned int charcode = glyph->u.ch;
-                    if (glyph->type == GLYPHLESS_GLYPH)
-                      charcode = ' ';  /* Placeholder for glyphless */
-                    neomacs_display_add_char_glyph (handle, charcode,
+                    neomacs_display_add_char_glyph (handle, ' ',
                                                     glyph->face_id,
                                                     glyph->pixel_width,
                                                     row->ascent, 0);
@@ -1242,14 +1321,6 @@ neomacs_draw_glyph_string (struct glyph_string *s)
   struct neomacs_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
   cairo_t *cr;
 
-  /* Debug: log Y coordinates for the first glyph of each row */
-  static int last_y = -1;
-  if (s->y != last_y && s->x < 20) {
-    fprintf(stderr, "draw_glyph_string: y=%d x=%d height=%d mode_line=%d\n",
-            s->y, s->x, s->height, s->row ? s->row->mode_line_p : -1);
-    last_y = s->y;
-  }
-
   if (!output)
     return;
 
@@ -1294,11 +1365,6 @@ neomacs_draw_glyph_string (struct glyph_string *s)
               uint32_t bg_rgb = ((RED_FROM_ULONG(bg) << 16) |
                                 (GREEN_FROM_ULONG(bg) << 8) |
                                 BLUE_FROM_ULONG(bg));
-
-              /* Debug: print mode-line face colors */
-              if (s->row->mode_line_p && s->x < 20)
-                printf("MODELINE face=%d bg_defaulted=%d bg_rgb=0x%06x\n",
-                       face->id, face->background_defaulted_p, bg_rgb);
 
               /* Get font family from lface */
               const char *font_family = NULL;  /* NULL means default */

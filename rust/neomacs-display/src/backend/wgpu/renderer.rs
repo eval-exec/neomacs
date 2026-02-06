@@ -1159,12 +1159,13 @@ impl WgpuRenderer {
                 render_pass.draw(0..rect_vertices.len() as u32, 0..1);
             }
 
-            // Draw character glyphs - collect all vertices first, then batch render
-            render_pass.set_pipeline(&self.glyph_pipeline);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            // Draw character glyphs in two groups:
+            // - Mask glyphs: alpha-only textures, tinted with foreground color (glyph_pipeline)
+            // - Color glyphs: RGBA textures rendered directly, e.g. color emoji (image_pipeline)
 
-            // First pass: collect glyph keys and vertices (ensures all glyphs are cached)
-            let mut glyph_data: Vec<(GlyphKey, [GlyphVertex; 6])> = Vec::new();
+            // First pass: collect glyph keys, vertices, and color flags (ensures all glyphs are cached)
+            let mut mask_data: Vec<(GlyphKey, [GlyphVertex; 6])> = Vec::new();
+            let mut color_data: Vec<(GlyphKey, [GlyphVertex; 6])> = Vec::new();
 
             for glyph in &frame_glyphs.glyphs {
                 if let FrameGlyph::Char { char, x, y, width, ascent, fg, face_id, font_size, .. } = glyph {
@@ -1177,39 +1178,47 @@ impl WgpuRenderer {
                     let face = faces.get(face_id);
 
                     if let Some(cached) = glyph_atlas.get_or_create(&self.device, &self.queue, &key, face) {
-                        // Position glyph correctly:
-                        // baseline = y + ascent (baseline position in frame coordinates)
-                        // bearing_y = distance from baseline to glyph top (positive = above baseline)
-                        // glyph_y = baseline - bearing_y = position of glyph top
-                        //
-                        // Use the cached glyph's actual dimensions (not Emacs's expected width)
-                        // to avoid stretching when font size changes. The glyph is positioned
-                        // at x + bearing_x to align correctly within Emacs's allocated space.
                         let glyph_x = *x + cached.bearing_x;
                         let baseline = *y + *ascent;
                         let glyph_y = baseline - cached.bearing_y;
                         let glyph_w = cached.width as f32;
                         let glyph_h = cached.height as f32;
 
+                        // Color glyphs use white vertex color (no tinting),
+                        // mask glyphs use foreground color for tinting
+                        let color = if cached.is_color {
+                            [1.0, 1.0, 1.0, 1.0]
+                        } else {
+                            [fg.r, fg.g, fg.b, fg.a]
+                        };
+
                         let vertices = [
-                            GlyphVertex { position: [glyph_x, glyph_y], tex_coords: [0.0, 0.0], color: [fg.r, fg.g, fg.b, fg.a] },
-                            GlyphVertex { position: [glyph_x + glyph_w, glyph_y], tex_coords: [1.0, 0.0], color: [fg.r, fg.g, fg.b, fg.a] },
-                            GlyphVertex { position: [glyph_x + glyph_w, glyph_y + glyph_h], tex_coords: [1.0, 1.0], color: [fg.r, fg.g, fg.b, fg.a] },
-                            GlyphVertex { position: [glyph_x, glyph_y], tex_coords: [0.0, 0.0], color: [fg.r, fg.g, fg.b, fg.a] },
-                            GlyphVertex { position: [glyph_x + glyph_w, glyph_y + glyph_h], tex_coords: [1.0, 1.0], color: [fg.r, fg.g, fg.b, fg.a] },
-                            GlyphVertex { position: [glyph_x, glyph_y + glyph_h], tex_coords: [0.0, 1.0], color: [fg.r, fg.g, fg.b, fg.a] },
+                            GlyphVertex { position: [glyph_x, glyph_y], tex_coords: [0.0, 0.0], color },
+                            GlyphVertex { position: [glyph_x + glyph_w, glyph_y], tex_coords: [1.0, 0.0], color },
+                            GlyphVertex { position: [glyph_x + glyph_w, glyph_y + glyph_h], tex_coords: [1.0, 1.0], color },
+                            GlyphVertex { position: [glyph_x, glyph_y], tex_coords: [0.0, 0.0], color },
+                            GlyphVertex { position: [glyph_x + glyph_w, glyph_y + glyph_h], tex_coords: [1.0, 1.0], color },
+                            GlyphVertex { position: [glyph_x, glyph_y + glyph_h], tex_coords: [0.0, 1.0], color },
                         ];
 
-                        glyph_data.push((key, vertices));
+                        if cached.is_color {
+                            color_data.push((key, vertices));
+                        } else {
+                            mask_data.push((key, vertices));
+                        }
                     }
                 }
             }
 
-            log::trace!("render_frame_glyphs: {} char glyphs to render", glyph_data.len());
+            log::trace!("render_frame_glyphs: {} mask glyphs, {} color glyphs",
+                mask_data.len(), color_data.len());
 
-            // Create single vertex buffer for all glyphs
-            if !glyph_data.is_empty() {
-                let all_vertices: Vec<GlyphVertex> = glyph_data.iter()
+            // Draw mask glyphs with glyph pipeline (alpha tinted with foreground)
+            if !mask_data.is_empty() {
+                render_pass.set_pipeline(&self.glyph_pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
+                let all_vertices: Vec<GlyphVertex> = mask_data.iter()
                     .flat_map(|(_, verts)| verts.iter().copied())
                     .collect();
 
@@ -1221,9 +1230,34 @@ impl WgpuRenderer {
 
                 render_pass.set_vertex_buffer(0, glyph_buffer.slice(..));
 
-                // Second pass: draw each glyph using cached bind groups
-                for (i, (key, _)) in glyph_data.iter().enumerate() {
-                    if let Some(cached) = glyph_atlas.get(&key) {
+                for (i, (key, _)) in mask_data.iter().enumerate() {
+                    if let Some(cached) = glyph_atlas.get(key) {
+                        render_pass.set_bind_group(1, &cached.bind_group, &[]);
+                        let start = (i * 6) as u32;
+                        render_pass.draw(start..start + 6, 0..1);
+                    }
+                }
+            }
+
+            // Draw color glyphs with image pipeline (direct RGBA, e.g. color emoji)
+            if !color_data.is_empty() {
+                render_pass.set_pipeline(&self.image_pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
+                let all_vertices: Vec<GlyphVertex> = color_data.iter()
+                    .flat_map(|(_, verts)| verts.iter().copied())
+                    .collect();
+
+                let color_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Color Glyph Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&all_vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+
+                render_pass.set_vertex_buffer(0, color_buffer.slice(..));
+
+                for (i, (key, _)) in color_data.iter().enumerate() {
+                    if let Some(cached) = glyph_atlas.get(key) {
                         render_pass.set_bind_group(1, &cached.bind_group, &[]);
                         let start = (i * 6) as u32;
                         render_pass.draw(start..start + 6, 0..1);
