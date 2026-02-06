@@ -782,17 +782,12 @@ impl RenderApp {
                 NamedKey::ArrowDown => 0xff54,
                 // Whitespace
                 NamedKey::Space => 0x20,
-                // Modifier keys (as keys themselves)
-                NamedKey::Shift => 0xffe1,
-                NamedKey::Control => 0xffe3,
-                NamedKey::Alt => 0xffe9,
-                NamedKey::Super => 0xffeb,
-                NamedKey::CapsLock => 0xffe5,
+                // Modifier keys are handled via ModifiersChanged, not as key events.
+                // They fall through to the default `_ => 0` which suppresses them.
                 // Other
                 NamedKey::PrintScreen => 0xff61,
                 NamedKey::ScrollLock => 0xff14,
                 NamedKey::Pause => 0xff13,
-                NamedKey::NumLock => 0xff7f,
                 _ => 0,
             },
             Key::Character(c) => {

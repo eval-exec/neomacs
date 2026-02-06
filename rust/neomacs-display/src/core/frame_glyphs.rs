@@ -89,7 +89,7 @@ pub enum FrameGlyph {
         y: f32,
         width: f32,
         height: f32,
-        /// 0=box, 1=hollow, 2=bar, 3=hbar
+        /// 0=box, 1=bar, 2=hbar, 3=hollow
         style: u8,
         color: Color,
     },

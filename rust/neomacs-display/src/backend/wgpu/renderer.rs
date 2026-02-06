@@ -1103,10 +1103,38 @@ impl WgpuRenderer {
                     y,
                     width,
                     height,
+                    style,
                     color,
                     ..
                 } => {
-                    self.add_rect(&mut cursor_vertices, *x, *y, *width, *height, color);
+                    match style {
+                        0 => {
+                            // Filled box
+                            self.add_rect(&mut cursor_vertices, *x, *y, *width, *height, color);
+                        }
+                        1 => {
+                            // Bar (thin vertical line)
+                            self.add_rect(&mut cursor_vertices, *x, *y, 2.0, *height, color);
+                        }
+                        2 => {
+                            // Underline (hbar at bottom)
+                            self.add_rect(&mut cursor_vertices, *x, *y + *height - 2.0, *width, 2.0, color);
+                        }
+                        3 => {
+                            // Hollow box (4 border edges)
+                            // Top
+                            self.add_rect(&mut cursor_vertices, *x, *y, *width, 1.0, color);
+                            // Bottom
+                            self.add_rect(&mut cursor_vertices, *x, *y + *height - 1.0, *width, 1.0, color);
+                            // Left
+                            self.add_rect(&mut cursor_vertices, *x, *y, 1.0, *height, color);
+                            // Right
+                            self.add_rect(&mut cursor_vertices, *x + *width - 1.0, *y, 1.0, *height, color);
+                        }
+                        _ => {
+                            self.add_rect(&mut cursor_vertices, *x, *y, *width, *height, color);
+                        }
+                    }
                 }
                 _ => {}
             }

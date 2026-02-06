@@ -2083,20 +2083,23 @@ neomacs_draw_window_cursor (struct window *w, struct glyph_row *row,
   if (!output || !on_p)
     return;
 
-  /* Get cursor dimensions */
-  int char_width = cursor_width > 0 ? cursor_width : FRAME_COLUMN_WIDTH (f);
-  int char_height = FRAME_LINE_HEIGHT (f);
+  /* Get the glyph at the cursor position for proper dimensions */
+  struct glyph *cursor_glyph = get_phys_cursor_glyph (w);
+  if (!cursor_glyph)
+    return;
+
+  int frame_x, frame_y, cursor_h;
+  get_phys_cursor_geometry (w, row, cursor_glyph, &frame_x, &frame_y, &cursor_h);
+  int cursor_w = w->phys_cursor_width;  /* Set by get_phys_cursor_geometry */
+
+  /* For bar cursor, use the explicit cursor_width if provided */
+  if (cursor_type == BAR_CURSOR && cursor_width > 0)
+    cursor_w = cursor_width;
 
   /* Get cursor color - default to a visible color */
   unsigned long cursor_color = output->cursor_pixel;
   if (cursor_color == 0)
     cursor_color = 0x00FF00;  /* Green for visibility */
-
-  /* Convert window-relative x,y to frame-absolute coordinates */
-  int window_left = WINDOW_LEFT_EDGE_X (w);
-  int window_top = WINDOW_TOP_EDGE_Y (w);
-  int frame_x = window_left + x;
-  int frame_y = window_top + y;
 
   /* Use GPU path if available */
   if (dpyinfo && dpyinfo->display_handle)
@@ -2132,7 +2135,7 @@ neomacs_draw_window_cursor (struct window *w, struct glyph_row *row,
       neomacs_display_set_cursor (dpyinfo->display_handle,
                                   (int)(intptr_t) w,
                                   (float) frame_x, (float) frame_y,
-                                  (float) char_width, (float) char_height,
+                                  (float) cursor_w, (float) cursor_h,
                                   style, rgba, 1);
       neomacs_display_reset_cursor_blink (dpyinfo->display_handle);
       return;
@@ -2154,26 +2157,26 @@ neomacs_draw_window_cursor (struct window *w, struct glyph_row *row,
     case DEFAULT_CURSOR:
     case FILLED_BOX_CURSOR:
       /* Filled box cursor */
-      cairo_rectangle (cr, x, y, char_width, char_height);
+      cairo_rectangle (cr, x, y, cursor_w, cursor_h);
       cairo_fill (cr);
       break;
 
     case BAR_CURSOR:
       /* Vertical bar cursor */
-      cairo_rectangle (cr, x, y, 2, char_height);
+      cairo_rectangle (cr, x, y, 2, cursor_h);
       cairo_fill (cr);
       break;
 
     case HBAR_CURSOR:
       /* Horizontal bar cursor */
-      cairo_rectangle (cr, x, y + char_height - 2, char_width, 2);
+      cairo_rectangle (cr, x, y + cursor_h - 2, cursor_w, 2);
       cairo_fill (cr);
       break;
 
     case HOLLOW_BOX_CURSOR:
       /* Hollow box cursor */
       cairo_set_line_width (cr, 1.0);
-      cairo_rectangle (cr, x + 0.5, y + 0.5, char_width - 1, char_height - 1);
+      cairo_rectangle (cr, x + 0.5, y + 0.5, cursor_w - 1, cursor_h - 1);
       cairo_stroke (cr);
       break;
 
