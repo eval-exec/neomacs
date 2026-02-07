@@ -3439,6 +3439,9 @@ use crate::thread_comm::{EmacsComms, InputEvent, RenderCommand, ThreadComms};
 #[cfg(feature = "winit-backend")]
 use crate::render_thread::{RenderThread, SharedImageDimensions};
 
+#[cfg(feature = "winit-backend")]
+const THREADED_MAIN_WINDOW_ID: u32 = 1;
+
 /// Global state for threaded mode
 #[cfg(feature = "winit-backend")]
 static mut THREADED_STATE: Option<ThreadedState> = None;
@@ -3556,6 +3559,11 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
             Ok(event) => {
                 let out = &mut *events.add(count as usize);
                 *out = NeomacsInputEvent::default();
+                out.window_id = THREADED_MAIN_WINDOW_ID;
+                out.timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
 
                 match event {
                     InputEvent::Key {

@@ -2104,6 +2104,7 @@ impl ApplicationHandler for RenderApp {
             }
 
             WindowEvent::Focused(focused) => {
+                log::trace!("WindowEvent::Focused({})", focused);
                 self.comms.send_input(InputEvent::WindowFocus { focused });
             }
 
@@ -2115,6 +2116,13 @@ impl ApplicationHandler for RenderApp {
                 ..
             } => {
                 let keysym = Self::translate_key(&logical_key);
+                log::trace!(
+                    "WindowEvent::KeyboardInput: key={:?}, keysym=0x{:x}, state={:?}, mods=0x{:x}",
+                    logical_key,
+                    keysym,
+                    state,
+                    self.modifiers
+                );
                 if keysym != 0 {
                     self.comms.send_input(InputEvent::Key {
                         keysym,
@@ -2133,6 +2141,14 @@ impl ApplicationHandler for RenderApp {
                     MouseButton::Forward => 5,
                     MouseButton::Other(n) => n as u32,
                 };
+                log::trace!(
+                    "WindowEvent::MouseInput: button={}, state={:?}, pos=({}, {}), mods=0x{:x}",
+                    btn,
+                    state,
+                    self.mouse_pos.0,
+                    self.mouse_pos.1,
+                    self.modifiers
+                );
                 self.comms.send_input(InputEvent::MouseButton {
                     button: btn,
                     x: self.mouse_pos.0,
@@ -2147,6 +2163,14 @@ impl ApplicationHandler for RenderApp {
                 let lx = (position.x / self.scale_factor) as f32;
                 let ly = (position.y / self.scale_factor) as f32;
                 self.mouse_pos = (lx, ly);
+                log::trace!(
+                    "WindowEvent::CursorMoved: physical=({}, {}), logical=({}, {}), mods=0x{:x}",
+                    position.x,
+                    position.y,
+                    lx,
+                    ly,
+                    self.modifiers
+                );
                 self.comms.send_input(InputEvent::MouseMove {
                     x: lx,
                     y: ly,
@@ -2162,6 +2186,14 @@ impl ApplicationHandler for RenderApp {
                          (pos.y / self.scale_factor) as f32 / 10.0)
                     }
                 };
+                log::trace!(
+                    "WindowEvent::MouseWheel: delta=({}, {}), pos=({}, {}), mods=0x{:x}",
+                    dx,
+                    dy,
+                    self.mouse_pos.0,
+                    self.mouse_pos.1,
+                    self.modifiers
+                );
                 self.comms.send_input(InputEvent::MouseScroll {
                     delta_x: dx,
                     delta_y: dy,
@@ -2191,6 +2223,7 @@ impl ApplicationHandler for RenderApp {
                 if state.super_key() {
                     self.modifiers |= NEOMACS_SUPER_MASK;
                 }
+                log::trace!("WindowEvent::ModifiersChanged: mods=0x{:x}", self.modifiers);
             }
 
             _ => {}

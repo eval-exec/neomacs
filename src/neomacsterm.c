@@ -4300,6 +4300,7 @@ neomacs_display_wakeup_handler (int fd, void *data)
       struct NeomacsInputEvent *ev = &events[i];
       union buffered_input_event inev;
       struct frame *f = SELECTED_FRAME ();
+      bool frame_matched = false;
       Lisp_Object tail, frame;
 
       /* Find frame by window_id */
@@ -4310,7 +4311,23 @@ neomacs_display_wakeup_handler (int fd, void *data)
               && FRAME_NEOMACS_OUTPUT (tf)->window_id == ev->windowId)
             {
               f = tf;
+              frame_matched = true;
               break;
+            }
+        }
+
+      /* Fallback for legacy/invalid window ids: route to any Neomacs frame
+         instead of potentially sending events to a non-Neomacs frame.  */
+      if (!frame_matched && !FRAME_NEOMACS_P (f))
+        {
+          FOR_EACH_FRAME (tail, frame)
+            {
+              struct frame *tf = XFRAME (frame);
+              if (FRAME_NEOMACS_P (tf))
+                {
+                  f = tf;
+                  break;
+                }
             }
         }
 
