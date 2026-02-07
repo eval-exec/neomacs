@@ -103,11 +103,36 @@ Returns terminal ID or nil on failure."
 
 (defvar neo-term-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; In raw mode, send everything to the terminal
-    (define-key map [remap self-insert-command] #'neo-term-send-key)
+    ;; Suppress default self-insert so stray keys don't modify the buffer
+    (suppress-keymap map t)
+
+    ;; All printable ASCII characters (space=32 through ~=126)
+    (dotimes (i 95)
+      (define-key map (string (+ i 32)) #'neo-term-send-key))
+
+    ;; Standard editing keys
     (define-key map (kbd "RET") #'neo-term-send-return)
     (define-key map (kbd "DEL") #'neo-term-send-backspace)
+    (define-key map (kbd "<backspace>") #'neo-term-send-backspace)
     (define-key map (kbd "TAB") #'neo-term-send-tab)
+    (define-key map [escape] #'neo-term-send-escape)
+
+    ;; Arrow keys, navigation keys, and function keys (send ANSI sequences)
+    (dolist (key '("<up>" "<down>" "<left>" "<right>"
+                   "<home>" "<end>" "<prior>" "<next>"
+                   "<insert>" "<delete>"
+                   "<f1>" "<f2>" "<f3>" "<f4>" "<f5>" "<f6>"
+                   "<f7>" "<f8>" "<f9>" "<f10>" "<f11>" "<f12>"))
+      (define-key map (kbd key) #'neo-term-send-special))
+
+    ;; Control keys sent directly to terminal (C-a=1 .. C-z=26)
+    ;; Skip C-c(3)=our prefix, C-i(9)=TAB, C-m(13)=RET
+    (dotimes (i 26)
+      (let ((ctrl-char (1+ i)))
+        (unless (memq ctrl-char '(3 9 13))
+          (define-key map (vector ctrl-char) #'neo-term-send-ctrl))))
+
+    ;; C-c prefix for Emacs-level commands
     (define-key map (kbd "C-c C-c") #'neo-term-send-ctrl-c)
     (define-key map (kbd "C-c C-d") #'neo-term-send-ctrl-d)
     (define-key map (kbd "C-c C-z") #'neo-term-send-ctrl-z)
@@ -116,7 +141,7 @@ Returns terminal ID or nil on failure."
     map)
   "Keymap for `neo-term-mode'.")
 
-(define-derived-mode neo-term-mode special-mode "NeoTerm"
+(define-derived-mode neo-term-mode fundamental-mode "NeoTerm"
   "Major mode for neo-term GPU terminal buffers.
 
 \\{neo-term-mode-map}"
@@ -150,6 +175,50 @@ Returns terminal ID or nil on failure."
   "Send Tab to the terminal."
   (interactive)
   (when neo-term--id (neo-term--write neo-term--id "\t")))
+
+(defun neo-term-send-escape ()
+  "Send Escape to the terminal."
+  (interactive)
+  (when neo-term--id (neo-term--write neo-term--id "\e")))
+
+(defun neo-term-send-ctrl ()
+  "Send control character to the terminal."
+  (interactive)
+  (when neo-term--id
+    (neo-term--write neo-term--id (string last-input-event))))
+
+(defun neo-term-send-special ()
+  "Send special key (arrows, function keys, etc.) as ANSI escape sequence."
+  (interactive)
+  (when neo-term--id
+    (let ((seq (neo-term--key-to-ansi last-input-event)))
+      (when seq (neo-term--write neo-term--id seq)))))
+
+(defun neo-term--key-to-ansi (key)
+  "Convert Emacs KEY event symbol to ANSI escape sequence string."
+  (pcase key
+    ('up     "\e[A")
+    ('down   "\e[B")
+    ('right  "\e[C")
+    ('left   "\e[D")
+    ('home   "\e[H")
+    ('end    "\e[F")
+    ('prior  "\e[5~")
+    ('next   "\e[6~")
+    ('insert "\e[2~")
+    ('delete "\e[3~")
+    ('f1  "\eOP")
+    ('f2  "\eOQ")
+    ('f3  "\eOR")
+    ('f4  "\eOS")
+    ('f5  "\e[15~")
+    ('f6  "\e[17~")
+    ('f7  "\e[18~")
+    ('f8  "\e[19~")
+    ('f9  "\e[20~")
+    ('f10 "\e[21~")
+    ('f11 "\e[23~")
+    ('f12 "\e[24~")))
 
 (defun neo-term-send-ctrl-c ()
   "Send C-c to the terminal."
