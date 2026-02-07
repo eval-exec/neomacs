@@ -94,6 +94,15 @@ pub mod platform {
         pub fn g_main_context_acquire(context: *mut GMainContext) -> i32;
         pub fn g_main_context_release(context: *mut GMainContext);
     }
+
+    // GObject construction (variadic - for creating objects with construct-only properties)
+    unsafe extern "C" {
+        pub fn g_object_new(
+            object_type: GType,
+            first_property_name: *const libc::c_char,
+            ...
+        ) -> *mut GObject;
+    }
 }
 
 // wpe-webkit bindings (WebKitWebView, etc.)

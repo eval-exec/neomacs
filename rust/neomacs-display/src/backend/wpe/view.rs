@@ -246,16 +246,18 @@ impl WpeWebView {
             let web_context = wk::webkit_web_context_new();
             log::debug!("WpeWebView::new: web_context={:?}", web_context);
 
-            // Create WebKitWebView with display property using g_object_new
-            // This is the key difference - we pass the WPE Platform display
-            log::debug!("WpeWebView::new: creating WebKitWebView with WPE Platform display...");
+            // Create WebKitWebView with "display" construct-only property via g_object_new.
+            // This ensures the view uses our headless WPE Platform display rather than
+            // falling back to wpe_display_get_default() which may differ on multi-GPU systems.
+            log::debug!("WpeWebView::new: creating WebKitWebView with WPE Platform display {:?}...", display);
 
-            let type_name = CString::new("WebKitWebView").unwrap();
             let display_prop = CString::new("display").unwrap();
-
-            // Use webkit_web_view_new with the display set via web context
-            // For WPE Platform, the display should be set as primary and WebKit will use it
-            let web_view = wk::webkit_web_view_new(ptr::null_mut());
+            let web_view = plat::g_object_new(
+                wk::webkit_web_view_get_type(),
+                display_prop.as_ptr(),
+                display as *mut libc::c_void,
+                ptr::null::<libc::c_char>(),
+            ) as *mut wk::WebKitWebView;
             log::debug!("WpeWebView::new: web_view={:?}", web_view);
 
             if web_view.is_null() {
