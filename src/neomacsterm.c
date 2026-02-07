@@ -4284,6 +4284,43 @@ static int wakeup_fd = -1;
 /* Forward declaration */
 static void neomacs_display_wakeup_handler (int fd, void *data);
 
+/* Resolve a safe target frame for an input event from the render thread.  */
+static struct frame *
+neomacs_event_target_frame (uint32_t window_id)
+{
+  Lisp_Object tail, frame;
+
+  /* First try an explicit window mapping when one is provided.  */
+  if (window_id != 0)
+    {
+      FOR_EACH_FRAME (tail, frame)
+        {
+          struct frame *tf = XFRAME (frame);
+          if (FRAME_LIVE_P (tf)
+              && FRAME_NEOMACS_P (tf)
+              && FRAME_NEOMACS_OUTPUT (tf)->window_id == window_id)
+            return tf;
+        }
+    }
+
+  /* Fallback to selected frame if it is live and a Neomacs frame.  */
+  {
+    struct frame *selected = SELECTED_FRAME ();
+    if (selected && FRAME_LIVE_P (selected) && FRAME_NEOMACS_P (selected))
+      return selected;
+  }
+
+  /* Last fallback: any live Neomacs frame.  */
+  FOR_EACH_FRAME (tail, frame)
+    {
+      struct frame *tf = XFRAME (frame);
+      if (FRAME_LIVE_P (tf) && FRAME_NEOMACS_P (tf))
+        return tf;
+    }
+
+  return NULL;
+}
+
 /* Handler called when wakeup_fd is readable */
 static void
 neomacs_display_wakeup_handler (int fd, void *data)
@@ -4299,20 +4336,10 @@ neomacs_display_wakeup_handler (int fd, void *data)
     {
       struct NeomacsInputEvent *ev = &events[i];
       union buffered_input_event inev;
-      struct frame *f = SELECTED_FRAME ();
-      Lisp_Object tail, frame;
+      struct frame *f = neomacs_event_target_frame (ev->windowId);
 
-      /* Find frame by window_id */
-      FOR_EACH_FRAME (tail, frame)
-        {
-          struct frame *tf = XFRAME (frame);
-          if (FRAME_NEOMACS_P (tf)
-              && FRAME_NEOMACS_OUTPUT (tf)->window_id == ev->windowId)
-            {
-              f = tf;
-              break;
-            }
-        }
+      if (!f)
+        continue;
 
       EVENT_INIT (inev.ie);
       inev.ie.timestamp = ev->timestamp;
