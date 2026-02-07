@@ -64,7 +64,7 @@
 (defun neo-term--shell-path ()
   "Return shell program to use."
   (or neo-term-shell
-      explicit-shell-file-name
+      (bound-and-true-p explicit-shell-file-name)
       (getenv "SHELL")
       "/bin/sh"))
 

@@ -457,7 +457,10 @@ neomacs_update_begin (struct frame *f)
       /* Use window-targeted begin_frame if we have a winit window */
       struct neomacs_output *output = FRAME_NEOMACS_OUTPUT (f);
       if (output && output->window_id > 0)
-        neomacs_display_begin_frame_window (dpyinfo->display_handle, output->window_id);
+        neomacs_display_begin_frame_window (dpyinfo->display_handle, output->window_id,
+                                            (float) FRAME_COLUMN_WIDTH (f),
+                                            (float) FRAME_LINE_HEIGHT (f),
+                                            FRAME_FONT (f) ? (float) FRAME_FONT (f)->pixel_size : 14.0f);
       else
         neomacs_display_begin_frame (dpyinfo->display_handle);
     }

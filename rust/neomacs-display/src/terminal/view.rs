@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 
 use parking_lot::FairMutex;
 
-use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
+use alacritty_terminal::event::{Event as TermEvent, EventListener, OnResize, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Column;
 use alacritty_terminal::term::{Config as TermConfig, Term};
@@ -74,6 +74,11 @@ impl NeomacsEventProxy {
     pub fn take_wakeup(&self) -> bool {
         self.wakeup.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
+
+    /// Check if wakeup is pending without consuming it.
+    pub fn peek_wakeup(&self) -> bool {
+        self.wakeup.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl EventListener for NeomacsEventProxy {
@@ -104,6 +109,9 @@ pub struct TerminalView {
     pub term: Arc<FairMutex<Term<NeomacsEventProxy>>>,
     /// Event proxy for wakeup notifications.
     pub event_proxy: NeomacsEventProxy,
+    /// PTY handle - MUST be kept alive to prevent SIGHUP to child shell.
+    /// Also used for on_resize() to send TIOCSWINSZ to the child.
+    pty: tty::Pty,
     /// PTY master (for writing input to the shell).
     pty_writer: Box<dyn Write + Send>,
     /// Reader thread handle.
@@ -152,6 +160,13 @@ impl TerminalView {
             ));
         }
 
+        // Ensure TERM is set for the child shell process.
+        // In neomacs, the display backend is GPU-based so TERM is typically unset.
+        // alacritty_terminal's child inherits the parent's TERM.
+        if std::env::var("TERM").unwrap_or_default().is_empty() {
+            std::env::set_var("TERM", "xterm-256color");
+        }
+
         let mut pty = tty::new(&pty_config, window_size, 0)
             .map_err(|e| format!("Failed to create PTY: {}", e))?;
 
@@ -188,6 +203,11 @@ impl TerminalView {
                         Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
                             continue;
                         }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            // Non-blocking fd, wait and retry
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                            continue;
+                        }
                         Err(e) => {
                             log::warn!("Terminal {} PTY read error: {}", id, e);
                             break;
@@ -201,6 +221,7 @@ impl TerminalView {
             mode,
             term,
             event_proxy,
+            pty,
             pty_writer: Box::new(pty_write_file),
             _reader_thread: Some(reader_thread),
             last_content: None,
@@ -222,7 +243,16 @@ impl TerminalView {
         let grid_size = TermGridSize::new(cols, rows);
         let mut term = self.term.lock();
         term.resize(grid_size);
-        // Note: PTY resize (SIGWINCH) should be handled separately if needed
+        drop(term);
+
+        // Send TIOCSWINSZ to the PTY so the child process gets SIGWINCH
+        let window_size = WindowSize {
+            num_cols: cols,
+            num_lines: rows,
+            cell_width: 8,
+            cell_height: 16,
+        };
+        self.pty.on_resize(window_size);
         self.dirty = true;
     }
 
@@ -333,5 +363,36 @@ impl TerminalManager {
 impl Default for TerminalManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_alacritty_pty_explicit_cmd() {
+        use std::io::Read;
+
+        let ws = WindowSize { num_cols: 80, num_lines: 24, cell_width: 8, cell_height: 16 };
+        let mut opts = tty::Options::default();
+        opts.shell = Some(alacritty_terminal::tty::Shell::new(
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), "echo ALACRITTY_PTY_OK; sleep 1".to_string()],
+        ));
+
+        let mut pty = tty::new(&opts, ws, 0).expect("create pty");
+        let mut reader = pty.reader().try_clone().expect("clone");
+        let mut buf = [0u8; 4096];
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        match reader.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                let output = String::from_utf8_lossy(&buf[..n]);
+                assert!(output.contains("ALACRITTY_PTY_OK"));
+            }
+            Ok(_) => panic!("EOF"),
+            Err(e) => panic!("Read error: {}", e),
+        }
     }
 }

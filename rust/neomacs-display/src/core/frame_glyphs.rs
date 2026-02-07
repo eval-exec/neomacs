@@ -181,6 +181,12 @@ pub struct FrameGlyphBuffer {
     pub width: f32,
     pub height: f32,
 
+    /// Default character cell dimensions (from FRAME_COLUMN_WIDTH / FRAME_LINE_HEIGHT)
+    pub char_width: f32,
+    pub char_height: f32,
+    /// Default font pixel size (from FRAME_FONT(f)->pixel_size)
+    pub font_pixel_size: f32,
+
     /// Frame background color
     pub background: Color,
 
@@ -226,6 +232,9 @@ impl FrameGlyphBuffer {
         Self {
             width: 0.0,
             height: 0.0,
+            char_width: 8.0,
+            char_height: 16.0,
+            font_pixel_size: 14.0,
             background: Color::BLACK,
             glyphs: Vec::with_capacity(10000),
             window_regions: Vec::with_capacity(16),

@@ -951,7 +951,11 @@ void neomacs_display_set_window_size(struct NeomacsDisplay *handle,
  *
  * Clears the window's scene to prepare for new content.
  */
-void neomacs_display_begin_frame_window(struct NeomacsDisplay *handle, uint32_t windowId);
+void neomacs_display_begin_frame_window(struct NeomacsDisplay *handle,
+                                        uint32_t windowId,
+                                        float charWidth,
+                                        float charHeight,
+                                        float fontPixelSize);
 
 /**
  * End a frame for a specific window and present it.

@@ -3262,6 +3262,9 @@ pub extern "C" fn neomacs_display_set_window_size(
 pub extern "C" fn neomacs_display_begin_frame_window(
     handle: *mut NeomacsDisplay,
     window_id: u32,
+    char_width: f32,
+    char_height: f32,
+    font_pixel_size: f32,
 ) {
     let display = unsafe { &mut *handle };
 
@@ -3272,6 +3275,9 @@ pub extern "C" fn neomacs_display_begin_frame_window(
     // from the scene, then clear all glyphs for the new frame.
     display.frame_glyphs.width = display.scene.width;
     display.frame_glyphs.height = display.scene.height;
+    display.frame_glyphs.char_width = if char_width > 0.0 { char_width } else { 8.0 };
+    display.frame_glyphs.char_height = if char_height > 0.0 { char_height } else { 16.0 };
+    display.frame_glyphs.font_pixel_size = if font_pixel_size > 0.0 { font_pixel_size } else { 14.0 };
     display.frame_glyphs.background = display.scene.background;
     display.frame_glyphs.clear_all();
 
