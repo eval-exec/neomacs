@@ -2355,6 +2355,17 @@ pub unsafe extern "C" fn neomacs_display_webkit_init(
     {
         log::info!("neomacs_display_webkit_init: ENTER egl_display={:?}", egl_display);
 
+        // In threaded mode, skip WPE init here — the render thread will do it
+        // with the correct DRM render node from wgpu adapter info.
+        // Initializing WPE here (Emacs thread) would race with the render thread:
+        // WPE_INIT.call_once runs with device_path=None (no adapter info yet),
+        // then the render thread's call_once is a no-op → WPE stuck on wrong GPU.
+        if THREADED_STATE.is_some() {
+            log::info!("neomacs_display_webkit_init: threaded mode, deferring WPE init to render thread");
+            return 0;
+        }
+
+        // Non-threaded path (legacy): initialize WPE here
         // If no EGL display provided, try to get one from the current context
         let egl_display = if egl_display.is_null() {
             log::info!("neomacs_display_webkit_init: egl_display is NULL, trying eglGetCurrentDisplay");
@@ -2419,23 +2430,7 @@ pub unsafe extern "C" fn neomacs_display_webkit_init(
                     *wpe.borrow_mut() = Some(backend);
                 });
 
-                // NOTE: We deliberately do NOT initialize WebKit on the Emacs main thread.
-                // Instead, WebKit should be initialized on the render thread, which will
-                // become WebKit's "main" thread. The render thread has its own GLib main
-                // context iteration loop (pump_glib) that dispatches WebKit callbacks.
-                //
-                // If we initialized WebKit here (on Emacs main thread), then:
-                // - Emacs main thread would become WebKit's "main" thread
-                // - But WebKitWebView is created on render thread
-                // - WebProcessProxy constructor asserts RunLoop::isMain() → crash
-                //
-                // By letting render thread initialize WebKit:
-                // - Render thread becomes WebKit's "main" thread
-                // - WebKitWebView created on render thread → same thread → OK
-                // - pump_glib dispatches callbacks on render thread → same thread → OK
-                log::info!("neomacs_display_webkit_init: WPE backend initialized (WebKit will be initialized on render thread)");
-
-                log::info!("neomacs_display_webkit_init: WebKit subsystem initialized successfully");
+                log::info!("neomacs_display_webkit_init: WPE backend initialized successfully");
                 return 0;
             }
             Err(e) => {
