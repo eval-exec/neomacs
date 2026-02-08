@@ -2243,13 +2243,51 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
               set_buffer_internal_1 (old);
               return 0;
             }
+          else if (CONSP (align_val))
+            {
+              /* (N) or (N . pixel) — pixel-based align-to */
+              Lisp_Object n = XCAR (align_val);
+              float pixel_pos = 0;
+              if (FIXNUMP (n))
+                pixel_pos = (float) XFIXNUM (n);
+              else if (FLOATP (n))
+                pixel_pos = (float) XFLOAT_DATA (n);
+              struct window *sw = window_ptr ? (struct window *) window_ptr : NULL;
+              float col_w = sw ? (float) FRAME_COLUMN_WIDTH (XFRAME (WINDOW_FRAME (sw)))
+                               : 8.0f;
+              if (col_w > 0)
+                out->align_to = pixel_pos / col_w;
+              else
+                out->align_to = 0;
+              out->type = 3;
+              set_buffer_internal_1 (old);
+              return 0;
+            }
 
-          /* Space spec: (space :width N) */
+          /* Space spec: (space :width N) or (space :width (N)) for pixels */
           Lisp_Object width_val = Fplist_get (plist, QCwidth, Qnil);
           if (FIXNUMP (width_val))
             out->space_width = (float) XFIXNUM (width_val);
           else if (FLOATP (width_val))
             out->space_width = (float) XFLOAT_DATA (width_val);
+          else if (CONSP (width_val))
+            {
+              /* (N) or (N . pixel) — treat car as pixel width,
+                 convert to column-equivalent */
+              Lisp_Object n = XCAR (width_val);
+              float pixel_w = 0;
+              if (FIXNUMP (n))
+                pixel_w = (float) XFIXNUM (n);
+              else if (FLOATP (n))
+                pixel_w = (float) XFLOAT_DATA (n);
+              struct window *sw = window_ptr ? (struct window *) window_ptr : NULL;
+              float col_w = sw ? (float) FRAME_COLUMN_WIDTH (XFRAME (WINDOW_FRAME (sw)))
+                               : 8.0f;
+              if (col_w > 0)
+                out->space_width = pixel_w / col_w;
+              else
+                out->space_width = 1.0;
+            }
           else
             out->space_width = 1.0;
 
