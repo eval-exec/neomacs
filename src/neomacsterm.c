@@ -61,6 +61,15 @@ static struct neomacs_image_cache_entry neomacs_image_cache[IMAGE_CACHE_SIZE];
 static int neomacs_image_cache_count = 0;
 
 /* Forward declarations */
+static void neomacs_extract_full_frame (struct frame *f);
+
+/* Rust layout engine FFI entry point (defined in layout/engine.rs via ffi.rs) */
+extern void neomacs_rust_layout_frame (void *display_handle, void *frame_ptr,
+                                       float width, float height,
+                                       float char_width, float char_height,
+                                       float font_pixel_size,
+                                       uint32_t background);
+
 static void neomacs_set_window_size (struct frame *f, bool change_gravity,
                                      int width, int height);
 static void neomacs_set_vertical_scroll_bar (struct window *w, int portion,
@@ -883,6 +892,484 @@ neomacs_extract_window_glyphs (struct window *w, void *user_data)
   return true;  /* continue iterating to next window */
 }
 
+/* ============================================================================
+ * Rust Layout Engine FFI Helpers
+ * ============================================================================
+ *
+ * These functions are called by the Rust layout engine to read Emacs data
+ * structures during layout computation.  They run on the Emacs thread.
+ */
+
+/* Global flag: whether to use the Rust display engine */
+static bool use_rust_display_engine = false;
+
+/* Get a character at a character position in a buffer.
+   Returns the Unicode codepoint, or -1 if out of range. */
+int
+neomacs_layout_char_at (void *buffer_ptr, int64_t charpos)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf)
+    return -1;
+
+  struct buffer *old = current_buffer;
+  set_buffer_internal_1 (buf);
+
+  if (charpos < BEGV || charpos >= ZV)
+    {
+      set_buffer_internal_1 (old);
+      return -1;
+    }
+
+  ptrdiff_t bytepos = CHAR_TO_BYTE (charpos);
+  int ch = FETCH_CHAR (bytepos);
+
+  set_buffer_internal_1 (old);
+  return ch;
+}
+
+/* Copy buffer text as UTF-8 into the provided buffer.
+   `from` and `to` are character positions.
+   Returns number of bytes written, or -1 on error. */
+int64_t
+neomacs_layout_buffer_text (void *buffer_ptr, int64_t from, int64_t to,
+                            uint8_t *out_buf, int64_t out_buf_len)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf || !out_buf || out_buf_len <= 0)
+    return -1;
+
+  struct buffer *old = current_buffer;
+  set_buffer_internal_1 (buf);
+
+  ptrdiff_t begv = BEGV;
+  ptrdiff_t zv = ZV;
+
+  if (from < begv) from = begv;
+  if (to > zv) to = zv;
+  if (from >= to)
+    {
+      set_buffer_internal_1 (old);
+      return 0;
+    }
+
+  int64_t written = 0;
+  ptrdiff_t pos = from;
+
+  while (pos < to && written < out_buf_len - 4)  /* leave room for max UTF-8 char */
+    {
+      ptrdiff_t bytepos = CHAR_TO_BYTE (pos);
+      int ch = FETCH_CHAR (bytepos);
+
+      /* Encode as UTF-8 */
+      if (ch < 0x80)
+        {
+          out_buf[written++] = (uint8_t) ch;
+        }
+      else if (ch < 0x800)
+        {
+          out_buf[written++] = (uint8_t) (0xC0 | (ch >> 6));
+          out_buf[written++] = (uint8_t) (0x80 | (ch & 0x3F));
+        }
+      else if (ch < 0x10000)
+        {
+          out_buf[written++] = (uint8_t) (0xE0 | (ch >> 12));
+          out_buf[written++] = (uint8_t) (0x80 | ((ch >> 6) & 0x3F));
+          out_buf[written++] = (uint8_t) (0x80 | (ch & 0x3F));
+        }
+      else
+        {
+          out_buf[written++] = (uint8_t) (0xF0 | (ch >> 18));
+          out_buf[written++] = (uint8_t) (0x80 | ((ch >> 12) & 0x3F));
+          out_buf[written++] = (uint8_t) (0x80 | ((ch >> 6) & 0x3F));
+          out_buf[written++] = (uint8_t) (0x80 | (ch & 0x3F));
+        }
+
+      pos++;
+    }
+
+  set_buffer_internal_1 (old);
+  return written;
+}
+
+/* Get buffer narrowing bounds. */
+void
+neomacs_layout_buffer_bounds (void *buffer_ptr, int64_t *begv, int64_t *zv)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf)
+    {
+      *begv = 1;
+      *zv = 1;
+      return;
+    }
+
+  struct buffer *old = current_buffer;
+  set_buffer_internal_1 (buf);
+  *begv = BEGV;
+  *zv = ZV;
+  set_buffer_internal_1 (old);
+}
+
+/* Get buffer point position. */
+int64_t
+neomacs_layout_buffer_point (void *buffer_ptr)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf)
+    return 1;
+  return BUF_PT (buf);
+}
+
+/* Check if buffer uses multibyte encoding. */
+int
+neomacs_layout_buffer_multibyte_p (void *buffer_ptr)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf)
+    return 0;
+  return !NILP (BVAR (buf, enable_multibyte_characters));
+}
+
+/* Get buffer-local tab-width. */
+int
+neomacs_layout_buffer_tab_width (void *buffer_ptr)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf)
+    return 8;
+  Lisp_Object tw = BVAR (buf, tab_width);
+  return FIXNATP (tw) ? XFIXNAT (tw) : 8;
+}
+
+/* Get buffer-local truncate-lines setting. */
+int
+neomacs_layout_buffer_truncate_lines (void *buffer_ptr)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf)
+    return 0;
+  return !NILP (BVAR (buf, truncate_lines));
+}
+
+/* Get number of leaf windows in the frame. */
+int
+neomacs_layout_frame_window_count (void *frame_ptr)
+{
+  struct frame *f = (struct frame *) frame_ptr;
+  if (!f)
+    return 0;
+
+  /* Count leaf windows using same traversal as neomacs_extract_full_frame */
+  int count = 0;
+  struct window *stack[64];
+  int sp = 0;
+  stack[sp++] = XWINDOW (FRAME_ROOT_WINDOW (f));
+
+  while (sp > 0)
+    {
+      struct window *w = stack[--sp];
+      if (WINDOWP (w->contents))
+        {
+          struct window *child = XWINDOW (w->contents);
+          while (child)
+            {
+              if (sp < 64)
+                stack[sp++] = child;
+              child = NILP (child->next) ? NULL : XWINDOW (child->next);
+            }
+        }
+      else
+        count++;
+    }
+
+  /* Also count minibuffer */
+  Lisp_Object mini = FRAME_MINIBUF_WINDOW (f);
+  if (!NILP (mini) && FRAME_HAS_MINIBUF_P (f))
+    count++;
+
+  return count;
+}
+
+/* FFI struct matching Rust WindowParamsFFI.
+   Must be kept in sync with layout/emacs_ffi.rs. */
+struct neomacs_window_params_ffi {
+  int64_t window_id;
+  uint64_t buffer_id;
+  void *window_ptr;
+  void *buffer_ptr;
+  float x, y, width, height;
+  float text_x, text_y, text_width, text_height;
+  int selected;
+  int64_t window_start;
+  int64_t point;
+  int64_t buffer_zv;
+  int64_t buffer_begv;
+  int hscroll;
+  int truncate_lines;
+  int tab_width;
+  uint32_t default_fg;
+  uint32_t default_bg;
+  float char_width, char_height;
+  float font_pixel_size;
+  float font_ascent;
+  float mode_line_height;
+  float header_line_height;
+  float tab_line_height;
+  uint8_t cursor_type;
+  int cursor_bar_width;
+};
+
+/* Get window parameters for the Nth leaf window.
+   Returns 0 on success, -1 on error. */
+int
+neomacs_layout_get_window_params (void *frame_ptr, int window_index,
+                                  struct neomacs_window_params_ffi *params)
+{
+  struct frame *f = (struct frame *) frame_ptr;
+  if (!f || !params)
+    return -1;
+
+  /* Find the Nth leaf window */
+  int count = 0;
+  struct window *found = NULL;
+  struct window *stack[64];
+  int sp = 0;
+  stack[sp++] = XWINDOW (FRAME_ROOT_WINDOW (f));
+
+  while (sp > 0 && !found)
+    {
+      struct window *w = stack[--sp];
+      if (WINDOWP (w->contents))
+        {
+          struct window *child = XWINDOW (w->contents);
+          while (child)
+            {
+              if (sp < 64)
+                stack[sp++] = child;
+              child = NILP (child->next) ? NULL : XWINDOW (child->next);
+            }
+        }
+      else
+        {
+          if (count == window_index)
+            found = w;
+          count++;
+        }
+    }
+
+  /* Check minibuffer */
+  if (!found)
+    {
+      Lisp_Object mini = FRAME_MINIBUF_WINDOW (f);
+      if (!NILP (mini) && FRAME_HAS_MINIBUF_P (f))
+        {
+          if (count == window_index)
+            found = XWINDOW (mini);
+        }
+    }
+
+  if (!found)
+    return -1;
+
+  struct window *w = found;
+
+  /* Fill params */
+  params->window_id = (int64_t)(intptr_t) w;
+  params->window_ptr = (void *) w;
+
+  if (BUFFERP (w->contents))
+    {
+      struct buffer *buf = XBUFFER (w->contents);
+      params->buffer_id = (uint64_t)(uintptr_t) buf;
+      params->buffer_ptr = (void *) buf;
+      params->point = BUF_PT (buf);
+      params->buffer_begv = BUF_BEGV (buf);
+      params->buffer_zv = BUF_ZV (buf);
+      params->tab_width = NILP (BVAR (buf, tab_width)) ? 8
+                          : (FIXNATP (BVAR (buf, tab_width))
+                             ? XFIXNAT (BVAR (buf, tab_width)) : 8);
+      params->truncate_lines = !NILP (BVAR (buf, truncate_lines));
+    }
+  else
+    {
+      params->buffer_id = 0;
+      params->buffer_ptr = NULL;
+      params->point = 1;
+      params->buffer_begv = 1;
+      params->buffer_zv = 1;
+      params->tab_width = 8;
+      params->truncate_lines = 0;
+    }
+
+  params->x = (float) WINDOW_LEFT_EDGE_X (w);
+  params->y = (float) WINDOW_TOP_EDGE_Y (w);
+  params->width = (float) WINDOW_PIXEL_WIDTH (w);
+  params->height = (float) WINDOW_PIXEL_HEIGHT (w);
+
+  /* Text area bounds */
+  params->text_x = (float) window_box_left (w, TEXT_AREA);
+  params->text_y = (float) WINDOW_TOP_EDGE_Y (w);
+  params->text_width = (float) window_box_width (w, TEXT_AREA);
+  params->text_height = (float) WINDOW_PIXEL_HEIGHT (w);
+
+  params->selected = (w == XWINDOW (f->selected_window)) ? 1 : 0;
+
+  if (MARKERP (w->start))
+    params->window_start = marker_position (w->start);
+  else
+    params->window_start = 1;
+
+  params->hscroll = w->hscroll;
+
+  /* Face colors */
+  struct face *default_face = FACE_FROM_ID_OR_NULL (f, DEFAULT_FACE_ID);
+  if (default_face)
+    {
+      unsigned long fg = default_face->foreground_defaulted_p
+        ? FRAME_FOREGROUND_PIXEL (f) : default_face->foreground;
+      unsigned long bg = default_face->background_defaulted_p
+        ? FRAME_BACKGROUND_PIXEL (f) : default_face->background;
+      params->default_fg = (uint32_t) ((RED_FROM_ULONG (fg) << 16)
+                                       | (GREEN_FROM_ULONG (fg) << 8)
+                                       | BLUE_FROM_ULONG (fg));
+      params->default_bg = (uint32_t) ((RED_FROM_ULONG (bg) << 16)
+                                       | (GREEN_FROM_ULONG (bg) << 8)
+                                       | BLUE_FROM_ULONG (bg));
+    }
+  else
+    {
+      params->default_fg = 0x00FFFFFF;
+      params->default_bg = 0x00000000;
+    }
+
+  /* Character cell dimensions */
+  params->char_width = (float) FRAME_COLUMN_WIDTH (f);
+  params->char_height = (float) FRAME_LINE_HEIGHT (f);
+  params->font_pixel_size = FRAME_FONT (f) ? (float) FRAME_FONT (f)->pixel_size : 14.0f;
+  params->font_ascent = FRAME_FONT (f) ? (float) FONT_BASE (FRAME_FONT (f)) : 12.0f;
+
+  /* Special line heights */
+  params->mode_line_height = (float) WINDOW_MODE_LINE_HEIGHT (w);
+  params->header_line_height = (float) WINDOW_HEADER_LINE_HEIGHT (w);
+  params->tab_line_height = (float) WINDOW_TAB_LINE_HEIGHT (w);
+
+  /* Cursor type — read from phys_cursor_type (set by C display engine).
+     get_window_cursor_type() is static in xdisp.c so we use the cached value. */
+  switch (w->phys_cursor_type)
+    {
+    case FILLED_BOX_CURSOR: params->cursor_type = 0; break;
+    case BAR_CURSOR: params->cursor_type = 1; break;
+    case HBAR_CURSOR: params->cursor_type = 2; break;
+    case HOLLOW_BOX_CURSOR: params->cursor_type = 3; break;
+    default: params->cursor_type = 0; break;
+    }
+  params->cursor_bar_width = w->phys_cursor_width > 0 ? w->phys_cursor_width : 2;
+
+  return 0;
+}
+
+/* Set window_end_pos on an Emacs window. */
+void
+neomacs_layout_set_window_end (void *window_ptr, int64_t end_pos, int end_vpos)
+{
+  struct window *w = (struct window *) window_ptr;
+  if (!w)
+    return;
+  w->window_end_pos = BUF_Z (XBUFFER (w->contents)) - end_pos;
+  w->window_end_vpos = end_vpos;
+  w->window_end_valid = true;
+}
+
+/* Set cursor position on an Emacs window. */
+void
+neomacs_layout_set_cursor (void *window_ptr, int x, int y, int hpos, int vpos)
+{
+  struct window *w = (struct window *) window_ptr;
+  if (!w)
+    return;
+  w->cursor.x = x;
+  w->cursor.y = y;
+  w->cursor.hpos = hpos;
+  w->cursor.vpos = vpos;
+}
+
+/* Trigger fontification at a range (calls fontification-functions).
+   Returns 1 if fontification happened, 0 if already fontified. */
+int
+neomacs_layout_ensure_fontified (void *buffer_ptr, int64_t from, int64_t to)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf)
+    return 0;
+
+  struct buffer *old = current_buffer;
+  set_buffer_internal_1 (buf);
+
+  /* Check if text is already fontified */
+  Lisp_Object fontified = Fget_text_property (make_fixnum (from),
+                                              Qfontified, Qnil);
+  if (!NILP (fontified))
+    {
+      set_buffer_internal_1 (old);
+      return 0;
+    }
+
+  /* Run fontification-functions */
+  if (!NILP (Vfontification_functions))
+    {
+      safe_calln (XCAR (Vfontification_functions), make_fixnum (from));
+    }
+
+  set_buffer_internal_1 (old);
+  return 1;
+}
+
+/* Get the resolved face at a buffer position for a window.
+   Uses face_at_buffer_position() internally. */
+int
+neomacs_layout_face_at_pos (void *window_ptr, int64_t charpos,
+                            void *face_out)
+{
+  /* TODO: Implement face resolution for Phase 2 */
+  (void) window_ptr;
+  (void) charpos;
+  (void) face_out;
+  return -1;
+}
+
+/* Get the default face for a frame. */
+int
+neomacs_layout_default_face (void *frame_ptr, void *face_out)
+{
+  /* TODO: Implement for Phase 2 */
+  (void) frame_ptr;
+  (void) face_out;
+  return -1;
+}
+
+/* Get a byte from buffer text at a byte position. */
+int
+neomacs_layout_buffer_byte_at (void *buffer_ptr, int64_t byte_pos)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  if (!buf)
+    return -1;
+
+  struct buffer *old = current_buffer;
+  set_buffer_internal_1 (buf);
+
+  if (byte_pos < BUF_BEGV_BYTE (buf) || byte_pos >= BUF_ZV_BYTE (buf))
+    {
+      set_buffer_internal_1 (old);
+      return -1;
+    }
+
+  int result = FETCH_BYTE (byte_pos);
+  set_buffer_internal_1 (old);
+  return result;
+}
+
 /* Walk current_matrix for ALL windows in the frame and extract complete
    glyph data.  Called from neomacs_update_end after Emacs has finished
    all window updates.  This replaces the incremental glyph accumulation
@@ -1015,9 +1502,32 @@ neomacs_update_end (struct frame *f)
 
   if (dpyinfo && dpyinfo->display_handle)
     {
-      /* Extract complete frame from current_matrix (matrix-based full-frame rendering).
-         This walks ALL windows and sends ALL visible glyphs to Rust. */
-      neomacs_extract_full_frame (f);
+      if (use_rust_display_engine)
+        {
+          /* NEW PATH: Rust layout engine reads buffer data directly via FFI
+             and produces FrameGlyphBuffer internally. */
+          struct face *default_face = FACE_FROM_ID_OR_NULL (f, DEFAULT_FACE_ID);
+          unsigned long bg_pixel = default_face && !default_face->background_defaulted_p
+            ? default_face->background : FRAME_BACKGROUND_PIXEL (f);
+          uint32_t bg_rgb = ((RED_FROM_ULONG (bg_pixel) << 16)
+                             | (GREEN_FROM_ULONG (bg_pixel) << 8)
+                             | BLUE_FROM_ULONG (bg_pixel));
+
+          neomacs_rust_layout_frame (
+              dpyinfo->display_handle,
+              (void *) f,
+              (float) FRAME_PIXEL_WIDTH (f),
+              (float) FRAME_PIXEL_HEIGHT (f),
+              (float) FRAME_COLUMN_WIDTH (f),
+              (float) FRAME_LINE_HEIGHT (f),
+              FRAME_FONT (f) ? (float) FRAME_FONT (f)->pixel_size : 14.0f,
+              bg_rgb);
+        }
+      else
+        {
+          /* LEGACY PATH: Extract from current_matrix (C display engine). */
+          neomacs_extract_full_frame (f);
+        }
 
       /* Signal end of frame to Rust (sends frame to render thread) */
       if (output && output->window_id > 0)
@@ -3699,6 +4209,26 @@ To update an existing webkit view, use `neomacs-webkit-load-uri' with the ID.  *
 
 
 /* ============================================================================
+ * Rust Display Engine API
+ * ============================================================================ */
+
+DEFUN ("neomacs-set-rust-display", Fneomacs_set_rust_display, Sneomacs_set_rust_display, 1, 1, 0,
+       doc: /* Enable or disable the Rust layout engine.
+When ENABLE is non-nil, use the Rust layout engine instead of the C display engine.
+The Rust engine reads buffer data directly via FFI and produces the glyph buffer,
+bypassing xdisp.c's matrix extraction.  Default is nil (legacy C engine).
+This is EXPERIMENTAL — enable for testing only.  */)
+  (Lisp_Object enable)
+{
+  use_rust_display_engine = !NILP (enable);
+  nlog_info ("Rust display engine %s", use_rust_display_engine ? "ENABLED" : "disabled");
+
+  /* Force full redisplay */
+  SET_FRAME_GARBAGED (SELECTED_FRAME ());
+  return enable;
+}
+
+/* ============================================================================
  * Animation API
  * ============================================================================ */
 
@@ -4867,6 +5397,9 @@ keyboard input forwarding.  Set to nil to clear. */);
   DEFVAR_LISP ("x-super-keysym", Vx_super_keysym,
 	       doc: /* SKIP: real doc in xterm.c.  */);
   Vx_super_keysym = Qnil;
+
+  /* Rust display engine toggle */
+  defsubr (&Sneomacs_set_rust_display);
 
   /* Tell Emacs about this window system */
   Fprovide (Qneomacs, Qnil);

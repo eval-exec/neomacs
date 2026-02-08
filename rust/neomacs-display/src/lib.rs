@@ -15,6 +15,7 @@ pub mod backend;
 pub mod text;
 pub mod ffi;
 pub mod thread_comm;
+pub mod layout;
 
 #[cfg(feature = "winit-backend")]
 pub mod render_thread;

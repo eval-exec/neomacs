@@ -189,6 +189,189 @@ typedef struct NeomacsInputEvent {
   uint32_t height;
 } NeomacsInputEvent;
 
+/**
+ * Opaque pointer to an Emacs buffer (struct buffer *)
+ */
+typedef void *EmacsBuffer;
+
+/**
+ * Opaque pointer to an Emacs frame (struct frame *)
+ */
+typedef void *EmacsFrame;
+
+/**
+ * Opaque pointer to an Emacs window (struct window *)
+ */
+typedef void *EmacsWindow;
+
+/**
+ * FFI-safe window parameters struct.
+ * Matches the C struct in neomacsterm.c.
+ */
+typedef struct WindowParamsFFI {
+  /**
+   * Window pointer as i64
+   */
+  int64_t windowId;
+  /**
+   * Buffer pointer as u64
+   */
+  uint64_t bufferId;
+  /**
+   * Window pointer (for FFI callbacks)
+   */
+  EmacsWindow windowPtr;
+  /**
+   * Buffer pointer (for FFI callbacks)
+   */
+  EmacsBuffer bufferPtr;
+  /**
+   * Frame-absolute position
+   */
+  float x;
+  float y;
+  float width;
+  float height;
+  /**
+   * Text area bounds (excluding fringes, margins)
+   */
+  float textX;
+  float textY;
+  float textWidth;
+  float textHeight;
+  /**
+   * Whether this is the selected window
+   */
+  int selected;
+  /**
+   * First visible buffer position
+   */
+  int64_t windowStart;
+  /**
+   * Point position
+   */
+  int64_t point;
+  /**
+   * Buffer size (ZV)
+   */
+  int64_t bufferZv;
+  /**
+   * Buffer beginning (BEGV)
+   */
+  int64_t bufferBegv;
+  /**
+   * Horizontal scroll
+   */
+  int hscroll;
+  /**
+   * Truncate long lines
+   */
+  int truncateLines;
+  /**
+   * Tab width
+   */
+  int tabWidth;
+  /**
+   * Default face colors (sRGB pixels)
+   */
+  uint32_t defaultFg;
+  uint32_t defaultBg;
+  /**
+   * Character cell dimensions
+   */
+  float charWidth;
+  float charHeight;
+  /**
+   * Font pixel size
+   */
+  float fontPixelSize;
+  /**
+   * Font ascent
+   */
+  float fontAscent;
+  /**
+   * Special line heights
+   */
+  float modeLineHeight;
+  float headerLineHeight;
+  float tabLineHeight;
+  /**
+   * Cursor type and width
+   */
+  uint8_t cursorType;
+  int cursorBarWidth;
+} WindowParamsFFI;
+
+/**
+ * FFI-safe face data struct.
+ */
+typedef struct FaceDataFFI {
+  /**
+   * Face ID
+   */
+  uint32_t faceId;
+  /**
+   * Foreground color (sRGB pixel: 0x00RRGGBB)
+   */
+  uint32_t fg;
+  /**
+   * Background color (sRGB pixel: 0x00RRGGBB)
+   */
+  uint32_t bg;
+  /**
+   * Font family name (null-terminated C string, valid for duration of layout)
+   */
+  const char *fontFamily;
+  /**
+   * Font weight (CSS scale: 400=normal, 700=bold)
+   */
+  int fontWeight;
+  /**
+   * Italic flag
+   */
+  int italic;
+  /**
+   * Font pixel size
+   */
+  int fontSize;
+  /**
+   * Underline style (0=none, 1=single, 2=wave, 3=double, 4=dotted, 5=dashed)
+   */
+  int underlineStyle;
+  /**
+   * Underline color (sRGB pixel)
+   */
+  uint32_t underlineColor;
+  /**
+   * Strike-through (0=none, 1=enabled)
+   */
+  int strikeThrough;
+  /**
+   * Strike-through color
+   */
+  uint32_t strikeThroughColor;
+  /**
+   * Overline (0=none, 1=enabled)
+   */
+  int overline;
+  /**
+   * Overline color
+   */
+  uint32_t overlineColor;
+  /**
+   * Box type (0=none, 1=line)
+   */
+  int boxType;
+  /**
+   * Box color
+   */
+  uint32_t boxColor;
+  /**
+   * Box line width
+   */
+  int boxLineWidth;
+} FaceDataFFI;
+
 #define VA_STATUS_SUCCESS 0
 
 #define VA_INVALID_SURFACE 4294967295
@@ -977,6 +1160,23 @@ void neomacs_display_begin_frame_window(struct NeomacsDisplay *handle,
 void neomacs_display_end_frame_window(struct NeomacsDisplay *handle, uint32_t windowId);
 
 /**
+ * Called from C when `neomacs-use-rust-display` is enabled.
+ * The Rust layout engine reads buffer data via FFI helpers and produces
+ * a FrameGlyphBuffer, bypassing the C matrix extraction.
+ *
+ * # Safety
+ * Must be called on the Emacs thread. All pointers must be valid.
+ */
+void neomacs_rust_layout_frame(struct NeomacsDisplay *handle,
+                               void *framePtr,
+                               float width,
+                               float height,
+                               float charWidth,
+                               float charHeight,
+                               float fontPixelSize,
+                               uint32_t background);
+
+/**
  * Set an animation configuration option (stub)
  */
 int neomacs_display_set_animation_option(struct NeomacsDisplay *handle,
@@ -1071,5 +1271,98 @@ int neomacs_display_get_threaded_wakeup_fd(void);
  * Returns NULL if threaded mode is not initialized.
  */
 struct NeomacsDisplay *neomacs_display_get_threaded_handle(void);
+
+/**
+ * Get a byte from buffer text at the given byte position.
+ * Handles the gap buffer transparently.
+ * Returns -1 if pos is out of range.
+ */
+extern int neomacs_layout_buffer_byte_at(EmacsBuffer buffer, int64_t bytePos);
+
+/**
+ * Copy buffer text (UTF-8) into the provided buffer.
+ * Handles gap buffer and multibyte encoding.
+ * Returns the number of bytes written, or -1 on error.
+ * `from` and `to` are character positions (not byte positions).
+ */
+extern int64_t neomacs_layout_buffer_text(EmacsBuffer buffer,
+                                          int64_t from,
+                                          int64_t to,
+                                          uint8_t *outBuf,
+                                          int64_t outBufLen);
+
+/**
+ * Get the character at a character position.
+ * Returns the Unicode codepoint, or -1 if out of range.
+ */
+extern int32_t neomacs_layout_char_at(EmacsBuffer buffer, int64_t charpos);
+
+/**
+ * Get buffer narrowing bounds: BEGV and ZV (character positions).
+ */
+extern void neomacs_layout_buffer_bounds(EmacsBuffer buffer, int64_t *begv, int64_t *zv);
+
+/**
+ * Get buffer point position (character position).
+ */
+extern int64_t neomacs_layout_buffer_point(EmacsBuffer buffer);
+
+/**
+ * Check if buffer uses multibyte encoding.
+ */
+extern int neomacs_layout_buffer_multibyte_p(EmacsBuffer buffer);
+
+/**
+ * Get buffer-local tab-width.
+ */
+extern int neomacs_layout_buffer_tab_width(EmacsBuffer buffer);
+
+/**
+ * Get buffer-local truncate-lines setting.
+ */
+extern int neomacs_layout_buffer_truncate_lines(EmacsBuffer buffer);
+
+/**
+ * Get the number of leaf windows in the frame.
+ */
+extern int neomacs_layout_frame_window_count(EmacsFrame frame);
+
+/**
+ * Get window parameters for the Nth leaf window.
+ * Fills the WindowParamsFFI struct. Returns 0 on success, -1 on error.
+ */
+extern int neomacs_layout_get_window_params(EmacsFrame frame,
+                                            int windowIndex,
+                                            struct WindowParamsFFI *params);
+
+/**
+ * Get the resolved face at a buffer position for a given window.
+ * Returns face data in the FaceDataFFI struct.
+ * This calls face_at_buffer_position() internally.
+ */
+extern int neomacs_layout_face_at_pos(EmacsWindow window,
+                                      int64_t charpos,
+                                      struct FaceDataFFI *faceOut);
+
+/**
+ * Get the default face for a frame.
+ */
+extern int neomacs_layout_default_face(EmacsFrame frame, struct FaceDataFFI *faceOut);
+
+/**
+ * Set window_end_pos on an Emacs window (for window-end Lisp function).
+ */
+extern void neomacs_layout_set_window_end(EmacsWindow window, int64_t endPos, int endVpos);
+
+/**
+ * Set cursor position on an Emacs window.
+ */
+extern void neomacs_layout_set_cursor(EmacsWindow window, int x, int y, int hpos, int vpos);
+
+/**
+ * Trigger fontification at a position (calls fontification-functions).
+ * Returns 1 if fontification happened, 0 if text was already fontified.
+ */
+extern int neomacs_layout_ensure_fontified(EmacsBuffer buffer, int64_t from, int64_t to);
 
 #endif  /* NEOMACS_DISPLAY_H */

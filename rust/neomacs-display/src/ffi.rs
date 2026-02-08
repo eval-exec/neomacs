@@ -3344,6 +3344,55 @@ pub extern "C" fn neomacs_display_end_frame_window(
     display.current_render_window_id = 0;
 }
 
+// ============================================================================
+// Rust Layout Engine FFI Entry Point
+// ============================================================================
+
+/// Global layout engine instance (lazily initialized)
+static mut LAYOUT_ENGINE: Option<crate::layout::LayoutEngine> = None;
+
+/// Called from C when `neomacs-use-rust-display` is enabled.
+/// The Rust layout engine reads buffer data via FFI helpers and produces
+/// a FrameGlyphBuffer, bypassing the C matrix extraction.
+///
+/// # Safety
+/// Must be called on the Emacs thread. All pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_rust_layout_frame(
+    handle: *mut NeomacsDisplay,
+    frame_ptr: *mut c_void,
+    width: f32,
+    height: f32,
+    char_width: f32,
+    char_height: f32,
+    font_pixel_size: f32,
+    background: u32,
+) {
+    let display = &mut *handle;
+
+    // Initialize layout engine on first call
+    if LAYOUT_ENGINE.is_none() {
+        LAYOUT_ENGINE = Some(crate::layout::LayoutEngine::new());
+        log::info!("Rust layout engine initialized");
+    }
+
+    let engine = LAYOUT_ENGINE.as_mut().unwrap();
+    let frame_params = crate::layout::FrameParams {
+        width,
+        height,
+        char_width: if char_width > 0.0 { char_width } else { 8.0 },
+        char_height: if char_height > 0.0 { char_height } else { 16.0 },
+        font_pixel_size: if font_pixel_size > 0.0 { font_pixel_size } else { 14.0 },
+        background,
+    };
+
+    engine.layout_frame(
+        frame_ptr,
+        &frame_params,
+        &mut display.frame_glyphs,
+    );
+}
+
 // Note: Event Polling FFI Functions have been removed
 // Events are now delivered via the threaded mode wakeup mechanism
 // Use neomacs_display_drain_input() instead
