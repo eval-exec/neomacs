@@ -603,6 +603,8 @@ struct RenderApp {
     custom_titlebar_height: f32,
     /// Currently hovered title bar element (0=none, 1=drag, 2=close, 3=max, 4=min)
     titlebar_hover: u32,
+    /// Last title bar click time (for double-click detection)
+    last_titlebar_click: std::time::Instant,
 }
 
 /// State for a tooltip displayed as GPU overlay
@@ -748,6 +750,7 @@ impl RenderApp {
             window_title: String::from("neomacs"),
             custom_titlebar_height: 30.0,
             titlebar_hover: 0,
+            last_titlebar_click: std::time::Instant::now(),
         }
     }
 
@@ -2991,10 +2994,16 @@ impl ApplicationHandler for RenderApp {
                     // Custom title bar click
                     match self.titlebar_hit_test(self.mouse_pos.0, self.mouse_pos.1) {
                         1 => {
-                            // Drag area
-                            if let Some(ref window) = self.window {
+                            // Drag area: double-click toggles maximize
+                            let now = std::time::Instant::now();
+                            if now.duration_since(self.last_titlebar_click).as_millis() < 400 {
+                                if let Some(ref window) = self.window {
+                                    window.set_maximized(!window.is_maximized());
+                                }
+                            } else if let Some(ref window) = self.window {
                                 let _ = window.drag_window();
                             }
+                            self.last_titlebar_click = now;
                         }
                         2 => {
                             // Close button
