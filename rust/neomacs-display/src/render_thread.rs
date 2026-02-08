@@ -3090,12 +3090,23 @@ impl ApplicationHandler for RenderApp {
                     }
                 }
 
-                // Update title bar hover state
+                // Update title bar hover state and cursor
                 if !self.decorations_enabled {
                     let new_hover = self.titlebar_hit_test(lx, ly);
                     if new_hover != self.titlebar_hover {
                         self.titlebar_hover = new_hover;
                         self.frame_dirty = true;
+                        // Set cursor icon based on title bar region
+                        if self.resize_edge.is_none() {
+                            if let Some(ref window) = self.window {
+                                use winit::window::CursorIcon;
+                                let icon = match new_hover {
+                                    2 | 3 | 4 => CursorIcon::Pointer, // buttons
+                                    _ => CursorIcon::Default,
+                                };
+                                window.set_cursor(icon);
+                            }
+                        }
                     }
                 }
 
