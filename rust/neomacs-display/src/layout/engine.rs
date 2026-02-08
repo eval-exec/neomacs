@@ -1623,19 +1623,22 @@ impl LayoutEngine {
                 // Right fringe: continuation indicator for wrapped lines
                 if right_fringe_width >= char_w && row_continued.get(r).copied().unwrap_or(false) {
                     let fx = right_fringe_x + (right_fringe_width - char_w) / 2.0;
-                    frame_glyphs.add_char('\\', fx, gy, char_w, char_h, ascent, false);
+                    // Curving arrow: line continues on next row
+                    frame_glyphs.add_char('\u{21B5}', fx, gy, char_w, char_h, ascent, false);
                 }
 
                 // Right fringe: truncation indicator
                 if right_fringe_width >= char_w && row_truncated.get(r).copied().unwrap_or(false) {
                     let fx = right_fringe_x + (right_fringe_width - char_w) / 2.0;
-                    frame_glyphs.add_char('$', fx, gy, char_w, char_h, ascent, false);
+                    // Right arrow: line truncated
+                    frame_glyphs.add_char('\u{2192}', fx, gy, char_w, char_h, ascent, false);
                 }
 
                 // Left fringe: continuation indicator for continued lines
                 if left_fringe_width >= char_w && row_continuation.get(r).copied().unwrap_or(false) {
                     let fx = left_fringe_x + (left_fringe_width - char_w) / 2.0;
-                    frame_glyphs.add_char('\\', fx, gy, char_w, char_h, ascent, false);
+                    // Curving arrow: continuation from previous row
+                    frame_glyphs.add_char('\u{21B3}', fx, gy, char_w, char_h, ascent, false);
                 }
             }
 
