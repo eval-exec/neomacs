@@ -726,6 +726,7 @@ impl WinitBackend {
                 state.config.height,
                 true, // cursor always visible in legacy path
                 None, // no animated cursor in legacy path
+                (0.0, 0.0), // no mouse tracking in legacy path
             );
         } else {
             log::debug!("end_frame_for_window: no glyph_atlas");

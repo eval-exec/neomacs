@@ -2174,6 +2174,7 @@ impl RenderApp {
                     self.height,
                     self.cursor_blink_on,
                     animated_cursor,
+                    self.mouse_pos,
                 );
             }
 
@@ -2210,6 +2211,7 @@ impl RenderApp {
                 self.height,
                 self.cursor_blink_on,
                 animated_cursor,
+                self.mouse_pos,
             );
         }
 

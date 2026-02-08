@@ -1157,6 +1157,7 @@ impl WgpuRenderer {
         surface_height: u32,
         cursor_visible: bool,
         animated_cursor: Option<AnimatedCursor>,
+        mouse_pos: (f32, f32),
     ) {
         log::debug!(
             "render_frame_glyphs: frame={}x{} surface={}x{}, {} glyphs, {} faces",
@@ -1380,6 +1381,9 @@ impl WgpuRenderer {
         // Filled box (0) is EXCLUDED here — handled by bg rect + trail + fg swap.
         let mut cursor_vertices: Vec<RectVertex> = Vec::new();
 
+        // === Collect scroll bar thumbs (drawn as rounded rects) ===
+        let mut scroll_bar_thumb_vertices: Vec<(f32, f32, f32, f32, f32, Color)> = Vec::new();
+
         for glyph in &frame_glyphs.glyphs {
             match glyph {
                 FrameGlyph::Border {
@@ -1402,16 +1406,38 @@ impl WgpuRenderer {
                     track_color,
                     thumb_color,
                 } => {
-                    // Draw scroll bar track
-                    self.add_rect(&mut cursor_vertices, *x, *y, *width, *height, track_color);
-                    // Draw scroll bar thumb
-                    if *horizontal {
-                        let tx = *x + *thumb_start;
-                        self.add_rect(&mut cursor_vertices, tx, *y, *thumb_size, *height, thumb_color);
+                    // Draw scroll bar track (subtle, slightly transparent)
+                    let subtle_track = Color::new(
+                        track_color.r, track_color.g, track_color.b,
+                        track_color.a * 0.6,
+                    );
+                    self.add_rect(&mut cursor_vertices, *x, *y, *width, *height, &subtle_track);
+
+                    // Compute thumb bounds
+                    let (tx, ty, tw, th) = if *horizontal {
+                        (*x + *thumb_start, *y, *thumb_size, *height)
                     } else {
-                        let ty = *y + *thumb_start;
-                        self.add_rect(&mut cursor_vertices, *x, ty, *width, *thumb_size, thumb_color);
-                    }
+                        (*x, *y + *thumb_start, *width, *thumb_size)
+                    };
+
+                    // Check hover: brighten thumb if mouse is over the scroll bar area
+                    let (mx, my) = mouse_pos;
+                    let hovered = mx >= *x && mx <= *x + *width
+                        && my >= *y && my <= *y + *height;
+                    let effective_thumb = if hovered {
+                        Color::new(
+                            (thumb_color.r * 1.4).min(1.0),
+                            (thumb_color.g * 1.4).min(1.0),
+                            (thumb_color.b * 1.4).min(1.0),
+                            thumb_color.a.min(1.0),
+                        )
+                    } else {
+                        *thumb_color
+                    };
+
+                    // Rounded thumb with pill shape
+                    let radius = tw.min(th) * 0.4;
+                    scroll_bar_thumb_vertices.push((tx, ty, tw, th, radius, effective_thumb));
                 }
                 FrameGlyph::Cursor {
                     window_id,
@@ -2204,6 +2230,26 @@ impl WgpuRenderer {
                 render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, cursor_buffer.slice(..));
                 render_pass.draw(0..cursor_vertices.len() as u32, 0..1);
+            }
+
+            // === Draw scroll bar thumbs as filled rounded rects ===
+            if !scroll_bar_thumb_vertices.is_empty() {
+                let mut rounded_verts: Vec<RoundedRectVertex> = Vec::new();
+                for (tx, ty, tw, th, radius, color) in &scroll_bar_thumb_vertices {
+                    // border_width = 0 triggers filled mode in the shader
+                    self.add_rounded_rect(&mut rounded_verts, *tx, *ty, *tw, *th, 0.0, *radius, color);
+                }
+                let thumb_buffer = self.device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("Scroll Bar Thumb Buffer"),
+                        contents: bytemuck::cast_slice(&rounded_verts),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    },
+                );
+                render_pass.set_pipeline(&self.rounded_rect_pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, thumb_buffer.slice(..));
+                render_pass.draw(0..rounded_verts.len() as u32, 0..1);
             }
         }
 

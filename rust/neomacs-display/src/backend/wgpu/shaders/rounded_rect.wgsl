@@ -75,6 +75,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Anti-aliased alpha: 1 inside outer, 0 outside; subtract inner hole.
     let outer_alpha = 1.0 - smoothstep(-0.5, 0.5, d_outer);
+
+    // When border_width <= 0, render as filled rounded rect (no inner cutout).
+    if (border_width <= 0.0) {
+        return vec4<f32>(in.color.rgb, in.color.a * outer_alpha);
+    }
+
     let inner_alpha = 1.0 - smoothstep(-0.5, 0.5, d_inner);
     let border_alpha = outer_alpha - inner_alpha;
 
