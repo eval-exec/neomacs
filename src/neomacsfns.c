@@ -1586,12 +1586,52 @@ If the parameters specify a display, that display is used.  */)
   /* Set up font - required before face realization */
   neomacs_default_font_parameter (f, parms);
 
-  /* Set foreground and background colors - REQUIRED for face realization */
-  /* Use black on white (standard Emacs default) */
+  /* Border and divider parameters */
+  gui_default_parameter (f, parms, Qborder_width, make_fixnum (0),
+			 "borderWidth", "BorderWidth", RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qinternal_border_width, make_fixnum (0),
+			 "internalBorderWidth", "internalBorderWidth",
+			 RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qchild_frame_border_width, Qnil,
+			 "childFrameBorderWidth", "childFrameBorderWidth",
+			 RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qright_divider_width, make_fixnum (0),
+			 NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qbottom_divider_width, make_fixnum (0),
+			 NULL, NULL, RES_TYPE_NUMBER);
+
+  /* Scroll bar parameters */
+  gui_default_parameter (f, parms, Qvertical_scroll_bars, Qright,
+			 "verticalScrollBars", "ScrollBars", RES_TYPE_SYMBOL);
+  gui_default_parameter (f, parms, Qhorizontal_scroll_bars, Qnil,
+			 "horizontalScrollBars", "ScrollBars",
+			 RES_TYPE_SYMBOL);
+
+  /* Color parameters - REQUIRED for face realization */
   gui_default_parameter (f, parms, Qforeground_color, build_string ("black"),
 			 "foreground", "Foreground", RES_TYPE_STRING);
   gui_default_parameter (f, parms, Qbackground_color, build_string ("white"),
 			 "background", "Background", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qmouse_color, build_string ("black"),
+			 "pointerColor", "Foreground", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qborder_color, build_string ("black"),
+			 "borderColor", "BorderColor", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qscreen_gamma, Qnil,
+			 "screenGamma", "ScreenGamma", RES_TYPE_FLOAT);
+  gui_default_parameter (f, parms, Qline_spacing, Qnil,
+			 "lineSpacing", "LineSpacing", RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qleft_fringe, Qnil,
+			 "leftFringe", "LeftFringe", RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qright_fringe, Qnil,
+			 "rightFringe", "RightFringe", RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qno_special_glyphs, Qnil,
+			 NULL, NULL, RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qscroll_bar_foreground, Qnil,
+			 "scrollBarForeground", "ScrollBarForeground",
+			 RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qscroll_bar_background, Qnil,
+			 "scrollBarBackground", "ScrollBarBackground",
+			 RES_TYPE_STRING);
 
   /* Initialize faces - MUST be done before adjust_frame_size */
   init_frame_faces (f);
@@ -1622,6 +1662,29 @@ If the parameters specify a display, that display is used.  */)
 		       Qx_create_frame_1);
   }
 
+  /* Menu, tab, tool bar lines */
+  gui_default_parameter (f, parms, Qmenu_bar_lines,
+			 NILP (Vmenu_bar_mode)
+			 ? make_fixnum (0) : make_fixnum (1),
+			 NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qtab_bar_lines,
+			 NILP (Vtab_bar_mode)
+			 ? make_fixnum (0) : make_fixnum (1),
+			 NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qtool_bar_lines,
+			 NILP (Vtool_bar_mode)
+			 ? make_fixnum (0) : make_fixnum (1),
+			 NULL, NULL, RES_TYPE_NUMBER);
+
+  gui_default_parameter (f, parms, Qbuffer_predicate, Qnil,
+			 "bufferPredicate", "BufferPredicate",
+			 RES_TYPE_SYMBOL);
+  gui_default_parameter (f, parms, Qtitle, Qnil,
+			 "title", "Title", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qinhibit_double_buffering, Qnil,
+			 "inhibitDoubleBuffering", "InhibitDoubleBuffering",
+			 RES_TYPE_BOOLEAN);
+
   /* Initialize cursor */
   FRAME_NEOMACS_OUTPUT (f)->cursor_pixel = dpyinfo->black_pixel;
   FRAME_NEOMACS_OUTPUT (f)->cursor_foreground_pixel = dpyinfo->white_pixel;
@@ -1638,13 +1701,50 @@ If the parameters specify a display, that display is used.  */)
   FRAME_NEOMACS_OUTPUT (f)->horizontal_drag_cursor = (Emacs_Cursor) 5;
   FRAME_NEOMACS_OUTPUT (f)->vertical_drag_cursor = (Emacs_Cursor) 6;
 
-  /* Store in frame list */
+  /* Now consider frame official.  */
+  f->terminal->reference_count++;
   Vframe_list = Fcons (frame, Vframe_list);
 
   /* Create GTK4 widgets */
   block_input ();
   neomacs_create_frame_widgets (f);
   unblock_input ();
+
+  /* Post-widget parameters */
+  gui_default_parameter (f, parms, Qicon_type, Qt,
+			 "bitmapIcon", "BitmapIcon", RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qauto_raise, Qnil,
+			 "autoRaise", "AutoRaiseLower", RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qauto_lower, Qnil,
+			 "autoLower", "AutoRaiseLower", RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qcursor_type, Qbox,
+			 "cursorType", "CursorType", RES_TYPE_SYMBOL);
+  gui_default_parameter (f, parms, Qscroll_bar_width, Qnil,
+			 "scrollBarWidth", "ScrollBarWidth",
+			 RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qscroll_bar_height, Qnil,
+			 "scrollBarHeight", "ScrollBarHeight",
+			 RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qalpha, Qnil,
+			 "alpha", "Alpha", RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qalpha_background, Qnil,
+			 "alphaBackground", "AlphaBackground",
+			 RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qno_focus_on_map, Qnil,
+			 NULL, NULL, RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qno_accept_focus, Qnil,
+			 NULL, NULL, RES_TYPE_BOOLEAN);
+
+  /* Allow frame to be resized now.  */
+  f->can_set_window_size = true;
+
+  /* Final frame size adjustment */
+  adjust_frame_size (f, FRAME_TEXT_WIDTH (f), FRAME_TEXT_HEIGHT (f),
+		     0, true, Qx_create_frame_2);
+
+  /* Process fullscreen parameter */
+  gui_default_parameter (f, parms, Qfullscreen, Qnil,
+			 "fullscreen", "Fullscreen", RES_TYPE_SYMBOL);
 
   /* Make the frame visible */
   gui_default_parameter (f, parms, Qvisibility, Qt,
