@@ -3960,15 +3960,16 @@ struct frame;
 
 /* Define if the windowing system provides a menu bar.  */
 #if defined (USE_X_TOOLKIT) || defined (HAVE_NTGUI) \
-  || defined (HAVE_NS) || defined (USE_GTK) || defined (HAVE_HAIKU) \
-  || defined (HAVE_NEOMACS)
+  || defined (HAVE_NS) || defined (USE_GTK) || defined (HAVE_HAIKU)
 #define HAVE_EXT_MENU_BAR true
 #endif
+/* Neomacs uses Emacs-internal (text-rendered) menu bar, not a toolkit widget. */
 
 /* Define if the windowing system provides a tool-bar.  */
-#if defined (USE_GTK) || defined (HAVE_NS) || defined (HAVE_NEOMACS)
+#if defined (USE_GTK) || defined (HAVE_NS)
 #define HAVE_EXT_TOOL_BAR true
 #endif
+/* Neomacs uses Emacs-internal (text-rendered) tool bar, not a toolkit widget. */
 
 /* Return the address of vector A's element at index I.  */
 

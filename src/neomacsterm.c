@@ -117,7 +117,6 @@ static void neomacs_focus_frame (struct frame *f, bool noactivate);
 static Lisp_Object neomacs_get_focus_frame (struct frame *frame);
 static void neomacs_buffer_flipping_unblocked (struct frame *f);
 static void neomacs_set_frame_alpha (struct frame *f);
-static void neomacs_activate_menubar (struct frame *f);
 static bool neomacs_bitmap_icon (struct frame *f, Lisp_Object file);
 static uint32_t neomacs_get_or_load_image (struct neomacs_display_info *dpyinfo,
                                            struct image *img);
@@ -730,7 +729,6 @@ neomacs_create_terminal (struct neomacs_display_info *dpyinfo)
   terminal->get_focus_frame = neomacs_get_focus_frame;
   terminal->buffer_flipping_unblocked_hook = neomacs_buffer_flipping_unblocked;
   terminal->set_frame_alpha_hook = neomacs_set_frame_alpha;
-  terminal->activate_menubar_hook = neomacs_activate_menubar;
   terminal->set_bitmap_icon_hook = neomacs_bitmap_icon;
 
   /* Register the display connection fd for event handling */
@@ -6121,16 +6119,9 @@ neomacs_set_frame_alpha (struct frame *f)
   else if (alpha < alpha_min && alpha_min <= 1.0)
     alpha = alpha_min;
 
-  /* TODO: Send alpha to render thread when winit/compositor supports
-     per-window opacity.  For now, just validate the value.  */
-}
-
-/* Activate menu bar - no-op since neomacs doesn't have a menu bar widget.
-   The hook must exist so Emacs doesn't crash on F10 (activate-menu-bar).  */
-static void
-neomacs_activate_menubar (struct frame *f)
-{
-  /* No menu bar widget to activate.  */
+  if (dpyinfo->display_handle)
+    neomacs_display_set_background_alpha (dpyinfo->display_handle,
+                                          (float) alpha);
 }
 
 /* Set bitmap icon for frame - no-op.
@@ -8222,40 +8213,26 @@ frame_set_mouse_pixel_position (struct frame *f, int pix_x, int pix_y)
 
 
 /* ============================================================================
- * Toolbar Support
+ * Menu Bar / Tool Bar Support
  * ============================================================================ */
 
-/* Update the tool bar for frame F.  Currently a stub.  */
-void
-update_frame_tool_bar (struct frame *f)
-{
-  /* TODO: Implement tool bar update via Rust/GTK4 */
-}
+/* Neomacs uses Emacs-internal text-rendered menu and tool bars (not external
+   toolkit widgets).  HAVE_EXT_MENU_BAR and HAVE_EXT_TOOL_BAR are NOT defined
+   for neomacs, so xdisp.c handles menu/tool bar rendering as text in the
+   frame's display matrix.  We still provide set_frame_menubar/free_frame_menubar
+   since frame.h declares them unconditionally.  */
 
-/* Free the tool bar resources for frame F.  Currently a stub.  */
-void
-free_frame_tool_bar (struct frame *f)
-{
-  /* TODO: Implement tool bar cleanup */
-}
-
-
-/* ============================================================================
- * Menu Bar Support
- * ============================================================================ */
-
-/* Update the menu bar for frame F.  Currently a stub.  */
 void
 set_frame_menubar (struct frame *f, bool deep_p)
 {
-  /* TODO: Implement menu bar via Rust/GTK4 */
+  /* Internal menu bar is rendered by xdisp.c via update_mode_line.
+     Nothing needed here.  */
 }
 
-/* Free the menu bar resources for frame F.  Currently a stub.  */
 void
 free_frame_menubar (struct frame *f)
 {
-  /* TODO: Implement menu bar cleanup */
+  /* No external menu bar resources to free.  */
 }
 
 

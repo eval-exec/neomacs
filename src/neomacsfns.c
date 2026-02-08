@@ -173,6 +173,7 @@ static void
 neomacs_set_menu_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval)
 {
   int nlines;
+  int olines = FRAME_MENU_BAR_LINES (f);
 
   if (FRAME_MINIBUF_ONLY_P (f) || FRAME_PARENT_FRAME (f))
     return;
@@ -182,28 +183,19 @@ neomacs_set_menu_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldv
   else
     nlines = 0;
 
+  /* Make sure we redisplay all windows in this frame.  */
   fset_redisplay (f);
 
-  /* Neomacs uses GPU rendering without a separate menu bar widget.
-     Set the frame state so Emacs knows the menu bar configuration,
-     but actual rendering goes through the internal menu bar face.  */
-  FRAME_MENU_BAR_LINES (f) = 0;
-  FRAME_MENU_BAR_HEIGHT (f) = 0;
+  /* Neomacs uses Emacs-internal text-rendered menu bar.  */
+  FRAME_MENU_BAR_LINES (f) = nlines;
+  FRAME_MENU_BAR_HEIGHT (f) = nlines * FRAME_LINE_HEIGHT (f);
 
-  if (nlines > 0)
+  if (nlines != olines)
     {
-      FRAME_EXTERNAL_MENU_BAR (f) = 1;
-      if (FRAME_NEOMACS_P (f) && !FRAME_TOOLTIP_P (f))
-	{
-	  XWINDOW (FRAME_SELECTED_WINDOW (f))->update_mode_line = true;
-	}
+      adjust_frame_size (f, -1, -1, 3, true, Qmenu_bar_lines);
+      adjust_frame_glyphs (f);
+      SET_FRAME_GARBAGED (f);
     }
-  else
-    {
-      FRAME_EXTERNAL_MENU_BAR (f) = 0;
-    }
-
-  adjust_frame_glyphs (f);
 }
 
 static void
@@ -297,42 +289,65 @@ neomacs_change_tab_bar_height (struct frame *f, int height)
   SET_FRAME_GARBAGED (f);
 }
 
+static void neomacs_change_tool_bar_height (struct frame *f, int height);
+
 static void
 neomacs_set_tool_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval)
 {
   int nlines;
 
   if (FRAME_MINIBUF_ONLY_P (f))
-    {
-      f->tool_bar_resized = true;
-      return;
-    }
+    return;
 
   if (RANGED_FIXNUMP (0, value, INT_MAX))
     nlines = XFIXNAT (value);
   else
     nlines = 0;
 
+  /* Neomacs uses Emacs-internal tool bar (text-rendered in frame).  */
+  neomacs_change_tool_bar_height (f, nlines * FRAME_LINE_HEIGHT (f));
+}
+
+/* Set the pixel height of the tool bar of frame F to HEIGHT.  */
+static void
+neomacs_change_tool_bar_height (struct frame *f, int height)
+{
+  int unit = FRAME_LINE_HEIGHT (f);
+  int old_height = FRAME_TOOL_BAR_HEIGHT (f);
+  int lines = (height + unit - 1) / unit;
+  Lisp_Object fullscreen = get_frame_param (f, Qfullscreen);
+
+  /* Make sure we redisplay all windows in this frame.  */
   fset_redisplay (f);
 
-  /* Neomacs uses GPU rendering without a separate tool bar widget.
-     Set frame state so Emacs knows tool bar configuration.  */
-  FRAME_TOOL_BAR_LINES (f) = 0;
-  FRAME_TOOL_BAR_HEIGHT (f) = 0;
+  FRAME_TOOL_BAR_HEIGHT (f) = height;
+  FRAME_TOOL_BAR_LINES (f) = lines;
+  store_frame_param (f, Qtool_bar_lines, make_fixnum (lines));
 
-  if (nlines > 0)
+  if (FRAME_NEOMACS_WINDOW (f) && FRAME_TOOL_BAR_HEIGHT (f) == 0)
     {
-      FRAME_EXTERNAL_TOOL_BAR (f) = true;
-      if (FRAME_NEOMACS_P (f) && !FRAME_TOOLTIP_P (f))
-	XWINDOW (FRAME_SELECTED_WINDOW (f))->update_mode_line = true;
+      clear_frame (f);
+      clear_current_matrices (f);
+    }
+
+  if ((height < old_height) && WINDOWP (f->tool_bar_window))
+    clear_glyph_matrix (XWINDOW (f->tool_bar_window)->current_matrix);
+
+  if (!f->tool_bar_resized)
+    {
+      if (NILP (fullscreen) || EQ (fullscreen, Qfullwidth))
+	adjust_frame_size (f, FRAME_TEXT_WIDTH (f), FRAME_TEXT_HEIGHT (f),
+			   1, false, Qtool_bar_lines);
+      else
+	adjust_frame_size (f, -1, -1, 4, false, Qtool_bar_lines);
+
+      f->tool_bar_resized = f->tool_bar_redisplayed;
     }
   else
-    {
-      FRAME_EXTERNAL_TOOL_BAR (f) = false;
-      f->tool_bar_resized = true;
-    }
+    adjust_frame_size (f, -1, -1, 3, false, Qtool_bar_lines);
 
   adjust_frame_glyphs (f);
+  SET_FRAME_GARBAGED (f);
 }
 
 static void
