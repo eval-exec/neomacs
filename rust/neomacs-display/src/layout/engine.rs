@@ -220,6 +220,11 @@ impl LayoutEngine {
         let char_h = params.char_height;
         let ascent = params.font_ascent;
 
+        // Fringe dimensions
+        let left_fringe_width = params.text_bounds.x - params.bounds.x;
+        let right_fringe_x = params.text_bounds.x + params.text_bounds.width;
+        let right_fringe_width = (params.bounds.x + params.bounds.width) - right_fringe_x;
+
         // Check line number configuration
         let mut lnum_config = LineNumberConfigFFI::default();
         let lnum_enabled = neomacs_layout_line_number_config(
@@ -339,6 +344,13 @@ impl LayoutEngine {
         let mut byte_idx = 0usize;
         // hscroll state: how many columns to skip on each line
         let mut hscroll_remaining = hscroll;
+
+        // Fringe indicator tracking:
+        // row_continued[row] = true if row wraps to next line (show \ in right fringe)
+        // row_continuation[row] = true if row is a continuation from prev (show \ in left fringe)
+        let mut row_continued = vec![false; max_rows as usize];
+        let mut row_continuation = vec![false; max_rows as usize];
+        let mut row_truncated = vec![false; max_rows as usize];
 
         // Word-wrap tracking: position after last breakable whitespace
         let mut wrap_break_col = 0i32;
@@ -811,6 +823,9 @@ impl LayoutEngine {
                     }
                     if col >= cols {
                         if params.truncate_lines {
+                            if (row as usize) < row_truncated.len() {
+                                row_truncated[row as usize] = true;
+                            }
                             while byte_idx < bytes_read as usize {
                                 let (c, l) = decode_utf8(&text[byte_idx..]);
                                 byte_idx += l;
@@ -825,8 +840,14 @@ impl LayoutEngine {
                                 }
                             }
                         } else {
+                            if (row as usize) < row_continued.len() {
+                                row_continued[row as usize] = true;
+                            }
                             col = 0;
                             row += 1;
+                            if (row as usize) < row_continuation.len() {
+                                row_continuation[row as usize] = true;
+                            }
                             wrap_has_break = false;
                         }
                     }
@@ -890,6 +911,9 @@ impl LayoutEngine {
                             let trunc_x = content_x + (cols - 1) as f32 * char_w;
                             let gy = text_y + row as f32 * char_h;
                             frame_glyphs.add_char('$', trunc_x, gy, char_w, char_h, ascent, false);
+                            if (row as usize) < row_truncated.len() {
+                                row_truncated[row as usize] = true;
+                            }
 
                             while byte_idx < bytes_read as usize {
                                 let (c, l) = decode_utf8(&text[byte_idx..]);
@@ -920,6 +944,9 @@ impl LayoutEngine {
                                     face_bg, self.face_data.face_id, false,
                                 );
                             }
+                            if (row as usize) < row_continued.len() {
+                                row_continued[row as usize] = true;
+                            }
                             // Rewind position to the break
                             byte_idx = wrap_break_byte_idx;
                             charpos = wrap_break_charpos;
@@ -927,6 +954,9 @@ impl LayoutEngine {
                             current_face_id = -1;
                             col = 0;
                             row += 1;
+                            if (row as usize) < row_continuation.len() {
+                                row_continuation[row as usize] = true;
+                            }
                             wrap_has_break = false;
                             if row >= max_rows {
                                 break;
@@ -940,8 +970,14 @@ impl LayoutEngine {
                                 let gy = text_y + row as f32 * char_h;
                                 frame_glyphs.add_stretch(gx, gy, remaining, char_h, face_bg, self.face_data.face_id, false);
                             }
+                            if (row as usize) < row_continued.len() {
+                                row_continued[row as usize] = true;
+                            }
                             col = 0;
                             row += 1;
+                            if (row as usize) < row_continuation.len() {
+                                row_continuation[row as usize] = true;
+                            }
                             wrap_has_break = false;
                             if row >= max_rows {
                                 break;
@@ -1035,6 +1071,39 @@ impl LayoutEngine {
             let remaining_h = text_height - filled_rows as f32 * char_h;
             if remaining_h > 0.0 {
                 frame_glyphs.add_stretch(text_x, gy, text_width, remaining_h, default_bg, 0, false);
+            }
+        }
+
+        // Render fringe indicators
+        let actual_rows = (row + 1).min(max_rows);
+        if right_fringe_width > 0.0 || left_fringe_width > 0.0 {
+            // Use default face for fringe rendering
+            frame_glyphs.set_face(
+                0, default_fg, Some(default_bg),
+                false, false, 0, None, 0, None, 0, None,
+            );
+
+            for r in 0..actual_rows as usize {
+                let gy = text_y + r as f32 * char_h;
+
+                // Right fringe: continuation indicator for wrapped lines
+                if right_fringe_width >= char_w && row_continued.get(r).copied().unwrap_or(false) {
+                    // Center the indicator in the fringe
+                    let fx = right_fringe_x + (right_fringe_width - char_w) / 2.0;
+                    frame_glyphs.add_char('\\', fx, gy, char_w, char_h, ascent, false);
+                }
+
+                // Right fringe: truncation indicator
+                if right_fringe_width >= char_w && row_truncated.get(r).copied().unwrap_or(false) {
+                    let fx = right_fringe_x + (right_fringe_width - char_w) / 2.0;
+                    frame_glyphs.add_char('$', fx, gy, char_w, char_h, ascent, false);
+                }
+
+                // Left fringe: continuation indicator for continued lines
+                if left_fringe_width >= char_w && row_continuation.get(r).copied().unwrap_or(false) {
+                    let fx = params.bounds.x + (left_fringe_width - char_w) / 2.0;
+                    frame_glyphs.add_char('\\', fx, gy, char_w, char_h, ascent, false);
+                }
             }
         }
 
