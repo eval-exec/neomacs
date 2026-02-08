@@ -496,6 +496,16 @@ pub enum RenderCommand {
         /// Width of gradient in pixels
         width: f32,
     },
+    /// Configure cursor drop shadow
+    SetCursorShadow {
+        enabled: bool,
+        /// Horizontal shadow offset in pixels
+        offset_x: f32,
+        /// Vertical shadow offset in pixels
+        offset_y: f32,
+        /// Shadow opacity (0.0-1.0)
+        opacity: f32,
+    },
     /// Configure animated focus ring around selected window
     SetFocusRing {
         enabled: bool,

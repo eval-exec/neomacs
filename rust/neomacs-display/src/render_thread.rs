@@ -739,6 +739,11 @@ struct RenderApp {
     cursor_trail_fade_enabled: bool,
     cursor_trail_fade_length: u32,
     cursor_trail_fade_ms: u32,
+    /// Cursor drop shadow
+    cursor_shadow_enabled: bool,
+    cursor_shadow_offset_x: f32,
+    cursor_shadow_offset_y: f32,
+    cursor_shadow_opacity: f32,
     /// Animated focus ring
     focus_ring_enabled: bool,
     focus_ring_color: (f32, f32, f32),
@@ -1034,6 +1039,10 @@ impl RenderApp {
             cursor_trail_fade_enabled: false,
             cursor_trail_fade_length: 8,
             cursor_trail_fade_ms: 300,
+            cursor_shadow_enabled: false,
+            cursor_shadow_offset_x: 2.0,
+            cursor_shadow_offset_y: 2.0,
+            cursor_shadow_opacity: 0.3,
             focus_ring_enabled: false,
             focus_ring_color: (0.4, 0.6, 1.0),
             focus_ring_opacity: 0.5,
@@ -2022,6 +2031,16 @@ impl RenderApp {
                     self.cursor_trail_fade_ms = fade_ms;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_cursor_trail_fade(enabled, length as usize, fade_ms);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorShadow { enabled, offset_x, offset_y, opacity } => {
+                    self.cursor_shadow_enabled = enabled;
+                    self.cursor_shadow_offset_x = offset_x;
+                    self.cursor_shadow_offset_y = offset_y;
+                    self.cursor_shadow_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_shadow(enabled, offset_x, offset_y, opacity);
                     }
                     self.frame_dirty = true;
                 }

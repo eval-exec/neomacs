@@ -8690,6 +8690,32 @@ FADE-MS is the fade transition duration in milliseconds (default 500).  */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-cursor-shadow",
+       Fneomacs_set_cursor_shadow,
+       Sneomacs_set_cursor_shadow, 0, 4, 0,
+       doc: /* Configure cursor drop shadow.
+ENABLED non-nil renders a soft drop shadow behind the cursor for
+a 3D depth effect.
+OFFSET-X is horizontal shadow offset in pixels (default 2).
+OFFSET-Y is vertical shadow offset in pixels (default 2).
+OPACITY is 0-100 for shadow darkness (default 30).  */)
+  (Lisp_Object enabled, Lisp_Object offset_x, Lisp_Object offset_y,
+   Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int on = !NILP (enabled);
+  int ox = 2, oy = 2, op = 30;
+  if (FIXNUMP (offset_x)) ox = XFIXNUM (offset_x);
+  if (FIXNUMP (offset_y)) oy = XFIXNUM (offset_y);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_cursor_shadow (dpyinfo->display_handle, on, ox, oy, op);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-focus-ring",
        Fneomacs_set_focus_ring,
        Sneomacs_set_focus_ring, 0, 7, 0,
@@ -10285,6 +10311,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_padding_gradient);
   defsubr (&Sneomacs_set_noise_grain);
   defsubr (&Sneomacs_set_idle_dim);
+  defsubr (&Sneomacs_set_cursor_shadow);
   defsubr (&Sneomacs_set_focus_ring);
   defsubr (&Sneomacs_set_window_mode_tint);
   defsubr (&Sneomacs_set_window_watermark);

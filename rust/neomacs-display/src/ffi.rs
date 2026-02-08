@@ -2801,6 +2801,26 @@ pub unsafe extern "C" fn neomacs_display_set_region_glow(
     }
 }
 
+/// Configure cursor drop shadow
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_cursor_shadow(
+    _handle: *mut NeomacsDisplay,
+    enabled: c_int,
+    offset_x: c_int,
+    offset_y: c_int,
+    opacity: c_int,
+) {
+    let cmd = RenderCommand::SetCursorShadow {
+        enabled: enabled != 0,
+        offset_x: offset_x as f32,
+        offset_y: offset_y as f32,
+        opacity: opacity as f32 / 100.0,
+    };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Configure animated focus ring around selected window
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_focus_ring(

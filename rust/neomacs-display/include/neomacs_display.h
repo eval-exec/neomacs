@@ -1385,6 +1385,15 @@ void neomacs_display_set_region_glow(struct NeomacsDisplay *handle,
                                      int opacity);
 
 /**
+ * Configure cursor drop shadow
+ */
+void neomacs_display_set_cursor_shadow(struct NeomacsDisplay *handle,
+                                       int enabled,
+                                       int offsetX,
+                                       int offsetY,
+                                       int opacity);
+
+/**
  * Configure animated focus ring around selected window
  */
 void neomacs_display_set_focus_ring(struct NeomacsDisplay *handle,

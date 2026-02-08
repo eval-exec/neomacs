@@ -1506,6 +1506,60 @@ activity, then smoothly restores brightness on any input."
                     neomacs-idle-dim)
            (neomacs-set-idle-dim t nil nil val))))
 
+;; --- Cursor drop shadow ---
+(declare-function neomacs-set-cursor-shadow "neomacsterm.c"
+  (&optional enabled offset-x offset-y opacity))
+
+(defcustom neomacs-cursor-shadow nil
+  "Enable cursor drop shadow.
+Non-nil renders a soft drop shadow behind the cursor for a 3D
+depth effect."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-cursor-shadow)
+           (neomacs-set-cursor-shadow val
+            (if (boundp 'neomacs-cursor-shadow-offset-x)
+                neomacs-cursor-shadow-offset-x nil)
+            (if (boundp 'neomacs-cursor-shadow-offset-y)
+                neomacs-cursor-shadow-offset-y nil)
+            (if (boundp 'neomacs-cursor-shadow-opacity)
+                neomacs-cursor-shadow-opacity nil)))))
+
+(defcustom neomacs-cursor-shadow-offset-x 2
+  "Horizontal shadow offset in pixels."
+  :type '(integer :tag "X Offset")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-shadow)
+                    (boundp 'neomacs-cursor-shadow)
+                    neomacs-cursor-shadow)
+           (neomacs-set-cursor-shadow t val))))
+
+(defcustom neomacs-cursor-shadow-offset-y 2
+  "Vertical shadow offset in pixels."
+  :type '(integer :tag "Y Offset")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-shadow)
+                    (boundp 'neomacs-cursor-shadow)
+                    neomacs-cursor-shadow)
+           (neomacs-set-cursor-shadow t nil val))))
+
+(defcustom neomacs-cursor-shadow-opacity 30
+  "Shadow darkness (0-100)."
+  :type '(integer :tag "Opacity")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-shadow)
+                    (boundp 'neomacs-cursor-shadow)
+                    neomacs-cursor-shadow)
+           (neomacs-set-cursor-shadow t nil nil val))))
+
 ;; --- Animated focus ring ---
 (declare-function neomacs-set-focus-ring "neomacsterm.c"
   (&optional enabled r g b opacity dash-length speed))

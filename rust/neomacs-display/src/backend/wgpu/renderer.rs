@@ -176,6 +176,11 @@ pub struct WgpuRenderer {
     cursor_trail_fade_duration: std::time::Duration,
     cursor_trail_positions: Vec<(f32, f32, f32, f32, std::time::Instant)>,
     cursor_trail_last_pos: (f32, f32),
+    /// Cursor drop shadow
+    cursor_shadow_enabled: bool,
+    cursor_shadow_offset_x: f32,
+    cursor_shadow_offset_y: f32,
+    cursor_shadow_opacity: f32,
     /// Animated focus ring
     focus_ring_enabled: bool,
     focus_ring_color: (f32, f32, f32),
@@ -806,6 +811,10 @@ impl WgpuRenderer {
             cursor_trail_fade_duration: std::time::Duration::from_millis(300),
             cursor_trail_positions: Vec::new(),
             cursor_trail_last_pos: (0.0, 0.0),
+            cursor_shadow_enabled: false,
+            cursor_shadow_offset_x: 2.0,
+            cursor_shadow_offset_y: 2.0,
+            cursor_shadow_opacity: 0.3,
             focus_ring_enabled: false,
             focus_ring_color: (0.4, 0.6, 1.0),
             focus_ring_opacity: 0.5,
@@ -1019,6 +1028,14 @@ impl WgpuRenderer {
     pub fn set_accent_strip(&mut self, enabled: bool, width: f32) {
         self.accent_strip_enabled = enabled;
         self.accent_strip_width = width;
+    }
+
+    /// Update cursor shadow config
+    pub fn set_cursor_shadow(&mut self, enabled: bool, offset_x: f32, offset_y: f32, opacity: f32) {
+        self.cursor_shadow_enabled = enabled;
+        self.cursor_shadow_offset_x = offset_x;
+        self.cursor_shadow_offset_y = offset_y;
+        self.cursor_shadow_opacity = opacity;
     }
 
     /// Update focus ring config
@@ -2746,6 +2763,29 @@ impl WgpuRenderer {
             // === Step 2: Draw cursor bg rect (inverse video background) ===
             // Drawn after window/char backgrounds but before text, so the cursor
             // background color is visible behind the inverse-video character.
+            // === Cursor drop shadow (drawn before cursor bg) ===
+            if self.cursor_shadow_enabled && cursor_visible {
+                if let Some(ref anim) = animated_cursor {
+                    let sx = anim.x + self.cursor_shadow_offset_x;
+                    let sy = anim.y + self.cursor_shadow_offset_y;
+                    let shadow_alpha = self.cursor_shadow_opacity.clamp(0.0, 1.0);
+                    let shadow_c = Color::new(0.0, 0.0, 0.0, shadow_alpha);
+                    let mut shadow_verts: Vec<RectVertex> = Vec::new();
+                    self.add_rect(&mut shadow_verts, sx, sy, anim.width, anim.height, &shadow_c);
+                    let shadow_buf = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Cursor Shadow Buffer"),
+                            contents: bytemuck::cast_slice(&shadow_verts),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, shadow_buf.slice(..));
+                    render_pass.draw(0..shadow_verts.len() as u32, 0..1);
+                }
+            }
+
             if !cursor_bg_vertices.is_empty() {
                 let cursor_bg_buffer =
                     self.device

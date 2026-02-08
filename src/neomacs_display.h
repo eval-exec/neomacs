@@ -1430,6 +1430,13 @@ void neomacs_display_set_region_glow(
     int radius,
     int opacity);
 
+void neomacs_display_set_cursor_shadow(
+    struct NeomacsDisplay *handle,
+    int enabled,
+    int offset_x,
+    int offset_y,
+    int opacity);
+
 void neomacs_display_set_focus_ring(
     struct NeomacsDisplay *handle,
     int enabled,
