@@ -381,6 +381,10 @@ pub struct WindowParamsFFI {
     pub fill_column_indicator_char: c_int,
     /// fill-column-indicator face foreground (sRGB pixel)
     pub fill_column_indicator_fg: u32,
+    /// Extra line spacing in pixels
+    pub extra_line_spacing: f32,
+    /// Whether to show cursor in non-selected windows
+    pub cursor_in_non_selected: c_int,
 }
 
 /// FFI-safe face data struct.

@@ -102,6 +102,8 @@ impl LayoutEngine {
                 fill_column_indicator: wp.fill_column_indicator,
                 fill_column_indicator_char: char::from_u32(wp.fill_column_indicator_char as u32).unwrap_or('|'),
                 fill_column_indicator_fg: wp.fill_column_indicator_fg,
+                extra_line_spacing: wp.extra_line_spacing,
+                cursor_in_non_selected: wp.cursor_in_non_selected != 0,
             };
 
             // Add window background
@@ -225,7 +227,7 @@ impl LayoutEngine {
             - params.mode_line_height;
 
         let char_w = params.char_width;
-        let char_h = params.char_height;
+        let char_h = params.char_height + params.extra_line_spacing;
         let ascent = params.font_ascent;
 
         // Fringe dimensions (use actual widths from window params)
@@ -768,30 +770,34 @@ impl LayoutEngine {
 
                 let cursor_style = if params.selected {
                     params.cursor_type
-                } else {
+                } else if params.cursor_in_non_selected {
                     3 // hollow for inactive windows
+                } else {
+                    255 // skip: no cursor in non-selected windows
                 };
 
-                frame_glyphs.add_cursor(
-                    params.window_id as i32,
-                    cursor_x,
-                    cursor_y,
-                    cursor_w,
-                    cursor_h,
-                    cursor_style,
-                    face_fg,
-                );
-
-                // Set inverse for filled box cursor
-                if cursor_style == 0 {
-                    frame_glyphs.set_cursor_inverse(
+                if cursor_style < 255 {
+                    frame_glyphs.add_cursor(
+                        params.window_id as i32,
                         cursor_x,
                         cursor_y,
                         cursor_w,
                         cursor_h,
-                        face_fg,     // cursor_bg = text fg
-                        face_bg,     // cursor_fg = text bg (inverse)
+                        cursor_style,
+                        face_fg,
                     );
+
+                    // Set inverse for filled box cursor
+                    if cursor_style == 0 {
+                        frame_glyphs.set_cursor_inverse(
+                            cursor_x,
+                            cursor_y,
+                            cursor_w,
+                            cursor_h,
+                            face_fg,     // cursor_bg = text fg
+                            face_bg,     // cursor_fg = text bg (inverse)
+                        );
+                    }
                 }
 
                 cursor_placed = true;
@@ -1081,19 +1087,23 @@ impl LayoutEngine {
 
             let cursor_style = if params.selected {
                 params.cursor_type
-            } else {
+            } else if params.cursor_in_non_selected {
                 3
+            } else {
+                255 // skip
             };
 
-            frame_glyphs.add_cursor(
-                params.window_id as i32,
-                cursor_x,
-                cursor_y,
-                char_w,
-                char_h,
-                cursor_style,
-                face_fg,
-            );
+            if cursor_style < 255 {
+                frame_glyphs.add_cursor(
+                    params.window_id as i32,
+                    cursor_x,
+                    cursor_y,
+                    char_w,
+                    char_h,
+                    cursor_style,
+                    face_fg,
+                );
+            }
 
             if cursor_style == 0 {
                 frame_glyphs.set_cursor_inverse(

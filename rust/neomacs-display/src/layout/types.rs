@@ -201,6 +201,10 @@ pub struct WindowParams {
     pub fill_column_indicator_char: char,
     /// Fill-column-indicator face foreground color
     pub fill_column_indicator_fg: u32,
+    /// Extra line spacing in pixels
+    pub extra_line_spacing: f32,
+    /// Whether to show cursor in non-selected windows
+    pub cursor_in_non_selected: bool,
 }
 
 /// Frame-level parameters for layout.

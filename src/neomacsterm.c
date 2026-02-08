@@ -1136,6 +1136,10 @@ struct neomacs_window_params_ffi {
   int fill_column_indicator_char;
   /* fill-column-indicator face foreground (sRGB) */
   uint32_t fill_column_indicator_fg;
+  /* Extra line spacing in pixels */
+  float extra_line_spacing;
+  /* Whether to show cursor in non-selected windows */
+  int cursor_in_non_selected;
 };
 
 /* Get window parameters for the Nth leaf window.
@@ -1366,6 +1370,23 @@ neomacs_layout_get_window_params (void *frame_ptr, int window_index,
             }
         }
     }
+
+  /* Extra line spacing: buffer-local or frame-level */
+  params->extra_line_spacing = 0.0f;
+  if (BUFFERP (w->contents))
+    {
+      Lisp_Object els = BVAR (XBUFFER (w->contents), extra_line_spacing);
+      if (FIXNUMP (els))
+        params->extra_line_spacing = (float) XFIXNUM (els);
+      else if (FLOATP (els))
+        params->extra_line_spacing = (float) XFLOAT_DATA (els);
+    }
+  if (params->extra_line_spacing == 0.0f)
+    params->extra_line_spacing = (float) f->extra_line_spacing;
+
+  /* Cursor in non-selected windows */
+  params->cursor_in_non_selected
+      = !NILP (BVAR (&buffer_defaults, cursor_in_non_selected_windows));
 
   return 0;
 }
