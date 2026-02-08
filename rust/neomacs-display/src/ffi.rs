@@ -4017,6 +4017,7 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
                         x,
                         y,
                         modifiers,
+                        pixel_precise,
                     } => {
                         out.kind = NEOMACS_EVENT_SCROLL;
                         out.x = x as i32;
@@ -4024,6 +4025,7 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
                         out.scroll_delta_x = delta_x;
                         out.scroll_delta_y = delta_y;
                         out.modifiers = modifiers;
+                        out.pixel_precise = if pixel_precise { 1 } else { 0 };
                     }
                     InputEvent::WindowResize { width, height } => {
                         out.kind = NEOMACS_EVENT_RESIZE;

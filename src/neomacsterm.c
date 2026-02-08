@@ -8520,23 +8520,35 @@ neomacs_display_wakeup_handler (int fd, void *data)
         case NEOMACS_EVENT_SCROLL:
           {
             /* Check if scrolling over a webkit view */
-            struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+            struct neomacs_display_info *dpyinfo
+              = FRAME_NEOMACS_DISPLAY_INFO (f);
             if (dpyinfo && dpyinfo->display_handle)
               {
                 uint32_t webkit_id = 0;
                 int rel_x = 0, rel_y = 0;
-                if (neomacs_display_webkit_at_position (dpyinfo->display_handle,
-                                                         ev->x, ev->y,
-                                                         &webkit_id, &rel_x, &rel_y))
+                if (neomacs_display_webkit_at_position (
+                      dpyinfo->display_handle,
+                      ev->x, ev->y,
+                      &webkit_id, &rel_x, &rel_y))
                   {
-                    /* Forward scroll to webkit view.
-                       Scale deltas: winit LineDelta is ~1.0 per notch,
-                       WPE expects pixel-like values. */
-                    int sdx = (int)(ev->scrollDeltaX * 53);
-                    int sdy = (int)(ev->scrollDeltaY * 53);
-                    neomacs_display_webkit_send_scroll (dpyinfo->display_handle,
-                                                        webkit_id, rel_x, rel_y,
-                                                        sdx, sdy);
+                    int sdx, sdy;
+                    if (ev->pixelPrecise)
+                      {
+                        /* Pixel deltas from touchpad — already
+                           in logical pixels, pass directly. */
+                        sdx = (int) ev->scrollDeltaX;
+                        sdy = (int) ev->scrollDeltaY;
+                      }
+                    else
+                      {
+                        /* Line deltas from mouse wheel —
+                           convert to ~pixels for WPE. */
+                        sdx = (int)(ev->scrollDeltaX * 53);
+                        sdy = (int)(ev->scrollDeltaY * 53);
+                      }
+                    neomacs_display_webkit_send_scroll (
+                      dpyinfo->display_handle,
+                      webkit_id, rel_x, rel_y, sdx, sdy);
                     break;
                   }
               }
@@ -8546,20 +8558,39 @@ neomacs_display_wakeup_handler (int fd, void *data)
             float abs_dx = dx < 0 ? -dx : dx;
             float abs_dy = dy < 0 ? -dy : dy;
 
-            /* Determine primary axis and generate appropriate event */
+            /* Convert deltas to pixel amounts for Emacs.
+               pixel_precise: touchpad deltas already in pixels.
+               Otherwise: line deltas × line height. */
+            double px_dx, px_dy;
+            if (ev->pixelPrecise)
+              {
+                px_dx = (double) -dx;
+                px_dy = (double) -dy;
+              }
+            else
+              {
+                int lh = FRAME_LINE_HEIGHT (f);
+                px_dx = (double) -dx * lh;
+                px_dy = (double) -dy * lh;
+              }
+
+            /* Determine primary axis and generate event */
             if (abs_dy >= abs_dx)
               {
                 if (dy != 0.0f)
                   {
                     inev.ie.kind = WHEEL_EVENT;
-                    /* Positive deltaY = scroll up in winit */
-                    inev.ie.modifiers |= (dy > 0) ? up_modifier : down_modifier;
+                    inev.ie.modifiers
+                      |= (dy > 0) ? up_modifier : down_modifier;
                     inev.ie.arg = list3 (Qnil,
-                                         make_float ((double) -dx * 100),
-                                         make_float ((double) -dy * 100));
-                    if (ev->modifiers & NEOMACS_SHIFT_MASK) inev.ie.modifiers |= shift_modifier;
-                    if (ev->modifiers & NEOMACS_CTRL_MASK) inev.ie.modifiers |= ctrl_modifier;
-                    if (ev->modifiers & NEOMACS_META_MASK) inev.ie.modifiers |= meta_modifier;
+                                         make_float (px_dx),
+                                         make_float (px_dy));
+                    if (ev->modifiers & NEOMACS_SHIFT_MASK)
+                      inev.ie.modifiers |= shift_modifier;
+                    if (ev->modifiers & NEOMACS_CTRL_MASK)
+                      inev.ie.modifiers |= ctrl_modifier;
+                    if (ev->modifiers & NEOMACS_META_MASK)
+                      inev.ie.modifiers |= meta_modifier;
                     XSETINT (inev.ie.x, ev->x);
                     XSETINT (inev.ie.y, ev->y);
                     XSETFRAME (inev.ie.frame_or_window, f);
@@ -8571,13 +8602,17 @@ neomacs_display_wakeup_handler (int fd, void *data)
                 if (dx != 0.0f)
                   {
                     inev.ie.kind = HORIZ_WHEEL_EVENT;
-                    inev.ie.modifiers |= (dx > 0) ? up_modifier : down_modifier;
+                    inev.ie.modifiers
+                      |= (dx > 0) ? up_modifier : down_modifier;
                     inev.ie.arg = list3 (Qnil,
-                                         make_float ((double) -dx * 100),
-                                         make_float ((double) -dy * 100));
-                    if (ev->modifiers & NEOMACS_SHIFT_MASK) inev.ie.modifiers |= shift_modifier;
-                    if (ev->modifiers & NEOMACS_CTRL_MASK) inev.ie.modifiers |= ctrl_modifier;
-                    if (ev->modifiers & NEOMACS_META_MASK) inev.ie.modifiers |= meta_modifier;
+                                         make_float (px_dx),
+                                         make_float (px_dy));
+                    if (ev->modifiers & NEOMACS_SHIFT_MASK)
+                      inev.ie.modifiers |= shift_modifier;
+                    if (ev->modifiers & NEOMACS_CTRL_MASK)
+                      inev.ie.modifiers |= ctrl_modifier;
+                    if (ev->modifiers & NEOMACS_META_MASK)
+                      inev.ie.modifiers |= meta_modifier;
                     XSETINT (inev.ie.x, ev->x);
                     XSETINT (inev.ie.y, ev->y);
                     XSETFRAME (inev.ie.frame_or_window, f);

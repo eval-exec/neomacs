@@ -2632,11 +2632,15 @@ impl ApplicationHandler for RenderApp {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
+                let (dx, dy, pixel_precise) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                        (x, y, false)
+                    }
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                        ((pos.x / self.scale_factor) as f32 / 10.0,
-                         (pos.y / self.scale_factor) as f32 / 10.0)
+                        // Pass raw logical pixel deltas for touchpad
+                        ((pos.x / self.scale_factor) as f32,
+                         (pos.y / self.scale_factor) as f32,
+                         true)
                     }
                 };
                 self.comms.send_input(InputEvent::MouseScroll {
@@ -2645,6 +2649,7 @@ impl ApplicationHandler for RenderApp {
                     x: self.mouse_pos.0,
                     y: self.mouse_pos.1,
                     modifiers: self.modifiers,
+                    pixel_precise,
                 });
             }
 

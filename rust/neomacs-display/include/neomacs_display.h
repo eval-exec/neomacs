@@ -202,6 +202,7 @@ typedef struct NeomacsInputEvent {
   uint32_t button;
   float scrollDeltaX;
   float scrollDeltaY;
+  uint32_t pixelPrecise;
   uint32_t width;
   uint32_t height;
 } NeomacsInputEvent;
@@ -1075,6 +1076,12 @@ void neomacs_display_hide_tooltip(struct NeomacsDisplay *handle);
  * Trigger visual bell flash effect.
  */
 void neomacs_display_visual_bell(struct NeomacsDisplay *handle);
+
+/**
+ * Request window attention (urgency hint / taskbar flash).
+ * If urgent is non-zero, uses Critical attention type; otherwise Informational.
+ */
+void neomacs_display_request_attention(struct NeomacsDisplay *handle, int urgent);
 
 /**
  * Set the window title (threaded mode)

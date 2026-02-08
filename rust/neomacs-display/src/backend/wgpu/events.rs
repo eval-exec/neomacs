@@ -59,6 +59,7 @@ pub struct NeomacsInputEvent {
     pub button: u32,
     pub scroll_delta_x: f32,
     pub scroll_delta_y: f32,
+    pub pixel_precise: u32,
     pub width: u32,
     pub height: u32,
 }
@@ -77,6 +78,7 @@ impl Default for NeomacsInputEvent {
             button: 0,
             scroll_delta_x: 0.0,
             scroll_delta_y: 0.0,
+            pixel_precise: 0,
             width: 0,
             height: 0,
         }

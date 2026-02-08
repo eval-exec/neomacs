@@ -33,6 +33,8 @@ pub enum InputEvent {
         x: f32,
         y: f32,
         modifiers: u32,
+        /// True if deltas are in pixels (touchpad), false if in lines (mouse wheel)
+        pixel_precise: bool,
     },
     WindowResize {
         width: u32,

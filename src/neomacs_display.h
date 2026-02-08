@@ -190,6 +190,7 @@ typedef struct NeomacsInputEvent {
   uint32_t button;
   float scrollDeltaX;
   float scrollDeltaY;
+  uint32_t pixelPrecise;
   uint32_t width;
   uint32_t height;
 } NeomacsInputEvent;
