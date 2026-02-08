@@ -2164,6 +2164,19 @@ pub unsafe extern "C" fn neomacs_display_visual_bell(
     }
 }
 
+/// Request window attention (urgency hint / taskbar flash).
+/// If urgent is non-zero, uses Critical attention type; otherwise Informational.
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_request_attention(
+    _handle: *mut NeomacsDisplay,
+    urgent: c_int,
+) {
+    let cmd = RenderCommand::RequestAttention { urgent: urgent != 0 };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Set the window title (threaded mode)
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_title(

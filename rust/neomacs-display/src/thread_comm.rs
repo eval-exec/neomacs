@@ -243,6 +243,8 @@ pub enum RenderCommand {
     HideTooltip,
     /// Trigger visual bell flash
     VisualBell,
+    /// Request window attention (urgency hint / taskbar flash)
+    RequestAttention { urgent: bool },
 }
 
 /// Wakeup pipe for signaling Emacs from render thread

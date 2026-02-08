@@ -6258,12 +6258,17 @@ neomacs_get_focus_frame (struct frame *frame)
 static void
 neomacs_frame_raise_lower (struct frame *f, bool raise_flag)
 {
-  /* With a single-window GPU renderer, raise/lower is mostly a no-op.
-     We just ensure the frame is visible when raising.  */
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+
   if (raise_flag)
     {
       if (!FRAME_VISIBLE_P (f))
         neomacs_make_frame_visible_invisible (f, true);
+
+      /* Request window attention (taskbar flash) when raising.
+         This is the equivalent of X11's urgency hint.  */
+      if (dpyinfo && dpyinfo->display_handle)
+        neomacs_display_request_attention (dpyinfo->display_handle, 0);
     }
 }
 

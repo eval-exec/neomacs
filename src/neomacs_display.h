@@ -1206,6 +1206,13 @@ void neomacs_clipboard_free_text(char *text);
 void neomacs_display_visual_bell(struct NeomacsDisplay *handle);
 
 /**
+ * Request window attention (urgency hint / taskbar flash).
+ * If urgent is non-zero, uses Critical type; otherwise Informational.
+ */
+void neomacs_display_request_attention(struct NeomacsDisplay *handle,
+                                       int urgent);
+
+/**
  * Get dropped file paths (call after NEOMACS_EVENT_FILE_DROP).
  * Returns number of paths written to out_paths.
  * Each path must be freed with neomacs_display_free_dropped_path().

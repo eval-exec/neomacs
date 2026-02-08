@@ -1156,6 +1156,16 @@ impl RenderApp {
                     self.visual_bell_start = Some(std::time::Instant::now());
                     self.frame_dirty = true;
                 }
+                RenderCommand::RequestAttention { urgent } => {
+                    if let Some(ref window) = self.window {
+                        let attention = if urgent {
+                            Some(winit::window::UserAttentionType::Critical)
+                        } else {
+                            Some(winit::window::UserAttentionType::Informational)
+                        };
+                        window.request_user_attention(attention);
+                    }
+                }
             }
         }
 
