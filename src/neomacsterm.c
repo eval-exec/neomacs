@@ -2301,6 +2301,9 @@ struct DisplayPropFFI {
   uint32_t image_gpu_id;  /* GPU image ID (type=4) */
   int image_width;        /* image width in pixels (type=4) */
   int image_height;       /* image height in pixels (type=4) */
+  int image_hmargin;      /* image horizontal margin in pixels (type=4) */
+  int image_vmargin;      /* image vertical margin in pixels (type=4) */
+  int image_ascent;       /* image ascent: 0-100 = percent, -1 = centered (type=4) */
   float raise_factor;     /* raise factor (type=5), fraction of line height */
   uint32_t display_fg;    /* display string face fg (type=1), 0=use position face */
   uint32_t display_bg;    /* display string face bg (type=1), 0=use position face */
@@ -2330,6 +2333,9 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
   out->image_gpu_id = 0;
   out->image_width = 0;
   out->image_height = 0;
+  out->image_hmargin = 0;
+  out->image_vmargin = 0;
+  out->image_ascent = 50;  /* DEFAULT_IMAGE_ASCENT */
   out->display_fg = 0;
   out->display_bg = 0;
   out->raise_factor = 0;
@@ -2569,6 +2575,9 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
                               out->image_gpu_id = gpu_id;
                               out->image_width = img->width > 0 ? img->width : 100;
                               out->image_height = img->height > 0 ? img->height : 100;
+                              out->image_hmargin = img->hmargin;
+                              out->image_vmargin = img->vmargin;
+                              out->image_ascent = img->ascent;
                               set_buffer_internal_1 (old);
                               return 0;
                             }

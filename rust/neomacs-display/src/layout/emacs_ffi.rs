@@ -359,6 +359,12 @@ pub struct DisplayPropFFI {
     pub image_width: c_int,
     /// Image height in pixels (type=4)
     pub image_height: c_int,
+    /// Image horizontal margin in pixels (type=4)
+    pub image_hmargin: c_int,
+    /// Image vertical margin in pixels (type=4)
+    pub image_vmargin: c_int,
+    /// Image ascent: 0-100 = percent, -1 = centered (type=4)
+    pub image_ascent: c_int,
     /// Raise factor (type=5), fraction of line height
     pub raise_factor: f32,
     /// Display string face fg (type=1), 0=use position face

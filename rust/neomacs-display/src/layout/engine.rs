@@ -985,19 +985,37 @@ impl LayoutEngine {
                     // Image display property: render image glyph
                     let img_w = display_prop.image_width as f32;
                     let img_h = display_prop.image_height as f32;
+                    let hmargin = display_prop.image_hmargin as f32;
+                    let vmargin = display_prop.image_vmargin as f32;
+                    // Total dimensions including margins
+                    let total_w = img_w + hmargin * 2.0;
+                    let total_h = img_h + vmargin * 2.0;
 
                     if row < max_rows && display_prop.image_gpu_id != 0 {
-                        let gx = content_x + col as f32 * char_w;
-                        let gy = row_y[row as usize];
+                        let gx = content_x + col as f32 * char_w + hmargin;
+                        let gy_base = row_y[row as usize];
+
+                        // Compute ascent-based vertical offset
+                        let img_ascent = display_prop.image_ascent;
+                        let ascent_px = if img_ascent == -1 {
+                            // Centered: align middle of image with font baseline center
+                            (total_h + ascent - (char_h - ascent) + 1.0) / 2.0
+                        } else {
+                            // Percentage: ascent% of total height
+                            total_h * (img_ascent as f32 / 100.0)
+                        };
+                        // Offset so image ascent aligns with text baseline
+                        let gy = gy_base + ascent - ascent_px + vmargin;
+
                         frame_glyphs.add_image(
                             display_prop.image_gpu_id,
                             gx, gy, img_w, img_h,
                         );
-                        // Advance by image width in columns
-                        let img_cols = (img_w / char_w).ceil() as i32;
+                        // Advance by total width (including margins) in columns
+                        let img_cols = (total_w / char_w).ceil() as i32;
                         col += img_cols;
                         // Advance rows if image is taller than one line
-                        let img_rows = ((img_h / char_h).ceil() as i32).max(1);
+                        let img_rows = ((total_h / char_h).ceil() as i32).max(1);
                         if img_rows > 1 {
                             row += img_rows - 1;
                         }
