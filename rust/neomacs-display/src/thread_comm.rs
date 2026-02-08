@@ -315,6 +315,16 @@ pub enum RenderCommand {
         /// Height in pixels (for shadow/gradient)
         height: f32,
     },
+    /// Configure cursor glow effect
+    SetCursorGlow {
+        enabled: bool,
+        /// Glow color as sRGB 0.0-1.0
+        r: f32, g: f32, b: f32,
+        /// Glow radius in pixels
+        radius: f32,
+        /// Peak opacity (0.0-1.0)
+        opacity: f32,
+    },
 }
 
 /// Wakeup pipe for signaling Emacs from render thread

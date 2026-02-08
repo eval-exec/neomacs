@@ -8086,6 +8086,47 @@ Optional HEIGHT is the separator height in pixels (default 3).  */)
   return s > 0 ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-cursor-glow",
+       Fneomacs_set_cursor_glow,
+       Sneomacs_set_cursor_glow, 0, 3, 0,
+       doc: /* Configure cursor glow effect.
+ENABLED non-nil enables a soft glow around the cursor.
+Optional COLOR is a color string (default cursor color).
+Optional RADIUS is the glow radius in pixels (default 30).  */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object radius)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int on = !NILP (enabled);
+  int r = 102, g = 153, b = 255; /* light blue default */
+  int rad = 30;
+  int opacity = 15; /* 0.15 */
+
+  if (!NILP (color) && STRINGP (color))
+    {
+      Emacs_Color c;
+      if (neomacs_defined_color (NULL, SSDATA (color), &c, false, false))
+        {
+          r = c.red >> 8;
+          g = c.green >> 8;
+          b = c.blue >> 8;
+        }
+    }
+
+  if (FIXNUMP (radius))
+    {
+      rad = (int) XFIXNUM (radius);
+      if (rad < 5) rad = 5;
+      if (rad > 100) rad = 100;
+    }
+
+  neomacs_display_set_cursor_glow (
+    dpyinfo->display_handle, on, r, g, b, rad, opacity);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-indent-guides",
        Fneomacs_set_indent_guides,
        Sneomacs_set_indent_guides, 0, 2, 0,
@@ -9347,6 +9388,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_show_whitespace);
   defsubr (&Sneomacs_set_inactive_dim);
   defsubr (&Sneomacs_set_mode_line_separator);
+  defsubr (&Sneomacs_set_cursor_glow);
 
   /* Cursor blink */
   defsubr (&Sneomacs_set_cursor_blink);

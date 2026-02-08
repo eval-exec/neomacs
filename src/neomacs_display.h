@@ -1295,6 +1295,13 @@ void neomacs_display_set_inactive_dim(
     int enabled,
     int opacity);
 
+void neomacs_display_set_cursor_glow(
+    struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int radius,
+    int opacity);
+
 void neomacs_display_set_mode_line_separator(
     struct NeomacsDisplay *handle,
     int style,

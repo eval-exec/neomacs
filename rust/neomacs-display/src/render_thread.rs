@@ -654,6 +654,12 @@ struct RenderApp {
     mode_line_separator_style: u32,
     mode_line_separator_color: (f32, f32, f32),
     mode_line_separator_height: f32,
+
+    /// Cursor glow effect
+    cursor_glow_enabled: bool,
+    cursor_glow_color: (f32, f32, f32),
+    cursor_glow_radius: f32,
+    cursor_glow_opacity: f32,
 }
 
 /// State for a tooltip displayed as GPU overlay
@@ -828,6 +834,10 @@ impl RenderApp {
             mode_line_separator_style: 0,
             mode_line_separator_color: (0.0, 0.0, 0.0),
             mode_line_separator_height: 3.0,
+            cursor_glow_enabled: false,
+            cursor_glow_color: (0.4, 0.6, 1.0),
+            cursor_glow_radius: 30.0,
+            cursor_glow_opacity: 0.15,
         }
     }
 
@@ -1563,6 +1573,17 @@ impl RenderApp {
                     self.mode_line_separator_height = height;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_mode_line_separator(style, (r, g, b), height);
+                    }
+                    self.frame_dirty = true;
+                }
+
+                RenderCommand::SetCursorGlow { enabled, r, g, b, radius, opacity } => {
+                    self.cursor_glow_enabled = enabled;
+                    self.cursor_glow_color = (r, g, b);
+                    self.cursor_glow_radius = radius;
+                    self.cursor_glow_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_glow(enabled, (r, g, b), radius, opacity);
                     }
                     self.frame_dirty = true;
                 }

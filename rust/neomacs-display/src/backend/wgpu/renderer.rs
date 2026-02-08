@@ -71,6 +71,14 @@ pub struct WgpuRenderer {
     mode_line_separator_color: (f32, f32, f32),
     /// Mode-line separator height in pixels
     mode_line_separator_height: f32,
+    /// Cursor glow enabled
+    cursor_glow_enabled: bool,
+    /// Cursor glow color (linear RGB)
+    cursor_glow_color: (f32, f32, f32),
+    /// Cursor glow radius
+    cursor_glow_radius: f32,
+    /// Cursor glow peak opacity
+    cursor_glow_opacity: f32,
 }
 
 impl WgpuRenderer {
@@ -550,6 +558,10 @@ impl WgpuRenderer {
             mode_line_separator_style: 0,
             mode_line_separator_color: (0.0, 0.0, 0.0),
             mode_line_separator_height: 3.0,
+            cursor_glow_enabled: false,
+            cursor_glow_color: (0.4, 0.6, 1.0),
+            cursor_glow_radius: 30.0,
+            cursor_glow_opacity: 0.15,
         }
     }
 
@@ -564,6 +576,14 @@ impl WgpuRenderer {
         self.mode_line_separator_style = style;
         self.mode_line_separator_color = color;
         self.mode_line_separator_height = height;
+    }
+
+    /// Update cursor glow config
+    pub fn set_cursor_glow(&mut self, enabled: bool, color: (f32, f32, f32), radius: f32, opacity: f32) {
+        self.cursor_glow_enabled = enabled;
+        self.cursor_glow_color = color;
+        self.cursor_glow_radius = radius;
+        self.cursor_glow_opacity = opacity;
     }
 
     /// Update visible whitespace config
@@ -1929,6 +1949,62 @@ impl WgpuRenderer {
                     render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, fill_buffer.slice(..));
                     render_pass.draw(0..box_fill_vertices.len() as u32, 0..1);
+                }
+            }
+
+            // === Step 1c: Draw cursor glow effect (behind cursor and text) ===
+            if self.cursor_glow_enabled && cursor_visible {
+                // Find active cursor position (style != 3 = not hollow/inactive)
+                let mut glow_pos: Option<(f32, f32, f32, f32)> = None;
+                if let Some(ref anim) = animated_cursor {
+                    glow_pos = Some((anim.x, anim.y, anim.width, anim.height));
+                } else {
+                    for glyph in &frame_glyphs.glyphs {
+                        if let FrameGlyph::Cursor { x, y, width, height, style, .. } = glyph {
+                            if *style != 3 {
+                                glow_pos = Some((*x, *y, *width, *height));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if let Some((cx, cy, cw, ch)) = glow_pos {
+                    let (gr, gg, gb) = self.cursor_glow_color;
+                    let radius = self.cursor_glow_radius;
+                    let peak_alpha = self.cursor_glow_opacity;
+                    let layers = (radius / 2.0).ceil() as i32;
+                    let mut glow_vertices: Vec<RectVertex> = Vec::new();
+
+                    // Center of cursor
+                    let center_x = cx + cw / 2.0;
+                    let center_y = cy + ch / 2.0;
+
+                    for i in 0..layers {
+                        let t = (i + 1) as f32 / layers as f32;
+                        let r = radius * t;
+                        let alpha = peak_alpha * (1.0 - t * t); // quadratic falloff
+                        let c = Color::new(gr, gg, gb, alpha);
+                        let gx = center_x - r;
+                        let gy = center_y - r;
+                        let gw = r * 2.0;
+                        let gh = r * 2.0;
+                        self.add_rect(&mut glow_vertices, gx, gy, gw, gh, &c);
+                    }
+
+                    if !glow_vertices.is_empty() {
+                        let glow_buffer = self.device.create_buffer_init(
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("Cursor Glow Buffer"),
+                                contents: bytemuck::cast_slice(&glow_vertices),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            },
+                        );
+                        render_pass.set_pipeline(&self.rect_pipeline);
+                        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, glow_buffer.slice(..));
+                        render_pass.draw(0..glow_vertices.len() as u32, 0..1);
+                    }
                 }
             }
 

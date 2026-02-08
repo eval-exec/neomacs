@@ -741,6 +741,54 @@ A color string, or nil for default black."
               nil)
             val))))
 
+(defcustom neomacs-cursor-glow nil
+  "Enable a soft glow effect around the cursor.
+Non-nil renders concentric semi-transparent rings behind the cursor."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-cursor-glow)
+           (neomacs-set-cursor-glow
+            val
+            (if (boundp 'neomacs-cursor-glow-color)
+                neomacs-cursor-glow-color
+              nil)
+            (if (boundp 'neomacs-cursor-glow-radius)
+                neomacs-cursor-glow-radius
+              nil)))))
+
+(defcustom neomacs-cursor-glow-color nil
+  "Color for cursor glow effect.
+A color string, or nil for default light blue."
+  :type '(choice (const :tag "Default" nil)
+                 (color :tag "Color"))
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-glow)
+                    (boundp 'neomacs-cursor-glow)
+                    neomacs-cursor-glow)
+           (neomacs-set-cursor-glow t val
+            (if (boundp 'neomacs-cursor-glow-radius)
+                neomacs-cursor-glow-radius
+              nil)))))
+
+(defcustom neomacs-cursor-glow-radius 30
+  "Radius of cursor glow in pixels."
+  :type '(integer :tag "Radius")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-glow)
+                    (boundp 'neomacs-cursor-glow)
+                    neomacs-cursor-glow)
+           (neomacs-set-cursor-glow t
+            (if (boundp 'neomacs-cursor-glow-color)
+                neomacs-cursor-glow-color
+              nil)
+            val))))
+
 ;; Provide the feature
 (provide 'neomacs-win)
 (provide 'term/neomacs-win)

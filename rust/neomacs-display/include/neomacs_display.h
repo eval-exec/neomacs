@@ -1177,6 +1177,17 @@ void neomacs_display_set_show_whitespace(struct NeomacsDisplay *handle,
 void neomacs_display_set_inactive_dim(struct NeomacsDisplay *handle, int enabled, int opacity);
 
 /**
+ * Configure cursor glow effect (threaded mode)
+ */
+void neomacs_display_set_cursor_glow(struct NeomacsDisplay *handle,
+                                     int enabled,
+                                     int r,
+                                     int g,
+                                     int b,
+                                     int radius,
+                                     int opacity);
+
+/**
  * Configure mode-line separator style (threaded mode)
  */
 void neomacs_display_set_mode_line_separator(struct NeomacsDisplay *handle,

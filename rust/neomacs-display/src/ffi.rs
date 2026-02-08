@@ -2368,6 +2368,28 @@ pub unsafe extern "C" fn neomacs_display_set_inactive_dim(
     }
 }
 
+/// Configure cursor glow effect (threaded mode)
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_cursor_glow(
+    _handle: *mut NeomacsDisplay,
+    enabled: c_int,
+    r: c_int, g: c_int, b: c_int,
+    radius: c_int,
+    opacity: c_int,
+) {
+    let cmd = RenderCommand::SetCursorGlow {
+        enabled: enabled != 0,
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        radius: radius as f32,
+        opacity: opacity as f32 / 100.0,
+    };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Configure mode-line separator style (threaded mode)
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_mode_line_separator(
