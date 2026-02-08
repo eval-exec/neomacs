@@ -692,6 +692,26 @@ neomacs_extract_window_glyphs (struct window *w, void *user_data)
         selected);
   }
 
+  /* Check mouse-face highlight for this window */
+  Mouse_HLInfo *hlinfo = MOUSE_HL_INFO (f);
+  bool has_mouse_face = false;
+  int mf_beg_row = -1, mf_beg_col = -1;
+  int mf_end_row = -1, mf_end_col = -1;
+  int mf_face_id = 0;
+
+  if (!NILP (hlinfo->mouse_face_window)
+      && XWINDOW (hlinfo->mouse_face_window) == w
+      && hlinfo->mouse_face_beg_row >= 0
+      && !hlinfo->mouse_face_hidden)
+    {
+      has_mouse_face = true;
+      mf_beg_row = hlinfo->mouse_face_beg_row;
+      mf_beg_col = hlinfo->mouse_face_beg_col;
+      mf_end_row = hlinfo->mouse_face_end_row;
+      mf_end_col = hlinfo->mouse_face_end_col;
+      mf_face_id = hlinfo->mouse_face_face_id;
+    }
+
   /* Walk all rows in current_matrix */
   for (int row_idx = 0; row_idx < matrix->nrows; row_idx++)
     {
@@ -711,6 +731,7 @@ neomacs_extract_window_glyphs (struct window *w, void *user_data)
           struct glyph *glyph = row->glyphs[area];
           struct glyph *end = glyph + row->used[area];
           int glyph_x;
+          int text_col = 0;  /* Column index within TEXT_AREA */
 
           /* Calculate starting X for this area */
           if (area == TEXT_AREA)
@@ -722,16 +743,35 @@ neomacs_extract_window_glyphs (struct window *w, void *user_data)
 
           while (glyph < end)
             {
-              /* Resolve the face for this glyph */
-              struct face *face = FACE_FROM_ID_OR_NULL (f, glyph->face_id);
+              /* Check if this glyph is in the mouse-face highlight region.
+                 Mouse-face beg/end col are relative to TEXT_AREA glyphs. */
+              bool in_mouse_face = false;
+              if (has_mouse_face && area == TEXT_AREA && !is_mode_line)
+                {
+                  if (row_idx > mf_beg_row && row_idx < mf_end_row)
+                    in_mouse_face = true;
+                  else if (row_idx == mf_beg_row && row_idx == mf_end_row)
+                    in_mouse_face = (text_col >= mf_beg_col
+                                     && text_col < mf_end_col);
+                  else if (row_idx == mf_beg_row)
+                    in_mouse_face = (text_col >= mf_beg_col);
+                  else if (row_idx == mf_end_row)
+                    in_mouse_face = (text_col < mf_end_col);
+                }
+
+              /* Determine effective face: mouse-face overrides normal */
+              int effective_face_id = in_mouse_face
+                ? mf_face_id : (int) glyph->face_id;
+              struct face *face
+                = FACE_FROM_ID_OR_NULL (f, effective_face_id);
               if (!face)
                 face = FACE_FROM_ID_OR_NULL (f, DEFAULT_FACE_ID);
 
               /* Send face if it changed */
-              if (face && (int) glyph->face_id != last_face_id)
+              if (face && effective_face_id != last_face_id)
                 {
                   neomacs_send_face (handle, f, face);
-                  last_face_id = glyph->face_id;
+                  last_face_id = effective_face_id;
                 }
 
               /* Set up row context via begin_row */
@@ -891,6 +931,8 @@ neomacs_extract_window_glyphs (struct window *w, void *user_data)
                 }
 
               glyph_x += glyph->pixel_width;
+              if (area == TEXT_AREA)
+                text_col++;
               glyph++;
             }
         }
@@ -5196,6 +5238,42 @@ neomacs_new_font (struct frame *f, Lisp_Object font_object, int fontset)
  * Input Event Handling
  * ============================================================================ */
 
+/* Re-send the current frame to the render thread.
+   Used after mouse highlight changes to immediately update the display
+   without waiting for a full redisplay cycle.  Does NOT clear cursors. */
+static void
+neomacs_resend_frame (struct frame *f)
+{
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+  struct neomacs_output *output = FRAME_NEOMACS_OUTPUT (f);
+
+  if (!dpyinfo || !dpyinfo->display_handle || !output
+      || !output->use_gpu_widget)
+    return;
+
+  void *handle = dpyinfo->display_handle;
+
+  /* Begin frame (clears glyph data but not cursors) */
+  if (output->window_id > 0)
+    neomacs_display_begin_frame_window (
+        handle, output->window_id,
+        (float) FRAME_COLUMN_WIDTH (f),
+        (float) FRAME_LINE_HEIGHT (f),
+        FRAME_FONT (f)
+          ? (float) FRAME_FONT (f)->pixel_size : 14.0f);
+  else
+    neomacs_display_begin_frame (handle);
+
+  /* Re-extract with current mouse highlight state */
+  neomacs_extract_full_frame (f);
+
+  /* Send to render thread */
+  if (output->window_id > 0)
+    neomacs_display_end_frame_window (handle, output->window_id);
+  else
+    neomacs_display_end_frame (handle);
+}
+
 /* Read socket events for the Neomacs terminal.
    In threaded mode, events are delivered via the wakeup handler
    (neomacs_display_wakeup_handler) which calls neomacs_display_drain_input.
@@ -7149,6 +7227,11 @@ neomacs_display_wakeup_handler (int fd, void *data)
                     remember_mouse_glyph (
                         f, ev->x, ev->y, r);
                     dpyinfo->last_mouse_glyph_frame = f;
+
+                    /* Re-send frame so mouse-face highlight is
+                       immediately visible without waiting for
+                       a full redisplay cycle.  */
+                    neomacs_resend_frame (f);
                   }
               }
           }
