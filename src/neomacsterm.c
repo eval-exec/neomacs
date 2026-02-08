@@ -6312,15 +6312,6 @@ DEFUN ("neomacs-display-list", Fneomacs_display_list, Sneomacs_display_list, 0, 
   return result;
 }
 
-DEFUN ("x-hide-tip", Fx_hide_tip, Sx_hide_tip, 0, 0, 0,
-       doc: /* Hide the current tooltip window, if there is any.
-Value is t if tooltip was open, nil otherwise.  */)
-  (void)
-{
-  /* TODO: Implement tooltip hiding */
-  return Qnil;
-}
-
 DEFUN ("xw-display-color-p", Fxw_display_color_p, Sxw_display_color_p, 0, 1, 0,
        doc: /* Return t if the display supports color.  */)
   (Lisp_Object terminal)
@@ -8461,7 +8452,6 @@ syms_of_neomacsterm (void)
 
   defsubr (&Sneomacs_available_p);
   defsubr (&Sneomacs_display_list);
-  defsubr (&Sx_hide_tip);
   defsubr (&Sxw_display_color_p);
   defsubr (&Sx_display_grayscale_p);
 

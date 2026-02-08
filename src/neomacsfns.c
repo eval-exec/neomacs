@@ -48,6 +48,13 @@ struct neomacs_frame_data
   int height;
 };
 
+/* Tooltip state (shared between x-show-tip and x-hide-tip) */
+static Lisp_Object tip_timer;
+static Lisp_Object tip_last_frame;
+static Lisp_Object tip_last_string;
+static Lisp_Object tip_last_parms;
+static bool tip_showing;
+
 /* Forward declarations */
 static void neomacs_set_title_handler (struct frame *, Lisp_Object, Lisp_Object);
 static struct neomacs_display_info *check_neomacs_display_info (Lisp_Object);
@@ -1832,14 +1839,79 @@ Not applicable to GPU-rendered displays; returns nil.  */)
 }
 
 DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
-       doc: /* Show STRING in a tooltip on FRAME.
-This is a simplified implementation for Neomacs.  */)
+       doc: /* SKIP: real doc in xfns.c.  */)
   (Lisp_Object string, Lisp_Object frame, Lisp_Object parms,
    Lisp_Object timeout, Lisp_Object dx, Lisp_Object dy)
 {
-  /* TODO: Implement proper tooltip rendering via GPU.  */
+  specpdl_ref count = SPECPDL_INDEX ();
+  specbind (Qinhibit_redisplay, Qt);
+
   CHECK_STRING (string);
-  return Qnil;
+  if (SCHARS (string) == 0)
+    string = make_unibyte_string (" ", 1);
+
+  if (NILP (frame))
+    frame = selected_frame;
+  decode_window_system_frame (frame);
+
+  if (NILP (timeout))
+    timeout = Vx_show_tooltip_timeout;
+  CHECK_FIXNAT (timeout);
+
+  if (NILP (dx))
+    dx = make_fixnum (5);
+  else
+    CHECK_FIXNUM (dx);
+
+  if (NILP (dy))
+    dy = make_fixnum (-10);
+  else
+    CHECK_FIXNUM (dy);
+
+  /* Hide any existing tooltip first.  */
+  Fx_hide_tip ();
+
+  tip_last_frame = frame;
+  tip_last_string = string;
+  tip_last_parms = parms;
+
+  /* Display tooltip text via echo area message.
+     This is a temporary implementation until GPU overlay tooltips
+     are added.  */
+  message_with_string ("%s", string, false);
+  tip_showing = true;
+
+  /* Let the tip disappear after timeout seconds.  */
+  tip_timer = calln (intern ("run-at-time"), timeout, Qnil,
+                     intern ("x-hide-tip"));
+
+  return unbind_to (count, Qnil);
+}
+
+DEFUN ("x-hide-tip", Fx_hide_tip, Sx_hide_tip, 0, 0, 0,
+       doc: /* Hide the current tooltip window, if there is any.
+Value is t if tooltip was open, nil otherwise.  */)
+  (void)
+{
+  Lisp_Object was_open = Qnil;
+
+  if (!NILP (tip_timer))
+    {
+      calln (intern ("cancel-timer"), tip_timer);
+      tip_timer = Qnil;
+    }
+
+  if (tip_showing)
+    {
+      /* Clear echo area.  */
+      message1 (NULL);
+      tip_showing = false;
+      was_open = Qt;
+    }
+
+  tip_last_frame = Qnil;
+
+  return was_open;
 }
 
 /* ============================================================================
@@ -2161,6 +2233,7 @@ syms_of_neomacsfns (void)
 
   /* Tooltip functions */
   defsubr (&Sx_show_tip);
+  defsubr (&Sx_hide_tip);
 
   /* Frame geometry functions */
   defsubr (&Sneomacs_frame_geometry);
@@ -2178,6 +2251,16 @@ syms_of_neomacsfns (void)
   /* Clipboard functions */
   defsubr (&Sneomacs_clipboard_set);
   defsubr (&Sneomacs_clipboard_get);
+
+  /* Tooltip state GC roots */
+  staticpro (&tip_timer);
+  tip_timer = Qnil;
+  staticpro (&tip_last_frame);
+  tip_last_frame = Qnil;
+  staticpro (&tip_last_string);
+  tip_last_string = Qnil;
+  staticpro (&tip_last_parms);
+  tip_last_parms = Qnil;
 
   /* Symbols */
   DEFSYM (Qdisplay, "display");
