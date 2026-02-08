@@ -2334,6 +2334,18 @@ impl RenderApp {
         output.present();
     }
 
+    /// Set the window icon from the embedded Emacs icon PNG.
+    fn set_window_icon(window: &Window) {
+        let icon_bytes = include_bytes!("../../../etc/images/icons/hicolor/128x128/apps/emacs.png");
+        if let Ok(img) = image::load_from_memory(icon_bytes) {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            if let Ok(icon) = winit::window::Icon::from_rgba(rgba.into_raw(), w, h) {
+                window.set_window_icon(Some(icon));
+            }
+        }
+    }
+
     /// Translate winit key to X11 keysym
     fn translate_key(key: &Key) -> u32 {
         match key {
@@ -2411,6 +2423,9 @@ impl ApplicationHandler for RenderApp {
 
                     // Enable IME input for CJK and compose support
                     window.set_ime_allowed(true);
+
+                    // Set window icon from embedded Emacs icon
+                    Self::set_window_icon(&window);
 
                     self.window = Some(window);
                 }
