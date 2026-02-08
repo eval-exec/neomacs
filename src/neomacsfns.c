@@ -437,31 +437,52 @@ neomacs_set_skip_taskbar (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 static void
 neomacs_set_no_focus_on_map (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-  /* No focus on map - not implemented yet */
+  if (!EQ (arg, oldval))
+    FRAME_NO_FOCUS_ON_MAP (f) = !NILP (arg);
 }
 
 static void
 neomacs_set_no_accept_focus (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-  /* No accept focus - not implemented yet */
+  if (!EQ (arg, oldval))
+    FRAME_NO_ACCEPT_FOCUS (f) = !NILP (arg);
 }
 
 static void
 neomacs_set_z_group (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-  /* Z group - not implemented yet */
+  /* Z group (always-on-top, etc.) - not supported by winit yet */
 }
 
 static void
 neomacs_set_override_redirect (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-  /* Override redirect - not implemented yet */
+  /* Override redirect - not applicable to GPU rendering */
 }
 
 static void
 neomacs_set_alpha_background (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-  /* Alpha background - not implemented yet */
+  double alpha = 1.0;
+
+  if (FLOATP (arg))
+    {
+      alpha = XFLOAT_DATA (arg);
+      if (alpha < 0.0 || alpha > 1.0)
+	args_out_of_range (make_float (0.0), make_float (1.0));
+    }
+  else if (FIXNUMP (arg))
+    {
+      EMACS_INT ialpha = XFIXNUM (arg);
+      if (ialpha < 0 || ialpha > 100)
+	args_out_of_range (make_fixnum (0), make_fixnum (100));
+      alpha = ialpha / 100.0;
+    }
+
+  f->alpha_background = alpha;
+
+  if (FRAME_TERMINAL (f)->set_frame_alpha_hook)
+    FRAME_TERMINAL (f)->set_frame_alpha_hook (f);
 }
 
 /* Frame parameter handlers table - must match the order in frame.c frame_parms table */
