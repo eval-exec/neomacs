@@ -294,6 +294,11 @@ impl LayoutEngine {
         // Invisible text state: next charpos where we need to re-check
         let mut next_invis_check: i64 = params.window_start;
 
+        // Display text property state
+        let mut next_display_check: i64 = params.window_start;
+        let mut display_prop = DisplayPropFFI::default();
+        let mut display_str_buf = [0u8; 1024];
+
         // Line number state
         let mut current_line: i64 = if lnum_enabled {
             neomacs_layout_count_line_number(
@@ -500,6 +505,129 @@ impl LayoutEngine {
                     } else {
                         charpos + 1
                     };
+                }
+            }
+
+            // Check for display text property at property boundaries
+            if charpos >= next_display_check {
+                neomacs_layout_check_display_prop(
+                    buffer,
+                    window,
+                    charpos,
+                    display_str_buf.as_mut_ptr(),
+                    display_str_buf.len() as i32,
+                    &mut display_prop,
+                );
+
+                if display_prop.prop_type == 1 {
+                    // String replacement: render the display string instead
+                    // of buffer text, skip original chars up to covers_to.
+
+                    // First resolve face at this position
+                    if charpos >= next_face_check || current_face_id < 0 {
+                        let mut next_check: i64 = 0;
+                        let fid = neomacs_layout_face_at_pos(
+                            window, charpos,
+                            &mut self.face_data as *mut FaceDataFFI,
+                            &mut next_check,
+                        );
+                        if fid >= 0 && fid != current_face_id {
+                            current_face_id = fid;
+                            face_fg = Color::from_pixel(self.face_data.fg);
+                            face_bg = Color::from_pixel(self.face_data.bg);
+                            self.apply_face(&self.face_data, frame_glyphs);
+                        }
+                        next_face_check = if next_check > charpos { next_check } else { charpos + 1 };
+                    }
+
+                    // Render display string characters
+                    let dstr = &display_str_buf[..display_prop.str_len as usize];
+                    let mut di = 0usize;
+                    while di < dstr.len() && row < max_rows {
+                        let (dch, dlen) = decode_utf8(&dstr[di..]);
+                        di += dlen;
+
+                        if dch == '\n' || dch == '\r' {
+                            continue;
+                        }
+
+                        let dchar_cols = if is_wide_char(dch) { 2 } else { 1 };
+                        if col + dchar_cols > cols {
+                            if params.truncate_lines {
+                                break;
+                            }
+                            col = 0;
+                            row += 1;
+                            if row >= max_rows { break; }
+                        }
+
+                        let gx = content_x + col as f32 * char_w;
+                        let gy = text_y + row as f32 * char_h;
+                        let glyph_w = dchar_cols as f32 * char_w;
+                        frame_glyphs.add_char(dch, gx, gy, glyph_w, char_h, ascent, false);
+                        col += dchar_cols;
+                    }
+
+                    // Skip original buffer text covered by this display prop
+                    let chars_to_skip = display_prop.covers_to - charpos;
+                    for _ in 0..chars_to_skip {
+                        if byte_idx >= bytes_read as usize { break; }
+                        let (_, ch_len) = decode_utf8(&text[byte_idx..]);
+                        byte_idx += ch_len;
+                    }
+                    charpos = display_prop.covers_to;
+                    window_end_charpos = charpos;
+                    next_display_check = display_prop.covers_to;
+                    current_face_id = -1; // force re-check at new position
+                    continue;
+                } else if display_prop.prop_type == 2 {
+                    // Space spec: render a stretch glyph
+
+                    // Resolve face first
+                    if charpos >= next_face_check || current_face_id < 0 {
+                        let mut next_check: i64 = 0;
+                        let fid = neomacs_layout_face_at_pos(
+                            window, charpos,
+                            &mut self.face_data as *mut FaceDataFFI,
+                            &mut next_check,
+                        );
+                        if fid >= 0 && fid != current_face_id {
+                            current_face_id = fid;
+                            face_fg = Color::from_pixel(self.face_data.fg);
+                            face_bg = Color::from_pixel(self.face_data.bg);
+                            self.apply_face(&self.face_data, frame_glyphs);
+                        }
+                        next_face_check = if next_check > charpos { next_check } else { charpos + 1 };
+                    }
+
+                    let space_cols = display_prop.space_width.ceil() as i32;
+                    let space_pixel_w = display_prop.space_width * char_w;
+
+                    if col + space_cols <= cols && row < max_rows {
+                        let gx = content_x + col as f32 * char_w;
+                        let gy = text_y + row as f32 * char_h;
+                        frame_glyphs.add_stretch(
+                            gx, gy, space_pixel_w, char_h,
+                            face_bg, self.face_data.face_id, false,
+                        );
+                        col += space_cols;
+                    }
+
+                    // Skip original buffer text
+                    let chars_to_skip = display_prop.covers_to - charpos;
+                    for _ in 0..chars_to_skip {
+                        if byte_idx >= bytes_read as usize { break; }
+                        let (_, ch_len) = decode_utf8(&text[byte_idx..]);
+                        byte_idx += ch_len;
+                    }
+                    charpos = display_prop.covers_to;
+                    window_end_charpos = charpos;
+                    next_display_check = display_prop.covers_to;
+                    current_face_id = -1;
+                    continue;
+                } else {
+                    // No display prop: covers_to tells us when to re-check
+                    next_display_check = display_prop.covers_to;
                 }
             }
 

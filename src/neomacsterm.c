@@ -1933,6 +1933,125 @@ neomacs_layout_buffer_byte_at (void *buffer_ptr, int64_t byte_pos)
   return result;
 }
 
+/* FFI struct for display text property results.
+   Layout must match Rust DisplayPropFFI in emacs_ffi.rs. */
+struct DisplayPropFFI {
+  int type;           /* 0=none, 1=string, 2=space */
+  int str_len;        /* bytes of replacement string (type=1) */
+  float space_width;  /* width in columns (type=2) */
+  int64_t covers_to;  /* charpos where display prop region ends */
+};
+
+/* Check for a 'display text property at charpos.
+   Handles:
+     - String replacement: (put-text-property ... 'display "text")
+     - Space spec: (put-text-property ... 'display (space :width N))
+   Writes replacement string into str_buf (for type=1).
+   Returns 0 on success. */
+int
+neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
+                                   int64_t charpos,
+                                   uint8_t *str_buf, int str_buf_len,
+                                   void *out_ptr)
+{
+  struct buffer *buf = (struct buffer *) buffer_ptr;
+  struct DisplayPropFFI *out = (struct DisplayPropFFI *) out_ptr;
+
+  out->type = 0;
+  out->str_len = 0;
+  out->space_width = 0;
+  out->covers_to = charpos + 1;
+
+  if (!buf)
+    return -1;
+
+  struct buffer *old = current_buffer;
+  set_buffer_internal_1 (buf);
+
+  ptrdiff_t zv = BUF_ZV (buf);
+  if (charpos >= zv)
+    {
+      set_buffer_internal_1 (old);
+      return 0;
+    }
+
+  Lisp_Object pos = make_fixnum (charpos);
+  Lisp_Object display_prop = Fget_char_property (pos, Qdisplay, Qnil);
+
+  if (NILP (display_prop))
+    {
+      /* No display property. Find next change so caller knows when to
+         re-check. */
+      Lisp_Object limit = make_fixnum (zv);
+      Lisp_Object next
+          = Fnext_single_char_property_change (pos, Qdisplay, Qnil, limit);
+      out->covers_to = FIXNUMP (next) ? XFIXNUM (next) : zv;
+      set_buffer_internal_1 (old);
+      return 0;
+    }
+
+  /* Find end of this display property region. */
+  Lisp_Object limit = make_fixnum (zv);
+  Lisp_Object next_change
+      = Fnext_single_char_property_change (pos, Qdisplay, Qnil, limit);
+  out->covers_to = FIXNUMP (next_change) ? XFIXNUM (next_change) : zv;
+
+  if (STRINGP (display_prop))
+    {
+      /* String replacement: 'display "text" */
+      ptrdiff_t len = SBYTES (display_prop);
+      ptrdiff_t copy_len = len < str_buf_len - 1 ? len : str_buf_len - 1;
+      memcpy (str_buf, SDATA (display_prop), copy_len);
+      str_buf[copy_len] = 0;
+      out->type = 1;
+      out->str_len = (int) copy_len;
+      set_buffer_internal_1 (old);
+      return 0;
+    }
+
+  if (CONSP (display_prop))
+    {
+      Lisp_Object car = XCAR (display_prop);
+
+      if (EQ (car, Qspace))
+        {
+          /* Space spec: (space :width N) */
+          Lisp_Object plist = XCDR (display_prop);
+          Lisp_Object width_val = Fplist_get (plist, QCwidth, Qnil);
+          if (FIXNUMP (width_val))
+            out->space_width = (float) XFIXNUM (width_val);
+          else if (FLOATP (width_val))
+            out->space_width = (float) XFLOAT_DATA (width_val);
+          else
+            out->space_width = 1.0;
+
+          out->type = 2;
+          set_buffer_internal_1 (old);
+          return 0;
+        }
+
+      /* Check for (raise FACTOR) — just skip to treat as normal text */
+      /* Check for (image ...) — TODO: handle image display */
+      /* Check for list of display specs — handle first string/space found */
+      if (STRINGP (car))
+        {
+          /* Sometimes display prop is a list starting with a string */
+          ptrdiff_t len = SBYTES (car);
+          ptrdiff_t copy_len = len < str_buf_len - 1 ? len : str_buf_len - 1;
+          memcpy (str_buf, SDATA (car), copy_len);
+          str_buf[copy_len] = 0;
+          out->type = 1;
+          out->str_len = (int) copy_len;
+          set_buffer_internal_1 (old);
+          return 0;
+        }
+    }
+
+  /* Unrecognized display property form — treat as no display prop */
+  set_buffer_internal_1 (old);
+  return 0;
+}
+
 /* Walk current_matrix for ALL windows in the frame and extract complete
    glyph data.  Called from neomacs_update_end after Emacs has finished
    all window updates.  This replaces the incremental glyph accumulation

@@ -222,6 +222,24 @@ extern "C" {
         minor_tick: c_int,
         face_out: *mut FaceDataFFI,
     ) -> c_int;
+
+    // ========================================================================
+    // Display text property
+    // ========================================================================
+
+    /// Check for a 'display text property at charpos.
+    /// Handles string replacement and space specs.
+    /// Writes replacement string into str_buf (type=1).
+    /// Fills DisplayPropFFI with type, length, and region end.
+    /// Returns 0 on success, -1 on error.
+    pub fn neomacs_layout_check_display_prop(
+        buffer: EmacsBuffer,
+        window: EmacsWindow,
+        charpos: i64,
+        str_buf: *mut u8,
+        str_buf_len: c_int,
+        out: *mut DisplayPropFFI,
+    ) -> c_int;
 }
 
 /// FFI-safe line number configuration struct.
@@ -243,6 +261,21 @@ pub struct LineNumberConfigFFI {
     pub current_absolute: c_int,
     /// display-line-numbers-widen
     pub widen: c_int,
+}
+
+/// FFI-safe display text property result.
+/// Matches the C struct DisplayPropFFI in neomacsterm.c.
+#[repr(C)]
+#[derive(Debug, Clone, Default)]
+pub struct DisplayPropFFI {
+    /// 0=none, 1=string replacement, 2=space
+    pub prop_type: c_int,
+    /// Bytes of replacement string (type=1)
+    pub str_len: c_int,
+    /// Space width in columns (type=2)
+    pub space_width: f32,
+    /// Charpos where this display property region ends
+    pub covers_to: i64,
 }
 
 /// FFI-safe window parameters struct.
