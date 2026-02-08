@@ -1800,7 +1800,15 @@ impl WgpuRenderer {
                     want_overlay, mask_data.len(), color_data.len());
 
                 // Draw mask glyphs with glyph pipeline (alpha tinted with foreground)
+                // Sort by GlyphKey so identical characters batch into single draw calls,
+                // significantly reducing GPU state changes (set_bind_group calls).
                 if !mask_data.is_empty() {
+                    mask_data.sort_by(|(a, _), (b, _)| {
+                        a.face_id.cmp(&b.face_id)
+                            .then(a.font_size_bits.cmp(&b.font_size_bits))
+                            .then(a.charcode.cmp(&b.charcode))
+                    });
+
                     render_pass.set_pipeline(&self.glyph_pipeline);
                     render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
 
@@ -1816,17 +1824,34 @@ impl WgpuRenderer {
 
                     render_pass.set_vertex_buffer(0, glyph_buffer.slice(..));
 
-                    for (i, (key, _)) in mask_data.iter().enumerate() {
+                    // Batch consecutive glyphs sharing the same texture
+                    let mut i = 0;
+                    while i < mask_data.len() {
+                        let (ref key, _) = mask_data[i];
                         if let Some(cached) = glyph_atlas.get(key) {
+                            let batch_start = i;
+                            i += 1;
+                            while i < mask_data.len() && mask_data[i].0 == *key {
+                                i += 1;
+                            }
+                            let vert_start = (batch_start * 6) as u32;
+                            let vert_end = (i * 6) as u32;
                             render_pass.set_bind_group(1, &cached.bind_group, &[]);
-                            let start = (i * 6) as u32;
-                            render_pass.draw(start..start + 6, 0..1);
+                            render_pass.draw(vert_start..vert_end, 0..1);
+                        } else {
+                            i += 1;
                         }
                     }
                 }
 
                 // Draw color glyphs with image pipeline (direct RGBA, e.g. color emoji)
                 if !color_data.is_empty() {
+                    color_data.sort_by(|(a, _), (b, _)| {
+                        a.face_id.cmp(&b.face_id)
+                            .then(a.font_size_bits.cmp(&b.font_size_bits))
+                            .then(a.charcode.cmp(&b.charcode))
+                    });
+
                     render_pass.set_pipeline(&self.image_pipeline);
                     render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
 
@@ -1842,11 +1867,22 @@ impl WgpuRenderer {
 
                     render_pass.set_vertex_buffer(0, color_buffer.slice(..));
 
-                    for (i, (key, _)) in color_data.iter().enumerate() {
+                    // Batch consecutive color glyphs sharing the same texture
+                    let mut i = 0;
+                    while i < color_data.len() {
+                        let (ref key, _) = color_data[i];
                         if let Some(cached) = glyph_atlas.get(key) {
+                            let batch_start = i;
+                            i += 1;
+                            while i < color_data.len() && color_data[i].0 == *key {
+                                i += 1;
+                            }
+                            let vert_start = (batch_start * 6) as u32;
+                            let vert_end = (i * 6) as u32;
                             render_pass.set_bind_group(1, &cached.bind_group, &[]);
-                            let start = (i * 6) as u32;
-                            render_pass.draw(start..start + 6, 0..1);
+                            render_pass.draw(vert_start..vert_end, 0..1);
+                        } else {
+                            i += 1;
                         }
                     }
                 }
