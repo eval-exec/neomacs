@@ -403,6 +403,16 @@ impl WgpuGlyphAtlas {
         self.cache.clear();
     }
 
+    /// Update the scale factor and clear the cache so glyphs are
+    /// re-rasterized at the new DPI.
+    pub fn set_scale_factor(&mut self, scale_factor: f32) {
+        if (self.scale_factor - scale_factor).abs() > 0.001 {
+            self.scale_factor = scale_factor;
+            self.cache.clear();
+            log::info!("Glyph atlas: scale factor -> {}, cache cleared", scale_factor);
+        }
+    }
+
     /// Get the number of cached glyphs
     pub fn len(&self) -> usize {
         self.cache.len()

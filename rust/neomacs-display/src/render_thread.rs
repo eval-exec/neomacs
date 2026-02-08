@@ -2704,6 +2704,11 @@ impl ApplicationHandler for RenderApp {
                 if let Some(ref mut renderer) = self.renderer {
                     renderer.set_scale_factor(scale_factor as f32);
                 }
+                // Clear glyph atlas so text re-rasterizes at new DPI
+                if let Some(ref mut atlas) = self.glyph_atlas {
+                    atlas.set_scale_factor(scale_factor as f32);
+                }
+                self.frame_dirty = true;
                 // The Resized event will follow, which handles surface reconfiguration
             }
 
