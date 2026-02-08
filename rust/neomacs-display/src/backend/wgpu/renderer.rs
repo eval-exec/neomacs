@@ -4001,6 +4001,16 @@ impl WgpuRenderer {
         // === Pass 1: Background rectangles ===
         let mut rect_vertices: Vec<RectVertex> = Vec::new();
 
+        // Drop shadow (layered for soft edge)
+        let shadow_layers = 4;
+        for i in 1..=shadow_layers {
+            let offset = i as f32 * 1.5;
+            let alpha = 0.12 * (1.0 - (i - 1) as f32 / shadow_layers as f32);
+            let shadow = Color::new(0.0, 0.0, 0.0, alpha);
+            self.add_rect(&mut rect_vertices,
+                          mx + offset, my + offset, mw, mh, &shadow);
+        }
+
         // Semi-transparent background
         self.add_rect(&mut rect_vertices, mx, my, mw, mh, &bg_color);
 
@@ -4250,6 +4260,16 @@ impl WgpuRenderer {
 
         // === Pass 1: Background and border rectangles ===
         let mut rect_vertices: Vec<RectVertex> = Vec::new();
+
+        // Drop shadow (layered for soft edge)
+        let shadow_layers = 3;
+        for i in 1..=shadow_layers {
+            let offset = i as f32 * 1.0;
+            let alpha = 0.10 * (1.0 - (i - 1) as f32 / shadow_layers as f32);
+            let shadow = Color::new(0.0, 0.0, 0.0, alpha);
+            self.add_rect(&mut rect_vertices,
+                          tx + offset, ty + offset, tw, th, &shadow);
+        }
 
         // Background
         self.add_rect(&mut rect_vertices, tx, ty, tw, th, &bg_color);
