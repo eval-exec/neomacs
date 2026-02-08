@@ -7,7 +7,7 @@
   };
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
     # Rust toolchain
     rust-overlay = {
@@ -205,7 +205,9 @@
               echo "WPE WebKit: $(pkg-config --modversion wpe-webkit-2.0 2>/dev/null || echo 'not found')"
               echo ""
 
-              # Library path for runtime
+              # Library path for runtime — DO NOT include ncurses here,
+              # it causes glibc version contamination with system shell.
+              # The linker adds RPATH for ncurses during compilation.
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (with pkgs; [
                 gtk4
                 glib
@@ -220,7 +222,6 @@
                 harfbuzz
                 libxml2
                 gnutls
-                ncurses
                 libjpeg
                 libtiff
                 giflib
