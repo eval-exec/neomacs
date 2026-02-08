@@ -8885,6 +8885,41 @@ SCALE-PCT is the initial scale percentage (default 130, meaning 130%).  */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-wrap-indicator",
+       Fneomacs_set_wrap_indicator,
+       Sneomacs_set_wrap_indicator, 0, 3, 0,
+       doc: /* Configure line wrap indicator overlay.
+ENABLED non-nil renders a subtle gradient at the right edge of lines
+that wrap, providing a visual cue for line wrapping.
+COLOR is an RGB hex string (default "#8099CC").
+OPACITY is a percentage 0-100 (default 30).  */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int on = !NILP (enabled);
+  int r = 128, g = 153, b = 204;
+  int op = 30;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_wrap_indicator (dpyinfo->display_handle, on, r, g, b, op);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-scroll-momentum",
        Fneomacs_set_scroll_momentum,
        Sneomacs_set_scroll_momentum, 0, 3, 0,
@@ -10435,6 +10470,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_mode_line_transition);
   defsubr (&Sneomacs_set_cursor_wake);
   defsubr (&Sneomacs_set_scroll_momentum);
+  defsubr (&Sneomacs_set_wrap_indicator);
   defsubr (&Sneomacs_set_region_glow);
   defsubr (&Sneomacs_set_window_glow);
   defsubr (&Sneomacs_set_scroll_progress);

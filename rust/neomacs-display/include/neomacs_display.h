@@ -1459,6 +1459,16 @@ void neomacs_display_set_cursor_wake(struct NeomacsDisplay *handle,
                                      int scalePct);
 
 /**
+ * Configure line wrap indicator overlay
+ */
+void neomacs_display_set_wrap_indicator(struct NeomacsDisplay *handle,
+                                        int enabled,
+                                        int r,
+                                        int g,
+                                        int b,
+                                        int opacity);
+
+/**
  * Configure per-window scroll momentum indicator
  */
 void neomacs_display_set_scroll_momentum(struct NeomacsDisplay *handle,

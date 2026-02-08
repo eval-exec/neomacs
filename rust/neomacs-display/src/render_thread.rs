@@ -771,6 +771,10 @@ struct RenderApp {
     cursor_wake_enabled: bool,
     cursor_wake_duration_ms: u32,
     cursor_wake_scale: f32,
+    /// Line wrap indicator overlay
+    wrap_indicator_enabled: bool,
+    wrap_indicator_color: (f32, f32, f32),
+    wrap_indicator_opacity: f32,
     /// Per-window scroll momentum indicator
     scroll_momentum_enabled: bool,
     scroll_momentum_fade_ms: u32,
@@ -1081,6 +1085,9 @@ impl RenderApp {
             cursor_wake_enabled: false,
             cursor_wake_duration_ms: 120,
             cursor_wake_scale: 1.3,
+            wrap_indicator_enabled: false,
+            wrap_indicator_color: (0.5, 0.6, 0.8),
+            wrap_indicator_opacity: 0.3,
             scroll_momentum_enabled: false,
             scroll_momentum_fade_ms: 300,
             scroll_momentum_width: 3.0,
@@ -2134,6 +2141,15 @@ impl RenderApp {
                     self.cursor_wake_scale = scale;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_cursor_wake(enabled, duration_ms, scale);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetWrapIndicator { enabled, r, g, b, opacity } => {
+                    self.wrap_indicator_enabled = enabled;
+                    self.wrap_indicator_color = (r, g, b);
+                    self.wrap_indicator_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_wrap_indicator(enabled, r, g, b, opacity);
                     }
                     self.frame_dirty = true;
                 }

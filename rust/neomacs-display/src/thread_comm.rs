@@ -592,6 +592,16 @@ pub enum RenderCommand {
         /// Duration of the spacing animation in milliseconds
         duration_ms: u32,
     },
+    /// Configure line wrap indicator overlay
+    SetWrapIndicator {
+        enabled: bool,
+        /// Color (sRGB floats)
+        r: f32,
+        g: f32,
+        b: f32,
+        /// Opacity 0.0-1.0
+        opacity: f32,
+    },
     /// Configure per-window scroll momentum indicator
     SetScrollMomentum {
         enabled: bool,

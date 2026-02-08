@@ -1732,6 +1732,52 @@ animates down to 100%."
                 neomacs-cursor-wake-duration nil)
             val))))
 
+;; --- Line wrap indicator ---
+(declare-function neomacs-set-wrap-indicator "neomacsterm.c"
+  (&optional enabled color opacity))
+
+(defcustom neomacs-wrap-indicator nil
+  "Enable line wrap indicator overlay.
+Non-nil renders a subtle gradient at the right edge of lines that
+wrap, providing a visual cue for line wrapping."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-wrap-indicator)
+           (neomacs-set-wrap-indicator val
+            (if (boundp 'neomacs-wrap-indicator-color)
+                neomacs-wrap-indicator-color nil)
+            (if (boundp 'neomacs-wrap-indicator-opacity)
+                neomacs-wrap-indicator-opacity nil)))))
+
+(defcustom neomacs-wrap-indicator-color "#8099CC"
+  "Color for the line wrap indicator (hex RGB string)."
+  :type '(string :tag "Color (#RRGGBB)")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-wrap-indicator)
+                    (boundp 'neomacs-wrap-indicator)
+                    neomacs-wrap-indicator)
+           (neomacs-set-wrap-indicator t val
+            (if (boundp 'neomacs-wrap-indicator-opacity)
+                neomacs-wrap-indicator-opacity nil)))))
+
+(defcustom neomacs-wrap-indicator-opacity 30
+  "Opacity for the line wrap indicator (0-100)."
+  :type '(integer :tag "Opacity (%)")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-wrap-indicator)
+                    (boundp 'neomacs-wrap-indicator)
+                    neomacs-wrap-indicator)
+           (neomacs-set-wrap-indicator t
+            (if (boundp 'neomacs-wrap-indicator-color)
+                neomacs-wrap-indicator-color nil)
+            val))))
+
 ;; --- Scroll momentum indicator ---
 (declare-function neomacs-set-scroll-momentum "neomacsterm.c"
   (&optional enabled fade-ms width))

@@ -260,6 +260,10 @@ pub struct WgpuRenderer {
     cursor_wake_scale: f32,
     /// Timestamp of last cursor wake trigger
     cursor_wake_started: Option<std::time::Instant>,
+    /// Line wrap indicator overlay
+    wrap_indicator_enabled: bool,
+    wrap_indicator_color: (f32, f32, f32),
+    wrap_indicator_opacity: f32,
     /// Per-window scroll momentum indicator
     scroll_momentum_enabled: bool,
     scroll_momentum_fade_ms: u32,
@@ -941,6 +945,9 @@ impl WgpuRenderer {
             cursor_wake_duration_ms: 120,
             cursor_wake_scale: 1.3,
             cursor_wake_started: None,
+            wrap_indicator_enabled: false,
+            wrap_indicator_color: (0.5, 0.6, 0.8),
+            wrap_indicator_opacity: 0.3,
             scroll_momentum_enabled: false,
             scroll_momentum_fade_ms: 300,
             scroll_momentum_width: 3.0,
@@ -1180,6 +1187,13 @@ impl WgpuRenderer {
         } else {
             1.0
         }
+    }
+
+    /// Update wrap indicator config
+    pub fn set_wrap_indicator(&mut self, enabled: bool, r: f32, g: f32, b: f32, opacity: f32) {
+        self.wrap_indicator_enabled = enabled;
+        self.wrap_indicator_color = (r, g, b);
+        self.wrap_indicator_opacity = opacity;
     }
 
     /// Update scroll momentum indicator config
@@ -5065,6 +5079,56 @@ impl WgpuRenderer {
                     render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, progress_buffer.slice(..));
                     render_pass.draw(0..progress_vertices.len() as u32, 0..1);
+                }
+            }
+
+            // === Line wrap indicator overlay ===
+            if self.wrap_indicator_enabled {
+                let (wr, wg, wb) = self.wrap_indicator_color;
+                let w_opacity = self.wrap_indicator_opacity.clamp(0.0, 1.0);
+                let mut wrap_vertices: Vec<RectVertex> = Vec::new();
+
+                // Detect right fringe wrap indicators (↵ U+21B5) and draw gradient
+                for glyph in &frame_glyphs.glyphs {
+                    if let FrameGlyph::Char { char: ch, x, y, height, .. } = glyph {
+                        if *ch == '\u{21B5}' {
+                            // Find which window this belongs to
+                            for info in &frame_glyphs.window_infos {
+                                if info.is_minibuffer { continue; }
+                                let b = &info.bounds;
+                                if *y >= b.y && *y < b.y + b.height
+                                    && *x >= b.x && *x < b.x + b.width
+                                {
+                                    // Draw gradient fade at right edge of text area
+                                    let grad_w = 20.0_f32.min(b.width * 0.1);
+                                    let text_right = *x; // fringe indicator x is at right fringe
+                                    let grad_x = text_right - grad_w;
+                                    let steps = 5;
+                                    for i in 0..steps {
+                                        let frac = i as f32 / steps as f32;
+                                        let step_alpha = w_opacity * frac * frac; // quadratic fade-in
+                                        let sx = grad_x + frac * grad_w;
+                                        let sw = grad_w / steps as f32;
+                                        let c = Color::new(wr, wg, wb, step_alpha);
+                                        self.add_rect(&mut wrap_vertices, sx, *y, sw, *height, &c);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !wrap_vertices.is_empty() {
+                    let wrap_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Wrap Indicator Buffer"),
+                        contents: bytemuck::cast_slice(&wrap_vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, wrap_buffer.slice(..));
+                    render_pass.draw(0..wrap_vertices.len() as u32, 0..1);
                 }
             }
 
