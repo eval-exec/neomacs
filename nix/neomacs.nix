@@ -249,6 +249,8 @@ in stdenv.mkDerivation {
     homepage = "https://github.com/eval-exec/neomacs";
     license = licenses.gpl3Plus;
     platforms = platforms.linux;
+    # `nix run` uses this when no explicit `apps.<system>.default` is defined.
+    mainProgram = "emacs";
     maintainers = [ ];
   };
 }
