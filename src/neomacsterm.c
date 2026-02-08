@@ -2310,6 +2310,7 @@ struct DisplayPropFFI {
   int fringe_bitmap_id;   /* fringe bitmap ID (type=6,7) */
   uint32_t fringe_fg;     /* fringe face foreground color (type=6,7) */
   uint32_t fringe_bg;     /* fringe face background color (type=6,7) */
+  float height_factor;    /* font height multiplier (0.0=default, >0=scale) */
 };
 
 /* Check for a 'display text property at charpos.
@@ -2345,6 +2346,7 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
   out->fringe_bitmap_id = 0;
   out->fringe_fg = 0;
   out->fringe_bg = 0;
+  out->height_factor = 0;
 
   if (!buf)
     return -1;
@@ -2548,6 +2550,21 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
           return 0;
         }
 
+      /* Check for (height FACTOR) display property — font scaling */
+      if (EQ (car, Qheight) && CONSP (XCDR (display_prop)))
+        {
+          Lisp_Object factor = XCAR (XCDR (display_prop));
+          if (FIXNUMP (factor))
+            out->height_factor = (float) XFIXNUM (factor);
+          else if (FLOATP (factor))
+            out->height_factor = (float) XFLOAT_DATA (factor);
+          /* Height is a non-replacing spec that modifies text;
+             use type 8 to signal font scaling. */
+          out->type = 8;
+          set_buffer_internal_1 (old);
+          return 0;
+        }
+
       /* Check for (left-fringe BITMAP [FACE]) or
          (right-fringe BITMAP [FACE]) display property */
       if ((EQ (car, Qleft_fringe)
@@ -2695,11 +2712,16 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
                   continue;
                 }
 
-              /* (height FACTOR) — font scaling stub:
-                 we note it but don't have a field yet.
-                 Just skip for now. */
-              if (EQ (scar, Qheight))
-                continue;
+              /* (height FACTOR) — font scaling */
+              if (EQ (scar, Qheight) && CONSP (XCDR (spec)))
+                {
+                  Lisp_Object factor = XCAR (XCDR (spec));
+                  if (FIXNUMP (factor))
+                    out->height_factor = (float) XFIXNUM (factor);
+                  else if (FLOATP (factor))
+                    out->height_factor = (float) XFLOAT_DATA (factor);
+                  continue;
+                }
 
               /* (space ...) — replacing spec, stop.
                  Extract basic :width for the space. */
@@ -2721,8 +2743,12 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
                   return 0;
                 }
             }
-          /* Processed all list elements */
-          if (out->raise_factor != 0.0)
+          /* Processed all list elements.
+             If any non-replacing effects found, use type 5
+             (raise) — the Rust engine checks both raise_factor
+             and height_factor regardless of type. */
+          if (out->raise_factor != 0.0
+              || out->height_factor != 0.0)
             {
               out->type = 5;
               set_buffer_internal_1 (old);

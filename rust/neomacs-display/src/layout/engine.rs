@@ -467,6 +467,9 @@ impl LayoutEngine {
         // Raise display property: Y offset applied to glyphs
         let mut raise_y_offset: f32 = 0.0;
         let mut raise_end: i64 = 0;
+        // Height display property: font scale factor
+        let mut height_scale: f32 = 0.0; // 0.0 = no scaling
+        let mut height_end: i64 = 0;
 
         // Margin rendering: check at start of each visual line
         let has_margins = params.left_margin_width > 0.0 || params.right_margin_width > 0.0;
@@ -1037,12 +1040,18 @@ impl LayoutEngine {
                     next_display_check = display_prop.covers_to;
                     current_face_id = -1;
                     continue;
-                } else if display_prop.prop_type == 5 {
-                    // Raise: set Y offset for subsequent glyphs until covers_to
-                    raise_y_offset = -(display_prop.raise_factor * char_h);
-                    raise_end = display_prop.covers_to;
+                } else if display_prop.prop_type == 5 || display_prop.prop_type == 8 {
+                    // Raise and/or height: modify rendering of subsequent glyphs
+                    if display_prop.raise_factor != 0.0 {
+                        raise_y_offset = -(display_prop.raise_factor * char_h);
+                        raise_end = display_prop.covers_to;
+                    }
+                    if display_prop.height_factor > 0.0 {
+                        height_scale = display_prop.height_factor;
+                        height_end = display_prop.covers_to;
+                    }
                     next_display_check = display_prop.covers_to;
-                    // Don't skip text - raise modifies rendering, not content
+                    // Don't skip text - these modify rendering, not content
                 } else if display_prop.prop_type == 6 || display_prop.prop_type == 7 {
                     // Left-fringe (6) or right-fringe (7) display property
                     let r = row as usize;
@@ -1084,6 +1093,11 @@ impl LayoutEngine {
                 if raise_end > 0 && charpos >= raise_end {
                     raise_y_offset = 0.0;
                     raise_end = 0;
+                }
+                // Reset height scale when past the height region
+                if height_end > 0 && charpos >= height_end {
+                    height_scale = 0.0;
+                    height_end = 0;
                 }
             }
 
@@ -1671,7 +1685,15 @@ impl LayoutEngine {
                     let gy = row_y[row as usize] + raise_y_offset;
                     let glyph_w = char_cols as f32 * char_w;
 
-                    frame_glyphs.add_char(ch, gx, gy, glyph_w, char_h, ascent, false);
+                    // Apply height scaling if active
+                    if height_scale > 0.0 && height_scale != 1.0 {
+                        let orig_size = frame_glyphs.font_size();
+                        frame_glyphs.set_font_size(orig_size * height_scale);
+                        frame_glyphs.add_char(ch, gx, gy, glyph_w, char_h, ascent, false);
+                        frame_glyphs.set_font_size(orig_size);
+                    } else {
+                        frame_glyphs.add_char(ch, gx, gy, glyph_w, char_h, ascent, false);
+                    }
                     col += char_cols;
 
                     // Track trailing whitespace

@@ -416,6 +416,16 @@ impl FrameGlyphBuffer {
         });
     }
 
+    /// Get current font size
+    pub fn font_size(&self) -> f32 {
+        self.current_font_size
+    }
+
+    /// Set current font size (for display property height scaling)
+    pub fn set_font_size(&mut self, size: f32) {
+        self.current_font_size = size;
+    }
+
     /// Add a stretch (whitespace) glyph. No overlap removal needed.
     pub fn add_stretch(&mut self, x: f32, y: f32, width: f32, height: f32, bg: Color, face_id: u32, is_overlay: bool) {
         self.glyphs.push(FrameGlyph::Stretch { x, y, width, height, bg, face_id, is_overlay });

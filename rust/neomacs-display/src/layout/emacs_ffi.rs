@@ -377,6 +377,8 @@ pub struct DisplayPropFFI {
     pub fringe_fg: u32,
     /// Fringe face background color (type=6,7)
     pub fringe_bg: u32,
+    /// Font height multiplier (type=5,8): 0.0=default, >0=scale factor
+    pub height_factor: f32,
 }
 
 /// FFI-safe window parameters struct.
