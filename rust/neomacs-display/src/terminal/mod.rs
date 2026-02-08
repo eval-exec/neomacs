@@ -13,6 +13,17 @@ pub use view::{TerminalManager, TerminalView};
 /// Unique identifier for a terminal instance.
 pub type TerminalId = u32;
 
+/// Shared terminal state accessible from both Emacs and render threads.
+/// Maps terminal ID to its Arc<FairMutex<Term>> for cross-thread text extraction.
+pub type SharedTerminals = std::sync::Arc<
+    std::sync::Mutex<
+        std::collections::HashMap<
+            TerminalId,
+            std::sync::Arc<parking_lot::FairMutex<alacritty_terminal::term::Term<view::NeomacsEventProxy>>>,
+        >,
+    >,
+>;
+
 /// Terminal display mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalMode {

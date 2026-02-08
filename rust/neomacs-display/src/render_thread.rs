@@ -53,9 +53,15 @@ impl RenderThread {
         height: u32,
         title: String,
         image_dimensions: SharedImageDimensions,
+        #[cfg(feature = "neo-term")]
+        shared_terminals: crate::terminal::SharedTerminals,
     ) -> Self {
         let handle = thread::spawn(move || {
-            run_render_loop(comms, width, height, title, image_dimensions);
+            run_render_loop(
+                comms, width, height, title, image_dimensions,
+                #[cfg(feature = "neo-term")]
+                shared_terminals,
+            );
         });
 
         Self {
@@ -398,6 +404,8 @@ struct RenderApp {
     // Terminal manager (neo-term)
     #[cfg(feature = "neo-term")]
     terminal_manager: crate::terminal::TerminalManager,
+    #[cfg(feature = "neo-term")]
+    shared_terminals: crate::terminal::SharedTerminals,
 
     // Active popup menu (shown by x-popup-menu)
     popup_menu: Option<PopupMenuState>,
@@ -466,6 +474,8 @@ impl RenderApp {
         height: u32,
         title: String,
         image_dimensions: SharedImageDimensions,
+        #[cfg(feature = "neo-term")]
+        shared_terminals: crate::terminal::SharedTerminals,
     ) -> Self {
         #[cfg(feature = "wpe-webkit")]
         let webkit_import_policy = WebKitImportPolicy::from_env();
@@ -545,6 +555,8 @@ impl RenderApp {
             floating_webkits: Vec::new(),
             #[cfg(feature = "neo-term")]
             terminal_manager: crate::terminal::TerminalManager::new(),
+            #[cfg(feature = "neo-term")]
+            shared_terminals,
             popup_menu: None,
             tooltip: None,
             visual_bell_start: None,
@@ -1089,6 +1101,10 @@ impl RenderApp {
                         id, cols, rows, term_mode, shell.as_deref(),
                     ) {
                         Ok(view) => {
+                            // Register term Arc in shared map for cross-thread access
+                            if let Ok(mut shared) = self.shared_terminals.lock() {
+                                shared.insert(id, view.term.clone());
+                            }
                             self.terminal_manager.terminals.insert(id, view);
                             log::info!("Terminal {} created ({}x{}, {:?})", id, cols, rows, term_mode);
                         }
@@ -1113,6 +1129,9 @@ impl RenderApp {
                 }
                 #[cfg(feature = "neo-term")]
                 RenderCommand::TerminalDestroy { id } => {
+                    if let Ok(mut shared) = self.shared_terminals.lock() {
+                        shared.remove(&id);
+                    }
                     self.terminal_manager.destroy(id);
                     log::info!("Terminal {} destroyed", id);
                 }
@@ -2896,6 +2915,8 @@ fn run_render_loop(
     height: u32,
     title: String,
     image_dimensions: SharedImageDimensions,
+    #[cfg(feature = "neo-term")]
+    shared_terminals: crate::terminal::SharedTerminals,
 ) {
     log::info!("Render thread starting");
 
@@ -2938,7 +2959,11 @@ fn run_render_loop(
         std::time::Instant::now() + std::time::Duration::from_millis(16),
     ));
 
-    let mut app = RenderApp::new(comms, width, height, title, image_dimensions);
+    let mut app = RenderApp::new(
+        comms, width, height, title, image_dimensions,
+        #[cfg(feature = "neo-term")]
+        shared_terminals,
+    );
 
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("Event loop error: {:?}", e);

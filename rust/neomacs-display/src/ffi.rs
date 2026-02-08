@@ -2648,10 +2648,30 @@ pub unsafe extern "C" fn neomacs_display_terminal_set_float(
 pub unsafe extern "C" fn neomacs_display_terminal_get_text(
     terminal_id: u32,
 ) -> *mut c_char {
-    // Terminal state is on the render thread. For now, return NULL.
-    // Text extraction requires synchronous access which will be added
-    // when the TerminalManager is integrated into the render thread.
-    log::debug!("terminal_get_text: id={} - not yet implemented for threaded mode", terminal_id);
+    #[cfg(feature = "winit-backend")]
+    {
+        if let Some(ref state) = THREADED_STATE {
+            if let Ok(shared) = state.shared_terminals.lock() {
+                if let Some(term_arc) = shared.get(&terminal_id) {
+                    use alacritty_terminal::grid::Dimensions;
+                    let term = term_arc.lock();
+                    let grid = term.grid();
+                    let cols = grid.columns();
+                    let rows = grid.screen_lines();
+                    let text = crate::terminal::content::extract_text(
+                        &*term, 0, 0,
+                        rows.saturating_sub(1),
+                        cols.saturating_sub(1),
+                    );
+                    drop(term);
+                    match CString::new(text) {
+                        Ok(c_string) => return c_string.into_raw(),
+                        Err(_) => return std::ptr::null_mut(),
+                    }
+                }
+            }
+        }
+    }
     std::ptr::null_mut()
 }
 
@@ -3868,6 +3888,9 @@ struct ThreadedState {
     /// Shared storage for image dimensions (id -> (width, height))
     /// Populated synchronously when loading images, accessible from main thread
     image_dimensions: Arc<Mutex<HashMap<u32, (u32, u32)>>>,
+    /// Shared terminal handles for cross-thread text extraction
+    #[cfg(feature = "neo-term")]
+    shared_terminals: crate::terminal::SharedTerminals,
 }
 
 /// Initialize display in threaded mode
@@ -3905,13 +3928,20 @@ pub unsafe extern "C" fn neomacs_display_init_threaded(
     // Create shared image dimensions map
     let image_dimensions = Arc::new(Mutex::new(HashMap::new()));
 
-    // Spawn render thread with shared map
+    // Create shared terminal handles for cross-thread text extraction
+    #[cfg(feature = "neo-term")]
+    let shared_terminals: crate::terminal::SharedTerminals =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    // Spawn render thread with shared maps
     let render_thread = RenderThread::spawn(
         render_comms,
         width,
         height,
         title,
         Arc::clone(&image_dimensions),
+        #[cfg(feature = "neo-term")]
+        Arc::clone(&shared_terminals),
     );
 
     // Create a NeomacsDisplay handle for C code to use with frame operations
@@ -3944,7 +3974,9 @@ pub unsafe extern "C" fn neomacs_display_init_threaded(
         emacs_comms,
         render_thread: Some(render_thread),
         display_handle: display_ptr,
-        image_dimensions,  // Use the same shared map passed to render thread
+        image_dimensions,
+        #[cfg(feature = "neo-term")]
+        shared_terminals,
     });
 
     wakeup_fd
