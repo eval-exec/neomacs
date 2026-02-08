@@ -268,6 +268,10 @@ typedef struct WindowParamsFFI {
    */
   int truncateLines;
   /**
+   * Word wrap at word boundaries
+   */
+  int wordWrap;
+  /**
    * Tab width
    */
   int tabWidth;
@@ -300,6 +304,73 @@ typedef struct WindowParamsFFI {
    */
   uint8_t cursorType;
   int cursorBarWidth;
+  /**
+   * Fringe widths in pixels
+   */
+  float leftFringeWidth;
+  float rightFringeWidth;
+  /**
+   * indicate-empty-lines: 0=off, 1=left, 2=right
+   */
+  int indicateEmptyLines;
+  /**
+   * show-trailing-whitespace
+   */
+  int showTrailingWhitespace;
+  /**
+   * trailing-whitespace face background color (sRGB pixel)
+   */
+  uint32_t trailingWsBg;
+  /**
+   * fill-column-indicator column (0 = off)
+   */
+  int fillColumnIndicator;
+  /**
+   * fill-column-indicator character (0 = use default '|')
+   */
+  int fillColumnIndicatorChar;
+  /**
+   * fill-column-indicator face foreground (sRGB pixel)
+   */
+  uint32_t fillColumnIndicatorFg;
+  /**
+   * Extra line spacing in pixels
+   */
+  float extraLineSpacing;
+  /**
+   * Whether to show cursor in non-selected windows
+   */
+  int cursorInNonSelected;
+  /**
+   * selective-display: 0=off, >0=hide lines indented more than N columns
+   */
+  int selectiveDisplay;
+  /**
+   * escape-glyph face foreground color for control chars
+   */
+  uint32_t escapeGlyphFg;
+  /**
+   * nobreak-char-display: 0=off, 1=highlight, 2=escape notation
+   */
+  int nobreakCharDisplay;
+  /**
+   * nobreak-char face foreground color
+   */
+  uint32_t nobreakCharFg;
+  /**
+   * glyphless-char face foreground color
+   */
+  uint32_t glyphlessCharFg;
+  /**
+   * wrap-prefix: string rendered at start of continuation lines
+   */
+  uint8_t wrapPrefix[128];
+  int wrapPrefixLen;
+  /**
+   * line-prefix: string rendered at start of all visual lines
+   */
+  uint8_t linePrefix[128];
+  int linePrefixLen;
 } WindowParamsFFI;
 
 /**
@@ -371,6 +442,84 @@ typedef struct FaceDataFFI {
    */
   int boxLineWidth;
 } FaceDataFFI;
+
+/**
+ * FFI-safe line number configuration struct.
+ * Matches the C struct LineNumberConfigFFI in neomacsterm.c.
+ */
+typedef struct LineNumberConfigFFI {
+  /**
+   * 0=off, 1=absolute, 2=relative, 3=visual
+   */
+  int mode;
+  /**
+   * Column width for line numbers (including padding)
+   */
+  int width;
+  /**
+   * display-line-numbers-offset
+   */
+  int offset;
+  /**
+   * display-line-numbers-major-tick
+   */
+  int majorTick;
+  /**
+   * display-line-numbers-minor-tick
+   */
+  int minorTick;
+  /**
+   * display-line-numbers-current-absolute
+   */
+  int currentAbsolute;
+  /**
+   * display-line-numbers-widen
+   */
+  int widen;
+} LineNumberConfigFFI;
+
+/**
+ * FFI-safe display text property result.
+ * Matches the C struct DisplayPropFFI in neomacsterm.c.
+ */
+typedef struct DisplayPropFFI {
+  /**
+   * 0=none, 1=string replacement, 2=space, 3=align-to, 4=image, 5=raise
+   */
+  int propType;
+  /**
+   * Bytes of replacement string (type=1)
+   */
+  int strLen;
+  /**
+   * Space width in columns (type=2)
+   */
+  float spaceWidth;
+  /**
+   * Charpos where this display property region ends
+   */
+  int64_t coversTo;
+  /**
+   * Align-to column (type=3)
+   */
+  float alignTo;
+  /**
+   * GPU image ID (type=4)
+   */
+  uint32_t imageGpuId;
+  /**
+   * Image width in pixels (type=4)
+   */
+  int imageWidth;
+  /**
+   * Image height in pixels (type=4)
+   */
+  int imageHeight;
+  /**
+   * Raise factor (type=5), fraction of line height
+   */
+  float raiseFactor;
+} DisplayPropFFI;
 
 #define VA_STATUS_SUCCESS 0
 
@@ -1175,7 +1324,12 @@ void neomacs_rust_layout_frame(struct NeomacsDisplay *handle,
                                float charHeight,
                                float fontPixelSize,
                                uint32_t background,
-                               uint32_t verticalBorderFg);
+                               uint32_t verticalBorderFg,
+                               int32_t rightDividerWidth,
+                               int32_t bottomDividerWidth,
+                               uint32_t dividerFg,
+                               uint32_t dividerFirstFg,
+                               uint32_t dividerLastFg);
 
 /**
  * Set an animation configuration option (stub)
@@ -1369,6 +1523,16 @@ extern void neomacs_layout_set_cursor(EmacsWindow window, int x, int y, int hpos
 extern int neomacs_layout_ensure_fontified(EmacsBuffer buffer, int64_t from, int64_t to);
 
 /**
+ * Check if text at charpos is invisible.
+ * Returns 0 = visible, 1 = invisible (hidden), 2 = invisible (ellipsis).
+ * If invisible, *next_visible_out is set to the next visible position.
+ */
+extern int neomacs_layout_check_invisible(EmacsBuffer buffer,
+                                          EmacsWindow window,
+                                          int64_t charpos,
+                                          int64_t *nextVisibleOut);
+
+/**
  * Get mode-line text for a window as plain UTF-8.
  * Returns the number of bytes written, or -1 on error.
  * Also fills face_out with the mode-line face (active or inactive).
@@ -1389,5 +1553,86 @@ extern int64_t neomacs_layout_header_line_text(EmacsWindow window,
                                                uint8_t *outBuf,
                                                int64_t outBufLen,
                                                struct FaceDataFFI *faceOut);
+
+/**
+ * Get tab-line text for a window as plain UTF-8.
+ * Returns the number of bytes written, 0 if no tab-line, or -1 on error.
+ * Also fills face_out with the tab-line face.
+ */
+extern int64_t neomacs_layout_tab_line_text(EmacsWindow window,
+                                            EmacsFrame frame,
+                                            uint8_t *outBuf,
+                                            int64_t outBufLen,
+                                            struct FaceDataFFI *faceOut);
+
+/**
+ * Get line number display configuration for a window.
+ * Returns 0 on success, -1 on error.
+ */
+extern int neomacs_layout_line_number_config(EmacsWindow window,
+                                             EmacsBuffer buffer,
+                                             int64_t bufferZv,
+                                             int maxRows,
+                                             struct LineNumberConfigFFI *configOut);
+
+/**
+ * Count the line number at a character position.
+ * Returns the 1-based line number.
+ */
+extern int64_t neomacs_layout_count_line_number(EmacsBuffer buffer, int64_t charpos, int widen);
+
+/**
+ * Resolve the face for a line number and fill FaceDataFFI.
+ */
+extern int neomacs_layout_line_number_face(EmacsWindow window,
+                                           int isCurrent,
+                                           int64_t lnum,
+                                           int majorTick,
+                                           int minorTick,
+                                           struct FaceDataFFI *faceOut);
+
+/**
+ * Check for a 'display text property at charpos.
+ * Handles string replacement and space specs.
+ * Writes replacement string into str_buf (type=1).
+ * Fills DisplayPropFFI with type, length, and region end.
+ * Returns 0 on success, -1 on error.
+ */
+extern int neomacs_layout_check_display_prop(EmacsBuffer buffer,
+                                             EmacsWindow window,
+                                             int64_t charpos,
+                                             uint8_t *strBuf,
+                                             int strBufLen,
+                                             struct DisplayPropFFI *out);
+
+/**
+ * Collect overlay before-string and after-string at a position.
+ * Before-strings come from overlays starting at charpos.
+ * After-strings come from overlays ending at charpos.
+ * Returns 0 on success, -1 on error.
+ */
+extern int neomacs_layout_overlay_strings_at(EmacsBuffer buffer,
+                                             EmacsWindow window,
+                                             int64_t charpos,
+                                             uint8_t *beforeBuf,
+                                             int beforeBufLen,
+                                             int *beforeLenOut,
+                                             uint8_t *afterBuf,
+                                             int afterBufLen,
+                                             int *afterLenOut);
+
+/**
+ * Check if a character should display as a glyphless glyph.
+ * Looks up Vglyphless_char_display char-table.
+ * method_out: 0=normal, 1=thin_space, 2=empty_box, 3=hex_code,
+ *             4=acronym, 5=zero_width.
+ * For method=4 (acronym), writes the string into str_buf.
+ */
+extern int neomacs_layout_check_glyphless(EmacsFrame frame,
+                                          int codepoint,
+                                          int *methodOut,
+                                          uint8_t *strBuf,
+                                          int strBufLen,
+                                          int *strLenOut);
 
 #endif  /* NEOMACS_DISPLAY_H */

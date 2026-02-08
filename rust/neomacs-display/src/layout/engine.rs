@@ -147,19 +147,69 @@ impl LayoutEngine {
             // Layout this window's content
             self.layout_window(&params, &wp, frame, frame_glyphs);
 
-            // Draw vertical border on right side if window doesn't reach frame edge
+            // Draw window dividers or simple vertical border
             let right_edge = params.bounds.x + params.bounds.width;
-            if right_edge < frame_params.width - 1.0 {
+            let bottom_edge = params.bounds.y + params.bounds.height;
+            let is_rightmost = right_edge >= frame_params.width - 1.0;
+            let is_bottommost = bottom_edge >= frame_params.height - 1.0;
+
+            if frame_params.right_divider_width > 0 && !is_rightmost {
+                // Draw right divider with first/last pixel faces
+                let dw = frame_params.right_divider_width as f32;
+                let x0 = right_edge - dw;
+                let y0 = params.bounds.y;
+                let h = params.bounds.height
+                    - if frame_params.bottom_divider_width > 0 && !is_bottommost {
+                        frame_params.bottom_divider_width as f32
+                    } else {
+                        0.0
+                    };
+                let first_fg = Color::from_pixel(frame_params.divider_first_fg);
+                let mid_fg = Color::from_pixel(frame_params.divider_fg);
+                let last_fg = Color::from_pixel(frame_params.divider_last_fg);
+                if dw >= 3.0 {
+                    frame_glyphs.add_stretch(x0, y0, 1.0, h, first_fg, 0, false);
+                    frame_glyphs.add_stretch(x0 + 1.0, y0, dw - 2.0, h, mid_fg, 0, false);
+                    frame_glyphs.add_stretch(x0 + dw - 1.0, y0, 1.0, h, last_fg, 0, false);
+                } else if dw >= 2.0 {
+                    frame_glyphs.add_stretch(x0, y0, 1.0, h, first_fg, 0, false);
+                    frame_glyphs.add_stretch(x0 + 1.0, y0, 1.0, h, last_fg, 0, false);
+                } else {
+                    frame_glyphs.add_stretch(x0, y0, 1.0, h, mid_fg, 0, false);
+                }
+            } else if !is_rightmost {
+                // Fallback: simple 1px vertical border
                 let border_color = Color::from_pixel(frame_params.vertical_border_fg);
                 frame_glyphs.add_stretch(
-                    right_edge,
-                    params.bounds.y,
-                    1.0,
-                    params.bounds.height,
-                    border_color,
-                    0,
-                    false,
+                    right_edge, params.bounds.y, 1.0, params.bounds.height,
+                    border_color, 0, false,
                 );
+            }
+
+            if frame_params.bottom_divider_width > 0 && !is_bottommost {
+                // Draw bottom divider with first/last pixel faces
+                let dw = frame_params.bottom_divider_width as f32;
+                let x0 = params.bounds.x;
+                let y0 = bottom_edge - dw;
+                let w = params.bounds.width
+                    - if frame_params.right_divider_width > 0 && !is_rightmost {
+                        frame_params.right_divider_width as f32
+                    } else {
+                        0.0
+                    };
+                let first_fg = Color::from_pixel(frame_params.divider_first_fg);
+                let mid_fg = Color::from_pixel(frame_params.divider_fg);
+                let last_fg = Color::from_pixel(frame_params.divider_last_fg);
+                if dw >= 3.0 {
+                    frame_glyphs.add_stretch(x0, y0, w, 1.0, first_fg, 0, false);
+                    frame_glyphs.add_stretch(x0, y0 + 1.0, w, dw - 2.0, mid_fg, 0, false);
+                    frame_glyphs.add_stretch(x0, y0 + dw - 1.0, w, 1.0, last_fg, 0, false);
+                } else if dw >= 2.0 {
+                    frame_glyphs.add_stretch(x0, y0, w, 1.0, first_fg, 0, false);
+                    frame_glyphs.add_stretch(x0, y0 + 1.0, w, 1.0, last_fg, 0, false);
+                } else {
+                    frame_glyphs.add_stretch(x0, y0, w, 1.0, mid_fg, 0, false);
+                }
             }
         }
     }

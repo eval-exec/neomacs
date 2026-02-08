@@ -3368,6 +3368,11 @@ pub unsafe extern "C" fn neomacs_rust_layout_frame(
     font_pixel_size: f32,
     background: u32,
     vertical_border_fg: u32,
+    right_divider_width: i32,
+    bottom_divider_width: i32,
+    divider_fg: u32,
+    divider_first_fg: u32,
+    divider_last_fg: u32,
 ) {
     let display = &mut *handle;
 
@@ -3386,6 +3391,11 @@ pub unsafe extern "C" fn neomacs_rust_layout_frame(
         font_pixel_size: if font_pixel_size > 0.0 { font_pixel_size } else { 14.0 },
         background,
         vertical_border_fg,
+        right_divider_width,
+        bottom_divider_width,
+        divider_fg,
+        divider_first_fg,
+        divider_last_fg,
     };
 
     engine.layout_frame(

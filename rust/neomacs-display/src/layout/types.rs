@@ -236,4 +236,14 @@ pub struct FrameParams {
     pub background: u32,
     /// Vertical border face foreground color (sRGB pixel)
     pub vertical_border_fg: u32,
+    /// Right window divider width in pixels (0 = disabled)
+    pub right_divider_width: i32,
+    /// Bottom window divider width in pixels (0 = disabled)
+    pub bottom_divider_width: i32,
+    /// Window-divider face foreground color (sRGB pixel)
+    pub divider_fg: u32,
+    /// Window-divider-first-pixel face foreground color (sRGB pixel)
+    pub divider_first_fg: u32,
+    /// Window-divider-last-pixel face foreground color (sRGB pixel)
+    pub divider_last_fg: u32,
 }

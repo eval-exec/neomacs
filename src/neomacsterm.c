@@ -70,7 +70,12 @@ extern void neomacs_rust_layout_frame (void *display_handle, void *frame_ptr,
                                        float char_width, float char_height,
                                        float font_pixel_size,
                                        uint32_t background,
-                                       uint32_t vertical_border_fg);
+                                       uint32_t vertical_border_fg,
+                                       int right_divider_width,
+                                       int bottom_divider_width,
+                                       uint32_t divider_fg,
+                                       uint32_t divider_first_fg,
+                                       uint32_t divider_last_fg);
 
 static void neomacs_set_window_size (struct frame *f, bool change_gravity,
                                      int width, int height);
@@ -2712,6 +2717,45 @@ neomacs_update_end (struct frame *f)
                              | (GREEN_FROM_ULONG (vb_fg) << 8)
                              | BLUE_FROM_ULONG (vb_fg));
 
+          /* Window divider face colors */
+          int rdw = FRAME_RIGHT_DIVIDER_WIDTH (f);
+          int bdw = FRAME_BOTTOM_DIVIDER_WIDTH (f);
+          uint32_t div_fg = vb_rgb, div_first_fg = vb_rgb, div_last_fg = vb_rgb;
+          if (rdw > 0 || bdw > 0)
+            {
+              struct face *div_face
+                = FACE_FROM_ID_OR_NULL (f, WINDOW_DIVIDER_FACE_ID);
+              struct face *div_first
+                = FACE_FROM_ID_OR_NULL (f, WINDOW_DIVIDER_FIRST_PIXEL_FACE_ID);
+              struct face *div_last
+                = FACE_FROM_ID_OR_NULL (f, WINDOW_DIVIDER_LAST_PIXEL_FACE_ID);
+              if (div_face)
+                {
+                  unsigned long c = div_face->foreground;
+                  div_fg = ((RED_FROM_ULONG (c) << 16)
+                            | (GREEN_FROM_ULONG (c) << 8)
+                            | BLUE_FROM_ULONG (c));
+                }
+              if (div_first)
+                {
+                  unsigned long c = div_first->foreground;
+                  div_first_fg = ((RED_FROM_ULONG (c) << 16)
+                                  | (GREEN_FROM_ULONG (c) << 8)
+                                  | BLUE_FROM_ULONG (c));
+                }
+              else
+                div_first_fg = div_fg;
+              if (div_last)
+                {
+                  unsigned long c = div_last->foreground;
+                  div_last_fg = ((RED_FROM_ULONG (c) << 16)
+                                 | (GREEN_FROM_ULONG (c) << 8)
+                                 | BLUE_FROM_ULONG (c));
+                }
+              else
+                div_last_fg = div_fg;
+            }
+
           neomacs_rust_layout_frame (
               dpyinfo->display_handle,
               (void *) f,
@@ -2721,7 +2765,9 @@ neomacs_update_end (struct frame *f)
               (float) FRAME_LINE_HEIGHT (f),
               FRAME_FONT (f) ? (float) FRAME_FONT (f)->pixel_size : 14.0f,
               bg_rgb,
-              vb_rgb);
+              vb_rgb,
+              rdw, bdw,
+              div_fg, div_first_fg, div_last_fg);
         }
       else
         {
