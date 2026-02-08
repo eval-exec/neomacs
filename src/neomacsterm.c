@@ -1126,6 +1126,10 @@ struct neomacs_window_params_ffi {
   float right_fringe_width;
   /* indicate-empty-lines: 0=off, 1=left, 2=right */
   int indicate_empty_lines;
+  /* show-trailing-whitespace */
+  int show_trailing_whitespace;
+  /* trailing-whitespace face background color (sRGB) */
+  uint32_t trailing_ws_bg;
 };
 
 /* Get window parameters for the Nth leaf window.
@@ -1293,6 +1297,33 @@ neomacs_layout_get_window_params (void *frame_ptr, int window_index,
     }
   else
     params->indicate_empty_lines = 0;
+
+  /* show-trailing-whitespace */
+  params->show_trailing_whitespace = !NILP (Vshow_trailing_whitespace);
+  if (params->show_trailing_whitespace)
+    {
+      int face_id = lookup_named_face (w, f, Qtrailing_whitespace, false);
+      if (face_id >= 0)
+        {
+          struct face *face = FACE_FROM_ID_OR_NULL (f, face_id);
+          if (face)
+            {
+              unsigned long bg = face->background;
+              params->trailing_ws_bg
+                  = (uint32_t) ((RED_FROM_ULONG (bg) << 16)
+                                | (GREEN_FROM_ULONG (bg) << 8)
+                                | BLUE_FROM_ULONG (bg));
+            }
+          else
+            params->trailing_ws_bg = 0x00FF0000;
+        }
+      else
+        params->trailing_ws_bg = 0x00FF0000;
+    }
+  else
+    {
+      params->trailing_ws_bg = 0;
+    }
 
   return 0;
 }

@@ -97,6 +97,8 @@ impl LayoutEngine {
                 left_fringe_width: wp.left_fringe_width,
                 right_fringe_width: wp.right_fringe_width,
                 indicate_empty_lines: wp.indicate_empty_lines,
+                show_trailing_whitespace: wp.show_trailing_whitespace != 0,
+                trailing_ws_bg: wp.trailing_ws_bg,
             };
 
             // Add window background
@@ -355,6 +357,15 @@ impl LayoutEngine {
         let mut row_continued = vec![false; max_rows as usize];
         let mut row_continuation = vec![false; max_rows as usize];
         let mut row_truncated = vec![false; max_rows as usize];
+
+        // Trailing whitespace tracking
+        let trailing_ws_bg = if params.show_trailing_whitespace {
+            Some(Color::from_pixel(params.trailing_ws_bg))
+        } else {
+            None
+        };
+        let mut trailing_ws_start_col: i32 = -1; // -1 = no trailing ws
+        let mut trailing_ws_row: i32 = 0;
 
         // Word-wrap tracking: position after last breakable whitespace
         let mut wrap_break_col = 0i32;
@@ -790,6 +801,19 @@ impl LayoutEngine {
 
             match ch {
                 '\n' => {
+                    // Highlight trailing whitespace (overlay stretch on top)
+                    if let Some(tw_bg) = trailing_ws_bg {
+                        if trailing_ws_start_col >= 0 && trailing_ws_row == row {
+                            let tw_x = content_x + trailing_ws_start_col as f32 * char_w;
+                            let tw_w = (col - trailing_ws_start_col) as f32 * char_w;
+                            let gy = text_y + row as f32 * char_h;
+                            if tw_w > 0.0 {
+                                frame_glyphs.add_stretch(tw_x, gy, tw_w, char_h, tw_bg, 0, false);
+                            }
+                        }
+                    }
+                    trailing_ws_start_col = -1;
+
                     // Fill rest of line with stretch (use face bg)
                     let remaining = (cols - col) as f32 * char_w;
                     if remaining > 0.0 {
@@ -995,6 +1019,18 @@ impl LayoutEngine {
 
                     frame_glyphs.add_char(ch, gx, gy, glyph_w, char_h, ascent, false);
                     col += char_cols;
+
+                    // Track trailing whitespace
+                    if trailing_ws_bg.is_some() {
+                        if ch == ' ' || ch == '\t' {
+                            if trailing_ws_start_col < 0 {
+                                trailing_ws_start_col = col - char_cols;
+                                trailing_ws_row = row;
+                            }
+                        } else {
+                            trailing_ws_start_col = -1;
+                        }
+                    }
 
                     // Record break AFTER whitespace characters
                     if params.word_wrap && (ch == ' ' || ch == '\t') {

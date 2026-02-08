@@ -371,6 +371,10 @@ pub struct WindowParamsFFI {
     pub right_fringe_width: f32,
     /// indicate-empty-lines: 0=off, 1=left, 2=right
     pub indicate_empty_lines: c_int,
+    /// show-trailing-whitespace
+    pub show_trailing_whitespace: c_int,
+    /// trailing-whitespace face background color (sRGB pixel)
+    pub trailing_ws_bg: u32,
 }
 
 /// FFI-safe face data struct.
