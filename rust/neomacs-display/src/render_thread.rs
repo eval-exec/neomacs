@@ -771,6 +771,10 @@ struct RenderApp {
     cursor_wake_enabled: bool,
     cursor_wake_duration_ms: u32,
     cursor_wake_scale: f32,
+    /// Per-window scroll momentum indicator
+    scroll_momentum_enabled: bool,
+    scroll_momentum_fade_ms: u32,
+    scroll_momentum_width: f32,
     /// Selection region glow
     region_glow_enabled: bool,
     region_glow_face_id: u32,
@@ -1077,6 +1081,9 @@ impl RenderApp {
             cursor_wake_enabled: false,
             cursor_wake_duration_ms: 120,
             cursor_wake_scale: 1.3,
+            scroll_momentum_enabled: false,
+            scroll_momentum_fade_ms: 300,
+            scroll_momentum_width: 3.0,
             region_glow_enabled: false,
             region_glow_face_id: 0,
             region_glow_radius: 6.0,
@@ -2130,6 +2137,15 @@ impl RenderApp {
                     }
                     self.frame_dirty = true;
                 }
+                RenderCommand::SetScrollMomentum { enabled, fade_ms, width } => {
+                    self.scroll_momentum_enabled = enabled;
+                    self.scroll_momentum_fade_ms = fade_ms;
+                    self.scroll_momentum_width = width;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_scroll_momentum(enabled, fade_ms, width);
+                    }
+                    self.frame_dirty = true;
+                }
                 RenderCommand::SetRegionGlow { enabled, face_id, radius, opacity } => {
                     self.region_glow_enabled = enabled;
                     self.region_glow_face_id = face_id;
@@ -2946,6 +2962,13 @@ impl RenderApp {
                             let dir = if info.window_start > prev.window_start { 1 } else { -1 };
                             if let Some(renderer) = self.renderer.as_mut() {
                                 renderer.trigger_scroll_line_spacing(info.window_id, info.bounds, dir, now);
+                            }
+                        }
+                        // Scroll momentum indicator
+                        if self.scroll_momentum_enabled && !info.is_minibuffer {
+                            let dir = if info.window_start > prev.window_start { 1 } else { -1 };
+                            if let Some(renderer) = self.renderer.as_mut() {
+                                renderer.trigger_scroll_momentum(info.window_id, info.bounds, dir, now);
                             }
                         }
                         // Scroll → slide (content area only, excluding mode-line)

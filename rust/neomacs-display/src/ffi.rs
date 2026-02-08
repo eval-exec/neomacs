@@ -2967,6 +2967,24 @@ pub unsafe extern "C" fn neomacs_display_set_cursor_wake(
     }
 }
 
+/// Configure per-window scroll momentum indicator
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_scroll_momentum(
+    _handle: *mut NeomacsDisplay,
+    enabled: c_int,
+    fade_ms: c_int,
+    width: c_int,
+) {
+    let cmd = RenderCommand::SetScrollMomentum {
+        enabled: enabled != 0,
+        fade_ms: fade_ms as u32,
+        width: width as f32,
+    };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Configure text fade-in animation for new content
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_text_fade_in(

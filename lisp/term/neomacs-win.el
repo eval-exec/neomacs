@@ -1732,6 +1732,52 @@ animates down to 100%."
                 neomacs-cursor-wake-duration nil)
             val))))
 
+;; --- Scroll momentum indicator ---
+(declare-function neomacs-set-scroll-momentum "neomacsterm.c"
+  (&optional enabled fade-ms width))
+
+(defcustom neomacs-scroll-momentum nil
+  "Enable per-window scroll momentum indicator.
+Non-nil shows a brief directional gradient bar at the right edge
+of each window during scrolling."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-scroll-momentum)
+           (neomacs-set-scroll-momentum val
+            (if (boundp 'neomacs-scroll-momentum-fade)
+                neomacs-scroll-momentum-fade nil)
+            (if (boundp 'neomacs-scroll-momentum-width)
+                neomacs-scroll-momentum-width nil)))))
+
+(defcustom neomacs-scroll-momentum-fade 300
+  "Scroll momentum indicator fade-out duration in milliseconds."
+  :type '(integer :tag "Fade (ms)")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-scroll-momentum)
+                    (boundp 'neomacs-scroll-momentum)
+                    neomacs-scroll-momentum)
+           (neomacs-set-scroll-momentum t val
+            (if (boundp 'neomacs-scroll-momentum-width)
+                neomacs-scroll-momentum-width nil)))))
+
+(defcustom neomacs-scroll-momentum-width 3
+  "Scroll momentum indicator bar width in pixels."
+  :type '(integer :tag "Width (px)")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-scroll-momentum)
+                    (boundp 'neomacs-scroll-momentum)
+                    neomacs-scroll-momentum)
+           (neomacs-set-scroll-momentum t
+            (if (boundp 'neomacs-scroll-momentum-fade)
+                neomacs-scroll-momentum-fade nil)
+            val))))
+
 ;; --- Mode-line content transition ---
 (declare-function neomacs-set-mode-line-transition "neomacsterm.c"
   (&optional enabled duration-ms))

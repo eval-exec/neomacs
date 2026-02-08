@@ -260,6 +260,21 @@ pub struct WgpuRenderer {
     cursor_wake_scale: f32,
     /// Timestamp of last cursor wake trigger
     cursor_wake_started: Option<std::time::Instant>,
+    /// Per-window scroll momentum indicator
+    scroll_momentum_enabled: bool,
+    scroll_momentum_fade_ms: u32,
+    scroll_momentum_width: f32,
+    /// Active scroll momentum entries
+    active_scroll_momentums: Vec<ScrollMomentumEntry>,
+}
+
+/// Entry for an active scroll momentum indicator
+struct ScrollMomentumEntry {
+    window_id: i64,
+    bounds: Rect,
+    direction: i32, // 1 = down, -1 = up
+    started: std::time::Instant,
+    duration: std::time::Duration,
 }
 
 /// Entry for an active window switch highlight fade
@@ -926,6 +941,10 @@ impl WgpuRenderer {
             cursor_wake_duration_ms: 120,
             cursor_wake_scale: 1.3,
             cursor_wake_started: None,
+            scroll_momentum_enabled: false,
+            scroll_momentum_fade_ms: 300,
+            scroll_momentum_width: 3.0,
+            active_scroll_momentums: Vec::new(),
         }
     }
 
@@ -1161,6 +1180,25 @@ impl WgpuRenderer {
         } else {
             1.0
         }
+    }
+
+    /// Update scroll momentum indicator config
+    pub fn set_scroll_momentum(&mut self, enabled: bool, fade_ms: u32, width: f32) {
+        self.scroll_momentum_enabled = enabled;
+        self.scroll_momentum_fade_ms = fade_ms;
+        self.scroll_momentum_width = width;
+    }
+
+    /// Trigger a scroll momentum indicator for a window
+    pub fn trigger_scroll_momentum(&mut self, window_id: i64, bounds: Rect, direction: i32, now: std::time::Instant) {
+        self.active_scroll_momentums.retain(|e| e.window_id != window_id);
+        self.active_scroll_momentums.push(ScrollMomentumEntry {
+            window_id,
+            bounds,
+            direction,
+            started: now,
+            duration: std::time::Duration::from_millis(self.scroll_momentum_fade_ms as u64),
+        });
     }
 
     /// Update mode-line transition config
@@ -2248,6 +2286,12 @@ impl WgpuRenderer {
             } else {
                 self.needs_continuous_redraw = true;
             }
+        }
+
+        // Clean up expired scroll momentum entries
+        self.active_scroll_momentums.retain(|e| e.started.elapsed() < e.duration);
+        if !self.active_scroll_momentums.is_empty() {
+            self.needs_continuous_redraw = true;
         }
 
         // Advance glyph atlas generation for LRU tracking
@@ -5022,6 +5066,64 @@ impl WgpuRenderer {
                     render_pass.set_vertex_buffer(0, progress_buffer.slice(..));
                     render_pass.draw(0..progress_vertices.len() as u32, 0..1);
                 }
+            }
+
+            // === Scroll momentum indicator ===
+            if !self.active_scroll_momentums.is_empty() {
+                let bar_w = self.scroll_momentum_width.max(1.0);
+                let mut momentum_vertices: Vec<RectVertex> = Vec::new();
+                let now = std::time::Instant::now();
+
+                for entry in &self.active_scroll_momentums {
+                    let elapsed = now.duration_since(entry.started);
+                    if elapsed >= entry.duration { continue; }
+                    let t = elapsed.as_secs_f32() / entry.duration.as_secs_f32();
+                    let alpha = (1.0 - t) * (1.0 - t); // quadratic fade-out
+                    let b = &entry.bounds;
+                    let content_h = b.height;
+
+                    // Draw a gradient bar at the right edge of the window
+                    let bar_x = b.x + b.width - bar_w - 2.0;
+                    // Arrow pointing in scroll direction at the edge
+                    if entry.direction > 0 {
+                        // Scrolling down: bar at bottom edge, gradient fades upward
+                        let arrow_h = (content_h * 0.15).min(40.0);
+                        let steps = 8;
+                        for i in 0..steps {
+                            let frac = i as f32 / steps as f32;
+                            let step_alpha = alpha * (1.0 - frac) * 0.6;
+                            let sy = b.y + content_h - arrow_h + frac * arrow_h;
+                            let sh = arrow_h / steps as f32;
+                            let c = Color::new(0.5, 0.7, 1.0, step_alpha);
+                            self.add_rect(&mut momentum_vertices, bar_x, sy, bar_w, sh, &c);
+                        }
+                    } else {
+                        // Scrolling up: bar at top edge, gradient fades downward
+                        let arrow_h = (content_h * 0.15).min(40.0);
+                        let steps = 8;
+                        for i in 0..steps {
+                            let frac = i as f32 / steps as f32;
+                            let step_alpha = alpha * (1.0 - frac) * 0.6;
+                            let sy = b.y + frac * arrow_h;
+                            let sh = arrow_h / steps as f32;
+                            let c = Color::new(0.5, 0.7, 1.0, step_alpha);
+                            self.add_rect(&mut momentum_vertices, bar_x, sy, bar_w, sh, &c);
+                        }
+                    }
+                }
+
+                if !momentum_vertices.is_empty() {
+                    let momentum_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Scroll Momentum Buffer"),
+                        contents: bytemuck::cast_slice(&momentum_vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, momentum_buffer.slice(..));
+                    render_pass.draw(0..momentum_vertices.len() as u32, 0..1);
+                }
+                self.needs_continuous_redraw = true;
             }
 
             // === Vignette effect: darken edges of the frame ===

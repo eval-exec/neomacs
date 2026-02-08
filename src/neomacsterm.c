@@ -8885,6 +8885,30 @@ SCALE-PCT is the initial scale percentage (default 130, meaning 130%).  */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-scroll-momentum",
+       Fneomacs_set_scroll_momentum,
+       Sneomacs_set_scroll_momentum, 0, 3, 0,
+       doc: /* Configure per-window scroll momentum indicator.
+ENABLED non-nil shows a brief directional gradient bar at the edge of
+each window during scrolling, indicating scroll direction.
+FADE-MS is the fade-out duration in milliseconds (default 300).
+WIDTH is the bar width in pixels (default 3).  */)
+  (Lisp_Object enabled, Lisp_Object fade_ms, Lisp_Object width)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int on = !NILP (enabled);
+  int fade = 300;
+  int w = 3;
+  if (FIXNUMP (fade_ms)) fade = XFIXNUM (fade_ms);
+  if (FIXNUMP (width)) w = XFIXNUM (width);
+
+  neomacs_display_set_scroll_momentum (dpyinfo->display_handle, on, fade, w);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-cursor-trail-fade",
        Fneomacs_set_cursor_trail_fade,
        Sneomacs_set_cursor_trail_fade, 0, 3, 0,
@@ -10410,6 +10434,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_text_fade_in);
   defsubr (&Sneomacs_set_mode_line_transition);
   defsubr (&Sneomacs_set_cursor_wake);
+  defsubr (&Sneomacs_set_scroll_momentum);
   defsubr (&Sneomacs_set_region_glow);
   defsubr (&Sneomacs_set_window_glow);
   defsubr (&Sneomacs_set_scroll_progress);

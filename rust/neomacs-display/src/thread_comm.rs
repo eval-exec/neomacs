@@ -592,6 +592,14 @@ pub enum RenderCommand {
         /// Duration of the spacing animation in milliseconds
         duration_ms: u32,
     },
+    /// Configure per-window scroll momentum indicator
+    SetScrollMomentum {
+        enabled: bool,
+        /// Fade-out duration in milliseconds
+        fade_ms: u32,
+        /// Bar width in pixels
+        width: f32,
+    },
     /// Configure background pattern
     SetBackgroundPattern {
         /// 0=none, 1=dots, 2=grid, 3=crosshatch

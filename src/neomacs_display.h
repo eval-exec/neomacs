@@ -1467,6 +1467,12 @@ void neomacs_display_set_cursor_wake(
     int duration_ms,
     int scale_pct);
 
+void neomacs_display_set_scroll_momentum(
+    struct NeomacsDisplay *handle,
+    int enabled,
+    int fade_ms,
+    int width);
+
 void neomacs_display_set_text_fade_in(
     struct NeomacsDisplay *handle,
     int enabled,

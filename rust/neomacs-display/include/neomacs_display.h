@@ -1459,6 +1459,14 @@ void neomacs_display_set_cursor_wake(struct NeomacsDisplay *handle,
                                      int scalePct);
 
 /**
+ * Configure per-window scroll momentum indicator
+ */
+void neomacs_display_set_scroll_momentum(struct NeomacsDisplay *handle,
+                                         int enabled,
+                                         int fadeMs,
+                                         int width);
+
+/**
  * Configure text fade-in animation for new content
  */
 void neomacs_display_set_text_fade_in(struct NeomacsDisplay *handle, int enabled, int durationMs);
