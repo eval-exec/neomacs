@@ -5813,7 +5813,31 @@ neomacs_frame_raise_lower (struct frame *f, bool raise_flag)
 static void
 neomacs_fullscreen_hook (struct frame *f)
 {
-  /* TODO: Send fullscreen command to render thread when supported.  */
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+
+  if (dpyinfo && dpyinfo->display_handle)
+    {
+      int mode;
+      switch (f->want_fullscreen)
+        {
+        case FULLSCREEN_BOTH:
+          mode = 3;
+          break;
+        case FULLSCREEN_MAXIMIZED:
+          mode = 4;
+          break;
+        case FULLSCREEN_WIDTH:
+          mode = 1;
+          break;
+        case FULLSCREEN_HEIGHT:
+          mode = 2;
+          break;
+        default:
+          mode = 0;
+          break;
+        }
+      neomacs_display_set_fullscreen (dpyinfo->display_handle, mode);
+    }
   f->want_fullscreen = FULLSCREEN_NONE;
 }
 
@@ -5821,9 +5845,49 @@ neomacs_fullscreen_hook (struct frame *f)
 static void
 neomacs_iconify_frame (struct frame *f)
 {
-  /* TODO: Send iconify command to render thread when supported.  */
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+
+  if (dpyinfo && dpyinfo->display_handle)
+    neomacs_display_set_minimized (dpyinfo->display_handle, 1);
+
   SET_FRAME_ICONIFIED (f, true);
   SET_FRAME_VISIBLE (f, 0);
+}
+
+/* Set frame name/title — common logic for implicit and explicit.  */
+static void
+neomacs_set_name (struct frame *f, Lisp_Object name, bool explicit_p)
+{
+  if (explicit_p)
+    {
+      if (f->explicit_name && NILP (name))
+        update_mode_lines = 12;
+      f->explicit_name = !NILP (name);
+    }
+  else if (f->explicit_name)
+    return;
+
+  if (NILP (name))
+    name = build_string ("Emacs");
+  else
+    CHECK_STRING (name);
+
+  if (!NILP (Fstring_equal (name, f->name)))
+    return;
+
+  fset_name (f, name);
+
+  /* Title overrides name.  */
+  if (!NILP (f->title))
+    name = f->title;
+
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+  if (dpyinfo && dpyinfo->display_handle)
+    {
+      Lisp_Object encoded = ENCODE_UTF_8 (name);
+      neomacs_display_set_title (dpyinfo->display_handle,
+                                 SSDATA (encoded));
+    }
 }
 
 /* Set frame title implicitly (from buffer name, etc.).  */
@@ -5831,10 +5895,7 @@ static void
 neomacs_implicit_set_name (struct frame *f, Lisp_Object arg,
                            Lisp_Object oldval)
 {
-  /* TODO: Send title to render thread when supported.
-     For now, just store it in the frame.  */
-  if (FRAME_NEOMACS_P (f) && !NILP (arg))
-    fset_name (f, arg);
+  neomacs_set_name (f, arg, false);
 }
 
 /* Set frame offset/position.  */
@@ -5842,7 +5903,6 @@ static void
 neomacs_set_frame_offset (struct frame *f, int xoff, int yoff,
                           int change_gravity)
 {
-  /* TODO: Send position to render thread when supported.  */
   if (change_gravity > 0)
     {
       f->top_pos = yoff;
@@ -5854,6 +5914,10 @@ neomacs_set_frame_offset (struct frame *f, int xoff, int yoff,
         f->size_hint_flags |= YNegative;
       f->win_gravity = NorthWestGravity;
     }
+
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+  if (dpyinfo && dpyinfo->display_handle)
+    neomacs_display_set_position (dpyinfo->display_handle, xoff, yoff);
 }
 
 /* Delete/destroy a frame.  */

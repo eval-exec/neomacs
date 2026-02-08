@@ -141,6 +141,14 @@ pub enum RenderCommand {
     VideoDestroy { id: u32 },
     /// Change the mouse pointer cursor shape (arrow, hand, ibeam, etc.)
     SetMouseCursor { cursor_type: i32 },
+    /// Set the window title
+    SetWindowTitle { title: String },
+    /// Set fullscreen mode (0=none, 1=fullscreen, 4=maximized)
+    SetWindowFullscreen { mode: u32 },
+    /// Minimize/iconify the window
+    SetWindowMinimized { minimized: bool },
+    /// Set window position
+    SetWindowPosition { x: i32, y: i32 },
     /// Configure cursor blinking
     SetCursorBlink { enabled: bool, interval_ms: u32 },
     /// Configure cursor animation (smooth motion)

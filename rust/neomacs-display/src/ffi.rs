@@ -1955,6 +1955,61 @@ pub unsafe extern "C" fn neomacs_display_set_mouse_cursor(
     }
 }
 
+/// Set the window title (threaded mode)
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_title(
+    _handle: *mut NeomacsDisplay,
+    title: *const c_char,
+) {
+    let title_str = if title.is_null() {
+        "Emacs".to_string()
+    } else {
+        CStr::from_ptr(title).to_string_lossy().into_owned()
+    };
+    let cmd = RenderCommand::SetWindowTitle { title: title_str };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
+/// Set fullscreen mode (threaded mode)
+/// mode: 0=none, 1=width, 2=height, 3=both, 4=maximized
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_fullscreen(
+    _handle: *mut NeomacsDisplay,
+    mode: c_int,
+) {
+    let cmd = RenderCommand::SetWindowFullscreen { mode: mode as u32 };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
+/// Minimize/iconify the window (threaded mode)
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_minimized(
+    _handle: *mut NeomacsDisplay,
+    minimized: c_int,
+) {
+    let cmd = RenderCommand::SetWindowMinimized { minimized: minimized != 0 };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
+/// Set window position (threaded mode)
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_position(
+    _handle: *mut NeomacsDisplay,
+    x: c_int,
+    y: c_int,
+) {
+    let cmd = RenderCommand::SetWindowPosition { x: x as i32, y: y as i32 };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Configure cursor blinking (enable/disable and interval)
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_cursor_blink(

@@ -749,6 +749,41 @@ impl RenderApp {
                         window.set_cursor(icon);
                     }
                 }
+                RenderCommand::SetWindowTitle { title } => {
+                    if let Some(ref window) = self.window {
+                        window.set_title(&title);
+                    }
+                }
+                RenderCommand::SetWindowFullscreen { mode } => {
+                    if let Some(ref window) = self.window {
+                        use winit::window::Fullscreen;
+                        match mode {
+                            3 => {
+                                // FULLSCREEN_BOTH: borderless fullscreen
+                                window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+                            }
+                            4 => {
+                                // FULLSCREEN_MAXIMIZED
+                                window.set_maximized(true);
+                            }
+                            _ => {
+                                // FULLSCREEN_NONE or partial: exit fullscreen
+                                window.set_fullscreen(None);
+                                window.set_maximized(false);
+                            }
+                        }
+                    }
+                }
+                RenderCommand::SetWindowMinimized { minimized } => {
+                    if let Some(ref window) = self.window {
+                        window.set_minimized(minimized);
+                    }
+                }
+                RenderCommand::SetWindowPosition { x, y } => {
+                    if let Some(ref window) = self.window {
+                        window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+                    }
+                }
                 RenderCommand::SetCursorBlink { enabled, interval_ms } => {
                     log::debug!("Cursor blink: enabled={}, interval={}ms", enabled, interval_ms);
                     self.cursor_blink_enabled = enabled;

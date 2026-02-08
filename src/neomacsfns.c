@@ -2020,34 +2020,24 @@ DEFUN ("x-display-list", Fx_display_list, Sx_display_list, 0, 0, 0,
 static void
 neomacs_set_title (struct frame *f)
 {
-  struct neomacs_output *output = FRAME_NEOMACS_OUTPUT (f);
   struct neomacs_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
-  const char *title;
+  Lisp_Object name;
 
   if (FRAME_ICONIFIED_P (f))
     return;
 
-  if (!STRINGP (f->title))
-    title = "Emacs";
+  if (STRINGP (f->title))
+    name = f->title;
+  else if (STRINGP (f->name))
+    name = f->name;
   else
-    title = SSDATA (f->title);
+    name = build_string ("Emacs");
 
-  /* Try winit window first */
-  if (output && output->window_id != 0 && dpyinfo && dpyinfo->display_handle)
+  if (dpyinfo && dpyinfo->display_handle)
     {
-      block_input ();
-      neomacs_display_set_window_title (dpyinfo->display_handle,
-                                        output->window_id, title);
-      unblock_input ();
-      return;
-    }
-
-  /* Fall back to GTK window */
-  if (output && output->widget)
-    {
-      block_input ();
-      gtk_window_set_title (GTK_WINDOW (output->widget), title);
-      unblock_input ();
+      Lisp_Object encoded = ENCODE_UTF_8 (name);
+      neomacs_display_set_title (dpyinfo->display_handle,
+                                 SSDATA (encoded));
     }
 }
 

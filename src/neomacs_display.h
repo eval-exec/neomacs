@@ -593,6 +593,31 @@ void neomacs_display_set_mouse_cursor(struct NeomacsDisplay *handle,
                                        int cursor_type);
 
 /**
+ * Set the window title (threaded mode - sends to render thread)
+ */
+void neomacs_display_set_title(struct NeomacsDisplay *handle,
+                                const char *title);
+
+/**
+ * Set fullscreen mode (threaded mode)
+ * mode: 0=none, 1=width, 2=height, 3=both, 4=maximized
+ */
+void neomacs_display_set_fullscreen(struct NeomacsDisplay *handle,
+                                     int mode);
+
+/**
+ * Minimize/iconify the window (threaded mode)
+ */
+void neomacs_display_set_minimized(struct NeomacsDisplay *handle,
+                                    int minimized);
+
+/**
+ * Set window position (threaded mode)
+ */
+void neomacs_display_set_position(struct NeomacsDisplay *handle,
+                                   int x, int y);
+
+/**
  * Reset cursor blink (call when cursor moves)
  */
 void neomacs_display_reset_cursor_blink(struct NeomacsDisplay *handle);
