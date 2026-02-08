@@ -1406,6 +1406,11 @@ void neomacs_display_set_typing_speed(
     struct NeomacsDisplay *handle,
     int enabled);
 
+void neomacs_display_set_accent_strip(
+    struct NeomacsDisplay *handle,
+    int enabled,
+    int width);
+
 void neomacs_display_set_frosted_glass(
     struct NeomacsDisplay *handle,
     int enabled,

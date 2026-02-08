@@ -8550,6 +8550,27 @@ corner of the active window, calculated from recent keystroke rate.  */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-accent-strip",
+       Fneomacs_set_accent_strip,
+       Sneomacs_set_accent_strip, 0, 2, 0,
+       doc: /* Configure buffer-local accent color strip.
+ENABLED non-nil renders a thin colored strip on the left edge of each
+window, with color derived from the buffer's file extension.
+WIDTH is strip width in pixels (default 3).  */)
+  (Lisp_Object enabled, Lisp_Object width)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int on = !NILP (enabled);
+  int w = 3;
+  if (FIXNUMP (width)) w = XFIXNUM (width);
+
+  neomacs_display_set_accent_strip (dpyinfo->display_handle, on, w);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-frosted-glass",
        Fneomacs_set_frosted_glass,
        Sneomacs_set_frosted_glass, 0, 3, 0,
@@ -9981,6 +10002,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_breadcrumb);
   defsubr (&Sneomacs_set_title_fade);
   defsubr (&Sneomacs_set_typing_speed);
+  defsubr (&Sneomacs_set_accent_strip);
   defsubr (&Sneomacs_set_frosted_glass);
   defsubr (&Sneomacs_set_window_glow);
   defsubr (&Sneomacs_set_scroll_progress);

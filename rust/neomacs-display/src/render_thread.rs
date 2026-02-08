@@ -718,6 +718,9 @@ struct RenderApp {
     title_fade_duration_ms: u32,
     /// Typing speed indicator
     typing_speed_enabled: bool,
+    /// Buffer-local accent color strip
+    accent_strip_enabled: bool,
+    accent_strip_width: f32,
     /// Frosted glass effect on mode-lines
     frosted_glass_enabled: bool,
     frosted_glass_opacity: f32,
@@ -962,6 +965,8 @@ impl RenderApp {
             typing_speed_enabled: false,
             key_press_times: Vec::new(),
             displayed_wpm: 0.0,
+            accent_strip_enabled: false,
+            accent_strip_width: 3.0,
             frosted_glass_enabled: false,
             frosted_glass_opacity: 0.3,
             frosted_glass_blur: 4.0,
@@ -1896,6 +1901,14 @@ impl RenderApp {
                     if !enabled {
                         self.key_press_times.clear();
                         self.displayed_wpm = 0.0;
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetAccentStrip { enabled, width } => {
+                    self.accent_strip_enabled = enabled;
+                    self.accent_strip_width = width;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_accent_strip(enabled, width);
                     }
                     self.frame_dirty = true;
                 }

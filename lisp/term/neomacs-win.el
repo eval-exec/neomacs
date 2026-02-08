@@ -1311,6 +1311,34 @@ when switching buffers in a window."
                     neomacs-title-fade)
            (neomacs-set-title-fade t val))))
 
+;; --- Buffer-local accent color strip ---
+(declare-function neomacs-set-accent-strip "neomacsterm.c"
+  (&optional enabled width))
+
+(defcustom neomacs-accent-strip nil
+  "Enable buffer-local accent color strip on left edge of windows.
+Non-nil renders a thin colored indicator on the left edge, with
+color derived from the buffer's file extension for quick identification."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-accent-strip)
+           (neomacs-set-accent-strip val
+            (if (boundp 'neomacs-accent-strip-width)
+                neomacs-accent-strip-width nil)))))
+
+(defcustom neomacs-accent-strip-width 3
+  "Width of the accent color strip in pixels."
+  :type '(integer :tag "Width")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-accent-strip)
+                    (boundp 'neomacs-accent-strip)
+                    neomacs-accent-strip)
+           (neomacs-set-accent-strip t val))))
+
 ;; --- Frosted glass effect ---
 (declare-function neomacs-set-frosted-glass "neomacsterm.c"
   (&optional enabled opacity blur))

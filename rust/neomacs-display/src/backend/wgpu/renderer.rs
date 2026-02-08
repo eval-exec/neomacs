@@ -159,6 +159,9 @@ pub struct WgpuRenderer {
     breadcrumb_enabled: bool,
     breadcrumb_opacity: f32,
     /// Frosted glass effect on mode-lines
+    /// Buffer-local accent color strip
+    accent_strip_enabled: bool,
+    accent_strip_width: f32,
     frosted_glass_enabled: bool,
     frosted_glass_opacity: f32,
     frosted_glass_blur: f32,
@@ -746,6 +749,8 @@ impl WgpuRenderer {
             active_window_fades: Vec::new(),
             breadcrumb_enabled: false,
             breadcrumb_opacity: 0.7,
+            accent_strip_enabled: false,
+            accent_strip_width: 3.0,
             frosted_glass_enabled: false,
             frosted_glass_opacity: 0.3,
             frosted_glass_blur: 4.0,
@@ -919,6 +924,12 @@ impl WgpuRenderer {
     pub fn set_breadcrumb(&mut self, enabled: bool, opacity: f32) {
         self.breadcrumb_enabled = enabled;
         self.breadcrumb_opacity = opacity;
+    }
+
+    /// Update accent strip config
+    pub fn set_accent_strip(&mut self, enabled: bool, width: f32) {
+        self.accent_strip_enabled = enabled;
+        self.accent_strip_width = width;
     }
 
     /// Update frosted glass config
@@ -3328,6 +3339,40 @@ impl WgpuRenderer {
                     render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, sep_buffer.slice(..));
                     render_pass.draw(0..sep_vertices.len() as u32, 0..1);
+                }
+            }
+
+            // === Buffer-local accent color strip ===
+            if self.accent_strip_enabled {
+                let strip_w = self.accent_strip_width.max(1.0);
+                let mut strip_vertices: Vec<RectVertex> = Vec::new();
+
+                for info in &frame_glyphs.window_infos {
+                    if info.is_minibuffer { continue; }
+                    let b = &info.bounds;
+
+                    // Derive color from file extension hash
+                    let ext = info.buffer_file_name.rsplit('.').next().unwrap_or("");
+                    let (r, g, b_col) = Self::extension_to_color(ext);
+                    let strip_h = b.height - info.mode_line_height;
+                    if strip_h <= 0.0 { continue; }
+
+                    let c = Color::new(r, g, b_col, 0.8);
+                    self.add_rect(&mut strip_vertices, b.x, b.y, strip_w, strip_h, &c);
+                }
+
+                if !strip_vertices.is_empty() {
+                    let strip_buffer = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Accent Strip Buffer"),
+                            contents: bytemuck::cast_slice(&strip_vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, strip_buffer.slice(..));
+                    render_pass.draw(0..strip_vertices.len() as u32, 0..1);
                 }
             }
 
@@ -6728,6 +6773,51 @@ impl WgpuRenderer {
     }
 
     /// Build breadcrumb display chars from a file path
+    /// Map a file extension to a distinct HSL-based accent color (linear RGB)
+    fn extension_to_color(ext: &str) -> (f32, f32, f32) {
+        // Well-known extensions get specific colors
+        match ext {
+            "rs" => (0.8, 0.3, 0.1),  // Rust - orange
+            "el" | "lisp" | "scm" => (0.6, 0.2, 0.8),  // Lisp - purple
+            "c" | "h" => (0.2, 0.5, 0.8),  // C - blue
+            "cpp" | "cc" | "hpp" => (0.2, 0.4, 0.7),  // C++ - darker blue
+            "py" => (0.2, 0.6, 0.2),  // Python - green
+            "js" | "jsx" => (0.9, 0.8, 0.2),  // JavaScript - yellow
+            "ts" | "tsx" => (0.2, 0.5, 0.9),  // TypeScript - blue
+            "rb" => (0.8, 0.2, 0.2),  // Ruby - red
+            "go" => (0.0, 0.6, 0.7),  // Go - teal
+            "java" => (0.7, 0.3, 0.1),  // Java - brown-orange
+            "html" | "htm" => (0.9, 0.3, 0.2),  // HTML - red-orange
+            "css" | "scss" => (0.2, 0.4, 0.9),  // CSS - blue
+            "json" | "yaml" | "yml" | "toml" => (0.5, 0.5, 0.5),  // Config - gray
+            "md" | "org" | "txt" => (0.4, 0.7, 0.4),  // Text - green
+            "sh" | "bash" | "zsh" => (0.3, 0.7, 0.3),  // Shell - green
+            _ => {
+                // Hash-based color for unknown extensions
+                let mut hash: u32 = 5381;
+                for byte in ext.bytes() {
+                    hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
+                }
+                let hue = (hash % 360) as f32 / 360.0;
+                // Simple HSL to RGB (saturation=0.6, lightness=0.5)
+                let s = 0.6_f32;
+                let l = 0.5_f32;
+                let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+                let x = c * (1.0 - ((hue * 6.0) % 2.0 - 1.0).abs());
+                let m = l - c / 2.0;
+                let (r, g, b) = match (hue * 6.0) as i32 {
+                    0 => (c, x, 0.0),
+                    1 => (x, c, 0.0),
+                    2 => (0.0, c, x),
+                    3 => (0.0, x, c),
+                    4 => (x, 0.0, c),
+                    _ => (c, 0.0, x),
+                };
+                (r + m, g + m, b + m)
+            }
+        }
+    }
+
     fn breadcrumb_display_chars(path: &str) -> Vec<(char, bool)> {
         let separator = " \u{203A} "; // " › "
         let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();

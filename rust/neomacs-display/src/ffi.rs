@@ -2699,6 +2699,22 @@ pub unsafe extern "C" fn neomacs_display_set_breadcrumb(
     }
 }
 
+/// Configure buffer-local accent color strip
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_accent_strip(
+    _handle: *mut NeomacsDisplay,
+    enabled: c_int,
+    width: c_int,
+) {
+    let cmd = RenderCommand::SetAccentStrip {
+        enabled: enabled != 0,
+        width: width as f32,
+    };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Configure frosted glass effect on mode-lines
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_frosted_glass(

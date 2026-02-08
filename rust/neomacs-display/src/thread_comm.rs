@@ -428,6 +428,12 @@ pub enum RenderCommand {
     SetTypingSpeed {
         enabled: bool,
     },
+    /// Configure buffer-local accent color strip
+    SetAccentStrip {
+        enabled: bool,
+        /// Strip width in pixels
+        width: f32,
+    },
     /// Configure frosted glass effect on mode-lines
     SetFrostedGlass {
         enabled: bool,
