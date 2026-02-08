@@ -1411,6 +1411,53 @@ on mode-line areas to simulate a blurred glass appearance."
                 neomacs-frosted-glass-opacity nil)
             val))))
 
+;; --- Window padding gradient ---
+(declare-function neomacs-set-padding-gradient "neomacsterm.c"
+  (&optional enabled r g b opacity width))
+
+(defcustom neomacs-padding-gradient nil
+  "Enable window padding gradient for depth effect.
+Non-nil renders a subtle gradient at the inner edges of each window,
+blending from an edge color inward, creating a sense of depth."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-padding-gradient)
+           (neomacs-set-padding-gradient val
+            (if (boundp 'neomacs-padding-gradient-r)
+                neomacs-padding-gradient-r nil)
+            (if (boundp 'neomacs-padding-gradient-g)
+                neomacs-padding-gradient-g nil)
+            (if (boundp 'neomacs-padding-gradient-b)
+                neomacs-padding-gradient-b nil)
+            (if (boundp 'neomacs-padding-gradient-opacity)
+                neomacs-padding-gradient-opacity nil)
+            (if (boundp 'neomacs-padding-gradient-width)
+                neomacs-padding-gradient-width nil)))))
+
+(defcustom neomacs-padding-gradient-opacity 15
+  "Peak opacity for the padding gradient at window edges (0-100)."
+  :type '(integer :tag "Opacity")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-padding-gradient)
+                    (boundp 'neomacs-padding-gradient)
+                    neomacs-padding-gradient)
+           (neomacs-set-padding-gradient t nil nil nil val))))
+
+(defcustom neomacs-padding-gradient-width 8
+  "Width of the padding gradient in pixels."
+  :type '(integer :tag "Width")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-padding-gradient)
+                    (boundp 'neomacs-padding-gradient)
+                    neomacs-padding-gradient)
+           (neomacs-set-padding-gradient t nil nil nil nil val))))
+
 ;; --- Smooth cursor size transition ---
 (declare-function neomacs-set-cursor-size-transition "neomacsterm.c"
   (&optional enabled duration-ms))

@@ -170,6 +170,11 @@ pub struct WgpuRenderer {
     /// Buffer-local accent color strip
     accent_strip_enabled: bool,
     accent_strip_width: f32,
+    /// Window padding gradient (inner edge shading)
+    padding_gradient_enabled: bool,
+    padding_gradient_color: (f32, f32, f32),
+    padding_gradient_opacity: f32,
+    padding_gradient_width: f32,
     frosted_glass_enabled: bool,
     frosted_glass_opacity: f32,
     frosted_glass_blur: f32,
@@ -764,6 +769,10 @@ impl WgpuRenderer {
             prev_border_selected: 0,
             accent_strip_enabled: false,
             accent_strip_width: 3.0,
+            padding_gradient_enabled: false,
+            padding_gradient_color: (0.0, 0.0, 0.0),
+            padding_gradient_opacity: 0.15,
+            padding_gradient_width: 8.0,
             frosted_glass_enabled: false,
             frosted_glass_opacity: 0.3,
             frosted_glass_blur: 4.0,
@@ -953,6 +962,14 @@ impl WgpuRenderer {
     pub fn set_accent_strip(&mut self, enabled: bool, width: f32) {
         self.accent_strip_enabled = enabled;
         self.accent_strip_width = width;
+    }
+
+    /// Update padding gradient config
+    pub fn set_padding_gradient(&mut self, enabled: bool, color: (f32, f32, f32), opacity: f32, width: f32) {
+        self.padding_gradient_enabled = enabled;
+        self.padding_gradient_color = color;
+        self.padding_gradient_opacity = opacity;
+        self.padding_gradient_width = width;
     }
 
     /// Update frosted glass config
@@ -3396,6 +3413,60 @@ impl WgpuRenderer {
                     render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, strip_buffer.slice(..));
                     render_pass.draw(0..strip_vertices.len() as u32, 0..1);
+                }
+            }
+
+            // === Window padding gradient (inner edge shading for depth) ===
+            if self.padding_gradient_enabled {
+                let grad_w = self.padding_gradient_width.max(1.0);
+                let peak_alpha = self.padding_gradient_opacity.clamp(0.0, 1.0);
+                let (cr, cg, cb) = self.padding_gradient_color;
+                let steps = (grad_w as i32).max(2);
+                let mut grad_vertices: Vec<RectVertex> = Vec::new();
+
+                for info in &frame_glyphs.window_infos {
+                    if info.is_minibuffer { continue; }
+                    let b = &info.bounds;
+                    let content_h = b.height - info.mode_line_height;
+                    if content_h <= 0.0 { continue; }
+
+                    let step_size = grad_w / steps as f32;
+                    for i in 0..steps {
+                        let t = i as f32 / steps as f32;
+                        let alpha = peak_alpha * (1.0 - t) * (1.0 - t);
+                        if alpha < 0.005 { continue; }
+                        let offset = i as f32 * step_size;
+                        let c = Color::new(cr, cg, cb, alpha);
+
+                        // Top edge
+                        self.add_rect(&mut grad_vertices, b.x, b.y + offset, b.width, step_size, &c);
+                        // Bottom edge (above mode-line)
+                        let bot_y = b.y + content_h - offset - step_size;
+                        if bot_y > b.y {
+                            self.add_rect(&mut grad_vertices, b.x, bot_y, b.width, step_size, &c);
+                        }
+                        // Left edge
+                        self.add_rect(&mut grad_vertices, b.x + offset, b.y, step_size, content_h, &c);
+                        // Right edge
+                        let right_x = b.x + b.width - offset - step_size;
+                        if right_x > b.x {
+                            self.add_rect(&mut grad_vertices, right_x, b.y, step_size, content_h, &c);
+                        }
+                    }
+                }
+
+                if !grad_vertices.is_empty() {
+                    let grad_buffer = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Padding Gradient Buffer"),
+                            contents: bytemuck::cast_slice(&grad_vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, grad_buffer.slice(..));
+                    render_pass.draw(0..grad_vertices.len() as u32, 0..1);
                 }
             }
 

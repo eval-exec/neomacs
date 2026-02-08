@@ -735,6 +735,11 @@ struct RenderApp {
     /// Buffer-local accent color strip
     accent_strip_enabled: bool,
     accent_strip_width: f32,
+    /// Window padding gradient
+    padding_gradient_enabled: bool,
+    padding_gradient_color: (f32, f32, f32),
+    padding_gradient_opacity: f32,
+    padding_gradient_width: f32,
     /// Frosted glass effect on mode-lines
     frosted_glass_enabled: bool,
     frosted_glass_opacity: f32,
@@ -992,6 +997,10 @@ impl RenderApp {
             border_transition_duration_ms: 200,
             accent_strip_enabled: false,
             accent_strip_width: 3.0,
+            padding_gradient_enabled: false,
+            padding_gradient_color: (0.0, 0.0, 0.0),
+            padding_gradient_opacity: 0.15,
+            padding_gradient_width: 8.0,
             frosted_glass_enabled: false,
             frosted_glass_opacity: 0.3,
             frosted_glass_blur: 4.0,
@@ -1943,6 +1952,16 @@ impl RenderApp {
                     self.accent_strip_width = width;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_accent_strip(enabled, width);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetPaddingGradient { enabled, color, opacity, width } => {
+                    self.padding_gradient_enabled = enabled;
+                    self.padding_gradient_color = color;
+                    self.padding_gradient_opacity = opacity;
+                    self.padding_gradient_width = width;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_padding_gradient(enabled, color, opacity, width);
                     }
                     self.frame_dirty = true;
                 }

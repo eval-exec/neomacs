@@ -450,6 +450,16 @@ pub enum RenderCommand {
         /// Blur radius (noise spread in pixels)
         blur: f32,
     },
+    /// Configure window padding gradient (inner edge shading for depth)
+    SetPaddingGradient {
+        enabled: bool,
+        /// Edge color (sRGB 0.0-1.0)
+        color: (f32, f32, f32),
+        /// Peak opacity at edge (0.0-1.0)
+        opacity: f32,
+        /// Width of gradient in pixels
+        width: f32,
+    },
     /// Configure smooth cursor size transition on text-scale-adjust
     SetCursorSizeTransition {
         enabled: bool,

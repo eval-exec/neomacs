@@ -2781,6 +2781,26 @@ pub unsafe extern "C" fn neomacs_display_set_title_fade(
     }
 }
 
+/// Configure window padding gradient (inner edge shading for depth)
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_padding_gradient(
+    _handle: *mut NeomacsDisplay,
+    enabled: c_int,
+    r: c_int, g: c_int, b: c_int,
+    opacity: c_int,
+    width: c_int,
+) {
+    let cmd = RenderCommand::SetPaddingGradient {
+        enabled: enabled != 0,
+        color: (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0),
+        opacity: opacity as f32 / 100.0,
+        width: width as f32,
+    };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Configure smooth cursor size transition on text-scale-adjust
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_cursor_size_transition(

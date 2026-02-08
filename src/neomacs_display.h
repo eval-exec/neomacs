@@ -1423,6 +1423,13 @@ void neomacs_display_set_frosted_glass(
     int opacity,
     int blur);
 
+void neomacs_display_set_padding_gradient(
+    struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int opacity,
+    int width);
+
 void neomacs_display_set_cursor_size_transition(
     struct NeomacsDisplay *handle,
     int enabled,

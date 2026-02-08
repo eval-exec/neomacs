@@ -8624,6 +8624,38 @@ BLUR is the blur spread radius in pixels (default 4).  */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-padding-gradient",
+       Fneomacs_set_padding_gradient,
+       Sneomacs_set_padding_gradient, 0, 6, 0,
+       doc: /* Configure window padding gradient for depth effect.
+ENABLED non-nil renders a subtle gradient at the inner edges of each
+window, blending from a configurable edge color inward, creating a
+sense of depth.
+R, G, B are the edge color 0-255 (default 0 0 0 for dark shading).
+OPACITY is 0-100 for peak edge opacity (default 15).
+WIDTH is the gradient width in pixels (default 8).  */)
+  (Lisp_Object enabled, Lisp_Object r, Lisp_Object g, Lisp_Object b,
+   Lisp_Object opacity, Lisp_Object width)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int on = !NILP (enabled);
+  int cr = 0, cg = 0, cb = 0;
+  int op = 15;
+  int w = 8;
+  if (FIXNUMP (r)) cr = XFIXNUM (r);
+  if (FIXNUMP (g)) cg = XFIXNUM (g);
+  if (FIXNUMP (b)) cb = XFIXNUM (b);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+  if (FIXNUMP (width)) w = XFIXNUM (width);
+
+  neomacs_display_set_padding_gradient (
+    dpyinfo->display_handle, on, cr, cg, cb, op, w);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-cursor-size-transition",
        Fneomacs_set_cursor_size_transition,
        Sneomacs_set_cursor_size_transition, 0, 2, 0,
@@ -10057,6 +10089,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_accent_strip);
   defsubr (&Sneomacs_set_frosted_glass);
   defsubr (&Sneomacs_set_cursor_size_transition);
+  defsubr (&Sneomacs_set_padding_gradient);
   defsubr (&Sneomacs_set_window_glow);
   defsubr (&Sneomacs_set_scroll_progress);
   defsubr (&Sneomacs_set_inactive_tint);

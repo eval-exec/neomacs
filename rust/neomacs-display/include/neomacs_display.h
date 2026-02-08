@@ -1376,6 +1376,17 @@ void neomacs_display_set_typing_speed(struct NeomacsDisplay *handle, int enabled
 void neomacs_display_set_title_fade(struct NeomacsDisplay *handle, int enabled, int durationMs);
 
 /**
+ * Configure window padding gradient (inner edge shading for depth)
+ */
+void neomacs_display_set_padding_gradient(struct NeomacsDisplay *handle,
+                                          int enabled,
+                                          int r,
+                                          int g,
+                                          int b,
+                                          int opacity,
+                                          int width);
+
+/**
  * Configure smooth cursor size transition on text-scale-adjust
  */
 void neomacs_display_set_cursor_size_transition(struct NeomacsDisplay *handle,
