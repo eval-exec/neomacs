@@ -2053,10 +2053,11 @@ neomacs_layout_buffer_byte_at (void *buffer_ptr, int64_t byte_pos)
 /* FFI struct for display text property results.
    Layout must match Rust DisplayPropFFI in emacs_ffi.rs. */
 struct DisplayPropFFI {
-  int type;           /* 0=none, 1=string, 2=space */
+  int type;           /* 0=none, 1=string, 2=space, 3=align-to */
   int str_len;        /* bytes of replacement string (type=1) */
   float space_width;  /* width in columns (type=2) */
   int64_t covers_to;  /* charpos where display prop region ends */
+  float align_to;     /* align-to column (type=3) */
 };
 
 /* Check for a 'display text property at charpos.
@@ -2132,8 +2133,26 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
 
       if (EQ (car, Qspace))
         {
-          /* Space spec: (space :width N) */
           Lisp_Object plist = XCDR (display_prop);
+
+          /* Check :align-to first */
+          Lisp_Object align_val = Fplist_get (plist, QCalign_to, Qnil);
+          if (FIXNUMP (align_val))
+            {
+              out->align_to = (float) XFIXNUM (align_val);
+              out->type = 3;
+              set_buffer_internal_1 (old);
+              return 0;
+            }
+          else if (FLOATP (align_val))
+            {
+              out->align_to = (float) XFLOAT_DATA (align_val);
+              out->type = 3;
+              set_buffer_internal_1 (old);
+              return 0;
+            }
+
+          /* Space spec: (space :width N) */
           Lisp_Object width_val = Fplist_get (plist, QCwidth, Qnil);
           if (FIXNUMP (width_val))
             out->space_width = (float) XFIXNUM (width_val);

@@ -288,7 +288,7 @@ pub struct LineNumberConfigFFI {
 #[repr(C)]
 #[derive(Debug, Clone, Default)]
 pub struct DisplayPropFFI {
-    /// 0=none, 1=string replacement, 2=space
+    /// 0=none, 1=string replacement, 2=space, 3=align-to
     pub prop_type: c_int,
     /// Bytes of replacement string (type=1)
     pub str_len: c_int,
@@ -296,6 +296,8 @@ pub struct DisplayPropFFI {
     pub space_width: f32,
     /// Charpos where this display property region ends
     pub covers_to: i64,
+    /// Align-to column (type=3)
+    pub align_to: f32,
 }
 
 /// FFI-safe window parameters struct.

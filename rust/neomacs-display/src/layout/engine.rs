@@ -724,6 +724,51 @@ impl LayoutEngine {
                     next_display_check = display_prop.covers_to;
                     current_face_id = -1;
                     continue;
+                } else if display_prop.prop_type == 3 {
+                    // Align-to spec: render stretch from current col to target column
+
+                    // Resolve face first
+                    if charpos >= next_face_check || current_face_id < 0 {
+                        let mut next_check: i64 = 0;
+                        let fid = neomacs_layout_face_at_pos(
+                            window, charpos,
+                            &mut self.face_data as *mut FaceDataFFI,
+                            &mut next_check,
+                        );
+                        if fid >= 0 && fid != current_face_id {
+                            current_face_id = fid;
+                            face_fg = Color::from_pixel(self.face_data.fg);
+                            face_bg = Color::from_pixel(self.face_data.bg);
+                            self.apply_face(&self.face_data, frame_glyphs);
+                        }
+                        next_face_check = if next_check > charpos { next_check } else { charpos + 1 };
+                    }
+
+                    let target_col = display_prop.align_to.ceil() as i32;
+                    if target_col > col && row < max_rows {
+                        let stretch_cols = target_col - col;
+                        let gx = content_x + col as f32 * char_w;
+                        let gy = text_y + row as f32 * char_h;
+                        let stretch_w = stretch_cols as f32 * char_w;
+                        frame_glyphs.add_stretch(
+                            gx, gy, stretch_w, char_h,
+                            face_bg, self.face_data.face_id, false,
+                        );
+                        col = target_col;
+                    }
+
+                    // Skip original buffer text
+                    let chars_to_skip = display_prop.covers_to - charpos;
+                    for _ in 0..chars_to_skip {
+                        if byte_idx >= bytes_read as usize { break; }
+                        let (_, ch_len) = decode_utf8(&text[byte_idx..]);
+                        byte_idx += ch_len;
+                    }
+                    charpos = display_prop.covers_to;
+                    window_end_charpos = charpos;
+                    next_display_check = display_prop.covers_to;
+                    current_face_id = -1;
+                    continue;
                 } else {
                     // No display prop: covers_to tells us when to re-check
                     next_display_check = display_prop.covers_to;
