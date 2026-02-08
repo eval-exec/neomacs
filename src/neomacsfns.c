@@ -1200,13 +1200,24 @@ neomacs_legacy_event_cb (GtkEventControllerLegacy *controller,
 
       kbd_buffer_store_event (&ie);
 
-      /* GTK4 doesn't deliver release events to custom NeomacsWidget reliably.
-         Send synthetic release immediately - this breaks drag-to-select but
-         makes basic clicking work. TODO: Implement proper drag support. */
+      return FALSE;
+    }
+
+  /* Handle button release */
+  if (event_type == GDK_BUTTON_RELEASE)
+    {
+      /* Deduplicate - multiple controllers may receive same event */
+      if (time == mouse_drag_state.last_release_time)
+        return FALSE;
+      mouse_drag_state.last_release_time = time;
+
+      button = gdk_button_event_get_button (event);
+
+      /* Send release event to Emacs */
       EVENT_INIT (ie);
       ie.kind = MOUSE_CLICK_EVENT;
       ie.code = button - 1;
-      ie.timestamp = time + 50;  /* Slightly later to not trigger double-click */
+      ie.timestamp = time;
       ie.modifiers = up_modifier;
 
       if (state & GDK_SHIFT_MASK)
@@ -1229,23 +1240,10 @@ neomacs_legacy_event_cb (GtkEventControllerLegacy *controller,
       return FALSE;
     }
 
-  /* Handle button release - since we send synthetic release on press,
-     this just handles cleanup if GTK4 does eventually send a release */
-  if (event_type == GDK_BUTTON_RELEASE)
-    {
-      /* Deduplicate */
-      if (time == mouse_drag_state.last_release_time)
-        return FALSE;
-      mouse_drag_state.last_release_time = time;
-
-      /* Don't send event - we already sent synthetic release on press */
-      return FALSE;
-    }
-
   return FALSE;
 }
 
-/* Callback for GTK4 mouse motion (non-drag) */
+/* Callback for GTK4 mouse motion */
 static void
 neomacs_motion_cb (GtkEventControllerMotion *controller,
                    double x, double y, gpointer user_data)
@@ -1282,9 +1280,26 @@ neomacs_motion_cb (GtkEventControllerMotion *controller,
         }
     }
 
-  /* Update last mouse position - used by Emacs for tracking */
-  f->mouse_moved = true;
+  /* Store mouse position for Emacs tracking (mouse-position, tooltips, etc.) */
+  dpyinfo->last_mouse_motion_frame = f;
+  dpyinfo->last_mouse_motion_x = (int) x;
+  dpyinfo->last_mouse_motion_y = (int) y;
   dpyinfo->last_mouse_frame = f;
+
+  /* Check if mouse moved off its current glyph for highlight updates */
+  {
+    NativeRectangle *r = &dpyinfo->last_mouse_glyph;
+    if (f != dpyinfo->last_mouse_glyph_frame
+        || (int) x < r->x || (int) x >= r->x + (int) r->width
+        || (int) y < r->y || (int) y >= r->y + (int) r->height)
+      {
+        f->mouse_moved = true;
+        dpyinfo->last_mouse_scroll_bar = NULL;
+        note_mouse_highlight (f, (int) x, (int) y);
+        remember_mouse_glyph (f, (int) x, (int) y, r);
+        dpyinfo->last_mouse_glyph_frame = f;
+      }
+  }
 }
 
 /* Callback for GTK4 scroll events (mouse wheel) */
@@ -1328,37 +1343,48 @@ neomacs_scroll_cb (GtkEventControllerScroll *controller,
         }
     }
 
+  GdkModifierType scroll_state = gdk_event_get_modifier_state (event);
+
   EVENT_INIT (ie);
   ie.timestamp = gdk_event_get_time (event);
   XSETFRAME (ie.frame_or_window, f);
   ie.arg = Qnil;
 
-  /* Use 0,0 as position - will be updated by next motion event */
-  XSETINT (ie.x, 0);
-  XSETINT (ie.y, 0);
+  /* Use actual scroll position */
+  XSETINT (ie.x, (int) scroll_x);
+  XSETINT (ie.y, (int) scroll_y);
 
   if (dy != 0)
     {
-      /* Vertical scroll - button 4 (up) or 5 (down) */
-      ie.kind = MOUSE_CLICK_EVENT;
-      ie.code = dy < 0 ? 3 : 4;  /* Button 4 or 5, 0-indexed */
-      ie.modifiers = down_modifier;
-      kbd_buffer_store_event (&ie);
-
-      /* Also send release */
-      ie.modifiers = up_modifier;
+      /* Vertical scroll - use proper WHEEL_EVENT */
+      ie.kind = WHEEL_EVENT;
+      ie.modifiers = dy > 0 ? down_modifier : up_modifier;
+      if (scroll_state & GDK_SHIFT_MASK)
+        ie.modifiers |= shift_modifier;
+      if (scroll_state & GDK_CONTROL_MASK)
+        ie.modifiers |= ctrl_modifier;
+      if (scroll_state & GDK_ALT_MASK)
+        ie.modifiers |= meta_modifier;
+      ie.arg = list3 (Qnil,
+                       make_float ((double) -dx * 100),
+                       make_float ((double) -dy * 100));
       kbd_buffer_store_event (&ie);
     }
 
   if (dx != 0)
     {
-      /* Horizontal scroll - button 6 (left) or 7 (right) */
-      ie.kind = MOUSE_CLICK_EVENT;
-      ie.code = dx < 0 ? 5 : 6;  /* Button 6 or 7, 0-indexed */
-      ie.modifiers = down_modifier;
-      kbd_buffer_store_event (&ie);
-
-      ie.modifiers = up_modifier;
+      /* Horizontal scroll - use proper HORIZ_WHEEL_EVENT */
+      ie.kind = HORIZ_WHEEL_EVENT;
+      ie.modifiers = dx >= 0 ? up_modifier : down_modifier;
+      if (scroll_state & GDK_SHIFT_MASK)
+        ie.modifiers |= shift_modifier;
+      if (scroll_state & GDK_CONTROL_MASK)
+        ie.modifiers |= ctrl_modifier;
+      if (scroll_state & GDK_ALT_MASK)
+        ie.modifiers |= meta_modifier;
+      ie.arg = list3 (Qnil,
+                       make_float ((double) -dx * 100),
+                       make_float ((double) -dy * 100));
       kbd_buffer_store_event (&ie);
     }
 
