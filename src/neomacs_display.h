@@ -1335,6 +1335,11 @@ void neomacs_display_set_typing_ripple(
     int max_radius,
     int duration_ms);
 
+void neomacs_display_set_search_pulse(
+    struct NeomacsDisplay *handle,
+    int enabled,
+    int face_id);
+
 void neomacs_display_set_mode_line_separator(
     struct NeomacsDisplay *handle,
     int style,

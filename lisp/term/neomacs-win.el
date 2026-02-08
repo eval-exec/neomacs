@@ -968,6 +968,39 @@ whenever it moves, providing visual feedback during typing."
               nil)
             val))))
 
+;;; Search highlight pulse
+
+(declare-function neomacs-set-search-pulse "neomacsterm.c"
+  (&optional enabled))
+
+(defcustom neomacs-search-pulse nil
+  "Enable pulsing glow animation on the current isearch match.
+Non-nil draws a pulsing highlight around isearch matches to make
+the active match stand out.  Automatically activates during isearch."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-search-pulse)
+           (if val
+               (progn
+                 (add-hook 'isearch-mode-hook #'neomacs--search-pulse-start)
+                 (add-hook 'isearch-mode-end-hook #'neomacs--search-pulse-stop))
+             (remove-hook 'isearch-mode-hook #'neomacs--search-pulse-start)
+             (remove-hook 'isearch-mode-end-hook #'neomacs--search-pulse-stop)
+             (neomacs-set-search-pulse nil)))))
+
+(defun neomacs--search-pulse-start ()
+  "Activate search pulse when isearch starts."
+  (when (and (boundp 'neomacs-search-pulse) neomacs-search-pulse
+             (fboundp 'neomacs-set-search-pulse))
+    (neomacs-set-search-pulse t)))
+
+(defun neomacs--search-pulse-stop ()
+  "Deactivate search pulse when isearch ends."
+  (when (fboundp 'neomacs-set-search-pulse)
+    (neomacs-set-search-pulse nil)))
+
 ;; Provide the feature
 (provide 'neomacs-win)
 (provide 'term/neomacs-win)

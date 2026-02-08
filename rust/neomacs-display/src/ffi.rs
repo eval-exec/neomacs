@@ -2490,6 +2490,22 @@ pub unsafe extern "C" fn neomacs_display_set_typing_ripple(
     }
 }
 
+/// Configure search highlight pulse
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_search_pulse(
+    _handle: *mut NeomacsDisplay,
+    enabled: c_int,
+    face_id: c_int,
+) {
+    let cmd = RenderCommand::SetSearchPulse {
+        enabled: enabled != 0,
+        face_id: face_id as u32,
+    };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Configure mode-line separator style (threaded mode)
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_mode_line_separator(

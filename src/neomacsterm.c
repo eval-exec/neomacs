@@ -8227,6 +8227,34 @@ DURATION-MS is the ripple duration in milliseconds (default 300).  */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-search-pulse",
+       Fneomacs_set_search_pulse,
+       Sneomacs_set_search_pulse, 0, 1, 0,
+       doc: /* Configure search highlight pulse effect.
+ENABLED non-nil draws a pulsing glow around the current isearch match.
+The isearch face is resolved automatically.  */)
+  (Lisp_Object enabled)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int on = !NILP (enabled);
+  int fid = 0;
+  if (on)
+    {
+      struct frame *f = SELECTED_FRAME ();
+      Lisp_Object isearch_sym = Fintern (build_string ("isearch"), Qnil);
+      fid = lookup_named_face (NULL, f, isearch_sym, false);
+      if (fid < 0)
+        fid = 0;
+    }
+
+  neomacs_display_set_search_pulse (
+    dpyinfo->display_handle, on, fid);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-indent-guides",
        Fneomacs_set_indent_guides,
        Sneomacs_set_indent_guides, 0, 2, 0,
@@ -9555,6 +9583,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_focus_mode);
   defsubr (&Sneomacs_set_minimap);
   defsubr (&Sneomacs_set_typing_ripple);
+  defsubr (&Sneomacs_set_search_pulse);
 
   /* Cursor blink */
   defsubr (&Sneomacs_set_cursor_blink);

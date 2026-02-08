@@ -359,6 +359,12 @@ pub enum RenderCommand {
         /// Duration in milliseconds
         duration_ms: u32,
     },
+    /// Configure search highlight pulse (glow on isearch match)
+    SetSearchPulse {
+        enabled: bool,
+        /// Face ID of the isearch face (used to identify matching glyphs)
+        face_id: u32,
+    },
 }
 
 /// Wakeup pipe for signaling Emacs from render thread

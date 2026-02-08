@@ -113,6 +113,12 @@ pub struct WgpuRenderer {
     typing_ripple_duration: f32,
     /// Active ripples: (center_x, center_y, spawn_instant)
     active_ripples: Vec<(f32, f32, std::time::Instant)>,
+    /// Search highlight pulse enabled
+    search_pulse_enabled: bool,
+    /// Face ID of the isearch face
+    search_pulse_face_id: u32,
+    /// Pulse start time
+    search_pulse_start: std::time::Instant,
 }
 
 impl WgpuRenderer {
@@ -613,6 +619,9 @@ impl WgpuRenderer {
             typing_ripple_max_radius: 40.0,
             typing_ripple_duration: 0.3,
             active_ripples: Vec::new(),
+            search_pulse_enabled: false,
+            search_pulse_face_id: 0,
+            search_pulse_start: std::time::Instant::now(),
         }
     }
 
@@ -654,6 +663,15 @@ impl WgpuRenderer {
     pub fn set_minimap(&mut self, enabled: bool, width: f32) {
         self.minimap_enabled = enabled;
         self.minimap_width = width;
+    }
+
+    /// Update search pulse config
+    pub fn set_search_pulse(&mut self, enabled: bool, face_id: u32) {
+        self.search_pulse_enabled = enabled;
+        self.search_pulse_face_id = face_id;
+        if enabled {
+            self.search_pulse_start = std::time::Instant::now();
+        }
     }
 
     /// Update typing ripple config
@@ -3053,6 +3071,72 @@ impl WgpuRenderer {
                 }
                 // Signal that we need continuous redraws during transition
                 if any_transitioning {
+                    self.needs_continuous_redraw = true;
+                }
+            }
+
+            // === Search highlight pulse (glow on isearch face glyphs) ===
+            if self.search_pulse_enabled && self.search_pulse_face_id > 0 {
+                let target_face = self.search_pulse_face_id;
+                // Find bounding box of all glyphs with the isearch face
+                let mut min_x = f32::MAX;
+                let mut min_y = f32::MAX;
+                let mut max_x = f32::MIN;
+                let mut max_y = f32::MIN;
+                let mut found = false;
+                let mut match_bg: Option<Color> = None;
+
+                for glyph in &frame_glyphs.glyphs {
+                    if let FrameGlyph::Char { x, y, width, height, face_id, bg, .. } = glyph {
+                        if *face_id == target_face {
+                            min_x = min_x.min(*x);
+                            min_y = min_y.min(*y);
+                            max_x = max_x.max(*x + *width);
+                            max_y = max_y.max(*y + *height);
+                            found = true;
+                            if match_bg.is_none() {
+                                match_bg = bg.clone();
+                            }
+                        }
+                    }
+                }
+
+                if found {
+                    let elapsed = self.search_pulse_start.elapsed().as_secs_f32();
+                    let phase = elapsed * 3.0 * std::f32::consts::PI; // 1.5 Hz
+                    let pulse = (phase.sin() + 1.0) / 2.0; // 0..1
+
+                    // Use the match background color or default to a warm highlight
+                    let (pr, pg, pb) = match match_bg {
+                        Some(c) => (c.r, c.g, c.b),
+                        None => (1.0, 0.8, 0.3), // warm yellow
+                    };
+
+                    let glow_alpha = 0.15 + 0.2 * pulse;
+                    let glow_pad = 4.0 + 3.0 * pulse; // expanding glow
+                    let glow_color = Color::new(pr, pg, pb, glow_alpha);
+
+                    let mut search_vertices: Vec<RectVertex> = Vec::new();
+                    self.add_rect(&mut search_vertices,
+                        min_x - glow_pad, min_y - glow_pad,
+                        (max_x - min_x) + glow_pad * 2.0,
+                        (max_y - min_y) + glow_pad * 2.0,
+                        &glow_color);
+
+                    if !search_vertices.is_empty() {
+                        let search_buffer = self.device.create_buffer_init(
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("Search Pulse Buffer"),
+                                contents: bytemuck::cast_slice(&search_vertices),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            },
+                        );
+                        render_pass.set_pipeline(&self.rect_pipeline);
+                        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, search_buffer.slice(..));
+                        render_pass.draw(0..search_vertices.len() as u32, 0..1);
+                    }
+
                     self.needs_continuous_redraw = true;
                 }
             }

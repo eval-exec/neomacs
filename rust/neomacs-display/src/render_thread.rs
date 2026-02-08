@@ -677,6 +677,9 @@ struct RenderApp {
     typing_ripple_enabled: bool,
     typing_ripple_max_radius: f32,
     typing_ripple_duration_ms: u32,
+    /// Search highlight pulse
+    search_pulse_enabled: bool,
+    search_pulse_face_id: u32,
 }
 
 /// State for a tooltip displayed as GPU overlay
@@ -867,6 +870,8 @@ impl RenderApp {
             typing_ripple_enabled: false,
             typing_ripple_max_radius: 40.0,
             typing_ripple_duration_ms: 300,
+            search_pulse_enabled: false,
+            search_pulse_face_id: 0,
         }
     }
 
@@ -1662,6 +1667,14 @@ impl RenderApp {
                     self.typing_ripple_duration_ms = duration_ms;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_typing_ripple(enabled, max_radius, duration_ms);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetSearchPulse { enabled, face_id } => {
+                    self.search_pulse_enabled = enabled;
+                    self.search_pulse_face_id = face_id;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_search_pulse(enabled, face_id);
                     }
                     self.frame_dirty = true;
                 }

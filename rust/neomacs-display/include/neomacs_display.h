@@ -1247,6 +1247,11 @@ void neomacs_display_set_typing_ripple(struct NeomacsDisplay *handle,
                                        int durationMs);
 
 /**
+ * Configure search highlight pulse
+ */
+void neomacs_display_set_search_pulse(struct NeomacsDisplay *handle, int enabled, int faceId);
+
+/**
  * Configure mode-line separator style (threaded mode)
  */
 void neomacs_display_set_mode_line_separator(struct NeomacsDisplay *handle,
