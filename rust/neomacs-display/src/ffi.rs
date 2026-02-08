@@ -3419,12 +3419,11 @@ pub unsafe extern "C" fn neomacs_display_has_transition_snapshot(
 // ============================================================================
 
 #[cfg(feature = "winit-backend")]
-use crate::thread_comm::{EmacsComms, InputEvent, RenderCommand, ThreadComms};
+use crate::thread_comm::{
+    EmacsComms, InputEvent, RenderCommand, ThreadComms, THREADED_MAIN_WINDOW_ID,
+};
 #[cfg(feature = "winit-backend")]
 use crate::render_thread::{RenderThread, SharedImageDimensions};
-
-#[cfg(feature = "winit-backend")]
-const THREADED_MAIN_WINDOW_ID: u32 = 1;
 
 /// Global state for threaded mode
 #[cfg(feature = "winit-backend")]
@@ -3551,10 +3550,12 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
 
                 match event {
                     InputEvent::Key {
+                        window_id,
                         keysym,
                         modifiers,
                         pressed,
                     } => {
+                        out.window_id = window_id;
                         out.kind = if pressed {
                             NEOMACS_EVENT_KEY_PRESS
                         } else {
@@ -3564,12 +3565,14 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
                         out.modifiers = modifiers;
                     }
                     InputEvent::MouseButton {
+                        window_id,
                         button,
                         x,
                         y,
                         pressed,
                         modifiers,
                     } => {
+                        out.window_id = window_id;
                         out.kind = if pressed {
                             NEOMACS_EVENT_BUTTON_PRESS
                         } else {
@@ -3580,19 +3583,27 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
                         out.button = button;
                         out.modifiers = modifiers;
                     }
-                    InputEvent::MouseMove { x, y, modifiers } => {
+                    InputEvent::MouseMove {
+                        window_id,
+                        x,
+                        y,
+                        modifiers,
+                    } => {
+                        out.window_id = window_id;
                         out.kind = NEOMACS_EVENT_MOUSE_MOVE;
                         out.x = x as i32;
                         out.y = y as i32;
                         out.modifiers = modifiers;
                     }
                     InputEvent::MouseScroll {
+                        window_id,
                         delta_x,
                         delta_y,
                         x,
                         y,
                         modifiers,
                     } => {
+                        out.window_id = window_id;
                         out.kind = NEOMACS_EVENT_SCROLL;
                         out.x = x as i32;
                         out.y = y as i32;
@@ -3600,15 +3611,22 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
                         out.scroll_delta_y = delta_y;
                         out.modifiers = modifiers;
                     }
-                    InputEvent::WindowResize { width, height } => {
+                    InputEvent::WindowResize {
+                        window_id,
+                        width,
+                        height,
+                    } => {
+                        out.window_id = window_id;
                         out.kind = NEOMACS_EVENT_RESIZE;
                         out.width = width;
                         out.height = height;
                     }
-                    InputEvent::WindowClose => {
+                    InputEvent::WindowClose { window_id } => {
+                        out.window_id = window_id;
                         out.kind = NEOMACS_EVENT_CLOSE;
                     }
-                    InputEvent::WindowFocus { focused } => {
+                    InputEvent::WindowFocus { window_id, focused } => {
+                        out.window_id = window_id;
                         out.kind = if focused {
                             NEOMACS_EVENT_FOCUS_IN
                         } else {

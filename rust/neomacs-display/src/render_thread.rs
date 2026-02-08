@@ -27,7 +27,7 @@ use crate::core::types::{
     AnimatedCursor, Color, CursorAnimStyle, Rect,
     ease_out_quad, ease_out_cubic, ease_out_expo, ease_in_out_cubic, ease_linear,
 };
-use crate::thread_comm::{InputEvent, RenderCommand, RenderComms};
+use crate::thread_comm::{InputEvent, RenderCommand, RenderComms, THREADED_MAIN_WINDOW_ID};
 
 #[cfg(all(feature = "wpe-webkit", wpe_platform_available))]
 use crate::backend::wpe::sys::platform as plat;
@@ -2044,18 +2044,28 @@ impl ApplicationHandler for RenderApp {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Threaded mode currently has a single winit window mapped to Emacs window ID 1.
+        let emacs_window_id = THREADED_MAIN_WINDOW_ID;
+
         match event {
             WindowEvent::CloseRequested => {
-                log::info!("Window close requested");
-                self.comms.send_input(InputEvent::WindowClose);
+                log::info!("Window close requested (winit {:?})", window_id);
+                self.comms.send_input(InputEvent::WindowClose {
+                    window_id: emacs_window_id,
+                });
                 event_loop.exit();
             }
 
             WindowEvent::Resized(size) => {
-                log::info!("WindowEvent::Resized: {}x{}", size.width, size.height);
+                log::info!(
+                    "WindowEvent::Resized (winit {:?}): {}x{}",
+                    window_id,
+                    size.width,
+                    size.height
+                );
 
                 // Handle wgpu surface resize
                 self.handle_resize(size.width, size.height);
@@ -2065,14 +2075,18 @@ impl ApplicationHandler for RenderApp {
                 let logical_h = (size.height as f64 / self.scale_factor) as u32;
                 log::info!("Sending WindowResize event to Emacs: {}x{} (logical)", logical_w, logical_h);
                 self.comms.send_input(InputEvent::WindowResize {
+                    window_id: emacs_window_id,
                     width: logical_w,
                     height: logical_h,
                 });
             }
 
             WindowEvent::Focused(focused) => {
-                log::trace!("WindowEvent::Focused({})", focused);
-                self.comms.send_input(InputEvent::WindowFocus { focused });
+                log::trace!("WindowEvent::Focused({}) for winit {:?}", focused, window_id);
+                self.comms.send_input(InputEvent::WindowFocus {
+                    window_id: emacs_window_id,
+                    focused,
+                });
             }
 
             WindowEvent::KeyboardInput {
@@ -2092,6 +2106,7 @@ impl ApplicationHandler for RenderApp {
                 );
                 if keysym != 0 {
                     self.comms.send_input(InputEvent::Key {
+                        window_id: emacs_window_id,
                         keysym,
                         modifiers: self.modifiers,
                         pressed: state == ElementState::Pressed,
@@ -2117,6 +2132,7 @@ impl ApplicationHandler for RenderApp {
                     self.modifiers
                 );
                 self.comms.send_input(InputEvent::MouseButton {
+                    window_id: emacs_window_id,
                     button: btn,
                     x: self.mouse_pos.0,
                     y: self.mouse_pos.1,
@@ -2139,6 +2155,7 @@ impl ApplicationHandler for RenderApp {
                     self.modifiers
                 );
                 self.comms.send_input(InputEvent::MouseMove {
+                    window_id: emacs_window_id,
                     x: lx,
                     y: ly,
                     modifiers: self.modifiers,
@@ -2162,6 +2179,7 @@ impl ApplicationHandler for RenderApp {
                     self.modifiers
                 );
                 self.comms.send_input(InputEvent::MouseScroll {
+                    window_id: emacs_window_id,
                     delta_x: dx,
                     delta_y: dy,
                     x: self.mouse_pos.0,

@@ -2,20 +2,25 @@
 //!
 //! Provides lock-free channels and wakeup mechanism between Emacs and render threads.
 
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TrySendError};
 use std::os::unix::io::RawFd;
 
 use crate::core::frame_glyphs::FrameGlyphBuffer;
+
+/// Emacs window ID used by threaded-mode's single winit window.
+pub const THREADED_MAIN_WINDOW_ID: u32 = 1;
 
 /// Input event from render thread to Emacs
 #[derive(Debug, Clone)]
 pub enum InputEvent {
     Key {
+        window_id: u32,
         keysym: u32,
         modifiers: u32,
         pressed: bool,
     },
     MouseButton {
+        window_id: u32,
         button: u32,
         x: f32,
         y: f32,
@@ -23,11 +28,13 @@ pub enum InputEvent {
         modifiers: u32,
     },
     MouseMove {
+        window_id: u32,
         x: f32,
         y: f32,
         modifiers: u32,
     },
     MouseScroll {
+        window_id: u32,
         delta_x: f32,
         delta_y: f32,
         x: f32,
@@ -35,11 +42,15 @@ pub enum InputEvent {
         modifiers: u32,
     },
     WindowResize {
+        window_id: u32,
         width: u32,
         height: u32,
     },
-    WindowClose,
+    WindowClose {
+        window_id: u32,
+    },
     WindowFocus {
+        window_id: u32,
         focused: bool,
     },
     /// WebKit view title changed
@@ -331,8 +342,16 @@ pub struct RenderComms {
 impl RenderComms {
     /// Send input event to Emacs and wake it up
     pub fn send_input(&self, event: InputEvent) {
-        if self.input_tx.try_send(event).is_ok() {
-            self.wakeup.wake();
+        match self.input_tx.try_send(event) {
+            Ok(()) => {
+                self.wakeup.wake();
+            }
+            Err(TrySendError::Full(event)) => {
+                log::warn!("Dropping input event because channel is full: {:?}", event);
+            }
+            Err(TrySendError::Disconnected(event)) => {
+                log::warn!("Dropping input event because channel is disconnected: {:?}", event);
+            }
         }
     }
 }

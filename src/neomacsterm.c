@@ -4284,55 +4284,120 @@ static int wakeup_fd = -1;
 /* Forward declaration */
 static void neomacs_display_wakeup_handler (int fd, void *data);
 
+static bool
+neomacs_input_trace_enabled (void)
+{
+  static bool initialized = false;
+  static bool enabled = false;
+
+  if (!initialized)
+    {
+      const char *val = getenv ("NEOMACS_INPUT_TRACE");
+      enabled = val && strcmp (val, "0") != 0;
+      initialized = true;
+    }
+
+  return enabled;
+}
+
+static struct frame *
+neomacs_find_any_frame (void)
+{
+  Lisp_Object tail, frame_obj;
+
+  FOR_EACH_FRAME (tail, frame_obj)
+    {
+      struct frame *f = XFRAME (frame_obj);
+      if (FRAME_NEOMACS_P (f))
+        return f;
+    }
+
+  return NULL;
+}
+
+static struct frame *
+neomacs_find_frame_by_window_id (uint32_t window_id)
+{
+  Lisp_Object tail, frame_obj;
+
+  FOR_EACH_FRAME (tail, frame_obj)
+    {
+      struct frame *f = XFRAME (frame_obj);
+      if (FRAME_NEOMACS_P (f)
+          && FRAME_NEOMACS_OUTPUT (f)
+          && FRAME_NEOMACS_OUTPUT (f)->window_id == window_id)
+        return f;
+    }
+
+  return NULL;
+}
+
 /* Handler called when wakeup_fd is readable */
 static void
 neomacs_display_wakeup_handler (int fd, void *data)
 {
   struct NeomacsInputEvent events[64];
   int count;
+  (void) fd;
+  (void) data;
 
   /* Drain input events from render thread */
   count = neomacs_display_drain_input (events, 64);
+  if (neomacs_input_trace_enabled ())
+    fprintf (stderr, "NEOMACS INPUT TRACE: drained=%d\n", count);
 
   /* Process events */
   for (int i = 0; i < count; i++)
     {
       struct NeomacsInputEvent *ev = &events[i];
       union buffered_input_event inev;
-      struct frame *f = SELECTED_FRAME ();
-      bool frame_matched = false;
-      Lisp_Object tail, frame;
+      struct frame *f = NULL;
+      bool requires_window_match
+        = (ev->kind == NEOMACS_EVENT_KEY_PRESS
+           || ev->kind == NEOMACS_EVENT_KEY_RELEASE
+           || ev->kind == NEOMACS_EVENT_MOUSE_PRESS
+           || ev->kind == NEOMACS_EVENT_MOUSE_RELEASE
+           || ev->kind == NEOMACS_EVENT_MOUSE_MOVE
+           || ev->kind == NEOMACS_EVENT_SCROLL
+           || ev->kind == NEOMACS_EVENT_RESIZE
+           || ev->kind == NEOMACS_EVENT_CLOSE_REQUEST
+           || ev->kind == NEOMACS_EVENT_FOCUS_IN
+           || ev->kind == NEOMACS_EVENT_FOCUS_OUT);
 
-      /* Find frame by window_id */
-      FOR_EACH_FRAME (tail, frame)
+      if (requires_window_match)
         {
-          struct frame *tf = XFRAME (frame);
-          if (FRAME_NEOMACS_P (tf)
-              && FRAME_NEOMACS_OUTPUT (tf)->window_id == ev->windowId)
+          f = neomacs_find_frame_by_window_id (ev->windowId);
+          if (!f)
             {
-              f = tf;
-              frame_matched = true;
-              break;
+              if (neomacs_input_trace_enabled ())
+                fprintf (stderr,
+                         "NEOMACS INPUT TRACE: drop unmatched event kind=%u window=%u\n",
+                         ev->kind, ev->windowId);
+              continue;
             }
         }
-
-      /* Fallback for legacy/invalid window ids: route to any Neomacs frame
-         instead of potentially sending events to a non-Neomacs frame.  */
-      if (!frame_matched && !FRAME_NEOMACS_P (f))
+      else
         {
-          FOR_EACH_FRAME (tail, frame)
+          f = SELECTED_FRAME ();
+          if (!FRAME_NEOMACS_P (f))
+            f = neomacs_find_any_frame ();
+          if (!f)
             {
-              struct frame *tf = XFRAME (frame);
-              if (FRAME_NEOMACS_P (tf))
-                {
-                  f = tf;
-                  break;
-                }
+              if (neomacs_input_trace_enabled ())
+                fprintf (stderr,
+                         "NEOMACS INPUT TRACE: drop event kind=%u (no Neomacs frame)\n",
+                         ev->kind);
+              continue;
             }
         }
 
       EVENT_INIT (inev.ie);
       inev.ie.timestamp = ev->timestamp;
+
+      if (neomacs_input_trace_enabled ())
+        fprintf (stderr,
+                 "NEOMACS INPUT TRACE: kind=%u window=%u frame=%p\n",
+                 ev->kind, ev->windowId, (void *) f);
 
       switch (ev->kind)
         {
