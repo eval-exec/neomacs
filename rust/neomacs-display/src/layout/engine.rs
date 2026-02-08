@@ -396,6 +396,10 @@ impl LayoutEngine {
         // Line/wrap prefix tracking: 0=none, 1=line_prefix, 2=wrap_prefix
         let mut need_prefix: u8 = if !params.line_prefix.is_empty() { 1 } else { 0 };
 
+        // Raise display property: Y offset applied to glyphs
+        let mut raise_y_offset: f32 = 0.0;
+        let mut raise_end: i64 = 0;
+
         while byte_idx < bytes_read as usize && row < max_rows {
             // Render line number at the start of each new row
             if need_line_number && lnum_enabled {
@@ -850,9 +854,21 @@ impl LayoutEngine {
                     next_display_check = display_prop.covers_to;
                     current_face_id = -1;
                     continue;
+                } else if display_prop.prop_type == 5 {
+                    // Raise: set Y offset for subsequent glyphs until covers_to
+                    raise_y_offset = -(display_prop.raise_factor * char_h);
+                    raise_end = display_prop.covers_to;
+                    next_display_check = display_prop.covers_to;
+                    // Don't skip text - raise modifies rendering, not content
                 } else {
                     // No display prop: covers_to tells us when to re-check
                     next_display_check = display_prop.covers_to;
+                }
+
+                // Reset raise offset when past the raise region
+                if raise_end > 0 && charpos >= raise_end {
+                    raise_y_offset = 0.0;
+                    raise_end = 0;
                 }
             }
 
@@ -1273,7 +1289,7 @@ impl LayoutEngine {
                     }
 
                     let gx = content_x + col as f32 * char_w;
-                    let gy = text_y + row as f32 * char_h;
+                    let gy = text_y + row as f32 * char_h + raise_y_offset;
                     let glyph_w = char_cols as f32 * char_w;
 
                     frame_glyphs.add_char(ch, gx, gy, glyph_w, char_h, ascent, false);

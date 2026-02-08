@@ -288,7 +288,7 @@ pub struct LineNumberConfigFFI {
 #[repr(C)]
 #[derive(Debug, Clone, Default)]
 pub struct DisplayPropFFI {
-    /// 0=none, 1=string replacement, 2=space, 3=align-to, 4=image
+    /// 0=none, 1=string replacement, 2=space, 3=align-to, 4=image, 5=raise
     pub prop_type: c_int,
     /// Bytes of replacement string (type=1)
     pub str_len: c_int,
@@ -304,6 +304,8 @@ pub struct DisplayPropFFI {
     pub image_width: c_int,
     /// Image height in pixels (type=4)
     pub image_height: c_int,
+    /// Raise factor (type=5), fraction of line height
+    pub raise_factor: f32,
 }
 
 /// FFI-safe window parameters struct.

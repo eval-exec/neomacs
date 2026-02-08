@@ -2146,6 +2146,7 @@ struct DisplayPropFFI {
   uint32_t image_gpu_id;  /* GPU image ID (type=4) */
   int image_width;        /* image width in pixels (type=4) */
   int image_height;       /* image height in pixels (type=4) */
+  float raise_factor;     /* raise factor (type=5), fraction of line height */
 };
 
 /* Check for a 'display text property at charpos.
@@ -2171,6 +2172,7 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
   out->image_gpu_id = 0;
   out->image_width = 0;
   out->image_height = 0;
+  out->raise_factor = 0;
 
   if (!buf)
     return -1;
@@ -2292,6 +2294,20 @@ neomacs_layout_check_display_prop (void *buffer_ptr, void *window_ptr,
             out->space_width = 1.0;
 
           out->type = 2;
+          set_buffer_internal_1 (old);
+          return 0;
+        }
+
+      /* Check for (raise FACTOR) display property */
+      if (EQ (car, Qraise) && CONSP (XCDR (display_prop)))
+        {
+          Lisp_Object factor = XCAR (XCDR (display_prop));
+          if (FIXNUMP (factor))
+            out->raise_factor = (float) XFIXNUM (factor);
+          else if (FLOATP (factor))
+            out->raise_factor = (float) XFLOAT_DATA (factor);
+          out->type = 5;
+          /* Raise doesn't replace text, so covers_to stays as next change */
           set_buffer_internal_1 (old);
           return 0;
         }
