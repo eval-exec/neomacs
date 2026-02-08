@@ -366,6 +366,14 @@ _FRAME is ignored; the menu opens on the selected frame."
 (global-set-key (kbd "s-<up>")    #'neomacs-maximize)
 (global-set-key (kbd "s-<down>")  #'neomacs-restore)
 
+;; Font size adjustment (Super +/-/0)
+(global-set-key (kbd "s-=") #'global-text-scale-adjust)
+(global-set-key (kbd "s-+") #'global-text-scale-adjust)
+(global-set-key (kbd "s--")
+  (lambda () (interactive) (global-text-scale-adjust -1)))
+(global-set-key (kbd "s-0")
+  (lambda () (interactive) (global-text-scale-adjust 0)))
+
 ;;; Scroll indicators
 
 (declare-function neomacs-set-scroll-indicators "neomacsterm.c" (enabled))
