@@ -64,6 +64,8 @@ static int neomacs_image_cache_count = 0;
 /* Forward declarations */
 static void neomacs_extract_full_frame (struct frame *f);
 static void neomacs_define_frame_cursor (struct frame *f, Emacs_Cursor cursor);
+static void neomacs_show_hourglass (struct frame *f);
+static void neomacs_hide_hourglass (struct frame *f);
 
 /* Rust layout engine FFI entry point (defined in layout/engine.rs via ffi.rs) */
 extern void neomacs_rust_layout_frame (void *display_handle, void *frame_ptr,
@@ -205,8 +207,8 @@ static struct redisplay_interface neomacs_redisplay_interface = {
   .draw_vertical_window_border = neomacs_draw_vertical_window_border,
   .draw_window_divider = neomacs_draw_window_divider,
   .shift_glyphs_for_insert = NULL,
-  .show_hourglass = NULL,
-  .hide_hourglass = NULL,
+  .show_hourglass = neomacs_show_hourglass,
+  .hide_hourglass = neomacs_hide_hourglass,
   .default_font_parameter = NULL,
 };
 
@@ -5048,6 +5050,25 @@ neomacs_define_frame_cursor (struct frame *f, Emacs_Cursor cursor)
   int cursor_type = (int)(intptr_t) cursor;
   neomacs_display_set_mouse_cursor (dpyinfo->display_handle,
                                      cursor_type);
+}
+
+
+/* Show hourglass cursor during long operations. */
+static void
+neomacs_show_hourglass (struct frame *f)
+{
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+  if (dpyinfo && dpyinfo->display_handle)
+    neomacs_display_set_mouse_cursor (dpyinfo->display_handle, 7);
+}
+
+/* Restore normal cursor after long operation. */
+static void
+neomacs_hide_hourglass (struct frame *f)
+{
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (f);
+  if (dpyinfo && dpyinfo->display_handle)
+    neomacs_display_set_mouse_cursor (dpyinfo->display_handle, 1);
 }
 
 
