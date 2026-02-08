@@ -601,6 +601,8 @@ struct RenderApp {
     window_title: String,
     /// Custom title bar height in logical pixels (0 = hidden)
     custom_titlebar_height: f32,
+    /// Currently hovered title bar element (0=none, 1=drag, 2=close, 3=max, 4=min)
+    titlebar_hover: u32,
 }
 
 /// State for a tooltip displayed as GPU overlay
@@ -745,6 +747,7 @@ impl RenderApp {
             resize_edge: None,
             window_title: String::from("neomacs"),
             custom_titlebar_height: 30.0,
+            titlebar_hover: 0,
         }
     }
 
@@ -2549,6 +2552,7 @@ impl RenderApp {
                     &surface_view,
                     &self.window_title,
                     self.custom_titlebar_height,
+                    self.titlebar_hover,
                     glyph_atlas,
                     self.width,
                     self.height,
@@ -3067,6 +3071,15 @@ impl ApplicationHandler for RenderApp {
                             None => CursorIcon::Default,
                         };
                         window.set_cursor(icon);
+                    }
+                }
+
+                // Update title bar hover state
+                if !self.decorations_enabled {
+                    let new_hover = self.titlebar_hit_test(lx, ly);
+                    if new_hover != self.titlebar_hover {
+                        self.titlebar_hover = new_hover;
+                        self.frame_dirty = true;
                     }
                 }
 
