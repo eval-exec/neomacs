@@ -2218,6 +2218,18 @@ pub unsafe extern "C" fn neomacs_display_set_show_fps(
     }
 }
 
+/// Set window corner radius for borderless mode (0 = square corners)
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_corner_radius(
+    _handle: *mut NeomacsDisplay,
+    radius: c_int,
+) {
+    let cmd = RenderCommand::SetCornerRadius { radius: radius as f32 };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Set the window title (threaded mode)
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_title(

@@ -255,6 +255,8 @@ pub enum RenderCommand {
     SetTitlebarHeight { height: f32 },
     /// Toggle FPS counter overlay
     SetShowFps { enabled: bool },
+    /// Set window corner radius for borderless mode (0 = no rounding)
+    SetCornerRadius { radius: f32 },
 }
 
 /// Wakeup pipe for signaling Emacs from render thread

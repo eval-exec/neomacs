@@ -415,6 +415,20 @@ is drawn by the render thread.  When disabled the title bar is hidden."
   :init-value nil
   (neomacs-set-titlebar-height (if neomacs-custom-titlebar-mode 30 0)))
 
+;;; Rounded corners
+
+(declare-function neomacs-set-corner-radius "neomacsterm.c" (radius))
+
+(defcustom neomacs-corner-radius 8
+  "Corner radius in pixels for borderless window rounding.
+Only takes effect when window decorations are disabled."
+  :type 'integer
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-corner-radius)
+           (neomacs-set-corner-radius val))))
+
 ;; Provide the feature
 (provide 'neomacs-win)
 (provide 'term/neomacs-win)

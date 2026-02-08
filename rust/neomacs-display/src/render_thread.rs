@@ -607,6 +607,8 @@ struct RenderApp {
     last_titlebar_click: std::time::Instant,
     /// Whether the window is currently in fullscreen mode
     is_fullscreen: bool,
+    /// Corner radius for borderless window rounded corners (0 = no rounding)
+    corner_radius: f32,
     /// Whether to show the FPS counter overlay
     show_fps: bool,
     /// Frame time tracking for FPS counter
@@ -760,6 +762,7 @@ impl RenderApp {
             titlebar_hover: 0,
             last_titlebar_click: std::time::Instant::now(),
             is_fullscreen: false,
+            corner_radius: 0.0,
             show_fps: false,
             fps_last_instant: std::time::Instant::now(),
             fps_frame_count: 0,
@@ -1412,6 +1415,10 @@ impl RenderApp {
                 }
                 RenderCommand::SetShowFps { enabled } => {
                     self.show_fps = enabled;
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCornerRadius { radius } => {
+                    self.corner_radius = radius;
                     self.frame_dirty = true;
                 }
             }
@@ -2676,6 +2683,18 @@ impl RenderApp {
                     &surface_view,
                     &fps_text,
                     glyph_atlas,
+                    self.width,
+                    self.height,
+                );
+            }
+        }
+
+        // Render corner mask for rounded window corners (borderless only, not fullscreen)
+        if !self.decorations_enabled && !self.is_fullscreen && self.corner_radius > 0.0 {
+            if let Some(ref renderer) = self.renderer {
+                renderer.render_corner_mask(
+                    &surface_view,
+                    self.corner_radius,
                     self.width,
                     self.height,
                 );

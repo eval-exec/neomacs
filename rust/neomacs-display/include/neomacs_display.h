@@ -1103,6 +1103,11 @@ void neomacs_display_set_titlebar_height(struct NeomacsDisplay *handle, int heig
 void neomacs_display_set_show_fps(struct NeomacsDisplay *handle, int enabled);
 
 /**
+ * Set window corner radius for borderless mode (0 = square corners)
+ */
+void neomacs_display_set_corner_radius(struct NeomacsDisplay *handle, int radius);
+
+/**
  * Set the window title (threaded mode)
  */
 void neomacs_display_set_title(struct NeomacsDisplay *handle, const char *title);

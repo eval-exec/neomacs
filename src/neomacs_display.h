@@ -1248,6 +1248,12 @@ void neomacs_display_set_show_fps(struct NeomacsDisplay *handle,
                                    int enabled);
 
 /**
+ * Set window corner radius for borderless mode (0 = square).
+ */
+void neomacs_display_set_corner_radius(struct NeomacsDisplay *handle,
+                                        int radius);
+
+/**
  * Get dropped file paths (call after NEOMACS_EVENT_FILE_DROP).
  * Returns number of paths written to out_paths.
  * Each path must be freed with neomacs_display_free_dropped_path().

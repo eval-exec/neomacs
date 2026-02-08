@@ -7862,6 +7862,23 @@ ENABLED non-nil shows the counter, nil hides it.  */)
   return !NILP (enabled) ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-corner-radius", Fneomacs_set_corner_radius,
+       Sneomacs_set_corner_radius, 1, 1, 0,
+       doc: /* Set the corner radius for borderless window rounding.
+RADIUS of 0 means square corners; positive values round the corners.
+Only visible when window decorations are disabled.  */)
+  (Lisp_Object radius)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  CHECK_FIXNAT (radius);
+  int r = XFIXNAT (radius);
+  neomacs_display_set_corner_radius (dpyinfo->display_handle, r);
+  return make_fixnum (r);
+}
+
 DEFUN ("neomacs-set-cursor-blink", Fneomacs_set_cursor_blink, Sneomacs_set_cursor_blink, 1, 2, 0,
        doc: /* Configure cursor blinking in the render thread.
 ENABLED non-nil enables blinking, nil disables it.
@@ -9033,6 +9050,9 @@ syms_of_neomacsterm (void)
 
   /* FPS counter */
   defsubr (&Sneomacs_show_fps);
+
+  /* Corner radius */
+  defsubr (&Sneomacs_set_corner_radius);
 
   /* Cursor blink */
   defsubr (&Sneomacs_set_cursor_blink);

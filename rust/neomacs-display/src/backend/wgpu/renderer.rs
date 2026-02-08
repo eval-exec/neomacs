@@ -27,6 +27,7 @@ pub struct WgpuRenderer {
     surface_format: wgpu::TextureFormat,
     rect_pipeline: wgpu::RenderPipeline,
     rounded_rect_pipeline: wgpu::RenderPipeline,
+    corner_mask_pipeline: wgpu::RenderPipeline,
     glyph_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     opaque_image_pipeline: wgpu::RenderPipeline,
@@ -208,6 +209,59 @@ impl WgpuRenderer {
                 targets: &[Some(wgpu::ColorTargetState {
                     format: target_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        // Corner mask pipeline: uses the same SDF rounded rect shader but with
+        // a blend mode that multiplies the destination by the source alpha.
+        // This clips window corners to a rounded shape.
+        let corner_mask_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Corner Mask Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &rounded_rect_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[RoundedRectVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &rounded_rect_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState {
+                        // dst = dst * src_alpha (mask mode)
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::SrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::SrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -439,6 +493,7 @@ impl WgpuRenderer {
             surface_format: target_format,
             rect_pipeline,
             rounded_rect_pipeline,
+            corner_mask_pipeline,
             glyph_pipeline,
             image_pipeline,
             opaque_image_pipeline,
@@ -4852,6 +4907,70 @@ impl WgpuRenderer {
 
     /// Render a visual bell flash overlay (semi-transparent white rectangle fading out).
     /// Render an FPS counter overlay in the top-right corner.
+    /// Render a corner mask to clip the window to a rounded rectangle.
+    /// Uses dst = dst * src_alpha blend mode to zero out pixels outside
+    /// the rounded rect shape.
+    pub fn render_corner_mask(
+        &self,
+        view: &wgpu::TextureView,
+        corner_radius: f32,
+        surface_width: u32,
+        surface_height: u32,
+    ) {
+        use wgpu::util::DeviceExt;
+
+        let logical_w = surface_width as f32 / self.scale_factor;
+        let logical_h = surface_height as f32 / self.scale_factor;
+        let uniforms = Uniforms {
+            screen_size: [logical_w, logical_h],
+            _padding: [0.0, 0.0],
+        };
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+        // Filled rounded rect covering the whole frame with alpha=1 inside, 0 outside.
+        // border_width=0 triggers filled mode in the shader.
+        let mut vertices: Vec<RoundedRectVertex> = Vec::new();
+        self.add_rounded_rect(
+            &mut vertices,
+            0.0, 0.0, logical_w, logical_h,
+            0.0,            // border_width=0 → filled mode
+            corner_radius,
+            &Color::new(1.0, 1.0, 1.0, 1.0), // white, alpha=1
+        );
+
+        let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Corner Mask Buffer"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Corner Mask Encoder"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Corner Mask Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.corner_mask_pipeline);
+            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..vertices.len() as u32, 0..1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+    }
+
     pub fn render_fps_overlay(
         &self,
         view: &wgpu::TextureView,
