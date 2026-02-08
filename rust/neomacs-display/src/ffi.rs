@@ -2368,6 +2368,26 @@ pub unsafe extern "C" fn neomacs_display_set_inactive_dim(
     }
 }
 
+/// Configure mode-line separator style (threaded mode)
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_mode_line_separator(
+    _handle: *mut NeomacsDisplay,
+    style: c_int,
+    r: c_int, g: c_int, b: c_int,
+    height: c_int,
+) {
+    let cmd = RenderCommand::SetModeLineSeparator {
+        style: style as u32,
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        height: height as f32,
+    };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Set the window title (threaded mode)
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_title(

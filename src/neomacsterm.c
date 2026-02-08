@@ -8041,6 +8041,51 @@ Optional OPACITY is a number 0.0-1.0 for dimming strength (default 0.15).  */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-mode-line-separator",
+       Fneomacs_set_mode_line_separator,
+       Sneomacs_set_mode_line_separator, 0, 3, 0,
+       doc: /* Configure mode-line separator rendering.
+STYLE is a symbol: nil (none), `line' (thin line), `shadow' (shadow effect),
+or `gradient' (gradient fade).
+Optional COLOR is a color string (default \"black\").
+Optional HEIGHT is the separator height in pixels (default 3).  */)
+  (Lisp_Object style, Lisp_Object color, Lisp_Object height)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int s = 0;
+  if (EQ (style, intern ("line")))
+    s = 1;
+  else if (EQ (style, intern ("shadow")))
+    s = 2;
+  else if (EQ (style, intern ("gradient")))
+    s = 3;
+
+  int r = 0, g = 0, b = 0;
+  if (!NILP (color) && STRINGP (color))
+    {
+      Emacs_Color c;
+      if (neomacs_defined_color (NULL, SSDATA (color), &c, false, false))
+        {
+          r = c.red >> 8;
+          g = c.green >> 8;
+          b = c.blue >> 8;
+        }
+    }
+
+  int h = 3;
+  if (FIXNUMP (height))
+    h = (int) XFIXNUM (height);
+  if (h < 1) h = 1;
+  if (h > 20) h = 20;
+
+  neomacs_display_set_mode_line_separator (
+    dpyinfo->display_handle, s, r, g, b, h);
+  return s > 0 ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-indent-guides",
        Fneomacs_set_indent_guides,
        Sneomacs_set_indent_guides, 0, 2, 0,
@@ -9301,6 +9346,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_line_highlight);
   defsubr (&Sneomacs_set_show_whitespace);
   defsubr (&Sneomacs_set_inactive_dim);
+  defsubr (&Sneomacs_set_mode_line_separator);
 
   /* Cursor blink */
   defsubr (&Sneomacs_set_cursor_blink);

@@ -649,6 +649,11 @@ struct RenderApp {
     /// Inactive window dimming
     inactive_dim_enabled: bool,
     inactive_dim_opacity: f32,
+
+    /// Mode-line separator style (0=none, 1=line, 2=shadow, 3=gradient)
+    mode_line_separator_style: u32,
+    mode_line_separator_color: (f32, f32, f32),
+    mode_line_separator_height: f32,
 }
 
 /// State for a tooltip displayed as GPU overlay
@@ -820,6 +825,9 @@ impl RenderApp {
             show_whitespace_color: (0.4, 0.4, 0.4, 0.3),
             inactive_dim_enabled: false,
             inactive_dim_opacity: 0.15,
+            mode_line_separator_style: 0,
+            mode_line_separator_color: (0.0, 0.0, 0.0),
+            mode_line_separator_height: 3.0,
         }
     }
 
@@ -1545,6 +1553,16 @@ impl RenderApp {
                     self.inactive_dim_opacity = opacity;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_inactive_dim_config(enabled, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+
+                RenderCommand::SetModeLineSeparator { style, r, g, b, height } => {
+                    self.mode_line_separator_style = style;
+                    self.mode_line_separator_color = (r, g, b);
+                    self.mode_line_separator_height = height;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_mode_line_separator(style, (r, g, b), height);
                     }
                     self.frame_dirty = true;
                 }

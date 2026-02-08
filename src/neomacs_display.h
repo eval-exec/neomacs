@@ -1295,6 +1295,12 @@ void neomacs_display_set_inactive_dim(
     int enabled,
     int opacity);
 
+void neomacs_display_set_mode_line_separator(
+    struct NeomacsDisplay *handle,
+    int style,
+    int r, int g, int b,
+    int height);
+
 /**
  * Get dropped file paths (call after NEOMACS_EVENT_FILE_DROP).
  * Returns number of paths written to out_paths.

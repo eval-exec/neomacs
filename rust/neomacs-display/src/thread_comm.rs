@@ -306,6 +306,15 @@ pub enum RenderCommand {
         /// Dimming opacity 0.0-1.0 (how much to darken)
         opacity: f32,
     },
+    /// Configure mode-line separator style
+    SetModeLineSeparator {
+        /// 0=none, 1=line, 2=shadow, 3=gradient
+        style: u32,
+        /// Separator color as sRGB 0.0-1.0
+        r: f32, g: f32, b: f32,
+        /// Height in pixels (for shadow/gradient)
+        height: f32,
+    },
 }
 
 /// Wakeup pipe for signaling Emacs from render thread

@@ -687,6 +687,60 @@ A number between 0.0 (no dimming) and 1.0 (fully black)."
                     neomacs-inactive-dim)
            (neomacs-set-inactive-dim t val))))
 
+(defcustom neomacs-mode-line-separator nil
+  "Style for mode-line separator decoration.
+A symbol: nil (none), `line' (thin line), `shadow' (shadow effect),
+or `gradient' (gradient fade above mode-line)."
+  :type '(choice (const :tag "None" nil)
+                 (const :tag "Thin line" line)
+                 (const :tag "Shadow" shadow)
+                 (const :tag "Gradient" gradient))
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-mode-line-separator)
+           (neomacs-set-mode-line-separator
+            val
+            (if (boundp 'neomacs-mode-line-separator-color)
+                neomacs-mode-line-separator-color
+              nil)
+            (if (boundp 'neomacs-mode-line-separator-height)
+                neomacs-mode-line-separator-height
+              nil)))))
+
+(defcustom neomacs-mode-line-separator-color nil
+  "Color for mode-line separator.
+A color string, or nil for default black."
+  :type '(choice (const :tag "Default" nil)
+                 (color :tag "Color"))
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-mode-line-separator)
+                    (boundp 'neomacs-mode-line-separator)
+                    neomacs-mode-line-separator)
+           (neomacs-set-mode-line-separator
+            neomacs-mode-line-separator val
+            (if (boundp 'neomacs-mode-line-separator-height)
+                neomacs-mode-line-separator-height
+              nil)))))
+
+(defcustom neomacs-mode-line-separator-height 3
+  "Height of the mode-line separator in pixels."
+  :type '(integer :tag "Height")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-mode-line-separator)
+                    (boundp 'neomacs-mode-line-separator)
+                    neomacs-mode-line-separator)
+           (neomacs-set-mode-line-separator
+            neomacs-mode-line-separator
+            (if (boundp 'neomacs-mode-line-separator-color)
+                neomacs-mode-line-separator-color
+              nil)
+            val))))
+
 ;; Provide the feature
 (provide 'neomacs-win)
 (provide 'term/neomacs-win)

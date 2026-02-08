@@ -65,6 +65,12 @@ pub struct WgpuRenderer {
     inactive_dim_enabled: bool,
     /// Inactive window dimming opacity
     inactive_dim_opacity: f32,
+    /// Mode-line separator style (0=none, 1=line, 2=shadow, 3=gradient)
+    mode_line_separator_style: u32,
+    /// Mode-line separator color (linear RGB)
+    mode_line_separator_color: (f32, f32, f32),
+    /// Mode-line separator height in pixels
+    mode_line_separator_height: f32,
 }
 
 impl WgpuRenderer {
@@ -541,6 +547,9 @@ impl WgpuRenderer {
             show_whitespace_color: (0.4, 0.4, 0.4, 0.3),
             inactive_dim_enabled: false,
             inactive_dim_opacity: 0.15,
+            mode_line_separator_style: 0,
+            mode_line_separator_color: (0.0, 0.0, 0.0),
+            mode_line_separator_height: 3.0,
         }
     }
 
@@ -548,6 +557,13 @@ impl WgpuRenderer {
     pub fn set_inactive_dim_config(&mut self, enabled: bool, opacity: f32) {
         self.inactive_dim_enabled = enabled;
         self.inactive_dim_opacity = opacity;
+    }
+
+    /// Update mode-line separator config
+    pub fn set_mode_line_separator(&mut self, style: u32, color: (f32, f32, f32), height: f32) {
+        self.mode_line_separator_style = style;
+        self.mode_line_separator_color = color;
+        self.mode_line_separator_height = height;
     }
 
     /// Update visible whitespace config
@@ -2619,6 +2635,64 @@ impl WgpuRenderer {
                 render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, thumb_buffer.slice(..));
                 render_pass.draw(0..rounded_verts.len() as u32, 0..1);
+            }
+
+            // === Draw mode-line separators ===
+            if self.mode_line_separator_style > 0 {
+                let (cr, cg, cb) = self.mode_line_separator_color;
+                let sep_h = self.mode_line_separator_height;
+                let style = self.mode_line_separator_style;
+                let mut sep_vertices: Vec<RectVertex> = Vec::new();
+
+                for info in &frame_glyphs.window_infos {
+                    if info.mode_line_height > 0.0 && !info.is_minibuffer {
+                        let b = &info.bounds;
+                        let sep_y = b.y + b.height - info.mode_line_height - sep_h;
+
+                        match style {
+                            1 => {
+                                // Solid line
+                                let c = Color::new(cr, cg, cb, 0.6);
+                                self.add_rect(&mut sep_vertices, b.x, sep_y, b.width, 1.0, &c);
+                            }
+                            2 => {
+                                // Shadow (gradient from opaque to transparent)
+                                let layers = sep_h.ceil() as i32;
+                                for i in 0..layers {
+                                    let t = i as f32 / layers as f32;
+                                    let alpha = 0.3 * (1.0 - t);
+                                    let c = Color::new(cr, cg, cb, alpha);
+                                    self.add_rect(&mut sep_vertices, b.x, sep_y + i as f32, b.width, 1.0, &c);
+                                }
+                            }
+                            3 => {
+                                // Gradient (solid to transparent, going upward)
+                                let layers = sep_h.ceil() as i32;
+                                for i in 0..layers {
+                                    let t = (layers - 1 - i) as f32 / layers as f32;
+                                    let alpha = 0.4 * t;
+                                    let c = Color::new(cr, cg, cb, alpha);
+                                    self.add_rect(&mut sep_vertices, b.x, sep_y + i as f32, b.width, 1.0, &c);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if !sep_vertices.is_empty() {
+                    let sep_buffer = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Mode-line Separator Buffer"),
+                            contents: bytemuck::cast_slice(&sep_vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, sep_buffer.slice(..));
+                    render_pass.draw(0..sep_vertices.len() as u32, 0..1);
+                }
             }
 
             // === Draw inactive window dimming overlays ===
