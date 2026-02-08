@@ -170,6 +170,11 @@ pub struct WgpuRenderer {
     /// Buffer-local accent color strip
     accent_strip_enabled: bool,
     accent_strip_width: f32,
+    /// Noise/film grain overlay
+    noise_grain_enabled: bool,
+    noise_grain_intensity: f32,
+    noise_grain_size: f32,
+    noise_grain_frame: u32,
     /// Window padding gradient (inner edge shading)
     padding_gradient_enabled: bool,
     padding_gradient_color: (f32, f32, f32),
@@ -769,6 +774,10 @@ impl WgpuRenderer {
             prev_border_selected: 0,
             accent_strip_enabled: false,
             accent_strip_width: 3.0,
+            noise_grain_enabled: false,
+            noise_grain_intensity: 0.03,
+            noise_grain_size: 2.0,
+            noise_grain_frame: 0,
             padding_gradient_enabled: false,
             padding_gradient_color: (0.0, 0.0, 0.0),
             padding_gradient_opacity: 0.15,
@@ -962,6 +971,13 @@ impl WgpuRenderer {
     pub fn set_accent_strip(&mut self, enabled: bool, width: f32) {
         self.accent_strip_enabled = enabled;
         self.accent_strip_width = width;
+    }
+
+    /// Update noise grain config
+    pub fn set_noise_grain(&mut self, enabled: bool, intensity: f32, size: f32) {
+        self.noise_grain_enabled = enabled;
+        self.noise_grain_intensity = intensity;
+        self.noise_grain_size = size;
     }
 
     /// Update padding gradient config
@@ -3620,6 +3636,52 @@ impl WgpuRenderer {
                     render_pass.set_vertex_buffer(0, frost_buffer.slice(..));
                     render_pass.draw(0..frost_vertices.len() as u32, 0..1);
                 }
+            }
+
+            // === Noise/film grain texture overlay ===
+            if self.noise_grain_enabled {
+                let grain_size = self.noise_grain_size.max(1.0);
+                let intensity = self.noise_grain_intensity.clamp(0.0, 1.0);
+                let frame_w = surface_width as f32 / self.scale_factor;
+                let frame_h = surface_height as f32 / self.scale_factor;
+                let cols = (frame_w / grain_size) as i32;
+                let rows = (frame_h / grain_size) as i32;
+                let frame_seed = self.noise_grain_frame as u64;
+                self.noise_grain_frame = self.noise_grain_frame.wrapping_add(1);
+
+                let mut grain_vertices: Vec<RectVertex> = Vec::new();
+                for row in 0..rows {
+                    for col in 0..cols {
+                        // Hash-based pseudo-random per grain cell, animated by frame
+                        let hash = ((row as u64).wrapping_mul(7919)
+                            .wrapping_add((col as u64).wrapping_mul(104729))
+                            .wrapping_add(frame_seed.wrapping_mul(31337))) % 97;
+                        if hash < 15 {
+                            // Alternate black/white grains
+                            let lum = if hash < 8 { 0.0 } else { 1.0 };
+                            let alpha = intensity * (hash as f32 / 15.0) * 0.5;
+                            let gx = col as f32 * grain_size;
+                            let gy = row as f32 * grain_size;
+                            let c = Color::new(lum, lum, lum, alpha);
+                            self.add_rect(&mut grain_vertices, gx, gy, grain_size, grain_size, &c);
+                        }
+                    }
+                }
+
+                if !grain_vertices.is_empty() {
+                    let grain_buffer = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Noise Grain Buffer"),
+                            contents: bytemuck::cast_slice(&grain_vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, grain_buffer.slice(..));
+                    render_pass.draw(0..grain_vertices.len() as u32, 0..1);
+                }
+                self.needs_continuous_redraw = true;
             }
 
             // === Focus mode: dim lines outside current paragraph ===

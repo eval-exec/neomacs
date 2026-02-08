@@ -450,6 +450,14 @@ pub enum RenderCommand {
         /// Blur radius (noise spread in pixels)
         blur: f32,
     },
+    /// Configure noise/film grain texture overlay
+    SetNoiseGrain {
+        enabled: bool,
+        /// Grain intensity (0.0-1.0)
+        intensity: f32,
+        /// Grain size in pixels
+        size: f32,
+    },
     /// Configure window padding gradient (inner edge shading for depth)
     SetPaddingGradient {
         enabled: bool,

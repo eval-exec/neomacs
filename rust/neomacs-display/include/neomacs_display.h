@@ -1376,6 +1376,14 @@ void neomacs_display_set_typing_speed(struct NeomacsDisplay *handle, int enabled
 void neomacs_display_set_title_fade(struct NeomacsDisplay *handle, int enabled, int durationMs);
 
 /**
+ * Configure noise/film grain texture overlay
+ */
+void neomacs_display_set_noise_grain(struct NeomacsDisplay *handle,
+                                     int enabled,
+                                     int intensity,
+                                     int size);
+
+/**
  * Configure window padding gradient (inner edge shading for depth)
  */
 void neomacs_display_set_padding_gradient(struct NeomacsDisplay *handle,

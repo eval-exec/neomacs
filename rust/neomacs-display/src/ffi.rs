@@ -2781,6 +2781,24 @@ pub unsafe extern "C" fn neomacs_display_set_title_fade(
     }
 }
 
+/// Configure noise/film grain texture overlay
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_noise_grain(
+    _handle: *mut NeomacsDisplay,
+    enabled: c_int,
+    intensity: c_int,
+    size: c_int,
+) {
+    let cmd = RenderCommand::SetNoiseGrain {
+        enabled: enabled != 0,
+        intensity: intensity as f32 / 100.0,
+        size: size as f32,
+    };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 /// Configure window padding gradient (inner edge shading for depth)
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_set_padding_gradient(

@@ -8624,6 +8624,30 @@ BLUR is the blur spread radius in pixels (default 4).  */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-noise-grain",
+       Fneomacs_set_noise_grain,
+       Sneomacs_set_noise_grain, 0, 3, 0,
+       doc: /* Configure noise/film grain texture overlay.
+ENABLED non-nil renders a subtle animated grain pattern over the
+entire frame, simulating a CRT or film look.
+INTENSITY is 0-100 for grain visibility (default 3).
+SIZE is the grain cell size in pixels (default 2).  */)
+  (Lisp_Object enabled, Lisp_Object intensity, Lisp_Object size)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  int on = !NILP (enabled);
+  int inten = 3;
+  int sz = 2;
+  if (FIXNUMP (intensity)) inten = XFIXNUM (intensity);
+  if (FIXNUMP (size)) sz = XFIXNUM (size);
+
+  neomacs_display_set_noise_grain (dpyinfo->display_handle, on, inten, sz);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-padding-gradient",
        Fneomacs_set_padding_gradient,
        Sneomacs_set_padding_gradient, 0, 6, 0,
@@ -10090,6 +10114,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_frosted_glass);
   defsubr (&Sneomacs_set_cursor_size_transition);
   defsubr (&Sneomacs_set_padding_gradient);
+  defsubr (&Sneomacs_set_noise_grain);
   defsubr (&Sneomacs_set_window_glow);
   defsubr (&Sneomacs_set_scroll_progress);
   defsubr (&Sneomacs_set_inactive_tint);

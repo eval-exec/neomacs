@@ -735,6 +735,10 @@ struct RenderApp {
     /// Buffer-local accent color strip
     accent_strip_enabled: bool,
     accent_strip_width: f32,
+    /// Noise/film grain overlay
+    noise_grain_enabled: bool,
+    noise_grain_intensity: f32,
+    noise_grain_size: f32,
     /// Window padding gradient
     padding_gradient_enabled: bool,
     padding_gradient_color: (f32, f32, f32),
@@ -997,6 +1001,9 @@ impl RenderApp {
             border_transition_duration_ms: 200,
             accent_strip_enabled: false,
             accent_strip_width: 3.0,
+            noise_grain_enabled: false,
+            noise_grain_intensity: 0.03,
+            noise_grain_size: 2.0,
             padding_gradient_enabled: false,
             padding_gradient_color: (0.0, 0.0, 0.0),
             padding_gradient_opacity: 0.15,
@@ -1952,6 +1959,15 @@ impl RenderApp {
                     self.accent_strip_width = width;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_accent_strip(enabled, width);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetNoiseGrain { enabled, intensity, size } => {
+                    self.noise_grain_enabled = enabled;
+                    self.noise_grain_intensity = intensity;
+                    self.noise_grain_size = size;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_noise_grain(enabled, intensity, size);
                     }
                     self.frame_dirty = true;
                 }

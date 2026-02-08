@@ -1411,6 +1411,52 @@ on mode-line areas to simulate a blurred glass appearance."
                 neomacs-frosted-glass-opacity nil)
             val))))
 
+;; --- Noise/film grain overlay ---
+(declare-function neomacs-set-noise-grain "neomacsterm.c"
+  (&optional enabled intensity size))
+
+(defcustom neomacs-noise-grain nil
+  "Enable noise/film grain texture overlay.
+Non-nil renders a subtle animated grain pattern over the entire frame,
+simulating a CRT or film look."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-noise-grain)
+           (neomacs-set-noise-grain val
+            (if (boundp 'neomacs-noise-grain-intensity)
+                neomacs-noise-grain-intensity nil)
+            (if (boundp 'neomacs-noise-grain-size)
+                neomacs-noise-grain-size nil)))))
+
+(defcustom neomacs-noise-grain-intensity 3
+  "Grain visibility intensity (0-100)."
+  :type '(integer :tag "Intensity")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-noise-grain)
+                    (boundp 'neomacs-noise-grain)
+                    neomacs-noise-grain)
+           (neomacs-set-noise-grain t val
+            (if (boundp 'neomacs-noise-grain-size)
+                neomacs-noise-grain-size nil)))))
+
+(defcustom neomacs-noise-grain-size 2
+  "Grain cell size in pixels."
+  :type '(integer :tag "Size")
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-noise-grain)
+                    (boundp 'neomacs-noise-grain)
+                    neomacs-noise-grain)
+           (neomacs-set-noise-grain t
+            (if (boundp 'neomacs-noise-grain-intensity)
+                neomacs-noise-grain-intensity nil)
+            val))))
+
 ;; --- Window padding gradient ---
 (declare-function neomacs-set-padding-gradient "neomacsterm.c"
   (&optional enabled r g b opacity width))
