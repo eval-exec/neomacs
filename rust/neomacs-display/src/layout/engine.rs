@@ -467,6 +467,13 @@ impl LayoutEngine {
         let has_margins = params.left_margin_width > 0.0 || params.right_margin_width > 0.0;
         let mut need_margin_check = has_margins;
 
+        // Box face tracking: borders around text regions with box_type > 0
+        let mut box_active = false;
+        let mut box_start_x: f32 = 0.0;
+        let mut box_row: i32 = 0;
+        let mut box_color = Color::from_pixel(0);
+        let mut box_line_width: i32 = 1;
+
         while byte_idx < bytes_read as usize && row < max_rows {
             // Render line number at the start of each new row
             if need_line_number && lnum_enabled {
@@ -1004,10 +1011,35 @@ impl LayoutEngine {
 
                 if fid >= 0 {
                     if fid != current_face_id {
+                        // Close previous box face region if active
+                        if box_active {
+                            let box_end_x = content_x + col as f32 * char_w;
+                            let gy = row_y[box_row as usize];
+                            let bw = box_line_width.max(1) as f32;
+                            // Top border
+                            frame_glyphs.add_border(box_start_x, gy, box_end_x - box_start_x, bw, box_color);
+                            // Bottom border
+                            frame_glyphs.add_border(box_start_x, gy + char_h - bw, box_end_x - box_start_x, bw, box_color);
+                            // Left border
+                            frame_glyphs.add_border(box_start_x, gy, bw, char_h, box_color);
+                            // Right border
+                            frame_glyphs.add_border(box_end_x - bw, gy, bw, char_h, box_color);
+                            box_active = false;
+                        }
+
                         current_face_id = fid;
                         face_fg = Color::from_pixel(self.face_data.fg);
                         face_bg = Color::from_pixel(self.face_data.bg);
                         self.apply_face(&self.face_data, frame_glyphs);
+
+                        // Start new box face region if this face has a box
+                        if self.face_data.box_type > 0 {
+                            box_active = true;
+                            box_start_x = content_x + col as f32 * char_w;
+                            box_row = row;
+                            box_color = Color::from_pixel(self.face_data.box_color);
+                            box_line_width = self.face_data.box_line_width;
+                        }
                     }
                     // next_check is 0 when face_at_buffer_position returns no limit
                     next_face_check = if next_check > charpos { next_check } else { charpos + 1 };
@@ -1092,6 +1124,21 @@ impl LayoutEngine {
                         let gy = row_y[row as usize];
                         frame_glyphs.add_stretch(gx, gy, remaining, char_h, face_bg, self.face_data.face_id, false);
                     }
+
+                    // Close box face at end of line (box continues on next line)
+                    if box_active {
+                        let box_end_x = content_x + col as f32 * char_w;
+                        let gy = row_y[box_row as usize];
+                        let bw = box_line_width.max(1) as f32;
+                        frame_glyphs.add_border(box_start_x, gy, box_end_x - box_start_x, bw, box_color);
+                        frame_glyphs.add_border(box_start_x, gy + char_h - bw, box_end_x - box_start_x, bw, box_color);
+                        frame_glyphs.add_border(box_start_x, gy, bw, char_h, box_color);
+                        frame_glyphs.add_border(box_end_x - bw, gy, bw, char_h, box_color);
+                        // Box stays active but restarts on new row
+                        box_start_x = content_x;
+                        // box_row will update after row += 1
+                    }
+
                     col = 0;
                     row += 1;
 
@@ -1111,6 +1158,7 @@ impl LayoutEngine {
                         }
                     }
 
+                    if box_active { box_row = row; }
                     current_line += 1;
                     need_line_number = lnum_enabled;
                     need_margin_check = has_margins;
@@ -1582,6 +1630,18 @@ impl LayoutEngine {
             }
 
             window_end_charpos = charpos;
+        }
+
+        // Close any remaining box face region at end of text
+        if box_active {
+            let box_end_x = content_x + col as f32 * char_w;
+            let gy = row_y[box_row.min(max_rows - 1) as usize];
+            let bw = box_line_width.max(1) as f32;
+            frame_glyphs.add_border(box_start_x, gy, box_end_x - box_start_x, bw, box_color);
+            frame_glyphs.add_border(box_start_x, gy + char_h - bw, box_end_x - box_start_x, bw, box_color);
+            frame_glyphs.add_border(box_start_x, gy, bw, char_h, box_color);
+            frame_glyphs.add_border(box_end_x - bw, gy, bw, char_h, box_color);
+            box_active = false;
         }
 
         // If cursor wasn't placed (point is past visible content), place at end
