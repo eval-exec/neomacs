@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 
-use crate::core::face::{Face, FaceAttributes};
+use crate::core::face::{BoxType, Face, FaceAttributes};
 use crate::core::frame_glyphs::{FrameGlyph, FrameGlyphBuffer};
 use crate::core::scene::{CursorStyle, Scene};
 use crate::core::types::{AnimatedCursor, Color};
@@ -2007,17 +2007,52 @@ impl WgpuRenderer {
                                         && (next.x - (span.x + span.width)).abs() < 1.5
                                 };
 
+                                // Compute edge colors for 3D box types
+                                let (top_left_color, bottom_right_color) = match face.box_type {
+                                    BoxType::Raised3D => {
+                                        let light = Color {
+                                            r: (bx_color.r * 1.4).min(1.0),
+                                            g: (bx_color.g * 1.4).min(1.0),
+                                            b: (bx_color.b * 1.4).min(1.0),
+                                            a: bx_color.a,
+                                        };
+                                        let dark = Color {
+                                            r: bx_color.r * 0.6,
+                                            g: bx_color.g * 0.6,
+                                            b: bx_color.b * 0.6,
+                                            a: bx_color.a,
+                                        };
+                                        (light, dark)
+                                    }
+                                    BoxType::Sunken3D => {
+                                        let light = Color {
+                                            r: (bx_color.r * 1.4).min(1.0),
+                                            g: (bx_color.g * 1.4).min(1.0),
+                                            b: (bx_color.b * 1.4).min(1.0),
+                                            a: bx_color.a,
+                                        };
+                                        let dark = Color {
+                                            r: bx_color.r * 0.6,
+                                            g: bx_color.g * 0.6,
+                                            b: bx_color.b * 0.6,
+                                            a: bx_color.a,
+                                        };
+                                        (dark, light)
+                                    }
+                                    _ => (bx_color.clone(), bx_color.clone()),
+                                };
+
                                 // Top
-                                self.add_rect(&mut sharp_border_vertices, span.x, span.y, span.width, bw, bx_color);
+                                self.add_rect(&mut sharp_border_vertices, span.x, span.y, span.width, bw, &top_left_color);
                                 // Bottom
-                                self.add_rect(&mut sharp_border_vertices, span.x, span.y + span.height - bw, span.width, bw, bx_color);
+                                self.add_rect(&mut sharp_border_vertices, span.x, span.y + span.height - bw, span.width, bw, &bottom_right_color);
                                 // Left (only if no adjacent span to the left on same row)
                                 if !has_left_neighbor {
-                                    self.add_rect(&mut sharp_border_vertices, span.x, span.y, bw, span.height, bx_color);
+                                    self.add_rect(&mut sharp_border_vertices, span.x, span.y, bw, span.height, &top_left_color);
                                 }
                                 // Right (only if no adjacent span to the right on same row)
                                 if !has_right_neighbor {
-                                    self.add_rect(&mut sharp_border_vertices, span.x + span.width - bw, span.y, bw, span.height, bx_color);
+                                    self.add_rect(&mut sharp_border_vertices, span.x + span.width - bw, span.y, bw, span.height, &bottom_right_color);
                                 }
                             }
                         }
