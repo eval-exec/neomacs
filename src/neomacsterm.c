@@ -113,6 +113,7 @@ static void neomacs_set_frame_offset (struct frame *f, int xoff, int yoff,
                                       int change_gravity);
 static void neomacs_delete_frame (struct frame *f);
 static void neomacs_focus_frame (struct frame *f, bool noactivate);
+static Lisp_Object neomacs_get_focus_frame (struct frame *frame);
 static void neomacs_buffer_flipping_unblocked (struct frame *f);
 static uint32_t neomacs_get_or_load_image (struct neomacs_display_info *dpyinfo,
                                            struct image *img);
@@ -518,6 +519,7 @@ neomacs_create_terminal (struct neomacs_display_info *dpyinfo)
   terminal->set_frame_offset_hook = neomacs_set_frame_offset;
   terminal->delete_frame_hook = neomacs_delete_frame;
   terminal->focus_frame_hook = neomacs_focus_frame;
+  terminal->get_focus_frame = neomacs_get_focus_frame;
   terminal->buffer_flipping_unblocked_hook = neomacs_buffer_flipping_unblocked;
 
   /* Register the display connection fd for event handling */
@@ -5924,6 +5926,20 @@ neomacs_focus_frame (struct frame *f, bool noactivate)
   dpyinfo->x_focus_frame = f;
   dpyinfo->focus_frame = f;
   neomacs_frame_rehighlight (dpyinfo);
+}
+
+/* Return the focused frame for this terminal.  */
+static Lisp_Object
+neomacs_get_focus_frame (struct frame *frame)
+{
+  struct neomacs_display_info *dpyinfo = FRAME_NEOMACS_DISPLAY_INFO (frame);
+  Lisp_Object focus;
+
+  if (!dpyinfo || !dpyinfo->x_focus_frame)
+    return Qnil;
+
+  XSETFRAME (focus, dpyinfo->x_focus_frame);
+  return focus;
 }
 
 /* Raise or lower frame F.  */
