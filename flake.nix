@@ -1,5 +1,5 @@
 {
-  description = "Neomacs - GPU-accelerated Emacs with GTK4 and WebKit";
+  description = "Neomacs - GPU-accelerated Emacs with winit/wgpu and WebKit";
 
   nixConfig = {
     extra-substituters = [ "https://nix-wpe-webkit.cachix.org" ];
@@ -88,12 +88,8 @@
               # Cairo
               cairo
 
-              # GTK4 and dependencies for Neomacs
-              gtk4
+              # GLib for event loop integration
               glib
-              graphene
-              pango
-              gdk-pixbuf
 
               # GStreamer for video support
               gst_all_1.gstreamer
@@ -160,12 +156,8 @@
 
             # pkg-config paths for dev headers
             PKG_CONFIG_PATH = pkgs.lib.makeSearchPath "lib/pkgconfig" (with pkgs; [
-              gtk4.dev
               glib.dev
-              graphene
-              pango.dev
               cairo.dev
-              gdk-pixbuf.dev
               gst_all_1.gstreamer.dev
               gst_all_1.gst-plugins-base.dev
               libva
@@ -200,7 +192,7 @@
               echo ""
               echo "Rust: $(rustc --version)"
               echo "Cargo: $(cargo --version)"
-              echo "GTK4: $(pkg-config --modversion gtk4 2>/dev/null || echo 'not found')"
+              echo "xkbcommon: $(pkg-config --modversion xkbcommon 2>/dev/null || echo 'not found')"
               echo "GStreamer: $(pkg-config --modversion gstreamer-1.0 2>/dev/null || echo 'not found')"
               echo "WPE WebKit: $(pkg-config --modversion wpe-webkit-2.0 2>/dev/null || echo 'not found')"
               echo ""
@@ -209,12 +201,8 @@
               # it causes glibc version contamination with system shell.
               # The linker adds RPATH for ncurses during compilation.
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (with pkgs; [
-                gtk4
                 glib
                 cairo
-                pango
-                gdk-pixbuf
-                graphene
                 gst_all_1.gstreamer
                 gst_all_1.gst-plugins-base
                 fontconfig

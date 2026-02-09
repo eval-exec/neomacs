@@ -572,7 +572,7 @@ AC_ARG_WITH([ns],[AS_HELP_STRING([--with-ns],
 On by default on macOS.])],[],[with_ns=maybe])
 OPTION_DEFAULT_OFF([w32], [use native MS Windows GUI in a Cygwin build])
 OPTION_DEFAULT_OFF([pgtk], [use GTK to support window systems other than X])
-OPTION_DEFAULT_OFF([neomacs], [use Neomacs GPU-accelerated display engine with GTK4])
+OPTION_DEFAULT_OFF([neomacs], [use Neomacs GPU-accelerated display engine with winit/wgpu])
 
 OPTION_DEFAULT_ON([gpm],[don't use -lgpm for mouse support on a GNU/Linux console])
 OPTION_DEFAULT_IFAVAILABLE([dbus],[compile with D-Bus support])
@@ -3950,8 +3950,7 @@ if test "$window_system" = "neomacs"; then
       fi
     fi
   fi
-  dnl Link GTK4 and GStreamer
-  PKG_CHECK_MODULES([GTK4], [gtk4], [], [AC_MSG_ERROR([GTK4 required for Neomacs])])
+  dnl Link GStreamer
   PKG_CHECK_MODULES([GSTREAMER], [gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0], [], [AC_MSG_ERROR([GStreamer required for Neomacs])])
   dnl GLib is required for event loop integration (xgselect)
   PKG_CHECK_MODULES([GLIB], [glib-2.0], [], [AC_MSG_ERROR([GLib required for Neomacs video playback])])
@@ -3972,8 +3971,10 @@ if test "$window_system" = "neomacs"; then
   PKG_CHECK_MODULES([WPEBACKEND], [wpebackend-fdo-1.0], [], [AC_MSG_WARN([wpebackend-fdo not found])])
   dnl Wayland-server is needed for wl_shm_buffer functions (SHM fallback mode)
   PKG_CHECK_MODULES([WAYLAND_SERVER], [wayland-server], [], [AC_MSG_WARN([wayland-server not found])])
-  NEOMACS_CFLAGS="$GTK4_CFLAGS $GSTREAMER_CFLAGS $CAIRO_CFLAGS $GLIB_CFLAGS $EGL_CFLAGS"
-  NEOMACS_LIBS="$NEOMACS_LIBS $GTK4_LIBS $GSTREAMER_LIBS $CAIRO_LIBS $GLIB_LIBS $EGL_LIBS -lpthread -lm -ldl"
+  dnl xkbcommon for key name resolution
+  PKG_CHECK_MODULES([XKBCOMMON], [xkbcommon], [], [AC_MSG_ERROR([xkbcommon required for Neomacs])])
+  NEOMACS_CFLAGS="$GSTREAMER_CFLAGS $CAIRO_CFLAGS $GLIB_CFLAGS $EGL_CFLAGS $XKBCOMMON_CFLAGS"
+  NEOMACS_LIBS="$NEOMACS_LIBS $GSTREAMER_LIBS $CAIRO_LIBS $GLIB_LIBS $EGL_LIBS $XKBCOMMON_LIBS -lpthread -lm -ldl"
   if test "$HAVE_NEOMACS_WEBKIT" = yes; then
     NEOMACS_CFLAGS="$NEOMACS_CFLAGS $WPEWEBKIT_CFLAGS $WPEBACKEND_CFLAGS $WAYLAND_SERVER_CFLAGS"
     NEOMACS_LIBS="$NEOMACS_LIBS $WPEWEBKIT_LIBS $WPEBACKEND_LIBS $WAYLAND_SERVER_LIBS"
