@@ -27,9 +27,6 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #ifdef HAVE_NEOMACS
 
-/* GTK4 headers */
-#include <gtk/gtk.h>
-
 /* Cairo is used for font rendering with ftcrfont */
 #include <cairo.h>
 
@@ -173,7 +170,7 @@ struct neomacs_display_info
   struct scroll_bar *last_mouse_scroll_bar;
 
   /* Last user interaction time (for focus stealing prevention) */
-  guint32 last_user_time;
+  uint32_t last_user_time;
 
   /* Whether the display supports ARGB visuals */
   bool_bf supports_argb : 1;
@@ -181,8 +178,6 @@ struct neomacs_display_info
   /* File descriptor for the display connection (for select/poll) */
   int connection;
 
-  /* GDK Display handle */
-  GdkDisplay *gdpy;
 };
 
 /* Neomacs output data - one per frame */

@@ -5372,7 +5372,7 @@ pub unsafe extern "C" fn neomacs_display_has_transition_snapshot(
 #[cfg(feature = "winit-backend")]
 use crate::thread_comm::{EmacsComms, InputEvent, PopupMenuItem, RenderCommand, ThreadComms};
 #[cfg(feature = "winit-backend")]
-use crate::render_thread::{RenderThread, SharedImageDimensions};
+use crate::render_thread::{RenderThread, SharedImageDimensions, SharedMonitorInfo};
 
 /// Global state for threaded mode
 #[cfg(feature = "winit-backend")]
@@ -5386,6 +5386,8 @@ struct ThreadedState {
     /// Shared storage for image dimensions (id -> (width, height))
     /// Populated synchronously when loading images, accessible from main thread
     image_dimensions: Arc<Mutex<HashMap<u32, (u32, u32)>>>,
+    /// Shared storage for monitor info from winit
+    shared_monitors: SharedMonitorInfo,
     /// Shared terminal handles for cross-thread text extraction
     #[cfg(feature = "neo-term")]
     shared_terminals: crate::terminal::SharedTerminals,
@@ -5426,6 +5428,9 @@ pub unsafe extern "C" fn neomacs_display_init_threaded(
     // Create shared image dimensions map
     let image_dimensions = Arc::new(Mutex::new(HashMap::new()));
 
+    // Create shared monitor info storage (with condvar for sync)
+    let shared_monitors: SharedMonitorInfo = Arc::new((Mutex::new(Vec::new()), std::sync::Condvar::new()));
+
     // Create shared terminal handles for cross-thread text extraction
     #[cfg(feature = "neo-term")]
     let shared_terminals: crate::terminal::SharedTerminals =
@@ -5438,6 +5443,7 @@ pub unsafe extern "C" fn neomacs_display_init_threaded(
         height,
         title,
         Arc::clone(&image_dimensions),
+        Arc::clone(&shared_monitors),
         #[cfg(feature = "neo-term")]
         Arc::clone(&shared_terminals),
     );
@@ -5473,11 +5479,138 @@ pub unsafe extern "C" fn neomacs_display_init_threaded(
         render_thread: Some(render_thread),
         display_handle: display_ptr,
         image_dimensions,
+        shared_monitors,
         #[cfg(feature = "neo-term")]
         shared_terminals,
     });
 
     wakeup_fd
+}
+
+// ============================================================================
+// Monitor Info FFI
+// ============================================================================
+
+/// Monitor info struct for C FFI
+#[repr(C)]
+pub struct NeomacsMonitorInfo {
+    pub x: c_int,
+    pub y: c_int,
+    pub width: c_int,
+    pub height: c_int,
+    pub scale: c_double,
+    pub width_mm: c_int,
+    pub height_mm: c_int,
+}
+
+/// Wait for monitor info to be available (with timeout).
+/// Call after neomacs_display_init_threaded().
+/// Returns number of monitors, or 0 on timeout.
+#[cfg(feature = "winit-backend")]
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_wait_for_monitors() -> c_int {
+    let state = match THREADED_STATE.as_ref() {
+        Some(s) => s,
+        None => return 0,
+    };
+    let (ref lock, ref cvar) = *state.shared_monitors;
+    let timeout = std::time::Duration::from_secs(5);
+    match lock.lock() {
+        Ok(guard) => {
+            // Wait until monitors are populated or timeout
+            let result = cvar.wait_timeout_while(guard, timeout, |m| m.is_empty());
+            match result {
+                Ok((monitors, _)) => monitors.len() as c_int,
+                Err(_) => 0,
+            }
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Get the number of monitors available.
+/// Must be called after neomacs_display_init_threaded().
+#[cfg(feature = "winit-backend")]
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_get_monitor_count() -> c_int {
+    let state = match THREADED_STATE.as_ref() {
+        Some(s) => s,
+        None => return 0,
+    };
+    let (ref lock, _) = *state.shared_monitors;
+    match lock.lock() {
+        Ok(monitors) => monitors.len() as c_int,
+        Err(_) => 0,
+    }
+}
+
+/// Get info about a specific monitor by index.
+/// Returns 1 on success, 0 on failure.
+#[cfg(feature = "winit-backend")]
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_get_monitor_info(
+    index: c_int,
+    info: *mut NeomacsMonitorInfo,
+) -> c_int {
+    if info.is_null() {
+        return 0;
+    }
+    let state = match THREADED_STATE.as_ref() {
+        Some(s) => s,
+        None => return 0,
+    };
+    let (ref lock, _) = *state.shared_monitors;
+    match lock.lock() {
+        Ok(monitors) => {
+            if index < 0 || index as usize >= monitors.len() {
+                return 0;
+            }
+            let m = &monitors[index as usize];
+            (*info).x = m.x as c_int;
+            (*info).y = m.y as c_int;
+            (*info).width = m.width as c_int;
+            (*info).height = m.height as c_int;
+            (*info).scale = m.scale;
+            (*info).width_mm = m.width_mm as c_int;
+            (*info).height_mm = m.height_mm as c_int;
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Get the name of a monitor by index.
+/// Returns a pointer to a static string (valid until next call), or NULL.
+#[cfg(feature = "winit-backend")]
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_get_monitor_name(
+    index: c_int,
+) -> *const c_char {
+    static mut NAME_BUF: Option<CString> = None;
+
+    let state = match THREADED_STATE.as_ref() {
+        Some(s) => s,
+        None => return ptr::null(),
+    };
+    let (ref lock, _) = *state.shared_monitors;
+    match lock.lock() {
+        Ok(monitors) => {
+            if index < 0 || index as usize >= monitors.len() {
+                return ptr::null();
+            }
+            match &monitors[index as usize].name {
+                Some(name) => {
+                    NAME_BUF = CString::new(name.as_str()).ok();
+                    match NAME_BUF.as_ref() {
+                        Some(cs) => cs.as_ptr(),
+                        None => ptr::null(),
+                    }
+                }
+                None => ptr::null(),
+            }
+        }
+        Err(_) => ptr::null(),
+    }
 }
 
 /// Drain input events from render thread

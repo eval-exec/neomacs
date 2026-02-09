@@ -40,6 +40,23 @@ use crate::backend::wpe::{WpeBackend, WpeWebView};
 /// Shared storage for image dimensions accessible from both threads
 pub type SharedImageDimensions = Arc<Mutex<HashMap<u32, (u32, u32)>>>;
 
+/// Monitor information collected from winit
+#[derive(Debug, Clone)]
+pub struct MonitorInfo {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub scale: f64,
+    pub width_mm: i32,
+    pub height_mm: i32,
+    pub name: Option<String>,
+}
+
+/// Shared storage for monitor info accessible from both threads.
+/// The Condvar is notified once monitors have been populated.
+pub type SharedMonitorInfo = Arc<(Mutex<Vec<MonitorInfo>>, std::sync::Condvar)>;
+
 /// Render thread state
 pub struct RenderThread {
     handle: Option<JoinHandle<()>>,
@@ -53,12 +70,14 @@ impl RenderThread {
         height: u32,
         title: String,
         image_dimensions: SharedImageDimensions,
+        shared_monitors: SharedMonitorInfo,
         #[cfg(feature = "neo-term")]
         shared_terminals: crate::terminal::SharedTerminals,
     ) -> Self {
         let handle = thread::spawn(move || {
             run_render_loop(
                 comms, width, height, title, image_dimensions,
+                shared_monitors,
                 #[cfg(feature = "neo-term")]
                 shared_terminals,
             );
@@ -877,6 +896,27 @@ struct RenderApp {
     cursor_crystal_facet_count: u32,
     cursor_crystal_radius: f32,
     cursor_crystal_opacity: f32,
+
+    tessellation_enabled: bool,
+    tessellation_color: (f32, f32, f32),
+    tessellation_tile_size: f32,
+    tessellation_rotation: f32,
+    tessellation_opacity: f32,
+    cursor_water_drop_enabled: bool,
+    cursor_water_drop_color: (f32, f32, f32),
+    cursor_water_drop_ripple_count: u32,
+    cursor_water_drop_expand_speed: f32,
+    cursor_water_drop_opacity: f32,
+    guilloche_enabled: bool,
+    guilloche_color: (f32, f32, f32),
+    guilloche_curve_count: u32,
+    guilloche_wave_freq: f32,
+    guilloche_opacity: f32,
+    cursor_pixel_dust_enabled: bool,
+    cursor_pixel_dust_color: (f32, f32, f32),
+    cursor_pixel_dust_count: u32,
+    cursor_pixel_dust_scatter_speed: f32,
+    cursor_pixel_dust_opacity: f32,
 
     celtic_knot_enabled: bool,
     celtic_knot_color: (f32, f32, f32),
@@ -1793,6 +1833,26 @@ impl RenderApp {
             cursor_crystal_facet_count: 6,
             cursor_crystal_radius: 25.0,
             cursor_crystal_opacity: 0.3,
+            tessellation_enabled: false,
+            tessellation_color: (0.5, 0.5, 0.7),
+            tessellation_tile_size: 40.0,
+            tessellation_rotation: 0.0,
+            tessellation_opacity: 0.04,
+            cursor_water_drop_enabled: false,
+            cursor_water_drop_color: (0.3, 0.6, 0.9),
+            cursor_water_drop_ripple_count: 4,
+            cursor_water_drop_expand_speed: 1.0,
+            cursor_water_drop_opacity: 0.15,
+            guilloche_enabled: false,
+            guilloche_color: (0.6, 0.4, 0.7),
+            guilloche_curve_count: 8,
+            guilloche_wave_freq: 1.0,
+            guilloche_opacity: 0.05,
+            cursor_pixel_dust_enabled: false,
+            cursor_pixel_dust_color: (0.8, 0.8, 0.6),
+            cursor_pixel_dust_count: 15,
+            cursor_pixel_dust_scatter_speed: 1.0,
+            cursor_pixel_dust_opacity: 0.2,
             celtic_knot_enabled: false,
             celtic_knot_color: (0.0, 0.6, 0.3),
             celtic_knot_scale: 60.0,
@@ -3968,6 +4028,50 @@ impl RenderApp {
                     self.cursor_tornado_opacity = opacity;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_cursor_tornado(enabled, (r, g, b), radius, particle_count, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetTessellation { enabled, r, g, b, tile_size, rotation, opacity } => {
+                    self.tessellation_enabled = enabled;
+                    self.tessellation_color = (r, g, b);
+                    self.tessellation_tile_size = tile_size;
+                    self.tessellation_rotation = rotation;
+                    self.tessellation_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_tessellation(enabled, (r, g, b), tile_size, rotation, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorWaterDrop { enabled, r, g, b, ripple_count, expand_speed, opacity } => {
+                    self.cursor_water_drop_enabled = enabled;
+                    self.cursor_water_drop_color = (r, g, b);
+                    self.cursor_water_drop_ripple_count = ripple_count;
+                    self.cursor_water_drop_expand_speed = expand_speed;
+                    self.cursor_water_drop_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_water_drop(enabled, (r, g, b), ripple_count, expand_speed, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetGuilloche { enabled, r, g, b, curve_count, wave_freq, opacity } => {
+                    self.guilloche_enabled = enabled;
+                    self.guilloche_color = (r, g, b);
+                    self.guilloche_curve_count = curve_count;
+                    self.guilloche_wave_freq = wave_freq;
+                    self.guilloche_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_guilloche(enabled, (r, g, b), curve_count, wave_freq, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorPixelDust { enabled, r, g, b, dust_count, scatter_speed, opacity } => {
+                    self.cursor_pixel_dust_enabled = enabled;
+                    self.cursor_pixel_dust_color = (r, g, b);
+                    self.cursor_pixel_dust_count = dust_count;
+                    self.cursor_pixel_dust_scatter_speed = scatter_speed;
+                    self.cursor_pixel_dust_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_pixel_dust(enabled, (r, g, b), dust_count, scatter_speed, opacity);
                     }
                     self.frame_dirty = true;
                 }
@@ -6926,6 +7030,7 @@ fn run_render_loop(
     height: u32,
     title: String,
     image_dimensions: SharedImageDimensions,
+    shared_monitors: SharedMonitorInfo,
     #[cfg(feature = "neo-term")]
     shared_terminals: crate::terminal::SharedTerminals,
 ) {
@@ -6964,6 +7069,48 @@ fn run_render_loop(
     };
     #[cfg(not(target_os = "linux"))]
     let event_loop = EventLoop::new().expect("Failed to create event loop");
+
+    // Enumerate monitors and store in shared state
+    {
+        let mut monitors = Vec::new();
+        for monitor in event_loop.available_monitors() {
+            let pos = monitor.position();
+            let size = monitor.size();
+            let scale = monitor.scale_factor();
+            let name = monitor.name();
+            // winit doesn't provide physical mm dimensions directly;
+            // estimate from DPI (96 DPI baseline) or use 0 as fallback
+            let width_mm = if scale > 0.0 {
+                (size.width as f64 * 25.4 / (96.0 * scale)) as i32
+            } else {
+                0
+            };
+            let height_mm = if scale > 0.0 {
+                (size.height as f64 * 25.4 / (96.0 * scale)) as i32
+            } else {
+                0
+            };
+            log::info!(
+                "Monitor: {:?} pos=({},{}) size={}x{} scale={} mm={}x{}",
+                name, pos.x, pos.y, size.width, size.height, scale, width_mm, height_mm
+            );
+            monitors.push(MonitorInfo {
+                x: pos.x,
+                y: pos.y,
+                width: size.width as i32,
+                height: size.height as i32,
+                scale,
+                width_mm,
+                height_mm,
+                name,
+            });
+        }
+        let (ref lock, ref cvar) = *shared_monitors;
+        if let Ok(mut shared) = lock.lock() {
+            *shared = monitors;
+            cvar.notify_all();
+        }
+    }
 
     // Start with WaitUntil to avoid busy-polling; about_to_wait() adjusts dynamically
     event_loop.set_control_flow(ControlFlow::WaitUntil(

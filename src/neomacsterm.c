@@ -25,10 +25,8 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include <dlfcn.h>
 #include <string.h>
-#include <gtk/gtk.h>
-
-/* Forward declarations for Wayland types (to avoid including wayland headers) */
-struct wl_display;
+#include <stdint.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include "lisp.h"
 #include "blockinput.h"
@@ -257,24 +255,74 @@ static void neomacs_query_colors (struct frame *, Emacs_Color *, int);
 static void neomacs_query_frame_background_color (struct frame *, Emacs_Color *);
 static void neomacs_free_pixmap (struct frame *, Emacs_Pixmap);
 
+/* Initialize display info defaults */
+static void
+neomacs_initialize_display_info (struct neomacs_display_info *dpyinfo)
+{
+  dpyinfo->reference_count = 0;
+  dpyinfo->n_planes = 24;
+  dpyinfo->black_pixel = 0x000000;
+  dpyinfo->white_pixel = 0xffffff;
+  dpyinfo->background_pixel = 0x000000;  /* Default to black for dark theme */
+  dpyinfo->smallest_char_width = 8;
+  dpyinfo->smallest_font_height = 16;
+  dpyinfo->supports_argb = true;
+  dpyinfo->connection = -1;
+
+  /* Initialize DPI to a reasonable default - required for font sizing */
+  dpyinfo->resx = 96;
+  dpyinfo->resy = 96;
+
+  /* Default display dimensions (overridden after render thread init) */
+  dpyinfo->width = 1920;
+  dpyinfo->height = 1080;
+}
+
+/* Query monitor info from winit (via Rust FFI) and update dpyinfo. */
+static void
+neomacs_query_monitors (struct neomacs_display_info *dpyinfo)
+{
+  int n = neomacs_display_wait_for_monitors ();
+  if (n <= 0)
+    {
+      nlog_debug ("No monitors found, using defaults");
+      return;
+    }
+
+  int max_width = 0, max_height = 0;
+  for (int i = 0; i < n; i++)
+    {
+      struct NeomacsMonitorInfo info;
+      if (neomacs_display_get_monitor_info (i, &info))
+        {
+          int right = info.x + info.width;
+          int bottom = info.y + info.height;
+          if (right > max_width)
+            max_width = right;
+          if (bottom > max_height)
+            max_height = bottom;
+        }
+    }
+  if (max_width > 0 && max_height > 0)
+    {
+      dpyinfo->width = max_width;
+      dpyinfo->height = max_height;
+      nlog_debug ("Display size from winit: %dx%d",
+                  dpyinfo->width, dpyinfo->height);
+    }
+}
+
 /* Create a new Neomacs display connection */
 struct neomacs_display_info *
 neomacs_open_display (const char *display_name)
 {
   struct neomacs_display_info *dpyinfo;
-  static bool gtk_initialized = false;
-
-  /* Initialize GTK if not already done */
-  if (!gtk_initialized)
-    {
-      gtk_init ();
-      gtk_initialized = true;
-    }
 
   dpyinfo = xzalloc (sizeof *dpyinfo);
   neomacs_initialize_display_info (dpyinfo);
 
-  /* Initialize the Rust display engine in threaded mode */
+  /* Initialize the Rust display engine in threaded mode.
+     This spawns the render thread with winit event loop.  */
   int wakeup_fd = neomacs_display_init_threaded (dpyinfo->width, dpyinfo->height, "Emacs");
 
   if (wakeup_fd < 0)
@@ -282,6 +330,9 @@ neomacs_open_display (const char *display_name)
       xfree (dpyinfo);
       error ("Failed to initialize Neomacs threaded display engine");
     }
+
+  /* Query actual monitor dimensions from winit */
+  neomacs_query_monitors (dpyinfo);
 
   /* Get display handle for frame operations */
   dpyinfo->display_handle = neomacs_display_get_threaded_handle ();
@@ -300,124 +351,15 @@ neomacs_open_display (const char *display_name)
   /* Register wakeup handler with Emacs event loop */
   add_read_fd (wakeup_fd, neomacs_display_wakeup_handler, dpyinfo);
 
+  /* Update render thread with actual display dimensions if they changed */
+  if (dpyinfo->display_handle)
+    neomacs_display_resize (dpyinfo->display_handle, dpyinfo->width, dpyinfo->height);
+
   /* Add to display list */
   dpyinfo->next = neomacs_display_list;
   neomacs_display_list = dpyinfo;
 
   return dpyinfo;
-}
-
-/* Initialize display info defaults */
-static void
-neomacs_initialize_display_info (struct neomacs_display_info *dpyinfo)
-{
-  dpyinfo->reference_count = 0;
-  dpyinfo->n_planes = 24;
-  dpyinfo->black_pixel = 0x000000;
-  dpyinfo->white_pixel = 0xffffff;
-  dpyinfo->background_pixel = 0x000000;  /* Default to black for dark theme */
-  dpyinfo->smallest_char_width = 8;
-  dpyinfo->smallest_font_height = 16;
-  dpyinfo->supports_argb = true;
-  dpyinfo->connection = -1;
-  dpyinfo->gdpy = NULL;
-
-  /* Initialize DPI to a reasonable default - required for font sizing */
-  dpyinfo->resx = 96;
-  dpyinfo->resy = 96;
-
-  /* Default display dimensions (overridden below from GDK monitors) */
-  dpyinfo->width = 1920;
-  dpyinfo->height = 1080;
-
-  /* Get the GDK display */
-  GdkDisplay *gdpy = gdk_display_get_default ();
-  if (!gdpy)
-    {
-      /* No display yet, try to open default */
-      gdpy = gdk_display_open (NULL);
-    }
-  dpyinfo->gdpy = gdpy;
-
-  if (gdpy)
-    {
-      /* Get the display connection fd for event handling.
-         This depends on whether we're running on X11 or Wayland.
-         Use dlsym to avoid compile-time dependencies on X11/Wayland headers.  */
-      void *handle = dlopen (NULL, RTLD_LAZY);
-      const char *type_name = G_OBJECT_TYPE_NAME (gdpy);
-
-      nlog_debug ("GDK display type: %s", type_name ? type_name : "NULL");
-
-      if (handle && type_name)
-	{
-	  /* Check for X11 display */
-	  if (strstr (type_name, "X11"))
-	    {
-	      void *(*get_xdisplay) (GdkDisplay *) = dlsym (handle, "gdk_x11_display_get_xdisplay");
-	      int (*conn_number) (void *) = dlsym (handle, "XConnectionNumber");
-	      nlog_debug ("X11: get_xdisplay=%p, conn_number=%p",
-		       (void *) get_xdisplay, (void *) conn_number);
-	      if (get_xdisplay && conn_number)
-		{
-		  void *xdpy = get_xdisplay (gdpy);
-		  nlog_debug ("X11: xdpy=%p", xdpy);
-		  if (xdpy)
-		    dpyinfo->connection = conn_number (xdpy);
-		}
-	    }
-	  /* Check for Wayland display */
-	  else if (strstr (type_name, "Wayland"))
-	    {
-	      struct wl_display *(*get_wl_display) (GdkDisplay *)
-		= dlsym (handle, "gdk_wayland_display_get_wl_display");
-	      int (*get_fd) (struct wl_display *) = dlsym (handle, "wl_display_get_fd");
-	      nlog_debug ("Wayland: get_wl_display=%p, get_fd=%p",
-		       (void *) get_wl_display, (void *) get_fd);
-	      if (get_wl_display && get_fd)
-		{
-		  struct wl_display *wl_dpy = get_wl_display (gdpy);
-		  nlog_debug ("Wayland: wl_dpy=%p", (void *) wl_dpy);
-		  if (wl_dpy)
-		    dpyinfo->connection = get_fd (wl_dpy);
-		}
-	    }
-	}
-
-      nlog_debug ("Display connection fd: %d", dpyinfo->connection);
-
-      /* Query actual screen dimensions from GDK monitors.  */
-      GListModel *monitors = gdk_display_get_monitors (gdpy);
-      if (monitors)
-        {
-          guint n = g_list_model_get_n_items (monitors);
-          int max_width = 0, max_height = 0;
-          for (guint i = 0; i < n; i++)
-            {
-              GdkMonitor *mon = g_list_model_get_item (monitors, i);
-              if (mon)
-                {
-                  GdkRectangle geom;
-                  gdk_monitor_get_geometry (mon, &geom);
-                  int scale = gdk_monitor_get_scale_factor (mon);
-                  int right = (geom.x + geom.width) * scale;
-                  int bottom = (geom.y + geom.height) * scale;
-                  if (right > max_width)
-                    max_width = right;
-                  if (bottom > max_height)
-                    max_height = bottom;
-                  g_object_unref (mon);
-                }
-            }
-          if (max_width > 0 && max_height > 0)
-            {
-              dpyinfo->width = max_width;
-              dpyinfo->height = max_height;
-              nlog_debug ("Display size: %dx%d",
-                          dpyinfo->width, dpyinfo->height);
-            }
-        }
-    }
 }
 
 
@@ -4184,14 +4126,7 @@ neomacs_update_end (struct frame *f)
         neomacs_display_end_frame (dpyinfo->display_handle);
     }
 
-  /* Queue a redraw of the drawing area */
-  if (output && output->drawing_area)
-    {
-      if (output->use_gpu_widget && dpyinfo && dpyinfo->display_handle)
-        neomacs_display_render_to_widget (dpyinfo->display_handle, output->drawing_area);
-
-      gtk_widget_queue_draw (GTK_WIDGET (output->drawing_area));
-    }
+  /* Rendering is handled by the Rust render thread — no GTK widget redraw needed. */
 }
 
 /* Called at the beginning of updating a window */
@@ -4247,18 +4182,7 @@ neomacs_update_window_end (struct window *w, bool cursor_on_p,
 void
 neomacs_flush_display (struct frame *f)
 {
-  struct neomacs_output *output;
-
-  if (!FRAME_NEOMACS_P (f))
-    return;
-
-  output = FRAME_NEOMACS_OUTPUT (f);
-
-  /* Queue a redraw of the drawing area */
-  if (output && output->drawing_area)
-    {
-      gtk_widget_queue_draw (GTK_WIDGET (output->drawing_area));
-    }
+  /* Rendering is handled by the Rust render thread — nothing to flush. */
 }
 
 /* Set window size (called from set-frame-size and similar) */
@@ -4285,22 +4209,6 @@ neomacs_set_window_size (struct frame *f, bool change_gravity,
       neomacs_display_clear_all_glyphs (dpyinfo->display_handle);
       /* Request the winit window to resize */
       neomacs_display_request_size (dpyinfo->display_handle, width, height);
-    }
-
-  /* Set the widget size request (GTK widget mode) */
-  if (output->drawing_area)
-    {
-      gtk_widget_set_size_request (GTK_WIDGET (output->drawing_area),
-                                   width, height);
-    }
-
-  /* For GTK4 top-level windows, set default size and queue resize */
-  if (output->widget && GTK_IS_WINDOW (output->widget))
-    {
-      GtkWindow *window = GTK_WINDOW (output->widget);
-      gtk_window_set_default_size (window, width, height);
-      gtk_window_set_resizable (window, TRUE);
-      gtk_widget_queue_resize (GTK_WIDGET (window));
     }
 
   /* Mark frame for redisplay */
@@ -4696,23 +4604,6 @@ neomacs_make_frame_visible_invisible (struct frame *f, bool visible)
       return;
     }
 
-  /* GTK widget path */
-  if (!output->widget)
-    return;
-
-  if (visible)
-    {
-      /* Show the window and mark frame visible */
-      gtk_widget_set_visible (GTK_WIDGET (output->widget), TRUE);
-      SET_FRAME_VISIBLE (f, 1);
-      SET_FRAME_ICONIFIED (f, false);
-    }
-  else
-    {
-      /* Hide the window */
-      gtk_widget_set_visible (GTK_WIDGET (output->widget), FALSE);
-      SET_FRAME_VISIBLE (f, 0);
-    }
 }
 
 /* Get a string resource value (for X resources / defaults) */
@@ -4728,24 +4619,367 @@ neomacs_get_string_resource (void *rdb, const char *name, const char *class)
  * Color Support
  * ============================================================================ */
 
+/* X11 named color table.  Generated from the standard X11 rgb.txt.
+   Values are 8-bit (0-255).  */
+struct named_color
+{
+  const char *name;
+  unsigned char r, g, b;
+};
+
+static const struct named_color x11_colors[] =
+{
+  {"alice blue", 240, 248, 255},
+  {"aliceblue", 240, 248, 255},
+  {"antique white", 250, 235, 215},
+  {"antiquewhite", 250, 235, 215},
+  {"aqua", 0, 255, 255},
+  {"aquamarine", 127, 255, 212},
+  {"azure", 240, 255, 255},
+  {"beige", 245, 245, 220},
+  {"bisque", 255, 228, 196},
+  {"black", 0, 0, 0},
+  {"blanched almond", 255, 235, 205},
+  {"blanchedalmond", 255, 235, 205},
+  {"blue", 0, 0, 255},
+  {"blue violet", 138, 43, 226},
+  {"blueviolet", 138, 43, 226},
+  {"brown", 165, 42, 42},
+  {"burlywood", 222, 184, 135},
+  {"cadet blue", 95, 158, 160},
+  {"cadetblue", 95, 158, 160},
+  {"chartreuse", 127, 255, 0},
+  {"chocolate", 210, 105, 30},
+  {"coral", 255, 127, 80},
+  {"cornflower blue", 100, 149, 237},
+  {"cornflowerblue", 100, 149, 237},
+  {"cornsilk", 255, 248, 220},
+  {"crimson", 220, 20, 60},
+  {"cyan", 0, 255, 255},
+  {"dark blue", 0, 0, 139},
+  {"dark cyan", 0, 139, 139},
+  {"dark goldenrod", 184, 134, 11},
+  {"dark gray", 169, 169, 169},
+  {"dark green", 0, 100, 0},
+  {"dark grey", 169, 169, 169},
+  {"dark khaki", 189, 183, 107},
+  {"dark magenta", 139, 0, 139},
+  {"dark olive green", 85, 107, 47},
+  {"dark orange", 255, 140, 0},
+  {"dark orchid", 153, 50, 204},
+  {"dark red", 139, 0, 0},
+  {"dark salmon", 233, 150, 122},
+  {"dark sea green", 143, 188, 143},
+  {"dark slate blue", 72, 61, 139},
+  {"dark slate gray", 47, 79, 79},
+  {"dark slate grey", 47, 79, 79},
+  {"dark turquoise", 0, 206, 209},
+  {"dark violet", 148, 0, 211},
+  {"darkblue", 0, 0, 139},
+  {"darkcyan", 0, 139, 139},
+  {"darkgoldenrod", 184, 134, 11},
+  {"darkgray", 169, 169, 169},
+  {"darkgreen", 0, 100, 0},
+  {"darkgrey", 169, 169, 169},
+  {"darkkhaki", 189, 183, 107},
+  {"darkmagenta", 139, 0, 139},
+  {"darkolivegreen", 85, 107, 47},
+  {"darkorange", 255, 140, 0},
+  {"darkorchid", 153, 50, 204},
+  {"darkred", 139, 0, 0},
+  {"darksalmon", 233, 150, 122},
+  {"darkseagreen", 143, 188, 143},
+  {"darkslateblue", 72, 61, 139},
+  {"darkslategray", 47, 79, 79},
+  {"darkslategrey", 47, 79, 79},
+  {"darkturquoise", 0, 206, 209},
+  {"darkviolet", 148, 0, 211},
+  {"deep pink", 255, 20, 147},
+  {"deep sky blue", 0, 191, 255},
+  {"deeppink", 255, 20, 147},
+  {"deepskyblue", 0, 191, 255},
+  {"dim gray", 105, 105, 105},
+  {"dim grey", 105, 105, 105},
+  {"dimgray", 105, 105, 105},
+  {"dimgrey", 105, 105, 105},
+  {"dodger blue", 30, 144, 255},
+  {"dodgerblue", 30, 144, 255},
+  {"firebrick", 178, 34, 34},
+  {"floral white", 255, 250, 240},
+  {"floralwhite", 255, 250, 240},
+  {"forest green", 34, 139, 34},
+  {"forestgreen", 34, 139, 34},
+  {"fuchsia", 255, 0, 255},
+  {"gainsboro", 220, 220, 220},
+  {"ghost white", 248, 248, 255},
+  {"ghostwhite", 248, 248, 255},
+  {"gold", 255, 215, 0},
+  {"goldenrod", 218, 165, 32},
+  {"gray", 128, 128, 128},
+  {"gray0", 0, 0, 0},
+  {"gray1", 3, 3, 3},
+  {"gray2", 5, 5, 5},
+  {"gray3", 8, 8, 8},
+  {"gray4", 10, 10, 10},
+  {"gray5", 13, 13, 13},
+  {"gray10", 26, 26, 26},
+  {"gray15", 38, 38, 38},
+  {"gray20", 51, 51, 51},
+  {"gray25", 64, 64, 64},
+  {"gray30", 77, 77, 77},
+  {"gray35", 89, 89, 89},
+  {"gray40", 102, 102, 102},
+  {"gray45", 115, 115, 115},
+  {"gray50", 128, 128, 128},
+  {"gray55", 140, 140, 140},
+  {"gray60", 153, 153, 153},
+  {"gray65", 166, 166, 166},
+  {"gray70", 179, 179, 179},
+  {"gray75", 191, 191, 191},
+  {"gray80", 204, 204, 204},
+  {"gray85", 217, 217, 217},
+  {"gray90", 229, 229, 229},
+  {"gray95", 242, 242, 242},
+  {"gray100", 255, 255, 255},
+  {"green", 0, 128, 0},
+  {"green yellow", 173, 255, 47},
+  {"greenyellow", 173, 255, 47},
+  {"grey", 128, 128, 128},
+  {"grey0", 0, 0, 0},
+  {"grey1", 3, 3, 3},
+  {"grey2", 5, 5, 5},
+  {"grey3", 8, 8, 8},
+  {"grey4", 10, 10, 10},
+  {"grey5", 13, 13, 13},
+  {"grey10", 26, 26, 26},
+  {"grey15", 38, 38, 38},
+  {"grey20", 51, 51, 51},
+  {"grey25", 64, 64, 64},
+  {"grey30", 77, 77, 77},
+  {"grey35", 89, 89, 89},
+  {"grey40", 102, 102, 102},
+  {"grey45", 115, 115, 115},
+  {"grey50", 128, 128, 128},
+  {"grey55", 140, 140, 140},
+  {"grey60", 153, 153, 153},
+  {"grey65", 166, 166, 166},
+  {"grey70", 179, 179, 179},
+  {"grey75", 191, 191, 191},
+  {"grey80", 204, 204, 204},
+  {"grey85", 217, 217, 217},
+  {"grey90", 229, 229, 229},
+  {"grey95", 242, 242, 242},
+  {"grey100", 255, 255, 255},
+  {"honeydew", 240, 255, 240},
+  {"hot pink", 255, 105, 180},
+  {"hotpink", 255, 105, 180},
+  {"indian red", 205, 92, 92},
+  {"indianred", 205, 92, 92},
+  {"indigo", 75, 0, 130},
+  {"ivory", 255, 255, 240},
+  {"khaki", 240, 230, 140},
+  {"lavender", 230, 230, 250},
+  {"lavender blush", 255, 240, 245},
+  {"lavenderblush", 255, 240, 245},
+  {"lawn green", 124, 252, 0},
+  {"lawngreen", 124, 252, 0},
+  {"lemon chiffon", 255, 250, 205},
+  {"lemonchiffon", 255, 250, 205},
+  {"light blue", 173, 216, 230},
+  {"light coral", 240, 128, 128},
+  {"light cyan", 224, 255, 255},
+  {"light goldenrod", 238, 221, 130},
+  {"light goldenrod yellow", 250, 250, 210},
+  {"light gray", 211, 211, 211},
+  {"light green", 144, 238, 144},
+  {"light grey", 211, 211, 211},
+  {"light pink", 255, 182, 193},
+  {"light salmon", 255, 160, 122},
+  {"light sea green", 32, 178, 170},
+  {"light sky blue", 135, 206, 250},
+  {"light slate blue", 132, 112, 255},
+  {"light slate gray", 119, 136, 153},
+  {"light slate grey", 119, 136, 153},
+  {"light steel blue", 176, 196, 222},
+  {"light yellow", 255, 255, 224},
+  {"lightblue", 173, 216, 230},
+  {"lightcoral", 240, 128, 128},
+  {"lightcyan", 224, 255, 255},
+  {"lightgoldenrod", 238, 221, 130},
+  {"lightgoldenrodyellow", 250, 250, 210},
+  {"lightgray", 211, 211, 211},
+  {"lightgreen", 144, 238, 144},
+  {"lightgrey", 211, 211, 211},
+  {"lightpink", 255, 182, 193},
+  {"lightsalmon", 255, 160, 122},
+  {"lightseagreen", 32, 178, 170},
+  {"lightskyblue", 135, 206, 250},
+  {"lightslateblue", 132, 112, 255},
+  {"lightslategray", 119, 136, 153},
+  {"lightslategrey", 119, 136, 153},
+  {"lightsteelblue", 176, 196, 222},
+  {"lightyellow", 255, 255, 224},
+  {"lime", 0, 255, 0},
+  {"lime green", 50, 205, 50},
+  {"limegreen", 50, 205, 50},
+  {"linen", 250, 240, 230},
+  {"magenta", 255, 0, 255},
+  {"maroon", 128, 0, 0},
+  {"medium aquamarine", 102, 205, 170},
+  {"medium blue", 0, 0, 205},
+  {"medium orchid", 186, 85, 211},
+  {"medium purple", 147, 112, 219},
+  {"medium sea green", 60, 179, 113},
+  {"medium slate blue", 123, 104, 238},
+  {"medium spring green", 0, 250, 154},
+  {"medium turquoise", 72, 209, 204},
+  {"medium violet red", 199, 21, 133},
+  {"mediumaquamarine", 102, 205, 170},
+  {"mediumblue", 0, 0, 205},
+  {"mediumorchid", 186, 85, 211},
+  {"mediumpurple", 147, 112, 219},
+  {"mediumseagreen", 60, 179, 113},
+  {"mediumslateblue", 123, 104, 238},
+  {"mediumspringgreen", 0, 250, 154},
+  {"mediumturquoise", 72, 209, 204},
+  {"mediumvioletred", 199, 21, 133},
+  {"midnight blue", 25, 25, 112},
+  {"midnightblue", 25, 25, 112},
+  {"mint cream", 245, 255, 250},
+  {"mintcream", 245, 255, 250},
+  {"misty rose", 255, 228, 225},
+  {"mistyrose", 255, 228, 225},
+  {"moccasin", 255, 228, 181},
+  {"navajo white", 255, 222, 173},
+  {"navajowhite", 255, 222, 173},
+  {"navy", 0, 0, 128},
+  {"navy blue", 0, 0, 128},
+  {"navyblue", 0, 0, 128},
+  {"old lace", 253, 245, 230},
+  {"oldlace", 253, 245, 230},
+  {"olive", 128, 128, 0},
+  {"olive drab", 107, 142, 35},
+  {"olivedrab", 107, 142, 35},
+  {"orange", 255, 165, 0},
+  {"orange red", 255, 69, 0},
+  {"orangered", 255, 69, 0},
+  {"orchid", 218, 112, 214},
+  {"pale goldenrod", 238, 232, 170},
+  {"pale green", 152, 251, 152},
+  {"pale turquoise", 175, 238, 238},
+  {"pale violet red", 219, 112, 147},
+  {"palegoldenrod", 238, 232, 170},
+  {"palegreen", 152, 251, 152},
+  {"paleturquoise", 175, 238, 238},
+  {"palevioletred", 219, 112, 147},
+  {"papaya whip", 255, 239, 213},
+  {"papayawhip", 255, 239, 213},
+  {"peach puff", 255, 218, 185},
+  {"peachpuff", 255, 218, 185},
+  {"peru", 205, 133, 63},
+  {"pink", 255, 192, 203},
+  {"plum", 221, 160, 221},
+  {"powder blue", 176, 224, 230},
+  {"powderblue", 176, 224, 230},
+  {"purple", 128, 0, 128},
+  {"rebecca purple", 102, 51, 153},
+  {"rebeccapurple", 102, 51, 153},
+  {"red", 255, 0, 0},
+  {"rosy brown", 188, 143, 143},
+  {"rosybrown", 188, 143, 143},
+  {"royal blue", 65, 105, 225},
+  {"royalblue", 65, 105, 225},
+  {"saddle brown", 139, 69, 19},
+  {"saddlebrown", 139, 69, 19},
+  {"salmon", 250, 128, 114},
+  {"sandy brown", 244, 164, 96},
+  {"sandybrown", 244, 164, 96},
+  {"sea green", 46, 139, 87},
+  {"seagreen", 46, 139, 87},
+  {"seashell", 255, 245, 238},
+  {"sienna", 160, 82, 45},
+  {"silver", 192, 192, 192},
+  {"sky blue", 135, 206, 235},
+  {"skyblue", 135, 206, 235},
+  {"slate blue", 106, 90, 205},
+  {"slate gray", 112, 128, 144},
+  {"slate grey", 112, 128, 144},
+  {"slateblue", 106, 90, 205},
+  {"slategray", 112, 128, 144},
+  {"slategrey", 112, 128, 144},
+  {"snow", 255, 250, 250},
+  {"spring green", 0, 255, 127},
+  {"springgreen", 0, 255, 127},
+  {"steel blue", 70, 130, 180},
+  {"steelblue", 70, 130, 180},
+  {"tan", 210, 180, 140},
+  {"teal", 0, 128, 128},
+  {"thistle", 216, 191, 216},
+  {"tomato", 255, 99, 71},
+  {"turquoise", 64, 224, 208},
+  {"violet", 238, 130, 238},
+  {"violet red", 208, 32, 144},
+  {"violetred", 208, 32, 144},
+  {"wheat", 245, 222, 179},
+  {"white", 255, 255, 255},
+  {"white smoke", 245, 245, 245},
+  {"whitesmoke", 245, 245, 245},
+  {"yellow", 255, 255, 0},
+  {"yellow green", 154, 205, 50},
+  {"yellowgreen", 154, 205, 50},
+};
+
+/* Look up a named color in the X11 color table.
+   Returns true and sets r, g, b (as 16-bit values) on success.  */
+static bool
+neomacs_lookup_named_color (const char *name,
+                            unsigned short *r, unsigned short *g, unsigned short *b)
+{
+  int lo = 0, hi = sizeof x11_colors / sizeof x11_colors[0] - 1;
+
+  /* Binary search won't work because entries aren't all in strict order
+     (e.g., "dark blue" vs "darkblue").  Use linear search with
+     case-insensitive comparison.  */
+  for (int i = 0; i <= hi; i++)
+    {
+      if (!xstrcasecmp (name, x11_colors[i].name))
+        {
+          *r = x11_colors[i].r * 257;   /* Scale 0-255 to 0-65535 */
+          *g = x11_colors[i].g * 257;
+          *b = x11_colors[i].b * 257;
+          return true;
+        }
+    }
+  return false;
+}
+
 /* Check if a color name is valid and return RGB values */
 bool
 neomacs_defined_color (struct frame *f, const char *color_name,
                        Emacs_Color *color_def, bool alloc, bool makeIndex)
 {
-  /* Use GDK to parse color names - supports all CSS color names and formats */
   if (!color_name || !color_def)
     return false;
 
-  GdkRGBA rgba;
-  if (gdk_rgba_parse (&rgba, color_name))
+  unsigned short r, g, b;
+
+  /* Try numeric formats first (#RGB, #RRGGBB, rgb:, rgbi:) */
+  if (parse_color_spec (color_name, &r, &g, &b))
     {
-      color_def->red = rgba.red * 65535;
-      color_def->green = rgba.green * 65535;
-      color_def->blue = rgba.blue * 65535;
-      color_def->pixel = ((color_def->red >> 8) << 16
-                          | (color_def->green >> 8) << 8
-                          | (color_def->blue >> 8) << 0);
+      color_def->red = r;
+      color_def->green = g;
+      color_def->blue = b;
+      color_def->pixel = ((r >> 8) << 16) | ((g >> 8) << 8) | (b >> 8);
+      return true;
+    }
+
+  /* Try X11 named colors */
+  if (neomacs_lookup_named_color (color_name, &r, &g, &b))
+    {
+      color_def->red = r;
+      color_def->green = g;
+      color_def->blue = b;
+      color_def->pixel = ((r >> 8) << 16) | ((g >> 8) << 8) | (b >> 8);
       return true;
     }
 
@@ -6495,9 +6729,9 @@ neomacs_ring_bell (struct frame *f)
   if (dpyinfo && dpyinfo->display_handle)
     neomacs_display_visual_bell (dpyinfo->display_handle);
 
-  /* Also send system beep if visible-bell is not set */
-  if (!visible_bell && dpyinfo && dpyinfo->gdpy)
-    gdk_display_beep (dpyinfo->gdpy);
+  /* Terminal bell as fallback when visible-bell is not set */
+  if (!visible_bell)
+    write (STDOUT_FILENO, "\a", 1);
 }
 
 /* Toggle invisible mouse pointer.  */
@@ -13616,8 +13850,10 @@ check_x_display_info (Lisp_Object frame)
 char *
 get_keysym_name (int keysym)
 {
-  const char *name = gdk_keyval_name (keysym);
-  return name ? (char *) name : NULL;
+  static char name_buf[64];
+  if (xkb_keysym_get_name (keysym, name_buf, sizeof name_buf) > 0)
+    return name_buf;
+  return NULL;
 }
 
 /* Set mouse pixel position on frame F.  */
@@ -14581,7 +14817,7 @@ keyboard input forwarding.  Set to nil to clear. */);
 
   DEFVAR_LISP ("x-toolkit-scroll-bars", Vx_toolkit_scroll_bars,
      doc: /* SKIP: real doc in xterm.c.  */);
-  Vx_toolkit_scroll_bars = intern_c_string ("gtk");
+  Vx_toolkit_scroll_bars = Qnil;
 
   DEFVAR_LISP ("x-ctrl-keysym", Vx_ctrl_keysym,
 	       doc: /* SKIP: real doc in xterm.c.  */);

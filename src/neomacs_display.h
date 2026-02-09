@@ -1083,6 +1083,43 @@ int neomacs_display_has_transition_snapshot(struct NeomacsDisplay *handle);
 int neomacs_display_init_threaded(uint32_t width, uint32_t height, const char *title);
 
 /**
+ * Monitor info struct returned by neomacs_display_get_monitor_info.
+ */
+struct NeomacsMonitorInfo {
+  int x;
+  int y;
+  int width;
+  int height;
+  double scale;
+  int width_mm;
+  int height_mm;
+};
+
+/**
+ * Wait for monitor info to be available (with timeout).
+ * Call after neomacs_display_init_threaded().
+ * Returns number of monitors, or 0 on timeout.
+ */
+int neomacs_display_wait_for_monitors(void);
+
+/**
+ * Get the number of monitors available.
+ */
+int neomacs_display_get_monitor_count(void);
+
+/**
+ * Get info about a specific monitor by index.
+ * Returns 1 on success, 0 on failure.
+ */
+int neomacs_display_get_monitor_info(int index, struct NeomacsMonitorInfo *info);
+
+/**
+ * Get the name of a monitor by index.
+ * Returns a pointer to a string (valid until next call), or NULL.
+ */
+const char *neomacs_display_get_monitor_name(int index);
+
+/**
  * Drain input events from render thread
  *
  * Returns number of events written to buffer.
