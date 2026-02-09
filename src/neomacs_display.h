@@ -1945,6 +1945,47 @@ void neomacs_display_set_cursor_radar(struct NeomacsDisplay *handle,
     int opacity);
 
 /**
+ * Configure kaleidoscope overlay effect.
+ */
+void neomacs_display_set_kaleidoscope(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int segments,
+    int speed,
+    int opacity);
+
+/**
+ * Configure cursor ripple ring effect.
+ */
+void neomacs_display_set_cursor_ripple_ring(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int max_radius,
+    int ring_count,
+    int speed,
+    int opacity);
+
+/**
+ * Configure noise field overlay effect.
+ */
+void neomacs_display_set_noise_field(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int scale,
+    int speed,
+    int opacity);
+
+/**
+ * Configure cursor scope effect.
+ */
+void neomacs_display_set_cursor_scope(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int thickness,
+    int gap,
+    int opacity);
+
+/**
  * Configure hex grid overlay effect.
  */
 void neomacs_display_set_hex_grid(struct NeomacsDisplay *handle,

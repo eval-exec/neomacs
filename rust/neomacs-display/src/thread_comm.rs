@@ -1238,6 +1238,56 @@ pub enum RenderCommand {
         /// Opacity (0.0-1.0)
         opacity: f32,
     },
+    /// Configure kaleidoscope overlay effect
+    SetKaleidoscope {
+        enabled: bool,
+        /// Kaleidoscope color (sRGB floats)
+        r: f32, g: f32, b: f32,
+        /// Number of mirror segments
+        segments: u32,
+        /// Rotation speed multiplier
+        speed: f32,
+        /// Opacity (0.0-1.0)
+        opacity: f32,
+    },
+    /// Configure cursor ripple ring effect
+    SetCursorRippleRing {
+        enabled: bool,
+        /// Ring color (sRGB floats)
+        r: f32, g: f32, b: f32,
+        /// Max ring radius in pixels
+        max_radius: f32,
+        /// Number of concentric rings
+        ring_count: u32,
+        /// Expansion speed multiplier
+        speed: f32,
+        /// Opacity (0.0-1.0)
+        opacity: f32,
+    },
+    /// Configure noise field overlay effect
+    SetNoiseField {
+        enabled: bool,
+        /// Noise color (sRGB floats)
+        r: f32, g: f32, b: f32,
+        /// Noise scale (higher = coarser)
+        scale: f32,
+        /// Animation speed multiplier
+        speed: f32,
+        /// Opacity (0.0-1.0)
+        opacity: f32,
+    },
+    /// Configure cursor scope effect
+    SetCursorScope {
+        enabled: bool,
+        /// Scope color (sRGB floats)
+        r: f32, g: f32, b: f32,
+        /// Line thickness in pixels
+        thickness: f32,
+        /// Gap around cursor in pixels
+        gap: f32,
+        /// Opacity (0.0-1.0)
+        opacity: f32,
+    },
     /// Configure background pattern
     SetBackgroundPattern {
         /// 0=none, 1=dots, 2=grid, 3=crosshatch

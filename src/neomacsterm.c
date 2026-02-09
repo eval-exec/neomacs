@@ -10669,6 +10669,156 @@ OPACITY is 0-100 (default 20). */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-kaleidoscope",
+       Fneomacs_set_kaleidoscope,
+       Sneomacs_set_kaleidoscope, 0, 5, 0,
+       doc: /* Configure kaleidoscope overlay effect.
+ENABLED non-nil activates mirrored geometric kaleidoscope patterns.
+COLOR is a hex color string like "#RRGGBB" (default "#9933E5").
+SEGMENTS is number of mirror segments (default 6).
+SPEED is rotation speed * 100 (default 50).
+OPACITY is 0-100 (default 10). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object segments,
+   Lisp_Object speed, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0x99, g = 0x33, b = 0xE5, seg = 6, spd = 50, op = 10;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (segments)) seg = XFIXNUM (segments);
+  if (FIXNUMP (speed)) spd = XFIXNUM (speed);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_kaleidoscope (dpyinfo->display_handle, on, r, g, b, seg, spd, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-cursor-ripple-ring",
+       Fneomacs_set_cursor_ripple_ring,
+       Sneomacs_set_cursor_ripple_ring, 0, 6, 0,
+       doc: /* Configure cursor ripple ring effect.
+ENABLED non-nil activates expanding concentric rings on cursor move.
+COLOR is a hex color string like "#RRGGBB" (default "#4DCCE5").
+MAX-RADIUS is max ring radius in pixels (default 60).
+RING-COUNT is number of concentric rings (default 3).
+SPEED is expansion speed * 100 (default 200).
+OPACITY is 0-100 (default 25). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object max_radius,
+   Lisp_Object ring_count, Lisp_Object speed, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0x4D, g = 0xCC, b = 0xE5, mr = 60, rc = 3, spd = 200, op = 25;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (max_radius)) mr = XFIXNUM (max_radius);
+  if (FIXNUMP (ring_count)) rc = XFIXNUM (ring_count);
+  if (FIXNUMP (speed)) spd = XFIXNUM (speed);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_cursor_ripple_ring (dpyinfo->display_handle, on, r, g, b, mr, rc, spd, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-noise-field",
+       Fneomacs_set_noise_field,
+       Sneomacs_set_noise_field, 0, 5, 0,
+       doc: /* Configure noise field overlay effect.
+ENABLED non-nil activates animated noise pattern overlay.
+COLOR is a hex color string like "#RRGGBB" (default "#80B34D").
+SCALE is noise cell size in pixels (default 50).
+SPEED is animation speed * 100 (default 50).
+OPACITY is 0-100 (default 8). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object scale,
+   Lisp_Object speed, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0x80, g = 0xB3, b = 0x4D, sc = 50, spd = 50, op = 8;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (scale)) sc = XFIXNUM (scale);
+  if (FIXNUMP (speed)) spd = XFIXNUM (speed);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_noise_field (dpyinfo->display_handle, on, r, g, b, sc, spd, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-cursor-scope",
+       Fneomacs_set_cursor_scope,
+       Sneomacs_set_cursor_scope, 0, 5, 0,
+       doc: /* Configure cursor scope effect.
+ENABLED non-nil activates scope lines through cursor position.
+COLOR is a hex color string like "#RRGGBB" (default "#FFCC33").
+THICKNESS is line thickness in pixels (default 1).
+GAP is gap around cursor in pixels (default 10).
+OPACITY is 0-100 (default 30). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object thickness,
+   Lisp_Object gap, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0xFF, g = 0xCC, b = 0x33, th = 1, gp = 10, op = 30;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (thickness)) th = XFIXNUM (thickness);
+  if (FIXNUMP (gap)) gp = XFIXNUM (gap);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_cursor_scope (dpyinfo->display_handle, on, r, g, b, th, gp, op);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-hex-grid",
        Fneomacs_set_hex_grid,
        Sneomacs_set_hex_grid, 0, 5, 0,
@@ -12494,6 +12644,10 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_cursor_metronome);
   defsubr (&Sneomacs_set_constellation);
   defsubr (&Sneomacs_set_cursor_radar);
+  defsubr (&Sneomacs_set_kaleidoscope);
+  defsubr (&Sneomacs_set_cursor_ripple_ring);
+  defsubr (&Sneomacs_set_noise_field);
+  defsubr (&Sneomacs_set_cursor_scope);
   defsubr (&Sneomacs_set_hex_grid);
   defsubr (&Sneomacs_set_cursor_sparkle_burst);
   defsubr (&Sneomacs_set_circuit_trace);

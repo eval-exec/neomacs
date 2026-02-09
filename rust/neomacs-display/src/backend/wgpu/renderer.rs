@@ -563,6 +563,34 @@ pub struct WgpuRenderer {
     cursor_radar_radius: f32,
     cursor_radar_speed: f32,
     cursor_radar_opacity: f32,
+    /// Kaleidoscope overlay
+    kaleidoscope_enabled: bool,
+    kaleidoscope_color: (f32, f32, f32),
+    kaleidoscope_segments: u32,
+    kaleidoscope_speed: f32,
+    kaleidoscope_opacity: f32,
+    /// Cursor ripple ring
+    cursor_ripple_ring_enabled: bool,
+    cursor_ripple_ring_color: (f32, f32, f32),
+    cursor_ripple_ring_max_radius: f32,
+    cursor_ripple_ring_count: u32,
+    cursor_ripple_ring_speed: f32,
+    cursor_ripple_ring_opacity: f32,
+    cursor_ripple_ring_start: Option<std::time::Instant>,
+    cursor_ripple_ring_last_x: f32,
+    cursor_ripple_ring_last_y: f32,
+    /// Noise field overlay
+    noise_field_enabled: bool,
+    noise_field_color: (f32, f32, f32),
+    noise_field_scale: f32,
+    noise_field_speed: f32,
+    noise_field_opacity: f32,
+    /// Cursor scope
+    cursor_scope_enabled: bool,
+    cursor_scope_color: (f32, f32, f32),
+    cursor_scope_thickness: f32,
+    cursor_scope_gap: f32,
+    cursor_scope_opacity: f32,
     /// Window edge glow on scroll boundaries
     edge_glow_enabled: bool,
     edge_glow_color: (f32, f32, f32),
@@ -1627,6 +1655,30 @@ impl WgpuRenderer {
             cursor_radar_radius: 40.0,
             cursor_radar_speed: 1.5,
             cursor_radar_opacity: 0.2,
+            kaleidoscope_enabled: false,
+            kaleidoscope_color: (0.6, 0.3, 0.9),
+            kaleidoscope_segments: 6,
+            kaleidoscope_speed: 0.5,
+            kaleidoscope_opacity: 0.1,
+            cursor_ripple_ring_enabled: false,
+            cursor_ripple_ring_color: (0.3, 0.8, 1.0),
+            cursor_ripple_ring_max_radius: 60.0,
+            cursor_ripple_ring_count: 3,
+            cursor_ripple_ring_speed: 2.0,
+            cursor_ripple_ring_opacity: 0.25,
+            cursor_ripple_ring_start: None,
+            cursor_ripple_ring_last_x: 0.0,
+            cursor_ripple_ring_last_y: 0.0,
+            noise_field_enabled: false,
+            noise_field_color: (0.5, 0.7, 0.3),
+            noise_field_scale: 50.0,
+            noise_field_speed: 0.5,
+            noise_field_opacity: 0.08,
+            cursor_scope_enabled: false,
+            cursor_scope_color: (1.0, 0.8, 0.2),
+            cursor_scope_thickness: 1.0,
+            cursor_scope_gap: 10.0,
+            cursor_scope_opacity: 0.3,
             edge_glow_enabled: false,
             edge_glow_color: (0.4, 0.6, 1.0),
             edge_glow_height: 40.0,
@@ -2457,6 +2509,43 @@ impl WgpuRenderer {
         self.cursor_radar_radius = radius;
         self.cursor_radar_speed = speed;
         self.cursor_radar_opacity = opacity;
+    }
+
+    /// Update kaleidoscope config
+    pub fn set_kaleidoscope(&mut self, enabled: bool, color: (f32, f32, f32), segments: u32, speed: f32, opacity: f32) {
+        self.kaleidoscope_enabled = enabled;
+        self.kaleidoscope_color = color;
+        self.kaleidoscope_segments = segments;
+        self.kaleidoscope_speed = speed;
+        self.kaleidoscope_opacity = opacity;
+    }
+
+    /// Update cursor ripple ring config
+    pub fn set_cursor_ripple_ring(&mut self, enabled: bool, color: (f32, f32, f32), max_radius: f32, ring_count: u32, speed: f32, opacity: f32) {
+        self.cursor_ripple_ring_enabled = enabled;
+        self.cursor_ripple_ring_color = color;
+        self.cursor_ripple_ring_max_radius = max_radius;
+        self.cursor_ripple_ring_count = ring_count;
+        self.cursor_ripple_ring_speed = speed;
+        self.cursor_ripple_ring_opacity = opacity;
+    }
+
+    /// Update noise field config
+    pub fn set_noise_field(&mut self, enabled: bool, color: (f32, f32, f32), scale: f32, speed: f32, opacity: f32) {
+        self.noise_field_enabled = enabled;
+        self.noise_field_color = color;
+        self.noise_field_scale = scale;
+        self.noise_field_speed = speed;
+        self.noise_field_opacity = opacity;
+    }
+
+    /// Update cursor scope config
+    pub fn set_cursor_scope(&mut self, enabled: bool, color: (f32, f32, f32), thickness: f32, gap: f32, opacity: f32) {
+        self.cursor_scope_enabled = enabled;
+        self.cursor_scope_color = color;
+        self.cursor_scope_thickness = thickness;
+        self.cursor_scope_gap = gap;
+        self.cursor_scope_opacity = opacity;
     }
 
     /// Update hex grid config
@@ -6269,6 +6358,199 @@ impl WgpuRenderer {
                         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                         render_pass.set_vertex_buffer(0, rd_buf.slice(..));
                         render_pass.draw(0..radar_verts.len() as u32, 0..1);
+                    }
+                    self.needs_continuous_redraw = true;
+                }
+            }
+
+            // === Kaleidoscope overlay effect ===
+            if self.kaleidoscope_enabled {
+                let now = std::time::Instant::now().duration_since(self.aurora_start).as_secs_f32();
+                let (kr, kg, kb) = self.kaleidoscope_color;
+                let kop = self.kaleidoscope_opacity;
+                let segs = self.kaleidoscope_segments.max(3).min(12);
+                let spd = self.kaleidoscope_speed;
+                let fw = self.width() as f32;
+                let fh = self.height() as f32;
+                let cx = fw / 2.0;
+                let cy = fh / 2.0;
+                let mut kal_verts: Vec<RectVertex> = Vec::new();
+                let angle_step = std::f32::consts::PI * 2.0 / segs as f32;
+                let max_r = (fw * fw + fh * fh).sqrt() * 0.5;
+                for seg in 0..segs {
+                    let base_angle = seg as f32 * angle_step + now * spd * 0.3;
+                    let num_shapes = 8;
+                    for s in 0..num_shapes {
+                        let r = max_r * (s as f32 + 1.0) / num_shapes as f32 * 0.8;
+                        let wobble = (now * spd * 0.7 + s as f32 * 1.3).sin() * 0.15;
+                        let a = base_angle + wobble;
+                        let px = cx + a.cos() * r;
+                        let py = cy + a.sin() * r;
+                        let sz = 4.0 + (now * spd + s as f32 * 0.7).sin().abs() * 8.0;
+                        let alpha = kop * (0.3 + 0.7 * (1.0 - r / max_r));
+                        let c = Color::new(kr, kg, kb, alpha);
+                        self.add_rect(&mut kal_verts, px - sz / 2.0, py - sz / 2.0, sz, sz, &c);
+                    }
+                }
+                if !kal_verts.is_empty() {
+                    let kl_buf = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Kaleidoscope Buffer"),
+                            contents: bytemuck::cast_slice(&kal_verts),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, kl_buf.slice(..));
+                    render_pass.draw(0..kal_verts.len() as u32, 0..1);
+                }
+                self.needs_continuous_redraw = true;
+            }
+
+            // === Cursor ripple ring effect ===
+            if self.cursor_ripple_ring_enabled && cursor_visible {
+                if let Some(ref anim) = animated_cursor {
+                    let cx = anim.x + anim.width / 2.0;
+                    let cy = anim.y + anim.height / 2.0;
+                    // Detect cursor move
+                    if (cx - self.cursor_ripple_ring_last_x).abs() > 1.0 || (cy - self.cursor_ripple_ring_last_y).abs() > 1.0 {
+                        self.cursor_ripple_ring_start = Some(std::time::Instant::now());
+                        self.cursor_ripple_ring_last_x = cx;
+                        self.cursor_ripple_ring_last_y = cy;
+                    }
+                    if let Some(start) = self.cursor_ripple_ring_start {
+                        let elapsed = start.elapsed().as_secs_f32();
+                        let max_r = self.cursor_ripple_ring_max_radius;
+                        let duration = max_r / (self.cursor_ripple_ring_speed * 60.0);
+                        if elapsed < duration {
+                            let t = elapsed / duration;
+                            let (rr, rg, rb) = self.cursor_ripple_ring_color;
+                            let rop = self.cursor_ripple_ring_opacity;
+                            let count = self.cursor_ripple_ring_count.max(1).min(8);
+                            let mut ring_verts: Vec<RectVertex> = Vec::new();
+                            for ring in 0..count {
+                                let ring_t = (t - ring as f32 * 0.15).max(0.0).min(1.0);
+                                if ring_t <= 0.0 { continue; }
+                                let radius = ring_t * max_r;
+                                let fade = (1.0 - ring_t) * rop;
+                                let ring_segs = 32;
+                                for seg in 0..ring_segs {
+                                    let a = seg as f32 / ring_segs as f32 * std::f32::consts::PI * 2.0;
+                                    let px = cx + a.cos() * radius;
+                                    let py = cy + a.sin() * radius;
+                                    let dot = 2.0;
+                                    let c = Color::new(rr, rg, rb, fade);
+                                    self.add_rect(&mut ring_verts, px - dot / 2.0, py - dot / 2.0, dot, dot, &c);
+                                }
+                            }
+                            if !ring_verts.is_empty() {
+                                let rr_buf = self.device.create_buffer_init(
+                                    &wgpu::util::BufferInitDescriptor {
+                                        label: Some("Ripple Ring Buffer"),
+                                        contents: bytemuck::cast_slice(&ring_verts),
+                                        usage: wgpu::BufferUsages::VERTEX,
+                                    },
+                                );
+                                render_pass.set_pipeline(&self.rect_pipeline);
+                                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                render_pass.set_vertex_buffer(0, rr_buf.slice(..));
+                                render_pass.draw(0..ring_verts.len() as u32, 0..1);
+                            }
+                            self.needs_continuous_redraw = true;
+                        } else {
+                            self.cursor_ripple_ring_start = None;
+                        }
+                    }
+                }
+            }
+
+            // === Noise field overlay effect ===
+            if self.noise_field_enabled {
+                let now = std::time::Instant::now().duration_since(self.aurora_start).as_secs_f32();
+                let (nr, ng, nb) = self.noise_field_color;
+                let nop = self.noise_field_opacity;
+                let scale = self.noise_field_scale.max(10.0);
+                let spd = self.noise_field_speed;
+                let fw = self.width() as f32;
+                let fh = self.height() as f32;
+                let mut noise_verts: Vec<RectVertex> = Vec::new();
+                let step = scale;
+                let cols = (fw / step) as i32 + 1;
+                let rows = (fh / step) as i32 + 1;
+                for row in 0..rows {
+                    for col in 0..cols {
+                        let x = col as f32 * step;
+                        let y = row as f32 * step;
+                        // Pseudo-noise using sin combinations
+                        let n = ((x * 0.013 + now * spd * 0.7).sin()
+                            * (y * 0.017 + now * spd * 0.5).cos()
+                            * (x * 0.009 + y * 0.011 + now * spd * 0.3).sin())
+                            .abs();
+                        let alpha = nop * n;
+                        if alpha > 0.005 {
+                            let c = Color::new(nr, ng, nb, alpha);
+                            self.add_rect(&mut noise_verts, x, y, step, step, &c);
+                        }
+                    }
+                }
+                if !noise_verts.is_empty() {
+                    let nf_buf = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Noise Field Buffer"),
+                            contents: bytemuck::cast_slice(&noise_verts),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, nf_buf.slice(..));
+                    render_pass.draw(0..noise_verts.len() as u32, 0..1);
+                }
+                self.needs_continuous_redraw = true;
+            }
+
+            // === Cursor scope effect ===
+            if self.cursor_scope_enabled && cursor_visible {
+                if let Some(ref anim) = animated_cursor {
+                    let cx = anim.x + anim.width / 2.0;
+                    let cy = anim.y + anim.height / 2.0;
+                    let (chr, chg, chb) = self.cursor_scope_color;
+                    let chop = self.cursor_scope_opacity;
+                    let thick = self.cursor_scope_thickness;
+                    let gap = self.cursor_scope_gap;
+                    let fw = self.width() as f32;
+                    let fh = self.height() as f32;
+                    let mut ch_verts: Vec<RectVertex> = Vec::new();
+                    let c = Color::new(chr, chg, chb, chop);
+                    // Horizontal line — left of cursor
+                    if cx - gap > 0.0 {
+                        self.add_rect(&mut ch_verts, 0.0, cy - thick / 2.0, cx - gap, thick, &c);
+                    }
+                    // Horizontal line — right of cursor
+                    if cx + gap < fw {
+                        self.add_rect(&mut ch_verts, cx + gap, cy - thick / 2.0, fw - (cx + gap), thick, &c);
+                    }
+                    // Vertical line — above cursor
+                    if cy - gap > 0.0 {
+                        self.add_rect(&mut ch_verts, cx - thick / 2.0, 0.0, thick, cy - gap, &c);
+                    }
+                    // Vertical line — below cursor
+                    if cy + gap < fh {
+                        self.add_rect(&mut ch_verts, cx - thick / 2.0, cy + gap, thick, fh - (cy + gap), &c);
+                    }
+                    if !ch_verts.is_empty() {
+                        let ch_buf = self.device.create_buffer_init(
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("Cursor Scope Buffer"),
+                                contents: bytemuck::cast_slice(&ch_verts),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            },
+                        );
+                        render_pass.set_pipeline(&self.rect_pipeline);
+                        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, ch_buf.slice(..));
+                        render_pass.draw(0..ch_verts.len() as u32, 0..1);
                     }
                     self.needs_continuous_redraw = true;
                 }

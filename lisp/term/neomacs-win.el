@@ -5394,6 +5394,310 @@ Non-nil renders animated flowing color bands at the top of the frame."
                 neomacs-cursor-radar-speed nil)
             val))))
 
+;; Kaleidoscope overlay effect
+(declare-function neomacs-set-kaleidoscope "neomacsterm.c")
+
+(defcustom neomacs-kaleidoscope nil
+  "Enable kaleidoscope overlay effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-kaleidoscope)
+           (neomacs-set-kaleidoscope val))))
+
+(defcustom neomacs-kaleidoscope-color "#9933E5"
+  "Kaleidoscope pattern color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-kaleidoscope)
+                    (boundp 'neomacs-kaleidoscope)
+                    neomacs-kaleidoscope)
+           (neomacs-set-kaleidoscope t val))))
+
+(defcustom neomacs-kaleidoscope-segments 6
+  "Number of mirror segments."
+  :type '(integer :tag "Segments")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-kaleidoscope)
+                    (boundp 'neomacs-kaleidoscope)
+                    neomacs-kaleidoscope)
+           (neomacs-set-kaleidoscope t
+            (if (boundp 'neomacs-kaleidoscope-color)
+                neomacs-kaleidoscope-color nil)
+            val))))
+
+(defcustom neomacs-kaleidoscope-speed 50
+  "Rotation speed * 100."
+  :type '(integer :tag "Speed")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-kaleidoscope)
+                    (boundp 'neomacs-kaleidoscope)
+                    neomacs-kaleidoscope)
+           (neomacs-set-kaleidoscope t
+            (if (boundp 'neomacs-kaleidoscope-color)
+                neomacs-kaleidoscope-color nil)
+            (if (boundp 'neomacs-kaleidoscope-segments)
+                neomacs-kaleidoscope-segments nil)
+            val))))
+
+(defcustom neomacs-kaleidoscope-opacity 10
+  "Kaleidoscope overlay opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-kaleidoscope)
+                    (boundp 'neomacs-kaleidoscope)
+                    neomacs-kaleidoscope)
+           (neomacs-set-kaleidoscope t
+            (if (boundp 'neomacs-kaleidoscope-color)
+                neomacs-kaleidoscope-color nil)
+            (if (boundp 'neomacs-kaleidoscope-segments)
+                neomacs-kaleidoscope-segments nil)
+            (if (boundp 'neomacs-kaleidoscope-speed)
+                neomacs-kaleidoscope-speed nil)
+            val))))
+
+;; Cursor ripple ring effect
+(declare-function neomacs-set-cursor-ripple-ring "neomacsterm.c")
+
+(defcustom neomacs-cursor-ripple-ring nil
+  "Enable cursor ripple ring effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-cursor-ripple-ring)
+           (neomacs-set-cursor-ripple-ring val))))
+
+(defcustom neomacs-cursor-ripple-ring-color "#4DCCE5"
+  "Ripple ring color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-ripple-ring)
+                    (boundp 'neomacs-cursor-ripple-ring)
+                    neomacs-cursor-ripple-ring)
+           (neomacs-set-cursor-ripple-ring t val))))
+
+(defcustom neomacs-cursor-ripple-ring-max-radius 60
+  "Max ring radius in pixels."
+  :type '(integer :tag "Max radius (pixels)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-ripple-ring)
+                    (boundp 'neomacs-cursor-ripple-ring)
+                    neomacs-cursor-ripple-ring)
+           (neomacs-set-cursor-ripple-ring t
+            (if (boundp 'neomacs-cursor-ripple-ring-color)
+                neomacs-cursor-ripple-ring-color nil)
+            val))))
+
+(defcustom neomacs-cursor-ripple-ring-count 3
+  "Number of concentric rings."
+  :type '(integer :tag "Ring count")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-ripple-ring)
+                    (boundp 'neomacs-cursor-ripple-ring)
+                    neomacs-cursor-ripple-ring)
+           (neomacs-set-cursor-ripple-ring t
+            (if (boundp 'neomacs-cursor-ripple-ring-color)
+                neomacs-cursor-ripple-ring-color nil)
+            (if (boundp 'neomacs-cursor-ripple-ring-max-radius)
+                neomacs-cursor-ripple-ring-max-radius nil)
+            val))))
+
+(defcustom neomacs-cursor-ripple-ring-speed 200
+  "Expansion speed * 100."
+  :type '(integer :tag "Speed")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-ripple-ring)
+                    (boundp 'neomacs-cursor-ripple-ring)
+                    neomacs-cursor-ripple-ring)
+           (neomacs-set-cursor-ripple-ring t
+            (if (boundp 'neomacs-cursor-ripple-ring-color)
+                neomacs-cursor-ripple-ring-color nil)
+            (if (boundp 'neomacs-cursor-ripple-ring-max-radius)
+                neomacs-cursor-ripple-ring-max-radius nil)
+            (if (boundp 'neomacs-cursor-ripple-ring-count)
+                neomacs-cursor-ripple-ring-count nil)
+            val))))
+
+(defcustom neomacs-cursor-ripple-ring-opacity 25
+  "Ripple ring opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-ripple-ring)
+                    (boundp 'neomacs-cursor-ripple-ring)
+                    neomacs-cursor-ripple-ring)
+           (neomacs-set-cursor-ripple-ring t
+            (if (boundp 'neomacs-cursor-ripple-ring-color)
+                neomacs-cursor-ripple-ring-color nil)
+            (if (boundp 'neomacs-cursor-ripple-ring-max-radius)
+                neomacs-cursor-ripple-ring-max-radius nil)
+            (if (boundp 'neomacs-cursor-ripple-ring-count)
+                neomacs-cursor-ripple-ring-count nil)
+            (if (boundp 'neomacs-cursor-ripple-ring-speed)
+                neomacs-cursor-ripple-ring-speed nil)
+            val))))
+
+;; Noise field overlay effect
+(declare-function neomacs-set-noise-field "neomacsterm.c")
+
+(defcustom neomacs-noise-field nil
+  "Enable noise field overlay effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-noise-field)
+           (neomacs-set-noise-field val))))
+
+(defcustom neomacs-noise-field-color "#80B34D"
+  "Noise field color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-noise-field)
+                    (boundp 'neomacs-noise-field)
+                    neomacs-noise-field)
+           (neomacs-set-noise-field t val))))
+
+(defcustom neomacs-noise-field-scale 50
+  "Noise cell size in pixels."
+  :type '(integer :tag "Scale (pixels)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-noise-field)
+                    (boundp 'neomacs-noise-field)
+                    neomacs-noise-field)
+           (neomacs-set-noise-field t
+            (if (boundp 'neomacs-noise-field-color)
+                neomacs-noise-field-color nil)
+            val))))
+
+(defcustom neomacs-noise-field-speed 50
+  "Animation speed * 100."
+  :type '(integer :tag "Speed")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-noise-field)
+                    (boundp 'neomacs-noise-field)
+                    neomacs-noise-field)
+           (neomacs-set-noise-field t
+            (if (boundp 'neomacs-noise-field-color)
+                neomacs-noise-field-color nil)
+            (if (boundp 'neomacs-noise-field-scale)
+                neomacs-noise-field-scale nil)
+            val))))
+
+(defcustom neomacs-noise-field-opacity 8
+  "Noise field opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-noise-field)
+                    (boundp 'neomacs-noise-field)
+                    neomacs-noise-field)
+           (neomacs-set-noise-field t
+            (if (boundp 'neomacs-noise-field-color)
+                neomacs-noise-field-color nil)
+            (if (boundp 'neomacs-noise-field-scale)
+                neomacs-noise-field-scale nil)
+            (if (boundp 'neomacs-noise-field-speed)
+                neomacs-noise-field-speed nil)
+            val))))
+
+;; Cursor scope effect
+(declare-function neomacs-set-cursor-scope "neomacsterm.c")
+
+(defcustom neomacs-cursor-scope nil
+  "Enable cursor scope effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-cursor-scope)
+           (neomacs-set-cursor-scope val))))
+
+(defcustom neomacs-cursor-scope-color "#FFCC33"
+  "Scope line color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-scope)
+                    (boundp 'neomacs-cursor-scope)
+                    neomacs-cursor-scope)
+           (neomacs-set-cursor-scope t val))))
+
+(defcustom neomacs-cursor-scope-thickness 1
+  "Scope line thickness in pixels."
+  :type '(integer :tag "Thickness (pixels)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-scope)
+                    (boundp 'neomacs-cursor-scope)
+                    neomacs-cursor-scope)
+           (neomacs-set-cursor-scope t
+            (if (boundp 'neomacs-cursor-scope-color)
+                neomacs-cursor-scope-color nil)
+            val))))
+
+(defcustom neomacs-cursor-scope-gap 10
+  "Gap around cursor in pixels."
+  :type '(integer :tag "Gap (pixels)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-scope)
+                    (boundp 'neomacs-cursor-scope)
+                    neomacs-cursor-scope)
+           (neomacs-set-cursor-scope t
+            (if (boundp 'neomacs-cursor-scope-color)
+                neomacs-cursor-scope-color nil)
+            (if (boundp 'neomacs-cursor-scope-thickness)
+                neomacs-cursor-scope-thickness nil)
+            val))))
+
+(defcustom neomacs-cursor-scope-opacity 30
+  "Cursor scope opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-scope)
+                    (boundp 'neomacs-cursor-scope)
+                    neomacs-cursor-scope)
+           (neomacs-set-cursor-scope t
+            (if (boundp 'neomacs-cursor-scope-color)
+                neomacs-cursor-scope-color nil)
+            (if (boundp 'neomacs-cursor-scope-thickness)
+                neomacs-cursor-scope-thickness nil)
+            (if (boundp 'neomacs-cursor-scope-gap)
+                neomacs-cursor-scope-gap nil)
+            val))))
+
 ;; Hex grid overlay effect
 (declare-function neomacs-set-hex-grid "neomacsterm.c")
 

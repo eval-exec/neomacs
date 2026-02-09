@@ -726,6 +726,32 @@ struct RenderApp {
     cursor_pendulum_damping: f32,
     cursor_pendulum_opacity: f32,
 
+    // Kaleidoscope overlay
+    kaleidoscope_enabled: bool,
+    kaleidoscope_color: (f32, f32, f32),
+    kaleidoscope_segments: u32,
+    kaleidoscope_speed: f32,
+    kaleidoscope_opacity: f32,
+    // Cursor ripple ring
+    cursor_ripple_ring_enabled: bool,
+    cursor_ripple_ring_color: (f32, f32, f32),
+    cursor_ripple_ring_max_radius: f32,
+    cursor_ripple_ring_count: u32,
+    cursor_ripple_ring_speed: f32,
+    cursor_ripple_ring_opacity: f32,
+    // Noise field overlay
+    noise_field_enabled: bool,
+    noise_field_color: (f32, f32, f32),
+    noise_field_scale: f32,
+    noise_field_speed: f32,
+    noise_field_opacity: f32,
+    // Cursor scope
+    cursor_scope_enabled: bool,
+    cursor_scope_color: (f32, f32, f32),
+    cursor_scope_thickness: f32,
+    cursor_scope_gap: f32,
+    cursor_scope_opacity: f32,
+
     // Per-window metadata from previous frame (for transition detection)
     prev_window_infos: HashMap<i64, crate::core::frame_glyphs::WindowInfo>,
 
@@ -1391,6 +1417,27 @@ impl RenderApp {
             cursor_pendulum_arc_length: 40.0,
             cursor_pendulum_damping: 0.5,
             cursor_pendulum_opacity: 0.3,
+            kaleidoscope_enabled: false,
+            kaleidoscope_color: (0.6, 0.3, 0.9),
+            kaleidoscope_segments: 6,
+            kaleidoscope_speed: 0.5,
+            kaleidoscope_opacity: 0.1,
+            cursor_ripple_ring_enabled: false,
+            cursor_ripple_ring_color: (0.3, 0.8, 1.0),
+            cursor_ripple_ring_max_radius: 60.0,
+            cursor_ripple_ring_count: 3,
+            cursor_ripple_ring_speed: 2.0,
+            cursor_ripple_ring_opacity: 0.25,
+            noise_field_enabled: false,
+            noise_field_color: (0.5, 0.7, 0.3),
+            noise_field_scale: 50.0,
+            noise_field_speed: 0.5,
+            noise_field_opacity: 0.08,
+            cursor_scope_enabled: false,
+            cursor_scope_color: (1.0, 0.8, 0.2),
+            cursor_scope_thickness: 1.0,
+            cursor_scope_gap: 10.0,
+            cursor_scope_opacity: 0.3,
             prev_window_infos: HashMap::new(),
             crossfade_enabled: true,
             crossfade_duration: std::time::Duration::from_millis(200),
@@ -3266,6 +3313,51 @@ impl RenderApp {
                     self.cursor_radar_opacity = opacity;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_cursor_radar(enabled, (r, g, b), radius, speed, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetKaleidoscope { enabled, r, g, b, segments, speed, opacity } => {
+                    self.kaleidoscope_enabled = enabled;
+                    self.kaleidoscope_color = (r, g, b);
+                    self.kaleidoscope_segments = segments;
+                    self.kaleidoscope_speed = speed;
+                    self.kaleidoscope_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_kaleidoscope(enabled, (r, g, b), segments, speed, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorRippleRing { enabled, r, g, b, max_radius, ring_count, speed, opacity } => {
+                    self.cursor_ripple_ring_enabled = enabled;
+                    self.cursor_ripple_ring_color = (r, g, b);
+                    self.cursor_ripple_ring_max_radius = max_radius;
+                    self.cursor_ripple_ring_count = ring_count;
+                    self.cursor_ripple_ring_speed = speed;
+                    self.cursor_ripple_ring_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_ripple_ring(enabled, (r, g, b), max_radius, ring_count, speed, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetNoiseField { enabled, r, g, b, scale, speed, opacity } => {
+                    self.noise_field_enabled = enabled;
+                    self.noise_field_color = (r, g, b);
+                    self.noise_field_scale = scale;
+                    self.noise_field_speed = speed;
+                    self.noise_field_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_noise_field(enabled, (r, g, b), scale, speed, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorScope { enabled, r, g, b, thickness, gap, opacity } => {
+                    self.cursor_scope_enabled = enabled;
+                    self.cursor_scope_color = (r, g, b);
+                    self.cursor_scope_thickness = thickness;
+                    self.cursor_scope_gap = gap;
+                    self.cursor_scope_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_scope(enabled, (r, g, b), thickness, gap, opacity);
                     }
                     self.frame_dirty = true;
                 }
