@@ -108,6 +108,22 @@ extern "C" {
         face_out: *mut FaceDataFFI,
     ) -> c_int;
 
+    /// Get the advance width of a single character in a specific face's font.
+    /// Returns the pixel width, or -1.0 if unmeasurable.
+    pub fn neomacs_layout_char_width(
+        window: EmacsWindow,
+        charcode: c_int,
+        face_id: c_int,
+    ) -> f32;
+
+    /// Fill advance widths for ASCII characters (0-127) in a face's font.
+    /// widths must point to an array of at least 128 floats.
+    pub fn neomacs_layout_fill_ascii_widths(
+        window: EmacsWindow,
+        face_id: c_int,
+        widths: *mut f32,
+    );
+
     // ========================================================================
     // Writing layout results back to Emacs
     // ========================================================================
@@ -561,4 +577,8 @@ pub struct FaceDataFFI {
     pub font_char_width: f32,
     /// Per-face font ascent (0.0 = use window default)
     pub font_ascent: f32,
+    /// Per-face space width (for tab stop calculations with proportional fonts)
+    pub font_space_width: f32,
+    /// Whether the face's font is monospace (1=monospace, 0=proportional)
+    pub font_is_monospace: c_int,
 }

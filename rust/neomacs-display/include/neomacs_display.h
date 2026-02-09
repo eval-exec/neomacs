@@ -494,6 +494,14 @@ typedef struct FaceDataFFI {
    * Per-face font ascent (0.0 = use window default)
    */
   float fontAscent;
+  /**
+   * Per-face space width (for tab stop calculations with proportional fonts)
+   */
+  float fontSpaceWidth;
+  /**
+   * Whether the face's font is monospace (1=monospace, 0=proportional)
+   */
+  int fontIsMonospace;
 } FaceDataFFI;
 
 /**
@@ -3025,6 +3033,18 @@ extern int neomacs_layout_face_at_pos(EmacsWindow window,
  * Get the default face for a frame.
  */
 extern int neomacs_layout_default_face(EmacsFrame frame, struct FaceDataFFI *faceOut);
+
+/**
+ * Get the advance width of a single character in a specific face's font.
+ * Returns the pixel width, or -1.0 if unmeasurable.
+ */
+extern float neomacs_layout_char_width(EmacsWindow window, int charcode, int faceId);
+
+/**
+ * Fill advance widths for ASCII characters (0-127) in a face's font.
+ * widths must point to an array of at least 128 floats.
+ */
+extern void neomacs_layout_fill_ascii_widths(EmacsWindow window, int faceId, float *widths);
 
 /**
  * Set window_end_pos on an Emacs window (for window-end Lisp function).

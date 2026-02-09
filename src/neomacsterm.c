@@ -2235,6 +2235,8 @@ struct FaceDataFFI {
   int extend;
   float font_char_width;
   float font_ascent;
+  float font_space_width;
+  int font_is_monospace;
 };
 
 static void
@@ -2352,11 +2354,76 @@ fill_face_data (struct frame *f, struct face *face, struct FaceDataFFI *out)
     {
       out->font_char_width = (float) face->font->average_width;
       out->font_ascent = (float) FONT_BASE (face->font);
+      out->font_space_width = (float) face->font->space_width;
+      out->font_is_monospace = (face->font->average_width == face->font->space_width
+                                && face->font->space_width == face->font->max_width)
+                               ? 1 : 0;
     }
   else
     {
       out->font_char_width = 0.0f; /* 0 = use window default */
       out->font_ascent = 0.0f;
+      out->font_space_width = 0.0f;
+      out->font_is_monospace = 1;
+    }
+}
+
+/* Get the advance width of a single character in a specific face's font.
+   Returns the pixel width, or -1.0 if not measurable. */
+float
+neomacs_layout_char_width (void *window_ptr, int charcode, int face_id)
+{
+  struct window *w = (struct window *) window_ptr;
+  if (!w)
+    return -1.0f;
+
+  struct frame *f = XFRAME (w->frame);
+  struct face *face = FACE_FROM_ID (f, face_id);
+  if (!face || !face->font)
+    return -1.0f;
+
+  struct font *font = face->font;
+  unsigned code = font->driver->encode_char (font, charcode);
+  if (code == FONT_INVALID_CODE)
+    return -1.0f;
+
+  struct font_metrics metrics;
+  font->driver->text_extents (font, &code, 1, &metrics);
+  return (float) metrics.width;
+}
+
+/* Fill advance widths for ASCII characters (0-127) in a face's font.
+   widths must point to an array of at least 128 floats. */
+void
+neomacs_layout_fill_ascii_widths (void *window_ptr, int face_id, float *widths)
+{
+  struct window *w = (struct window *) window_ptr;
+  if (!w)
+    {
+      for (int i = 0; i < 128; i++) widths[i] = -1.0f;
+      return;
+    }
+
+  struct frame *f = XFRAME (w->frame);
+  struct face *face = FACE_FROM_ID (f, face_id);
+  if (!face || !face->font)
+    {
+      for (int i = 0; i < 128; i++) widths[i] = -1.0f;
+      return;
+    }
+
+  struct font *font = face->font;
+  for (int i = 0; i < 128; i++)
+    {
+      unsigned code = font->driver->encode_char (font, i);
+      if (code == FONT_INVALID_CODE)
+        {
+          widths[i] = -1.0f;
+          continue;
+        }
+      struct font_metrics metrics;
+      font->driver->text_extents (font, &code, 1, &metrics);
+      widths[i] = (float) metrics.width;
     }
 }
 
