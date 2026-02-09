@@ -878,6 +878,27 @@ struct RenderApp {
     cursor_crystal_radius: f32,
     cursor_crystal_opacity: f32,
 
+    basket_weave_enabled: bool,
+    basket_weave_color: (f32, f32, f32),
+    basket_weave_strip_width: f32,
+    basket_weave_strip_spacing: f32,
+    basket_weave_opacity: f32,
+    cursor_sparkler_enabled: bool,
+    cursor_sparkler_color: (f32, f32, f32),
+    cursor_sparkler_spark_count: u32,
+    cursor_sparkler_burn_speed: f32,
+    cursor_sparkler_opacity: f32,
+    fish_scale_enabled: bool,
+    fish_scale_color: (f32, f32, f32),
+    fish_scale_size: f32,
+    fish_scale_row_offset: f32,
+    fish_scale_opacity: f32,
+    cursor_plasma_ball_enabled: bool,
+    cursor_plasma_ball_color: (f32, f32, f32),
+    cursor_plasma_ball_tendril_count: u32,
+    cursor_plasma_ball_arc_speed: f32,
+    cursor_plasma_ball_opacity: f32,
+
     trefoil_knot_enabled: bool,
     trefoil_knot_color: (f32, f32, f32),
     trefoil_knot_size: f32,
@@ -1751,6 +1772,26 @@ impl RenderApp {
             cursor_crystal_facet_count: 6,
             cursor_crystal_radius: 25.0,
             cursor_crystal_opacity: 0.3,
+            basket_weave_enabled: false,
+            basket_weave_color: (0.55, 0.4, 0.25),
+            basket_weave_strip_width: 6.0,
+            basket_weave_strip_spacing: 20.0,
+            basket_weave_opacity: 0.05,
+            cursor_sparkler_enabled: false,
+            cursor_sparkler_color: (1.0, 0.85, 0.3),
+            cursor_sparkler_spark_count: 12,
+            cursor_sparkler_burn_speed: 1.0,
+            cursor_sparkler_opacity: 0.25,
+            fish_scale_enabled: false,
+            fish_scale_color: (0.3, 0.6, 0.7),
+            fish_scale_size: 16.0,
+            fish_scale_row_offset: 0.5,
+            fish_scale_opacity: 0.04,
+            cursor_plasma_ball_enabled: false,
+            cursor_plasma_ball_color: (0.7, 0.3, 1.0),
+            cursor_plasma_ball_tendril_count: 6,
+            cursor_plasma_ball_arc_speed: 1.0,
+            cursor_plasma_ball_opacity: 0.2,
             trefoil_knot_enabled: false,
             trefoil_knot_color: (0.4, 0.6, 0.9),
             trefoil_knot_size: 80.0,
@@ -3886,6 +3927,50 @@ impl RenderApp {
                     self.cursor_tornado_opacity = opacity;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_cursor_tornado(enabled, (r, g, b), radius, particle_count, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetBasketWeave { enabled, r, g, b, strip_width, strip_spacing, opacity } => {
+                    self.basket_weave_enabled = enabled;
+                    self.basket_weave_color = (r, g, b);
+                    self.basket_weave_strip_width = strip_width;
+                    self.basket_weave_strip_spacing = strip_spacing;
+                    self.basket_weave_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_basket_weave(enabled, (r, g, b), strip_width, strip_spacing, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorSparkler { enabled, r, g, b, spark_count, burn_speed, opacity } => {
+                    self.cursor_sparkler_enabled = enabled;
+                    self.cursor_sparkler_color = (r, g, b);
+                    self.cursor_sparkler_spark_count = spark_count;
+                    self.cursor_sparkler_burn_speed = burn_speed;
+                    self.cursor_sparkler_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_sparkler(enabled, (r, g, b), spark_count, burn_speed, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetFishScale { enabled, r, g, b, scale_size, row_offset, opacity } => {
+                    self.fish_scale_enabled = enabled;
+                    self.fish_scale_color = (r, g, b);
+                    self.fish_scale_size = scale_size;
+                    self.fish_scale_row_offset = row_offset;
+                    self.fish_scale_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_fish_scale(enabled, (r, g, b), scale_size, row_offset, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorPlasmaBall { enabled, r, g, b, tendril_count, arc_speed, opacity } => {
+                    self.cursor_plasma_ball_enabled = enabled;
+                    self.cursor_plasma_ball_color = (r, g, b);
+                    self.cursor_plasma_ball_tendril_count = tendril_count;
+                    self.cursor_plasma_ball_arc_speed = arc_speed;
+                    self.cursor_plasma_ball_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_plasma_ball(enabled, (r, g, b), tendril_count, arc_speed, opacity);
                     }
                     self.frame_dirty = true;
                 }

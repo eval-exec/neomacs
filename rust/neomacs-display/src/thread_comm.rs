@@ -1467,6 +1467,38 @@ pub enum RenderCommand {
         radius: f32,
         opacity: f32,
     },
+    /// Configure basket weave overlay effect
+    SetBasketWeave {
+        enabled: bool,
+        r: f32, g: f32, b: f32,
+        strip_width: f32,
+        strip_spacing: f32,
+        opacity: f32,
+    },
+    /// Configure cursor sparkler effect
+    SetCursorSparkler {
+        enabled: bool,
+        r: f32, g: f32, b: f32,
+        spark_count: u32,
+        burn_speed: f32,
+        opacity: f32,
+    },
+    /// Configure fish scale overlay effect
+    SetFishScale {
+        enabled: bool,
+        r: f32, g: f32, b: f32,
+        scale_size: f32,
+        row_offset: f32,
+        opacity: f32,
+    },
+    /// Configure cursor plasma ball effect
+    SetCursorPlasmaBall {
+        enabled: bool,
+        r: f32, g: f32, b: f32,
+        tendril_count: u32,
+        arc_speed: f32,
+        opacity: f32,
+    },
     /// Configure trefoil knot overlay effect
     SetTrefoilKnot {
         enabled: bool,

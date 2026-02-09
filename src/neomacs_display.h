@@ -2026,6 +2026,46 @@ void neomacs_display_set_cursor_gravity_well(struct NeomacsDisplay *handle,
     int opacity);
 
 /**
+ * Configure basket weave overlay effect.
+ */
+void neomacs_display_set_basket_weave(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int strip_width,
+    int strip_spacing,
+    int opacity);
+
+/**
+ * Configure cursor sparkler effect.
+ */
+void neomacs_display_set_cursor_sparkler(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int spark_count,
+    int burn_speed,
+    int opacity);
+
+/**
+ * Configure fish scale overlay effect.
+ */
+void neomacs_display_set_fish_scale(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int scale_size,
+    int row_offset,
+    int opacity);
+
+/**
+ * Configure cursor plasma ball effect.
+ */
+void neomacs_display_set_cursor_plasma_ball(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int tendril_count,
+    int arc_speed,
+    int opacity);
+
+/**
  * Configure trefoil knot overlay effect.
  */
 void neomacs_display_set_trefoil_knot(struct NeomacsDisplay *handle,

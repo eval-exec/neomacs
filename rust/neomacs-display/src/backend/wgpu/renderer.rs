@@ -729,6 +729,30 @@ pub struct WgpuRenderer {
     cursor_crystal_facet_count: u32,
     cursor_crystal_radius: f32,
     cursor_crystal_opacity: f32,
+    /// Basket weave overlay
+    basket_weave_enabled: bool,
+    basket_weave_color: (f32, f32, f32),
+    basket_weave_strip_width: f32,
+    basket_weave_strip_spacing: f32,
+    basket_weave_opacity: f32,
+    /// Cursor sparkler effect
+    cursor_sparkler_enabled: bool,
+    cursor_sparkler_color: (f32, f32, f32),
+    cursor_sparkler_spark_count: u32,
+    cursor_sparkler_burn_speed: f32,
+    cursor_sparkler_opacity: f32,
+    /// Fish scale overlay
+    fish_scale_enabled: bool,
+    fish_scale_color: (f32, f32, f32),
+    fish_scale_size: f32,
+    fish_scale_row_offset: f32,
+    fish_scale_opacity: f32,
+    /// Cursor plasma ball effect
+    cursor_plasma_ball_enabled: bool,
+    cursor_plasma_ball_color: (f32, f32, f32),
+    cursor_plasma_ball_tendril_count: u32,
+    cursor_plasma_ball_arc_speed: f32,
+    cursor_plasma_ball_opacity: f32,
     /// Trefoil knot overlay
     trefoil_knot_enabled: bool,
     trefoil_knot_color: (f32, f32, f32),
@@ -2033,6 +2057,26 @@ impl WgpuRenderer {
             cursor_crystal_facet_count: 6,
             cursor_crystal_radius: 25.0,
             cursor_crystal_opacity: 0.3,
+            basket_weave_enabled: false,
+            basket_weave_color: (0.55, 0.4, 0.25),
+            basket_weave_strip_width: 6.0,
+            basket_weave_strip_spacing: 20.0,
+            basket_weave_opacity: 0.05,
+            cursor_sparkler_enabled: false,
+            cursor_sparkler_color: (1.0, 0.85, 0.3),
+            cursor_sparkler_spark_count: 12,
+            cursor_sparkler_burn_speed: 1.0,
+            cursor_sparkler_opacity: 0.25,
+            fish_scale_enabled: false,
+            fish_scale_color: (0.3, 0.6, 0.7),
+            fish_scale_size: 16.0,
+            fish_scale_row_offset: 0.5,
+            fish_scale_opacity: 0.04,
+            cursor_plasma_ball_enabled: false,
+            cursor_plasma_ball_color: (0.7, 0.3, 1.0),
+            cursor_plasma_ball_tendril_count: 6,
+            cursor_plasma_ball_arc_speed: 1.0,
+            cursor_plasma_ball_opacity: 0.2,
             trefoil_knot_enabled: false,
             trefoil_knot_color: (0.4, 0.6, 0.9),
             trefoil_knot_size: 80.0,
@@ -3165,6 +3209,42 @@ impl WgpuRenderer {
         self.cursor_crystal_facet_count = facet_count;
         self.cursor_crystal_radius = radius;
         self.cursor_crystal_opacity = opacity;
+    }
+
+    /// Update basket weave config
+    pub fn set_basket_weave(&mut self, enabled: bool, color: (f32, f32, f32), strip_width: f32, strip_spacing: f32, opacity: f32) {
+        self.basket_weave_enabled = enabled;
+        self.basket_weave_color = color;
+        self.basket_weave_strip_width = strip_width;
+        self.basket_weave_strip_spacing = strip_spacing;
+        self.basket_weave_opacity = opacity;
+    }
+
+    /// Update cursor sparkler config
+    pub fn set_cursor_sparkler(&mut self, enabled: bool, color: (f32, f32, f32), spark_count: u32, burn_speed: f32, opacity: f32) {
+        self.cursor_sparkler_enabled = enabled;
+        self.cursor_sparkler_color = color;
+        self.cursor_sparkler_spark_count = spark_count;
+        self.cursor_sparkler_burn_speed = burn_speed;
+        self.cursor_sparkler_opacity = opacity;
+    }
+
+    /// Update fish scale config
+    pub fn set_fish_scale(&mut self, enabled: bool, color: (f32, f32, f32), scale_size: f32, row_offset: f32, opacity: f32) {
+        self.fish_scale_enabled = enabled;
+        self.fish_scale_color = color;
+        self.fish_scale_size = scale_size;
+        self.fish_scale_row_offset = row_offset;
+        self.fish_scale_opacity = opacity;
+    }
+
+    /// Update cursor plasma ball config
+    pub fn set_cursor_plasma_ball(&mut self, enabled: bool, color: (f32, f32, f32), tendril_count: u32, arc_speed: f32, opacity: f32) {
+        self.cursor_plasma_ball_enabled = enabled;
+        self.cursor_plasma_ball_color = color;
+        self.cursor_plasma_ball_tendril_count = tendril_count;
+        self.cursor_plasma_ball_arc_speed = arc_speed;
+        self.cursor_plasma_ball_opacity = opacity;
     }
 
     /// Update trefoil knot config
@@ -8354,6 +8434,201 @@ impl WgpuRenderer {
                         render_pass.draw(0..ct_verts.len() as u32, 0..1);
                     }
                     self.needs_continuous_redraw = true;
+                }
+            }
+
+            // === Basket weave overlay effect ===
+            if self.basket_weave_enabled {
+                let width = self.width() as f32;
+                let height = self.height() as f32;
+                let (wr, wg, wb) = self.basket_weave_color;
+                let sw = self.basket_weave_strip_width;
+                let spacing = self.basket_weave_strip_spacing;
+                let alpha = self.basket_weave_opacity;
+                let mut overlay_verts = Vec::new();
+
+                // Horizontal strips
+                let h_strips = (height / spacing) as i32 + 1;
+                for i in 0..h_strips {
+                    let y = i as f32 * spacing;
+                    let block = (i % 2) as f32;
+                    let cols = (width / spacing) as i32 + 1;
+                    for j in 0..cols {
+                        let x = j as f32 * spacing + block * spacing / 2.0;
+                        let c = Color::new(wr, wg, wb, alpha);
+                        self.add_rect(&mut overlay_verts, x, y, spacing / 2.0, sw, &c);
+                    }
+                }
+
+                // Vertical strips
+                let v_strips = (width / spacing) as i32 + 1;
+                for j in 0..v_strips {
+                    let x = j as f32 * spacing;
+                    let block = (j % 2) as f32;
+                    let rows = (height / spacing) as i32 + 1;
+                    for i in 0..rows {
+                        let y = i as f32 * spacing + block * spacing / 2.0;
+                        let c = Color::new(wr, wg, wb, alpha * 0.7);
+                        self.add_rect(&mut overlay_verts, x, y, sw, spacing / 2.0, &c);
+                    }
+                }
+
+                if !overlay_verts.is_empty() {
+                    let buf = self.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("basket_weave_verts"),
+                        contents: bytemuck::cast_slice(&overlay_verts),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, buf.slice(..));
+                    render_pass.draw(0..overlay_verts.len() as u32, 0..1);
+                }
+            }
+
+            // === Cursor sparkler effect ===
+            if self.cursor_sparkler_enabled && cursor_visible {
+                if let Some(ref anim) = animated_cursor {
+                    let now = std::time::Instant::now().duration_since(self.aurora_start).as_secs_f32();
+                    let (sr, sg, sb) = self.cursor_sparkler_color;
+                    let spark_count = self.cursor_sparkler_spark_count;
+                    let burn = self.cursor_sparkler_burn_speed;
+                    let alpha = self.cursor_sparkler_opacity;
+                    let mut overlay_verts = Vec::new();
+
+                    let cx = anim.x + anim.width / 2.0;
+                    let cy = anim.y + anim.height / 2.0;
+
+                    for i in 0..spark_count {
+                        let angle = (i as f32 / spark_count as f32) * std::f32::consts::TAU + now * burn * 2.0;
+                        let life = ((now * burn * 3.0 + i as f32 * 1.7) % 1.0);
+                        let r = 5.0 + life * 25.0;
+                        let sx = cx + angle.cos() * r;
+                        let sy = cy + angle.sin() * r;
+                        let fade = (1.0 - life).max(0.0);
+                        let size = 2.0 * fade + 0.5;
+
+                        // Color shifts from white-hot to orange to dim
+                        let heat = fade;
+                        let cr = sr * heat + 1.0 * (1.0 - heat);
+                        let cg = sg * heat;
+                        let cb = sb * heat * 0.3;
+                        let c = Color::new(cr.min(1.0), cg.min(1.0), cb.min(1.0), alpha * fade);
+                        self.add_rect(&mut overlay_verts, sx - size / 2.0, sy - size / 2.0, size, size, &c);
+                    }
+
+                    if !overlay_verts.is_empty() {
+                        let buf = self.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("cursor_sparkler_verts"),
+                            contents: bytemuck::cast_slice(&overlay_verts),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                        render_pass.set_pipeline(&self.rect_pipeline);
+                        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, buf.slice(..));
+                        render_pass.draw(0..overlay_verts.len() as u32, 0..1);
+                        self.needs_continuous_redraw = true;
+                    }
+                }
+            }
+
+            // === Fish scale overlay effect ===
+            if self.fish_scale_enabled {
+                let width = self.width() as f32;
+                let height = self.height() as f32;
+                let (fr, fg, fb) = self.fish_scale_color;
+                let size = self.fish_scale_size;
+                let offset = self.fish_scale_row_offset;
+                let alpha = self.fish_scale_opacity;
+                let mut overlay_verts = Vec::new();
+
+                let rows = (height / (size * 0.75)) as i32 + 2;
+                let cols = (width / size) as i32 + 2;
+
+                for row in 0..rows {
+                    let y = row as f32 * size * 0.75;
+                    let x_off = if row % 2 == 1 { size * offset } else { 0.0 };
+
+                    for col in 0..cols {
+                        let cx = col as f32 * size + x_off;
+                        let cy = y;
+
+                        // Draw semicircle as series of small rects (arc approximation)
+                        let segments = 10;
+                        for s in 0..segments {
+                            let angle = std::f32::consts::PI * s as f32 / segments as f32;
+                            let ax = cx + angle.cos() * size / 2.0;
+                            let ay = cy - angle.sin() * size / 2.0;
+                            let c = Color::new(fr, fg, fb, alpha);
+                            self.add_rect(&mut overlay_verts, ax - 0.5, ay - 0.5, 1.0, 1.0, &c);
+                        }
+                    }
+                }
+
+                if !overlay_verts.is_empty() {
+                    let buf = self.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("fish_scale_verts"),
+                        contents: bytemuck::cast_slice(&overlay_verts),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, buf.slice(..));
+                    render_pass.draw(0..overlay_verts.len() as u32, 0..1);
+                }
+            }
+
+            // === Cursor plasma ball effect ===
+            if self.cursor_plasma_ball_enabled && cursor_visible {
+                if let Some(ref anim) = animated_cursor {
+                    let now = std::time::Instant::now().duration_since(self.aurora_start).as_secs_f32();
+                    let (pr, pg, pb) = self.cursor_plasma_ball_color;
+                    let tendril_count = self.cursor_plasma_ball_tendril_count;
+                    let arc_speed = self.cursor_plasma_ball_arc_speed;
+                    let alpha = self.cursor_plasma_ball_opacity;
+                    let mut overlay_verts = Vec::new();
+
+                    let cx = anim.x + anim.width / 2.0;
+                    let cy = anim.y + anim.height / 2.0;
+
+                    for t in 0..tendril_count {
+                        let base_angle = (t as f32 / tendril_count as f32) * std::f32::consts::TAU;
+                        let segments = 15;
+
+                        for s in 0..segments {
+                            let frac = s as f32 / segments as f32;
+                            let r = 3.0 + frac * 25.0;
+                            let wobble = (now * arc_speed * 5.0 + t as f32 * 2.3 + frac * 4.0).sin() * 0.4;
+                            let angle = base_angle + now * arc_speed + wobble;
+                            let px = cx + angle.cos() * r;
+                            let py = cy + angle.sin() * r;
+                            let fade = 1.0 - frac * 0.7;
+                            let size = 2.5 - frac * 1.0;
+
+                            let c = Color::new(pr, pg, pb, alpha * fade);
+                            if size > 0.5 {
+                                self.add_rect(&mut overlay_verts, px - size / 2.0, py - size / 2.0, size, size, &c);
+                            }
+                        }
+                    }
+
+                    // Central glow
+                    let glow = (now * arc_speed * 3.0).sin() * 0.3 + 0.7;
+                    let c = Color::new(pr, pg, pb, alpha * glow * 0.5);
+                    self.add_rect(&mut overlay_verts, cx - 4.0, cy - 4.0, 8.0, 8.0, &c);
+
+                    if !overlay_verts.is_empty() {
+                        let buf = self.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("cursor_plasma_ball_verts"),
+                            contents: bytemuck::cast_slice(&overlay_verts),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                        render_pass.set_pipeline(&self.rect_pipeline);
+                        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, buf.slice(..));
+                        render_pass.draw(0..overlay_verts.len() as u32, 0..1);
+                        self.needs_continuous_redraw = true;
+                    }
                 }
             }
 

@@ -5982,6 +5982,298 @@ Non-nil renders animated flowing color bands at the top of the frame."
                 neomacs-cursor-gravity-well-line-count nil)
             val))))
 
+;; Basket weave overlay effect
+(declare-function neomacs-set-basket-weave "neomacsterm.c")
+
+(defcustom neomacs-basket-weave nil
+  "Enable basket weave overlay effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-basket-weave)
+           (if val
+               (neomacs-set-basket-weave t)
+             (neomacs-set-basket-weave nil)))))
+
+(defcustom neomacs-basket-weave-color "#8C6640"
+  "Basket weave color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-basket-weave)
+                    (boundp 'neomacs-basket-weave)
+                    neomacs-basket-weave)
+           (neomacs-set-basket-weave t val))))
+
+(defcustom neomacs-basket-weave-strip-width 6
+  "Basket weave strip width in pixels."
+  :type '(integer :tag "Strip width (px)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-basket-weave)
+                    (boundp 'neomacs-basket-weave)
+                    neomacs-basket-weave)
+           (neomacs-set-basket-weave t
+            (if (boundp 'neomacs-basket-weave-color)
+                neomacs-basket-weave-color nil)
+            val))))
+
+(defcustom neomacs-basket-weave-strip-spacing 20
+  "Basket weave strip spacing in pixels."
+  :type '(integer :tag "Strip spacing (px)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-basket-weave)
+                    (boundp 'neomacs-basket-weave)
+                    neomacs-basket-weave)
+           (neomacs-set-basket-weave t
+            (if (boundp 'neomacs-basket-weave-color)
+                neomacs-basket-weave-color nil)
+            (if (boundp 'neomacs-basket-weave-strip-width)
+                neomacs-basket-weave-strip-width nil)
+            val))))
+
+(defcustom neomacs-basket-weave-opacity 5
+  "Basket weave opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-basket-weave)
+                    (boundp 'neomacs-basket-weave)
+                    neomacs-basket-weave)
+           (neomacs-set-basket-weave t
+            (if (boundp 'neomacs-basket-weave-color)
+                neomacs-basket-weave-color nil)
+            (if (boundp 'neomacs-basket-weave-strip-width)
+                neomacs-basket-weave-strip-width nil)
+            (if (boundp 'neomacs-basket-weave-strip-spacing)
+                neomacs-basket-weave-strip-spacing nil)
+            val))))
+
+;; Cursor sparkler effect
+(declare-function neomacs-set-cursor-sparkler "neomacsterm.c")
+
+(defcustom neomacs-cursor-sparkler nil
+  "Enable cursor sparkler effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-cursor-sparkler)
+           (if val
+               (neomacs-set-cursor-sparkler t)
+             (neomacs-set-cursor-sparkler nil)))))
+
+(defcustom neomacs-cursor-sparkler-color "#FFD94D"
+  "Cursor sparkler color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-sparkler)
+                    (boundp 'neomacs-cursor-sparkler)
+                    neomacs-cursor-sparkler)
+           (neomacs-set-cursor-sparkler t val))))
+
+(defcustom neomacs-cursor-sparkler-spark-count 12
+  "Number of sparkler sparks."
+  :type '(integer :tag "Spark count")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-sparkler)
+                    (boundp 'neomacs-cursor-sparkler)
+                    neomacs-cursor-sparkler)
+           (neomacs-set-cursor-sparkler t
+            (if (boundp 'neomacs-cursor-sparkler-color)
+                neomacs-cursor-sparkler-color nil)
+            val))))
+
+(defcustom neomacs-cursor-sparkler-burn-speed 100
+  "Cursor sparkler burn speed (* 100)."
+  :type '(integer :tag "Burn speed")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-sparkler)
+                    (boundp 'neomacs-cursor-sparkler)
+                    neomacs-cursor-sparkler)
+           (neomacs-set-cursor-sparkler t
+            (if (boundp 'neomacs-cursor-sparkler-color)
+                neomacs-cursor-sparkler-color nil)
+            (if (boundp 'neomacs-cursor-sparkler-spark-count)
+                neomacs-cursor-sparkler-spark-count nil)
+            val))))
+
+(defcustom neomacs-cursor-sparkler-opacity 25
+  "Cursor sparkler opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-sparkler)
+                    (boundp 'neomacs-cursor-sparkler)
+                    neomacs-cursor-sparkler)
+           (neomacs-set-cursor-sparkler t
+            (if (boundp 'neomacs-cursor-sparkler-color)
+                neomacs-cursor-sparkler-color nil)
+            (if (boundp 'neomacs-cursor-sparkler-spark-count)
+                neomacs-cursor-sparkler-spark-count nil)
+            (if (boundp 'neomacs-cursor-sparkler-burn-speed)
+                neomacs-cursor-sparkler-burn-speed nil)
+            val))))
+
+;; Fish scale overlay effect
+(declare-function neomacs-set-fish-scale "neomacsterm.c")
+
+(defcustom neomacs-fish-scale nil
+  "Enable fish scale overlay effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-fish-scale)
+           (if val
+               (neomacs-set-fish-scale t)
+             (neomacs-set-fish-scale nil)))))
+
+(defcustom neomacs-fish-scale-color "#4D99B3"
+  "Fish scale color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-fish-scale)
+                    (boundp 'neomacs-fish-scale)
+                    neomacs-fish-scale)
+           (neomacs-set-fish-scale t val))))
+
+(defcustom neomacs-fish-scale-size 16
+  "Fish scale size in pixels."
+  :type '(integer :tag "Scale size (px)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-fish-scale)
+                    (boundp 'neomacs-fish-scale)
+                    neomacs-fish-scale)
+           (neomacs-set-fish-scale t
+            (if (boundp 'neomacs-fish-scale-color)
+                neomacs-fish-scale-color nil)
+            val))))
+
+(defcustom neomacs-fish-scale-row-offset 50
+  "Fish scale row offset (* 100)."
+  :type '(integer :tag "Row offset (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-fish-scale)
+                    (boundp 'neomacs-fish-scale)
+                    neomacs-fish-scale)
+           (neomacs-set-fish-scale t
+            (if (boundp 'neomacs-fish-scale-color)
+                neomacs-fish-scale-color nil)
+            (if (boundp 'neomacs-fish-scale-size)
+                neomacs-fish-scale-size nil)
+            val))))
+
+(defcustom neomacs-fish-scale-opacity 4
+  "Fish scale opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-fish-scale)
+                    (boundp 'neomacs-fish-scale)
+                    neomacs-fish-scale)
+           (neomacs-set-fish-scale t
+            (if (boundp 'neomacs-fish-scale-color)
+                neomacs-fish-scale-color nil)
+            (if (boundp 'neomacs-fish-scale-size)
+                neomacs-fish-scale-size nil)
+            (if (boundp 'neomacs-fish-scale-row-offset)
+                neomacs-fish-scale-row-offset nil)
+            val))))
+
+;; Cursor plasma ball effect
+(declare-function neomacs-set-cursor-plasma-ball "neomacsterm.c")
+
+(defcustom neomacs-cursor-plasma-ball nil
+  "Enable cursor plasma ball effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-cursor-plasma-ball)
+           (if val
+               (neomacs-set-cursor-plasma-ball t)
+             (neomacs-set-cursor-plasma-ball nil)))))
+
+(defcustom neomacs-cursor-plasma-ball-color "#B34DFF"
+  "Cursor plasma ball color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-plasma-ball)
+                    (boundp 'neomacs-cursor-plasma-ball)
+                    neomacs-cursor-plasma-ball)
+           (neomacs-set-cursor-plasma-ball t val))))
+
+(defcustom neomacs-cursor-plasma-ball-tendril-count 6
+  "Number of plasma ball tendrils."
+  :type '(integer :tag "Tendril count")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-plasma-ball)
+                    (boundp 'neomacs-cursor-plasma-ball)
+                    neomacs-cursor-plasma-ball)
+           (neomacs-set-cursor-plasma-ball t
+            (if (boundp 'neomacs-cursor-plasma-ball-color)
+                neomacs-cursor-plasma-ball-color nil)
+            val))))
+
+(defcustom neomacs-cursor-plasma-ball-arc-speed 100
+  "Cursor plasma ball arc speed (* 100)."
+  :type '(integer :tag "Arc speed")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-plasma-ball)
+                    (boundp 'neomacs-cursor-plasma-ball)
+                    neomacs-cursor-plasma-ball)
+           (neomacs-set-cursor-plasma-ball t
+            (if (boundp 'neomacs-cursor-plasma-ball-color)
+                neomacs-cursor-plasma-ball-color nil)
+            (if (boundp 'neomacs-cursor-plasma-ball-tendril-count)
+                neomacs-cursor-plasma-ball-tendril-count nil)
+            val))))
+
+(defcustom neomacs-cursor-plasma-ball-opacity 20
+  "Cursor plasma ball opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-plasma-ball)
+                    (boundp 'neomacs-cursor-plasma-ball)
+                    neomacs-cursor-plasma-ball)
+           (neomacs-set-cursor-plasma-ball t
+            (if (boundp 'neomacs-cursor-plasma-ball-color)
+                neomacs-cursor-plasma-ball-color nil)
+            (if (boundp 'neomacs-cursor-plasma-ball-tendril-count)
+                neomacs-cursor-plasma-ball-tendril-count nil)
+            (if (boundp 'neomacs-cursor-plasma-ball-arc-speed)
+                neomacs-cursor-plasma-ball-arc-speed nil)
+            val))))
+
 ;; Trefoil knot overlay effect
 (declare-function neomacs-set-trefoil-knot "neomacsterm.c")
 

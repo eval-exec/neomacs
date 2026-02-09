@@ -10967,6 +10967,154 @@ OPACITY is 0-100 (default 20). */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-basket-weave",
+       Fneomacs_set_basket_weave,
+       Sneomacs_set_basket_weave, 0, 5, 0,
+       doc: /* Configure basket weave overlay effect.
+ENABLED non-nil activates interlocking strip pattern overlay.
+COLOR is a hex color string like "#RRGGBB" (default "#8C6640").
+STRIP-WIDTH is width of each strip in pixels (default 6).
+STRIP-SPACING is spacing between strips in pixels (default 20).
+OPACITY is 0-100 (default 5). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object strip_width,
+   Lisp_Object strip_spacing, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0x8C, g = 0x66, b = 0x40, sw = 6, ss = 20, op = 5;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (strip_width)) sw = XFIXNUM (strip_width);
+  if (FIXNUMP (strip_spacing)) ss = XFIXNUM (strip_spacing);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_basket_weave (dpyinfo->display_handle, on, r, g, b, sw, ss, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-cursor-sparkler",
+       Fneomacs_set_cursor_sparkler,
+       Sneomacs_set_cursor_sparkler, 0, 5, 0,
+       doc: /* Configure cursor sparkler effect.
+ENABLED non-nil activates radiating sparks around cursor.
+COLOR is a hex color string like "#RRGGBB" (default "#FFD94D").
+SPARK-COUNT is number of sparks (default 12).
+BURN-SPEED is speed * 100 (default 100).
+OPACITY is 0-100 (default 25). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object spark_count,
+   Lisp_Object burn_speed, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0xFF, g = 0xD9, b = 0x4D, sc = 12, bs = 100, op = 25;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (spark_count)) sc = XFIXNUM (spark_count);
+  if (FIXNUMP (burn_speed)) bs = XFIXNUM (burn_speed);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_cursor_sparkler (dpyinfo->display_handle, on, r, g, b, sc, bs, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-fish-scale",
+       Fneomacs_set_fish_scale,
+       Sneomacs_set_fish_scale, 0, 5, 0,
+       doc: /* Configure fish scale overlay effect.
+ENABLED non-nil activates tessellated semicircular scale pattern.
+COLOR is a hex color string like "#RRGGBB" (default "#4D99B3").
+SCALE-SIZE is size of each scale in pixels (default 16).
+ROW-OFFSET is offset between rows * 100 (default 50).
+OPACITY is 0-100 (default 4). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object scale_size,
+   Lisp_Object row_offset, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0x4D, g = 0x99, b = 0xB3, sz = 16, ro = 50, op = 4;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (scale_size)) sz = XFIXNUM (scale_size);
+  if (FIXNUMP (row_offset)) ro = XFIXNUM (row_offset);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_fish_scale (dpyinfo->display_handle, on, r, g, b, sz, ro, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-cursor-plasma-ball",
+       Fneomacs_set_cursor_plasma_ball,
+       Sneomacs_set_cursor_plasma_ball, 0, 5, 0,
+       doc: /* Configure cursor plasma ball effect.
+ENABLED non-nil activates electric tendrils around cursor.
+COLOR is a hex color string like "#RRGGBB" (default "#B34DFF").
+TENDRIL-COUNT is number of tendrils (default 6).
+ARC-SPEED is speed * 100 (default 100).
+OPACITY is 0-100 (default 20). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object tendril_count,
+   Lisp_Object arc_speed, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0xB3, g = 0x4D, b = 0xFF, tc = 6, as_ = 100, op = 20;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (tendril_count)) tc = XFIXNUM (tendril_count);
+  if (FIXNUMP (arc_speed)) as_ = XFIXNUM (arc_speed);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_cursor_plasma_ball (dpyinfo->display_handle, on, r, g, b, tc, as_, op);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-trefoil-knot",
        Fneomacs_set_trefoil_knot,
        Sneomacs_set_trefoil_knot, 0, 5, 0,
@@ -13994,6 +14142,10 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_cursor_shockwave);
   defsubr (&Sneomacs_set_diamond_lattice);
   defsubr (&Sneomacs_set_cursor_gravity_well);
+  defsubr (&Sneomacs_set_basket_weave);
+  defsubr (&Sneomacs_set_cursor_sparkler);
+  defsubr (&Sneomacs_set_fish_scale);
+  defsubr (&Sneomacs_set_cursor_plasma_ball);
   defsubr (&Sneomacs_set_trefoil_knot);
   defsubr (&Sneomacs_set_cursor_quill_pen);
   defsubr (&Sneomacs_set_herringbone_pattern);
