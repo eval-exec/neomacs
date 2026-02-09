@@ -812,6 +812,29 @@ impl TransitionState {
     }
 }
 
+/// FPS counter and frame time tracking state.
+struct FpsCounter {
+    enabled: bool,
+    last_instant: std::time::Instant,
+    frame_count: u32,
+    display_value: f32,
+    frame_time_ms: f32,
+    render_start: std::time::Instant,
+}
+
+impl Default for FpsCounter {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            last_instant: std::time::Instant::now(),
+            frame_count: 0,
+            display_value: 0.0,
+            frame_time_ms: 0.0,
+            render_start: std::time::Instant::now(),
+        }
+    }
+}
+
 struct RenderApp {
     comms: RenderComms,
     window: Option<Arc<Window>>,
@@ -910,16 +933,8 @@ struct RenderApp {
     is_fullscreen: bool,
     /// Corner radius for borderless window rounded corners (0 = no rounding)
     corner_radius: f32,
-    /// Whether to show the FPS counter overlay
-    show_fps: bool,
-    /// Frame time tracking for FPS counter
-    fps_last_instant: std::time::Instant,
-    fps_frame_count: u32,
-    fps_display_value: f32,
-    /// Frame time tracking (ms per frame, smoothed)
-    fps_frame_time_ms: f32,
-    /// Last render start time for measuring frame time
-    fps_render_start: std::time::Instant,
+    // FPS counter state
+    fps: FpsCounter,
     /// Extra line spacing in pixels (added between rows)
     extra_line_spacing: f32,
     /// Extra letter spacing in pixels (added between characters)
@@ -1044,12 +1059,7 @@ impl RenderApp {
             last_titlebar_click: std::time::Instant::now(),
             is_fullscreen: false,
             corner_radius: 0.0,
-            show_fps: false,
-            fps_last_instant: std::time::Instant::now(),
-            fps_frame_count: 0,
-            fps_display_value: 0.0,
-            fps_frame_time_ms: 0.0,
-            fps_render_start: std::time::Instant::now(),
+            fps: FpsCounter::default(),
             extra_line_spacing: 0.0,
             extra_letter_spacing: 0.0,
             prev_selected_window_id: 0,
@@ -1758,7 +1768,7 @@ impl RenderApp {
                     self.frame_dirty = true;
                 }
                 RenderCommand::SetShowFps { enabled } => {
-                    self.show_fps = enabled;
+                    self.fps.enabled = enabled;
                     self.frame_dirty = true;
                 }
                 RenderCommand::SetCornerRadius { radius } => {
@@ -2957,15 +2967,15 @@ impl RenderApp {
         }
 
         // FPS tracking
-        if self.show_fps {
-            self.fps_render_start = std::time::Instant::now();
-            self.fps_frame_count += 1;
-            let elapsed = self.fps_last_instant.elapsed();
+        if self.fps.enabled {
+            self.fps.render_start = std::time::Instant::now();
+            self.fps.frame_count += 1;
+            let elapsed = self.fps.last_instant.elapsed();
             if elapsed.as_secs_f32() >= 1.0 {
-                self.fps_display_value =
-                    self.fps_frame_count as f32 / elapsed.as_secs_f32();
-                self.fps_frame_count = 0;
-                self.fps_last_instant = std::time::Instant::now();
+                self.fps.display_value =
+                    self.fps.frame_count as f32 / elapsed.as_secs_f32();
+                self.fps.frame_count = 0;
+                self.fps.last_instant = std::time::Instant::now();
             }
         }
 
@@ -3256,11 +3266,11 @@ impl RenderApp {
         }
 
         // Render FPS counter overlay (topmost) with profiling stats
-        if self.show_fps {
+        if self.fps.enabled {
             // Measure frame time
-            let frame_time = self.fps_render_start.elapsed().as_secs_f32() * 1000.0;
+            let frame_time = self.fps.render_start.elapsed().as_secs_f32() * 1000.0;
             // Exponential moving average (smooth over ~10 frames)
-            self.fps_frame_time_ms = self.fps_frame_time_ms * 0.9 + frame_time * 0.1;
+            self.fps.frame_time_ms = self.fps.frame_time_ms * 0.9 + frame_time * 0.1;
 
             // Gather stats
             let glyph_count = self.current_frame.as_ref()
@@ -3273,7 +3283,7 @@ impl RenderApp {
 
             // Build multi-line stats text
             let stats_lines = vec![
-                format!("{:.0} FPS | {:.1}ms", self.fps_display_value, self.fps_frame_time_ms),
+                format!("{:.0} FPS | {:.1}ms", self.fps.display_value, self.fps.frame_time_ms),
                 format!("{}g {}w {}t  {}x{}", glyph_count, window_count,
                     transition_count, self.width, self.height),
             ];
