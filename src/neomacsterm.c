@@ -3973,8 +3973,23 @@ neomacs_extract_full_frame (struct frame *f)
       }
   }
 
-  /* The tab-bar window is a pseudo-window NOT part of the root window tree.
-     Extract it separately so tab-bar items are rendered. */
+  /* The menu-bar, tool-bar, and tab-bar windows are pseudo-windows NOT
+     part of the root window tree.  Extract them separately so their
+     content (menu items, tool bar buttons, tab-bar items) is rendered. */
+  if (WINDOWP (f->menu_bar_window))
+    {
+      struct window *mbw = XWINDOW (f->menu_bar_window);
+      if (mbw->current_matrix)
+        neomacs_extract_window_glyphs (mbw, NULL);
+    }
+
+  if (WINDOWP (f->tool_bar_window))
+    {
+      struct window *tbw = XWINDOW (f->tool_bar_window);
+      if (tbw->current_matrix)
+        neomacs_extract_window_glyphs (tbw, NULL);
+    }
+
   if (WINDOWP (f->tab_bar_window))
     {
       struct window *tw = XWINDOW (f->tab_bar_window);
@@ -4142,6 +4157,24 @@ neomacs_update_end (struct frame *f)
               vb_rgb,
               rdw, bdw,
               div_fg, div_first_fg, div_last_fg);
+
+          /* Extract menu bar and tool bar from current_matrix.
+             Their desired_matrix was populated by
+             neomacs_display_menu_and_tool_bar() in redisplay_internal,
+             then copied desired→current by update_menu_bar/update_tool_bar
+             in update_frame (dispnew.c).  */
+          if (WINDOWP (f->menu_bar_window))
+            {
+              struct window *mbw = XWINDOW (f->menu_bar_window);
+              if (mbw->current_matrix)
+                neomacs_extract_window_glyphs (mbw, NULL);
+            }
+          if (WINDOWP (f->tool_bar_window))
+            {
+              struct window *tbw = XWINDOW (f->tool_bar_window);
+              if (tbw->current_matrix)
+                neomacs_extract_window_glyphs (tbw, NULL);
+            }
         }
       else
         {

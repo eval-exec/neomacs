@@ -894,7 +894,7 @@ pub unsafe extern "C" fn neomacs_display_set_face(
         r: ((background >> 16) & 0xFF) as f32 / 255.0,
         g: ((background >> 8) & 0xFF) as f32 / 255.0,
         b: (background & 0xFF) as f32 / 255.0,
-        a: if background == 0 { 0.0 } else { 1.0 },
+        a: 1.0,
     }.srgb_to_linear();
 
     // Build attributes
@@ -1019,7 +1019,7 @@ pub unsafe extern "C" fn neomacs_display_set_face(
 
     // Hybrid path: set current face attributes for frame glyph buffer
     if display.use_hybrid {
-        let bg_opt = if background == 0 { None } else { Some(bg) };
+        let bg_opt = Some(bg);
         let ul_color_opt = if underline_color != 0 { ul_color } else { None };
         let st_color_opt = if strike_through != 0 { st_color } else { None };
         let ol_color_opt = if overline != 0 { ol_color } else { None };

@@ -18021,6 +18021,19 @@ redisplay_internal (void)
 		    unrequest_sigio ();
 		  STOP_POLLING;
 
+
+#ifdef HAVE_NEOMACS
+		  /* For neomacs frames, redisplay_window is short-circuited
+		     (the Rust engine handles text layout), so display_menu_bar
+		     and redisplay_tool_bar never run.  Call them here to
+		     populate the desired_matrix before update_frame copies
+		     desired→current via update_menu_bar/update_tool_bar.  */
+		  if (FRAME_NEOMACS_P (f))
+		    {
+		      extern void neomacs_display_menu_and_tool_bar (struct frame *);
+		      neomacs_display_menu_and_tool_bar (f);
+		    }
+#endif
 		  update_frame (f, false);
 		  /* On some platforms (at least MS-Windows), the
 		     scroll_run_hook called from scrolling_window
@@ -20488,16 +20501,11 @@ redisplay_window (Lisp_Object window, bool just_this_one_p)
   nlog_trace ("redisplay_window: window=%p", (void *) XWINDOW (window));
   /* When the Rust display engine is active, skip the entire C display
      computation.  The Rust engine reads buffer data directly via FFI and
-     handles all rendering (text, mode-lines, scroll bars, tool bar) in
-     neomacs_update_end → neomacs_rust_layout_frame.  The C display engine's
-     work (font encoding via Cairo, bidi resolution, mode-line Lisp eval,
-     tool bar image parsing) is expensive and entirely wasted — a single
-     redisplay_window call can take 10+ seconds due to per-character font
-     encoding, GC during mode-line eval, etc.
-     Skipping here is safe because:
-     - w->must_be_updated_p remains false, so update_window does nothing
-     - update_end is called unconditionally in update_window_frame
-     - mark_window_display_accurate clears dirty flags after update  */
+     handles rendering in neomacs_update_end.  The C display engine's work
+     (font encoding via Cairo, bidi, mode-line Lisp eval) is expensive and
+     entirely wasted — a single call can take 10+ seconds.
+     Menu bar and tool bar are populated separately via
+     neomacs_display_menu_and_tool_bar() called from redisplay_internal.  */
   {
     extern bool use_rust_display_engine;
     struct frame *nf = XFRAME (XWINDOW (window)->frame);
@@ -27648,10 +27656,9 @@ display_menu_bar (struct window *w)
   if (FRAME_PGTK_P (f))
     return;
 #endif
-#if defined (HAVE_NEOMACS)
-  if (FRAME_NEOMACS_P (f))
-    return;
-#endif
+  /* Neomacs uses text-rendered menu bar (not external toolkit), so
+     do NOT return early — fall through to populate the menu bar
+     window's desired_matrix.  */
 
 #if defined (USE_X_TOOLKIT) || defined (USE_GTK)
   if (FRAME_X_P (f))
@@ -27787,6 +27794,24 @@ display_menu_bar (struct window *w)
     }
 #endif
 }
+
+#ifdef HAVE_NEOMACS
+/* Populate the menu bar and tool bar desired_matrices for frame F.
+   Called from redisplay_internal before update_frame, because
+   redisplay_window is short-circuited for neomacs frames and
+   display_menu_bar / redisplay_tool_bar are normally only called
+   from within redisplay_window for the selected window.  */
+void
+neomacs_display_menu_and_tool_bar (struct frame *f)
+{
+  if (FRAME_MENU_BAR_LINES (f) > 0)
+    display_menu_bar (XWINDOW (FRAME_SELECTED_WINDOW (f)));
+  if (WINDOWP (f->tool_bar_window)
+      && (FRAME_TOOL_BAR_LINES (f) > 0
+          || !NILP (Vauto_resize_tool_bars)))
+    redisplay_tool_bar (f);
+}
+#endif
 
 /* This code is never used on Android where there are only GUI and
    initial frames.  */
