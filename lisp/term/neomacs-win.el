@@ -434,6 +434,22 @@ In decorated mode, disable them."
            (if (boundp 'neomacs-corner-radius) neomacs-corner-radius 8)
          0)))))
 
+;;; Rust display engine
+
+(declare-function neomacs-set-rust-display "neomacsterm.c" (enable))
+
+(defcustom neomacs-rust-display-engine t
+  "Use the Rust layout engine instead of the legacy C display engine.
+The Rust engine reads buffer data directly and produces the glyph buffer,
+bypassing xdisp.c's matrix extraction.  Set to nil to fall back to the
+legacy C engine if you encounter display issues."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-rust-display)
+           (neomacs-set-rust-display val))))
+
 ;;; Rounded corners
 
 (declare-function neomacs-set-corner-radius "neomacsterm.c" (radius))

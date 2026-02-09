@@ -1420,7 +1420,7 @@ neomacs_extract_window_glyphs (struct window *w, void *user_data)
  */
 
 /* Global flag: whether to use the Rust display engine */
-static bool use_rust_display_engine = false;
+static bool use_rust_display_engine = true;
 
 /* Get a character at a character position in a buffer.
    Returns the Unicode codepoint, or -1 if out of range. */
@@ -7918,8 +7918,8 @@ DEFUN ("neomacs-set-rust-display", Fneomacs_set_rust_display, Sneomacs_set_rust_
        doc: /* Enable or disable the Rust layout engine.
 When ENABLE is non-nil, use the Rust layout engine instead of the C display engine.
 The Rust engine reads buffer data directly via FFI and produces the glyph buffer,
-bypassing xdisp.c's matrix extraction.  Default is nil (legacy C engine).
-This is EXPERIMENTAL — enable for testing only.  */)
+bypassing xdisp.c's matrix extraction.  Default is t (Rust engine).
+Set to nil to fall back to the legacy C matrix extraction engine.  */)
   (Lisp_Object enable)
 {
   use_rust_display_engine = !NILP (enable);
