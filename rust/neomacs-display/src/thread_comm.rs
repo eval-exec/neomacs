@@ -1188,6 +1188,56 @@ pub enum RenderCommand {
         /// Opacity (0.0-1.0)
         opacity: f32,
     },
+    /// Configure topographic contour effect
+    SetTopoContour {
+        enabled: bool,
+        /// Contour line color (sRGB floats)
+        r: f32, g: f32, b: f32,
+        /// Line spacing in pixels
+        spacing: f32,
+        /// Animation speed multiplier
+        speed: f32,
+        /// Opacity (0.0-1.0)
+        opacity: f32,
+    },
+    /// Configure cursor metronome tick effect
+    SetCursorMetronome {
+        enabled: bool,
+        /// Tick color (sRGB floats)
+        r: f32, g: f32, b: f32,
+        /// Tick height in pixels
+        tick_height: f32,
+        /// Fade duration in ms
+        fade_ms: u32,
+        /// Opacity (0.0-1.0)
+        opacity: f32,
+    },
+    /// Configure constellation overlay effect
+    SetConstellation {
+        enabled: bool,
+        /// Star color (sRGB floats)
+        r: f32, g: f32, b: f32,
+        /// Number of stars
+        star_count: u32,
+        /// Connection distance in pixels
+        connect_dist: f32,
+        /// Twinkle speed multiplier
+        twinkle_speed: f32,
+        /// Opacity (0.0-1.0)
+        opacity: f32,
+    },
+    /// Configure cursor radar sweep effect
+    SetCursorRadar {
+        enabled: bool,
+        /// Sweep color (sRGB floats)
+        r: f32, g: f32, b: f32,
+        /// Sweep radius in pixels
+        radius: f32,
+        /// Rotation speed multiplier
+        speed: f32,
+        /// Opacity (0.0-1.0)
+        opacity: f32,
+    },
     /// Configure background pattern
     SetBackgroundPattern {
         /// 0=none, 1=dots, 2=grid, 3=crosshatch

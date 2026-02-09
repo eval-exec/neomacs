@@ -5090,6 +5090,310 @@ Non-nil renders animated flowing color bands at the top of the frame."
                 neomacs-cursor-heartbeat-max-radius nil)
             val))))
 
+;; Topographic contour effect
+(declare-function neomacs-set-topo-contour "neomacsterm.c")
+
+(defcustom neomacs-topo-contour nil
+  "Enable topographic contour line effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-topo-contour)
+           (neomacs-set-topo-contour val))))
+
+(defcustom neomacs-topo-contour-color "#66B380"
+  "Contour line color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-topo-contour)
+                    (boundp 'neomacs-topo-contour)
+                    neomacs-topo-contour)
+           (neomacs-set-topo-contour t val))))
+
+(defcustom neomacs-topo-contour-spacing 30
+  "Line spacing in pixels."
+  :type '(integer :tag "Spacing (pixels)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-topo-contour)
+                    (boundp 'neomacs-topo-contour)
+                    neomacs-topo-contour)
+           (neomacs-set-topo-contour t
+            (if (boundp 'neomacs-topo-contour-color)
+                neomacs-topo-contour-color nil)
+            val))))
+
+(defcustom neomacs-topo-contour-speed 100
+  "Animation speed * 100."
+  :type '(integer :tag "Speed")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-topo-contour)
+                    (boundp 'neomacs-topo-contour)
+                    neomacs-topo-contour)
+           (neomacs-set-topo-contour t
+            (if (boundp 'neomacs-topo-contour-color)
+                neomacs-topo-contour-color nil)
+            (if (boundp 'neomacs-topo-contour-spacing)
+                neomacs-topo-contour-spacing nil)
+            val))))
+
+(defcustom neomacs-topo-contour-opacity 10
+  "Contour line opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-topo-contour)
+                    (boundp 'neomacs-topo-contour)
+                    neomacs-topo-contour)
+           (neomacs-set-topo-contour t
+            (if (boundp 'neomacs-topo-contour-color)
+                neomacs-topo-contour-color nil)
+            (if (boundp 'neomacs-topo-contour-spacing)
+                neomacs-topo-contour-spacing nil)
+            (if (boundp 'neomacs-topo-contour-speed)
+                neomacs-topo-contour-speed nil)
+            val))))
+
+;; Cursor metronome tick effect
+(declare-function neomacs-set-cursor-metronome "neomacsterm.c")
+
+(defcustom neomacs-cursor-metronome nil
+  "Enable cursor metronome tick effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-cursor-metronome)
+           (neomacs-set-cursor-metronome val))))
+
+(defcustom neomacs-cursor-metronome-color "#E58033"
+  "Metronome tick color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-metronome)
+                    (boundp 'neomacs-cursor-metronome)
+                    neomacs-cursor-metronome)
+           (neomacs-set-cursor-metronome t val))))
+
+(defcustom neomacs-cursor-metronome-tick-height 20
+  "Tick height in pixels."
+  :type '(integer :tag "Height (pixels)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-metronome)
+                    (boundp 'neomacs-cursor-metronome)
+                    neomacs-cursor-metronome)
+           (neomacs-set-cursor-metronome t
+            (if (boundp 'neomacs-cursor-metronome-color)
+                neomacs-cursor-metronome-color nil)
+            val))))
+
+(defcustom neomacs-cursor-metronome-fade-ms 300
+  "Tick fade duration in milliseconds."
+  :type '(integer :tag "Fade (ms)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-metronome)
+                    (boundp 'neomacs-cursor-metronome)
+                    neomacs-cursor-metronome)
+           (neomacs-set-cursor-metronome t
+            (if (boundp 'neomacs-cursor-metronome-color)
+                neomacs-cursor-metronome-color nil)
+            (if (boundp 'neomacs-cursor-metronome-tick-height)
+                neomacs-cursor-metronome-tick-height nil)
+            val))))
+
+(defcustom neomacs-cursor-metronome-opacity 40
+  "Metronome tick opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-metronome)
+                    (boundp 'neomacs-cursor-metronome)
+                    neomacs-cursor-metronome)
+           (neomacs-set-cursor-metronome t
+            (if (boundp 'neomacs-cursor-metronome-color)
+                neomacs-cursor-metronome-color nil)
+            (if (boundp 'neomacs-cursor-metronome-tick-height)
+                neomacs-cursor-metronome-tick-height nil)
+            (if (boundp 'neomacs-cursor-metronome-fade-ms)
+                neomacs-cursor-metronome-fade-ms nil)
+            val))))
+
+;; Constellation overlay effect
+(declare-function neomacs-set-constellation "neomacsterm.c")
+
+(defcustom neomacs-constellation nil
+  "Enable constellation overlay effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-constellation)
+           (neomacs-set-constellation val))))
+
+(defcustom neomacs-constellation-color "#B3CCFF"
+  "Star and connection color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-constellation)
+                    (boundp 'neomacs-constellation)
+                    neomacs-constellation)
+           (neomacs-set-constellation t val))))
+
+(defcustom neomacs-constellation-star-count 50
+  "Number of stars."
+  :type '(integer :tag "Star count")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-constellation)
+                    (boundp 'neomacs-constellation)
+                    neomacs-constellation)
+           (neomacs-set-constellation t
+            (if (boundp 'neomacs-constellation-color)
+                neomacs-constellation-color nil)
+            val))))
+
+(defcustom neomacs-constellation-connect-dist 80
+  "Connection distance in pixels."
+  :type '(integer :tag "Distance (pixels)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-constellation)
+                    (boundp 'neomacs-constellation)
+                    neomacs-constellation)
+           (neomacs-set-constellation t
+            (if (boundp 'neomacs-constellation-color)
+                neomacs-constellation-color nil)
+            (if (boundp 'neomacs-constellation-star-count)
+                neomacs-constellation-star-count nil)
+            val))))
+
+(defcustom neomacs-constellation-twinkle-speed 100
+  "Twinkle speed * 100."
+  :type '(integer :tag "Speed")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-constellation)
+                    (boundp 'neomacs-constellation)
+                    neomacs-constellation)
+           (neomacs-set-constellation t
+            (if (boundp 'neomacs-constellation-color)
+                neomacs-constellation-color nil)
+            (if (boundp 'neomacs-constellation-star-count)
+                neomacs-constellation-star-count nil)
+            (if (boundp 'neomacs-constellation-connect-dist)
+                neomacs-constellation-connect-dist nil)
+            val))))
+
+(defcustom neomacs-constellation-opacity 15
+  "Constellation opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-constellation)
+                    (boundp 'neomacs-constellation)
+                    neomacs-constellation)
+           (neomacs-set-constellation t
+            (if (boundp 'neomacs-constellation-color)
+                neomacs-constellation-color nil)
+            (if (boundp 'neomacs-constellation-star-count)
+                neomacs-constellation-star-count nil)
+            (if (boundp 'neomacs-constellation-connect-dist)
+                neomacs-constellation-connect-dist nil)
+            (if (boundp 'neomacs-constellation-twinkle-speed)
+                neomacs-constellation-twinkle-speed nil)
+            val))))
+
+;; Cursor radar sweep effect
+(declare-function neomacs-set-cursor-radar "neomacsterm.c")
+
+(defcustom neomacs-cursor-radar nil
+  "Enable cursor radar sweep effect."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-cursor-radar)
+           (neomacs-set-cursor-radar val))))
+
+(defcustom neomacs-cursor-radar-color "#33E566"
+  "Radar sweep color."
+  :type 'color
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-radar)
+                    (boundp 'neomacs-cursor-radar)
+                    neomacs-cursor-radar)
+           (neomacs-set-cursor-radar t val))))
+
+(defcustom neomacs-cursor-radar-radius 40
+  "Sweep radius in pixels."
+  :type '(integer :tag "Radius (pixels)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-radar)
+                    (boundp 'neomacs-cursor-radar)
+                    neomacs-cursor-radar)
+           (neomacs-set-cursor-radar t
+            (if (boundp 'neomacs-cursor-radar-color)
+                neomacs-cursor-radar-color nil)
+            val))))
+
+(defcustom neomacs-cursor-radar-speed 150
+  "Rotation speed * 100."
+  :type '(integer :tag "Speed")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-radar)
+                    (boundp 'neomacs-cursor-radar)
+                    neomacs-cursor-radar)
+           (neomacs-set-cursor-radar t
+            (if (boundp 'neomacs-cursor-radar-color)
+                neomacs-cursor-radar-color nil)
+            (if (boundp 'neomacs-cursor-radar-radius)
+                neomacs-cursor-radar-radius nil)
+            val))))
+
+(defcustom neomacs-cursor-radar-opacity 20
+  "Radar sweep opacity (0-100)."
+  :type '(integer :tag "Opacity (0-100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'neomacs-set-cursor-radar)
+                    (boundp 'neomacs-cursor-radar)
+                    neomacs-cursor-radar)
+           (neomacs-set-cursor-radar t
+            (if (boundp 'neomacs-cursor-radar-color)
+                neomacs-cursor-radar-color nil)
+            (if (boundp 'neomacs-cursor-radar-radius)
+                neomacs-cursor-radar-radius nil)
+            (if (boundp 'neomacs-cursor-radar-speed)
+                neomacs-cursor-radar-speed nil)
+            val))))
+
 ;; Hex grid overlay effect
 (declare-function neomacs-set-hex-grid "neomacsterm.c")
 

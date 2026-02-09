@@ -1904,6 +1904,47 @@ void neomacs_display_set_cursor_heartbeat(
     int opacity);
 
 /**
+ * Configure topographic contour effect.
+ */
+void neomacs_display_set_topo_contour(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int spacing,
+    int speed,
+    int opacity);
+
+/**
+ * Configure cursor metronome tick effect.
+ */
+void neomacs_display_set_cursor_metronome(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int tick_height,
+    int fade_ms,
+    int opacity);
+
+/**
+ * Configure constellation overlay effect.
+ */
+void neomacs_display_set_constellation(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int star_count,
+    int connect_dist,
+    int twinkle_speed,
+    int opacity);
+
+/**
+ * Configure cursor radar sweep effect.
+ */
+void neomacs_display_set_cursor_radar(struct NeomacsDisplay *handle,
+    int enabled,
+    int r, int g, int b,
+    int radius,
+    int speed,
+    int opacity);
+
+/**
  * Configure hex grid overlay effect.
  */
 void neomacs_display_set_hex_grid(struct NeomacsDisplay *handle,

@@ -10519,6 +10519,156 @@ OPACITY is 0-100 for pulse opacity (default 20). */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-topo-contour",
+       Fneomacs_set_topo_contour,
+       Sneomacs_set_topo_contour, 0, 5, 0,
+       doc: /* Configure topographic contour effect.
+ENABLED non-nil activates flowing contour lines overlay.
+COLOR is a hex color string like "#RRGGBB" (default "#66B380").
+SPACING is line spacing in pixels (default 30).
+SPEED is animation speed * 100 (default 100).
+OPACITY is 0-100 (default 10). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object spacing,
+   Lisp_Object speed, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0x66, g = 0xB3, b = 0x80, sp = 30, spd = 100, op = 10;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (spacing)) sp = XFIXNUM (spacing);
+  if (FIXNUMP (speed)) spd = XFIXNUM (speed);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_topo_contour (dpyinfo->display_handle, on, r, g, b, sp, spd, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-cursor-metronome",
+       Fneomacs_set_cursor_metronome,
+       Sneomacs_set_cursor_metronome, 0, 5, 0,
+       doc: /* Configure cursor metronome tick effect.
+ENABLED non-nil shows a tick mark on cursor movement.
+COLOR is a hex color string like "#RRGGBB" (default "#E58033").
+TICK-HEIGHT is tick height in pixels (default 20).
+FADE-MS is fade duration in milliseconds (default 300).
+OPACITY is 0-100 (default 40). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object tick_height,
+   Lisp_Object fade_ms, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0xE5, g = 0x80, b = 0x33, th = 20, fm = 300, op = 40;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (tick_height)) th = XFIXNUM (tick_height);
+  if (FIXNUMP (fade_ms)) fm = XFIXNUM (fade_ms);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_cursor_metronome (dpyinfo->display_handle, on, r, g, b, th, fm, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-constellation",
+       Fneomacs_set_constellation,
+       Sneomacs_set_constellation, 0, 6, 0,
+       doc: /* Configure constellation overlay effect.
+ENABLED non-nil activates twinkling star pattern.
+COLOR is a hex color string like "#RRGGBB" (default "#B3CCFF").
+STAR-COUNT is number of stars (default 50).
+CONNECT-DIST is connection distance in pixels (default 80).
+TWINKLE-SPEED is twinkle speed * 100 (default 100).
+OPACITY is 0-100 (default 15). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object star_count,
+   Lisp_Object connect_dist, Lisp_Object twinkle_speed, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0xB3, g = 0xCC, b = 0xFF, sc = 50, cd = 80, ts = 100, op = 15;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (star_count)) sc = XFIXNUM (star_count);
+  if (FIXNUMP (connect_dist)) cd = XFIXNUM (connect_dist);
+  if (FIXNUMP (twinkle_speed)) ts = XFIXNUM (twinkle_speed);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_constellation (dpyinfo->display_handle, on, r, g, b, sc, cd, ts, op);
+  return on ? Qt : Qnil;
+}
+
+DEFUN ("neomacs-set-cursor-radar",
+       Fneomacs_set_cursor_radar,
+       Sneomacs_set_cursor_radar, 0, 5, 0,
+       doc: /* Configure cursor radar sweep effect.
+ENABLED non-nil activates rotating radar sweep around cursor.
+COLOR is a hex color string like "#RRGGBB" (default "#33E566").
+RADIUS is sweep radius in pixels (default 40).
+SPEED is rotation speed * 100 (default 150).
+OPACITY is 0-100 (default 20). */)
+  (Lisp_Object enabled, Lisp_Object color, Lisp_Object radius,
+   Lisp_Object speed, Lisp_Object opacity)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int r = 0x33, g = 0xE5, b = 0x66, rad = 40, spd = 150, op = 20;
+  if (STRINGP (color))
+    {
+      const char *s = SSDATA (color);
+      if (s[0] == '#' && strlen (s) == 7)
+        {
+          unsigned int hex;
+          sscanf (s + 1, "%06x", &hex);
+          r = (hex >> 16) & 0xFF;
+          g = (hex >> 8) & 0xFF;
+          b = hex & 0xFF;
+        }
+    }
+  if (FIXNUMP (radius)) rad = XFIXNUM (radius);
+  if (FIXNUMP (speed)) spd = XFIXNUM (speed);
+  if (FIXNUMP (opacity)) op = XFIXNUM (opacity);
+
+  neomacs_display_set_cursor_radar (dpyinfo->display_handle, on, r, g, b, rad, spd, op);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-hex-grid",
        Fneomacs_set_hex_grid,
        Sneomacs_set_hex_grid, 0, 5, 0,
@@ -12340,6 +12490,10 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_cursor_orbit_particles);
   defsubr (&Sneomacs_set_plasma_border);
   defsubr (&Sneomacs_set_cursor_heartbeat);
+  defsubr (&Sneomacs_set_topo_contour);
+  defsubr (&Sneomacs_set_cursor_metronome);
+  defsubr (&Sneomacs_set_constellation);
+  defsubr (&Sneomacs_set_cursor_radar);
   defsubr (&Sneomacs_set_hex_grid);
   defsubr (&Sneomacs_set_cursor_sparkle_burst);
   defsubr (&Sneomacs_set_circuit_trace);

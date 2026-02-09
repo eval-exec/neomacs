@@ -2531,6 +2531,55 @@ void neomacs_display_set_cursor_heartbeat(struct NeomacsDisplay *handle,
                                           int opacity);
 
 /**
+ * Configure topographic contour effect
+ */
+void neomacs_display_set_topo_contour(struct NeomacsDisplay *handle,
+                                      int enabled,
+                                      int r,
+                                      int g,
+                                      int b,
+                                      int spacing,
+                                      int speed,
+                                      int opacity);
+
+/**
+ * Configure cursor metronome tick effect
+ */
+void neomacs_display_set_cursor_metronome(struct NeomacsDisplay *handle,
+                                          int enabled,
+                                          int r,
+                                          int g,
+                                          int b,
+                                          int tickHeight,
+                                          int fadeMs,
+                                          int opacity);
+
+/**
+ * Configure constellation overlay effect
+ */
+void neomacs_display_set_constellation(struct NeomacsDisplay *handle,
+                                       int enabled,
+                                       int r,
+                                       int g,
+                                       int b,
+                                       int starCount,
+                                       int connectDist,
+                                       int twinkleSpeed,
+                                       int opacity);
+
+/**
+ * Configure cursor radar sweep effect
+ */
+void neomacs_display_set_cursor_radar(struct NeomacsDisplay *handle,
+                                      int enabled,
+                                      int r,
+                                      int g,
+                                      int b,
+                                      int radius,
+                                      int speed,
+                                      int opacity);
+
+/**
  * Configure hex grid overlay effect
  */
 void neomacs_display_set_hex_grid(struct NeomacsDisplay *handle,

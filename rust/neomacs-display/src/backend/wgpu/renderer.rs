@@ -535,6 +535,34 @@ pub struct WgpuRenderer {
     cursor_compass_size: f32,
     cursor_compass_speed: f32,
     cursor_compass_opacity: f32,
+    /// Topographic contour effect
+    topo_contour_enabled: bool,
+    topo_contour_color: (f32, f32, f32),
+    topo_contour_spacing: f32,
+    topo_contour_speed: f32,
+    topo_contour_opacity: f32,
+    /// Cursor metronome tick
+    cursor_metronome_enabled: bool,
+    cursor_metronome_color: (f32, f32, f32),
+    cursor_metronome_tick_height: f32,
+    cursor_metronome_fade_ms: u32,
+    cursor_metronome_opacity: f32,
+    cursor_metronome_last_x: f32,
+    cursor_metronome_last_y: f32,
+    cursor_metronome_tick_start: Option<std::time::Instant>,
+    /// Constellation overlay
+    constellation_enabled: bool,
+    constellation_color: (f32, f32, f32),
+    constellation_star_count: u32,
+    constellation_connect_dist: f32,
+    constellation_twinkle_speed: f32,
+    constellation_opacity: f32,
+    /// Cursor radar sweep
+    cursor_radar_enabled: bool,
+    cursor_radar_color: (f32, f32, f32),
+    cursor_radar_radius: f32,
+    cursor_radar_speed: f32,
+    cursor_radar_opacity: f32,
     /// Window edge glow on scroll boundaries
     edge_glow_enabled: bool,
     edge_glow_color: (f32, f32, f32),
@@ -1575,6 +1603,30 @@ impl WgpuRenderer {
             cursor_compass_size: 20.0,
             cursor_compass_speed: 1.0,
             cursor_compass_opacity: 0.25,
+            topo_contour_enabled: false,
+            topo_contour_color: (0.4, 0.7, 0.5),
+            topo_contour_spacing: 30.0,
+            topo_contour_speed: 1.0,
+            topo_contour_opacity: 0.1,
+            cursor_metronome_enabled: false,
+            cursor_metronome_color: (0.9, 0.5, 0.2),
+            cursor_metronome_tick_height: 20.0,
+            cursor_metronome_fade_ms: 300,
+            cursor_metronome_opacity: 0.4,
+            cursor_metronome_last_x: 0.0,
+            cursor_metronome_last_y: 0.0,
+            cursor_metronome_tick_start: None,
+            constellation_enabled: false,
+            constellation_color: (0.7, 0.8, 1.0),
+            constellation_star_count: 50,
+            constellation_connect_dist: 80.0,
+            constellation_twinkle_speed: 1.0,
+            constellation_opacity: 0.15,
+            cursor_radar_enabled: false,
+            cursor_radar_color: (0.2, 0.9, 0.4),
+            cursor_radar_radius: 40.0,
+            cursor_radar_speed: 1.5,
+            cursor_radar_opacity: 0.2,
             edge_glow_enabled: false,
             edge_glow_color: (0.4, 0.6, 1.0),
             edge_glow_height: 40.0,
@@ -2368,6 +2420,43 @@ impl WgpuRenderer {
         self.cursor_pendulum_arc_length = arc_length;
         self.cursor_pendulum_damping = damping;
         self.cursor_pendulum_opacity = opacity;
+    }
+
+    /// Update topo contour config
+    pub fn set_topo_contour(&mut self, enabled: bool, color: (f32, f32, f32), spacing: f32, speed: f32, opacity: f32) {
+        self.topo_contour_enabled = enabled;
+        self.topo_contour_color = color;
+        self.topo_contour_spacing = spacing;
+        self.topo_contour_speed = speed;
+        self.topo_contour_opacity = opacity;
+    }
+
+    /// Update cursor metronome config
+    pub fn set_cursor_metronome(&mut self, enabled: bool, color: (f32, f32, f32), tick_height: f32, fade_ms: u32, opacity: f32) {
+        self.cursor_metronome_enabled = enabled;
+        self.cursor_metronome_color = color;
+        self.cursor_metronome_tick_height = tick_height;
+        self.cursor_metronome_fade_ms = fade_ms;
+        self.cursor_metronome_opacity = opacity;
+    }
+
+    /// Update constellation config
+    pub fn set_constellation(&mut self, enabled: bool, color: (f32, f32, f32), star_count: u32, connect_dist: f32, twinkle_speed: f32, opacity: f32) {
+        self.constellation_enabled = enabled;
+        self.constellation_color = color;
+        self.constellation_star_count = star_count;
+        self.constellation_connect_dist = connect_dist;
+        self.constellation_twinkle_speed = twinkle_speed;
+        self.constellation_opacity = opacity;
+    }
+
+    /// Update cursor radar config
+    pub fn set_cursor_radar(&mut self, enabled: bool, color: (f32, f32, f32), radius: f32, speed: f32, opacity: f32) {
+        self.cursor_radar_enabled = enabled;
+        self.cursor_radar_color = color;
+        self.cursor_radar_radius = radius;
+        self.cursor_radar_speed = speed;
+        self.cursor_radar_opacity = opacity;
     }
 
     /// Update hex grid config
@@ -5959,6 +6048,227 @@ impl WgpuRenderer {
                         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                         render_pass.set_vertex_buffer(0, hb_buf.slice(..));
                         render_pass.draw(0..heartbeat_verts.len() as u32, 0..1);
+                    }
+                    self.needs_continuous_redraw = true;
+                }
+            }
+
+            // === Topographic contour effect ===
+            if self.topo_contour_enabled {
+                let now = std::time::Instant::now().duration_since(self.aurora_start).as_secs_f32();
+                let (tr, tg, tb) = self.topo_contour_color;
+                let top = self.topo_contour_opacity;
+                let spacing = self.topo_contour_spacing.max(5.0);
+                let spd = self.topo_contour_speed;
+                let fw = self.width() as f32;
+                let fh = self.height() as f32;
+                let mut topo_verts: Vec<RectVertex> = Vec::new();
+                let num_contours = (fh / spacing) as i32 + 2;
+                let line_thick = 1.0;
+                for i in 0..num_contours {
+                    let base_y = i as f32 * spacing + (now * spd * 10.0) % spacing;
+                    let num_seg = 40;
+                    for seg in 0..num_seg {
+                        let x = seg as f32 / num_seg as f32 * fw;
+                        let wave = (x * 0.01 + i as f32 * 0.5 + now * spd * 0.3).sin() * spacing * 0.3
+                            + (x * 0.02 + i as f32 * 1.2).cos() * spacing * 0.15;
+                        let y = base_y + wave;
+                        if y >= 0.0 && y < fh {
+                            let seg_w = fw / num_seg as f32 + 1.0;
+                            let alpha = top * (0.5 + 0.5 * (x * 0.005 + now * 0.5).sin());
+                            let c = Color::new(tr, tg, tb, alpha);
+                            self.add_rect(&mut topo_verts, x, y, seg_w, line_thick, &c);
+                        }
+                    }
+                }
+                if !topo_verts.is_empty() {
+                    let tp_buf = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Topo Contour Buffer"),
+                            contents: bytemuck::cast_slice(&topo_verts),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, tp_buf.slice(..));
+                    render_pass.draw(0..topo_verts.len() as u32, 0..1);
+                }
+                self.needs_continuous_redraw = true;
+            }
+
+            // === Cursor metronome tick effect ===
+            if self.cursor_metronome_enabled && cursor_visible {
+                if let Some(ref anim) = animated_cursor {
+                    let cx = anim.x + anim.width / 2.0;
+                    let cy = anim.y;
+                    // Detect cursor move
+                    if (cx - self.cursor_metronome_last_x).abs() > 1.0 || (cy - self.cursor_metronome_last_y).abs() > 1.0 {
+                        self.cursor_metronome_tick_start = Some(std::time::Instant::now());
+                        self.cursor_metronome_last_x = cx;
+                        self.cursor_metronome_last_y = cy;
+                    }
+                    if let Some(start) = self.cursor_metronome_tick_start {
+                        let elapsed = start.elapsed().as_secs_f32();
+                        let duration = self.cursor_metronome_fade_ms as f32 / 1000.0;
+                        if elapsed < duration {
+                            let t = elapsed / duration;
+                            let fade = 1.0 - t;
+                            let (mr, mg, mb) = self.cursor_metronome_color;
+                            let mop = self.cursor_metronome_opacity;
+                            let th = self.cursor_metronome_tick_height;
+                            let mut tick_verts: Vec<RectVertex> = Vec::new();
+                            // Vertical tick line above cursor
+                            let tick_w = 2.0;
+                            let c = Color::new(mr, mg, mb, mop * fade);
+                            self.add_rect(&mut tick_verts, cx - tick_w / 2.0, cy - th * (1.0 - t * 0.3), tick_w, th, &c);
+                            // Small horizontal cap
+                            let cap_w = 6.0;
+                            let cc = Color::new(mr, mg, mb, mop * fade * 0.8);
+                            self.add_rect(&mut tick_verts, cx - cap_w / 2.0, cy - th * (1.0 - t * 0.3), cap_w, 1.5, &cc);
+
+                            let tk_buf = self.device.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("Metronome Tick Buffer"),
+                                    contents: bytemuck::cast_slice(&tick_verts),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                },
+                            );
+                            render_pass.set_pipeline(&self.rect_pipeline);
+                            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, tk_buf.slice(..));
+                            render_pass.draw(0..tick_verts.len() as u32, 0..1);
+                            self.needs_continuous_redraw = true;
+                        } else {
+                            self.cursor_metronome_tick_start = None;
+                        }
+                    }
+                }
+            }
+
+            // === Constellation overlay effect ===
+            if self.constellation_enabled {
+                let now = std::time::Instant::now().duration_since(self.aurora_start).as_secs_f32();
+                let (sr, sg, sb) = self.constellation_color;
+                let sop = self.constellation_opacity;
+                let count = self.constellation_star_count.min(200);
+                let conn_dist = self.constellation_connect_dist;
+                let tspd = self.constellation_twinkle_speed;
+                let fw = self.width() as f32;
+                let fh = self.height() as f32;
+                let mut star_verts: Vec<RectVertex> = Vec::new();
+                // Generate deterministic star positions
+                let mut stars: Vec<(f32, f32)> = Vec::with_capacity(count as usize);
+                for i in 0..count {
+                    let mut h = i.wrapping_mul(2654435761);
+                    h ^= h >> 16;
+                    let x = (h as f32 / u32::MAX as f32) * fw;
+                    h = h.wrapping_mul(0x45d9f3b);
+                    h ^= h >> 16;
+                    let y = (h as f32 / u32::MAX as f32) * fh;
+                    stars.push((x, y));
+                    // Twinkle
+                    let twinkle = (0.4 + 0.6 * (now * tspd + i as f32 * 2.1).sin()).max(0.0);
+                    let sz = 2.0 + twinkle * 2.0;
+                    let c = Color::new(sr, sg, sb, sop * twinkle);
+                    self.add_rect(&mut star_verts, x - sz / 2.0, y - sz / 2.0, sz, sz, &c);
+                }
+                // Connect nearby stars
+                for i in 0..stars.len() {
+                    for j in (i + 1)..stars.len().min(i + 10) {
+                        let dx = stars[j].0 - stars[i].0;
+                        let dy = stars[j].1 - stars[i].1;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist < conn_dist && dist > 1.0 {
+                            let alpha = sop * 0.3 * (1.0 - dist / conn_dist);
+                            let c = Color::new(sr, sg, sb, alpha);
+                            let mx = stars[i].0.min(stars[j].0);
+                            let my = stars[i].1.min(stars[j].1);
+                            let lw = dx.abs().max(1.0);
+                            let lh = dy.abs().max(1.0);
+                            self.add_rect(&mut star_verts, mx, my, lw, lh, &c);
+                        }
+                    }
+                }
+                if !star_verts.is_empty() {
+                    let st_buf = self.device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("Constellation Buffer"),
+                            contents: bytemuck::cast_slice(&star_verts),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+                    render_pass.set_pipeline(&self.rect_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, st_buf.slice(..));
+                    render_pass.draw(0..star_verts.len() as u32, 0..1);
+                }
+                self.needs_continuous_redraw = true;
+            }
+
+            // === Cursor radar sweep effect ===
+            if self.cursor_radar_enabled && cursor_visible {
+                if let Some(ref anim) = animated_cursor {
+                    let now = std::time::Instant::now().duration_since(self.aurora_start).as_secs_f32();
+                    let cx = anim.x + anim.width / 2.0;
+                    let cy = anim.y + anim.height / 2.0;
+                    let (rr, rg, rb) = self.cursor_radar_color;
+                    let rop = self.cursor_radar_opacity;
+                    let radius = self.cursor_radar_radius;
+                    let spd = self.cursor_radar_speed;
+                    let sweep_angle = now * spd * std::f32::consts::PI * 2.0;
+                    let mut radar_verts: Vec<RectVertex> = Vec::new();
+                    // Sweep beam line
+                    let beam_segs = 15;
+                    for seg in 0..beam_segs {
+                        let t = seg as f32 / beam_segs as f32;
+                        let r = t * radius;
+                        let px = cx + sweep_angle.cos() * r;
+                        let py = cy + sweep_angle.sin() * r;
+                        let dot = 2.0;
+                        let c = Color::new(rr, rg, rb, rop * (1.0 - t * 0.5));
+                        self.add_rect(&mut radar_verts, px - dot / 2.0, py - dot / 2.0, dot, dot, &c);
+                    }
+                    // Fading trail (previous sweep positions)
+                    let trail_count = 20;
+                    for trail in 1..trail_count {
+                        let trail_angle = sweep_angle - trail as f32 * 0.08;
+                        let fade = 1.0 - trail as f32 / trail_count as f32;
+                        for seg in 0..8 {
+                            let t = seg as f32 / 8.0;
+                            let r = t * radius;
+                            let px = cx + trail_angle.cos() * r;
+                            let py = cy + trail_angle.sin() * r;
+                            let dot = 1.5;
+                            let c = Color::new(rr, rg, rb, rop * fade * fade * 0.3);
+                            self.add_rect(&mut radar_verts, px - dot / 2.0, py - dot / 2.0, dot, dot, &c);
+                        }
+                    }
+                    // Concentric range rings
+                    let ring_count = 3;
+                    for ring in 1..=ring_count {
+                        let ring_r = radius * ring as f32 / ring_count as f32;
+                        let ring_segs = 24;
+                        for seg in 0..ring_segs {
+                            let a = seg as f32 / ring_segs as f32 * std::f32::consts::PI * 2.0;
+                            let px = cx + a.cos() * ring_r;
+                            let py = cy + a.sin() * ring_r;
+                            let c = Color::new(rr, rg, rb, rop * 0.15);
+                            self.add_rect(&mut radar_verts, px - 0.5, py - 0.5, 1.0, 1.0, &c);
+                        }
+                    }
+                    if !radar_verts.is_empty() {
+                        let rd_buf = self.device.create_buffer_init(
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("Radar Sweep Buffer"),
+                                contents: bytemuck::cast_slice(&radar_verts),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            },
+                        );
+                        render_pass.set_pipeline(&self.rect_pipeline);
+                        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, rd_buf.slice(..));
+                        render_pass.draw(0..radar_verts.len() as u32, 0..1);
                     }
                     self.needs_continuous_redraw = true;
                 }

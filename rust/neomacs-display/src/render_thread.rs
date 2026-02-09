@@ -648,6 +648,32 @@ struct RenderApp {
     cursor_heartbeat_max_radius: f32,
     cursor_heartbeat_opacity: f32,
 
+    // Topographic contour effect
+    topo_contour_enabled: bool,
+    topo_contour_color: (f32, f32, f32),
+    topo_contour_spacing: f32,
+    topo_contour_speed: f32,
+    topo_contour_opacity: f32,
+    // Cursor metronome tick
+    cursor_metronome_enabled: bool,
+    cursor_metronome_color: (f32, f32, f32),
+    cursor_metronome_tick_height: f32,
+    cursor_metronome_fade_ms: u32,
+    cursor_metronome_opacity: f32,
+    // Constellation overlay
+    constellation_enabled: bool,
+    constellation_color: (f32, f32, f32),
+    constellation_star_count: u32,
+    constellation_connect_dist: f32,
+    constellation_twinkle_speed: f32,
+    constellation_opacity: f32,
+    // Cursor radar sweep
+    cursor_radar_enabled: bool,
+    cursor_radar_color: (f32, f32, f32),
+    cursor_radar_radius: f32,
+    cursor_radar_speed: f32,
+    cursor_radar_opacity: f32,
+
     // Hex grid overlay
     hex_grid_enabled: bool,
     hex_grid_color: (f32, f32, f32),
@@ -1302,6 +1328,27 @@ impl RenderApp {
             cursor_heartbeat_bpm: 72.0,
             cursor_heartbeat_max_radius: 50.0,
             cursor_heartbeat_opacity: 0.2,
+            topo_contour_enabled: false,
+            topo_contour_color: (0.4, 0.7, 0.5),
+            topo_contour_spacing: 30.0,
+            topo_contour_speed: 1.0,
+            topo_contour_opacity: 0.1,
+            cursor_metronome_enabled: false,
+            cursor_metronome_color: (0.9, 0.5, 0.2),
+            cursor_metronome_tick_height: 20.0,
+            cursor_metronome_fade_ms: 300,
+            cursor_metronome_opacity: 0.4,
+            constellation_enabled: false,
+            constellation_color: (0.7, 0.8, 1.0),
+            constellation_star_count: 50,
+            constellation_connect_dist: 80.0,
+            constellation_twinkle_speed: 1.0,
+            constellation_opacity: 0.15,
+            cursor_radar_enabled: false,
+            cursor_radar_color: (0.2, 0.9, 0.4),
+            cursor_radar_radius: 40.0,
+            cursor_radar_speed: 1.5,
+            cursor_radar_opacity: 0.2,
             hex_grid_enabled: false,
             hex_grid_color: (0.3, 0.6, 0.9),
             hex_grid_cell_size: 40.0,
@@ -3174,6 +3221,51 @@ impl RenderApp {
                     self.cursor_heartbeat_opacity = opacity;
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_cursor_heartbeat(enabled, (r, g, b), bpm, max_radius, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetTopoContour { enabled, r, g, b, spacing, speed, opacity } => {
+                    self.topo_contour_enabled = enabled;
+                    self.topo_contour_color = (r, g, b);
+                    self.topo_contour_spacing = spacing;
+                    self.topo_contour_speed = speed;
+                    self.topo_contour_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_topo_contour(enabled, (r, g, b), spacing, speed, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorMetronome { enabled, r, g, b, tick_height, fade_ms, opacity } => {
+                    self.cursor_metronome_enabled = enabled;
+                    self.cursor_metronome_color = (r, g, b);
+                    self.cursor_metronome_tick_height = tick_height;
+                    self.cursor_metronome_fade_ms = fade_ms;
+                    self.cursor_metronome_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_metronome(enabled, (r, g, b), tick_height, fade_ms, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetConstellation { enabled, r, g, b, star_count, connect_dist, twinkle_speed, opacity } => {
+                    self.constellation_enabled = enabled;
+                    self.constellation_color = (r, g, b);
+                    self.constellation_star_count = star_count;
+                    self.constellation_connect_dist = connect_dist;
+                    self.constellation_twinkle_speed = twinkle_speed;
+                    self.constellation_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_constellation(enabled, (r, g, b), star_count, connect_dist, twinkle_speed, opacity);
+                    }
+                    self.frame_dirty = true;
+                }
+                RenderCommand::SetCursorRadar { enabled, r, g, b, radius, speed, opacity } => {
+                    self.cursor_radar_enabled = enabled;
+                    self.cursor_radar_color = (r, g, b);
+                    self.cursor_radar_radius = radius;
+                    self.cursor_radar_speed = speed;
+                    self.cursor_radar_opacity = opacity;
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_cursor_radar(enabled, (r, g, b), radius, speed, opacity);
                     }
                     self.frame_dirty = true;
                 }
