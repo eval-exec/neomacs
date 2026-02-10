@@ -219,7 +219,7 @@ pub unsafe extern "C" fn neomacs_display_webkit_init(
 
         // In threaded mode, skip WPE init here -- the render thread will do it
         // with the correct DRM render node from wgpu adapter info.
-        if THREADED_STATE.is_some() {
+        if (*std::ptr::addr_of!(super::THREADED_STATE)).is_some() {
             log::info!("neomacs_display_webkit_init: threaded mode, deferring WPE init to render thread");
             return 0;
         }

@@ -5,6 +5,12 @@
 
 use super::*;
 
+/// Access THREADED_STATE without creating a reference to the static.
+/// Returns Option<&ThreadedState> using raw pointer indirection (Rust 2024 safe).
+unsafe fn threaded_state() -> Option<&'static ThreadedState> {
+    (*std::ptr::addr_of!(THREADED_STATE)).as_ref()
+}
+
 // ============================================================================
 // Threaded Mode Initialization
 // ============================================================================
@@ -90,7 +96,7 @@ pub unsafe extern "C" fn neomacs_display_init_threaded(
     });
     let display_ptr = Box::into_raw(display);
 
-    THREADED_STATE = Some(ThreadedState {
+    *std::ptr::addr_of_mut!(THREADED_STATE) = Some(ThreadedState {
         emacs_comms,
         render_thread: Some(render_thread),
         display_handle: display_ptr,
@@ -125,7 +131,7 @@ pub struct NeomacsMonitorInfo {
 #[cfg(feature = "winit-backend")]
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_wait_for_monitors() -> c_int {
-    let state = match THREADED_STATE.as_ref() {
+    let state = match threaded_state() {
         Some(s) => s,
         None => return 0,
     };
@@ -149,7 +155,7 @@ pub unsafe extern "C" fn neomacs_display_wait_for_monitors() -> c_int {
 #[cfg(feature = "winit-backend")]
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_get_monitor_count() -> c_int {
-    let state = match THREADED_STATE.as_ref() {
+    let state = match threaded_state() {
         Some(s) => s,
         None => return 0,
     };
@@ -171,7 +177,7 @@ pub unsafe extern "C" fn neomacs_display_get_monitor_info(
     if info.is_null() {
         return 0;
     }
-    let state = match THREADED_STATE.as_ref() {
+    let state = match threaded_state() {
         Some(s) => s,
         None => return 0,
     };
@@ -204,7 +210,7 @@ pub unsafe extern "C" fn neomacs_display_get_monitor_name(
 ) -> *const c_char {
     static mut NAME_BUF: Option<CString> = None;
 
-    let state = match THREADED_STATE.as_ref() {
+    let state = match threaded_state() {
         Some(s) => s,
         None => return ptr::null(),
     };
@@ -216,8 +222,8 @@ pub unsafe extern "C" fn neomacs_display_get_monitor_name(
             }
             match &monitors[index as usize].name {
                 Some(name) => {
-                    NAME_BUF = CString::new(name.as_str()).ok();
-                    match NAME_BUF.as_ref() {
+                    *std::ptr::addr_of_mut!(NAME_BUF) = CString::new(name.as_str()).ok();
+                    match (*std::ptr::addr_of!(NAME_BUF)).as_ref() {
                         Some(cs) => cs.as_ptr(),
                         None => ptr::null(),
                     }
@@ -242,7 +248,7 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
     events: *mut NeomacsInputEvent,
     max_events: c_int,
 ) -> c_int {
-    let state = match THREADED_STATE.as_ref() {
+    let state = match threaded_state() {
         Some(s) => s,
         None => return 0,
     };
@@ -463,7 +469,7 @@ pub unsafe extern "C" fn neomacs_display_send_frame(handle: *mut NeomacsDisplay)
 
     let display = &*handle;
 
-    let state = match THREADED_STATE.as_ref() {
+    let state = match threaded_state() {
         Some(s) => s,
         None => return,
     };
@@ -483,7 +489,7 @@ pub unsafe extern "C" fn neomacs_display_send_command(
     param2: u32,
     str_param: *const c_char,
 ) {
-    let state = match THREADED_STATE.as_ref() {
+    let state = match threaded_state() {
         Some(s) => s,
         None => return,
     };
@@ -523,7 +529,7 @@ pub unsafe extern "C" fn neomacs_display_send_command(
 #[cfg(feature = "winit-backend")]
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_shutdown_threaded() {
-    if let Some(mut state) = THREADED_STATE.take() {
+    if let Some(mut state) = (*std::ptr::addr_of_mut!(THREADED_STATE)).take() {
         // Send shutdown command
         let _ = state.emacs_comms.cmd_tx.try_send(RenderCommand::Shutdown);
 
@@ -543,7 +549,7 @@ pub unsafe extern "C" fn neomacs_display_shutdown_threaded() {
 #[cfg(feature = "winit-backend")]
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_get_threaded_wakeup_fd() -> c_int {
-    match THREADED_STATE.as_ref() {
+    match threaded_state() {
         Some(state) => state.emacs_comms.wakeup_read_fd,
         None => -1,
     }
@@ -556,7 +562,7 @@ pub unsafe extern "C" fn neomacs_display_get_threaded_wakeup_fd() -> c_int {
 #[cfg(feature = "winit-backend")]
 #[no_mangle]
 pub unsafe extern "C" fn neomacs_display_get_threaded_handle() -> *mut NeomacsDisplay {
-    match THREADED_STATE.as_ref() {
+    match threaded_state() {
         Some(state) => state.display_handle,
         None => std::ptr::null_mut(),
     }

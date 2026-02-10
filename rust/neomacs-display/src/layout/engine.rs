@@ -249,7 +249,7 @@ impl LayoutEngine {
 
         // Publish hit-test data for mouse interaction queries
         unsafe {
-            FRAME_HIT_DATA = Some(std::mem::take(&mut self.hit_data));
+            *std::ptr::addr_of_mut!(FRAME_HIT_DATA) = Some(std::mem::take(&mut self.hit_data));
         }
     }
 

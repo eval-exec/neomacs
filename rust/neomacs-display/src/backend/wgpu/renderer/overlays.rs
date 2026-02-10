@@ -107,7 +107,7 @@ impl WgpuRenderer {
     }
 
     /// Render a popup menu overlay on top of all content.
-    pub fn render_popup_menu(
+    pub(crate) fn render_popup_menu(
         &self,
         view: &wgpu::TextureView,
         menu: &crate::render_thread::PopupMenuState,
@@ -609,7 +609,7 @@ impl WgpuRenderer {
     }
 
     /// Render a tooltip overlay on top of the scene.
-    pub fn render_tooltip(
+    pub(crate) fn render_tooltip(
         &self,
         view: &wgpu::TextureView,
         tooltip: &crate::render_thread::TooltipState,

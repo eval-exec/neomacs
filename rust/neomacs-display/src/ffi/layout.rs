@@ -45,12 +45,12 @@ pub unsafe extern "C" fn neomacs_rust_layout_frame(
         let display = &mut *handle;
 
         // Initialize layout engine on first call
-        if LAYOUT_ENGINE.is_none() {
-            LAYOUT_ENGINE = Some(crate::layout::LayoutEngine::new());
+        if (*std::ptr::addr_of!(LAYOUT_ENGINE)).is_none() {
+            *std::ptr::addr_of_mut!(LAYOUT_ENGINE) = Some(crate::layout::LayoutEngine::new());
             log::info!("Rust layout engine initialized");
         }
 
-        let engine = match LAYOUT_ENGINE.as_mut() {
+        let engine = match (*std::ptr::addr_of_mut!(LAYOUT_ENGINE)).as_mut() {
             Some(e) => e,
             None => {
                 log::error!("Rust layout engine initialization failed");

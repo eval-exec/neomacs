@@ -23,7 +23,7 @@ pub extern "C" fn neomacs_display_create_window(
     // Return window ID 1 (the main window)
     #[cfg(feature = "winit-backend")]
     unsafe {
-        if THREADED_STATE.is_some() {
+        if (*std::ptr::addr_of!(super::THREADED_STATE)).is_some() {
             return 1; // Main window ID
         }
     }
@@ -149,7 +149,7 @@ pub unsafe extern "C" fn neomacs_display_end_frame_window(
 
     #[cfg(feature = "winit-backend")]
     {
-        if let Some(ref state) = THREADED_STATE.as_ref() {
+        if let Some(state) = (*std::ptr::addr_of!(super::THREADED_STATE)).as_ref() {
             // Matrix-based full-frame rendering: always send the complete frame.
             // The buffer was cleared at begin_frame and rebuilt by the matrix walker,
             // so it always contains the complete visible state.

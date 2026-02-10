@@ -29,7 +29,7 @@ pub(crate) static mut FRAME_HIT_DATA: Option<Vec<WindowHitData>> = None;
 /// Returns charpos, or -1 if not found.
 pub fn hit_test_charpos_at_pixel(px: f32, py: f32) -> i64 {
     unsafe {
-        let data = match &FRAME_HIT_DATA {
+        let data = match &*std::ptr::addr_of!(FRAME_HIT_DATA) {
             Some(d) => d,
             None => return -1,
         };
@@ -52,7 +52,7 @@ pub fn hit_test_charpos_at_pixel(px: f32, py: f32) -> i64 {
 /// Query charpos for a specific window at window-relative pixel coordinates.
 pub fn hit_test_window_charpos(window_id: i64, wx: f32, wy: f32) -> i64 {
     unsafe {
-        let data = match &FRAME_HIT_DATA {
+        let data = match &*std::ptr::addr_of!(FRAME_HIT_DATA) {
             Some(d) => d,
             None => return -1,
         };

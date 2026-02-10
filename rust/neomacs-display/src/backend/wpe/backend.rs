@@ -68,7 +68,7 @@ pub fn has_webkit_error() -> bool {
 /// Get and clear the last WebKit error message
 pub fn take_webkit_error() -> Option<String> {
     if WEBKIT_FATAL_ERROR.swap(false, Ordering::SeqCst) {
-        unsafe { WEBKIT_ERROR_MESSAGE.take() }
+        unsafe { (*std::ptr::addr_of_mut!(WEBKIT_ERROR_MESSAGE)).take() }
     } else {
         None
     }
@@ -108,11 +108,11 @@ impl WpeBackend {
         // Store the device path in a static for the once closure
         static mut DEVICE_PATH: Option<String> = None;
         if let Some(path) = device_path {
-            DEVICE_PATH = Some(path.to_string());
+            *std::ptr::addr_of_mut!(DEVICE_PATH) = Some(path.to_string());
         }
 
         WPE_INIT.call_once(|| {
-            let dev_path = DEVICE_PATH.as_deref();
+            let dev_path = (*std::ptr::addr_of!(DEVICE_PATH)).as_deref();
             if let Some(path) = dev_path {
                 log::info!("WpeBackend: Initializing WPE Platform API with device: {}", path);
             } else {
@@ -122,7 +122,7 @@ impl WpeBackend {
             // Check sandbox prerequisites first
             if let Err(msg) = check_sandbox_prerequisites() {
                 log::error!("WpeBackend: ERROR - {}", msg);
-                WPE_INIT_ERROR = Some(msg);
+                *std::ptr::addr_of_mut!(WPE_INIT_ERROR) = Some(msg);
                 return;
             }
 
@@ -136,23 +136,23 @@ impl WpeBackend {
                 Ok(display) => {
                     log::info!("WpeBackend: WPE Platform display created successfully");
                     log::info!("WpeBackend: EGL available: {}", display.has_egl());
-                    WPE_PLATFORM_DISPLAY = Some(display);
+                    *std::ptr::addr_of_mut!(WPE_PLATFORM_DISPLAY) = Some(display);
                 }
                 Err(e) => {
                     let msg = format!("Failed to create WPE Platform display: {}", e);
                     log::error!("WpeBackend: ERROR - {}", msg);
-                    WPE_INIT_ERROR = Some(msg);
+                    *std::ptr::addr_of_mut!(WPE_INIT_ERROR) = Some(msg);
                 }
             }
         });
 
         // Check for init error
-        if let Some(ref error) = WPE_INIT_ERROR {
+        if let Some(ref error) = *std::ptr::addr_of!(WPE_INIT_ERROR) {
             return Err(DisplayError::WebKit(error.clone()));
         }
 
         // Get the display
-        let platform_display = WPE_PLATFORM_DISPLAY.as_ref()
+        let platform_display = (*std::ptr::addr_of!(WPE_PLATFORM_DISPLAY)).as_ref()
             .ok_or_else(|| DisplayError::WebKit("WPE Platform not initialized".into()))?;
 
         Ok(Self {
@@ -173,7 +173,7 @@ impl WpeBackend {
 
     /// Get the WPE Platform display
     pub fn platform_display(&self) -> Option<&WpePlatformDisplay> {
-        unsafe { WPE_PLATFORM_DISPLAY.as_ref() }
+        unsafe { (*std::ptr::addr_of!(WPE_PLATFORM_DISPLAY)).as_ref() }
     }
 }
 

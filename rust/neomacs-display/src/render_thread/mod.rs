@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopBuilder};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
@@ -2999,7 +2999,7 @@ fn run_render_loop(
     // Use any_thread() since we're running on a non-main thread
     #[cfg(target_os = "linux")]
     let event_loop = {
-        let mut builder = EventLoopBuilder::new();
+        let mut builder = EventLoop::builder();
         // Try Wayland first, fall back to X11
         if std::env::var("WAYLAND_DISPLAY").is_ok() {
             EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
