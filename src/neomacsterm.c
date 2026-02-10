@@ -1819,6 +1819,19 @@ neomacs_layout_get_window_params (void *frame_ptr, int window_index,
   params->selected = (w == XWINDOW (f->selected_window)) ? 1 : 0;
   params->is_minibuffer = MINI_WINDOW_P (w) ? 1 : 0;
 
+  /* Debug: log minibuffer window buffer info */
+  if (MINI_WINDOW_P (w) && BUFFERP (w->contents))
+    {
+      struct buffer *mbuf = XBUFFER (w->contents);
+      nlog_debug ("minibuf window: buf='%s' begv=%ld zv=%ld pt=%ld "
+                  "window_start=%ld height=%d",
+                  SSDATA (BVAR (mbuf, name)),
+                  (long) BUF_BEGV (mbuf), (long) BUF_ZV (mbuf),
+                  (long) BUF_PT (mbuf),
+                  MARKERP (w->start) ? (long) marker_position (w->start) : -1L,
+                  WINDOW_PIXEL_HEIGHT (w));
+    }
+
   if (MARKERP (w->start))
     params->window_start = marker_position (w->start);
   else

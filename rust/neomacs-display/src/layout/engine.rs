@@ -440,6 +440,10 @@ impl LayoutEngine {
             &[]
         };
 
+        log::debug!("  layout_window id={}: text_y={:.1} text_h={:.1} char_h={:.1} max_rows={} bytes_read={} bufsz={} is_mini={}",
+            params.window_id, text_y, text_height, char_h, max_rows,
+            bytes_read, params.buffer_size, params.is_minibuffer);
+
         // Default face colors (fallback)
         let default_fg = Color::from_pixel(params.default_fg);
         let default_bg = Color::from_pixel(params.default_bg);
@@ -581,7 +585,13 @@ impl LayoutEngine {
         let mut box_color = Color::from_pixel(0);
         let mut box_line_width: i32 = 1;
 
-        while byte_idx < bytes_read as usize && row < max_rows {
+        // Pixel Y limit: stop rendering when rows exceed the text area,
+        // which can happen with variable-height faces pushing rows down.
+        let text_y_limit = text_y + text_height;
+
+        while byte_idx < bytes_read as usize && row < max_rows
+            && row_y[row as usize] < text_y_limit
+        {
             // Render line number at the start of each new row
             if need_line_number && lnum_enabled {
                 // Determine displayed number based on mode
