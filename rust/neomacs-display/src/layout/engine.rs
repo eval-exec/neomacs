@@ -12,6 +12,83 @@ use crate::core::types::{Color, Rect};
 use super::types::*;
 use super::emacs_ffi::*;
 
+// ============================================================================
+// Hit-test infrastructure: maps pixel coordinates to buffer char positions.
+// ============================================================================
+
+/// Per-row hit-test data: maps a Y range to a charpos range.
+#[derive(Clone)]
+struct HitRow {
+    y_start: f32,
+    y_end: f32,
+    charpos_start: i64,
+    charpos_end: i64,
+}
+
+/// Per-window hit-test data built during layout.
+#[derive(Clone)]
+struct WindowHitData {
+    window_id: i64,
+    content_x: f32,
+    char_w: f32,
+    rows: Vec<HitRow>,
+}
+
+/// Global hit-test data for all windows, updated each frame.
+/// Safe to use without Mutex because layout and queries happen on the same (Emacs) thread.
+static mut FRAME_HIT_DATA: Option<Vec<WindowHitData>> = None;
+
+/// Query charpos at a given frame-relative pixel coordinate.
+/// Searches all windows for the one containing (px, py).
+/// Returns charpos, or -1 if not found.
+pub fn hit_test_charpos_at_pixel(px: f32, py: f32) -> i64 {
+    unsafe {
+        let data = match &FRAME_HIT_DATA {
+            Some(d) => d,
+            None => return -1,
+        };
+        for win in data {
+            // Find row by Y
+            for row in &win.rows {
+                if py >= row.y_start && py < row.y_end {
+                    // Compute approximate column from X
+                    let col = ((px - win.content_x) / win.char_w).max(0.0) as i64;
+                    let charpos = (row.charpos_start + col).min(row.charpos_end);
+                    return charpos;
+                }
+            }
+        }
+        -1
+    }
+}
+
+/// Query charpos for a specific window at window-relative pixel coordinates.
+pub fn hit_test_window_charpos(window_id: i64, wx: f32, wy: f32) -> i64 {
+    unsafe {
+        let data = match &FRAME_HIT_DATA {
+            Some(d) => d,
+            None => return -1,
+        };
+        for win in data {
+            if win.window_id != window_id {
+                continue;
+            }
+            for row in &win.rows {
+                if wy >= row.y_start && wy < row.y_end {
+                    let col = ((wx - win.content_x) / win.char_w).max(0.0) as i64;
+                    return (row.charpos_start + col).min(row.charpos_end);
+                }
+            }
+            // Past last row: return last charpos
+            if let Some(last) = win.rows.last() {
+                return last.charpos_end;
+            }
+            return -1;
+        }
+        -1
+    }
+}
+
 /// Which kind of status line to render.
 enum StatusLineKind {
     ModeLine,
@@ -83,6 +160,8 @@ pub struct LayoutEngine {
     /// Per-face ASCII width cache for proportional fonts.
     /// Key: (face_id, font_size), Value: advance widths for chars 0-127.
     ascii_width_cache: std::collections::HashMap<(u32, i32), [f32; 128]>,
+    /// Hit-test data being built for current frame
+    hit_data: Vec<WindowHitData>,
 }
 
 impl LayoutEngine {
@@ -92,6 +171,7 @@ impl LayoutEngine {
             text_buf: Vec::with_capacity(64 * 1024), // 64KB initial
             face_data: FaceDataFFI::default(),
             ascii_width_cache: std::collections::HashMap::new(),
+            hit_data: Vec::new(),
         }
     }
 
@@ -118,6 +198,9 @@ impl LayoutEngine {
         frame_glyphs.char_height = frame_params.char_height;
         frame_glyphs.font_pixel_size = frame_params.font_pixel_size;
         frame_glyphs.background = Color::from_pixel(frame_params.background);
+
+        // Clear hit-test data for new frame
+        self.hit_data.clear();
 
         // Get number of windows
         let window_count = neomacs_layout_frame_window_count(frame);
@@ -294,6 +377,11 @@ impl LayoutEngine {
                     frame_glyphs.add_stretch(x0, y0, w, 1.0, mid_fg, 0, false);
                 }
             }
+        }
+
+        // Publish hit-test data for mouse interaction queries
+        unsafe {
+            FRAME_HIT_DATA = Some(std::mem::take(&mut self.hit_data));
         }
     }
 
@@ -608,6 +696,10 @@ impl LayoutEngine {
         // Pixel Y limit: stop rendering when rows exceed the text area,
         // which can happen with variable-height faces pushing rows down.
         let text_y_limit = text_y + text_height;
+
+        // Hit-test data for this window
+        let mut hit_rows: Vec<HitRow> = Vec::new();
+        let mut hit_row_charpos_start: i64 = window_start;
 
         while byte_idx < bytes_read as usize && row < max_rows
             && row_y[row as usize] < text_y_limit
@@ -1600,6 +1692,17 @@ impl LayoutEngine {
                         // box_row will update after row += 1
                     }
 
+                    // Record hit-test row (newline ends the row)
+                    if (row as usize) < row_y.len() {
+                        hit_rows.push(HitRow {
+                            y_start: row_y[row as usize],
+                            y_end: row_y[row as usize] + row_max_height,
+                            charpos_start: hit_row_charpos_start,
+                            charpos_end: charpos,
+                        });
+                        hit_row_charpos_start = charpos;
+                    }
+
                     col = 0;
                     x_offset = 0.0;
                     row += 1;
@@ -2113,6 +2216,16 @@ impl LayoutEngine {
                             // Rewind position to the break
                             byte_idx = wrap_break_byte_idx;
                             charpos = wrap_break_charpos;
+                            // Record hit-test row (word-wrap break)
+                            if (row as usize) < row_y.len() {
+                                hit_rows.push(HitRow {
+                                    y_start: row_y[row as usize],
+                                    y_end: row_y[row as usize] + row_max_height,
+                                    charpos_start: hit_row_charpos_start,
+                                    charpos_end: charpos,
+                                });
+                                hit_row_charpos_start = charpos;
+                            }
                             // Force face re-check since we rewound
                             current_face_id = -1;
                             col = 0;
@@ -2146,6 +2259,16 @@ impl LayoutEngine {
                             }
                             if (row as usize) < row_continued.len() {
                                 row_continued[row as usize] = true;
+                            }
+                            // Record hit-test row (char-wrap break)
+                            if (row as usize) < row_y.len() {
+                                hit_rows.push(HitRow {
+                                    y_start: row_y[row as usize],
+                                    y_end: row_y[row as usize] + row_max_height,
+                                    charpos_start: hit_row_charpos_start,
+                                    charpos_end: charpos,
+                                });
+                                hit_row_charpos_start = charpos;
                             }
                             col = 0;
                             x_offset = 0.0;
@@ -2779,6 +2902,24 @@ impl LayoutEngine {
                 StatusLineKind::ModeLine,
             );
         }
+
+        // Record last hit-test row (end of visible text)
+        if row < max_rows && (row as usize) < row_y.len() && charpos > hit_row_charpos_start {
+            hit_rows.push(HitRow {
+                y_start: row_y[row as usize],
+                y_end: row_y[row as usize] + row_max_height,
+                charpos_start: hit_row_charpos_start,
+                charpos_end: charpos,
+            });
+        }
+
+        // Store hit-test data for this window
+        self.hit_data.push(WindowHitData {
+            window_id: params.window_id,
+            content_x,
+            char_w,
+            rows: hit_rows,
+        });
 
         // Write layout results back to Emacs
         neomacs_layout_set_window_end(

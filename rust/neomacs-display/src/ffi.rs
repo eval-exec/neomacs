@@ -4384,6 +4384,35 @@ pub unsafe extern "C" fn neomacs_rust_layout_frame(
     );
 }
 
+/// Query buffer character position at given frame-relative pixel coordinates.
+/// Used by mouse interaction (note_mouse_highlight, mouse clicks).
+/// Returns charpos, or -1 if not found.
+///
+/// # Safety
+/// Must be called on the Emacs thread.
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_layout_charpos_at_pixel(
+    px: f32,
+    py: f32,
+) -> i64 {
+    crate::layout::hit_test_charpos_at_pixel(px, py)
+}
+
+/// Query buffer character position for a specific window at
+/// window-relative pixel coordinates.
+/// Returns charpos, or -1 if not found.
+///
+/// # Safety
+/// Must be called on the Emacs thread.
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_layout_window_charpos(
+    window_id: i64,
+    wx: f32,
+    wy: f32,
+) -> i64 {
+    crate::layout::hit_test_window_charpos(window_id, wx, wy)
+}
+
 // Note: Event Polling FFI Functions have been removed
 // Events are now delivered via the threaded mode wakeup mechanism
 // Use neomacs_display_drain_input() instead

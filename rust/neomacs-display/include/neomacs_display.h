@@ -1973,6 +1973,26 @@ void neomacs_rust_layout_frame(struct NeomacsDisplay *handle,
                                uint32_t dividerLastFg);
 
 /**
+ * Query buffer character position at given frame-relative pixel coordinates.
+ * Used by mouse interaction (note_mouse_highlight, mouse clicks).
+ * Returns charpos, or -1 if not found.
+ *
+ * # Safety
+ * Must be called on the Emacs thread.
+ */
+int64_t neomacs_layout_charpos_at_pixel(float px, float py);
+
+/**
+ * Query buffer character position for a specific window at
+ * window-relative pixel coordinates.
+ * Returns charpos, or -1 if not found.
+ *
+ * # Safety
+ * Must be called on the Emacs thread.
+ */
+int64_t neomacs_layout_window_charpos(int64_t windowId, float wx, float wy);
+
+/**
  * Set an animation configuration option (stub)
  */
 int neomacs_display_set_animation_option(struct NeomacsDisplay *handle,
