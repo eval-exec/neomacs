@@ -3631,13 +3631,17 @@ neomacs_layout_overlay_strings_at (void *buffer_ptr, void *window_ptr,
                                    uint8_t *after_buf, int after_buf_len,
                                    int *after_len_out,
                                    void *before_face_out,
-                                   void *after_face_out)
+                                   void *after_face_out,
+                                   int *before_nruns_out,
+                                   int *after_nruns_out)
 {
   struct buffer *buf = (struct buffer *) buffer_ptr;
   struct window *w = window_ptr ? (struct window *) window_ptr : NULL;
 
   *before_len_out = 0;
   *after_len_out = 0;
+  *before_nruns_out = 0;
+  *after_nruns_out = 0;
 
   if (!buf)
     return -1;
@@ -3707,6 +3711,69 @@ neomacs_layout_overlay_strings_at (void *buffer_ptr, void *window_ptr,
                         }
                     }
                 }
+
+              /* Extract per-character face runs from before-string text
+                 properties.  Face runs are stored after the string text in
+                 before_buf, 10 bytes each: u16 byte_offset + u32 fg + u32 bg. */
+              if (SCHARS (bstr) > 0
+                  && string_intervals (bstr)
+                  && f && copy > 0
+                  && copy + 10 <= before_buf_len)
+                {
+                  ptrdiff_t fcharpos = 0;
+                  ptrdiff_t nchars = SCHARS (bstr);
+                  ptrdiff_t run_offset = before_offset;
+                  int nruns = 0;
+                  int max_runs = (int) ((before_buf_len - before_offset) / 10);
+                  uint32_t prev_fg = 0xFFFFFFFF;
+                  uint32_t prev_bg = 0xFFFFFFFF;
+
+                  while (fcharpos < nchars && nruns < max_runs)
+                    {
+                      ptrdiff_t endpos;
+                      int fid = face_at_string_position (w, bstr, fcharpos,
+                                                         0, &endpos,
+                                                         DEFAULT_FACE_ID,
+                                                         false, 0);
+                      struct face *rf = FACE_FROM_ID_OR_NULL (f, fid);
+
+                      uint32_t fg = 0, bg = 0;
+                      if (rf)
+                        {
+                          unsigned long c = rf->foreground;
+                          if (rf->foreground_defaulted_p)
+                            c = FRAME_FOREGROUND_PIXEL (f);
+                          fg = ((RED_FROM_ULONG (c) << 16)
+                                | (GREEN_FROM_ULONG (c) << 8)
+                                | BLUE_FROM_ULONG (c));
+                          c = rf->background;
+                          if (rf->background_defaulted_p)
+                            c = FRAME_BACKGROUND_PIXEL (f);
+                          bg = ((RED_FROM_ULONG (c) << 16)
+                                | (GREEN_FROM_ULONG (c) << 8)
+                                | BLUE_FROM_ULONG (c));
+                        }
+
+                      if (fg != prev_fg || bg != prev_bg)
+                        {
+                          ptrdiff_t byte_off
+                            = string_char_to_byte (bstr, fcharpos);
+                          uint16_t boff = (uint16_t) byte_off;
+                          memcpy (before_buf + run_offset, &boff, 2);
+                          memcpy (before_buf + run_offset + 2, &fg, 4);
+                          memcpy (before_buf + run_offset + 6, &bg, 4);
+                          run_offset += 10;
+                          nruns++;
+                          prev_fg = fg;
+                          prev_bg = bg;
+                        }
+                      if (endpos < 0)
+                        fcharpos = nchars;  /* constant to end */
+                      else
+                        fcharpos = endpos > fcharpos ? endpos : fcharpos + 1;
+                    }
+                  *before_nruns_out = nruns;
+                }
             }
         }
 
@@ -3744,6 +3811,69 @@ neomacs_layout_overlay_strings_at (void *buffer_ptr, void *window_ptr,
                           after_face_set = true;
                         }
                     }
+                }
+
+              /* Extract per-character face runs from after-string text
+                 properties.  Face runs are stored after the string text in
+                 after_buf, 10 bytes each: u16 byte_offset + u32 fg + u32 bg. */
+              if (SCHARS (astr) > 0
+                  && string_intervals (astr)
+                  && f && copy > 0
+                  && copy + 10 <= after_buf_len)
+                {
+                  ptrdiff_t fcharpos = 0;
+                  ptrdiff_t nchars = SCHARS (astr);
+                  ptrdiff_t run_offset = after_offset;
+                  int nruns = 0;
+                  int max_runs = (int) ((after_buf_len - after_offset) / 10);
+                  uint32_t prev_fg = 0xFFFFFFFF;
+                  uint32_t prev_bg = 0xFFFFFFFF;
+
+                  while (fcharpos < nchars && nruns < max_runs)
+                    {
+                      ptrdiff_t endpos;
+                      int fid = face_at_string_position (w, astr, fcharpos,
+                                                         0, &endpos,
+                                                         DEFAULT_FACE_ID,
+                                                         false, 0);
+                      struct face *rf = FACE_FROM_ID_OR_NULL (f, fid);
+
+                      uint32_t fg = 0, bg = 0;
+                      if (rf)
+                        {
+                          unsigned long c = rf->foreground;
+                          if (rf->foreground_defaulted_p)
+                            c = FRAME_FOREGROUND_PIXEL (f);
+                          fg = ((RED_FROM_ULONG (c) << 16)
+                                | (GREEN_FROM_ULONG (c) << 8)
+                                | BLUE_FROM_ULONG (c));
+                          c = rf->background;
+                          if (rf->background_defaulted_p)
+                            c = FRAME_BACKGROUND_PIXEL (f);
+                          bg = ((RED_FROM_ULONG (c) << 16)
+                                | (GREEN_FROM_ULONG (c) << 8)
+                                | BLUE_FROM_ULONG (c));
+                        }
+
+                      if (fg != prev_fg || bg != prev_bg)
+                        {
+                          ptrdiff_t byte_off
+                            = string_char_to_byte (astr, fcharpos);
+                          uint16_t boff = (uint16_t) byte_off;
+                          memcpy (after_buf + run_offset, &boff, 2);
+                          memcpy (after_buf + run_offset + 2, &fg, 4);
+                          memcpy (after_buf + run_offset + 6, &bg, 4);
+                          run_offset += 10;
+                          nruns++;
+                          prev_fg = fg;
+                          prev_bg = bg;
+                        }
+                      if (endpos < 0)
+                        fcharpos = nchars;  /* constant to end */
+                      else
+                        fcharpos = endpos > fcharpos ? endpos : fcharpos + 1;
+                    }
+                  *after_nruns_out = nruns;
                 }
             }
         }

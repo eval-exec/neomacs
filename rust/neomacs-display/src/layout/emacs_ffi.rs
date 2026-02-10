@@ -277,6 +277,8 @@ extern "C" {
         after_len_out: *mut c_int,
         before_face_out: *mut FaceDataFFI,
         after_face_out: *mut FaceDataFFI,
+        before_nruns_out: *mut c_int,
+        after_nruns_out: *mut c_int,
     ) -> c_int;
 
     // ========================================================================

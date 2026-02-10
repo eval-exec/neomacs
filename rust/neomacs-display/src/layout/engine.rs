@@ -19,6 +19,58 @@ enum StatusLineKind {
     TabLine,
 }
 
+/// A face run within an overlay/display string: byte offset + fg/bg colors.
+struct OverlayFaceRun {
+    byte_offset: u16,
+    fg: u32,
+    bg: u32,
+}
+
+/// Parse face runs appended after text in a buffer.
+/// Runs are stored as 10-byte records: u16 byte_offset + u32 fg + u32 bg.
+fn parse_overlay_face_runs(buf: &[u8], text_len: usize, nruns: i32) -> Vec<OverlayFaceRun> {
+    let mut runs = Vec::with_capacity(nruns as usize);
+    let runs_start = text_len;
+    for ri in 0..nruns as usize {
+        let off = runs_start + ri * 10;
+        if off + 10 <= buf.len() {
+            let byte_offset = u16::from_ne_bytes([buf[off], buf[off + 1]]);
+            let fg = u32::from_ne_bytes([buf[off + 2], buf[off + 3], buf[off + 4], buf[off + 5]]);
+            let bg = u32::from_ne_bytes([buf[off + 6], buf[off + 7], buf[off + 8], buf[off + 9]]);
+            runs.push(OverlayFaceRun { byte_offset, fg, bg });
+        }
+    }
+    runs
+}
+
+/// Apply the face run covering the current byte index.
+/// Returns the updated current_run index.
+fn apply_overlay_face_run(
+    runs: &[OverlayFaceRun],
+    byte_idx: usize,
+    current_run: usize,
+    frame_glyphs: &mut FrameGlyphBuffer,
+) -> usize {
+    let mut cr = current_run;
+    // Advance to the correct run
+    while cr + 1 < runs.len() && byte_idx >= runs[cr + 1].byte_offset as usize {
+        cr += 1;
+    }
+    if byte_idx >= runs[cr].byte_offset as usize {
+        let run = &runs[cr];
+        if run.fg != 0 || run.bg != 0 {
+            let rfg = Color::from_pixel(run.fg);
+            let rbg = Color::from_pixel(run.bg);
+            frame_glyphs.set_face(0, rfg, Some(rbg), false, false, 0, None, 0, None, 0, None);
+        }
+        // Pre-advance if next run starts at next byte
+        if cr + 1 < runs.len() && byte_idx + 1 >= runs[cr + 1].byte_offset as usize {
+            cr += 1;
+        }
+    }
+    cr
+}
+
 /// The main Rust layout engine.
 ///
 /// Called on the Emacs thread during redisplay. Reads buffer data via FFI,
@@ -421,6 +473,8 @@ impl LayoutEngine {
         let mut overlay_before_len: i32 = 0;
         let mut overlay_after_len: i32 = 0;
         let mut overlay_after_face = FaceDataFFI::default();
+        let mut overlay_before_nruns: i32 = 0;
+        let mut overlay_after_nruns: i32 = 0;
 
         // Line number state
         let mut current_line: i64 = if lnum_enabled {
@@ -809,6 +863,8 @@ impl LayoutEngine {
                 overlay_after_len = 0;
                 let mut overlay_before_face = FaceDataFFI::default();
                 overlay_after_face = FaceDataFFI::default();
+                overlay_before_nruns = 0;
+                overlay_after_nruns = 0;
                 neomacs_layout_overlay_strings_at(
                     buffer, window, charpos,
                     overlay_before_buf.as_mut_ptr(),
@@ -819,32 +875,51 @@ impl LayoutEngine {
                     &mut overlay_after_len,
                     &mut overlay_before_face,
                     &mut overlay_after_face,
+                    &mut overlay_before_nruns,
+                    &mut overlay_after_nruns,
                 );
 
                 // Render before-string (if any) — insert before buffer text
                 if overlay_before_len > 0 {
-                    // Use overlay face if set, otherwise resolve face for this position
-                    if overlay_before_face.face_id != 0 {
-                        self.apply_face(&overlay_before_face, frame_glyphs);
-                    } else if charpos >= next_face_check || current_face_id < 0 {
-                        let mut next_check: i64 = 0;
-                        let fid = neomacs_layout_face_at_pos(
-                            window, charpos,
-                            &mut self.face_data as *mut FaceDataFFI,
-                            &mut next_check,
-                        );
-                        if fid >= 0 && fid != current_face_id {
-                            current_face_id = fid;
-                            face_fg = Color::from_pixel(self.face_data.fg);
-                            face_bg = Color::from_pixel(self.face_data.bg);
-                            self.apply_face(&self.face_data, frame_glyphs);
+                    let before_has_runs = overlay_before_nruns > 0;
+                    let before_face_runs = if before_has_runs {
+                        parse_overlay_face_runs(&overlay_before_buf, overlay_before_len as usize, overlay_before_nruns)
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Use per-char face runs, overlay face, or resolve face for position
+                    if !before_has_runs {
+                        if overlay_before_face.face_id != 0 {
+                            self.apply_face(&overlay_before_face, frame_glyphs);
+                        } else if charpos >= next_face_check || current_face_id < 0 {
+                            let mut next_check: i64 = 0;
+                            let fid = neomacs_layout_face_at_pos(
+                                window, charpos,
+                                &mut self.face_data as *mut FaceDataFFI,
+                                &mut next_check,
+                            );
+                            if fid >= 0 && fid != current_face_id {
+                                current_face_id = fid;
+                                face_fg = Color::from_pixel(self.face_data.fg);
+                                face_bg = Color::from_pixel(self.face_data.bg);
+                                self.apply_face(&self.face_data, frame_glyphs);
+                            }
+                            next_face_check = if next_check > charpos { next_check } else { charpos + 1 };
                         }
-                        next_face_check = if next_check > charpos { next_check } else { charpos + 1 };
                     }
 
                     let bstr = &overlay_before_buf[..overlay_before_len as usize];
                     let mut bi = 0usize;
+                    let mut bcurrent_run = 0usize;
                     while bi < bstr.len() && row < max_rows {
+                        // Apply face run if needed
+                        if before_has_runs && bcurrent_run < before_face_runs.len() {
+                            bcurrent_run = apply_overlay_face_run(
+                                &before_face_runs, bi, bcurrent_run, frame_glyphs,
+                            );
+                        }
+
                         let (bch, blen) = decode_utf8(&bstr[bi..]);
                         bi += blen;
                         if bch == '\n' {
@@ -873,7 +948,7 @@ impl LayoutEngine {
                     }
 
                     // Restore text face after overlay face was used
-                    if overlay_before_face.face_id != 0 && current_face_id >= 0 {
+                    if (before_has_runs || overlay_before_face.face_id != 0) && current_face_id >= 0 {
                         self.apply_face(&self.face_data, frame_glyphs);
                     }
                 }
@@ -2087,14 +2162,29 @@ impl LayoutEngine {
 
             // Render overlay after-string (if any) — collected earlier
             if overlay_after_len > 0 && row < max_rows {
-                // Apply overlay face for after-string if set
-                if overlay_after_face.face_id != 0 {
+                let after_has_runs = overlay_after_nruns > 0;
+                let after_face_runs = if after_has_runs {
+                    parse_overlay_face_runs(&overlay_after_buf, overlay_after_len as usize, overlay_after_nruns)
+                } else {
+                    Vec::new()
+                };
+
+                // Apply overlay face for after-string if no per-char runs
+                if !after_has_runs && overlay_after_face.face_id != 0 {
                     self.apply_face(&overlay_after_face, frame_glyphs);
                 }
 
                 let astr = &overlay_after_buf[..overlay_after_len as usize];
                 let mut ai = 0usize;
+                let mut acurrent_run = 0usize;
                 while ai < astr.len() && row < max_rows {
+                    // Apply face run if needed
+                    if after_has_runs && acurrent_run < after_face_runs.len() {
+                        acurrent_run = apply_overlay_face_run(
+                            &after_face_runs, ai, acurrent_run, frame_glyphs,
+                        );
+                    }
+
                     let (ach, alen) = decode_utf8(&astr[ai..]);
                     ai += alen;
                     if ach == '\n' {
@@ -2123,7 +2213,7 @@ impl LayoutEngine {
                 }
 
                 // Restore text face after overlay after-string
-                if overlay_after_face.face_id != 0 && current_face_id >= 0 {
+                if (after_has_runs || overlay_after_face.face_id != 0) && current_face_id >= 0 {
                     self.apply_face(&self.face_data, frame_glyphs);
                 }
             }
@@ -2189,6 +2279,8 @@ impl LayoutEngine {
         if row < max_rows {
             overlay_after_len = 0;
             overlay_after_face = FaceDataFFI::default();
+            overlay_before_nruns = 0;
+            overlay_after_nruns = 0;
             let mut eob_before_len: i32 = 0;
             let mut eob_before_face = FaceDataFFI::default();
             neomacs_layout_overlay_strings_at(
@@ -2201,16 +2293,32 @@ impl LayoutEngine {
                 &mut overlay_after_len,
                 &mut eob_before_face,
                 &mut overlay_after_face,
+                &mut overlay_before_nruns,
+                &mut overlay_after_nruns,
             );
 
             // Render before-string at end-of-buffer
             if eob_before_len > 0 {
-                if eob_before_face.face_id != 0 {
+                let eob_before_has_runs = overlay_before_nruns > 0;
+                let eob_before_face_runs = if eob_before_has_runs {
+                    parse_overlay_face_runs(&overlay_before_buf, eob_before_len as usize, overlay_before_nruns)
+                } else {
+                    Vec::new()
+                };
+
+                if !eob_before_has_runs && eob_before_face.face_id != 0 {
                     self.apply_face(&eob_before_face, frame_glyphs);
                 }
                 let bstr = &overlay_before_buf[..eob_before_len as usize];
                 let mut bi = 0usize;
+                let mut bcurrent_run = 0usize;
                 while bi < bstr.len() && row < max_rows {
+                    if eob_before_has_runs && bcurrent_run < eob_before_face_runs.len() {
+                        bcurrent_run = apply_overlay_face_run(
+                            &eob_before_face_runs, bi, bcurrent_run, frame_glyphs,
+                        );
+                    }
+
                     let (bch, blen) = decode_utf8(&bstr[bi..]);
                     bi += blen;
                     if bch == '\n' {
@@ -2236,19 +2344,33 @@ impl LayoutEngine {
                     col += bchar_cols;
                     x_offset += b_advance;
                 }
-                if eob_before_face.face_id != 0 && current_face_id >= 0 {
+                if (eob_before_has_runs || eob_before_face.face_id != 0) && current_face_id >= 0 {
                     self.apply_face(&self.face_data, frame_glyphs);
                 }
             }
 
             // Render after-string at end-of-buffer
             if overlay_after_len > 0 {
-                if overlay_after_face.face_id != 0 {
+                let eob_after_has_runs = overlay_after_nruns > 0;
+                let eob_after_face_runs = if eob_after_has_runs {
+                    parse_overlay_face_runs(&overlay_after_buf, overlay_after_len as usize, overlay_after_nruns)
+                } else {
+                    Vec::new()
+                };
+
+                if !eob_after_has_runs && overlay_after_face.face_id != 0 {
                     self.apply_face(&overlay_after_face, frame_glyphs);
                 }
                 let astr = &overlay_after_buf[..overlay_after_len as usize];
                 let mut ai = 0usize;
+                let mut acurrent_run = 0usize;
                 while ai < astr.len() && row < max_rows {
+                    if eob_after_has_runs && acurrent_run < eob_after_face_runs.len() {
+                        acurrent_run = apply_overlay_face_run(
+                            &eob_after_face_runs, ai, acurrent_run, frame_glyphs,
+                        );
+                    }
+
                     let (ach, alen) = decode_utf8(&astr[ai..]);
                     ai += alen;
                     if ach == '\n' {
@@ -2274,7 +2396,7 @@ impl LayoutEngine {
                     col += achar_cols;
                     x_offset += a_advance;
                 }
-                if overlay_after_face.face_id != 0 && current_face_id >= 0 {
+                if (eob_after_has_runs || overlay_after_face.face_id != 0) && current_face_id >= 0 {
                     self.apply_face(&self.face_data, frame_glyphs);
                 }
             }
