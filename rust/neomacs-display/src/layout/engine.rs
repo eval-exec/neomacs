@@ -2034,6 +2034,57 @@ impl LayoutEngine {
                 }
             }
 
+            // Place cursor before rendering overlay after-string.
+            // When an overlay ends at point (e.g., fido-vertical-mode completions),
+            // the after-string visually follows the cursor. Without this check,
+            // the cursor would be placed after the entire after-string content.
+            if !cursor_placed && charpos >= params.point && overlay_after_len > 0 {
+                cursor_col = col;
+                cursor_x = x_offset;
+                cursor_row = row;
+                let cursor_px = content_x + x_offset;
+                let cursor_y = row_y[row as usize];
+
+                let (cursor_w, cursor_h) = match params.cursor_type {
+                    1 => (params.cursor_bar_width.max(1) as f32, char_h), // bar
+                    2 => (char_w, 2.0),                                    // hbar
+                    _ => (char_w, char_h),                                 // box/hollow
+                };
+
+                let cursor_style = if params.selected {
+                    params.cursor_type
+                } else if params.cursor_in_non_selected {
+                    3 // hollow for inactive windows
+                } else {
+                    255 // skip: no cursor in non-selected windows
+                };
+
+                if cursor_style < 255 {
+                    frame_glyphs.add_cursor(
+                        params.window_id as i32,
+                        cursor_px,
+                        cursor_y,
+                        cursor_w,
+                        cursor_h,
+                        cursor_style,
+                        face_fg,
+                    );
+
+                    if cursor_style == 0 {
+                        frame_glyphs.set_cursor_inverse(
+                            cursor_px,
+                            cursor_y,
+                            cursor_w,
+                            cursor_h,
+                            face_fg,
+                            face_bg,
+                        );
+                    }
+                }
+
+                cursor_placed = true;
+            }
+
             // Render overlay after-string (if any) — collected earlier
             if overlay_after_len > 0 && row < max_rows {
                 // Apply overlay face for after-string if set
@@ -2078,6 +2129,59 @@ impl LayoutEngine {
             }
 
             window_end_charpos = charpos;
+        }
+
+        // Place cursor before end-of-buffer overlay strings.
+        // When point is at end-of-buffer and overlays have after-strings there
+        // (e.g., fido-vertical-mode completions), the cursor must be placed
+        // BEFORE the overlay content is rendered.
+        if !cursor_placed && params.point >= params.window_start
+            && charpos >= params.point
+        {
+            cursor_col = col;
+            cursor_x = x_offset;
+            cursor_row = row.min(max_rows - 1);
+            let cursor_px = content_x + x_offset;
+            let cursor_y = row_y[row.min(max_rows - 1) as usize];
+
+            let cursor_style = if params.selected {
+                params.cursor_type
+            } else if params.cursor_in_non_selected {
+                3
+            } else {
+                255 // skip
+            };
+
+            if cursor_style < 255 {
+                let (cursor_w, cursor_h) = match params.cursor_type {
+                    1 => (params.cursor_bar_width.max(1) as f32, char_h), // bar
+                    2 => (char_w, 2.0),                                    // hbar
+                    _ => (char_w, char_h),                                 // box/hollow
+                };
+
+                frame_glyphs.add_cursor(
+                    params.window_id as i32,
+                    cursor_px,
+                    cursor_y,
+                    cursor_w,
+                    cursor_h,
+                    cursor_style,
+                    face_fg,
+                );
+
+                if cursor_style == 0 {
+                    frame_glyphs.set_cursor_inverse(
+                        cursor_px,
+                        cursor_y,
+                        cursor_w,
+                        cursor_h,
+                        face_fg,
+                        face_bg,
+                    );
+                }
+            }
+
+            cursor_placed = true;
         }
 
         // Check for overlay strings at end-of-buffer (e.g., fido-vertical-mode
