@@ -51,6 +51,18 @@
 #define ScrollEffect_COUNT 21
 
 /**
+ * Default number of bytes to add when enlarging the gap.
+ */
+#define GAP_BYTES_DFL 2000
+
+/**
+ * Minimum gap size after compaction.
+ */
+#define GAP_BYTES_MIN 20
+
+
+
+/**
  * Modifier flags matching Emacs.
  */
 #define NEOMACS_SHIFT_MASK (1 << 0)
