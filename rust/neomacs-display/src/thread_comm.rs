@@ -45,10 +45,17 @@ pub enum InputEvent {
     WindowResize {
         width: u32,
         height: u32,
+        /// Emacs frame_id of the window that resized (0 = primary)
+        emacs_frame_id: u64,
     },
-    WindowClose,
+    WindowClose {
+        /// Emacs frame_id of the window being closed (0 = primary)
+        emacs_frame_id: u64,
+    },
     WindowFocus {
         focused: bool,
+        /// Emacs frame_id of the window that gained/lost focus (0 = primary)
+        emacs_frame_id: u64,
     },
     /// WebKit view title changed
     #[cfg(feature = "wpe-webkit")]
@@ -291,6 +298,17 @@ pub enum RenderCommand {
     },
     /// Remove a child frame (sent when frame is deleted or unparented)
     RemoveChildFrame { frame_id: u64 },
+    /// Create a new OS window for a top-level Emacs frame
+    CreateWindow {
+        emacs_frame_id: u64,
+        width: u32,
+        height: u32,
+        title: String,
+    },
+    /// Destroy an OS window for a top-level Emacs frame
+    DestroyWindow {
+        emacs_frame_id: u64,
+    },
     /// Configure child frame visual style (drop shadow, rounded corners)
     SetChildFrameStyle {
         corner_radius: f32,

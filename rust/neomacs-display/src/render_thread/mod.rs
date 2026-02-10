@@ -5,6 +5,7 @@
 pub(crate) mod child_frames;
 mod cursor;
 mod input;
+pub(crate) mod multi_window;
 mod popup_menu;
 mod transitions;
 
@@ -272,6 +273,11 @@ struct RenderApp {
     #[cfg(feature = "neo-term")]
     shared_terminals: crate::terminal::SharedTerminals,
 
+    // Multi-window manager (secondary OS windows for top-level frames)
+    multi_windows: multi_window::MultiWindowManager,
+    // wgpu adapter (needed for creating surfaces on new windows)
+    adapter: Option<wgpu::Adapter>,
+
     // Child frames (posframe, which-key-posframe, etc.)
     child_frames: child_frames::ChildFrameManager,
     // Child frame visual style
@@ -370,6 +376,8 @@ impl RenderApp {
             terminal_manager: crate::terminal::TerminalManager::new(),
             #[cfg(feature = "neo-term")]
             shared_terminals,
+            multi_windows: multi_window::MultiWindowManager::new(),
+            adapter: None,
             child_frames: child_frames::ChildFrameManager::new(),
             child_frame_corner_radius: 8.0,
             child_frame_shadow_enabled: true,
@@ -506,6 +514,7 @@ impl RenderApp {
             format
         );
 
+        self.adapter = Some(adapter);
         self.surface = Some(surface);
         self.surface_config = Some(config);
         self.device = Some(device.clone());
@@ -1145,6 +1154,16 @@ impl RenderApp {
                     self.child_frame_shadow_opacity = shadow_opacity;
                     self.frame_dirty = true;
                 }
+                RenderCommand::CreateWindow { emacs_frame_id, width, height, title } => {
+                    log::info!("CreateWindow request: frame_id=0x{:x} {}x{} \"{}\"",
+                        emacs_frame_id, width, height, title);
+                    self.multi_windows.request_create(emacs_frame_id, width, height, title);
+                    // Actual creation happens in about_to_wait() with ActiveEventLoop
+                }
+                RenderCommand::DestroyWindow { emacs_frame_id } => {
+                    log::info!("DestroyWindow request: frame_id=0x{:x}", emacs_frame_id);
+                    self.multi_windows.request_destroy(emacs_frame_id);
+                }
             }
         }
 
@@ -1155,13 +1174,29 @@ impl RenderApp {
     fn poll_frame(&mut self) {
         // Get the newest frame, discarding older ones
         // Route child frames to the child frame manager, root frames to current_frame
+        // Secondary windows route to multi_windows manager
         self.child_frames.tick();
         while let Ok(frame) = self.comms.frame_rx.try_recv() {
-            if frame.parent_id != 0 {
-                // Child frame: store in manager
+            // Check if this frame belongs to a secondary window
+            let frame_id = frame.frame_id;
+            let parent_id = frame.parent_id;
+
+            // Try routing to secondary windows first (by frame_id)
+            if frame_id != 0 && parent_id == 0 && self.multi_windows.windows.contains_key(&frame_id) {
+                self.multi_windows.route_frame(frame);
+                continue;
+            }
+            // Try routing child frames to secondary windows (by parent_id)
+            if parent_id != 0 && self.multi_windows.windows.contains_key(&parent_id) {
+                self.multi_windows.route_frame(frame);
+                continue;
+            }
+
+            if parent_id != 0 {
+                // Child frame: store in primary window's manager
                 self.child_frames.update_frame(frame);
             } else {
-                // Root frame: update current_frame
+                // Root frame: update primary window's current_frame
                 self.current_frame = Some(frame);
                 // Reset blink to visible when new frame arrives (cursor just moved/redrawn)
                 self.cursor.reset_blink();
@@ -2515,28 +2550,51 @@ impl ApplicationHandler for RenderApp {
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Window close requested");
-                self.comms.send_input(InputEvent::WindowClose);
-                event_loop.exit();
+                let emacs_fid = self.multi_windows.emacs_frame_for_winit(_window_id).unwrap_or(0);
+                self.comms.send_input(InputEvent::WindowClose { emacs_frame_id: emacs_fid });
+                if emacs_fid == 0 {
+                    // Primary window closing — exit
+                    event_loop.exit();
+                } else {
+                    // Secondary window closing — just remove it
+                    self.multi_windows.request_destroy(emacs_fid);
+                }
             }
 
             WindowEvent::Resized(size) => {
                 log::info!("WindowEvent::Resized: {}x{}", size.width, size.height);
 
-                // Handle wgpu surface resize
-                self.handle_resize(size.width, size.height);
-
-                // Notify Emacs of the resize in logical pixels
-                let logical_w = (size.width as f64 / self.scale_factor) as u32;
-                let logical_h = (size.height as f64 / self.scale_factor) as u32;
-                log::info!("Sending WindowResize event to Emacs: {}x{} (logical)", logical_w, logical_h);
-                self.comms.send_input(InputEvent::WindowResize {
-                    width: logical_w,
-                    height: logical_h,
-                });
+                let emacs_fid = self.multi_windows.emacs_frame_for_winit(_window_id).unwrap_or(0);
+                if emacs_fid == 0 {
+                    // Primary window resize
+                    self.handle_resize(size.width, size.height);
+                    let logical_w = (size.width as f64 / self.scale_factor) as u32;
+                    let logical_h = (size.height as f64 / self.scale_factor) as u32;
+                    log::info!("Sending WindowResize event to Emacs: {}x{} (logical)", logical_w, logical_h);
+                    self.comms.send_input(InputEvent::WindowResize {
+                        width: logical_w,
+                        height: logical_h,
+                        emacs_frame_id: 0,
+                    });
+                } else if let Some(device) = self.device.clone() {
+                    // Secondary window resize
+                    if let Some(ws) = self.multi_windows.get_mut(emacs_fid) {
+                        ws.handle_resize(&device, size.width, size.height);
+                        let scale = ws.scale_factor;
+                        let logical_w = (size.width as f64 / scale) as u32;
+                        let logical_h = (size.height as f64 / scale) as u32;
+                        self.comms.send_input(InputEvent::WindowResize {
+                            width: logical_w,
+                            height: logical_h,
+                            emacs_frame_id: emacs_fid,
+                        });
+                    }
+                }
             }
 
             WindowEvent::Focused(focused) => {
-                self.comms.send_input(InputEvent::WindowFocus { focused });
+                let emacs_fid = self.multi_windows.emacs_frame_for_winit(_window_id).unwrap_or(0);
+                self.comms.send_input(InputEvent::WindowFocus { focused, emacs_frame_id: emacs_fid });
             }
 
             WindowEvent::KeyboardInput {
@@ -2726,8 +2784,8 @@ impl ApplicationHandler for RenderApp {
                             self.chrome.last_titlebar_click = now;
                         }
                         2 => {
-                            // Close button
-                            self.comms.send_input(InputEvent::WindowClose);
+                            // Close button (titlebar is only on primary window)
+                            self.comms.send_input(InputEvent::WindowClose { emacs_frame_id: 0 });
                         }
                         3 => {
                             // Maximize/restore toggle
@@ -3028,6 +3086,12 @@ impl ApplicationHandler for RenderApp {
             event_loop.exit();
             return;
         }
+
+        // Process multi-window creates/destroys
+        if let (Some(device), Some(adapter)) = (&self.device, &self.adapter) {
+            self.multi_windows.process_creates(event_loop, device, adapter);
+        }
+        self.multi_windows.process_destroys();
 
         // Get latest frame from Emacs
         self.poll_frame();

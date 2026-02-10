@@ -321,20 +321,23 @@ pub unsafe extern "C" fn neomacs_display_drain_input(
                         out.pixel_precise = if pixel_precise { 1 } else { 0 };
                         out.target_frame_id = target_frame_id;
                     }
-                    InputEvent::WindowResize { width, height } => {
+                    InputEvent::WindowResize { width, height, emacs_frame_id } => {
                         out.kind = NEOMACS_EVENT_RESIZE;
                         out.width = width;
                         out.height = height;
+                        out.target_frame_id = emacs_frame_id;
                     }
-                    InputEvent::WindowClose => {
+                    InputEvent::WindowClose { emacs_frame_id } => {
                         out.kind = NEOMACS_EVENT_CLOSE;
+                        out.target_frame_id = emacs_frame_id;
                     }
-                    InputEvent::WindowFocus { focused } => {
+                    InputEvent::WindowFocus { focused, emacs_frame_id } => {
                         out.kind = if focused {
                             NEOMACS_EVENT_FOCUS_IN
                         } else {
                             NEOMACS_EVENT_FOCUS_OUT
                         };
+                        out.target_frame_id = emacs_frame_id;
                     }
                     InputEvent::ImageDimensionsReady { id, width, height } => {
                         out.kind = NEOMACS_EVENT_IMAGE_DIMENSIONS_READY;

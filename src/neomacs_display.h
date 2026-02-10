@@ -1205,6 +1205,22 @@ void neomacs_display_remove_child_frame(struct NeomacsDisplay *handle,
                                         uint64_t frame_id);
 
 /**
+ * Create a new OS window for a top-level Emacs frame.
+ * The window is created asynchronously on the render thread.
+ * emacs_frame_id should be the Emacs frame pointer cast to uint64_t.
+ */
+void neomacs_display_create_os_window(struct NeomacsDisplay *handle,
+                                       uint64_t emacs_frame_id,
+                                       int width, int height,
+                                       const char *title);
+
+/**
+ * Destroy an OS window for a top-level Emacs frame.
+ */
+void neomacs_display_destroy_os_window(struct NeomacsDisplay *handle,
+                                        uint64_t emacs_frame_id);
+
+/**
  * Configure child frame visual style (drop shadow, rounded corners).
  */
 void neomacs_display_set_child_frame_style(struct NeomacsDisplay *handle,

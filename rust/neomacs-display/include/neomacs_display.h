@@ -2794,6 +2794,29 @@ void neomacs_display_begin_frame_window(struct NeomacsDisplay *handle,
 void neomacs_display_end_frame_window(struct NeomacsDisplay *handle, uint32_t windowId);
 
 /**
+ * Create a new OS window for a top-level Emacs frame.
+ *
+ * The window is created asynchronously on the render thread.
+ * `emacs_frame_id` should be the Emacs frame pointer cast to u64.
+ *
+ * # Safety
+ * Must be called from the Emacs thread with valid parameters.
+ */
+void neomacs_display_create_os_window(struct NeomacsDisplay *handle,
+                                      uint64_t emacsFrameId,
+                                      int width,
+                                      int height,
+                                      const char *title);
+
+/**
+ * Destroy an OS window for a top-level Emacs frame.
+ *
+ * # Safety
+ * Must be called from the Emacs thread.
+ */
+void neomacs_display_destroy_os_window(struct NeomacsDisplay *handle, uint64_t emacsFrameId);
+
+/**
  * Called from C when `neomacs-use-rust-display` is enabled.
  * The Rust layout engine reads buffer data via FFI helpers and produces
  * a FrameGlyphBuffer, bypassing the C matrix extraction.

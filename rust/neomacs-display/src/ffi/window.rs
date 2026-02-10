@@ -171,3 +171,61 @@ pub unsafe extern "C" fn neomacs_display_end_frame_window(
 
     display.current_render_window_id = 0;
 }
+
+// ============================================================================
+// Multi-Window FFI (Threaded Mode)
+// ============================================================================
+
+/// Create a new OS window for a top-level Emacs frame.
+///
+/// The window is created asynchronously on the render thread.
+/// `emacs_frame_id` should be the Emacs frame pointer cast to u64.
+///
+/// # Safety
+/// Must be called from the Emacs thread with valid parameters.
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_create_os_window(
+    _handle: *mut NeomacsDisplay,
+    emacs_frame_id: u64,
+    width: c_int,
+    height: c_int,
+    title: *const c_char,
+) {
+    #[cfg(feature = "winit-backend")]
+    {
+        if let Some(state) = (*std::ptr::addr_of!(super::THREADED_STATE)).as_ref() {
+            let title_str = if title.is_null() {
+                "neomacs".to_string()
+            } else {
+                CStr::from_ptr(title).to_str().unwrap_or("neomacs").to_string()
+            };
+            let _ = state.emacs_comms.cmd_tx.try_send(
+                RenderCommand::CreateWindow {
+                    emacs_frame_id,
+                    width: width as u32,
+                    height: height as u32,
+                    title: title_str,
+                }
+            );
+        }
+    }
+}
+
+/// Destroy an OS window for a top-level Emacs frame.
+///
+/// # Safety
+/// Must be called from the Emacs thread.
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_destroy_os_window(
+    _handle: *mut NeomacsDisplay,
+    emacs_frame_id: u64,
+) {
+    #[cfg(feature = "winit-backend")]
+    {
+        if let Some(state) = (*std::ptr::addr_of!(super::THREADED_STATE)).as_ref() {
+            let _ = state.emacs_comms.cmd_tx.try_send(
+                RenderCommand::DestroyWindow { emacs_frame_id }
+            );
+        }
+    }
+}
