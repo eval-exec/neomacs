@@ -296,6 +296,7 @@ image_pix_container_create_from_bitmap_data (char *data, unsigned int width,
   return pimg;
 }
 
+#ifndef HAVE_NEOMACS
 static cairo_surface_t *
 cr_create_surface_from_pix_containers (Emacs_Pix_Container pimg,
 				       Emacs_Pix_Container mask)
@@ -357,6 +358,7 @@ cr_put_image_to_cr_data (struct image *img)
 
   img->cr_data = pattern;
 }
+#endif	/* !HAVE_NEOMACS */
 
 #endif	/* USE_CAIRO */
 
@@ -1925,14 +1927,13 @@ prepare_image_for_display (struct frame *f, struct image *img)
 				   != CAIRO_PATTERN_TYPE_SURFACE))
 	{
 #ifdef HAVE_NEOMACS
-	  /* Neomacs images don't use Cairo pixmaps - GPU handles rendering.
-	     Skip Cairo-specific processing for neomacs image type.  */
-	  if (EQ (image_spec_value (img->spec, QCtype, NULL), Qneomacs))
-	    {
-	      /* Nothing to do - GPU will handle the image in neomacsterm.c */
-	    }
-	  else
-#endif
+	  /* Neomacs renders images via GPU, not Cairo.  Preserve
+	     img->pixmap->data so neomacsterm.c can upload it directly.
+	     cr_put_image_to_cr_data would transfer ownership to a Cairo
+	     pattern and set pixmap->data = NULL, making it inaccessible.  */
+	  IMAGE_BACKGROUND (img, f, img->pixmap);
+	  IMAGE_BACKGROUND_TRANSPARENT (img, f, img->mask);
+#else
 	    {
 	      /* Fill in the background/background_transparent field while
 		 we have img->pixmap->data/img->mask->data.  */
@@ -1945,6 +1946,7 @@ prepare_image_for_display (struct frame *f, struct image *img)
 		  img->type->free_img (f, img);
 		}
 	    }
+#endif
 	}
       unblock_input ();
     }

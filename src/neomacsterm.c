@@ -7043,9 +7043,10 @@ neomacs_get_or_load_image (struct neomacs_display_info *dpyinfo, struct image *i
       int height = img->pixmap->height;
       int stride = img->pixmap->bytes_per_line;
       unsigned char *data = (unsigned char *) img->pixmap->data;
+      int bpp = img->pixmap->bits_per_pixel;
 
       /* Check if image has alpha (mask or ARGB32 bits_per_pixel) */
-      if (img->mask || img->pixmap->bits_per_pixel == 32)
+      if (img->mask || bpp == 32)
         {
           gpu_id = neomacs_display_load_image_argb32 (dpyinfo->display_handle,
                                                        data, width, height, stride);
