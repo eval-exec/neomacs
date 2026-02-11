@@ -519,22 +519,22 @@ impl CursorAnimator {
     /// Update with explicit delta time (for external time management)
     pub fn update_with_dt(&mut self, dt: f32) -> bool {
         let now = Instant::now();
-        
+
         // Update cursor blink
         if now.duration_since(self.last_blink_toggle) >= self.blink_interval {
             self.blink_on = !self.blink_on;
             self.last_blink_toggle = now;
         }
-        
+
         // Smooth cursor movement (exponential interpolation)
         if self.mode != CursorAnimationMode::None {
             let factor = 1.0 - (-self.animation_speed * dt).exp();
-            
+
             self.current_x += (self.target_x - self.current_x) * factor;
             self.current_y += (self.target_y - self.current_y) * factor;
             self.current_width += (self.target_width - self.current_width) * factor;
             self.current_height += (self.target_height - self.current_height) * factor;
-            
+
             // Check if we've reached the target
             let dx = (self.target_x - self.current_x).abs();
             let dy = (self.target_y - self.current_y).abs();
@@ -551,29 +551,679 @@ impl CursorAnimator {
             self.current_height = self.target_height;
             self.animating = false;
         }
-        
+
         // Update particles
         for particle in &mut self.particles {
             particle.update(dt);
         }
         self.particles.retain(|p| p.is_alive(now));
-        
+
         // Update rings
         for ring in &mut self.rings {
             ring.update(dt);
         }
         self.rings.retain(|r| r.is_alive(now));
-        
+
         // Update trail (remove old points)
         let trail_lifetime = Duration::from_millis(200);
         self.trail.retain(|p| now.duration_since(p.time) < trail_lifetime);
-        
+
         // Add trail point for torpedo while moving
         if self.mode == CursorAnimationMode::Torpedo && self.animating {
             self.add_trail_point();
         }
-        
+
         // Return true if any animation is active
         self.animating || !self.particles.is_empty() || !self.rings.is_empty() || !self.trail.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    // -----------------------------------------------------------------------
+    // CursorAnimationMode
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mode_from_str_known_variants() {
+        assert_eq!(CursorAnimationMode::from_str("none"), CursorAnimationMode::None);
+        assert_eq!(CursorAnimationMode::from_str("smooth"), CursorAnimationMode::Smooth);
+        assert_eq!(CursorAnimationMode::from_str("railgun"), CursorAnimationMode::Railgun);
+        assert_eq!(CursorAnimationMode::from_str("torpedo"), CursorAnimationMode::Torpedo);
+        assert_eq!(CursorAnimationMode::from_str("pixiedust"), CursorAnimationMode::Pixiedust);
+        assert_eq!(CursorAnimationMode::from_str("sonicboom"), CursorAnimationMode::Sonicboom);
+        assert_eq!(CursorAnimationMode::from_str("ripple"), CursorAnimationMode::Ripple);
+        assert_eq!(CursorAnimationMode::from_str("wireframe"), CursorAnimationMode::Wireframe);
+    }
+
+    #[test]
+    fn mode_from_str_case_insensitive() {
+        assert_eq!(CursorAnimationMode::from_str("RAILGUN"), CursorAnimationMode::Railgun);
+        assert_eq!(CursorAnimationMode::from_str("Torpedo"), CursorAnimationMode::Torpedo);
+        assert_eq!(CursorAnimationMode::from_str("NONE"), CursorAnimationMode::None);
+    }
+
+    #[test]
+    fn mode_from_str_unknown_falls_back_to_smooth() {
+        assert_eq!(CursorAnimationMode::from_str("unknown"), CursorAnimationMode::Smooth);
+        assert_eq!(CursorAnimationMode::from_str(""), CursorAnimationMode::Smooth);
+        assert_eq!(CursorAnimationMode::from_str("foobar"), CursorAnimationMode::Smooth);
+    }
+
+    #[test]
+    fn mode_default_is_smooth() {
+        assert_eq!(CursorAnimationMode::default(), CursorAnimationMode::Smooth);
+    }
+
+    // -----------------------------------------------------------------------
+    // Particle
+    // -----------------------------------------------------------------------
+
+    fn make_particle(lifetime_ms: u64) -> Particle {
+        Particle {
+            x: 10.0,
+            y: 20.0,
+            vx: 100.0,
+            vy: -50.0,
+            size: 4.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            birth_time: Instant::now(),
+            lifetime: Duration::from_millis(lifetime_ms),
+            initial_size: 4.0,
+        }
+    }
+
+    #[test]
+    fn particle_is_alive_before_lifetime() {
+        let p = make_particle(500);
+        assert!(p.is_alive(Instant::now()));
+    }
+
+    #[test]
+    fn particle_is_dead_after_lifetime() {
+        let p = make_particle(10);
+        thread::sleep(Duration::from_millis(15));
+        assert!(!p.is_alive(Instant::now()));
+    }
+
+    #[test]
+    fn particle_age_fraction_starts_near_zero() {
+        let p = make_particle(1000);
+        let age = p.age_fraction(Instant::now());
+        assert!(age < 0.1, "expected age near 0, got {}", age);
+    }
+
+    #[test]
+    fn particle_age_fraction_clamped_to_one() {
+        let p = make_particle(10);
+        thread::sleep(Duration::from_millis(20));
+        let age = p.age_fraction(Instant::now());
+        assert!((age - 1.0).abs() < f32::EPSILON, "expected age clamped to 1.0, got {}", age);
+    }
+
+    #[test]
+    fn particle_update_moves_position() {
+        let mut p = make_particle(500);
+        let old_x = p.x;
+        let old_y = p.y;
+        p.update(0.016); // ~60 FPS frame
+        assert!(p.x > old_x, "x should increase with positive vx");
+        assert!(p.y < old_y, "y should decrease with negative vy");
+    }
+
+    #[test]
+    fn particle_update_applies_drag() {
+        let mut p = make_particle(500);
+        let old_vx = p.vx;
+        p.update(0.016);
+        assert!(p.vx.abs() < old_vx.abs(), "velocity should decrease due to drag");
+    }
+
+    #[test]
+    fn particle_opacity_starts_at_one() {
+        let p = make_particle(1000);
+        let op = p.opacity(Instant::now());
+        assert!(op > 0.9, "opacity should be near 1.0 at birth, got {}", op);
+    }
+
+    #[test]
+    fn particle_opacity_approaches_zero() {
+        let p = make_particle(10);
+        thread::sleep(Duration::from_millis(15));
+        let op = p.opacity(Instant::now());
+        assert!(op < 0.05, "opacity should be near 0 after lifetime, got {}", op);
+    }
+
+    #[test]
+    fn particle_current_size_shrinks_over_time() {
+        let p = make_particle(10);
+        let initial = p.current_size(p.birth_time);
+        thread::sleep(Duration::from_millis(15));
+        let final_size = p.current_size(Instant::now());
+        assert!(final_size < initial, "size should shrink; initial={}, final={}", initial, final_size);
+    }
+
+    // -----------------------------------------------------------------------
+    // Ring
+    // -----------------------------------------------------------------------
+
+    fn make_ring(lifetime_ms: u64) -> Ring {
+        Ring {
+            x: 50.0,
+            y: 60.0,
+            radius: 5.0,
+            speed: 300.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            birth_time: Instant::now(),
+            lifetime: Duration::from_millis(lifetime_ms),
+            thickness: 3.0,
+        }
+    }
+
+    #[test]
+    fn ring_is_alive_and_dies() {
+        let r = make_ring(10);
+        assert!(r.is_alive(Instant::now()));
+        thread::sleep(Duration::from_millis(15));
+        assert!(!r.is_alive(Instant::now()));
+    }
+
+    #[test]
+    fn ring_update_expands_radius() {
+        let mut r = make_ring(500);
+        let old_radius = r.radius;
+        r.update(0.016);
+        assert!(r.radius > old_radius, "ring should expand");
+    }
+
+    #[test]
+    fn ring_opacity_fades() {
+        let r = make_ring(10);
+        let op_start = r.opacity(r.birth_time);
+        assert!((op_start - 1.0).abs() < f32::EPSILON);
+        thread::sleep(Duration::from_millis(15));
+        let op_end = r.opacity(Instant::now());
+        assert!(op_end < 0.05, "ring opacity should fade near zero, got {}", op_end);
+    }
+
+    // -----------------------------------------------------------------------
+    // CursorAnimator - construction and initial state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn new_animator_initial_state() {
+        let a = CursorAnimator::new();
+        assert_eq!(a.mode, CursorAnimationMode::Smooth);
+        assert_eq!(a.target_x, 0.0);
+        assert_eq!(a.target_y, 0.0);
+        assert_eq!(a.current_x, 0.0);
+        assert_eq!(a.current_y, 0.0);
+        assert_eq!(a.target_width, 8.0);
+        assert_eq!(a.target_height, 16.0);
+        assert_eq!(a.current_width, 8.0);
+        assert_eq!(a.current_height, 16.0);
+        assert_eq!(a.color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(a.style, 0);
+        assert!(a.visible);
+        assert!(!a.animating);
+        assert!(a.particles.is_empty());
+        assert!(a.rings.is_empty());
+        assert!(a.trail.is_empty());
+        assert!(a.is_visible());
+        assert!(!a.is_animating());
+    }
+
+    #[test]
+    fn default_matches_new() {
+        let a = CursorAnimator::default();
+        let b = CursorAnimator::new();
+        assert_eq!(a.mode, b.mode);
+        assert_eq!(a.target_x, b.target_x);
+        assert_eq!(a.animation_speed, b.animation_speed);
+        assert_eq!(a.glow_intensity, b.glow_intensity);
+    }
+
+    // -----------------------------------------------------------------------
+    // set_target / update_target
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_target_updates_target_fields() {
+        let mut a = CursorAnimator::new();
+        a.set_target(100.0, 200.0, 10.0, 20.0, 1, [0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(a.target_x, 100.0);
+        assert_eq!(a.target_y, 200.0);
+        assert_eq!(a.target_width, 10.0);
+        assert_eq!(a.target_height, 20.0);
+        assert_eq!(a.style, 1);
+        assert_eq!(a.color, [0.5, 0.5, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn set_target_starts_animation_on_move() {
+        let mut a = CursorAnimator::new();
+        assert!(!a.animating);
+        a.set_target(100.0, 200.0, 10.0, 20.0, 0, [1.0; 4]);
+        assert!(a.animating, "moving cursor should set animating=true");
+    }
+
+    #[test]
+    fn set_target_no_animation_for_tiny_move() {
+        let mut a = CursorAnimator::new();
+        // Move less than 0.5 in both axes -- should not trigger on_cursor_move
+        a.set_target(0.3, 0.3, 8.0, 16.0, 0, [1.0; 4]);
+        assert!(!a.animating, "sub-threshold move should not animate");
+    }
+
+    #[test]
+    fn set_target_records_last_position() {
+        let mut a = CursorAnimator::new();
+        a.set_target(50.0, 60.0, 8.0, 16.0, 0, [1.0; 4]);
+        assert_eq!(a.last_target_x, 0.0);
+        assert_eq!(a.last_target_y, 0.0);
+        a.set_target(100.0, 120.0, 8.0, 16.0, 0, [1.0; 4]);
+        assert_eq!(a.last_target_x, 50.0);
+        assert_eq!(a.last_target_y, 60.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // tick / update_with_dt - animation progress
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn update_with_dt_moves_toward_target() {
+        let mut a = CursorAnimator::new();
+        a.set_target(200.0, 300.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        // Simulate several frames
+        for _ in 0..10 {
+            a.update_with_dt(0.016);
+        }
+
+        // Should have moved toward target but not necessarily reached it
+        assert!(a.current_x > 0.0, "current_x should move toward target");
+        assert!(a.current_y > 0.0, "current_y should move toward target");
+        assert!(a.current_x <= 200.0, "current_x should not overshoot");
+        assert!(a.current_y <= 300.0, "current_y should not overshoot");
+    }
+
+    #[test]
+    fn update_with_dt_converges_to_target() {
+        let mut a = CursorAnimator::new();
+        a.set_target(100.0, 100.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        // Simulate many frames (~2 seconds at 60fps)
+        for _ in 0..120 {
+            a.update_with_dt(0.016);
+        }
+
+        assert!((a.current_x - 100.0).abs() < 0.5, "x should converge; got {}", a.current_x);
+        assert!((a.current_y - 100.0).abs() < 0.5, "y should converge; got {}", a.current_y);
+        // Once converged, snaps exactly and animating is false
+        assert_eq!(a.current_x, a.target_x);
+        assert_eq!(a.current_y, a.target_y);
+        assert!(!a.animating);
+    }
+
+    #[test]
+    fn update_with_dt_snaps_when_close() {
+        let mut a = CursorAnimator::new();
+        // Place current very close to target
+        a.target_x = 10.0;
+        a.target_y = 10.0;
+        a.current_x = 9.8;
+        a.current_y = 9.8;
+        a.animating = true;
+
+        a.update_with_dt(0.016);
+
+        assert_eq!(a.current_x, 10.0, "should snap to target x");
+        assert_eq!(a.current_y, 10.0, "should snap to target y");
+        assert!(!a.animating);
+    }
+
+    #[test]
+    fn update_returns_false_when_idle() {
+        let mut a = CursorAnimator::new();
+        // No target change, no particles -- should be idle
+        let active = a.update_with_dt(0.016);
+        assert!(!active, "update should return false when nothing is happening");
+    }
+
+    #[test]
+    fn update_returns_true_while_animating() {
+        let mut a = CursorAnimator::new();
+        a.set_target(500.0, 500.0, 8.0, 16.0, 0, [1.0; 4]);
+        let active = a.update_with_dt(0.016);
+        assert!(active, "update should return true while cursor is in motion");
+    }
+
+    // -----------------------------------------------------------------------
+    // Mode::None - instant movement
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mode_none_instant_movement() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::None);
+        a.set_target(500.0, 400.0, 12.0, 24.0, 0, [1.0; 4]);
+        a.update_with_dt(0.016);
+
+        assert_eq!(a.current_x, 500.0);
+        assert_eq!(a.current_y, 400.0);
+        assert_eq!(a.current_width, 12.0);
+        assert_eq!(a.current_height, 24.0);
+        assert!(!a.animating);
+    }
+
+    // -----------------------------------------------------------------------
+    // Blink
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn blink_toggles_after_interval() {
+        let mut a = CursorAnimator::new();
+        assert!(a.blink_on);
+        assert!(a.is_visible());
+
+        // Wait longer than blink interval (530ms)
+        thread::sleep(Duration::from_millis(550));
+        a.update_with_dt(0.0);
+
+        assert!(!a.blink_on, "blink should have toggled off");
+        assert!(!a.is_visible(), "cursor should be invisible when blink is off");
+    }
+
+    #[test]
+    fn blink_resets_on_cursor_move() {
+        let mut a = CursorAnimator::new();
+        // Force blink off
+        thread::sleep(Duration::from_millis(550));
+        a.update_with_dt(0.0);
+        assert!(!a.blink_on);
+
+        // Move cursor -- blink should reset to on
+        a.set_target(100.0, 100.0, 8.0, 16.0, 0, [1.0; 4]);
+        assert!(a.blink_on, "blink should reset to on after cursor move");
+    }
+
+    #[test]
+    fn visibility_depends_on_visible_flag() {
+        let mut a = CursorAnimator::new();
+        assert!(a.is_visible());
+        a.visible = false;
+        assert!(!a.is_visible(), "should be invisible when visible=false");
+    }
+
+    // -----------------------------------------------------------------------
+    // set_mode clears effects
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_mode_clears_particles_and_rings() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Railgun);
+        // Trigger particle spawn by moving
+        a.set_target(100.0, 100.0, 8.0, 16.0, 0, [1.0; 4]);
+        assert!(!a.particles.is_empty(), "railgun should spawn particles");
+
+        a.set_mode(CursorAnimationMode::Smooth);
+        assert!(a.particles.is_empty(), "set_mode should clear particles");
+        assert!(a.rings.is_empty(), "set_mode should clear rings");
+        assert!(a.trail.is_empty(), "set_mode should clear trail");
+        assert_eq!(a.mode, CursorAnimationMode::Smooth);
+    }
+
+    // -----------------------------------------------------------------------
+    // set_animation_speed clamping
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_animation_speed_clamps() {
+        let mut a = CursorAnimator::new();
+        a.set_animation_speed(0.5);
+        assert_eq!(a.animation_speed, 1.0, "speed below 1 should clamp to 1");
+
+        a.set_animation_speed(200.0);
+        assert_eq!(a.animation_speed, 100.0, "speed above 100 should clamp to 100");
+
+        a.set_animation_speed(50.0);
+        assert_eq!(a.animation_speed, 50.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // set_particle_count clamping
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_particle_count_clamps() {
+        let mut a = CursorAnimator::new();
+        a.set_particle_count(0);
+        assert_eq!(a.particle_count, 1, "count 0 should clamp to 1");
+
+        a.set_particle_count(999);
+        assert_eq!(a.particle_count, 100, "count above 100 should clamp to 100");
+
+        a.set_particle_count(42);
+        assert_eq!(a.particle_count, 42);
+    }
+
+    // -----------------------------------------------------------------------
+    // Particle effects per mode
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn railgun_spawns_particles_on_move() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Railgun);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        assert_eq!(a.particles.len(), a.particle_count as usize);
+    }
+
+    #[test]
+    fn pixiedust_spawns_particles_on_move() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Pixiedust);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        assert_eq!(a.particles.len(), a.particle_count as usize);
+    }
+
+    #[test]
+    fn sonicboom_spawns_ring_on_move() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Sonicboom);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        assert_eq!(a.rings.len(), 1);
+    }
+
+    #[test]
+    fn ripple_spawns_three_rings_on_move() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Ripple);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        assert_eq!(a.rings.len(), 3, "ripple should spawn 3 concentric rings");
+    }
+
+    #[test]
+    fn torpedo_adds_trail_point_on_move() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Torpedo);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        assert!(!a.trail.is_empty(), "torpedo should add trail point on move");
+    }
+
+    #[test]
+    fn torpedo_adds_trail_points_while_animating() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Torpedo);
+        a.set_target(500.0, 500.0, 8.0, 16.0, 0, [1.0; 4]);
+        let initial_count = a.trail.len();
+
+        // Tick several frames while still animating
+        for _ in 0..5 {
+            a.update_with_dt(0.016);
+        }
+        assert!(a.trail.len() > initial_count, "torpedo should accumulate trail points during animation");
+    }
+
+    #[test]
+    fn smooth_mode_no_particles_or_rings() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Smooth);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        assert!(a.particles.is_empty(), "smooth mode should not spawn particles");
+        assert!(a.rings.is_empty(), "smooth mode should not spawn rings");
+    }
+
+    #[test]
+    fn wireframe_mode_no_particles_or_rings() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Wireframe);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        assert!(a.particles.is_empty(), "wireframe mode should not spawn particles");
+        assert!(a.rings.is_empty(), "wireframe mode should not spawn rings");
+    }
+
+    // -----------------------------------------------------------------------
+    // Particles/rings expire and are cleaned up
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn particles_expire_after_lifetime() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Pixiedust);
+        // Use very short particle lifetime
+        a.particle_lifetime = Duration::from_millis(10);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+        assert!(!a.particles.is_empty());
+
+        thread::sleep(Duration::from_millis(20));
+        a.update_with_dt(0.0);
+        assert!(a.particles.is_empty(), "particles should be removed after lifetime");
+    }
+
+    #[test]
+    fn rings_expire_after_lifetime() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Sonicboom);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+        assert!(!a.rings.is_empty());
+
+        // Sonicboom rings have 300ms lifetime
+        thread::sleep(Duration::from_millis(350));
+        a.update_with_dt(0.0);
+        assert!(a.rings.is_empty(), "rings should be removed after lifetime");
+    }
+
+    // -----------------------------------------------------------------------
+    // Trail max length
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trail_capped_at_max_length() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Torpedo);
+
+        // Add many trail points by repeatedly moving
+        for i in 0..60 {
+            let x = (i as f32) * 10.0;
+            a.set_target(x, 0.0, 8.0, 16.0, 0, [1.0; 4]);
+        }
+
+        assert!(a.trail.len() <= a.max_trail_length,
+            "trail length {} should not exceed max {}", a.trail.len(), a.max_trail_length);
+    }
+
+    // -----------------------------------------------------------------------
+    // is_animating reflects all effect sources
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_animating_reflects_particles() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Railgun);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+        assert!(a.is_animating(), "should be animating with active particles");
+    }
+
+    #[test]
+    fn is_animating_reflects_rings() {
+        let mut a = CursorAnimator::new();
+        a.set_mode(CursorAnimationMode::Sonicboom);
+        a.set_target(200.0, 200.0, 8.0, 16.0, 0, [1.0; 4]);
+        assert!(a.is_animating(), "should be animating with active rings");
+    }
+
+    // -----------------------------------------------------------------------
+    // Higher animation_speed converges faster
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn higher_speed_converges_faster() {
+        let mut slow = CursorAnimator::new();
+        slow.set_animation_speed(5.0);
+        slow.set_target(200.0, 0.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        let mut fast = CursorAnimator::new();
+        fast.set_animation_speed(50.0);
+        fast.set_target(200.0, 0.0, 8.0, 16.0, 0, [1.0; 4]);
+
+        // Simulate 5 frames
+        for _ in 0..5 {
+            slow.update_with_dt(0.016);
+            fast.update_with_dt(0.016);
+        }
+
+        assert!(fast.current_x > slow.current_x,
+            "faster animator ({}) should be closer to target than slower ({})",
+            fast.current_x, slow.current_x);
+    }
+
+    // -----------------------------------------------------------------------
+    // Width/height also animate smoothly
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn width_and_height_animate() {
+        let mut a = CursorAnimator::new();
+        // Default width=8, height=16; change to 20x40
+        a.set_target(0.0, 0.0, 20.0, 40.0, 0, [1.0; 4]);
+        a.update_with_dt(0.016);
+
+        assert!(a.current_width > 8.0, "width should animate toward 20");
+        assert!(a.current_height > 16.0, "height should animate toward 40");
+
+        // Converge
+        for _ in 0..200 {
+            a.update_with_dt(0.016);
+        }
+        assert!((a.current_width - 20.0).abs() < 0.5);
+        assert!((a.current_height - 40.0).abs() < 0.5);
+    }
+
+    // -----------------------------------------------------------------------
+    // update() (wall-clock based) basic smoke test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn update_wall_clock_smoke_test() {
+        let mut a = CursorAnimator::new();
+        a.set_target(100.0, 100.0, 8.0, 16.0, 0, [1.0; 4]);
+        thread::sleep(Duration::from_millis(16));
+        let active = a.update();
+        // Should be animating since we just moved
+        assert!(active);
+        assert!(a.current_x > 0.0, "should have moved from origin");
     }
 }

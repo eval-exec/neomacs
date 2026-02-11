@@ -663,3 +663,992 @@ impl FrameGlyphBuffer {
         self.glyphs.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Helper: assert a Color matches expected RGBA (with tolerance for floats)
+    // -----------------------------------------------------------------------
+    fn assert_color_eq(actual: &Color, expected: &Color) {
+        assert!(
+            (actual.r - expected.r).abs() < 1e-5
+                && (actual.g - expected.g).abs() < 1e-5
+                && (actual.b - expected.b).abs() < 1e-5
+                && (actual.a - expected.a).abs() < 1e-5,
+            "Colors differ: actual {:?} vs expected {:?}",
+            actual,
+            expected,
+        );
+    }
+
+    // =======================================================================
+    // new() - initial state
+    // =======================================================================
+
+    #[test]
+    fn new_creates_empty_buffer() {
+        let buf = FrameGlyphBuffer::new();
+        assert!(buf.glyphs.is_empty());
+        assert!(buf.window_regions.is_empty());
+        assert!(buf.window_infos.is_empty());
+        assert!(buf.faces.is_empty());
+        assert!(buf.face_fonts.is_empty());
+        assert!(buf.stipple_patterns.is_empty());
+        assert!(buf.face_box_attrs.is_empty());
+        assert!(buf.cursor_inverse.is_none());
+        assert!(!buf.layout_changed);
+    }
+
+    #[test]
+    fn new_has_correct_defaults() {
+        let buf = FrameGlyphBuffer::new();
+        assert_eq!(buf.width, 0.0);
+        assert_eq!(buf.height, 0.0);
+        assert_eq!(buf.char_width, 8.0);
+        assert_eq!(buf.char_height, 16.0);
+        assert_eq!(buf.font_pixel_size, 14.0);
+        assert_color_eq(&buf.background, &Color::BLACK);
+        assert_eq!(buf.frame_id, 0);
+        assert_eq!(buf.parent_id, 0);
+        assert_eq!(buf.background_alpha, 1.0);
+        assert!(!buf.no_accept_focus);
+    }
+
+    #[test]
+    fn new_is_empty_and_len_zero() {
+        let buf = FrameGlyphBuffer::new();
+        assert!(buf.is_empty());
+        assert_eq!(buf.len(), 0);
+    }
+
+    // =======================================================================
+    // with_size()
+    // =======================================================================
+
+    #[test]
+    fn with_size_sets_dimensions() {
+        let buf = FrameGlyphBuffer::with_size(1920.0, 1080.0);
+        assert_eq!(buf.width, 1920.0);
+        assert_eq!(buf.height, 1080.0);
+        // Everything else should match new()
+        assert!(buf.glyphs.is_empty());
+        assert_eq!(buf.char_width, 8.0);
+    }
+
+    // =======================================================================
+    // clear_all()
+    // =======================================================================
+
+    #[test]
+    fn clear_all_resets_glyphs_and_metadata() {
+        let mut buf = FrameGlyphBuffer::new();
+
+        // Populate some data
+        buf.add_char('A', 0.0, 0.0, 8.0, 16.0, 12.0, false);
+        buf.add_stretch(0.0, 0.0, 100.0, 16.0, Color::RED, 0, false);
+        buf.add_cursor(1, 10.0, 20.0, 2.0, 16.0, 1, Color::WHITE);
+        buf.add_window_info(
+            1, 100, 0, 500, 1000,
+            0.0, 0.0, 800.0, 600.0,
+            20.0, true, false, 16.0,
+            "test.rs".to_string(), false,
+        );
+        buf.set_cursor_inverse(10.0, 20.0, 8.0, 16.0, Color::WHITE, Color::BLACK);
+        buf.stipple_patterns.insert(1, StipplePattern {
+            width: 8,
+            height: 8,
+            bits: vec![0xAA; 8],
+        });
+        buf.face_box_attrs.insert(1, FaceBoxAttrs {
+            box_type: 1,
+            box_color: Color::RED,
+            box_line_width: 1,
+            box_corner_radius: 0,
+        });
+
+        assert!(!buf.glyphs.is_empty());
+        assert!(!buf.window_infos.is_empty());
+
+        buf.clear_all();
+
+        assert!(buf.glyphs.is_empty());
+        assert!(buf.window_regions.is_empty());
+        assert!(buf.window_infos.is_empty());
+        assert!(buf.cursor_inverse.is_none());
+        assert!(buf.stipple_patterns.is_empty());
+        assert!(buf.face_box_attrs.is_empty());
+    }
+
+    #[test]
+    fn clear_all_preserves_frame_dimensions() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.begin_frame(1920.0, 1080.0, Color::BLUE);
+        buf.add_char('X', 0.0, 0.0, 8.0, 16.0, 12.0, false);
+
+        buf.clear_all();
+
+        // Dimensions and background should survive clear_all
+        assert_eq!(buf.width, 1920.0);
+        assert_eq!(buf.height, 1080.0);
+        assert_color_eq(&buf.background, &Color::BLUE);
+    }
+
+    // =======================================================================
+    // begin_frame()
+    // =======================================================================
+
+    #[test]
+    fn begin_frame_sets_dimensions_and_background() {
+        let mut buf = FrameGlyphBuffer::new();
+        let bg = Color::rgb(0.1, 0.2, 0.3);
+        buf.begin_frame(800.0, 600.0, bg);
+
+        assert_eq!(buf.width, 800.0);
+        assert_eq!(buf.height, 600.0);
+        assert_color_eq(&buf.background, &bg);
+    }
+
+    #[test]
+    fn begin_frame_clears_glyphs() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_char('Z', 5.0, 5.0, 8.0, 16.0, 12.0, false);
+        assert_eq!(buf.len(), 1);
+
+        buf.begin_frame(800.0, 600.0, Color::BLACK);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn begin_frame_clears_cursor_inverse() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.set_cursor_inverse(0.0, 0.0, 8.0, 16.0, Color::WHITE, Color::BLACK);
+        assert!(buf.cursor_inverse.is_some());
+
+        buf.begin_frame(800.0, 600.0, Color::BLACK);
+        assert!(buf.cursor_inverse.is_none());
+    }
+
+    #[test]
+    fn begin_frame_clears_stipple_patterns_and_box_attrs() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.stipple_patterns.insert(1, StipplePattern {
+            width: 4, height: 4, bits: vec![0xFF; 2],
+        });
+        buf.face_box_attrs.insert(1, FaceBoxAttrs {
+            box_type: 1,
+            box_color: Color::RED,
+            box_line_width: 2,
+            box_corner_radius: 0,
+        });
+
+        buf.begin_frame(800.0, 600.0, Color::BLACK);
+        assert!(buf.stipple_patterns.is_empty());
+        assert!(buf.face_box_attrs.is_empty());
+    }
+
+    #[test]
+    fn begin_frame_then_add_then_begin_frame_clears_previous() {
+        let mut buf = FrameGlyphBuffer::new();
+
+        // First frame
+        buf.begin_frame(800.0, 600.0, Color::BLACK);
+        buf.add_char('A', 0.0, 0.0, 8.0, 16.0, 12.0, false);
+        buf.add_char('B', 8.0, 0.0, 8.0, 16.0, 12.0, false);
+        buf.add_cursor(1, 16.0, 0.0, 2.0, 16.0, 1, Color::WHITE);
+        buf.add_stretch(0.0, 16.0, 800.0, 16.0, Color::BLACK, 0, false);
+        buf.add_window_info(
+            1, 100, 0, 100, 200,
+            0.0, 0.0, 800.0, 600.0,
+            20.0, true, false, 16.0,
+            String::new(), false,
+        );
+        assert_eq!(buf.len(), 4);
+        assert_eq!(buf.window_infos.len(), 1);
+
+        // Second frame - should clear all glyphs
+        buf.begin_frame(1024.0, 768.0, Color::WHITE);
+        assert!(buf.is_empty());
+        assert_eq!(buf.width, 1024.0);
+        assert_eq!(buf.height, 768.0);
+        assert_color_eq(&buf.background, &Color::WHITE);
+        // Note: begin_frame does NOT clear window_infos (that's clear_all's job)
+    }
+
+    // =======================================================================
+    // add_char()
+    // =======================================================================
+
+    #[test]
+    fn add_char_appends_char_glyph() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_char('H', 10.0, 20.0, 8.0, 16.0, 12.0, false);
+
+        assert_eq!(buf.len(), 1);
+        match &buf.glyphs[0] {
+            FrameGlyph::Char { char: ch, x, y, width, height, ascent, is_overlay, composed, .. } => {
+                assert_eq!(*ch, 'H');
+                assert_eq!(*x, 10.0);
+                assert_eq!(*y, 20.0);
+                assert_eq!(*width, 8.0);
+                assert_eq!(*height, 16.0);
+                assert_eq!(*ascent, 12.0);
+                assert!(!*is_overlay);
+                assert!(composed.is_none());
+            }
+            other => panic!("Expected Char glyph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn add_char_uses_current_face_attributes() {
+        let mut buf = FrameGlyphBuffer::new();
+        let fg = Color::rgb(1.0, 0.0, 0.0);
+        let bg = Color::rgb(0.0, 0.0, 1.0);
+        buf.set_face(
+            42, fg, Some(bg),
+            700, true,
+            1, Some(Color::GREEN),   // underline
+            1, Some(Color::RED),     // strike-through
+            1, Some(Color::BLUE),    // overline
+        );
+        buf.add_char('X', 0.0, 0.0, 8.0, 16.0, 12.0, true);
+
+        match &buf.glyphs[0] {
+            FrameGlyph::Char {
+                fg: glyph_fg, bg: glyph_bg, face_id,
+                font_weight, italic, underline, strike_through, overline,
+                is_overlay, underline_color, strike_through_color, overline_color,
+                ..
+            } => {
+                assert_color_eq(glyph_fg, &fg);
+                assert_eq!(*glyph_bg, Some(bg));
+                assert_eq!(*face_id, 42);
+                assert_eq!(*font_weight, 700);
+                assert!(*italic);
+                assert_eq!(*underline, 1);
+                assert_eq!(*underline_color, Some(Color::GREEN));
+                assert_eq!(*strike_through, 1);
+                assert_eq!(*strike_through_color, Some(Color::RED));
+                assert_eq!(*overline, 1);
+                assert_eq!(*overline_color, Some(Color::BLUE));
+                assert!(*is_overlay);
+            }
+            other => panic!("Expected Char glyph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn add_char_multiple_appends_in_order() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_char('A', 0.0, 0.0, 8.0, 16.0, 12.0, false);
+        buf.add_char('B', 8.0, 0.0, 8.0, 16.0, 12.0, false);
+        buf.add_char('C', 16.0, 0.0, 8.0, 16.0, 12.0, false);
+
+        assert_eq!(buf.len(), 3);
+        let chars: Vec<char> = buf.glyphs.iter().map(|g| {
+            match g {
+                FrameGlyph::Char { char: ch, .. } => *ch,
+                _ => panic!("Expected Char"),
+            }
+        }).collect();
+        assert_eq!(chars, vec!['A', 'B', 'C']);
+    }
+
+    #[test]
+    fn add_char_overlay_flag() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_char('M', 0.0, 0.0, 8.0, 16.0, 12.0, true);
+        assert!(buf.glyphs[0].is_overlay());
+
+        buf.add_char('N', 0.0, 0.0, 8.0, 16.0, 12.0, false);
+        assert!(!buf.glyphs[1].is_overlay());
+    }
+
+    // =======================================================================
+    // add_composed_char()
+    // =======================================================================
+
+    #[test]
+    fn add_composed_char_stores_text_and_base() {
+        let mut buf = FrameGlyphBuffer::new();
+        // Emoji ZWJ sequence: family emoji
+        let composed_text = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        buf.add_composed_char(composed_text, '\u{1F468}', 0.0, 0.0, 24.0, 16.0, 12.0, false);
+
+        assert_eq!(buf.len(), 1);
+        match &buf.glyphs[0] {
+            FrameGlyph::Char { char: ch, composed, width, .. } => {
+                assert_eq!(*ch, '\u{1F468}');
+                assert!(composed.is_some());
+                assert_eq!(&**composed.as_ref().unwrap(), composed_text);
+                assert_eq!(*width, 24.0);
+            }
+            other => panic!("Expected Char glyph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn add_composed_char_uses_current_face() {
+        let mut buf = FrameGlyphBuffer::new();
+        let fg = Color::rgb(0.5, 0.5, 0.5);
+        buf.set_face(10, fg, None, 400, false, 0, None, 0, None, 0, None);
+        buf.add_composed_char("e\u{0301}", 'e', 0.0, 0.0, 8.0, 16.0, 12.0, false);
+
+        match &buf.glyphs[0] {
+            FrameGlyph::Char { face_id, fg: glyph_fg, bg: glyph_bg, .. } => {
+                assert_eq!(*face_id, 10);
+                assert_color_eq(glyph_fg, &fg);
+                assert_eq!(*glyph_bg, None);
+            }
+            other => panic!("Expected Char glyph, got {:?}", other),
+        }
+    }
+
+    // =======================================================================
+    // add_cursor()
+    // =======================================================================
+
+    #[test]
+    fn add_cursor_appends_cursor_glyph() {
+        let mut buf = FrameGlyphBuffer::new();
+        let cursor_color = Color::rgb(0.0, 1.0, 0.0);
+        buf.add_cursor(42, 100.0, 200.0, 2.0, 16.0, 1, cursor_color);
+
+        assert_eq!(buf.len(), 1);
+        match &buf.glyphs[0] {
+            FrameGlyph::Cursor { window_id, x, y, width, height, style, color } => {
+                assert_eq!(*window_id, 42);
+                assert_eq!(*x, 100.0);
+                assert_eq!(*y, 200.0);
+                assert_eq!(*width, 2.0);
+                assert_eq!(*height, 16.0);
+                assert_eq!(*style, 1); // bar
+                assert_color_eq(color, &cursor_color);
+            }
+            other => panic!("Expected Cursor glyph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn add_cursor_all_styles() {
+        let mut buf = FrameGlyphBuffer::new();
+        let c = Color::WHITE;
+        buf.add_cursor(1, 0.0, 0.0, 8.0, 16.0, 0, c); // box
+        buf.add_cursor(1, 0.0, 0.0, 2.0, 16.0, 1, c); // bar
+        buf.add_cursor(1, 0.0, 0.0, 8.0, 2.0, 2, c);  // hbar
+        buf.add_cursor(1, 0.0, 0.0, 8.0, 16.0, 3, c);  // hollow
+
+        assert_eq!(buf.len(), 4);
+        for (i, expected_style) in [0u8, 1, 2, 3].iter().enumerate() {
+            match &buf.glyphs[i] {
+                FrameGlyph::Cursor { style, .. } => {
+                    assert_eq!(style, expected_style, "Cursor {} has wrong style", i);
+                }
+                other => panic!("Expected Cursor at index {}, got {:?}", i, other),
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_glyph_is_not_overlay() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_cursor(1, 0.0, 0.0, 8.0, 16.0, 0, Color::WHITE);
+        assert!(!buf.glyphs[0].is_overlay());
+    }
+
+    // =======================================================================
+    // add_stretch()
+    // =======================================================================
+
+    #[test]
+    fn add_stretch_appends_stretch_glyph() {
+        let mut buf = FrameGlyphBuffer::new();
+        let bg = Color::rgb(0.2, 0.2, 0.2);
+        buf.add_stretch(0.0, 100.0, 800.0, 16.0, bg, 5, false);
+
+        assert_eq!(buf.len(), 1);
+        match &buf.glyphs[0] {
+            FrameGlyph::Stretch { x, y, width, height, bg: stretch_bg, face_id, is_overlay, stipple_id, stipple_fg } => {
+                assert_eq!(*x, 0.0);
+                assert_eq!(*y, 100.0);
+                assert_eq!(*width, 800.0);
+                assert_eq!(*height, 16.0);
+                assert_color_eq(stretch_bg, &bg);
+                assert_eq!(*face_id, 5);
+                assert!(!*is_overlay);
+                assert_eq!(*stipple_id, 0);
+                assert!(stipple_fg.is_none());
+            }
+            other => panic!("Expected Stretch glyph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn add_stretch_overlay() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_stretch(0.0, 0.0, 800.0, 20.0, Color::BLUE, 0, true);
+        assert!(buf.glyphs[0].is_overlay());
+    }
+
+    #[test]
+    fn add_stretch_stipple_stores_pattern_info() {
+        let mut buf = FrameGlyphBuffer::new();
+        let bg = Color::BLACK;
+        let fg = Color::WHITE;
+        buf.add_stretch_stipple(0.0, 0.0, 100.0, 100.0, bg, fg, 3, false, 7);
+
+        assert_eq!(buf.len(), 1);
+        match &buf.glyphs[0] {
+            FrameGlyph::Stretch { stipple_id, stipple_fg, .. } => {
+                assert_eq!(*stipple_id, 7);
+                assert_eq!(*stipple_fg, Some(fg));
+            }
+            other => panic!("Expected Stretch glyph, got {:?}", other),
+        }
+    }
+
+    // =======================================================================
+    // add_window_info()
+    // =======================================================================
+
+    #[test]
+    fn add_window_info_appends_metadata() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_window_info(
+            0x1234, 0xABCD, 1, 500, 1000,
+            10.0, 20.0, 780.0, 560.0,
+            22.0, true, false, 16.0,
+            "main.rs".to_string(), true,
+        );
+
+        assert_eq!(buf.window_infos.len(), 1);
+        let info = &buf.window_infos[0];
+        assert_eq!(info.window_id, 0x1234);
+        assert_eq!(info.buffer_id, 0xABCD);
+        assert_eq!(info.window_start, 1);
+        assert_eq!(info.window_end, 500);
+        assert_eq!(info.buffer_size, 1000);
+        assert_eq!(info.bounds, Rect::new(10.0, 20.0, 780.0, 560.0));
+        assert_eq!(info.mode_line_height, 22.0);
+        assert!(info.selected);
+        assert!(!info.is_minibuffer);
+        assert_eq!(info.char_height, 16.0);
+        assert_eq!(info.buffer_file_name, "main.rs");
+        assert!(info.modified);
+    }
+
+    #[test]
+    fn add_window_info_multiple_windows() {
+        let mut buf = FrameGlyphBuffer::new();
+
+        // Two side-by-side windows
+        buf.add_window_info(
+            1, 100, 0, 200, 500,
+            0.0, 0.0, 400.0, 600.0,
+            20.0, true, false, 16.0,
+            "left.rs".to_string(), false,
+        );
+        buf.add_window_info(
+            2, 200, 0, 300, 800,
+            400.0, 0.0, 400.0, 600.0,
+            20.0, false, false, 16.0,
+            "right.rs".to_string(), true,
+        );
+
+        assert_eq!(buf.window_infos.len(), 2);
+        assert_eq!(buf.window_infos[0].window_id, 1);
+        assert!(buf.window_infos[0].selected);
+        assert_eq!(buf.window_infos[1].window_id, 2);
+        assert!(!buf.window_infos[1].selected);
+    }
+
+    #[test]
+    fn add_window_info_minibuffer() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_window_info(
+            99, 50, 0, 0, 0,
+            0.0, 580.0, 800.0, 20.0,
+            0.0, false, true, 16.0,
+            String::new(), false,
+        );
+
+        let info = &buf.window_infos[0];
+        assert!(info.is_minibuffer);
+        assert!(!info.selected);
+        assert_eq!(info.buffer_file_name, "");
+    }
+
+    // =======================================================================
+    // set_face() / set_face_with_font()
+    // =======================================================================
+
+    #[test]
+    fn set_face_affects_subsequent_chars() {
+        let mut buf = FrameGlyphBuffer::new();
+
+        // Default face
+        buf.add_char('A', 0.0, 0.0, 8.0, 16.0, 12.0, false);
+
+        // Change face
+        let red = Color::rgb(1.0, 0.0, 0.0);
+        buf.set_face(5, red, None, 700, true, 0, None, 0, None, 0, None);
+        buf.add_char('B', 8.0, 0.0, 8.0, 16.0, 12.0, false);
+
+        // First char uses default face
+        match &buf.glyphs[0] {
+            FrameGlyph::Char { face_id, font_weight, italic, .. } => {
+                assert_eq!(*face_id, 0);
+                assert_eq!(*font_weight, 400);
+                assert!(!*italic);
+            }
+            _ => panic!("Expected Char"),
+        }
+
+        // Second char uses newly set face
+        match &buf.glyphs[1] {
+            FrameGlyph::Char { face_id, font_weight, italic, fg, .. } => {
+                assert_eq!(*face_id, 5);
+                assert_eq!(*font_weight, 700);
+                assert!(*italic);
+                assert_color_eq(fg, &red);
+            }
+            _ => panic!("Expected Char"),
+        }
+    }
+
+    #[test]
+    fn set_face_with_font_stores_font_family() {
+        let mut buf = FrameGlyphBuffer::new();
+        let fg = Color::WHITE;
+        buf.set_face_with_font(
+            7, fg, None,
+            "Fira Code", 400, false, 14.0,
+            0, None, 0, None, 0, None,
+        );
+
+        // face_fonts map should have the entry
+        assert_eq!(buf.get_face_font(7), "Fira Code");
+        assert_eq!(buf.get_current_font_family(), "Fira Code");
+    }
+
+    #[test]
+    fn set_face_with_font_updates_font_size() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.set_face_with_font(
+            1, Color::WHITE, None,
+            "monospace", 400, false, 24.0,
+            0, None, 0, None, 0, None,
+        );
+        buf.add_char('A', 0.0, 0.0, 12.0, 24.0, 18.0, false);
+
+        match &buf.glyphs[0] {
+            FrameGlyph::Char { font_size, .. } => {
+                assert_eq!(*font_size, 24.0);
+            }
+            _ => panic!("Expected Char"),
+        }
+    }
+
+    #[test]
+    fn set_face_preserves_font_family_from_previous_set_face_with_font() {
+        let mut buf = FrameGlyphBuffer::new();
+
+        // First set with font
+        buf.set_face_with_font(
+            1, Color::WHITE, None,
+            "JetBrains Mono", 400, false, 14.0,
+            0, None, 0, None, 0, None,
+        );
+        assert_eq!(buf.get_face_font(1), "JetBrains Mono");
+
+        // Then set_face (without font) for a different face_id
+        buf.set_face(2, Color::WHITE, None, 400, false, 0, None, 0, None, 0, None);
+
+        // face_id 1 font should still be accessible
+        assert_eq!(buf.get_face_font(1), "JetBrains Mono");
+        // face_id 2 font should be default
+        assert_eq!(buf.get_face_font(2), "monospace");
+    }
+
+    #[test]
+    fn set_face_with_font_decoration_attributes() {
+        let mut buf = FrameGlyphBuffer::new();
+        let ul_color = Color::rgb(1.0, 1.0, 0.0);
+        let st_color = Color::rgb(1.0, 0.0, 1.0);
+        let ol_color = Color::rgb(0.0, 1.0, 1.0);
+        buf.set_face_with_font(
+            3, Color::WHITE, None,
+            "monospace", 400, false, 14.0,
+            2, Some(ul_color),  // wave underline
+            1, Some(st_color),  // strike-through
+            1, Some(ol_color),  // overline
+        );
+        buf.add_char('D', 0.0, 0.0, 8.0, 16.0, 12.0, false);
+
+        match &buf.glyphs[0] {
+            FrameGlyph::Char {
+                underline, underline_color,
+                strike_through, strike_through_color,
+                overline, overline_color,
+                ..
+            } => {
+                assert_eq!(*underline, 2);
+                assert_eq!(*underline_color, Some(ul_color));
+                assert_eq!(*strike_through, 1);
+                assert_eq!(*strike_through_color, Some(st_color));
+                assert_eq!(*overline, 1);
+                assert_eq!(*overline_color, Some(ol_color));
+            }
+            _ => panic!("Expected Char"),
+        }
+    }
+
+    #[test]
+    fn get_current_bg_returns_current_face_bg() {
+        let mut buf = FrameGlyphBuffer::new();
+        assert_eq!(buf.get_current_bg(), None);
+
+        let bg = Color::rgb(0.1, 0.2, 0.3);
+        buf.set_face(1, Color::WHITE, Some(bg), 400, false, 0, None, 0, None, 0, None);
+        assert_eq!(buf.get_current_bg(), Some(bg));
+    }
+
+    // =======================================================================
+    // set_frame_identity()
+    // =======================================================================
+
+    #[test]
+    fn set_frame_identity_stores_all_fields() {
+        let mut buf = FrameGlyphBuffer::new();
+        let border_color = Color::rgb(0.5, 0.5, 0.5);
+        buf.set_frame_identity(
+            0x100, 0x200,
+            50.0, 75.0,
+            5,
+            2.0, border_color,
+            true,
+            0.85,
+        );
+
+        assert_eq!(buf.frame_id, 0x100);
+        assert_eq!(buf.parent_id, 0x200);
+        assert_eq!(buf.parent_x, 50.0);
+        assert_eq!(buf.parent_y, 75.0);
+        assert_eq!(buf.z_order, 5);
+        assert_eq!(buf.border_width, 2.0);
+        assert_color_eq(&buf.border_color, &border_color);
+        assert!(buf.no_accept_focus);
+        assert_eq!(buf.background_alpha, 0.85);
+    }
+
+    #[test]
+    fn set_frame_identity_root_frame() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.set_frame_identity(
+            0x100, 0, // parent_id 0 = root frame
+            0.0, 0.0,
+            0,
+            0.0, Color::BLACK,
+            false,
+            1.0,
+        );
+
+        assert_eq!(buf.frame_id, 0x100);
+        assert_eq!(buf.parent_id, 0);
+        assert!(!buf.no_accept_focus);
+        assert_eq!(buf.background_alpha, 1.0);
+    }
+
+    // =======================================================================
+    // set_cursor_inverse()
+    // =======================================================================
+
+    #[test]
+    fn set_cursor_inverse_stores_info() {
+        let mut buf = FrameGlyphBuffer::new();
+        let cursor_bg = Color::rgb(0.9, 0.9, 0.0);
+        let cursor_fg = Color::rgb(0.0, 0.0, 0.0);
+        buf.set_cursor_inverse(50.0, 100.0, 8.0, 16.0, cursor_bg, cursor_fg);
+
+        assert!(buf.cursor_inverse.is_some());
+        let inv = buf.cursor_inverse.as_ref().unwrap();
+        assert_eq!(inv.x, 50.0);
+        assert_eq!(inv.y, 100.0);
+        assert_eq!(inv.width, 8.0);
+        assert_eq!(inv.height, 16.0);
+        assert_color_eq(&inv.cursor_bg, &cursor_bg);
+        assert_color_eq(&inv.cursor_fg, &cursor_fg);
+    }
+
+    // =======================================================================
+    // font_size() / set_font_size()
+    // =======================================================================
+
+    #[test]
+    fn font_size_accessors() {
+        let mut buf = FrameGlyphBuffer::new();
+        assert_eq!(buf.font_size(), 14.0); // default
+
+        buf.set_font_size(20.0);
+        assert_eq!(buf.font_size(), 20.0);
+
+        // Affects subsequently added chars
+        buf.add_char('X', 0.0, 0.0, 10.0, 20.0, 15.0, false);
+        match &buf.glyphs[0] {
+            FrameGlyph::Char { font_size, .. } => assert_eq!(*font_size, 20.0),
+            _ => panic!("Expected Char"),
+        }
+    }
+
+    // =======================================================================
+    // start_frame() / end_frame() / take_layout_changed()
+    // =======================================================================
+
+    #[test]
+    fn start_frame_swaps_window_regions() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_background(0.0, 0.0, 400.0, 300.0, Color::BLACK);
+        buf.add_background(400.0, 0.0, 400.0, 300.0, Color::BLACK);
+        assert_eq!(buf.window_regions.len(), 2);
+        assert!(buf.prev_window_regions.is_empty());
+
+        buf.start_frame();
+        // Previous regions moved to prev, current cleared
+        assert_eq!(buf.prev_window_regions.len(), 2);
+        assert!(buf.window_regions.is_empty());
+    }
+
+    #[test]
+    fn end_frame_returns_false() {
+        let mut buf = FrameGlyphBuffer::new();
+        assert!(!buf.end_frame());
+    }
+
+    #[test]
+    fn take_layout_changed_returns_and_resets() {
+        let mut buf = FrameGlyphBuffer::new();
+        assert!(!buf.take_layout_changed());
+
+        buf.layout_changed = true;
+        assert!(buf.take_layout_changed());
+        assert!(!buf.take_layout_changed()); // second call returns false
+    }
+
+    // =======================================================================
+    // add_background()
+    // =======================================================================
+
+    #[test]
+    fn add_background_adds_glyph_and_window_region() {
+        let mut buf = FrameGlyphBuffer::new();
+        let bg = Color::rgb(0.15, 0.15, 0.15);
+        buf.add_background(10.0, 20.0, 780.0, 560.0, bg);
+
+        assert_eq!(buf.len(), 1);
+        assert_eq!(buf.window_regions.len(), 1);
+        assert_eq!(buf.window_regions[0], Rect::new(10.0, 20.0, 780.0, 560.0));
+
+        match &buf.glyphs[0] {
+            FrameGlyph::Background { bounds, color } => {
+                assert_eq!(*bounds, Rect::new(10.0, 20.0, 780.0, 560.0));
+                assert_color_eq(color, &bg);
+            }
+            other => panic!("Expected Background glyph, got {:?}", other),
+        }
+    }
+
+    // =======================================================================
+    // add_border()
+    // =======================================================================
+
+    #[test]
+    fn add_border_appends_border_glyph() {
+        let mut buf = FrameGlyphBuffer::new();
+        let border_color = Color::rgb(0.3, 0.3, 0.3);
+        buf.add_border(400.0, 0.0, 1.0, 600.0, border_color);
+
+        assert_eq!(buf.len(), 1);
+        match &buf.glyphs[0] {
+            FrameGlyph::Border { x, y, width, height, color } => {
+                assert_eq!(*x, 400.0);
+                assert_eq!(*y, 0.0);
+                assert_eq!(*width, 1.0);
+                assert_eq!(*height, 600.0);
+                assert_color_eq(color, &border_color);
+            }
+            other => panic!("Expected Border glyph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn border_glyph_is_not_overlay() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_border(0.0, 0.0, 1.0, 100.0, Color::WHITE);
+        assert!(!buf.glyphs[0].is_overlay());
+    }
+
+    // =======================================================================
+    // add_image() / add_video() / add_webkit()
+    // =======================================================================
+
+    #[test]
+    fn add_image_appends_image_glyph() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_image(42, 100.0, 200.0, 320.0, 240.0);
+
+        assert_eq!(buf.len(), 1);
+        match &buf.glyphs[0] {
+            FrameGlyph::Image { image_id, x, y, width, height } => {
+                assert_eq!(*image_id, 42);
+                assert_eq!(*x, 100.0);
+                assert_eq!(*y, 200.0);
+                assert_eq!(*width, 320.0);
+                assert_eq!(*height, 240.0);
+            }
+            other => panic!("Expected Image glyph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn add_video_appends_video_glyph() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_video(7, 0.0, 0.0, 640.0, 480.0);
+
+        match &buf.glyphs[0] {
+            FrameGlyph::Video { video_id, .. } => assert_eq!(*video_id, 7),
+            other => panic!("Expected Video glyph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn add_webkit_appends_webkit_glyph() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_webkit(99, 0.0, 0.0, 800.0, 600.0);
+
+        match &buf.glyphs[0] {
+            FrameGlyph::WebKit { webkit_id, .. } => assert_eq!(*webkit_id, 99),
+            other => panic!("Expected WebKit glyph, got {:?}", other),
+        }
+    }
+
+    // =======================================================================
+    // add_scroll_bar()
+    // =======================================================================
+
+    #[test]
+    fn add_scroll_bar_appends_scrollbar_glyph() {
+        let mut buf = FrameGlyphBuffer::new();
+        let track = Color::rgb(0.1, 0.1, 0.1);
+        let thumb = Color::rgb(0.5, 0.5, 0.5);
+        buf.add_scroll_bar(false, 790.0, 0.0, 10.0, 600.0, 50.0, 100.0, track, thumb);
+
+        assert_eq!(buf.len(), 1);
+        match &buf.glyphs[0] {
+            FrameGlyph::ScrollBar {
+                horizontal, x, y, width, height,
+                thumb_start, thumb_size, track_color, thumb_color,
+            } => {
+                assert!(!*horizontal);
+                assert_eq!(*x, 790.0);
+                assert_eq!(*y, 0.0);
+                assert_eq!(*width, 10.0);
+                assert_eq!(*height, 600.0);
+                assert_eq!(*thumb_start, 50.0);
+                assert_eq!(*thumb_size, 100.0);
+                assert_color_eq(track_color, &track);
+                assert_color_eq(thumb_color, &thumb);
+            }
+            other => panic!("Expected ScrollBar glyph, got {:?}", other),
+        }
+    }
+
+    // =======================================================================
+    // is_overlay() dispatch
+    // =======================================================================
+
+    #[test]
+    fn is_overlay_returns_false_for_non_char_stretch_types() {
+        let mut buf = FrameGlyphBuffer::new();
+        buf.add_border(0.0, 0.0, 1.0, 100.0, Color::WHITE);
+        buf.add_cursor(1, 0.0, 0.0, 8.0, 16.0, 0, Color::WHITE);
+        buf.add_image(1, 0.0, 0.0, 100.0, 100.0);
+
+        for glyph in &buf.glyphs {
+            assert!(!glyph.is_overlay());
+        }
+    }
+
+    // =======================================================================
+    // Full frame simulation: realistic multi-window frame
+    // =======================================================================
+
+    #[test]
+    fn full_frame_simulation() {
+        let mut buf = FrameGlyphBuffer::new();
+        let frame_bg = Color::rgb(0.12, 0.12, 0.12);
+
+        // Begin frame
+        buf.begin_frame(1920.0, 1080.0, frame_bg);
+        buf.set_frame_identity(0x1, 0, 0.0, 0.0, 0, 0.0, Color::BLACK, false, 1.0);
+
+        // Window 1: left pane background
+        let win_bg = Color::rgb(0.13, 0.13, 0.13);
+        buf.add_background(0.0, 0.0, 960.0, 1060.0, win_bg);
+
+        // Window 1: some text
+        let text_fg = Color::rgb(0.87, 0.87, 0.87);
+        buf.set_face_with_font(
+            0, text_fg, None,
+            "Iosevka", 400, false, 14.0,
+            0, None, 0, None, 0, None,
+        );
+        for (i, ch) in "Hello, Neomacs!".chars().enumerate() {
+            buf.add_char(ch, i as f32 * 8.0, 0.0, 8.0, 16.0, 12.0, false);
+        }
+
+        // Window 1: cursor
+        buf.add_cursor(1, 15.0 * 8.0, 0.0, 2.0, 16.0, 1, Color::WHITE);
+        buf.set_cursor_inverse(15.0 * 8.0, 0.0, 8.0, 16.0, Color::WHITE, Color::BLACK);
+
+        // Vertical border
+        buf.add_border(960.0, 0.0, 1.0, 1060.0, Color::rgb(0.3, 0.3, 0.3));
+
+        // Window 2: right pane background
+        buf.add_background(961.0, 0.0, 959.0, 1060.0, win_bg);
+
+        // Mode-line (overlay)
+        let ml_bg = Color::rgb(0.2, 0.2, 0.3);
+        buf.set_face(10, Color::WHITE, Some(ml_bg), 700, false, 0, None, 0, None, 0, None);
+        buf.add_stretch(0.0, 1060.0, 1920.0, 20.0, ml_bg, 10, true);
+
+        // Window infos
+        buf.add_window_info(
+            1, 100, 0, 500, 1000,
+            0.0, 0.0, 960.0, 1060.0,
+            20.0, true, false, 16.0,
+            "left.rs".to_string(), false,
+        );
+        buf.add_window_info(
+            2, 200, 0, 300, 800,
+            961.0, 0.0, 959.0, 1060.0,
+            20.0, false, false, 16.0,
+            "right.rs".to_string(), true,
+        );
+
+        // Verify totals
+        // 15 chars + 1 cursor + 2 backgrounds + 1 border + 1 mode-line stretch = 20
+        assert_eq!(buf.len(), 20);
+        assert_eq!(buf.window_infos.len(), 2);
+        assert_eq!(buf.window_regions.len(), 2);
+        assert!(buf.cursor_inverse.is_some());
+        assert_eq!(buf.frame_id, 0x1);
+        assert_eq!(buf.width, 1920.0);
+        assert_eq!(buf.height, 1080.0);
+
+        // Verify overlay count
+        let overlay_count = buf.glyphs.iter().filter(|g| g.is_overlay()).count();
+        assert_eq!(overlay_count, 1); // just the mode-line stretch
+    }
+}
