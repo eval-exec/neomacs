@@ -9274,6 +9274,23 @@ Values of 0 mean no extra spacing (default).  */)
   return Qt;
 }
 
+DEFUN ("neomacs-set-ligatures-enabled", Fneomacs_set_ligatures_enabled,
+       Sneomacs_set_ligatures_enabled, 1, 1, 0,
+       doc: /* Enable or disable font ligature support.
+When non-nil, the layout engine groups same-face character runs so that
+HarfBuzz can perform ligature substitution (e.g., -> becomes an arrow
+glyph in fonts like JetBrains Mono or Fira Code).  */)
+  (Lisp_Object enabled)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+
+  neomacs_display_set_ligatures_enabled (dpyinfo->display_handle,
+                                          !NILP (enabled));
+  return !NILP (enabled) ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-background-gradient",
        Fneomacs_set_background_gradient,
        Sneomacs_set_background_gradient, 2, 2, 0,
@@ -15745,6 +15762,7 @@ syms_of_neomacsterm (void)
   /* Corner radius */
   defsubr (&Sneomacs_set_corner_radius);
   defsubr (&Sneomacs_set_extra_spacing);
+  defsubr (&Sneomacs_set_ligatures_enabled);
   defsubr (&Sneomacs_set_background_gradient);
   defsubr (&Sneomacs_set_scroll_bar_config);
   defsubr (&Sneomacs_set_indent_guides);

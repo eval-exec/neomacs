@@ -666,8 +666,10 @@ impl WgpuGlyphAtlas {
     /// Also evicts stale composed glyphs (not accessed for 60+ frames).
     pub fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        // Evict stale composed glyphs (they're less likely to be reused)
-        if self.composed_cache.len() > 256 {
+        // Evict stale composed glyphs (they're less likely to be reused).
+        // Threshold raised from 256 to 1024 to accommodate ligature runs
+        // which generate more composed cache entries per frame.
+        if self.composed_cache.len() > 1024 {
             let cutoff = self.generation.saturating_sub(60);
             self.composed_cache.retain(|_, v| v.last_accessed >= cutoff);
         }

@@ -296,6 +296,8 @@ pub enum RenderCommand {
         /// Transition duration in milliseconds
         duration_ms: u32,
     },
+    /// Enable or disable font ligatures
+    SetLigaturesEnabled { enabled: bool },
     /// Remove a child frame (sent when frame is deleted or unparented)
     RemoveChildFrame { frame_id: u64 },
     /// Create a new OS window for a top-level Emacs frame

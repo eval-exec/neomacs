@@ -1138,6 +1138,13 @@ impl RenderApp {
                     }
                     self.frame_dirty = true;
                 }
+                RenderCommand::SetLigaturesEnabled { enabled } => {
+                    log::info!("Ligatures enabled: {}", enabled);
+                    // Ligatures are handled by the layout engine (Emacs thread),
+                    // not the render thread. The flag is stored on
+                    // NeomacsDisplay/LayoutEngine via a separate static.
+                    // This command is a no-op on the render thread but we log it.
+                }
                 RenderCommand::RemoveChildFrame { frame_id } => {
                     log::info!("Removing child frame 0x{:x}", frame_id);
                     self.child_frames.remove_frame(frame_id);

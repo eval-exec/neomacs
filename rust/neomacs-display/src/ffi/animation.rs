@@ -344,6 +344,34 @@ pub unsafe extern "C" fn neomacs_display_set_extra_spacing(
     }
 }
 
+/// Enable or disable font ligature support.
+/// When enabled, the layout engine groups same-face character runs and emits
+/// them as composed glyphs so that cosmic-text/HarfBuzz can perform ligature
+/// substitution (e.g., -> becomes an arrow in JetBrains Mono).
+#[no_mangle]
+pub unsafe extern "C" fn neomacs_display_set_ligatures_enabled(
+    _handle: *mut NeomacsDisplay,
+    enabled: c_int,
+) {
+    let on = enabled != 0;
+
+    // Set on the layout engine (Emacs thread).
+    // If the engine isn't initialized yet (e.g., called from init.el before
+    // first layout frame), store as pending value that will be applied on init.
+    use crate::ffi::layout::{LAYOUT_ENGINE, PENDING_LIGATURES_ENABLED};
+    if let Some(ref mut engine) = *std::ptr::addr_of_mut!(LAYOUT_ENGINE) {
+        engine.ligatures_enabled = on;
+    }
+    // Always store pending so engine init picks it up even if set before creation
+    *std::ptr::addr_of_mut!(PENDING_LIGATURES_ENABLED) = Some(on);
+
+    // Also send to render thread for logging/future use
+    let cmd = RenderCommand::SetLigaturesEnabled { enabled: on };
+    if let Some(ref state) = THREADED_STATE {
+        let _ = state.emacs_comms.cmd_tx.try_send(cmd);
+    }
+}
+
 // ============================================================================
 // effect_setter! macro and invocations
 // ============================================================================

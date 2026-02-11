@@ -16,6 +16,111 @@ use super::unicode::*;
 use super::hit_test::*;
 use super::status_line::*;
 
+/// Maximum number of characters in a ligature run before forced flush.
+const MAX_LIGATURE_RUN_LEN: usize = 64;
+
+/// Buffer for accumulating same-face text runs for ligature shaping.
+struct LigatureRunBuffer {
+    chars: Vec<char>,
+    advances: Vec<f32>,
+    start_x: f32,
+    start_y: f32,
+    face_h: f32,
+    face_ascent: f32,
+    face_id: u32,
+    total_advance: f32,
+    is_overlay: bool,
+    height_scale: f32,
+}
+
+impl LigatureRunBuffer {
+    fn new() -> Self {
+        Self {
+            chars: Vec::with_capacity(MAX_LIGATURE_RUN_LEN),
+            advances: Vec::with_capacity(MAX_LIGATURE_RUN_LEN),
+            start_x: 0.0,
+            start_y: 0.0,
+            face_h: 0.0,
+            face_ascent: 0.0,
+            face_id: 0,
+            total_advance: 0.0,
+            is_overlay: false,
+            height_scale: 0.0,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.chars.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.chars.len()
+    }
+
+    fn clear(&mut self) {
+        self.chars.clear();
+        self.advances.clear();
+        self.total_advance = 0.0;
+    }
+
+    /// Push a character and its advance width into the run.
+    fn push(&mut self, ch: char, advance: f32) {
+        self.chars.push(ch);
+        self.advances.push(advance);
+        self.total_advance += advance;
+    }
+
+    /// Start a new run at the given position with the given face parameters.
+    fn start(&mut self, x: f32, y: f32, face_h: f32, face_ascent: f32,
+             face_id: u32, is_overlay: bool, height_scale: f32) {
+        self.clear();
+        self.start_x = x;
+        self.start_y = y;
+        self.face_h = face_h;
+        self.face_ascent = face_ascent;
+        self.face_id = face_id;
+        self.is_overlay = is_overlay;
+        self.height_scale = height_scale;
+    }
+}
+
+/// Flush the accumulated ligature run as either individual chars or a composed glyph.
+fn flush_run(run: &LigatureRunBuffer, frame_glyphs: &mut FrameGlyphBuffer, ligatures: bool) {
+    if run.is_empty() {
+        return;
+    }
+    if !ligatures || run.len() == 1 {
+        // Emit individual chars (fallback / ligatures disabled / single char)
+        let mut x = run.start_x;
+        for (i, &ch) in run.chars.iter().enumerate() {
+            let adv = run.advances[i];
+            if run.height_scale > 0.0 && run.height_scale != 1.0 {
+                let orig_size = frame_glyphs.font_size();
+                frame_glyphs.set_font_size(orig_size * run.height_scale);
+                frame_glyphs.add_char(ch, x, run.start_y, adv, run.face_h, run.face_ascent, run.is_overlay);
+                frame_glyphs.set_font_size(orig_size);
+            } else {
+                frame_glyphs.add_char(ch, x, run.start_y, adv, run.face_h, run.face_ascent, run.is_overlay);
+            }
+            x += adv;
+        }
+    } else {
+        // Emit as composed glyph — render thread will shape via HarfBuzz
+        let text: String = run.chars.iter().collect();
+        let base_char = run.chars[0];
+        if run.height_scale > 0.0 && run.height_scale != 1.0 {
+            let orig_size = frame_glyphs.font_size();
+            frame_glyphs.set_font_size(orig_size * run.height_scale);
+            frame_glyphs.add_composed_char(&text, base_char, run.start_x, run.start_y,
+                run.total_advance, run.face_h, run.face_ascent, run.is_overlay);
+            frame_glyphs.set_font_size(orig_size);
+        } else {
+            frame_glyphs.add_composed_char(&text, base_char, run.start_x, run.start_y,
+                run.total_advance, run.face_h, run.face_ascent, run.is_overlay);
+        }
+    }
+}
+
 /// The main Rust layout engine.
 ///
 /// Called on the Emacs thread during redisplay. Reads buffer data via FFI,
@@ -30,6 +135,10 @@ pub struct LayoutEngine {
     ascii_width_cache: std::collections::HashMap<(u32, i32), [f32; 128]>,
     /// Hit-test data being built for current frame
     hit_data: Vec<WindowHitData>,
+    /// Reusable ligature run buffer
+    run_buf: LigatureRunBuffer,
+    /// Whether ligatures are enabled
+    pub ligatures_enabled: bool,
 }
 
 impl LayoutEngine {
@@ -40,6 +149,8 @@ impl LayoutEngine {
             face_data: FaceDataFFI::default(),
             ascii_width_cache: std::collections::HashMap::new(),
             hit_data: Vec::new(),
+            run_buf: LigatureRunBuffer::new(),
+            ligatures_enabled: false,
         }
     }
 
@@ -623,6 +734,10 @@ impl LayoutEngine {
         let mut hit_rows: Vec<HitRow> = Vec::new();
         let mut hit_row_charpos_start: i64 = window_start;
 
+        // Ligature run accumulation
+        let ligatures = self.ligatures_enabled;
+        self.run_buf.clear();
+
         while byte_idx < bytes_read as usize && row < max_rows
             && row_y[row as usize] < text_y_limit
         {
@@ -858,6 +973,8 @@ impl LayoutEngine {
 
             // Check for invisible text at property change boundaries
             if charpos >= next_invis_check {
+                flush_run(&self.run_buf, frame_glyphs, ligatures);
+                self.run_buf.clear();
                 let mut next_visible: i64 = 0;
                 let invis = neomacs_layout_check_invisible(
                     buffer,
@@ -907,6 +1024,10 @@ impl LayoutEngine {
             // Check for overlay before-string/after-string at this position.
             // Before-strings render at overlay start, after-strings at end.
             {
+                // Flush ligature run before overlay strings
+                flush_run(&self.run_buf, frame_glyphs, ligatures);
+                self.run_buf.clear();
+
                 overlay_before_len = 0;
                 overlay_after_len = 0;
                 let mut overlay_before_face = FaceDataFFI::default();
@@ -1009,6 +1130,8 @@ impl LayoutEngine {
 
             // Check for display text property at property boundaries
             if charpos >= next_display_check {
+                flush_run(&self.run_buf, frame_glyphs, ligatures);
+                self.run_buf.clear();
                 neomacs_layout_check_display_prop(
                     buffer,
                     window,
@@ -1440,6 +1563,9 @@ impl LayoutEngine {
 
             // Resolve face if needed (when entering a new face region)
             if charpos >= next_face_check || current_face_id < 0 {
+                // Flush ligature run before potential face change
+                flush_run(&self.run_buf, frame_glyphs, ligatures);
+                self.run_buf.clear();
                 let mut next_check: i64 = 0;
                 let fid = neomacs_layout_face_at_pos(
                     window,
@@ -1507,6 +1633,9 @@ impl LayoutEngine {
 
             // Check if cursor is at this position
             if !cursor_placed && charpos >= params.point {
+                // Flush ligature run before cursor to split run at cursor position
+                flush_run(&self.run_buf, frame_glyphs, ligatures);
+                self.run_buf.clear();
                 cursor_col = col;
                 cursor_x = x_offset;
                 cursor_row = row;
@@ -1567,6 +1696,10 @@ impl LayoutEngine {
 
             match ch {
                 '\n' => {
+                    // Flush ligature run before newline
+                    flush_run(&self.run_buf, frame_glyphs, ligatures);
+                    self.run_buf.clear();
+
                     // Highlight trailing whitespace (overlay stretch on top)
                     if let Some(tw_bg) = trailing_ws_bg {
                         if trailing_ws_start_col >= 0 && trailing_ws_row == row {
@@ -1700,6 +1833,10 @@ impl LayoutEngine {
                     }
                 }
                 '\t' => {
+                    // Flush ligature run before tab
+                    flush_run(&self.run_buf, frame_glyphs, ligatures);
+                    self.run_buf.clear();
+
                     // Tab: advance to next tab stop (column-based, pixel width uses space_w)
                     let tab_w = params.tab_width.max(1);
                     let next_tab = ((col / tab_w) + 1) * tab_w;
@@ -1758,6 +1895,10 @@ impl LayoutEngine {
                     }
                 }
                 '\r' => {
+                    // Flush ligature run before carriage return
+                    flush_run(&self.run_buf, frame_glyphs, ligatures);
+                    self.run_buf.clear();
+
                     if params.selective_display > 0 {
                         // In selective-display mode, \r hides until next \n
                         // Show ... ellipsis
@@ -1791,6 +1932,10 @@ impl LayoutEngine {
                     // Otherwise: carriage return is just skipped
                 }
                 _ if ch < ' ' || ch == '\x7F' => {
+                    // Flush ligature run before control char
+                    flush_run(&self.run_buf, frame_glyphs, ligatures);
+                    self.run_buf.clear();
+
                     // Control character: display as ^X (2 columns)
                     // DEL (0x7F) displays as ^?
                     // Use escape-glyph face for control char display
@@ -1849,6 +1994,9 @@ impl LayoutEngine {
                 _ => {
                     // Non-breaking space and soft hyphen highlighting
                     if params.nobreak_char_display > 0 && (ch == '\u{00A0}' || ch == '\u{00AD}') {
+                        // Flush ligature run before nobreak char special handling
+                        flush_run(&self.run_buf, frame_glyphs, ligatures);
+                        self.run_buf.clear();
                         let nb_fg = Color::from_pixel(params.nobreak_char_fg);
                         frame_glyphs.set_face(
                             0, nb_fg, Some(face_bg),
@@ -1877,6 +2025,9 @@ impl LayoutEngine {
                         collect_grapheme_cluster(ch, &text[byte_idx..bytes_read as usize]);
 
                     if let Some(ref cluster) = cluster_text {
+                        // Flush ligature run before grapheme cluster (emoji/ZWJ)
+                        flush_run(&self.run_buf, frame_glyphs, ligatures);
+                        self.run_buf.clear();
                         // Multi-codepoint grapheme cluster (emoji ZWJ, combining marks, etc.)
                         // Advance past the extra characters consumed
                         byte_idx += cluster_extra_bytes;
@@ -1939,6 +2090,9 @@ impl LayoutEngine {
                     if is_cluster_extender(ch) && ch != '\u{200D}' && ch != '\u{200C}'
                         && ch != '\u{200B}' && ch != '\u{200E}' && ch != '\u{200F}'
                         && ch != '\u{FEFF}' {
+                        // Flush ligature run before combining mark
+                        flush_run(&self.run_buf, frame_glyphs, ligatures);
+                        self.run_buf.clear();
                         if x_offset > 0.0 {
                             // Place combining mark at the position of the previous character
                             let gx = content_x + x_offset - char_w;
@@ -1952,6 +2106,9 @@ impl LayoutEngine {
                     // Glyphless character check for C1 control and other
                     // non-printable chars
                     if is_potentially_glyphless(ch) {
+                        // Flush ligature run before glyphless handling
+                        flush_run(&self.run_buf, frame_glyphs, ligatures);
+                        self.run_buf.clear();
                         let mut method: c_int = 0;
                         let mut str_buf = [0u8; 64];
                         let mut str_len: c_int = 0;
@@ -2069,6 +2226,10 @@ impl LayoutEngine {
                     );
 
                     if x_offset + advance > avail_width {
+                        // Flush ligature run before line wrap/truncation
+                        flush_run(&self.run_buf, frame_glyphs, ligatures);
+                        self.run_buf.clear();
+
                         // Line full
                         if params.truncate_lines {
                             // Show $ truncation indicator at right edge
@@ -2202,9 +2363,6 @@ impl LayoutEngine {
                         }
                     }
 
-                    let gx = content_x + x_offset;
-                    let gy = row_y[row as usize] + raise_y_offset;
-
                     // Track per-row max height for variable-height faces
                     if face_h > row_max_height {
                         row_max_height = face_h;
@@ -2213,14 +2371,49 @@ impl LayoutEngine {
                         row_max_ascent = face_ascent;
                     }
 
-                    // Apply height scaling if active
-                    if height_scale > 0.0 && height_scale != 1.0 {
-                        let orig_size = frame_glyphs.font_size();
-                        frame_glyphs.set_font_size(orig_size * height_scale);
-                        frame_glyphs.add_char(ch, gx, gy, advance, face_h, face_ascent, false);
-                        frame_glyphs.set_font_size(orig_size);
+                    // Spaces break ligature runs (they never ligate) and serve
+                    // as word-wrap breakpoints. Flush and emit individually.
+                    if ch == ' ' {
+                        flush_run(&self.run_buf, frame_glyphs, ligatures);
+                        self.run_buf.clear();
+
+                        let gx = content_x + x_offset;
+                        let gy = row_y[row as usize] + raise_y_offset;
+                        if height_scale > 0.0 && height_scale != 1.0 {
+                            let orig_size = frame_glyphs.font_size();
+                            frame_glyphs.set_font_size(orig_size * height_scale);
+                            frame_glyphs.add_char(ch, gx, gy, advance, face_h, face_ascent, false);
+                            frame_glyphs.set_font_size(orig_size);
+                        } else {
+                            frame_glyphs.add_char(ch, gx, gy, advance, face_h, face_ascent, false);
+                        }
+                    } else if ligatures {
+                        // Accumulate into ligature run
+                        let gy = row_y[row as usize] + raise_y_offset;
+                        if self.run_buf.is_empty() {
+                            let gx = content_x + x_offset;
+                            self.run_buf.start(gx, gy, face_h, face_ascent,
+                                self.face_data.face_id, false, height_scale);
+                        }
+                        self.run_buf.push(ch, advance);
+
+                        // Flush at max run length to limit texture sizes
+                        if self.run_buf.len() >= MAX_LIGATURE_RUN_LEN {
+                            flush_run(&self.run_buf, frame_glyphs, ligatures);
+                            self.run_buf.clear();
+                        }
                     } else {
-                        frame_glyphs.add_char(ch, gx, gy, advance, face_h, face_ascent, false);
+                        // Ligatures disabled: emit directly
+                        let gx = content_x + x_offset;
+                        let gy = row_y[row as usize] + raise_y_offset;
+                        if height_scale > 0.0 && height_scale != 1.0 {
+                            let orig_size = frame_glyphs.font_size();
+                            frame_glyphs.set_font_size(orig_size * height_scale);
+                            frame_glyphs.add_char(ch, gx, gy, advance, face_h, face_ascent, false);
+                            frame_glyphs.set_font_size(orig_size);
+                        } else {
+                            frame_glyphs.add_char(ch, gx, gy, advance, face_h, face_ascent, false);
+                        }
                     }
                     col += char_cols;
                     x_offset += advance;
@@ -2240,6 +2433,11 @@ impl LayoutEngine {
 
                     // Record break AFTER whitespace characters
                     if params.word_wrap && (ch == ' ' || ch == '\t') {
+                        // Flush ligature run at word-wrap boundary so truncate()
+                        // never cuts inside a composed glyph
+                        flush_run(&self.run_buf, frame_glyphs, ligatures);
+                        self.run_buf.clear();
+
                         wrap_break_col = col;
                         wrap_break_x = x_offset;
                         wrap_break_byte_idx = byte_idx;
@@ -2249,6 +2447,10 @@ impl LayoutEngine {
                     }
                 }
             }
+
+            // Flush any remaining ligature run before overlay after-string
+            flush_run(&self.run_buf, frame_glyphs, ligatures);
+            self.run_buf.clear();
 
             // Place cursor before rendering overlay after-string.
             // When an overlay ends at point (e.g., fido-vertical-mode completions),
@@ -2367,6 +2569,10 @@ impl LayoutEngine {
 
             window_end_charpos = charpos;
         }
+
+        // Flush any remaining ligature run at end of buffer
+        flush_run(&self.run_buf, frame_glyphs, ligatures);
+        self.run_buf.clear();
 
         // Place cursor before end-of-buffer overlay strings.
         // When point is at end-of-buffer and overlays have after-strings there

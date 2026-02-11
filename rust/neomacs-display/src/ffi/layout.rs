@@ -10,7 +10,11 @@ use super::*;
 // ============================================================================
 
 /// Global layout engine instance (lazily initialized)
-static mut LAYOUT_ENGINE: Option<crate::layout::LayoutEngine> = None;
+pub(crate) static mut LAYOUT_ENGINE: Option<crate::layout::LayoutEngine> = None;
+
+/// Pending ligatures-enabled flag, set before layout engine is initialized.
+/// Applied on first engine creation so init.el settings are not lost.
+pub(crate) static mut PENDING_LIGATURES_ENABLED: Option<bool> = None;
 
 /// Called from C when `neomacs-use-rust-display` is enabled.
 /// The Rust layout engine reads buffer data via FFI helpers and produces
@@ -46,7 +50,13 @@ pub unsafe extern "C" fn neomacs_rust_layout_frame(
 
         // Initialize layout engine on first call
         if (*std::ptr::addr_of!(LAYOUT_ENGINE)).is_none() {
-            *std::ptr::addr_of_mut!(LAYOUT_ENGINE) = Some(crate::layout::LayoutEngine::new());
+            let mut engine = crate::layout::LayoutEngine::new();
+            // Apply pending ligatures setting from init.el (set before engine existed)
+            if let Some(enabled) = *std::ptr::addr_of!(PENDING_LIGATURES_ENABLED) {
+                engine.ligatures_enabled = enabled;
+                log::info!("Applied pending ligatures_enabled={}", enabled);
+            }
+            *std::ptr::addr_of_mut!(LAYOUT_ENGINE) = Some(engine);
             log::info!("Rust layout engine initialized");
         }
 

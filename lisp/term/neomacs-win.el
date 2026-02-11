@@ -494,6 +494,23 @@ Applied at the render level."
                 neomacs-extra-line-spacing 0)
             val))))
 
+;;; Font ligatures
+
+(declare-function neomacs-set-ligatures-enabled "neomacsterm.c" (enabled))
+
+(defcustom neomacs-ligatures-enabled nil
+  "Enable font ligature support.
+When non-nil, the layout engine groups same-face character runs so that
+HarfBuzz can perform ligature substitution.  This makes programming
+ligature fonts like JetBrains Mono and Fira Code render connected glyphs
+for sequences like ->, =>, !=, == etc."
+  :type 'boolean
+  :group 'frames
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'neomacs-set-ligatures-enabled)
+           (neomacs-set-ligatures-enabled val))))
+
 ;;; Background gradient
 
 (declare-function neomacs-set-background-gradient "neomacsterm.c"

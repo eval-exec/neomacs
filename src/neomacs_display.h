@@ -1265,6 +1265,14 @@ void neomacs_display_set_extra_spacing(struct NeomacsDisplay *handle,
                                         int line_spacing,
                                         int letter_spacing);
 
+/**
+ * Enable or disable font ligature support.
+ * When enabled, the layout engine groups same-face character runs
+ * so that HarfBuzz can perform ligature substitution.
+ */
+void neomacs_display_set_ligatures_enabled(struct NeomacsDisplay *handle,
+                                            int enabled);
+
 void neomacs_display_set_background_gradient(
     struct NeomacsDisplay *handle,
     int enabled,
