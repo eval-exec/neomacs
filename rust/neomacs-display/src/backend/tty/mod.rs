@@ -1363,7 +1363,7 @@ mod tests {
                 col,
                 0,
                 TtyCell {
-                    text: (b'A' + col as u8).to_string(),
+                    text: ((b'A' + col as u8) as char).to_string(),
                     width: 1,
                     attrs,
                 },

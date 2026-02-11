@@ -383,7 +383,7 @@ pub unsafe extern "C" fn neomacs_display_set_ligatures_enabled(
 /// in `RenderCommand::UpdateEffect(EffectUpdater(...))` boilerplate.
 ///
 /// Usage:
-/// ```
+/// ```ignore
 /// effect_setter!(neomacs_display_set_foo(enabled: c_int, r: c_int) |effects| {
 ///     effects.foo.enabled = enabled != 0;
 ///     effects.foo.color_r = r as f32 / 255.0;

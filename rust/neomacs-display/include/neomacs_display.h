@@ -73,6 +73,41 @@
 #define MAX_BPA_STACK 63
 
 /**
+ * Greek capital letter sigma.
+ */
+#define GREEK_CAPITAL_SIGMA U'\U000003A3'
+
+/**
+ * Greek small letter sigma (medial).
+ */
+#define GREEK_SMALL_SIGMA U'\U000003C3'
+
+/**
+ * Greek small letter final sigma.
+ */
+#define GREEK_SMALL_FINAL_SIGMA U'\U000003C2'
+
+/**
+ * German sharp s (eszett).
+ */
+#define SHARP_S '\u{df}'
+
+/**
+ * Capital sharp s.
+ */
+#define CAPITAL_SHARP_S U'\U00001E9E'
+
+/**
+ * Maximum number of components in a single composition.
+ */
+#define MAX_COMPOSITION_COMPONENTS 16
+
+/**
+ * Maximum number of characters to look back for auto-compositions.
+ */
+#define MAX_AUTO_COMPOSITION_LOOKBACK 3
+
+/**
  * Modifier flags matching Emacs.
  */
 #define NEOMACS_SHIFT_MASK (1 << 0)
@@ -1190,11 +1225,11 @@ void neomacs_display_set_extra_spacing(struct NeomacsDisplay *handle,
 
 /**
  * Enable or disable font ligature support.
- * When enabled, the layout engine groups same-face character runs
- * so that HarfBuzz can perform ligature substitution.
+ * When enabled, the layout engine groups same-face character runs and emits
+ * them as composed glyphs so that cosmic-text/HarfBuzz can perform ligature
+ * substitution (e.g., -> becomes an arrow in JetBrains Mono).
  */
-void neomacs_display_set_ligatures_enabled(struct NeomacsDisplay *handle,
-                                            int enabled);
+void neomacs_display_set_ligatures_enabled(struct NeomacsDisplay *handle, int enabled);
 
 void neomacs_display_set_background_gradient(struct NeomacsDisplay *handle,
                                              int enabled,

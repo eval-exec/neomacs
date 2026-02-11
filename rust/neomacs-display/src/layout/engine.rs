@@ -85,12 +85,33 @@ impl LigatureRunBuffer {
     }
 }
 
+/// Check if a character is a ligature-eligible symbol/punctuation.
+/// Programming font ligatures only form between these characters.
+#[inline]
+fn is_ligature_char(ch: char) -> bool {
+    matches!(ch,
+        '!' | '#' | '$' | '%' | '&' | '*' | '+' | '-' | '.' | '/' |
+        ':' | ';' | '<' | '=' | '>' | '?' | '@' | '\\' | '^' | '|' | '~'
+    )
+}
+
+/// Check if a run consists entirely of ligature-eligible characters.
+/// Mixed runs (e.g., "arrow:" or "Font:") should NOT be composed,
+/// only pure symbol runs (e.g., "->", "!=", "===").
+#[inline]
+fn run_is_pure_ligature(run: &LigatureRunBuffer) -> bool {
+    run.chars.iter().all(|&ch| is_ligature_char(ch))
+}
+
 /// Flush the accumulated ligature run as either individual chars or a composed glyph.
 fn flush_run(run: &LigatureRunBuffer, frame_glyphs: &mut FrameGlyphBuffer, ligatures: bool) {
     if run.is_empty() {
         return;
     }
-    if !ligatures || run.len() == 1 {
+    // Only compose runs of pure ligature-forming characters (punctuation/symbols).
+    // Alphabetic/numeric runs are emitted as individual chars.
+    let compose = ligatures && run.len() > 1 && run_is_pure_ligature(run);
+    if !compose {
         // Emit individual chars (fallback / ligatures disabled / single char)
         let mut x = run.start_x;
         for (i, &ch) in run.chars.iter().enumerate() {
@@ -979,8 +1000,6 @@ impl LayoutEngine {
 
             // Check for invisible text at property change boundaries
             if charpos >= next_invis_check {
-                flush_run(&self.run_buf, frame_glyphs, ligatures);
-                self.run_buf.clear();
                 let mut next_visible: i64 = 0;
                 let invis = neomacs_layout_check_invisible(
                     buffer,
@@ -990,6 +1009,9 @@ impl LayoutEngine {
                 );
 
                 if invis > 0 {
+                    // Flush ligature run before invisible text skip
+                    flush_run(&self.run_buf, frame_glyphs, ligatures);
+                    self.run_buf.clear();
                     // Skip invisible characters: advance byte_idx
                     // and charpos to next_visible
                     let chars_to_skip = next_visible - charpos;
@@ -1030,10 +1052,6 @@ impl LayoutEngine {
             // Check for overlay before-string/after-string at this position.
             // Before-strings render at overlay start, after-strings at end.
             {
-                // Flush ligature run before overlay strings
-                flush_run(&self.run_buf, frame_glyphs, ligatures);
-                self.run_buf.clear();
-
                 overlay_before_len = 0;
                 overlay_after_len = 0;
                 let mut overlay_before_face = FaceDataFFI::default();
@@ -1053,6 +1071,12 @@ impl LayoutEngine {
                     &mut overlay_before_nruns,
                     &mut overlay_after_nruns,
                 );
+
+                // Flush ligature run before overlay strings (only if overlays exist)
+                if overlay_before_len > 0 || overlay_after_len > 0 {
+                    flush_run(&self.run_buf, frame_glyphs, ligatures);
+                    self.run_buf.clear();
+                }
 
                 // Render before-string (if any) — insert before buffer text
                 if overlay_before_len > 0 {
@@ -1140,8 +1164,6 @@ impl LayoutEngine {
 
             // Check for display text property at property boundaries
             if charpos >= next_display_check {
-                flush_run(&self.run_buf, frame_glyphs, ligatures);
-                self.run_buf.clear();
                 neomacs_layout_check_display_prop(
                     buffer,
                     window,
@@ -1150,6 +1172,12 @@ impl LayoutEngine {
                     display_str_buf.len() as i32,
                     &mut display_prop,
                 );
+
+                if display_prop.prop_type != 0 {
+                    // Flush ligature run before display property handling
+                    flush_run(&self.run_buf, frame_glyphs, ligatures);
+                    self.run_buf.clear();
+                }
 
                 if display_prop.prop_type == 1 {
                     // String replacement: render the display string instead
@@ -1575,9 +1603,6 @@ impl LayoutEngine {
 
             // Resolve face if needed (when entering a new face region)
             if charpos >= next_face_check || current_face_id < 0 {
-                // Flush ligature run before potential face change
-                flush_run(&self.run_buf, frame_glyphs, ligatures);
-                self.run_buf.clear();
                 let mut next_check: i64 = 0;
                 let fid = neomacs_layout_face_at_pos(
                     window,
@@ -1588,6 +1613,9 @@ impl LayoutEngine {
 
                 if fid >= 0 {
                     if fid != current_face_id {
+                        // Flush ligature run before face change
+                        flush_run(&self.run_buf, frame_glyphs, ligatures);
+                        self.run_buf.clear();
                         // Close previous box face region if active.
                         // Box borders are now rendered by the renderer's box span
                         // detection (supports both sharp and SDF rounded corners).
@@ -2487,9 +2515,11 @@ impl LayoutEngine {
                 }
             }
 
-            // Flush any remaining ligature run before overlay after-string
-            flush_run(&self.run_buf, frame_glyphs, ligatures);
-            self.run_buf.clear();
+            // Flush ligature run only if we have overlay after-strings to render
+            if overlay_after_len > 0 {
+                flush_run(&self.run_buf, frame_glyphs, ligatures);
+                self.run_buf.clear();
+            }
 
             // Place cursor before rendering overlay after-string.
             // When an overlay ends at point (e.g., fido-vertical-mode completions),
@@ -3472,10 +3502,11 @@ mod tests {
 
     #[test]
     fn test_flush_run_multiple_chars_ligatures_true() {
+        // Use ligature-eligible chars (pure symbol run)
         let mut run = LigatureRunBuffer::new();
         run.start(10.0, 20.0, 16.0, 12.0, 1, false, 0.0);
-        run.push('f', 6.0);
-        run.push('i', 4.0);
+        run.push('-', 6.0);
+        run.push('>', 4.0);
 
         let mut frame_glyphs = FrameGlyphBuffer::new();
         flush_run(&run, &mut frame_glyphs, true);
@@ -3485,8 +3516,8 @@ mod tests {
 
         match &frame_glyphs.glyphs[0] {
             FrameGlyph::Char { char: ch, composed, x, y, width, height, ascent, is_overlay, .. } => {
-                assert_eq!(*ch, 'f'); // base char
-                assert_eq!(composed.as_ref().map(|s: &Box<str>| s.as_ref()), Some("fi"));
+                assert_eq!(*ch, '-'); // base char
+                assert_eq!(composed.as_ref().map(|s: &Box<str>| s.as_ref()), Some("->"));
                 assert_eq!(*x, 10.0);
                 assert_eq!(*y, 20.0);
                 assert_eq!(*width, 10.0); // total_advance = 6.0 + 4.0
@@ -3496,6 +3527,21 @@ mod tests {
             }
             _ => panic!("Expected Char glyph"),
         }
+    }
+
+    #[test]
+    fn test_flush_run_mixed_alpha_symbol_not_composed() {
+        // Mixed alphanumeric+symbol runs should NOT compose (e.g., "arrow:")
+        let mut run = LigatureRunBuffer::new();
+        run.start(0.0, 0.0, 16.0, 12.0, 1, false, 0.0);
+        run.push('f', 6.0);
+        run.push('i', 4.0);
+
+        let mut frame_glyphs = FrameGlyphBuffer::new();
+        flush_run(&run, &mut frame_glyphs, true);
+
+        // Should emit as individual chars, not composed
+        assert_eq!(frame_glyphs.glyphs.len(), 2);
     }
 
     #[test]
@@ -3518,10 +3564,11 @@ mod tests {
 
     #[test]
     fn test_flush_run_height_scale_composed() {
+        // Use ligature-eligible chars for composed path
         let mut run = LigatureRunBuffer::new();
         run.start(0.0, 0.0, 16.0, 12.0, 1, false, 2.0);
-        run.push('f', 6.0);
-        run.push('i', 4.0);
+        run.push('=', 6.0);
+        run.push('>', 4.0);
 
         let mut frame_glyphs = FrameGlyphBuffer::new();
         frame_glyphs.set_font_size(14.0);
@@ -3533,6 +3580,42 @@ mod tests {
 
         // Composed glyph should exist
         assert_eq!(frame_glyphs.glyphs.len(), 1);
+    }
+
+    #[test]
+    fn test_is_ligature_char() {
+        // Ligature-eligible characters
+        for ch in ['-', '>', '<', '=', '!', '|', '&', '*', '+', '.', '/', ':', ';', '?', '@', '\\', '^', '~', '#', '$', '%'] {
+            assert!(is_ligature_char(ch), "'{}' should be a ligature char", ch);
+        }
+        // Non-ligature characters
+        for ch in ['a', 'Z', '0', '9', ' ', '\n', '\t', '(', ')', '[', ']', '{', '}', ',', '\'', '"'] {
+            assert!(!is_ligature_char(ch), "'{}' should NOT be a ligature char", ch);
+        }
+    }
+
+    #[test]
+    fn test_run_is_pure_ligature() {
+        // Pure symbol run
+        let mut run = LigatureRunBuffer::new();
+        run.start(0.0, 0.0, 16.0, 12.0, 1, false, 0.0);
+        run.push('-', 8.0);
+        run.push('>', 8.0);
+        assert!(run_is_pure_ligature(&run));
+
+        // Mixed run (alpha + symbol)
+        let mut run2 = LigatureRunBuffer::new();
+        run2.start(0.0, 0.0, 16.0, 12.0, 1, false, 0.0);
+        run2.push('a', 8.0);
+        run2.push(':', 8.0);
+        assert!(!run_is_pure_ligature(&run2));
+
+        // Pure alpha run
+        let mut run3 = LigatureRunBuffer::new();
+        run3.start(0.0, 0.0, 16.0, 12.0, 1, false, 0.0);
+        run3.push('h', 8.0);
+        run3.push('i', 8.0);
+        assert!(!run_is_pure_ligature(&run3));
     }
 }
 

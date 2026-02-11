@@ -173,12 +173,14 @@ fn test_input_event_mouse() {
         y: 200.0,
         pressed: true,
         modifiers: 0,
+        target_frame_id: 0,
     });
 
     render.send_input(InputEvent::MouseMove {
         x: 150.0,
         y: 250.0,
         modifiers: 0,
+        target_frame_id: 0,
     });
 
     render.send_input(InputEvent::MouseScroll {
@@ -187,6 +189,8 @@ fn test_input_event_mouse() {
         x: 150.0,
         y: 250.0,
         modifiers: 0,
+        pixel_precise: false,
+        target_frame_id: 0,
     });
 
     // Verify all events
@@ -226,14 +230,15 @@ fn test_input_event_window() {
     render.send_input(InputEvent::WindowResize {
         width: 1920,
         height: 1080,
+        emacs_frame_id: 0,
     });
 
-    render.send_input(InputEvent::WindowFocus { focused: true });
+    render.send_input(InputEvent::WindowFocus { focused: true, emacs_frame_id: 0 });
 
-    render.send_input(InputEvent::WindowClose);
+    render.send_input(InputEvent::WindowClose { emacs_frame_id: 0 });
 
     match emacs.input_rx.recv().unwrap() {
-        InputEvent::WindowResize { width, height } => {
+        InputEvent::WindowResize { width, height, .. } => {
             assert_eq!(width, 1920);
             assert_eq!(height, 1080);
         }
@@ -241,7 +246,7 @@ fn test_input_event_window() {
     }
 
     match emacs.input_rx.recv().unwrap() {
-        InputEvent::WindowFocus { focused } => {
+        InputEvent::WindowFocus { focused, .. } => {
             assert!(focused);
         }
         _ => panic!("Expected WindowFocus event"),
@@ -249,7 +254,7 @@ fn test_input_event_window() {
 
     assert!(matches!(
         emacs.input_rx.recv().unwrap(),
-        InputEvent::WindowClose
+        InputEvent::WindowClose { .. }
     ));
 }
 
@@ -263,7 +268,7 @@ fn test_frame_channel() {
     frame.background = Color::rgb(0.1, 0.1, 0.1);
 
     // Add some glyphs
-    frame.set_face(0, Color::WHITE, None, false, false, 0, None);
+    frame.set_face(0, Color::WHITE, None, 400, false, 0, None, 0, None, 0, None);
     frame.add_char('H', 0.0, 0.0, 10.0, 20.0, 16.0, false);
     frame.add_char('i', 10.0, 0.0, 10.0, 20.0, 16.0, false);
 
@@ -278,28 +283,23 @@ fn test_frame_channel() {
 }
 
 #[test]
-fn test_frame_channel_double_buffering() {
+fn test_frame_channel_unbounded() {
     let comms = ThreadComms::new().expect("Failed to create ThreadComms");
     let (emacs, render) = comms.split();
 
-    // Frame channel capacity is 2 (double buffering)
+    // Frame channel is unbounded — can send multiple frames without blocking
     let frame1 = FrameGlyphBuffer::with_size(800.0, 600.0);
     let frame2 = FrameGlyphBuffer::with_size(800.0, 600.0);
+    let frame3 = FrameGlyphBuffer::with_size(800.0, 600.0);
 
-    // Both should send without blocking
     emacs.frame_tx.send(frame1).unwrap();
     emacs.frame_tx.send(frame2).unwrap();
+    emacs.frame_tx.send(frame3).unwrap();
 
-    // Try to send a third - should fail with try_send since channel is full
-    let frame3 = FrameGlyphBuffer::with_size(800.0, 600.0);
-    assert!(emacs.frame_tx.try_send(frame3).is_err());
-
-    // Receive one
+    // All three should be receivable
     let _ = render.frame_rx.recv().unwrap();
-
-    // Now we can send again
-    let frame4 = FrameGlyphBuffer::with_size(800.0, 600.0);
-    emacs.frame_tx.try_send(frame4).unwrap();
+    let _ = render.frame_rx.recv().unwrap();
+    let _ = render.frame_rx.recv().unwrap();
 }
 
 #[test]
@@ -369,11 +369,15 @@ fn test_frame_glyph_buffer_operations() {
         Color::WHITE,
         Some(Color::BLACK),
         "monospace",
-        false,
-        false,
-        14.0,
-        0,
-        None,
+        400,     // font_weight
+        false,   // italic
+        14.0,    // font_size
+        0,       // underline
+        None,    // underline_color
+        0,       // strike_through
+        None,    // strike_through_color
+        0,       // overline
+        None,    // overline_color
     );
 
     buffer.add_char('T', 0.0, 0.0, 10.0, 20.0, 16.0, false);
@@ -393,23 +397,27 @@ fn test_frame_glyph_buffer_operations() {
 }
 
 #[test]
-fn test_frame_glyph_buffer_overlapping_removal() {
+fn test_frame_glyph_buffer_append_model() {
     let mut buffer = FrameGlyphBuffer::new();
     buffer.begin_frame(800.0, 600.0, Color::BLACK);
 
     // Set face
-    buffer.set_face(0, Color::WHITE, None, false, false, 0, None);
+    buffer.set_face(0, Color::WHITE, None, 400, false, 0, None, 0, None, 0, None);
 
-    // Add a character
+    // Full-frame rebuild: add_char always appends (no overlap tracking)
     buffer.add_char('A', 10.0, 10.0, 10.0, 20.0, 16.0, false);
     assert_eq!(buffer.len(), 1);
 
-    // Add another character at the same position - should replace
-    buffer.add_char('B', 10.0, 10.0, 10.0, 20.0, 16.0, false);
-    assert_eq!(buffer.len(), 1);
+    buffer.add_char('B', 20.0, 10.0, 10.0, 20.0, 16.0, false);
+    assert_eq!(buffer.len(), 2);
 
-    // Verify it's 'B' not 'A'
+    // Verify both chars present
     if let neomacs_display::core::frame_glyphs::FrameGlyph::Char { char, .. } = &buffer.glyphs[0] {
+        assert_eq!(*char, 'A');
+    } else {
+        panic!("Expected Char glyph");
+    }
+    if let neomacs_display::core::frame_glyphs::FrameGlyph::Char { char, .. } = &buffer.glyphs[1] {
         assert_eq!(*char, 'B');
     } else {
         panic!("Expected Char glyph");
@@ -417,11 +425,11 @@ fn test_frame_glyph_buffer_overlapping_removal() {
 }
 
 #[test]
-fn test_frame_glyph_buffer_clear_area() {
+fn test_frame_glyph_buffer_clear_all() {
     let mut buffer = FrameGlyphBuffer::new();
     buffer.begin_frame(800.0, 600.0, Color::BLACK);
 
-    buffer.set_face(0, Color::WHITE, None, false, false, 0, None);
+    buffer.set_face(0, Color::WHITE, None, 400, false, 0, None, 0, None, 0, None);
 
     // Add some chars
     buffer.add_char('A', 0.0, 0.0, 10.0, 20.0, 16.0, false);
@@ -431,29 +439,26 @@ fn test_frame_glyph_buffer_clear_area() {
 
     assert_eq!(buffer.len(), 4);
 
-    // Clear area covering first row
-    buffer.clear_area(0.0, 0.0, 30.0, 25.0);
+    // clear_all removes all glyphs (full-frame rebuild model)
+    buffer.clear_all();
 
-    // Only 'D' should remain (on different row)
-    assert_eq!(buffer.len(), 1);
+    assert_eq!(buffer.len(), 0);
 }
 
 #[test]
-fn test_frame_glyph_buffer_cursor_per_window() {
+fn test_frame_glyph_buffer_cursor_append() {
     let mut buffer = FrameGlyphBuffer::new();
     buffer.begin_frame(800.0, 600.0, Color::BLACK);
 
-    // Add cursors for different windows
+    // Full-frame rebuild: add_cursor always appends
     buffer.add_cursor(1, 10.0, 10.0, 2.0, 20.0, 0, Color::WHITE);
     buffer.add_cursor(2, 100.0, 100.0, 2.0, 20.0, 0, Color::WHITE);
 
     assert_eq!(buffer.len(), 2);
 
-    // Update cursor for window 1 - should replace, not add
-    buffer.add_cursor(1, 20.0, 10.0, 2.0, 20.0, 0, Color::WHITE);
-
-    // Still 2 cursors (one per window)
-    assert_eq!(buffer.len(), 2);
+    // Adding another cursor appends (frame is rebuilt each time)
+    buffer.add_cursor(3, 200.0, 200.0, 2.0, 20.0, 0, Color::WHITE);
+    assert_eq!(buffer.len(), 3);
 }
 
 // Test that requires windowing system - mark as ignored for CI
@@ -462,12 +467,23 @@ fn test_frame_glyph_buffer_cursor_per_window() {
 #[cfg(feature = "winit-backend")]
 fn test_render_thread_lifecycle() {
     use neomacs_display::render_thread::RenderThread;
+    use std::sync::{Arc, Mutex};
+    use std::collections::HashMap;
 
     let comms = ThreadComms::new().expect("Failed to create comms");
     let (emacs, render) = comms.split();
 
+    let image_dimensions = Arc::new(Mutex::new(HashMap::new()));
+    let shared_monitors = Arc::new((Mutex::new(Vec::new()), std::sync::Condvar::new()));
+
     // Spawn render thread
-    let rt = RenderThread::spawn(render, 800, 600, "Test Window".to_string());
+    let rt = RenderThread::spawn(
+        render, 800, 600, "Test Window".to_string(),
+        image_dimensions,
+        shared_monitors,
+        #[cfg(feature = "neo-term")]
+        Arc::new(Mutex::new(HashMap::new())),
+    );
 
     // Give it time to start
     thread::sleep(Duration::from_millis(200));
@@ -485,11 +501,22 @@ fn test_render_thread_lifecycle() {
 #[cfg(feature = "winit-backend")]
 fn test_render_thread_with_frames() {
     use neomacs_display::render_thread::RenderThread;
+    use std::sync::{Arc, Mutex};
+    use std::collections::HashMap;
 
     let comms = ThreadComms::new().expect("Failed to create comms");
     let (emacs, render) = comms.split();
 
-    let rt = RenderThread::spawn(render, 800, 600, "Test Frame Render".to_string());
+    let image_dimensions = Arc::new(Mutex::new(HashMap::new()));
+    let shared_monitors = Arc::new((Mutex::new(Vec::new()), std::sync::Condvar::new()));
+
+    let rt = RenderThread::spawn(
+        render, 800, 600, "Test Frame Render".to_string(),
+        image_dimensions,
+        shared_monitors,
+        #[cfg(feature = "neo-term")]
+        Arc::new(Mutex::new(HashMap::new())),
+    );
 
     // Wait for window to be ready
     thread::sleep(Duration::from_millis(300));
@@ -498,7 +525,7 @@ fn test_render_thread_with_frames() {
     for i in 0..5 {
         let mut frame = FrameGlyphBuffer::with_size(800.0, 600.0);
         frame.background = Color::rgb(0.1 * i as f32, 0.1, 0.1);
-        frame.set_face(0, Color::WHITE, None, false, false, 0, None);
+        frame.set_face(0, Color::WHITE, None, 400, false, 0, None, 0, None, 0, None);
         frame.add_char('X', 100.0, 100.0, 10.0, 20.0, 16.0, false);
 
         if emacs.frame_tx.try_send(frame).is_err() {
