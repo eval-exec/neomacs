@@ -103,11 +103,13 @@ impl Evaluator {
         functions.insert("+".to_string(), Value::Symbol("+".to_string()));
         functions.insert("/".to_string(), Value::Symbol("/".to_string()));
         functions.insert("setcar".to_string(), Value::Symbol("setcar".to_string()));
+        functions.insert("setcdr".to_string(), Value::Symbol("setcdr".to_string()));
         functions.insert("car".to_string(), Value::Symbol("car".to_string()));
         functions.insert("cdr".to_string(), Value::Symbol("cdr".to_string()));
         functions.insert("cons".to_string(), Value::Symbol("cons".to_string()));
         functions.insert("list".to_string(), Value::Symbol("list".to_string()));
         functions.insert("eq".to_string(), Value::Symbol("eq".to_string()));
+        functions.insert("equal".to_string(), Value::Symbol("equal".to_string()));
         Self {
             globals,
             functions,
@@ -164,6 +166,7 @@ impl Evaluator {
             match name.as_str() {
                 "quote" => return self.eval_quote(tail),
                 "let" => return self.eval_let(tail),
+                "let*" => return self.eval_let_star(tail),
                 "setq" => return self.eval_setq(tail),
                 "catch" => return self.eval_catch(tail),
                 "throw" => return self.eval_throw(tail),
@@ -176,11 +179,13 @@ impl Evaluator {
                 "+" => return self.eval_plus(tail),
                 "/" => return self.eval_div(tail),
                 "setcar" => return self.eval_setcar(tail),
+                "setcdr" => return self.eval_setcdr(tail),
                 "car" => return self.eval_car(tail),
                 "cdr" => return self.eval_cdr(tail),
                 "cons" => return self.eval_cons(tail),
                 "list" => return self.eval_list_builtin(tail),
                 "eq" => return self.eval_eq(tail),
+                "equal" => return self.eval_equal(tail),
                 _ => {}
             }
 
@@ -258,6 +263,39 @@ impl Evaluator {
         }
 
         Ok(last)
+    }
+
+    fn eval_let_star(&mut self, tail: &[Expr]) -> EvalResult {
+        if tail.is_empty() {
+            return Err(signal("wrong-number-of-arguments", vec![]));
+        }
+
+        let Expr::List(entries) = &tail[0] else {
+            return Err(signal("wrong-type-argument", vec![]));
+        };
+
+        self.dynamic.push(HashMap::new());
+        for binding in entries {
+            match binding {
+                Expr::Symbol(name) => self.assign(name, Value::Nil),
+                Expr::List(pair) if pair.len() == 2 => {
+                    let Expr::Symbol(name) = &pair[0] else {
+                        self.dynamic.pop();
+                        return Err(signal("wrong-type-argument", vec![]));
+                    };
+                    let value = self.eval(&pair[1])?;
+                    self.assign(name, value);
+                }
+                _ => {
+                    self.dynamic.pop();
+                    return Err(signal("wrong-type-argument", vec![]));
+                }
+            }
+        }
+
+        let result = self.eval_progn(&tail[1..]);
+        self.dynamic.pop();
+        result
     }
 
     fn eval_catch(&mut self, tail: &[Expr]) -> EvalResult {
@@ -436,6 +474,24 @@ impl Evaluator {
         }
     }
 
+    fn eval_setcdr(&mut self, tail: &[Expr]) -> EvalResult {
+        if tail.len() != 2 {
+            return Err(signal("wrong-number-of-arguments", vec![]));
+        }
+
+        let list = self.eval(&tail[0])?;
+        let value = self.eval(&tail[1])?;
+
+        match list {
+            Value::Cons(cell) => {
+                let mut pair = cell.lock().expect("cons cell mutex poisoned");
+                pair.cdr = value.clone();
+                Ok(value)
+            }
+            _ => Err(signal("wrong-type-argument", vec![])),
+        }
+    }
+
     fn eval_car(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.len() != 1 {
             return Err(signal("wrong-number-of-arguments", vec![]));
@@ -490,6 +546,19 @@ impl Evaluator {
         }
     }
 
+    fn eval_equal(&mut self, tail: &[Expr]) -> EvalResult {
+        if tail.len() != 2 {
+            return Err(signal("wrong-number-of-arguments", vec![]));
+        }
+        let left = self.eval(&tail[0])?;
+        let right = self.eval(&tail[1])?;
+        if equal_value(&left, &right, 0) {
+            Ok(Value::Symbol("t".to_string()))
+        } else {
+            Ok(Value::Nil)
+        }
+    }
+
     fn apply(&mut self, function: Value, args: Vec<Value>) -> EvalResult {
         match function {
             Value::Lambda(lambda) => {
@@ -507,15 +576,7 @@ impl Evaluator {
                 self.dynamic.pop();
                 result
             }
-            Value::Symbol(name) if name == "+" => {
-                let mut sum = 0i64;
-                for value in args {
-                    sum = sum
-                        .checked_add(expect_int(value)?)
-                        .ok_or_else(|| signal("overflow-error", vec![]))?;
-                }
-                Ok(Value::Int(sum))
-            }
+            Value::Symbol(name) => self.apply_builtin(&name, args),
             _ => Err(signal("invalid-function", vec![function])),
         }
     }
@@ -525,6 +586,116 @@ impl Evaluator {
             signal("void-function", vec![Value::Symbol(name.to_string())])
         })?;
         self.apply(function, args)
+    }
+
+    fn apply_builtin(&mut self, name: &str, args: Vec<Value>) -> EvalResult {
+        match name {
+            "+" => {
+                let mut sum = 0i64;
+                for value in args {
+                    sum = sum
+                        .checked_add(expect_int(value)?)
+                        .ok_or_else(|| signal("overflow-error", vec![]))?;
+                }
+                Ok(Value::Int(sum))
+            }
+            "/" => {
+                if args.len() < 2 {
+                    return Err(signal("wrong-number-of-arguments", vec![]));
+                }
+                let mut iter = args.into_iter();
+                let mut acc = expect_int(iter.next().expect("division arg exists"))?;
+                for value in iter {
+                    let divisor = expect_int(value)?;
+                    if divisor == 0 {
+                        return Err(signal("arith-error", vec![]));
+                    }
+                    acc /= divisor;
+                }
+                Ok(Value::Int(acc))
+            }
+            "car" => {
+                if args.len() != 1 {
+                    return Err(signal("wrong-number-of-arguments", vec![]));
+                }
+                match &args[0] {
+                    Value::Nil => Ok(Value::Nil),
+                    Value::Cons(cell) => {
+                        Ok(cell.lock().expect("cons cell mutex poisoned").car.clone())
+                    }
+                    _ => Err(signal("wrong-type-argument", vec![])),
+                }
+            }
+            "cdr" => {
+                if args.len() != 1 {
+                    return Err(signal("wrong-number-of-arguments", vec![]));
+                }
+                match &args[0] {
+                    Value::Nil => Ok(Value::Nil),
+                    Value::Cons(cell) => {
+                        Ok(cell.lock().expect("cons cell mutex poisoned").cdr.clone())
+                    }
+                    _ => Err(signal("wrong-type-argument", vec![])),
+                }
+            }
+            "cons" => {
+                if args.len() != 2 {
+                    return Err(signal("wrong-number-of-arguments", vec![]));
+                }
+                Ok(Value::Cons(Arc::new(Mutex::new(ConsCell {
+                    car: args[0].clone(),
+                    cdr: args[1].clone(),
+                }))))
+            }
+            "list" => Ok(list_from_vec(args)),
+            "eq" => {
+                if args.len() != 2 {
+                    return Err(signal("wrong-number-of-arguments", vec![]));
+                }
+                if eq_value(&args[0], &args[1]) {
+                    Ok(Value::Symbol("t".to_string()))
+                } else {
+                    Ok(Value::Nil)
+                }
+            }
+            "equal" => {
+                if args.len() != 2 {
+                    return Err(signal("wrong-number-of-arguments", vec![]));
+                }
+                if equal_value(&args[0], &args[1], 0) {
+                    Ok(Value::Symbol("t".to_string()))
+                } else {
+                    Ok(Value::Nil)
+                }
+            }
+            "setcar" => {
+                if args.len() != 2 {
+                    return Err(signal("wrong-number-of-arguments", vec![]));
+                }
+                match &args[0] {
+                    Value::Cons(cell) => {
+                        let mut pair = cell.lock().expect("cons cell mutex poisoned");
+                        pair.car = args[1].clone();
+                        Ok(args[1].clone())
+                    }
+                    _ => Err(signal("wrong-type-argument", vec![])),
+                }
+            }
+            "setcdr" => {
+                if args.len() != 2 {
+                    return Err(signal("wrong-number-of-arguments", vec![]));
+                }
+                match &args[0] {
+                    Value::Cons(cell) => {
+                        let mut pair = cell.lock().expect("cons cell mutex poisoned");
+                        pair.cdr = args[1].clone();
+                        Ok(args[1].clone())
+                    }
+                    _ => Err(signal("wrong-type-argument", vec![])),
+                }
+            }
+            _ => Err(signal("invalid-function", vec![Value::Symbol(name.to_string())])),
+        }
     }
 
     fn eval_progn(&mut self, forms: &[Expr]) -> EvalResult {
@@ -709,6 +880,29 @@ fn eq_value(left: &Value, right: &Value) -> bool {
         (Value::Int(a), Value::Int(b)) => a == b,
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Cons(a), Value::Cons(b)) => Arc::ptr_eq(a, b),
+        (Value::Lambda(a), Value::Lambda(b)) => Arc::ptr_eq(a, b),
+        _ => false,
+    }
+}
+
+fn equal_value(left: &Value, right: &Value, depth: usize) -> bool {
+    if depth > 4096 {
+        return false;
+    }
+
+    match (left, right) {
+        (Value::Nil, Value::Nil) => true,
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Symbol(a), Value::Symbol(b)) => a == b,
+        (Value::Cons(a), Value::Cons(b)) => {
+            if Arc::ptr_eq(a, b) {
+                return true;
+            }
+            let left_cell = a.lock().expect("cons cell mutex poisoned");
+            let right_cell = b.lock().expect("cons cell mutex poisoned");
+            equal_value(&left_cell.car, &right_cell.car, depth + 1)
+                && equal_value(&left_cell.cdr, &right_cell.cdr, depth + 1)
+        }
         (Value::Lambda(a), Value::Lambda(b)) => Arc::ptr_eq(a, b),
         _ => false,
     }
@@ -927,5 +1121,25 @@ mod tests {
         let mut evaluator = Evaluator::new();
         let result = evaluator.eval_expr(&forms[0]);
         assert_eq!(format_eval_result(&result), "OK (9 8)");
+    }
+
+    #[test]
+    fn supports_let_star_and_equal() {
+        let forms = parse_forms(
+            "(let* ((x 1) (y (+ x 2))) (if (equal (list x y) '(1 3)) y 0))",
+        )
+        .expect("parse should succeed");
+        let mut evaluator = Evaluator::new();
+        let result = evaluator.eval_expr(&forms[0]);
+        assert_eq!(format_eval_result(&result), "OK 3");
+    }
+
+    #[test]
+    fn supports_setcdr_mutation() {
+        let forms = parse_forms("(let ((x '(1 2 3))) (setcdr x '(9 10)) x)")
+            .expect("parse should succeed");
+        let mut evaluator = Evaluator::new();
+        let result = evaluator.eval_expr(&forms[0]);
+        assert_eq!(format_eval_result(&result), "OK (1 9 10)");
     }
 }

@@ -91,7 +91,7 @@ Implemented now:
 
 - `rust/neovm-host-abi`: typed VM/host boundary (`HostAbi`, `Affinity`, `EffectClass`, snapshots, patches, task/select types)
 - `rust/neovm-core`: `Vm<H, S>` shell with explicit `TaskScheduler` trait to keep core decoupled from host/editor internals
-- `rust/neovm-core/src/elisp.rs`: first interpreter slice with parser + evaluator for dynamic `let`/`setq`, quote/list mutation (`setcar`), `catch`/`throw`, `condition-case`, lambda/funcall, and arithmetic
+- `rust/neovm-core/src/elisp.rs`: first interpreter slice with parser + evaluator for `let`/`let*`/`setq`, quote/list mutation (`setcar`/`setcdr`), `catch`/`throw`, `condition-case`, `if`/`progn`, lambda/funcall/`defun`, arithmetic, and `eq`/`equal`
 - `rust/neovm-worker`: first worker runtime scaffold with:
   - bounded priority task queues (`Interactive`, `Default`, `Background`)
   - cancellation-aware task lifecycle (`Queued/Running/Completed/Cancelled`)

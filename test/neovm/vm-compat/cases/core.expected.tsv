@@ -8,3 +8,6 @@
 8	(if (eq (car (cons 1 nil)) 1) (list 9 8) nil)	OK (9 8)
 9	(cdr '(1 2 3))	OK (2 3)
 10	(if nil 1 2)	OK 2
+11	(let* ((x 1) (y (+ x 2))) (if (equal (list x y) '(1 3)) y 0))	OK 3
+12	(let ((x '(1 2 3))) (setcdr x '(9 10)) x)	OK (1 9 10)
+13	(funcall 'equal '(1 (2 3)) '(1 (2 3)))	OK t

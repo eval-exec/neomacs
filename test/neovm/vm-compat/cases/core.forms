@@ -20,3 +20,8 @@
 (if (eq (car (cons 1 nil)) 1) (list 9 8) nil)
 (cdr '(1 2 3))
 (if nil 1 2)
+
+; Sequential bindings and structural equality
+(let* ((x 1) (y (+ x 2))) (if (equal (list x y) '(1 3)) y 0))
+(let ((x '(1 2 3))) (setcdr x '(9 10)) x)
+(funcall 'equal '(1 (2 3)) '(1 (2 3)))
