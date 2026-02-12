@@ -3925,9 +3925,24 @@ NEOMACS_CFLAGS=
 NEOMACS_PREBUILT=no
 if test "$window_system" = "neomacs"; then
   NEOMACS_OBJ="neomacsterm.o neomacsfns.o neomacs_log.o"
-  dnl Check for the Rust library - use dynamic library (.so)
+  dnl Check for the Rust library using the platform's dynamic library suffix.
+  NEOMACS_RUST_DYLIB_EXT=".so"
+  NEOMACS_RUST_ALT_DYLIB_EXT=""
+  case $opsys in
+    darwin)
+      NEOMACS_RUST_DYLIB_EXT=".dylib"
+      dnl Keep .so as a compatibility fallback on macOS.
+      NEOMACS_RUST_ALT_DYLIB_EXT=".so"
+      ;;
+    cygwin|mingw32)
+      NEOMACS_RUST_DYLIB_EXT=".dll"
+      ;;
+  esac
   dnl First check NEOMACS_DISPLAY_LIB environment variable (for nix/external builds)
-  if test -n "$NEOMACS_DISPLAY_LIB" && test -f "${NEOMACS_DISPLAY_LIB}/libneomacs_display.so"; then
+  if test -n "$NEOMACS_DISPLAY_LIB" \
+     && (test -f "${NEOMACS_DISPLAY_LIB}/libneomacs_display${NEOMACS_RUST_DYLIB_EXT}" \
+         || (test -n "$NEOMACS_RUST_ALT_DYLIB_EXT" \
+             && test -f "${NEOMACS_DISPLAY_LIB}/libneomacs_display${NEOMACS_RUST_ALT_DYLIB_EXT}")); then
     NEOMACS_RUST_LIB_DIR="$NEOMACS_DISPLAY_LIB"
     NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display -Wl,-rpath,${NEOMACS_RUST_LIB_DIR}"
     NEOMACS_PREBUILT=yes
@@ -3937,13 +3952,17 @@ if test "$window_system" = "neomacs"; then
   else
     dnl Fall back to in-tree release build
     NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/release"
-    if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.so"; then
+    if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display${NEOMACS_RUST_DYLIB_EXT}" \
+       || (test -n "$NEOMACS_RUST_ALT_DYLIB_EXT" \
+           && test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display${NEOMACS_RUST_ALT_DYLIB_EXT}"); then
       dnl Use dynamic linking - faster iteration during development
       NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display -Wl,-rpath,${NEOMACS_RUST_LIB_DIR}"
     else
       dnl Try debug build
       NEOMACS_RUST_LIB_DIR="`cd ${srcdir} && pwd`/rust/neomacs-display/target/debug"
-      if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display.so"; then
+      if test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display${NEOMACS_RUST_DYLIB_EXT}" \
+         || (test -n "$NEOMACS_RUST_ALT_DYLIB_EXT" \
+             && test -f "${NEOMACS_RUST_LIB_DIR}/libneomacs_display${NEOMACS_RUST_ALT_DYLIB_EXT}"); then
         NEOMACS_LIBS="-L${NEOMACS_RUST_LIB_DIR} -lneomacs_display -Wl,-rpath,${NEOMACS_RUST_LIB_DIR}"
       else
         AC_MSG_ERROR([Neomacs display library not found. Build it with: cd rust/neomacs-display && cargo build --release])
