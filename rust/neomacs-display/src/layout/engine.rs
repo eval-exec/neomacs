@@ -208,8 +208,10 @@ impl LayoutEngine {
         // Clear hit-test data for new frame
         self.hit_data.clear();
 
-        // Get number of windows
-        let window_count = neomacs_layout_frame_window_count(frame);
+        // Get number of windows (direct Rust struct access, no FFI call)
+        let window_count = super::emacs_types::frame_window_count(
+            frame as *const std::ffi::c_void,
+        );
         log::debug!("layout_frame: {}x{} char={}x{} windows={}",
             frame_params.width, frame_params.height,
             frame_params.char_width, frame_params.char_height,
@@ -226,7 +228,35 @@ impl LayoutEngine {
                 continue;
             }
 
+            // Read buffer metadata directly from Emacs struct (Phase 2: bypass C wrappers)
+            let (rust_begv, rust_zv) = if !wp.buffer_ptr.is_null() {
+                super::emacs_types::buffer_bounds(wp.buffer_ptr)
+            } else {
+                (1, 1)
+            };
+            let rust_point = if !wp.buffer_ptr.is_null() {
+                super::emacs_types::buffer_point(wp.buffer_ptr)
+            } else {
+                1
+            };
+            let rust_tab_width = if !wp.buffer_ptr.is_null() {
+                super::emacs_types::buffer_tab_width(wp.buffer_ptr)
+            } else {
+                8
+            };
+            let rust_truncate = if !wp.buffer_ptr.is_null() {
+                super::emacs_types::buffer_truncate_lines(wp.buffer_ptr)
+            } else {
+                false
+            };
+            let rust_word_wrap = if !wp.buffer_ptr.is_null() {
+                super::emacs_types::buffer_word_wrap(wp.buffer_ptr)
+            } else {
+                false
+            };
+
             // Convert FFI params to our types
+            // Buffer metadata fields use direct Rust struct reads instead of C values
             let params = WindowParams {
                 window_id: wp.window_id,
                 buffer_id: wp.buffer_id,
@@ -236,13 +266,13 @@ impl LayoutEngine {
                 is_minibuffer: wp.is_minibuffer != 0,
                 window_start: wp.window_start,
                 window_end: wp.window_end,
-                point: wp.point,
-                buffer_size: wp.buffer_zv,
-                buffer_begv: wp.buffer_begv,
+                point: rust_point,
+                buffer_size: rust_zv,
+                buffer_begv: rust_begv,
                 hscroll: wp.hscroll,
-                truncate_lines: wp.truncate_lines != 0,
-                word_wrap: wp.word_wrap != 0,
-                tab_width: wp.tab_width,
+                truncate_lines: rust_truncate,
+                word_wrap: rust_word_wrap,
+                tab_width: rust_tab_width,
                 default_fg: wp.default_fg,
                 default_bg: wp.default_bg,
                 char_width: wp.char_width,
@@ -617,20 +647,21 @@ impl LayoutEngine {
         let fontify_end = (window_start + read_chars).min(params.buffer_size);
         neomacs_layout_ensure_fontified(buffer, window_start, fontify_end);
 
-        // Read buffer text from window_start
+        // Read buffer text directly from gap buffer (Phase 3: eliminates
+        // per-character FFI overhead from the old neomacs_layout_buffer_text).
         let bytes_read = if read_chars <= 0 {
-            0
+            0i64
         } else {
-            let buf_size = (read_chars * 4) as usize;
-            self.text_buf.resize(buf_size, 0);
-            let n = neomacs_layout_buffer_text(
-                buffer,
-                window_start,
-                (window_start + read_chars).min(params.buffer_size),
-                self.text_buf.as_mut_ptr(),
-                buf_size as i64,
+            let text_end = (window_start + read_chars).min(params.buffer_size);
+            let byte_from = neomacs_buf_charpos_to_bytepos(buffer, window_start);
+            let byte_to = neomacs_buf_charpos_to_bytepos(buffer, text_end);
+            super::emacs_types::gap_buffer_copy_text(
+                buffer as *const std::ffi::c_void,
+                byte_from as isize,
+                byte_to as isize,
+                &mut self.text_buf,
             );
-            n.max(0)
+            self.text_buf.len() as i64
         };
 
         let text = if bytes_read > 0 {

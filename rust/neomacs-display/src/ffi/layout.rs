@@ -48,6 +48,9 @@ pub unsafe extern "C" fn neomacs_rust_layout_frame(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let display = &mut *handle;
 
+        // Validate Emacs struct offsets on first call
+        crate::layout::emacs_types::ensure_offsets_valid();
+
         // Initialize layout engine on first call
         if (*std::ptr::addr_of!(LAYOUT_ENGINE)).is_none() {
             let mut engine = crate::layout::LayoutEngine::new();

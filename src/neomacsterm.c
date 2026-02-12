@@ -1512,193 +1512,129 @@ neomacs_extract_window_glyphs (struct window *w, void *user_data)
 
 /* The Rust display engine is always active — no legacy fallback. */
 
-/* Get a character at a character position in a buffer.
-   Returns the Unicode codepoint, or -1 if out of range. */
-int
-neomacs_layout_char_at (void *buffer_ptr, int64_t charpos)
-{
-  struct buffer *buf = (struct buffer *) buffer_ptr;
-  if (!buf)
-    return -1;
-
-  struct buffer *old = current_buffer;
-  set_buffer_internal_1 (buf);
-
-  if (charpos < BEGV || charpos >= ZV)
-    {
-      set_buffer_internal_1 (old);
-      return -1;
-    }
-
-  ptrdiff_t bytepos = CHAR_TO_BYTE (charpos);
-  int ch = FETCH_CHAR (bytepos);
-
-  set_buffer_internal_1 (old);
-  return ch;
-}
-
-/* Copy buffer text as UTF-8 into the provided buffer.
-   `from` and `to` are character positions.
-   Returns number of bytes written, or -1 on error. */
+/* Convert character position to byte position in a buffer.
+   Used by Rust layout engine for gap buffer direct access.
+   Does not need set_buffer_internal_1 — works directly on the buffer. */
 int64_t
-neomacs_layout_buffer_text (void *buffer_ptr, int64_t from, int64_t to,
-                            uint8_t *out_buf, int64_t out_buf_len)
-{
-  struct buffer *buf = (struct buffer *) buffer_ptr;
-  if (!buf || !out_buf || out_buf_len <= 0)
-    return -1;
-
-  struct buffer *old = current_buffer;
-  set_buffer_internal_1 (buf);
-
-  ptrdiff_t begv = BEGV;
-  ptrdiff_t zv = ZV;
-
-  if (from < begv) from = begv;
-  if (to > zv) to = zv;
-  if (from >= to)
-    {
-      set_buffer_internal_1 (old);
-      return 0;
-    }
-
-  int64_t written = 0;
-  ptrdiff_t pos = from;
-
-  while (pos < to && written < out_buf_len - 4)  /* leave room for max UTF-8 char */
-    {
-      ptrdiff_t bytepos = CHAR_TO_BYTE (pos);
-      int ch = FETCH_CHAR (bytepos);
-
-      /* Encode as UTF-8 */
-      if (ch < 0x80)
-        {
-          out_buf[written++] = (uint8_t) ch;
-        }
-      else if (ch < 0x800)
-        {
-          out_buf[written++] = (uint8_t) (0xC0 | (ch >> 6));
-          out_buf[written++] = (uint8_t) (0x80 | (ch & 0x3F));
-        }
-      else if (ch < 0x10000)
-        {
-          out_buf[written++] = (uint8_t) (0xE0 | (ch >> 12));
-          out_buf[written++] = (uint8_t) (0x80 | ((ch >> 6) & 0x3F));
-          out_buf[written++] = (uint8_t) (0x80 | (ch & 0x3F));
-        }
-      else
-        {
-          out_buf[written++] = (uint8_t) (0xF0 | (ch >> 18));
-          out_buf[written++] = (uint8_t) (0x80 | ((ch >> 12) & 0x3F));
-          out_buf[written++] = (uint8_t) (0x80 | ((ch >> 6) & 0x3F));
-          out_buf[written++] = (uint8_t) (0x80 | (ch & 0x3F));
-        }
-
-      pos++;
-    }
-
-  set_buffer_internal_1 (old);
-  return written;
-}
-
-/* Get buffer narrowing bounds. */
-void
-neomacs_layout_buffer_bounds (void *buffer_ptr, int64_t *begv, int64_t *zv)
-{
-  struct buffer *buf = (struct buffer *) buffer_ptr;
-  if (!buf)
-    {
-      *begv = 1;
-      *zv = 1;
-      return;
-    }
-
-  struct buffer *old = current_buffer;
-  set_buffer_internal_1 (buf);
-  *begv = BEGV;
-  *zv = ZV;
-  set_buffer_internal_1 (old);
-}
-
-/* Get buffer point position. */
-int64_t
-neomacs_layout_buffer_point (void *buffer_ptr)
+neomacs_buf_charpos_to_bytepos (void *buffer_ptr, int64_t charpos)
 {
   struct buffer *buf = (struct buffer *) buffer_ptr;
   if (!buf)
     return 1;
-  return BUF_PT (buf);
+  return buf_charpos_to_bytepos (buf, (ptrdiff_t) charpos);
 }
 
-/* Check if buffer uses multibyte encoding. */
-int
-neomacs_layout_buffer_multibyte_p (void *buffer_ptr)
+/* ========================================================================
+   Struct offset validation for Rust direct field access.
+   Called once by Rust on first layout frame to validate that Rust's
+   compile-time struct assumptions match the actual C struct layout.
+   ======================================================================== */
+
+/* This struct must match Rust's StructOffsets in emacs_types.rs exactly. */
+struct neomacs_struct_offsets
 {
-  struct buffer *buf = (struct buffer *) buffer_ptr;
-  if (!buf)
-    return 0;
-  return !NILP (BVAR (buf, enable_multibyte_characters));
-}
+  /* struct buffer offsets */
+  size_t buf_text;
+  size_t buf_pt;
+  size_t buf_pt_byte;
+  size_t buf_begv;
+  size_t buf_begv_byte;
+  size_t buf_zv;
+  size_t buf_zv_byte;
+  size_t buf_base_buffer;
+  size_t buf_lisp_field_count;
+  /* struct buffer_text offsets */
+  size_t buftext_beg;
+  size_t buftext_gpt;
+  size_t buftext_z;
+  size_t buftext_gpt_byte;
+  size_t buftext_z_byte;
+  size_t buftext_gap_size;
+  /* BVAR field offsets (for index validation) */
+  size_t buf_tab_width;
+  size_t buf_truncate_lines;
+  size_t buf_enable_multibyte;
+  size_t buf_pt_marker;
+  size_t buf_begv_marker;
+  size_t buf_zv_marker;
+  size_t buf_word_wrap;
+  size_t buf_selective_display;
+  /* struct window offsets */
+  size_t win_frame;
+  size_t win_next;
+  size_t win_contents;
+  /* struct frame offsets */
+  size_t frame_root_window;
+  size_t frame_selected_window;
+  size_t frame_minibuffer_window;
+  /* Pseudovector type constants */
+  size_t pvec_window;
+  size_t pvec_buffer;
+  size_t pseudovector_area_bits;
+  size_t pseudovector_flag;
+};
 
-/* Get buffer-local tab-width. */
-int
-neomacs_layout_buffer_tab_width (void *buffer_ptr)
+void
+neomacs_get_struct_offsets (struct neomacs_struct_offsets *out)
 {
-  struct buffer *buf = (struct buffer *) buffer_ptr;
-  if (!buf)
-    return 8;
-  Lisp_Object tw = BVAR (buf, tab_width);
-  return FIXNATP (tw) ? XFIXNAT (tw) : 8;
+  /* struct buffer scalar field offsets */
+  out->buf_text = offsetof (struct buffer, text);
+  out->buf_pt = offsetof (struct buffer, pt);
+  out->buf_pt_byte = offsetof (struct buffer, pt_byte);
+  out->buf_begv = offsetof (struct buffer, begv);
+  out->buf_begv_byte = offsetof (struct buffer, begv_byte);
+  out->buf_zv = offsetof (struct buffer, zv);
+  out->buf_zv_byte = offsetof (struct buffer, zv_byte);
+  out->buf_base_buffer = offsetof (struct buffer, base_buffer);
+  out->buf_lisp_field_count = BUFFER_LISP_SIZE;
+
+  /* struct buffer_text field offsets */
+  out->buftext_beg = offsetof (struct buffer_text, beg);
+  out->buftext_gpt = offsetof (struct buffer_text, gpt);
+  out->buftext_z = offsetof (struct buffer_text, z);
+  out->buftext_gpt_byte = offsetof (struct buffer_text, gpt_byte);
+  out->buftext_z_byte = offsetof (struct buffer_text, z_byte);
+  out->buftext_gap_size = offsetof (struct buffer_text, gap_size);
+
+  /* BVAR field offsets for Rust index validation */
+  out->buf_tab_width = offsetof (struct buffer, tab_width_);
+  out->buf_truncate_lines = offsetof (struct buffer, truncate_lines_);
+  out->buf_enable_multibyte = offsetof (struct buffer, enable_multibyte_characters_);
+  out->buf_pt_marker = offsetof (struct buffer, pt_marker_);
+  out->buf_begv_marker = offsetof (struct buffer, begv_marker_);
+  out->buf_zv_marker = offsetof (struct buffer, zv_marker_);
+  out->buf_word_wrap = offsetof (struct buffer, word_wrap_);
+  out->buf_selective_display = offsetof (struct buffer, selective_display_);
+
+  /* struct window field offsets */
+  out->win_frame = offsetof (struct window, frame);
+  out->win_next = offsetof (struct window, next);
+  out->win_contents = offsetof (struct window, contents);
+
+  /* struct frame field offsets */
+  out->frame_root_window = offsetof (struct frame, root_window);
+  out->frame_selected_window = offsetof (struct frame, selected_window);
+  out->frame_minibuffer_window = offsetof (struct frame, minibuffer_window);
+
+  /* Pseudovector type constants */
+  out->pvec_window = PVEC_WINDOW;
+  out->pvec_buffer = PVEC_BUFFER;
+  out->pseudovector_area_bits = PSEUDOVECTOR_AREA_BITS;
+  out->pseudovector_flag = (size_t) PSEUDOVECTOR_FLAG;
 }
 
-/* Get buffer-local truncate-lines setting. */
-int
-neomacs_layout_buffer_truncate_lines (void *buffer_ptr)
+/* Return the character position of a Lisp marker object.
+   Used by Rust for indirect buffer marker fallback. */
+int64_t
+neomacs_layout_marker_position (Lisp_Object marker)
 {
-  struct buffer *buf = (struct buffer *) buffer_ptr;
-  if (!buf)
-    return 0;
-  return !NILP (BVAR (buf, truncate_lines));
+  if (NILP (marker))
+    return 1;
+  return marker_position (marker);
 }
 
-/* Get number of leaf windows in the frame. */
-int
-neomacs_layout_frame_window_count (void *frame_ptr)
-{
-  struct frame *f = (struct frame *) frame_ptr;
-  if (!f)
-    return 0;
-
-  /* Count leaf windows using stack-based window tree traversal */
-  int count = 0;
-  struct window *stack[64];
-  int sp = 0;
-  stack[sp++] = XWINDOW (FRAME_ROOT_WINDOW (f));
-
-  while (sp > 0)
-    {
-      struct window *w = stack[--sp];
-      if (WINDOWP (w->contents))
-        {
-          struct window *child = XWINDOW (w->contents);
-          while (child)
-            {
-              if (sp < 64)
-                stack[sp++] = child;
-              child = NILP (child->next) ? NULL : XWINDOW (child->next);
-            }
-        }
-      else
-        count++;
-    }
-
-  /* Also count minibuffer */
-  Lisp_Object mini = FRAME_MINIBUF_WINDOW (f);
-  if (!NILP (mini) && FRAME_HAS_MINIBUF_P (f))
-    count++;
-
-  return count;
-}
+/* frame_window_count is now implemented directly in Rust
+   (emacs_types::frame_window_count — direct struct access). */
 
 /* FFI struct matching Rust WindowParamsFFI.
    Must be kept in sync with layout/emacs_ffi.rs. */
@@ -3309,28 +3245,6 @@ neomacs_layout_line_number_face (void *window_ptr,
     fill_face_data (f, face, (struct FaceDataFFI *) face_out);
 
   return 0;
-}
-
-/* Get a byte from buffer text at a byte position. */
-int
-neomacs_layout_buffer_byte_at (void *buffer_ptr, int64_t byte_pos)
-{
-  struct buffer *buf = (struct buffer *) buffer_ptr;
-  if (!buf)
-    return -1;
-
-  struct buffer *old = current_buffer;
-  set_buffer_internal_1 (buf);
-
-  if (byte_pos < BUF_BEGV_BYTE (buf) || byte_pos >= BUF_ZV_BYTE (buf))
-    {
-      set_buffer_internal_1 (old);
-      return -1;
-    }
-
-  int result = FETCH_BYTE (byte_pos);
-  set_buffer_internal_1 (old);
-  return result;
 }
 
 /* FFI struct for display text property results.

@@ -190,6 +190,62 @@
 #define VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2 1073741824
 
 /**
+ * Number of `Lisp_Object` fields in `struct buffer` (with `HAVE_TREE_SITTER=1`).
+ * Validated at runtime against C.
+ */
+#define BUFFER_LISP_FIELD_COUNT 76
+
+/**
+ * `name_` — buffer name
+ */
+#define NAME 0
+
+/**
+ * `tab_width_` — buffer-local tab width
+ */
+#define TAB_WIDTH 20
+
+/**
+ * `fill_column_` — buffer-local fill column
+ */
+#define FILL_COLUMN 21
+
+/**
+ * `truncate_lines_` — non-nil means don't wrap
+ */
+#define TRUNCATE_LINES 28
+
+/**
+ * `word_wrap_` — non-nil means word-wrap
+ */
+#define WORD_WRAP 29
+
+/**
+ * `selective_display_` — selective display level
+ */
+#define SELECTIVE_DISPLAY 35
+
+/**
+ * `enable_multibyte_characters_` — multibyte flag
+ */
+#define ENABLE_MULTIBYTE_CHARACTERS 41
+
+/**
+ * `pt_marker_` — point marker (for indirect buffers)
+ */
+#define PT_MARKER 47
+
+/**
+ * `begv_marker_` — BEGV marker (for indirect buffers)
+ */
+#define BEGV_MARKER 48
+
+/**
+ * `zv_marker_` — ZV marker (for indirect buffers)
+ */
+#define ZV_MARKER 49
+
+/**
  * Type for the resize callback function pointer from C
  */
 typedef void (*ResizeCallbackFn)(void *user_data, int width, int height);
@@ -695,6 +751,53 @@ typedef struct DisplayPropFFI {
    */
   int displayNruns;
 } DisplayPropFFI;
+
+/**
+ * Struct offsets reported by C `neomacs_get_struct_offsets()`.
+ * Each field stores the `offsetof()` value for the corresponding C struct field.
+ */
+typedef struct StructOffsets {
+  uintptr_t bufText;
+  uintptr_t bufPt;
+  uintptr_t bufPtByte;
+  uintptr_t bufBegv;
+  uintptr_t bufBegvByte;
+  uintptr_t bufZv;
+  uintptr_t bufZvByte;
+  uintptr_t bufBaseBuffer;
+  uintptr_t bufLispFieldCount;
+  uintptr_t buftextBeg;
+  uintptr_t buftextGpt;
+  uintptr_t buftextZ;
+  uintptr_t buftextGptByte;
+  uintptr_t buftextZByte;
+  uintptr_t buftextGapSize;
+  uintptr_t bufTabWidth;
+  uintptr_t bufTruncateLines;
+  uintptr_t bufEnableMultibyte;
+  uintptr_t bufPtMarker;
+  uintptr_t bufBegvMarker;
+  uintptr_t bufZvMarker;
+  uintptr_t bufWordWrap;
+  uintptr_t bufSelectiveDisplay;
+  uintptr_t winFrame;
+  uintptr_t winNext;
+  uintptr_t winContents;
+  uintptr_t frameRootWindow;
+  uintptr_t frameSelectedWindow;
+  uintptr_t frameMinibufferWindow;
+  uintptr_t pvecWindow;
+  uintptr_t pvecBuffer;
+  uintptr_t pseudovectorAreaBits;
+  uintptr_t pseudovectorFlag;
+} StructOffsets;
+
+/**
+ * Emacs `Lisp_Object`: a tagged machine word.
+ * On x86-64 with USE_LSB_TAG, this is a 64-bit signed integer where
+ * the lower 3 bits hold the type tag.
+ */
+typedef int64_t LispObject;
 
 #define VA_STATUS_SUCCESS 0
 
@@ -3210,59 +3313,11 @@ void rust_itree_iterator_narrow(RustItreeIterator *iter, int64_t begin, int64_t 
 void rust_itree_iterator_destroy(RustItreeIterator *iter);
 
 /**
- * Get a byte from buffer text at the given byte position.
- * Handles the gap buffer transparently.
- * Returns -1 if pos is out of range.
+ * Convert character position to byte position in a buffer.
+ * Uses Emacs byte-charpos cache (O(log n)).
+ * Works directly on the buffer struct — no set_buffer_internal_1 needed.
  */
-extern int neomacs_layout_buffer_byte_at(EmacsBuffer buffer, int64_t bytePos);
-
-/**
- * Copy buffer text (UTF-8) into the provided buffer.
- * Handles gap buffer and multibyte encoding.
- * Returns the number of bytes written, or -1 on error.
- * `from` and `to` are character positions (not byte positions).
- */
-extern int64_t neomacs_layout_buffer_text(EmacsBuffer buffer,
-                                          int64_t from,
-                                          int64_t to,
-                                          uint8_t *outBuf,
-                                          int64_t outBufLen);
-
-/**
- * Get the character at a character position.
- * Returns the Unicode codepoint, or -1 if out of range.
- */
-extern int32_t neomacs_layout_char_at(EmacsBuffer buffer, int64_t charpos);
-
-/**
- * Get buffer narrowing bounds: BEGV and ZV (character positions).
- */
-extern void neomacs_layout_buffer_bounds(EmacsBuffer buffer, int64_t *begv, int64_t *zv);
-
-/**
- * Get buffer point position (character position).
- */
-extern int64_t neomacs_layout_buffer_point(EmacsBuffer buffer);
-
-/**
- * Check if buffer uses multibyte encoding.
- */
-extern int neomacs_layout_buffer_multibyte_p(EmacsBuffer buffer);
-
-/**
- * Get buffer-local tab-width.
- */
-extern int neomacs_layout_buffer_tab_width(EmacsBuffer buffer);
-
-/**
- * Get buffer-local truncate-lines setting.
- */
-extern int neomacs_layout_buffer_truncate_lines(EmacsBuffer buffer);
-
-/**
- * Get the number of leaf windows in the frame.
- */
-extern int neomacs_layout_frame_window_count(EmacsFrame frame);
+extern int64_t neomacs_buf_charpos_to_bytepos(EmacsBuffer buffer, int64_t charpos);
 
 /**
  * Get window parameters for the Nth leaf window.
@@ -3507,5 +3562,9 @@ extern int neomacs_layout_get_fringe_bitmap(int bitmapId,
                                             int *widthOut,
                                             int *heightOut,
                                             int *alignOut);
+
+extern void neomacs_get_struct_offsets(struct StructOffsets *out);
+
+extern int64_t neomacs_layout_marker_position(LispObject marker);
 
 #endif  /* NEOMACS_DISPLAY_H */

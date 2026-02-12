@@ -17,6 +17,7 @@
 pub mod types;
 pub mod engine;
 pub mod emacs_ffi;
+pub mod emacs_types;
 pub mod unicode;
 pub mod hit_test;
 pub mod status_line;

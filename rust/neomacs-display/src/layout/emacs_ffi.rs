@@ -22,62 +22,26 @@ extern "C" {
     // Buffer text access
     // ========================================================================
 
-    /// Get a byte from buffer text at the given byte position.
-    /// Handles the gap buffer transparently.
-    /// Returns -1 if pos is out of range.
-    pub fn neomacs_layout_buffer_byte_at(
-        buffer: EmacsBuffer,
-        byte_pos: i64,
-    ) -> c_int;
-
-    /// Copy buffer text (UTF-8) into the provided buffer.
-    /// Handles gap buffer and multibyte encoding.
-    /// Returns the number of bytes written, or -1 on error.
-    /// `from` and `to` are character positions (not byte positions).
-    pub fn neomacs_layout_buffer_text(
-        buffer: EmacsBuffer,
-        from: i64,
-        to: i64,
-        out_buf: *mut u8,
-        out_buf_len: i64,
-    ) -> i64;
-
-    /// Get the character at a character position.
-    /// Returns the Unicode codepoint, or -1 if out of range.
-    pub fn neomacs_layout_char_at(
+    /// Convert character position to byte position in a buffer.
+    /// Uses Emacs byte-charpos cache (O(log n)).
+    /// Works directly on the buffer struct — no set_buffer_internal_1 needed.
+    pub fn neomacs_buf_charpos_to_bytepos(
         buffer: EmacsBuffer,
         charpos: i64,
-    ) -> i32;
+    ) -> i64;
 
-    // ========================================================================
-    // Buffer metadata
-    // ========================================================================
-
-    /// Get buffer narrowing bounds: BEGV and ZV (character positions).
-    pub fn neomacs_layout_buffer_bounds(
-        buffer: EmacsBuffer,
-        begv: *mut i64,
-        zv: *mut i64,
-    );
-
-    /// Get buffer point position (character position).
-    pub fn neomacs_layout_buffer_point(buffer: EmacsBuffer) -> i64;
-
-    /// Check if buffer uses multibyte encoding.
-    pub fn neomacs_layout_buffer_multibyte_p(buffer: EmacsBuffer) -> c_int;
-
-    /// Get buffer-local tab-width.
-    pub fn neomacs_layout_buffer_tab_width(buffer: EmacsBuffer) -> c_int;
-
-    /// Get buffer-local truncate-lines setting.
-    pub fn neomacs_layout_buffer_truncate_lines(buffer: EmacsBuffer) -> c_int;
+    // Buffer bulk text copy is now handled directly in Rust via
+    // emacs_types::gap_buffer_copy_text() — no FFI call needed.
+    //
+    // Buffer metadata (bounds, point, tab_width, etc.) is also read
+    // directly from Emacs structs in Rust — see emacs_types.rs.
 
     // ========================================================================
     // Window geometry
     // ========================================================================
 
-    /// Get the number of leaf windows in the frame.
-    pub fn neomacs_layout_frame_window_count(frame: EmacsFrame) -> c_int;
+    // frame_window_count is now implemented directly in Rust
+    // (see emacs_types::frame_window_count — uses direct struct access).
 
     /// Get window parameters for the Nth leaf window.
     /// Fills the WindowParamsFFI struct. Returns 0 on success, -1 on error.
