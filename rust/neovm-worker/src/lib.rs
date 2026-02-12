@@ -1,6 +1,7 @@
 use neovm_core::{TaskHandle, TaskScheduler, TaskStatus};
 use neovm_host_abi::{
-    Affinity, LispValue, SelectOp, SelectResult, Signal, TaskError, TaskOptions, TaskPriority,
+    Affinity, ChannelId, LispValue, SelectOp, SelectResult, Signal, TaskError, TaskOptions,
+    TaskPriority,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -177,11 +178,169 @@ struct SharedQueue {
     ready: Condvar,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChannelError {
+    Closed,
+    TimedOut,
+}
+
+#[derive(Default)]
+struct ChannelState {
+    queue: VecDeque<LispValue>,
+    closed: bool,
+}
+
+struct Channel {
+    state: Mutex<ChannelState>,
+    space_or_data: Condvar,
+    capacity: usize,
+}
+
+impl Channel {
+    fn new(capacity: usize) -> Self {
+        Self {
+            state: Mutex::new(ChannelState::default()),
+            space_or_data: Condvar::new(),
+            // Unbuffered channels require rendezvous semantics; keep this first
+            // implementation bounded-buffer only.
+            capacity: capacity.max(1),
+        }
+    }
+
+    fn try_send(&self, value: LispValue) -> Result<(), ChannelError> {
+        let mut state = self.state.lock().expect("channel mutex poisoned");
+        if state.closed {
+            return Err(ChannelError::Closed);
+        }
+        if state.queue.len() >= self.capacity {
+            return Err(ChannelError::TimedOut);
+        }
+
+        state.queue.push_back(value);
+        drop(state);
+        self.space_or_data.notify_one();
+        Ok(())
+    }
+
+    fn try_recv(&self) -> Result<Option<LispValue>, ChannelError> {
+        let mut state = self.state.lock().expect("channel mutex poisoned");
+        if let Some(value) = state.queue.pop_front() {
+            drop(state);
+            self.space_or_data.notify_one();
+            return Ok(Some(value));
+        }
+        if state.closed {
+            return Ok(None);
+        }
+        Err(ChannelError::TimedOut)
+    }
+
+    fn send(&self, value: LispValue, timeout: Option<Duration>) -> Result<(), ChannelError> {
+        let mut state = self.state.lock().expect("channel mutex poisoned");
+        if state.closed {
+            return Err(ChannelError::Closed);
+        }
+        if state.queue.len() < self.capacity {
+            state.queue.push_back(value);
+            drop(state);
+            self.space_or_data.notify_one();
+            return Ok(());
+        }
+
+        let Some(timeout) = timeout else {
+            return Err(ChannelError::TimedOut);
+        };
+        let deadline = Instant::now() + timeout;
+        let pending = value;
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(ChannelError::TimedOut);
+            }
+            let wait_for = deadline.saturating_duration_since(now);
+            let (next_state, wait_result) = self
+                .space_or_data
+                .wait_timeout(state, wait_for)
+                .expect("channel condvar wait failed");
+            state = next_state;
+
+            if state.closed {
+                return Err(ChannelError::Closed);
+            }
+
+            if state.queue.len() < self.capacity {
+                state.queue.push_back(pending);
+                drop(state);
+                self.space_or_data.notify_one();
+                return Ok(());
+            }
+
+            if wait_result.timed_out() {
+                return Err(ChannelError::TimedOut);
+            }
+        }
+    }
+
+    fn recv(&self, timeout: Option<Duration>) -> Result<Option<LispValue>, ChannelError> {
+        let mut state = self.state.lock().expect("channel mutex poisoned");
+        if let Some(value) = state.queue.pop_front() {
+            drop(state);
+            self.space_or_data.notify_one();
+            return Ok(Some(value));
+        }
+        if state.closed {
+            return Ok(None);
+        }
+
+        let Some(timeout) = timeout else {
+            return Err(ChannelError::TimedOut);
+        };
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(ChannelError::TimedOut);
+            }
+            let wait_for = deadline.saturating_duration_since(now);
+            let (next_state, wait_result) = self
+                .space_or_data
+                .wait_timeout(state, wait_for)
+                .expect("channel condvar wait failed");
+            state = next_state;
+
+            if let Some(value) = state.queue.pop_front() {
+                drop(state);
+                self.space_or_data.notify_one();
+                return Ok(Some(value));
+            }
+            if state.closed {
+                return Ok(None);
+            }
+
+            if wait_result.timed_out() {
+                return Err(ChannelError::TimedOut);
+            }
+        }
+    }
+
+    fn close(&self) {
+        let mut state = self.state.lock().expect("channel mutex poisoned");
+        state.closed = true;
+        drop(state);
+        self.space_or_data.notify_all();
+    }
+}
+
 pub struct WorkerRuntime {
     config: WorkerConfig,
     next_task: AtomicU64,
+    next_channel: AtomicU64,
+    select_cursor: AtomicU64,
     queue: Arc<SharedQueue>,
     tasks: Arc<RwLock<HashMap<u64, Arc<TaskEntry>>>>,
+    channels: Arc<RwLock<HashMap<u64, Arc<Channel>>>>,
     metrics: Arc<RuntimeMetrics>,
 }
 
@@ -190,8 +349,11 @@ impl WorkerRuntime {
         Self {
             config,
             next_task: AtomicU64::new(1),
+            next_channel: AtomicU64::new(1),
+            select_cursor: AtomicU64::new(0),
             queue: Arc::new(SharedQueue::default()),
             tasks: Arc::new(RwLock::new(HashMap::new())),
+            channels: Arc::new(RwLock::new(HashMap::new())),
             metrics: Arc::new(RuntimeMetrics::default()),
         }
     }
@@ -202,6 +364,62 @@ impl WorkerRuntime {
 
     pub fn stats(&self) -> RuntimeStats {
         self.metrics.snapshot()
+    }
+
+    pub fn make_channel(&self, capacity: usize) -> ChannelId {
+        let id = ChannelId(self.next_channel.fetch_add(1, Ordering::Relaxed));
+        let mut channels = self.channels.write().expect("channels map rwlock poisoned");
+        channels.insert(id.0, Arc::new(Channel::new(capacity)));
+        id
+    }
+
+    pub fn close_channel(&self, id: ChannelId) -> bool {
+        let channel = {
+            let channels = self.channels.read().expect("channels map rwlock poisoned");
+            channels.get(&id.0).cloned()
+        };
+        let Some(channel) = channel else {
+            return false;
+        };
+        channel.close();
+        true
+    }
+
+    pub fn channel_send(
+        &self,
+        id: ChannelId,
+        value: LispValue,
+        timeout: Option<Duration>,
+    ) -> Result<(), Signal> {
+        let channel = {
+            let channels = self.channels.read().expect("channels map rwlock poisoned");
+            channels.get(&id.0).cloned()
+        }
+        .ok_or_else(|| Signal {
+            symbol: "channel-not-found".to_string(),
+            data: None,
+        })?;
+
+        channel
+            .send(value, timeout)
+            .map_err(channel_error_to_signal)
+    }
+
+    pub fn channel_recv(
+        &self,
+        id: ChannelId,
+        timeout: Option<Duration>,
+    ) -> Result<Option<LispValue>, Signal> {
+        let channel = {
+            let channels = self.channels.read().expect("channels map rwlock poisoned");
+            channels.get(&id.0).cloned()
+        }
+        .ok_or_else(|| Signal {
+            symbol: "channel-not-found".to_string(),
+            data: None,
+        })?;
+
+        channel.recv(timeout).map_err(channel_error_to_signal)
     }
 
     pub fn spawn(&self, form: LispValue, opts: TaskOptions) -> Result<TaskHandle, EnqueueError> {
@@ -364,6 +582,90 @@ impl WorkerRuntime {
             }
         }
     }
+
+    fn select_once(&self, ops: &[SelectOp], start: usize) -> Option<SelectResult> {
+        if ops.is_empty() {
+            return None;
+        }
+
+        for offset in 0..ops.len() {
+            let index = (start + offset) % ops.len();
+            match &ops[index] {
+                SelectOp::Recv(channel_id) => {
+                    let channel = {
+                        let channels = self.channels.read().expect("channels map rwlock poisoned");
+                        channels.get(&channel_id.0).cloned()
+                    };
+                    let Some(channel) = channel else {
+                        continue;
+                    };
+
+                    match channel.try_recv() {
+                        Ok(value) => {
+                            return Some(SelectResult::Ready {
+                                op_index: index,
+                                value,
+                            });
+                        }
+                        Err(ChannelError::TimedOut) => {}
+                        Err(ChannelError::Closed) => {
+                            return Some(SelectResult::Cancelled);
+                        }
+                    }
+                }
+                SelectOp::Send(channel_id, value) => {
+                    let channel = {
+                        let channels = self.channels.read().expect("channels map rwlock poisoned");
+                        channels.get(&channel_id.0).cloned()
+                    };
+                    let Some(channel) = channel else {
+                        continue;
+                    };
+
+                    match channel.try_send(value.clone()) {
+                        Ok(()) => {
+                            return Some(SelectResult::Ready {
+                                op_index: index,
+                                value: None,
+                            });
+                        }
+                        Err(ChannelError::TimedOut) => {}
+                        Err(ChannelError::Closed) => {
+                            return Some(SelectResult::Cancelled);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn select_ops(&self, ops: &[SelectOp], timeout: Option<Duration>) -> SelectResult {
+        if ops.is_empty() {
+            return SelectResult::TimedOut;
+        }
+
+        let start = (self.select_cursor.fetch_add(1, Ordering::Relaxed) as usize) % ops.len();
+        if let Some(result) = self.select_once(ops, start) {
+            return result;
+        }
+
+        let Some(timeout) = timeout else {
+            return SelectResult::TimedOut;
+        };
+
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() >= deadline {
+                return SelectResult::TimedOut;
+            }
+            if let Some(result) = self.select_once(ops, start) {
+                return result;
+            }
+            thread::yield_now();
+        }
+    }
 }
 
 fn enqueue_error_to_signal(err: EnqueueError) -> Signal {
@@ -378,6 +680,19 @@ fn enqueue_error_to_signal(err: EnqueueError) -> Signal {
         },
         EnqueueError::MainAffinityUnsupported => Signal {
             symbol: "task-main-affinity-unsupported".to_string(),
+            data: None,
+        },
+    }
+}
+
+fn channel_error_to_signal(err: ChannelError) -> Signal {
+    match err {
+        ChannelError::Closed => Signal {
+            symbol: "channel-closed".to_string(),
+            data: None,
+        },
+        ChannelError::TimedOut => Signal {
+            symbol: "channel-timeout".to_string(),
             data: None,
         },
     }
@@ -404,8 +719,8 @@ impl TaskScheduler for WorkerRuntime {
         self.task_await_result(handle, timeout)
     }
 
-    fn select(&self, _ops: &[SelectOp], _timeout: Option<Duration>) -> SelectResult {
-        SelectResult::TimedOut
+    fn select(&self, ops: &[SelectOp], timeout: Option<Duration>) -> SelectResult {
+        self.select_ops(ops, timeout)
     }
 }
 
@@ -501,6 +816,64 @@ mod tests {
 
         let err = TaskScheduler::task_await(&rt, task, None).expect_err("task should cancel");
         assert!(matches!(err, TaskError::Cancelled));
+    }
+
+    #[test]
+    fn channel_send_recv_round_trip() {
+        let rt = WorkerRuntime::new(WorkerConfig::default());
+        let channel = rt.make_channel(2);
+        rt.channel_send(channel, LispValue { bytes: vec![7, 8] }, None)
+            .expect("send should succeed");
+
+        let value = rt
+            .channel_recv(channel, None)
+            .expect("recv should succeed")
+            .expect("channel should produce a value");
+        assert_eq!(value.bytes, vec![7, 8]);
+    }
+
+    #[test]
+    fn select_reports_ready_recv() {
+        let rt = WorkerRuntime::new(WorkerConfig::default());
+        let channel = rt.make_channel(1);
+        rt.channel_send(channel, LispValue { bytes: vec![1] }, None)
+            .expect("send should succeed");
+
+        let result = TaskScheduler::select(
+            &rt,
+            &[SelectOp::Recv(channel)],
+            Some(Duration::from_millis(5)),
+        );
+        match result {
+            SelectResult::Ready {
+                op_index: 0,
+                value: Some(value),
+            } => assert_eq!(value.bytes, vec![1]),
+            _ => panic!("expected ready recv"),
+        }
+    }
+
+    #[test]
+    fn select_reports_timeout_when_blocked() {
+        let rt = WorkerRuntime::new(WorkerConfig::default());
+        let channel = rt.make_channel(1);
+        let result = TaskScheduler::select(
+            &rt,
+            &[SelectOp::Recv(channel)],
+            Some(Duration::from_millis(2)),
+        );
+        assert!(matches!(result, SelectResult::TimedOut));
+    }
+
+    #[test]
+    fn close_channel_returns_none_on_recv() {
+        let rt = WorkerRuntime::new(WorkerConfig::default());
+        let channel = rt.make_channel(1);
+        assert!(rt.close_channel(channel));
+        let value = rt
+            .channel_recv(channel, Some(Duration::from_millis(1)))
+            .expect("recv on closed channel should return gracefully");
+        assert_eq!(value, None);
     }
 
     #[test]
