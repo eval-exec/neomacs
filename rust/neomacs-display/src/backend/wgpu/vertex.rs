@@ -167,6 +167,19 @@ pub struct Uniforms {
     pub _padding: [f32; 2],
 }
 
+/// Uniforms for the Gaussian blur shader.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct BlurUniforms {
+    /// Texel size: (1.0/width, 1.0/height)
+    pub texel_size: [f32; 2],
+    /// Blur direction: (1,0) for horizontal, (0,1) for vertical
+    pub direction: [f32; 2],
+    /// Blur radius multiplier
+    pub radius: f32,
+    pub _pad: [f32; 3],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

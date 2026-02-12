@@ -9327,6 +9327,48 @@ Non-nil renders animated flowing color bands at the top of the frame."
                 neomacs-cursor-bubble-rise-speed nil)
             val))))
 
+;; Gaussian blur post-processing effect
+(declare-function neomacs-set-blur "neomacsterm.c")
+
+(defun neomacs--apply-blur ()
+  "Apply current blur settings."
+  (when (fboundp 'neomacs-set-blur)
+    (neomacs-set-blur
+     (if (and (boundp 'neomacs-blur) neomacs-blur) t nil)
+     (if (boundp 'neomacs-blur-radius)
+         neomacs-blur-radius 100)
+     (if (boundp 'neomacs-blur-passes)
+         neomacs-blur-passes 2))))
+
+(defcustom neomacs-blur nil
+  "Enable Gaussian blur post-processing effect.
+When enabled, applies a GPU-accelerated Gaussian blur to the entire frame.
+This is a cross-platform feature using wgpu shaders."
+  :type 'boolean
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (neomacs--apply-blur)))
+
+(defcustom neomacs-blur-radius 100
+  "Blur radius multiplied by 100 (100 = standard 1.0x radius).
+Higher values produce a wider, more diffuse blur."
+  :type '(integer :tag "Radius (x100)")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (neomacs--apply-blur)))
+
+(defcustom neomacs-blur-passes 2
+  "Number of blur passes (iterations).
+Each pass applies horizontal + vertical Gaussian blur.
+1 = light blur, 2-3 = medium, 4+ = heavy."
+  :type '(integer :tag "Passes")
+  :group 'neomacs
+  :set (lambda (sym val)
+         (set-default sym val)
+         (neomacs--apply-blur)))
+
 ;; Hex grid overlay effect
 (declare-function neomacs-set-hex-grid "neomacsterm.c")
 

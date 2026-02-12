@@ -2483,6 +2483,14 @@ void neomacs_display_set_cursor_bubble(struct NeomacsDisplay *handle,
     int opacity);
 
 /**
+ * Configure Gaussian blur post-processing effect.
+ */
+void neomacs_display_set_blur(struct NeomacsDisplay *handle,
+    int enabled,
+    int radius,
+    int passes);
+
+/**
  * Configure hex grid overlay effect.
  */
 void neomacs_display_set_hex_grid(struct NeomacsDisplay *handle,

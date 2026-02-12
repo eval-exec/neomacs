@@ -18,6 +18,7 @@ use super::video_cache::VideoCache;
 use super::webkit_cache::WgpuWebKitCache;
 use super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, Uniforms};
 
+mod blur;
 mod media;
 mod effects_state;
 mod glyphs;
@@ -41,6 +42,13 @@ pub struct WgpuRenderer {
     pub(super) glyph_pipeline: wgpu::RenderPipeline,
     pub(super) image_pipeline: wgpu::RenderPipeline,
     pub(super) opaque_image_pipeline: wgpu::RenderPipeline,
+    pub(super) blur_pipeline: wgpu::RenderPipeline,
+    pub(super) blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
+    pub(super) blur_texture_bind_group_layout: wgpu::BindGroupLayout,
+    pub(super) blur_sampler: wgpu::Sampler,
+    /// Intermediate textures for ping-pong blur passes
+    pub(super) blur_texture_a: Option<(wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
+    pub(super) blur_texture_b: Option<(wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
     pub(super) glyph_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) uniform_buffer: wgpu::Buffer,
     pub(super) uniform_bind_group: wgpu::BindGroup,
@@ -752,6 +760,106 @@ impl WgpuRenderer {
             cache: None,
         });
 
+        // === Blur pipeline ===
+        let blur_shader_source = include_str!("../shaders/blur.wgsl");
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Blur Shader"),
+            source: wgpu::ShaderSource::Wgsl(blur_shader_source.into()),
+        });
+
+        // Blur texture bind group layout: texture + sampler (group 1)
+        let blur_texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Blur Texture Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // Blur uniform bind group layout: blur params (group 2)
+        let blur_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Blur Uniform Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Blur Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout, &blur_texture_bind_group_layout, &blur_uniform_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Blur Pipeline"),
+            layout: Some(&blur_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &blur_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[GlyphVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blur_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: None, // No blending — blur overwrites entirely
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        let blur_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Blur Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
         // Create surface_config from format if we have a surface
         let surface_config = if let Some(ref s) = surface {
             let config = wgpu::SurfaceConfiguration {
@@ -782,6 +890,12 @@ impl WgpuRenderer {
             glyph_pipeline,
             image_pipeline,
             opaque_image_pipeline,
+            blur_pipeline,
+            blur_uniform_bind_group_layout,
+            blur_texture_bind_group_layout,
+            blur_sampler,
+            blur_texture_a: None,
+            blur_texture_b: None,
             glyph_bind_group_layout,
             uniform_buffer,
             uniform_bind_group,

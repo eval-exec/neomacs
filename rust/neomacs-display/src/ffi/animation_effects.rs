@@ -803,3 +803,15 @@ effect_setter!(neomacs_display_set_cursor_bubble(enabled: c_int, r: c_int, g: c_
                     effects.cursor_bubble.rise_speed = rise_speed as f32;
                     effects.cursor_bubble.opacity = opacity as f32 / 100.0;
 });
+
+/// Configure Gaussian blur post-processing effect.
+///
+/// Cross-platform GPU blur using separable two-pass convolution.
+/// `radius` is in percentage (100 = 1.0x), `passes` is the number
+/// of blur iterations (more = stronger blur).
+#[no_mangle]
+effect_setter!(neomacs_display_set_blur(enabled: c_int, radius: c_int, passes: c_int) |effects| {
+    effects.blur.enabled = enabled != 0;
+    effects.blur.radius = radius as f32 / 100.0;
+    effects.blur.passes = (passes as u32).max(1);
+});

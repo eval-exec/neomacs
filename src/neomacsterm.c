@@ -14007,6 +14007,29 @@ OPACITY is 0-100 (default 20). */)
   return on ? Qt : Qnil;
 }
 
+DEFUN ("neomacs-set-blur",
+       Fneomacs_set_blur,
+       Sneomacs_set_blur, 0, 3, 0,
+       doc: /* Configure Gaussian blur post-processing effect.
+ENABLED non-nil activates full-frame Gaussian blur.
+RADIUS is blur radius multiplied by 100 (default 100 = 1.0x).
+Higher values produce wider blur.
+PASSES is number of blur iterations (default 2).
+More passes produce stronger blur (1=light, 2-3=medium, 4+=heavy). */)
+  (Lisp_Object enabled, Lisp_Object radius, Lisp_Object passes)
+{
+  struct neomacs_display_info *dpyinfo = neomacs_display_list;
+  if (!dpyinfo || !dpyinfo->display_handle)
+    return Qnil;
+  int on = !NILP (enabled);
+  int rad = 100, ps = 2;
+  if (FIXNUMP (radius)) rad = XFIXNUM (radius);
+  if (FIXNUMP (passes)) ps = XFIXNUM (passes);
+
+  neomacs_display_set_blur (dpyinfo->display_handle, on, rad, ps);
+  return on ? Qt : Qnil;
+}
+
 DEFUN ("neomacs-set-hex-grid",
        Fneomacs_set_hex_grid,
        Sneomacs_set_hex_grid, 0, 5, 0,
@@ -15953,6 +15976,7 @@ syms_of_neomacsterm (void)
   defsubr (&Sneomacs_set_cursor_portal);
   defsubr (&Sneomacs_set_chevron_pattern);
   defsubr (&Sneomacs_set_cursor_bubble);
+  defsubr (&Sneomacs_set_blur);
   defsubr (&Sneomacs_set_hex_grid);
   defsubr (&Sneomacs_set_cursor_sparkle_burst);
   defsubr (&Sneomacs_set_circuit_trace);

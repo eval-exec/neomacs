@@ -2564,6 +2564,8 @@ void neomacs_display_set_cursor_bubble(struct NeomacsDisplay *handle,
                                        int riseSpeed,
                                        int opacity);
 
+void neomacs_display_set_blur(struct NeomacsDisplay *handle, int enabled, int radius, int passes);
+
 /**
  * Create a new terminal.
  *

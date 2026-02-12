@@ -2220,12 +2220,46 @@ impl RenderApp {
 
             // Composite active transitions on top
             self.render_transitions(&surface_view);
+        } else if self.effects.blur.enabled {
+            // Blur path: render to blur texture, then apply blur to surface
+            let renderer = self.renderer.as_mut().expect("checked in render");
+            renderer.ensure_blur_textures();
+            let blur_view_ptr = renderer.blur_render_target_view()
+                .expect("blur textures initialized") as *const wgpu::TextureView;
+
+            let frame = self.current_frame.as_ref().expect("checked in render");
+            let glyph_atlas = self.glyph_atlas.as_mut().expect("checked in render");
+            let renderer = self.renderer.as_mut().expect("checked in render");
+            renderer.set_idle_dim_alpha(self.idle_dim_current_alpha);
+
+            // Render frame content to blur texture A
+            renderer.render_frame_glyphs(
+                unsafe { &*blur_view_ptr },
+                frame,
+                glyph_atlas,
+                &self.faces,
+                self.width,
+                self.height,
+                self.cursor.blink_on,
+                animated_cursor,
+                self.mouse_pos,
+                bg_gradient,
+            );
+
+            // Apply blur from texture A to surface
+            let passes = self.effects.blur.passes;
+            let radius = self.effects.blur.radius;
+            let renderer = self.renderer.as_ref().expect("checked in render");
+            renderer.apply_blur_from_a(&surface_view, passes, radius);
         } else {
             // Simple path: render directly to surface
             let frame = self.current_frame.as_ref().expect("checked in render");
             let renderer = self.renderer.as_mut().expect("checked in render");
             let glyph_atlas = self.glyph_atlas.as_mut().expect("checked in render");
             renderer.set_idle_dim_alpha(self.idle_dim_current_alpha);
+
+            // Free blur textures if blur was just disabled
+            renderer.free_blur_textures();
 
             renderer.render_frame_glyphs(
                 &surface_view,
