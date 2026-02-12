@@ -2,12 +2,15 @@
 
 use std::collections::HashMap;
 
+use super::advice::{AdviceManager, VariableWatcherList};
 use super::builtins;
 use super::error::*;
 use super::expr::Expr;
 use super::keymap::KeymapManager;
+use super::process::ProcessManager;
 use super::regex::MatchData;
 use super::symbol::Obarray;
+use super::timer::TimerManager;
 use super::value::*;
 use crate::buffer::BufferManager;
 
@@ -27,6 +30,14 @@ pub struct Evaluator {
     pub(crate) match_data: Option<MatchData>,
     /// Keymap manager — owns all keymaps.
     pub(crate) keymaps: KeymapManager,
+    /// Process manager — owns all tracked processes.
+    pub(crate) processes: ProcessManager,
+    /// Timer manager — owns all timers.
+    pub(crate) timers: TimerManager,
+    /// Advice manager — function advice (before/after/around/etc.).
+    pub(crate) advice: AdviceManager,
+    /// Variable watcher list — callbacks on variable changes.
+    pub(crate) watchers: VariableWatcherList,
     /// Current buffer-local keymap id (set by `use-local-map`).
     pub(crate) current_local_map: Option<u64>,
     /// Recursion depth counter.
@@ -75,6 +86,10 @@ impl Evaluator {
             buffers: BufferManager::new(),
             match_data: None,
             keymaps: KeymapManager::new(),
+            processes: ProcessManager::new(),
+            timers: TimerManager::new(),
+            advice: AdviceManager::new(),
+            watchers: VariableWatcherList::new(),
             current_local_map: None,
             depth: 0,
             max_depth: 200,

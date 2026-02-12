@@ -33,6 +33,8 @@ pub enum Value {
     ByteCode(Arc<super::bytecode::ByteCodeFunction>),
     /// Buffer reference (opaque id into the BufferManager).
     Buffer(crate::buffer::BufferId),
+    /// Timer reference (opaque id into the TimerManager).
+    Timer(u64),
 }
 
 #[derive(Clone, Debug)]
@@ -246,6 +248,7 @@ impl Value {
             Value::Subr(_) => "subr",
             Value::ByteCode(_) => "compiled-function",
             Value::Buffer(_) => "buffer",
+            Value::Timer(_) => "timer",
         }
     }
 
@@ -318,6 +321,7 @@ impl Value {
             Value::Subr(n) => HashKey::Symbol(n.clone()),
             Value::ByteCode(b) => HashKey::Ptr(Arc::as_ptr(b) as usize),
             Value::Buffer(id) => HashKey::Int(id.0 as i64),
+            Value::Timer(id) => HashKey::Int(*id as i64),
         }
     }
 
@@ -370,6 +374,7 @@ pub fn eq_value(left: &Value, right: &Value) -> bool {
         (Value::Subr(a), Value::Subr(b)) => a == b,
         (Value::ByteCode(a), Value::ByteCode(b)) => Arc::ptr_eq(a, b),
         (Value::Buffer(a), Value::Buffer(b)) => a == b,
+        (Value::Timer(a), Value::Timer(b)) => a == b,
         _ => false,
     }
 }
@@ -418,6 +423,7 @@ pub fn equal_value(left: &Value, right: &Value, depth: usize) -> bool {
         (Value::Subr(a), Value::Subr(b)) => a == b,
         (Value::ByteCode(a), Value::ByteCode(b)) => Arc::ptr_eq(a, b),
         (Value::Buffer(a), Value::Buffer(b)) => a == b,
+        (Value::Timer(a), Value::Timer(b)) => a == b,
         _ => false,
     }
 }

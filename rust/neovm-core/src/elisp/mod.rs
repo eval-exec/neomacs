@@ -22,6 +22,10 @@ pub mod bytecode;
 pub mod keymap;
 pub mod regex;
 pub mod fileio;
+pub mod syntax;
+pub mod advice;
+pub mod process;
+pub mod timer;
 
 // Re-export the main public API
 pub use value::{Value, ConsCell, LambdaData, LambdaParams};

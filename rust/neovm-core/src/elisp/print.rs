@@ -56,6 +56,7 @@ pub fn print_value(value: &Value) -> String {
             format!("#<bytecode {} ({} ops)>", params, bc.ops.len())
         }
         Value::Buffer(id) => format!("#<buffer {}>", id.0),
+        Value::Timer(id) => format!("#<timer {}>", id),
     }
 }
 

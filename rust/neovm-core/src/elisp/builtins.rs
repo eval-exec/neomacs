@@ -2053,10 +2053,7 @@ pub(crate) fn builtin_gensym(args: Vec<Value>) -> EvalResult {
 }
 
 pub(crate) fn builtin_string_to_syntax(args: Vec<Value>) -> EvalResult {
-    expect_args("string-to-syntax", &args, 1)?;
-    // Stub: return a cons cell representing the syntax descriptor
-    let _s = expect_string(&args[0])?;
-    Ok(Value::cons(Value::Int(0), Value::Nil))
+    super::syntax::builtin_string_to_syntax(args)
 }
 
 pub(crate) fn builtin_current_time(args: Vec<Value>) -> EvalResult {
@@ -2963,6 +2960,39 @@ pub(crate) fn dispatch_builtin(
         "keymap-parent" => return Some(builtin_keymap_parent(eval, args)),
         "set-keymap-parent" => return Some(builtin_set_keymap_parent(eval, args)),
         "keymapp" => return Some(builtin_keymapp(eval, args)),
+        // Process operations (evaluator-dependent)
+        "start-process" => return Some(super::process::builtin_start_process(eval, args)),
+        "call-process" => return Some(super::process::builtin_call_process(eval, args)),
+        "call-process-region" => return Some(super::process::builtin_call_process_region(eval, args)),
+        "delete-process" => return Some(super::process::builtin_delete_process(eval, args)),
+        "process-send-string" => return Some(super::process::builtin_process_send_string(eval, args)),
+        "process-status" => return Some(super::process::builtin_process_status(eval, args)),
+        "process-exit-status" => return Some(super::process::builtin_process_exit_status(eval, args)),
+        "process-list" => return Some(super::process::builtin_process_list(eval, args)),
+        "process-name" => return Some(super::process::builtin_process_name(eval, args)),
+        "process-buffer" => return Some(super::process::builtin_process_buffer(eval, args)),
+        // Timer operations (evaluator-dependent)
+        "run-at-time" => return Some(super::timer::builtin_run_at_time(eval, args)),
+        "run-with-timer" => return Some(super::timer::builtin_run_with_timer(eval, args)),
+        "run-with-idle-timer" => return Some(super::timer::builtin_run_with_idle_timer(eval, args)),
+        "cancel-timer" => return Some(super::timer::builtin_cancel_timer(eval, args)),
+        "timer-activate" => return Some(super::timer::builtin_timer_activate(eval, args)),
+        // Advice system
+        "advice-add" => return Some(super::advice::builtin_advice_add(eval, args)),
+        "advice-remove" => return Some(super::advice::builtin_advice_remove(eval, args)),
+        "advice-member-p" => return Some(super::advice::builtin_advice_member_p(eval, args)),
+        // Variable watchers
+        "add-variable-watcher" => return Some(super::advice::builtin_add_variable_watcher(eval, args)),
+        "remove-variable-watcher" => return Some(super::advice::builtin_remove_variable_watcher(eval, args)),
+        // Syntax table operations (evaluator-dependent)
+        "modify-syntax-entry" => return Some(super::syntax::builtin_modify_syntax_entry(eval, args)),
+        "char-syntax" => return Some(super::syntax::builtin_char_syntax(eval, args)),
+        "forward-word" => return Some(super::syntax::builtin_forward_word(eval, args)),
+        "backward-word" => return Some(super::syntax::builtin_backward_word(eval, args)),
+        "forward-sexp" => return Some(super::syntax::builtin_forward_sexp(eval, args)),
+        "backward-sexp" => return Some(super::syntax::builtin_backward_sexp(eval, args)),
+        "skip-syntax-forward" => return Some(super::syntax::builtin_skip_syntax_forward(eval, args)),
+        "skip-syntax-backward" => return Some(super::syntax::builtin_skip_syntax_backward(eval, args)),
         _ => {}
     }
 
@@ -3133,6 +3163,7 @@ pub(crate) fn dispatch_builtin(
         "propertize" => builtin_propertize(args),
         "gensym" => builtin_gensym(args),
         "string-to-syntax" => builtin_string_to_syntax(args),
+        "make-syntax-table" => super::syntax::builtin_make_syntax_table(args),
         "current-time" => builtin_current_time(args),
         "float-time" => builtin_float_time(args),
 
@@ -3157,6 +3188,15 @@ pub(crate) fn dispatch_builtin(
 
         // Keymap (pure — no evaluator needed)
         "kbd" => builtin_kbd(args),
+
+        // Process (pure — no evaluator needed)
+        "shell-command-to-string" => super::process::builtin_shell_command_to_string(args),
+        "getenv" => super::process::builtin_getenv(args),
+        "setenv" => super::process::builtin_setenv(args),
+
+        // Timer (pure — no evaluator needed)
+        "timerp" => super::timer::builtin_timerp(args),
+        "sit-for" => super::timer::builtin_sit_for(args),
 
         _ => return None,
     })
@@ -3314,6 +3354,7 @@ pub(crate) fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<Eval
         "propertize" => builtin_propertize(args),
         "gensym" => builtin_gensym(args),
         "string-to-syntax" => builtin_string_to_syntax(args),
+        "make-syntax-table" => super::syntax::builtin_make_syntax_table(args),
         "current-time" => builtin_current_time(args),
         "float-time" => builtin_float_time(args),
         // File I/O (pure)
@@ -3336,6 +3377,13 @@ pub(crate) fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<Eval
         "file-attributes" => super::fileio::builtin_file_attributes(args),
         // Keymap (pure)
         "kbd" => builtin_kbd(args),
+        // Process (pure)
+        "shell-command-to-string" => super::process::builtin_shell_command_to_string(args),
+        "getenv" => super::process::builtin_getenv(args),
+        "setenv" => super::process::builtin_setenv(args),
+        // Timer (pure)
+        "timerp" => super::timer::builtin_timerp(args),
+        "sit-for" => super::timer::builtin_sit_for(args),
         _ => return None,
     })
 }

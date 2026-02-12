@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use super::gap_buffer::GapBuffer;
 use super::overlay::OverlayList;
 use super::text_props::TextPropertyTable;
+use crate::elisp::syntax::SyntaxTable;
 use crate::elisp::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,8 @@ pub struct Buffer {
     pub text_props: TextPropertyTable,
     /// Overlays attached to the buffer.
     pub overlays: OverlayList,
+    /// Syntax table for character classification.
+    pub syntax_table: SyntaxTable,
 }
 
 impl Buffer {
@@ -104,6 +107,7 @@ impl Buffer {
             properties: HashMap::new(),
             text_props: TextPropertyTable::new(),
             overlays: OverlayList::new(),
+            syntax_table: SyntaxTable::new_standard(),
         }
     }
 
