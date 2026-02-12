@@ -1,0 +1,6 @@
+1	(+ 1 2)	OK 3
+2	(let ((x 1)) (setq x (+ x 2)) x)	OK 3
+3	(let ((lst '(1 2))) (setcar lst 9) lst)	OK (9 2)
+4	(catch 'tag (throw 'tag 42))	OK 42
+5	(condition-case e (/ 1 0) (arith-error 'div-zero))	OK div-zero
+6	(let ((x 1)) (let ((f (lambda nil x))) (let ((x 2)) (funcall f))))	OK 2

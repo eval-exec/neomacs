@@ -25,6 +25,14 @@ Output columns:
 2. input form
 3. oracle result (`OK <value>` or `ERR <signal+data>`)
 
+## Baseline Workflow
+
+```bash
+cd test/neovm/vm-compat
+make record   # writes cases/core.expected.tsv
+make check    # diffs fresh oracle output against expected
+```
+
 ## Next step
 
 Add a NeoVM runner that evaluates the same corpus and diffs against this oracle output.
