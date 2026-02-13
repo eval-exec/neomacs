@@ -47,6 +47,7 @@ pub mod chartable;
 pub mod errors;
 pub mod pcase;
 pub mod setf;
+pub mod cl_extra;
 
 // Re-export the main public API
 pub use value::{Value, ConsCell, LambdaData, LambdaParams};
