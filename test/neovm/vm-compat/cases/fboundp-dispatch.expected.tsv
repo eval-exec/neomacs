@@ -2,4 +2,5 @@
 2	(fboundp 'load)	OK t
 3	(fboundp 'symbol-value)	OK t
 4	(fboundp 'random)	OK t
-5	(fboundp 'definitely-not-a-builtin)	OK nil
+5	(fboundp 'read-key)	OK t
+6	(fboundp 'definitely-not-a-builtin)	OK nil

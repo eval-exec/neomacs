@@ -3,4 +3,5 @@
 (fboundp 'load)
 (fboundp 'symbol-value)
 (fboundp 'random)
+(fboundp 'read-key)
 (fboundp 'definitely-not-a-builtin)
