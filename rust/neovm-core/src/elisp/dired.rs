@@ -1469,7 +1469,7 @@ mod tests {
 
     #[test]
     fn test_file_attributes_regular_file() {
-        let (dir, dir_str) = make_test_dir("fa_reg");
+        let (dir, _dir_str) = make_test_dir("fa_reg");
         let path = dir.join("test.txt");
         let path_str = path.to_string_lossy().to_string();
         create_file(&dir, "test.txt", "hello");
