@@ -170,13 +170,7 @@ fn uid_to_name(uid: u32) -> Option<String> {
 
         loop {
             let mut buf = vec![0u8; buf_len];
-            let rc = libc::getpwuid_r(
-                uid,
-                &mut pwd,
-                buf.as_mut_ptr().cast(),
-                buf_len,
-                &mut result,
-            );
+            let rc = libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr().cast(), buf_len, &mut result);
 
             if rc == 0 {
                 if result.is_null() || pwd.pw_name.is_null() {
@@ -204,13 +198,7 @@ fn gid_to_name(gid: u32) -> Option<String> {
 
         loop {
             let mut buf = vec![0u8; buf_len];
-            let rc = libc::getgrgid_r(
-                gid,
-                &mut grp,
-                buf.as_mut_ptr().cast(),
-                buf_len,
-                &mut result,
-            );
+            let rc = libc::getgrgid_r(gid, &mut grp, buf.as_mut_ptr().cast(), buf_len, &mut result);
 
             if rc == 0 {
                 if result.is_null() || grp.gr_name.is_null() {
@@ -510,7 +498,6 @@ pub(crate) fn builtin_directory_files(args: Vec<Value>) -> EvalResult {
     let mut result: VecDeque<String> = VecDeque::new();
     let mut remaining = count.unwrap_or(usize::MAX);
     for name in names {
-
         // Apply regex filter.
         if let Some(ref re) = re {
             if !re.is_match(&name) {
@@ -584,7 +571,6 @@ pub(crate) fn builtin_directory_files_and_attributes(args: Vec<Value>) -> EvalRe
     let mut items: VecDeque<(String, String)> = VecDeque::new();
     let mut remaining = count.unwrap_or(usize::MAX);
     for name in names {
-
         // Apply regex filter.
         if let Some(ref re) = re {
             if !re.is_match(&name) {
@@ -633,56 +619,34 @@ pub(crate) fn builtin_file_name_completion(args: Vec<Value>) -> EvalResult {
 
     let file = expect_string("file-name-completion", &args[0])?;
     let directory = expect_string("file-name-completion", &args[1])?;
-
-    let entries = fs::read_dir(&directory).map_err(|e| {
-        signal(
-            "file-error",
-            vec![
-                Value::string("Opening directory"),
-                Value::string(e.to_string()),
-                Value::string(&directory),
-            ],
-        )
-    })?;
-
-    let mut completions: Vec<String> = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            signal(
-                "file-error",
-                vec![Value::string(format!("Reading directory entry: {}", e))],
-            )
-        })?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&file) {
-            // Append '/' for directories.
-            let full_path = std::path::Path::new(&directory).join(&name);
-            if full_path.is_dir() {
-                completions.push(format!("{}/", name));
-            } else {
-                completions.push(name);
-            }
-        }
+    if file.contains('/') {
+        return Ok(Value::Nil);
     }
+    let completions = collect_file_name_completions(&file, &directory)?;
 
     if completions.is_empty() {
         return Ok(Value::Nil);
     }
 
-    // If there is exactly one completion and it matches FILE exactly
-    // (possibly with trailing slash for directories), return t.
-    if completions.len() == 1 {
-        let comp = &completions[0];
-        let base = comp.strip_suffix('/').unwrap_or(comp);
-        if base == file {
+    let filtered = filter_completion_candidates(&file, completions);
+    if filtered.is_empty() {
+        return Ok(Value::string(file));
+    }
+
+    // If there is exactly one completion and it matches FILE exactly, return t.
+    // For directory candidates ending in '/', Emacs returns the completion
+    // string when FILE lacks the trailing slash (e.g. ".." -> "../").
+    if filtered.len() == 1 {
+        let comp = &filtered[0];
+        if comp == &file {
             return Ok(Value::True);
         }
         return Ok(Value::string(comp.clone()));
     }
 
     // Find the longest common prefix among completions.
-    let mut prefix = completions[0].clone();
-    for comp in &completions[1..] {
+    let mut prefix = filtered[0].clone();
+    for comp in &filtered[1..] {
         let common_len = prefix
             .chars()
             .zip(comp.chars())
@@ -711,43 +675,41 @@ pub(crate) fn builtin_file_name_all_completions(args: Vec<Value>) -> EvalResult 
 
     let file = expect_string("file-name-all-completions", &args[0])?;
     let directory = expect_string("file-name-all-completions", &args[1])?;
-
-    let entries = fs::read_dir(&directory).map_err(|e| {
-        signal(
-            "file-error",
-            vec![
-                Value::string("Opening directory"),
-                Value::string(e.to_string()),
-                Value::string(&directory),
-            ],
-        )
-    })?;
-
-    let mut completions: Vec<String> = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            signal(
-                "file-error",
-                vec![Value::string(format!("Reading directory entry: {}", e))],
-            )
-        })?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&file) {
-            // Append '/' for directories.
-            let full_path = std::path::Path::new(&directory).join(&name);
-            if full_path.is_dir() {
-                completions.push(format!("{}/", name));
-            } else {
-                completions.push(name);
-            }
-        }
+    if file.contains('/') {
+        return Ok(Value::Nil);
     }
-
-    completions.sort();
-
+    let completions = collect_file_name_completions(&file, &directory)?;
     Ok(Value::list(
         completions.into_iter().map(Value::string).collect(),
     ))
+}
+
+fn collect_file_name_completions(file: &str, directory: &str) -> Result<Vec<String>, Flow> {
+    let names = read_directory_names(directory)?;
+    let mut completions = VecDeque::new();
+
+    for name in names {
+        if !name.starts_with(file) {
+            continue;
+        }
+
+        let full_path = std::path::Path::new(directory).join(&name);
+        if full_path.is_dir() {
+            completions.push_front(format!("{}/", name));
+        } else {
+            completions.push_front(name);
+        }
+    }
+
+    Ok(completions.into_iter().collect())
+}
+
+fn filter_completion_candidates(file: &str, completions: Vec<String>) -> Vec<String> {
+    completions
+        .into_iter()
+        .filter(|c| c != "./")
+        .filter(|c| file.starts_with("..") || c != "../")
+        .collect()
 }
 
 /// (file-attributes FILENAME &optional ID-FORMAT)
@@ -1191,6 +1153,39 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn test_file_name_completion_dot_and_slash_behavior() {
+        let (dir, dir_str) = make_test_dir("fnc_dot_slash");
+        create_file(&dir, ".hidden", "");
+        fs::create_dir(dir.join("subdir")).unwrap();
+
+        let dot = builtin_file_name_completion(vec![Value::string("."), Value::string(&dir_str)])
+            .unwrap();
+        assert_eq!(dot.as_str(), Some(".hidden"));
+
+        let dotdot =
+            builtin_file_name_completion(vec![Value::string(".."), Value::string(&dir_str)])
+                .unwrap();
+        assert_eq!(dotdot.as_str(), Some("../"));
+
+        let slash =
+            builtin_file_name_completion(vec![Value::string("./"), Value::string(&dir_str)])
+                .unwrap();
+        assert!(slash.is_nil());
+
+        let subdir_prefix =
+            builtin_file_name_completion(vec![Value::string("sub"), Value::string(&dir_str)])
+                .unwrap();
+        assert_eq!(subdir_prefix.as_str(), Some("subdir/"));
+
+        let subdir_with_slash =
+            builtin_file_name_completion(vec![Value::string("subdir/"), Value::string(&dir_str)])
+                .unwrap();
+        assert!(subdir_with_slash.is_nil());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     // -----------------------------------------------------------------------
     // file-name-all-completions
     // -----------------------------------------------------------------------
@@ -1223,6 +1218,36 @@ mod tests {
             builtin_file_name_all_completions(vec![Value::string("zzz"), Value::string(&dir_str)])
                 .unwrap();
         assert!(result.is_nil());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_file_name_all_completions_special_entries() {
+        let (dir, dir_str) = make_test_dir("fnac_special");
+        create_file(&dir, ".hidden", "");
+        fs::create_dir(dir.join("subdir")).unwrap();
+
+        let dot =
+            builtin_file_name_all_completions(vec![Value::string("."), Value::string(&dir_str)])
+                .unwrap();
+        let dot_items = list_to_vec(&dot).unwrap();
+        let dot_names: Vec<&str> = dot_items.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(dot_names.contains(&"./"));
+        assert!(dot_names.contains(&"../"));
+        assert!(dot_names.contains(&".hidden"));
+
+        let dotdot =
+            builtin_file_name_all_completions(vec![Value::string(".."), Value::string(&dir_str)])
+                .unwrap();
+        let dotdot_items = list_to_vec(&dotdot).unwrap();
+        assert_eq!(dotdot_items.len(), 1);
+        assert_eq!(dotdot_items[0].as_str(), Some("../"));
+
+        let slash =
+            builtin_file_name_all_completions(vec![Value::string("./"), Value::string(&dir_str)])
+                .unwrap();
+        assert!(slash.is_nil());
 
         let _ = fs::remove_dir_all(&dir);
     }
