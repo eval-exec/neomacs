@@ -39,6 +39,8 @@ pub struct Evaluator {
     pub(crate) lexenv: Vec<HashMap<String, Value>>,
     /// Features list (for require/provide).
     pub(crate) features: Vec<String>,
+    /// Features currently being resolved through `require`.
+    require_stack: Vec<String>,
     /// Buffer manager — owns all live buffers and tracks current buffer.
     pub(crate) buffers: BufferManager,
     /// Match data from the last successful search/match operation.
@@ -146,6 +148,7 @@ impl Evaluator {
             dynamic: Vec::new(),
             lexenv: Vec::new(),
             features: Vec::new(),
+            require_stack: Vec::new(),
             buffers: BufferManager::new(),
             match_data: None,
             keymaps: KeymapManager::new(),
@@ -1023,50 +1026,65 @@ impl Evaluator {
             return Ok(Value::symbol(name));
         }
 
-        // Try to find and load the file
-        let filename = if tail.len() > 1 {
-            match &self.eval(&tail[1])? {
-                Value::Str(s) => (**s).clone(),
-                _ => name.clone(),
-            }
-        } else {
-            name.clone()
-        };
+        if self.require_stack.iter().any(|feature| feature == &name) {
+            return Err(signal(
+                "error",
+                vec![Value::string(format!(
+                    "Recursive require for feature '{}'",
+                    name
+                ))],
+            ));
+        }
+        self.require_stack.push(name.clone());
 
-        let load_path = super::load::get_load_path(&self.obarray);
-        match super::load::find_file_in_load_path(&filename, &load_path) {
-            Some(path) => {
-                self.load_file_internal(&path)?;
-                // After loading, check if feature was provided
-                if self.has_feature(&name) {
-                    Ok(Value::symbol(name))
-                } else {
+        // Try to find and load the file
+        let result = (|| -> EvalResult {
+            let filename = if tail.len() > 1 {
+                match &self.eval(&tail[1])? {
+                    Value::Str(s) => (**s).clone(),
+                    _ => name.clone(),
+                }
+            } else {
+                name.clone()
+            };
+
+            let load_path = super::load::get_load_path(&self.obarray);
+            match super::load::find_file_in_load_path(&filename, &load_path) {
+                Some(path) => {
+                    self.load_file_internal(&path)?;
+                    // After loading, check if feature was provided
+                    if self.has_feature(&name) {
+                        Ok(Value::symbol(name))
+                    } else {
+                        Err(signal(
+                            "error",
+                            vec![Value::string(format!(
+                                "Required feature '{}' was not provided",
+                                name
+                            ))],
+                        ))
+                    }
+                }
+                None => {
+                    // Check if no-error flag is set (3rd argument)
+                    if tail.len() > 2 {
+                        let noerror = self.eval(&tail[2])?;
+                        if noerror.is_truthy() {
+                            return Ok(Value::Nil);
+                        }
+                    }
                     Err(signal(
-                        "error",
+                        "file-missing",
                         vec![Value::string(format!(
-                            "Required feature '{}' was not provided",
+                            "Cannot open load file: no such file or directory, {}",
                             name
                         ))],
                     ))
                 }
             }
-            None => {
-                // Check if no-error flag is set (3rd argument)
-                if tail.len() > 2 {
-                    let noerror = self.eval(&tail[2])?;
-                    if noerror.is_truthy() {
-                        return Ok(Value::Nil);
-                    }
-                }
-                Err(signal(
-                    "file-missing",
-                    vec![Value::string(format!(
-                        "Cannot open load file: no such file or directory, {}",
-                        name
-                    ))],
-                ))
-            }
-        }
+        })();
+        let _ = self.require_stack.pop();
+        result
     }
 
     fn sf_with_current_buffer(&mut self, tail: &[Expr]) -> EvalResult {
@@ -1853,6 +1871,44 @@ mod tests {
             .collect();
         assert_eq!(results[0], "OK my-feature");
         assert_eq!(results[1], "OK t");
+    }
+
+    #[test]
+    fn require_recursive_cycle_signals_error() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-require-recursive-{unique}"));
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        fs::write(
+            dir.join("vm-rec-a.el"),
+            "(require 'vm-rec-b)\n(provide 'vm-rec-a)\n",
+        )
+        .expect("write vm-rec-a");
+        fs::write(
+            dir.join("vm-rec-b.el"),
+            "(require 'vm-rec-a)\n(provide 'vm-rec-b)\n",
+        )
+        .expect("write vm-rec-b");
+
+        let escaped = dir.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            "(progn (setq load-path (cons \"{}\" load-path)) 'ok)\n\
+             (condition-case err (require 'vm-rec-a) (error (car err)))\n\
+             (featurep 'vm-rec-a)\n\
+             (featurep 'vm-rec-b)",
+            escaped
+        );
+        let results = eval_all(&script);
+        assert_eq!(results[1], "OK error");
+        assert_eq!(results[2], "OK nil");
+        assert_eq!(results[3], "OK nil");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
