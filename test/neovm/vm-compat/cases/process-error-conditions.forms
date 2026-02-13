@@ -1,0 +1,11 @@
+; Process operation conditions should expose specific file-* subclasses.
+(condition-case err
+    (call-process "/nonexistent/neovm-vm-compat-missing-prog")
+  (file-missing (car err))
+  (file-error (car err)))
+(with-temp-buffer
+  (insert "x")
+  (condition-case err
+      (call-process-region (point-min) (point-max) "/nonexistent/neovm-vm-compat-missing-prog")
+    (file-missing (car err))
+    (file-error (car err))))
