@@ -3,4 +3,6 @@
 3	(fboundp 'symbol-value)	OK t
 4	(fboundp 'random)	OK t
 5	(fboundp 'read-key)	OK t
-6	(fboundp 'definitely-not-a-builtin)	OK nil
+6	(fboundp 'read-event)	OK t
+7	(fboundp 'read-char-exclusive)	OK t
+8	(fboundp 'definitely-not-a-builtin)	OK nil

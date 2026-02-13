@@ -4,4 +4,6 @@
 (fboundp 'symbol-value)
 (fboundp 'random)
 (fboundp 'read-key)
+(fboundp 'read-event)
+(fboundp 'read-char-exclusive)
 (fboundp 'definitely-not-a-builtin)
