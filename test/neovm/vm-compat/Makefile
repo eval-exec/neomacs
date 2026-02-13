@@ -1,7 +1,7 @@
 FORMS ?= cases/core.forms
 EXPECTED ?= cases/core.expected.tsv
 NEOVM_OUT ?= cases/core.neovm.tsv
-CASES ?= cases/core cases/bindings cases/default-directory cases/directory-file-name cases/directory-files cases/file-name-concat cases/path-predicates cases/file-name-types cases/substitute-in-file-name cases/features-sync cases/pcase cases/seq-position cases/seq-misc cases/seq-uniq cases/seq-slice cases/seq-more cases/seq-concat cases/seq-reverse cases/take cases/match-data cases/search-buffer cases/search-count cases/replace-match cases/load-require cases/require-recursive cases/load-flags cases/load-relative cases/load-history cases/load-file-name cases/load-path-nil cases/load-path-order cases/reader-hash cases/locate-file
+CASES ?= cases/core cases/bindings cases/default-directory cases/directory-file-name cases/directory-files cases/directory-files-and-attributes cases/file-name-concat cases/path-predicates cases/file-name-types cases/substitute-in-file-name cases/features-sync cases/pcase cases/seq-position cases/seq-misc cases/seq-uniq cases/seq-slice cases/seq-more cases/seq-concat cases/seq-reverse cases/take cases/match-data cases/search-buffer cases/search-count cases/replace-match cases/load-require cases/require-recursive cases/load-flags cases/load-relative cases/load-history cases/load-file-name cases/load-path-nil cases/load-path-order cases/reader-hash cases/locate-file
 NEOVM_ONLY_CASES ?= cases/load-suffixes cases/load-policy cases/precompile
 ALL_NEOVM_CASES ?= $(CASES) $(NEOVM_ONLY_CASES)
 BENCH_SOURCE ?= cases/load-policy-fixtures/vm-policy-cache-probe.el

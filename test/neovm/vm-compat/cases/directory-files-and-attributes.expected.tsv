@@ -1,0 +1,11 @@
+1	(setq vm-dfa-dir (let* ((forms-file (getenv "NEOVM_FORMS_FILE")) (base (if forms-file (file-name-directory forms-file) default-directory))) (expand-file-name "directory-files-fixtures" base)))	OK "/home/exec/Projects/github.com/eval-exec/neomacs/test/neovm/vm-compat/cases/directory-files-fixtures"
+2	(mapcar #'car (directory-files-and-attributes vm-dfa-dir))	OK ("." ".." ".hidden" "alpha.txt" "beta.el" "z")
+3	(mapcar #'car (directory-files-and-attributes vm-dfa-dir t))	OK ("/home/exec/Projects/github.com/eval-exec/neomacs/test/neovm/vm-compat/cases/directory-files-fixtures/." "/home/exec/Projects/github.com/eval-exec/neomacs/test/neovm/vm-compat/cases/directory-files-fixtures/.." "/home/exec/Projects/github.com/eval-exec/neomacs/test/neovm/vm-compat/cases/directory-files-fixtures/.hidden" "/home/exec/Projects/github.com/eval-exec/neomacs/test/neovm/vm-compat/cases/directory-files-fixtures/alpha.txt" "/home/exec/Projects/github.com/eval-exec/neomacs/test/neovm/vm-compat/cases/directory-files-fixtures/beta.el" "/home/exec/Projects/github.com/eval-exec/neomacs/test/neovm/vm-compat/cases/directory-files-fixtures/z")
+4	(mapcar #'car (directory-files-and-attributes vm-dfa-dir nil "\\.el$"))	OK ("beta.el")
+5	(sort (copy-sequence (mapcar #'car (directory-files-and-attributes vm-dfa-dir nil nil t))) #'string<)	OK ("." ".." ".hidden" "alpha.txt" "beta.el" "z")
+6	(mapcar #'car (directory-files-and-attributes vm-dfa-dir nil nil t nil 2))	OK ("alpha.txt" ".")
+7	(mapcar #'car (directory-files-and-attributes vm-dfa-dir nil nil nil nil 2))	OK ("." "alpha.txt")
+8	(let* ((xs (directory-files-and-attributes vm-dfa-dir nil nil nil t 1)) (x (car xs)) (attrs (cdr x))) (list (car x) (stringp (nth 2 attrs)) (stringp (nth 3 attrs))))	OK ("." t t)
+9	(condition-case err (directory-files-and-attributes vm-dfa-dir nil nil nil nil -1) (list (car err) (nth 1 err)))	ERR (wrong-type-argument (wholenump -1))
+10	(condition-case err (directory-files-and-attributes vm-dfa-dir nil nil nil nil "x") (list (car err) (nth 1 err)))	ERR (wrong-type-argument (wholenump "x"))
+11	(condition-case err (directory-files-and-attributes vm-dfa-dir nil nil nil nil 0 nil) (car err))	ERR (wrong-number-of-arguments (directory-files-and-attributes 7))
