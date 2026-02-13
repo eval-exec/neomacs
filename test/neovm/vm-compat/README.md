@@ -13,6 +13,7 @@ results against that baseline once evaluator execution is wired in.
 - `run-oracle.sh`: runs all forms from a corpus file and prints TSV output
 - `run-neovm.sh`: runs NeoVM worker-runtime compatibility runner and prints TSV output
 - `compare-results.sh`: diffs oracle TSV vs NeoVM TSV
+- `bench-load-cache.sh`: runs cold/warm `.neoc` load benchmark via `load_cache_bench`
 - `cases/core.forms`: starter corpus for expression and error behavior
 
 ## Usage
@@ -79,4 +80,13 @@ You can also precompile source files into NeoVM cache sidecars ahead of load:
 ```bash
 cargo run --manifest-path rust/neovm-core/Cargo.toml --example precompile_neoc -- \
   path/to/file.el [path/to/another.el ...]
+```
+
+Run cache-load benchmark reporting cold miss vs warm hit timing:
+
+```bash
+cd test/neovm/vm-compat
+make bench-load-cache
+# or override:
+make bench-load-cache BENCH_SOURCE=cases/load-policy-fixtures/vm-policy-cache-probe.el BENCH_ITERS=200
 ```
