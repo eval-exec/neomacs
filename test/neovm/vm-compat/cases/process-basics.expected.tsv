@@ -16,6 +16,12 @@
 16	(condition-case err (call-process-region "xyz" nil "cat" t t nil) (error (car err)))	OK wrong-type-argument
 17	(with-temp-buffer (insert "abc") (list (call-process-region (point-max) (point-min) "cat" nil t nil) (buffer-string)))	OK (0 "abcabc")
 18	(with-temp-buffer (insert "abc") (list (call-process-region (point-max) (point-min) "cat" t t nil) (buffer-string)))	OK (0 "abc")
-19	(condition-case err (call-process "cat" "/nonexistent/neovm-vm-compat-process-infile") (error (car err)))	OK file-missing
-20	(condition-case err (call-process "/nonexistent/neovm-vm-compat-missing-prog") (error (car err)))	OK file-missing
-21	(with-temp-buffer (insert "x") (condition-case err (call-process-region (point-min) (point-max) "/nonexistent/neovm-vm-compat-missing-prog") (error (car err))))	OK file-missing
+19	(with-temp-buffer (insert "abc") (condition-case err (call-process-region 1 nil "cat" nil t nil) (error (car err))))	OK wrong-type-argument
+20	(with-temp-buffer (insert "abc") (condition-case err (call-process-region nil 1 "cat" nil t nil) (error (car err))))	OK 0
+21	(with-temp-buffer (insert "abc") (condition-case err (call-process-region "xyz" nil "cat" nil nil nil) (error (car err))))	OK 0
+22	(with-temp-buffer (insert "abc") (list (call-process-region (point-min) (point-max) "cat" t nil nil) (buffer-string)))	OK (0 "")
+23	(with-temp-buffer (insert "abc") (condition-case err (call-process-region (make-marker) (point-max) "cat" nil t nil) (error (car err))))	OK error
+24	(with-temp-buffer (insert "abc") (condition-case err (call-process-region (point-min) (make-marker) "cat" nil t nil) (error (car err))))	OK error
+25	(condition-case err (call-process "cat" "/nonexistent/neovm-vm-compat-process-infile") (error (car err)))	OK file-missing
+26	(condition-case err (call-process "/nonexistent/neovm-vm-compat-missing-prog") (error (car err)))	OK file-missing
+27	(with-temp-buffer (insert "x") (condition-case err (call-process-region (point-min) (point-max) "/nonexistent/neovm-vm-compat-missing-prog") (error (car err))))	OK file-missing

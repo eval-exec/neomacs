@@ -85,6 +85,35 @@
   (insert "abc")
   (list (call-process-region (point-max) (point-min) "cat" t t nil)
         (buffer-string)))
+(with-temp-buffer
+  (insert "abc")
+  (condition-case err
+      (call-process-region 1 nil "cat" nil t nil)
+    (error (car err))))
+(with-temp-buffer
+  (insert "abc")
+  (condition-case err
+      (call-process-region nil 1 "cat" nil t nil)
+    (error (car err))))
+(with-temp-buffer
+  (insert "abc")
+  (condition-case err
+      (call-process-region "xyz" nil "cat" nil nil nil)
+    (error (car err))))
+(with-temp-buffer
+  (insert "abc")
+  (list (call-process-region (point-min) (point-max) "cat" t nil nil)
+        (buffer-string)))
+(with-temp-buffer
+  (insert "abc")
+  (condition-case err
+      (call-process-region (make-marker) (point-max) "cat" nil t nil)
+    (error (car err))))
+(with-temp-buffer
+  (insert "abc")
+  (condition-case err
+      (call-process-region (point-min) (make-marker) "cat" nil t nil)
+    (error (car err))))
 (condition-case err
     (call-process "cat" "/nonexistent/neovm-vm-compat-process-infile")
   (error (car err)))
