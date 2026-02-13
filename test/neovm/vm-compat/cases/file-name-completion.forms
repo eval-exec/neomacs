@@ -27,3 +27,7 @@
 (file-name-all-completions "subdir/" vm-fnc-dir)
 (file-name-all-completions "./" vm-fnc-dir)
 (file-name-all-completions "" vm-fnc-dir #'file-directory-p)
+(let ((default-directory "/tmp/"))
+  (file-name-all-completions "sub" vm-fnc-dir))
+(let* ((default-directory (file-name-directory vm-fnc-dir)))
+  (file-name-all-completions "sub" "file-name-completion-fixtures/"))

@@ -23,3 +23,5 @@
 23	(file-name-all-completions "subdir/" vm-fnc-dir)	OK nil
 24	(file-name-all-completions "./" vm-fnc-dir)	OK nil
 25	(file-name-all-completions "" vm-fnc-dir #'file-directory-p)	ERR (wrong-number-of-arguments (file-name-all-completions 3))
+26	(let ((default-directory "/tmp/")) (file-name-all-completions "sub" vm-fnc-dir))	OK ("subdir/")
+27	(let* ((default-directory (file-name-directory vm-fnc-dir))) (file-name-all-completions "sub" "file-name-completion-fixtures/"))	OK ("subdir/")

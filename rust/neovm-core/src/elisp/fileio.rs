@@ -775,7 +775,7 @@ fn default_directory_for_eval(eval: &Evaluator) -> Option<String> {
     }
 }
 
-fn resolve_filename_for_eval(eval: &Evaluator, filename: &str) -> String {
+pub(crate) fn resolve_filename_for_eval(eval: &Evaluator, filename: &str) -> String {
     if filename.is_empty() || Path::new(filename).is_absolute() {
         return filename.to_string();
     }

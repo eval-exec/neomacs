@@ -639,7 +639,10 @@ pub(crate) fn builtin_file_name_completion_eval(
     expect_range_args("file-name-completion", &args, 2, 3)?;
 
     let file = expect_string("file-name-completion", &args[0])?;
-    let directory = expect_string("file-name-completion", &args[1])?;
+    let directory = super::fileio::resolve_filename_for_eval(
+        eval,
+        &expect_string("file-name-completion", &args[1])?,
+    );
     let predicate = args.get(2);
     if file.contains('/') {
         return Ok(Value::Nil);
@@ -659,6 +662,28 @@ pub(crate) fn builtin_file_name_all_completions(args: Vec<Value>) -> EvalResult 
 
     let file = expect_string("file-name-all-completions", &args[0])?;
     let directory = expect_string("file-name-all-completions", &args[1])?;
+    if file.contains('/') {
+        return Ok(Value::Nil);
+    }
+    let completions = collect_file_name_completions(&file, &directory)?;
+    Ok(Value::list(
+        completions.into_iter().map(Value::string).collect(),
+    ))
+}
+
+/// Evaluator-backed variant of `file-name-all-completions`.
+/// Resolves relative DIRECTORY against dynamic/default `default-directory`.
+pub(crate) fn builtin_file_name_all_completions_eval(
+    eval: &Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_range_args("file-name-all-completions", &args, 2, 2)?;
+
+    let file = expect_string("file-name-all-completions", &args[0])?;
+    let directory = super::fileio::resolve_filename_for_eval(
+        eval,
+        &expect_string("file-name-all-completions", &args[1])?,
+    );
     if file.contains('/') {
         return Ok(Value::Nil);
     }
@@ -1397,6 +1422,30 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn test_file_name_completion_eval_relative_directory() {
+        let (base, base_str) = make_test_dir("fnc_eval_relative");
+        let fixture_dir = base.join("fixtures");
+        fs::create_dir(&fixture_dir).unwrap();
+        create_file(&fixture_dir, "alpha.txt", "");
+        fs::create_dir(fixture_dir.join("subdir")).unwrap();
+
+        let mut eval = Evaluator::new();
+        eval.obarray.set_symbol_value(
+            "default-directory",
+            Value::string(ensure_trailing_slash(&base_str)),
+        );
+
+        let result = builtin_file_name_completion_eval(
+            &mut eval,
+            vec![Value::string("sub"), Value::string("fixtures/")],
+        )
+        .unwrap();
+        assert_eq!(result.as_str(), Some("subdir/"));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
     // -----------------------------------------------------------------------
     // file-name-all-completions
     // -----------------------------------------------------------------------
@@ -1461,6 +1510,32 @@ mod tests {
         assert!(slash.is_nil());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_file_name_all_completions_eval_relative_directory() {
+        let (base, base_str) = make_test_dir("fnac_eval_relative");
+        let fixture_dir = base.join("fixtures");
+        fs::create_dir(&fixture_dir).unwrap();
+        create_file(&fixture_dir, "alpha.txt", "");
+        fs::create_dir(fixture_dir.join("subdir")).unwrap();
+
+        let mut eval = Evaluator::new();
+        eval.obarray.set_symbol_value(
+            "default-directory",
+            Value::string(ensure_trailing_slash(&base_str)),
+        );
+
+        let result = builtin_file_name_all_completions_eval(
+            &eval,
+            vec![Value::string("sub"), Value::string("fixtures/")],
+        )
+        .unwrap();
+        let items = list_to_vec(&result).unwrap();
+        let names: Vec<&str> = items.iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(names, vec!["subdir/"]);
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     // -----------------------------------------------------------------------
