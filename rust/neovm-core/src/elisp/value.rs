@@ -37,6 +37,12 @@ pub enum Value {
     Timer(u64),
 }
 
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        equal_value(self, other, 0)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ConsCell {
     pub car: Value,
