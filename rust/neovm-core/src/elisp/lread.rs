@@ -252,12 +252,12 @@ pub(crate) fn builtin_eval_region(
 
 /// `(read-char &optional PROMPT INHERIT-INPUT-METHOD SECONDS)`
 ///
-/// Stub: returns 0 (no terminal input available in batch mode).
+/// Batch stub: returns nil (no terminal input available).
 pub(crate) fn builtin_read_char(
     _eval: &mut super::eval::Evaluator,
     _args: Vec<Value>,
 ) -> EvalResult {
-    Ok(Value::Int(0))
+    Ok(Value::Nil)
 }
 
 /// `(read-event &optional PROMPT INHERIT-INPUT-METHOD SECONDS)`
@@ -272,12 +272,12 @@ pub(crate) fn builtin_read_event(
 
 /// `(read-char-exclusive &optional PROMPT INHERIT-INPUT-METHOD SECONDS)`
 ///
-/// Stub: returns 0 (no terminal input available in batch mode).
+/// Batch stub: returns nil (no terminal input available).
 pub(crate) fn builtin_read_char_exclusive(
     _eval: &mut super::eval::Evaluator,
     _args: Vec<Value>,
 ) -> EvalResult {
-    Ok(Value::Int(0))
+    Ok(Value::Nil)
 }
 
 /// `(load FILE &optional NOERROR NOMESSAGE NOSUFFIX MUST-SUFFIX)`
@@ -929,10 +929,10 @@ mod tests {
     }
 
     #[test]
-    fn read_char_returns_zero() {
+    fn read_char_returns_nil() {
         let mut ev = Evaluator::new();
         let result = builtin_read_char(&mut ev, vec![]).unwrap();
-        assert!(matches!(result, Value::Int(0)));
+        assert!(result.is_nil());
     }
 
     #[test]
@@ -943,10 +943,10 @@ mod tests {
     }
 
     #[test]
-    fn read_char_exclusive_returns_zero() {
+    fn read_char_exclusive_returns_nil() {
         let mut ev = Evaluator::new();
         let result = builtin_read_char_exclusive(&mut ev, vec![]).unwrap();
-        assert!(matches!(result, Value::Int(0)));
+        assert!(result.is_nil());
     }
 
     #[test]

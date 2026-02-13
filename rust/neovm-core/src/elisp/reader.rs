@@ -793,13 +793,13 @@ pub(crate) fn builtin_yes_or_no_p(args: Vec<Value>) -> EvalResult {
 
 /// `(read-char &optional PROMPT ...)`
 ///
-/// Stub: returns ?y (121).
+/// Batch stub: returns nil (no input available).
 pub(crate) fn builtin_read_char(
     _eval: &mut super::eval::Evaluator,
     args: Vec<Value>,
 ) -> EvalResult {
     let _ = args;
-    Ok(Value::Char('y'))
+    Ok(Value::Nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,10 +1345,10 @@ mod tests {
     }
 
     #[test]
-    fn read_char_returns_y() {
+    fn read_char_returns_nil() {
         let mut ev = Evaluator::new();
         let result = builtin_read_char(&mut ev, vec![]).unwrap();
-        assert!(matches!(result, Value::Char('y')));
+        assert!(result.is_nil());
     }
 
     #[test]
