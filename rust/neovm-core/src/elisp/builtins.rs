@@ -2439,6 +2439,65 @@ pub(crate) fn builtin_number_sequence(args: Vec<Value>) -> EvalResult {
 // Misc builtins
 // ===========================================================================
 
+fn dynamic_or_global_symbol_value(eval: &super::eval::Evaluator, name: &str) -> Option<Value> {
+    for frame in eval.dynamic.iter().rev() {
+        if let Some(value) = frame.get(name) {
+            return Some(value.clone());
+        }
+    }
+    eval.obarray.symbol_value(name).cloned()
+}
+
+fn resolve_print_target(eval: &super::eval::Evaluator, printcharfun: Option<&Value>) -> Value {
+    match printcharfun {
+        Some(dest) if !dest.is_nil() => dest.clone(),
+        _ => dynamic_or_global_symbol_value(eval, "standard-output").unwrap_or(Value::True),
+    }
+}
+
+fn write_print_output(
+    eval: &mut super::eval::Evaluator,
+    printcharfun: Option<&Value>,
+    text: &str,
+) -> Result<(), Flow> {
+    let target = resolve_print_target(eval, printcharfun);
+    match target {
+        Value::True => Ok(()),
+        Value::Buffer(id) => {
+            let Some(buf) = eval.buffers.get_mut(id) else {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Output buffer no longer exists")],
+                ));
+            };
+            buf.insert(text);
+            Ok(())
+        }
+        Value::Str(name) => {
+            let Some(id) = eval.buffers.find_buffer_by_name(&name) else {
+                return Err(signal("error", vec![Value::string(format!("No buffer named {name}"))]));
+            };
+            let Some(buf) = eval.buffers.get_mut(id) else {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Output buffer no longer exists")],
+                ));
+            };
+            buf.insert(text);
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn princ_text(value: &Value) -> String {
+    match value {
+        Value::Str(s) => (**s).clone(),
+        Value::Char(c) => (*c as u32).to_string(),
+        other => super::print::print_value(other),
+    }
+}
+
 pub(crate) fn builtin_princ(args: Vec<Value>) -> EvalResult {
     expect_min_args("princ", &args, 1)?;
     // In real Emacs this prints to standard output; here just return the value
@@ -2450,6 +2509,26 @@ pub(crate) fn builtin_prin1(args: Vec<Value>) -> EvalResult {
     Ok(args[0].clone())
 }
 
+pub(crate) fn builtin_princ_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("princ", &args, 1)?;
+    let text = princ_text(&args[0]);
+    write_print_output(eval, args.get(1), &text)?;
+    Ok(args[0].clone())
+}
+
+pub(crate) fn builtin_prin1_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("prin1", &args, 1)?;
+    let text = super::print::print_value(&args[0]);
+    write_print_output(eval, args.get(1), &text)?;
+    Ok(args[0].clone())
+}
+
 pub(crate) fn builtin_prin1_to_string(args: Vec<Value>) -> EvalResult {
     expect_min_args("prin1-to-string", &args, 1)?;
     Ok(Value::string(super::print::print_value(&args[0])))
@@ -2457,6 +2536,19 @@ pub(crate) fn builtin_prin1_to_string(args: Vec<Value>) -> EvalResult {
 
 pub(crate) fn builtin_print(args: Vec<Value>) -> EvalResult {
     expect_min_args("print", &args, 1)?;
+    Ok(args[0].clone())
+}
+
+pub(crate) fn builtin_print_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("print", &args, 1)?;
+    let mut text = String::new();
+    text.push('\n');
+    text.push_str(&super::print::print_value(&args[0]));
+    text.push('\n');
+    write_print_output(eval, args.get(1), &text)?;
     Ok(args[0].clone())
 }
 
@@ -4225,6 +4317,9 @@ pub(crate) fn dispatch_builtin(
         "completing-read" => return Some(super::reader::builtin_completing_read(eval, args)),
         "read-char" => return Some(super::reader::builtin_read_char(eval, args)),
         "read-key-sequence" => return Some(super::reader::builtin_read_key_sequence(eval, args)),
+        "princ" => return Some(builtin_princ_eval(eval, args)),
+        "prin1" => return Some(builtin_prin1_eval(eval, args)),
+        "print" => return Some(builtin_print_eval(eval, args)),
 
         // Misc (evaluator-dependent)
         "backtrace-frame" => return Some(super::misc::builtin_backtrace_frame(eval, args)),

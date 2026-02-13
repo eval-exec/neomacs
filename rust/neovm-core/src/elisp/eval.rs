@@ -130,6 +130,7 @@ impl Evaluator {
         obarray.set_symbol_value("inhibit-quit", Value::Nil);
         obarray.set_symbol_value("print-length", Value::Nil);
         obarray.set_symbol_value("print-level", Value::Nil);
+        obarray.set_symbol_value("standard-output", Value::True);
 
         // Mark standard variables as special (dynamically bound)
         for name in &[
@@ -145,6 +146,7 @@ impl Evaluator {
             "inhibit-quit",
             "print-length",
             "print-level",
+            "standard-output",
         ] {
             obarray.make_special(name);
         }

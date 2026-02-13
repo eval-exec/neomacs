@@ -880,18 +880,32 @@ pub(crate) fn builtin_with_temp_buffer(
 
 /// Special form: `(with-output-to-string BODY...)`
 ///
-/// Evaluate BODY, capturing output from print functions as a string.
-/// For simplicity, evaluates body and returns empty string (output capture
-/// would require threading a dynamic output-stream variable).
+/// Evaluate BODY, capturing output from print functions into a temporary
+/// buffer bound through `standard-output`.
 pub(crate) fn sf_with_output_to_string(
     eval: &mut super::eval::Evaluator,
     tail: &[Expr],
 ) -> EvalResult {
-    // Evaluate body for side effects
-    let _result = eval.sf_progn(tail)?;
-    // In a full implementation, we'd capture output from princ/prin1/print.
-    // For now, return empty string.
-    Ok(Value::string(""))
+    let temp_name = eval
+        .buffers
+        .generate_new_buffer_name(" *with-output-to-string*");
+    let temp_id = eval.buffers.create_buffer(&temp_name);
+
+    let mut frame = std::collections::HashMap::new();
+    frame.insert("standard-output".to_string(), Value::Buffer(temp_id));
+    eval.dynamic.push(frame);
+
+    let body_result = eval.sf_progn(tail);
+    let captured = eval
+        .buffers
+        .get(temp_id)
+        .map(|buf| buf.buffer_string())
+        .unwrap_or_default();
+
+    let _ = eval.dynamic.pop();
+    eval.buffers.kill_buffer(temp_id);
+
+    body_result.map(|_| Value::string(captured))
 }
 
 // ---------------------------------------------------------------------------
@@ -1374,11 +1388,28 @@ mod tests {
     // ===================================================================
 
     #[test]
-    fn with_output_to_string_returns_string() {
+    fn with_output_to_string_captures_print_output() {
         let mut ev = Evaluator::new();
-        let body = parse_forms("1 2 3").unwrap();
-        let result = sf_with_output_to_string(&mut ev, &body).unwrap();
-        assert!(result.is_string());
+        let forms = parse_forms(r#"(with-output-to-string (princ "a") (prin1 '(1 2)) (print "x"))"#)
+            .unwrap();
+        let result = ev.eval_expr(&forms[0]).unwrap();
+        assert_eq!(result.as_str(), Some("a(1 2)\n\"x\"\n"));
+    }
+
+    #[test]
+    fn with_output_to_string_keeps_explicit_destination_working() {
+        let mut ev = Evaluator::new();
+        let forms = parse_forms(
+            r#"(with-temp-buffer
+                 (let ((buf (current-buffer)))
+                   (with-output-to-string
+                     (princ "captured")
+                     (princ " to-buf" buf))
+                   (buffer-string)))"#,
+        )
+        .unwrap();
+        let result = ev.eval_expr(&forms[0]).unwrap();
+        assert_eq!(result.as_str(), Some(" to-buf"));
     }
 
     // ===================================================================

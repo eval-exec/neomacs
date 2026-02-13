@@ -1,0 +1,27 @@
+; printer/output behavior and with-output-to-string capture.
+(replace-regexp-in-string
+ (char-to-string 10)
+ "<NL>"
+ (with-output-to-string
+   (princ "a")
+   (prin1 '(1 2))
+   (print "x")))
+(with-temp-buffer
+  (let ((buf (current-buffer)))
+    (with-output-to-string
+      (princ "capture")
+      (princ " out" buf))
+    (buffer-string)))
+(with-temp-buffer
+  (let ((buf (current-buffer)))
+    (prin1 "x" buf)
+    (buffer-string)))
+(with-temp-buffer
+  (let ((buf (current-buffer)))
+    (print "x" buf)
+    (replace-regexp-in-string (char-to-string 10) "<NL>" (buffer-string))))
+(with-output-to-string)
+(let ((standard-output t))
+  (with-output-to-string
+    (princ "x"))
+  (eq standard-output t))

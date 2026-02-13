@@ -1,0 +1,6 @@
+1	(replace-regexp-in-string (char-to-string 10) "<NL>" (with-output-to-string (princ "a") (prin1 '(1 2)) (print "x")))	OK "a(1 2)<NL>\"x\"<NL>"
+2	(with-temp-buffer (let ((buf (current-buffer))) (with-output-to-string (princ "capture") (princ " out" buf)) (buffer-string)))	OK " out"
+3	(with-temp-buffer (let ((buf (current-buffer))) (prin1 "x" buf) (buffer-string)))	OK "\"x\""
+4	(with-temp-buffer (let ((buf (current-buffer))) (print "x" buf) (replace-regexp-in-string (char-to-string 10) "<NL>" (buffer-string))))	OK "<NL>\"x\"<NL>"
+5	(with-output-to-string)	OK ""
+6	(let ((standard-output t)) (with-output-to-string (princ "x")) (eq standard-output t))	OK t
