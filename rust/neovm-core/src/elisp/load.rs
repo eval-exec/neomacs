@@ -153,14 +153,24 @@ pub fn load_file(eval: &mut super::eval::Evaluator, path: &Path) -> Result<Value
     );
 
     let result = (|| -> Result<Value, EvalError> {
-        let forms = super::parser::parse_forms(&content).map_err(|e| EvalError::Signal {
-            symbol: "invalid-read-syntax".to_string(),
-            data: vec![Value::string(format!(
-                "Parse error in {}: {:?}",
-                path.display(),
-                e
-            ))],
-        })?;
+        let forms = match super::parser::parse_forms(&content) {
+            Ok(forms) => forms,
+            Err(e) => {
+                // Temporary compatibility path: when we cannot read an .elc file,
+                // transparently try sibling source until native .elc execution lands.
+                if let Some(source_path) = source_sibling_for_elc(path) {
+                    return load_file(eval, &source_path);
+                }
+                return Err(EvalError::Signal {
+                    symbol: "invalid-read-syntax".to_string(),
+                    data: vec![Value::string(format!(
+                        "Parse error in {}: {:?}",
+                        path.display(),
+                        e
+                    ))],
+                });
+            }
+        };
 
         for form in &forms {
             let _ = eval.eval_expr(form)?;
@@ -180,6 +190,18 @@ pub fn load_file(eval: &mut super::eval::Evaluator, path: &Path) -> Result<Value
     }
 
     result
+}
+
+fn source_sibling_for_elc(path: &Path) -> Option<PathBuf> {
+    if path.extension().and_then(|s| s.to_str()) != Some("elc") {
+        return None;
+    }
+    let source = path.with_extension("el");
+    if source.exists() {
+        Some(source)
+    } else {
+        None
+    }
 }
 
 fn record_load_history(eval: &mut super::eval::Evaluator, path: &Path) {
@@ -353,6 +375,52 @@ mod tests {
             eval.obarray().symbol_value("load-file-name").cloned(),
             Some(Value::Nil)
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_elc_falls_back_to_source_sibling() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-load-elc-fallback-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp fixture dir");
+        let source = dir.join("probe.el");
+        let compiled = dir.join("probe.elc");
+        fs::write(&source, "(setq vm-load-elc-fallback 'source)\n").expect("write source fixture");
+        // Intentionally unreadable as Elisp for current parser.
+        fs::write(&compiled, "#[broken\n").expect("write compiled fixture");
+
+        let mut eval = super::super::eval::Evaluator::new();
+        let loaded = load_file(&mut eval, &compiled).expect("load file with source fallback");
+        assert_eq!(loaded, Value::True);
+        assert_eq!(
+            eval.obarray().symbol_value("vm-load-elc-fallback").cloned(),
+            Some(Value::symbol("source"))
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_elc_without_source_still_errors() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-load-elc-no-source-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp fixture dir");
+        let compiled = dir.join("probe.elc");
+        fs::write(&compiled, "#[broken\n").expect("write compiled fixture");
+
+        let mut eval = super::super::eval::Evaluator::new();
+        let err = load_file(&mut eval, &compiled).expect_err("load should error");
+        match err {
+            EvalError::Signal { symbol, .. } => assert_eq!(symbol, "invalid-read-syntax"),
+            other => panic!("unexpected error: {other:?}"),
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
