@@ -1,0 +1,38 @@
+name: vm-compat
+
+on:
+  pull_request:
+    paths:
+      - "rust/**"
+      - "test/neovm/vm-compat/**"
+      - ".github/workflows/vm-compat.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "rust/**"
+      - "test/neovm/vm-compat/**"
+      - ".github/workflows/vm-compat.yml"
+
+jobs:
+  neovm-vm-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust/neovm-core
+            rust/neovm-worker
+
+      - name: Run NeoVM compatibility corpus
+        working-directory: test/neovm/vm-compat
+        run: |
+          RUSTFLAGS='-Awarnings' make check-all-neovm
