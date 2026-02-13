@@ -15,7 +15,8 @@ record:
 	@echo "recorded oracle baseline: $(EXPECTED)"
 
 check:
-	@tmp_file="$$(mktemp)"; \
+	@set -e; \
+	tmp_file="$$(mktemp)"; \
 	./run-oracle.sh $(FORMS) > "$$tmp_file"; \
 	diff -u $(EXPECTED) "$$tmp_file"; \
 	rm -f "$$tmp_file"; \
@@ -25,7 +26,8 @@ compare:
 	./compare-results.sh $(EXPECTED) $(NEOVM_OUT)
 
 check-neovm:
-	@tmp_file="$$(mktemp)"; \
+	@set -e; \
+	tmp_file="$$(mktemp)"; \
 	./run-neovm.sh $(FORMS) > "$$tmp_file"; \
 	STRICT_FORM=1 ./compare-results.sh $(EXPECTED) "$$tmp_file"; \
 	rm -f "$$tmp_file"; \
