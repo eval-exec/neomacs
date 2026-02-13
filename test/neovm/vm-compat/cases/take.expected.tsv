@@ -1,0 +1,5 @@
+1	(take 2 '(a b c))	OK (a b)
+2	(take 10 '(a b c))	OK (a b c)
+3	(take 2 '(a . b))	ERR (wrong-type-argument (listp b))
+4	(take -1 '(a b c))	OK nil
+5	(take 2 5)	ERR (wrong-type-argument (listp 5))

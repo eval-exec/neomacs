@@ -1,0 +1,5 @@
+(take 2 '(a b c))
+(take 10 '(a b c))
+(take 2 '(a . b))
+(take -1 '(a b c))
+(take 2 5)
