@@ -14,6 +14,11 @@
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
+use std::cell::RefCell;
+
+thread_local! {
+    static PURE_MATCH_DATA: RefCell<Option<super::regex::MatchData>> = const { RefCell::new(None) };
+}
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -52,6 +57,17 @@ fn expect_int(val: &Value) -> Result<i64, Flow> {
     }
 }
 
+fn expect_integer_or_marker(val: &Value) -> Result<i64, Flow> {
+    match val {
+        Value::Int(n) => Ok(*n),
+        Value::Char(c) => Ok(*c as i64),
+        other => Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("integer-or-marker-p"), other.clone()],
+        )),
+    }
+}
+
 fn expect_string(val: &Value) -> Result<String, Flow> {
     match val {
         Value::Str(s) => Ok((**s).clone()),
@@ -60,6 +76,61 @@ fn expect_string(val: &Value) -> Result<String, Flow> {
             vec![Value::symbol("stringp"), other.clone()],
         )),
     }
+}
+
+fn normalize_string_start_arg(string: &str, start: Option<&Value>) -> Result<usize, Flow> {
+    let Some(start_val) = start else {
+        return Ok(0);
+    };
+    if start_val.is_nil() {
+        return Ok(0);
+    }
+
+    let raw_start = expect_int(start_val)?;
+    let len = string.len() as i64;
+    let normalized = if raw_start < 0 {
+        len.checked_add(raw_start)
+    } else {
+        Some(raw_start)
+    };
+
+    let Some(start_idx) = normalized else {
+        return Err(signal(
+            "args-out-of-range",
+            vec![Value::string(string), Value::Int(raw_start)],
+        ));
+    };
+
+    if !(0..=len).contains(&start_idx) {
+        return Err(signal(
+            "args-out-of-range",
+            vec![Value::string(string), Value::Int(raw_start)],
+        ));
+    }
+
+    Ok(start_idx as usize)
+}
+
+fn flatten_match_data(md: &super::regex::MatchData) -> Value {
+    let mut trailing = md.groups.len();
+    while trailing > 0 && md.groups[trailing - 1].is_none() {
+        trailing -= 1;
+    }
+
+    let mut flat: Vec<Value> = Vec::with_capacity(trailing * 2);
+    for grp in md.groups.iter().take(trailing) {
+        match grp {
+            Some((start, end)) => {
+                flat.push(Value::Int(*start as i64));
+                flat.push(Value::Int(*end as i64));
+            }
+            None => {
+                flat.push(Value::Nil);
+                flat.push(Value::Nil);
+            }
+        }
+    }
+    Value::list(flat)
 }
 
 // ---------------------------------------------------------------------------
@@ -73,29 +144,16 @@ pub(crate) fn builtin_string_match(args: Vec<Value>) -> EvalResult {
     expect_min_args("string-match", &args, 2)?;
     let pattern = expect_string(&args[0])?;
     let s = expect_string(&args[1])?;
-    let start = if args.len() > 2 && !args[2].is_nil() {
-        expect_int(&args[2])? as usize
-    } else {
-        0
-    };
+    let start = normalize_string_start_arg(&s, args.get(2))?;
 
-    let rust_pattern = super::regex::translate_emacs_regex(&pattern);
-    let re = regex::Regex::new(&rust_pattern)
-        .map_err(|e| signal("invalid-regexp", vec![Value::string(e.to_string())]))?;
-
-    if start > s.len() {
-        return Ok(Value::Nil);
-    }
-
-    let search_region = &s[start..];
-    match re.captures(search_region) {
-        Some(caps) => {
-            let m = caps.get(0).unwrap();
-            let match_start = m.start() + start;
-            Ok(Value::Int(match_start as i64))
+    PURE_MATCH_DATA.with(|slot| {
+        let mut md = slot.borrow_mut();
+        match super::regex::string_match_full(&pattern, &s, start, &mut md) {
+            Ok(Some(pos)) => Ok(Value::Int(pos as i64)),
+            Ok(None) => Ok(Value::Nil),
+            Err(msg) => Err(signal("invalid-regexp", vec![Value::string(msg)])),
         }
-        None => Ok(Value::Nil),
-    }
+    })
 }
 
 /// `(string-match-p REGEXP STRING &optional START)` -- like `string-match`
@@ -104,19 +162,11 @@ pub(crate) fn builtin_string_match_p(args: Vec<Value>) -> EvalResult {
     expect_min_args("string-match-p", &args, 2)?;
     let pattern = expect_string(&args[0])?;
     let s = expect_string(&args[1])?;
-    let start = if args.len() > 2 && !args[2].is_nil() {
-        expect_int(&args[2])? as usize
-    } else {
-        0
-    };
+    let start = normalize_string_start_arg(&s, args.get(2))?;
 
     let rust_pattern = super::regex::translate_emacs_regex(&pattern);
     let re = regex::Regex::new(&rust_pattern)
         .map_err(|e| signal("invalid-regexp", vec![Value::string(e.to_string())]))?;
-
-    if start > s.len() {
-        return Ok(Value::Nil);
-    }
 
     let search_region = &s[start..];
     match re.find(search_region) {
@@ -153,37 +203,115 @@ pub(crate) fn builtin_regexp_quote(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(match-beginning SUBEXP)` -- return the start position of the SUBEXPth
-/// match group.  Stub: returns 0.
+/// match group, or nil if unavailable.
 pub(crate) fn builtin_match_beginning(args: Vec<Value>) -> EvalResult {
     expect_args("match-beginning", &args, 1)?;
-    let _subexp = expect_int(&args[0])?;
-    // Stub: proper implementation requires match data stored on the evaluator.
-    Ok(Value::Int(0))
+    let subexp = expect_int(&args[0])? as usize;
+    PURE_MATCH_DATA.with(|slot| {
+        let md = slot.borrow();
+        let Some(md) = md.as_ref() else {
+            return Ok(Value::Nil);
+        };
+        match md.groups.get(subexp) {
+            Some(Some((start, _end))) => Ok(Value::Int(*start as i64)),
+            _ => Ok(Value::Nil),
+        }
+    })
 }
 
 /// `(match-end SUBEXP)` -- return the end position of the SUBEXPth
-/// match group.  Stub: returns 0.
+/// match group, or nil if unavailable.
 pub(crate) fn builtin_match_end(args: Vec<Value>) -> EvalResult {
     expect_args("match-end", &args, 1)?;
-    let _subexp = expect_int(&args[0])?;
-    // Stub: proper implementation requires match data stored on the evaluator.
-    Ok(Value::Int(0))
+    let subexp = expect_int(&args[0])? as usize;
+    PURE_MATCH_DATA.with(|slot| {
+        let md = slot.borrow();
+        let Some(md) = md.as_ref() else {
+            return Ok(Value::Nil);
+        };
+        match md.groups.get(subexp) {
+            Some(Some((_start, end))) => Ok(Value::Int(*end as i64)),
+            _ => Ok(Value::Nil),
+        }
+    })
 }
 
 /// `(match-data &optional INTEGERS REUSE RESEAT)` -- return the match data
-/// as a list.  Stub: returns nil.
+/// as a list.
 pub(crate) fn builtin_match_data(args: Vec<Value>) -> EvalResult {
-    let _ = args;
-    // Stub: proper implementation requires match data stored on the evaluator.
-    Ok(Value::Nil)
+    if args.len() > 3 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("match-data"), Value::Int(args.len() as i64)],
+        ));
+    }
+    PURE_MATCH_DATA.with(|slot| {
+        let md = slot.borrow();
+        let Some(md) = md.as_ref() else {
+            return Ok(Value::Nil);
+        };
+        Ok(flatten_match_data(md))
+    })
 }
 
 /// `(set-match-data LIST &optional RESEAT)` -- set match data from LIST.
-/// Stub: returns nil.
 pub(crate) fn builtin_set_match_data(args: Vec<Value>) -> EvalResult {
     expect_min_args("set-match-data", &args, 1)?;
-    let _ = &args[0];
-    // Stub: proper implementation requires match data stored on the evaluator.
+    if args.len() > 2 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("set-match-data"), Value::Int(args.len() as i64)],
+        ));
+    }
+
+    if args[0].is_nil() {
+        PURE_MATCH_DATA.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        return Ok(Value::Nil);
+    }
+
+    let items = list_to_vec(&args[0]).ok_or_else(|| {
+        signal(
+            "wrong-type-argument",
+            vec![Value::symbol("listp"), args[0].clone()],
+        )
+    })?;
+
+    let mut groups: Vec<Option<(usize, usize)>> = Vec::with_capacity(items.len() / 2);
+    let mut i = 0usize;
+    while i + 1 < items.len() {
+        let start_v = &items[i];
+        let end_v = &items[i + 1];
+        if start_v.is_nil() && end_v.is_nil() {
+            groups.push(None);
+            i += 2;
+            continue;
+        }
+
+        let start = expect_integer_or_marker(start_v)?;
+        let end = expect_integer_or_marker(end_v)?;
+
+        // Negative marker positions terminate match-data parsing.
+        if start < 0 || end < 0 {
+            break;
+        }
+
+        groups.push(Some((start as usize, end as usize)));
+        i += 2;
+    }
+
+    PURE_MATCH_DATA.with(|slot| {
+        if groups.is_empty() {
+            *slot.borrow_mut() = None;
+        } else {
+            *slot.borrow_mut() = Some(super::regex::MatchData {
+                groups,
+                searched_string: None,
+            });
+        }
+    });
+
     Ok(Value::Nil)
 }
 
@@ -445,27 +573,99 @@ mod tests {
     }
 
     #[test]
-    fn match_beginning_stub() {
+    fn match_beginning_nil_without_match_data() {
+        builtin_set_match_data(vec![Value::Nil]).unwrap();
         let result = builtin_match_beginning(vec![Value::Int(0)]);
-        assert_int(result.unwrap(), 0);
+        assert_nil(result.unwrap());
     }
 
     #[test]
-    fn match_end_stub() {
+    fn match_end_nil_without_match_data() {
+        builtin_set_match_data(vec![Value::Nil]).unwrap();
         let result = builtin_match_end(vec![Value::Int(0)]);
-        assert_int(result.unwrap(), 0);
+        assert_nil(result.unwrap());
     }
 
     #[test]
-    fn match_data_stub() {
+    fn match_data_nil_without_match_data() {
+        builtin_set_match_data(vec![Value::Nil]).unwrap();
         let result = builtin_match_data(vec![]);
         assert_nil(result.unwrap());
     }
 
     #[test]
-    fn set_match_data_stub() {
+    fn set_match_data_nil_clears_state() {
+        builtin_set_match_data(vec![Value::list(vec![Value::Int(1), Value::Int(2)])]).unwrap();
         let result = builtin_set_match_data(vec![Value::Nil]);
         assert_nil(result.unwrap());
+        let md = builtin_match_data(vec![]).unwrap();
+        assert_nil(md);
+    }
+
+    #[test]
+    fn set_match_data_round_trip() {
+        builtin_set_match_data(vec![Value::list(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Nil,
+            Value::Nil,
+            Value::Int(5),
+            Value::Int(7),
+        ])])
+        .unwrap();
+        let md = builtin_match_data(vec![]).unwrap();
+        assert_eq!(
+            md,
+            Value::list(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Nil,
+                Value::Nil,
+                Value::Int(5),
+                Value::Int(7)
+            ])
+        );
+    }
+
+    #[test]
+    fn string_match_updates_match_data() {
+        builtin_set_match_data(vec![Value::Nil]).unwrap();
+        let result = builtin_string_match(vec![
+            Value::string("\\(foo\\|bar\\)"),
+            Value::string("test bar"),
+        ]);
+        assert_int(result.unwrap(), 5);
+
+        let begin = builtin_match_beginning(vec![Value::Int(0)]).unwrap();
+        let end = builtin_match_end(vec![Value::Int(0)]).unwrap();
+        assert_int(begin, 5);
+        assert_int(end, 8);
+    }
+
+    #[test]
+    fn string_match_start_nil_and_negative() {
+        let with_nil = builtin_string_match(vec![
+            Value::string("a"),
+            Value::string("ba"),
+            Value::Nil,
+        ])
+        .unwrap();
+        assert_int(with_nil, 1);
+
+        let with_negative = builtin_string_match(vec![
+            Value::string("a"),
+            Value::string("ba"),
+            Value::Int(-1),
+        ])
+        .unwrap();
+        assert_int(with_negative, 1);
+
+        let out_of_range = builtin_string_match(vec![
+            Value::string("a"),
+            Value::string("ba"),
+            Value::Int(3),
+        ]);
+        assert!(out_of_range.is_err());
     }
 
     #[test]
