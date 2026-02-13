@@ -70,6 +70,21 @@ cd test/neovm/vm-compat
 make check-introspection-neovm
 ```
 
+Run the ERT allowlist oracle scaffold (for upstream differential bootstrapping):
+
+```bash
+cd test/neovm/vm-compat
+make check-ert-allowlist
+```
+
+The default fixture uses:
+
+- allowlist file: `cases/ert-allowlist-smoke.txt`
+- loaded test file: `cases/ert-allowlist-fixtures/smoke-tests.el`
+- baseline output: `cases/ert-allowlist-smoke.expected.tsv`
+
+You can override all three via `ERT_ALLOWLIST`, `ERT_LOAD_FILES`, and `ERT_EXPECTED`.
+
 `run-neovm.sh` sets `NEOVM_DISABLE_LOAD_CACHE_WRITE=1` so compatibility runs do
 not mutate fixture directories with `.neoc` sidecars.
 

@@ -7,8 +7,11 @@ ALL_NEOVM_CASES ?= $(CASES) $(NEOVM_ONLY_CASES)
 INTROSPECTION_CASES ?= cases/fboundp-core cases/fboundp-dispatch cases/fboundp-macro-boundary cases/symbol-function-core cases/symbol-function-error-paths cases/indirect-function-core cases/indirect-function-alias-chains cases/condition-case-unwind-introspection cases/subr-introspection-core cases/macro-special-introspection-core cases/function-special-form-edges cases/autoload-macro-introspection cases/functionp-callable-matrix cases/funcall-apply-non-callable-matrix cases/special-form-edges cases/func-arity-fallback-macros
 BENCH_SOURCE ?= cases/load-policy-fixtures/vm-policy-cache-probe.el
 BENCH_ITERS ?= 100
+ERT_ALLOWLIST ?= cases/ert-allowlist-smoke.txt
+ERT_EXPECTED ?= cases/ert-allowlist-smoke.expected.tsv
+ERT_LOAD_FILES ?= cases/ert-allowlist-fixtures/smoke-tests.el
 
-.PHONY: oracle neovm record check compare check-neovm record-all check-all check-all-neovm check-all-neovm-only check-introspection-neovm bench-load-cache
+.PHONY: oracle neovm record check compare check-neovm record-all check-all check-all-neovm check-all-neovm-only check-introspection-neovm ert-oracle record-ert-allowlist check-ert-allowlist bench-load-cache
 
 oracle:
 	./run-oracle.sh $(FORMS)
@@ -73,6 +76,21 @@ check-introspection-neovm:
 		echo "== $$case =="; \
 		$(MAKE) --no-print-directory check-neovm FORMS="$$case.forms" EXPECTED="$$case.expected.tsv"; \
 	done
+
+ert-oracle:
+	./run-ert-allowlist.sh $(ERT_ALLOWLIST) $(ERT_LOAD_FILES)
+
+record-ert-allowlist:
+	./run-ert-allowlist.sh $(ERT_ALLOWLIST) $(ERT_LOAD_FILES) > $(ERT_EXPECTED)
+	@echo "recorded ERT allowlist baseline: $(ERT_EXPECTED)"
+
+check-ert-allowlist:
+	@set -e; \
+	tmp_file="$$(mktemp)"; \
+	./run-ert-allowlist.sh $(ERT_ALLOWLIST) $(ERT_LOAD_FILES) > "$$tmp_file"; \
+	diff -u $(ERT_EXPECTED) "$$tmp_file"; \
+	rm -f "$$tmp_file"; \
+	echo "ERT allowlist output matches expected baseline"
 
 bench-load-cache:
 	./bench-load-cache.sh $(BENCH_SOURCE) $(BENCH_ITERS)

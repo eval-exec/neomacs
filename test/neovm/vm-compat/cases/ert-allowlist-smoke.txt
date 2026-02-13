@@ -1,0 +1,3 @@
+# Minimal smoke allowlist. Extend with upstream test names as NeoVM support expands.
+neovm-allowlist-smoke-eq
+neovm-allowlist-smoke-list
