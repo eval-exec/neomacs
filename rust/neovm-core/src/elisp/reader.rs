@@ -820,25 +820,7 @@ pub(crate) fn sf_with_output_to_string(
 mod tests {
     use super::*;
     use crate::elisp::eval::Evaluator;
-    use crate::elisp::{format_eval_result, parse_forms};
-
-    // Helper: create an evaluator, parse and eval a single form
-    fn eval_one(src: &str) -> String {
-        let forms = parse_forms(src).expect("parse");
-        let mut ev = Evaluator::new();
-        let result = ev.eval_expr(&forms[0]);
-        format_eval_result(&result)
-    }
-
-    // Helper: parse and eval multiple forms, return all results
-    fn eval_all(src: &str) -> Vec<String> {
-        let forms = parse_forms(src).expect("parse");
-        let mut ev = Evaluator::new();
-        ev.eval_forms(&forms)
-            .iter()
-            .map(format_eval_result)
-            .collect()
-    }
+    use crate::elisp::parse_forms;
 
     // ===================================================================
     // read-from-string tests
