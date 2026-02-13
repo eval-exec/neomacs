@@ -3244,6 +3244,9 @@ pub(crate) fn dispatch_builtin(
         "condition-wait" => return Some(super::threads::builtin_condition_wait(eval, args)),
         "condition-notify" => return Some(super::threads::builtin_condition_notify(eval, args)),
 
+        // Undo system (evaluator-dependent)
+        "undo" => return Some(super::undo::builtin_undo(eval, args)),
+
         // Hash-table / obarray (evaluator-dependent)
         "maphash" => return Some(super::hashtab::builtin_maphash(eval, args)),
         "mapatoms" => return Some(super::hashtab::builtin_mapatoms(eval, args)),
@@ -3345,6 +3348,9 @@ pub(crate) fn dispatch_builtin(
         "upcase-word" => return Some(super::casefiddle::builtin_upcase_word(eval, args)),
         "downcase-word" => return Some(super::casefiddle::builtin_downcase_word(eval, args)),
         "capitalize-word" => return Some(super::casefiddle::builtin_capitalize_word(eval, args)),
+
+        // Undo (evaluator-dependent)
+        "undo" => return Some(super::undo::builtin_undo(eval, args)),
 
         _ => {}
     }
@@ -3553,6 +3559,10 @@ pub(crate) fn dispatch_builtin(
 
         // Register (pure — no evaluator needed)
         "register-to-string" => super::register::builtin_register_to_string(args),
+
+        // Undo system (pure — no evaluator needed)
+        "undo-boundary" => super::undo::builtin_undo_boundary(args),
+        "primitive-undo" => super::undo::builtin_primitive_undo(args),
 
         // Keyboard macro (pure — no evaluator needed)
         "executing-kbd-macro-p" => super::kmacro::builtin_executing_kbd_macro_p(args),
@@ -3768,6 +3778,26 @@ pub(crate) fn dispatch_builtin(
         "file-attributes-lessp" => super::dired::builtin_file_attributes_lessp(args),
         "system-users" => super::dired::builtin_system_users(args),
         "system-groups" => super::dired::builtin_system_groups(args),
+
+        // Undo (pure)
+        "undo-boundary" => super::undo::builtin_undo_boundary(args),
+        "primitive-undo" => super::undo::builtin_primitive_undo(args),
+
+        // Display engine (pure)
+        "format-mode-line" => super::xdisp::builtin_format_mode_line(args),
+        "invisible-p" => super::xdisp::builtin_invisible_p(args),
+        "line-pixel-height" => super::xdisp::builtin_line_pixel_height(args),
+        "window-text-pixel-size" => super::xdisp::builtin_window_text_pixel_size(args),
+        "pos-visible-in-window-p" => super::xdisp::builtin_pos_visible_in_window_p(args),
+        "move-point-visually" => super::xdisp::builtin_move_point_visually(args),
+        "lookup-image-map" => super::xdisp::builtin_lookup_image_map(args),
+        "current-bidi-paragraph-direction" => super::xdisp::builtin_current_bidi_paragraph_direction(args),
+        "move-to-window-line" => super::xdisp::builtin_move_to_window_line(args),
+        "tool-bar-height" => super::xdisp::builtin_tool_bar_height(args),
+        "tab-bar-height" => super::xdisp::builtin_tab_bar_height(args),
+        "display-line-numbers-update-width" => super::xdisp::builtin_display_line_numbers_update_width(args),
+        "line-number-display-width" => super::xdisp::builtin_line_number_display_width(args),
+        "long-line-optimizations-p" => super::xdisp::builtin_long_line_optimizations_p(args),
 
         // Charset (pure)
         "charsetp" => super::charset::builtin_charsetp(args),

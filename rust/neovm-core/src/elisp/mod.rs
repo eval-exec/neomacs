@@ -72,6 +72,8 @@ pub mod floatfns;
 pub mod timefns;
 pub mod font;
 pub mod dired;
+pub mod undo;
+pub mod xdisp;
 
 // Re-export the main public API
 pub use value::{Value, ConsCell, LambdaData, LambdaParams};
