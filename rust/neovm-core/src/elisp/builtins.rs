@@ -2926,6 +2926,28 @@ enum PureBuiltinId {
     Eql,
     #[strum(serialize = "equal")]
     Equal,
+    #[strum(serialize = "cons")]
+    Cons,
+    #[strum(serialize = "car")]
+    Car,
+    #[strum(serialize = "cdr")]
+    Cdr,
+    #[strum(serialize = "car-safe")]
+    CarSafe,
+    #[strum(serialize = "cdr-safe")]
+    CdrSafe,
+    #[strum(serialize = "setcar")]
+    Setcar,
+    #[strum(serialize = "setcdr")]
+    Setcdr,
+    #[strum(serialize = "list")]
+    List,
+    #[strum(serialize = "length")]
+    Length,
+    #[strum(serialize = "nth")]
+    Nth,
+    #[strum(serialize = "nthcdr")]
+    Nthcdr,
 }
 
 fn dispatch_builtin_id_pure(id: PureBuiltinId, args: Vec<Value>) -> EvalResult {
@@ -2974,6 +2996,17 @@ fn dispatch_builtin_id_pure(id: PureBuiltinId, args: Vec<Value>) -> EvalResult {
         PureBuiltinId::Eq => builtin_eq(args),
         PureBuiltinId::Eql => builtin_eql(args),
         PureBuiltinId::Equal => builtin_equal(args),
+        PureBuiltinId::Cons => builtin_cons(args),
+        PureBuiltinId::Car => builtin_car(args),
+        PureBuiltinId::Cdr => builtin_cdr(args),
+        PureBuiltinId::CarSafe => builtin_car_safe(args),
+        PureBuiltinId::CdrSafe => builtin_cdr_safe(args),
+        PureBuiltinId::Setcar => builtin_setcar(args),
+        PureBuiltinId::Setcdr => builtin_setcdr(args),
+        PureBuiltinId::List => builtin_list(args),
+        PureBuiltinId::Length => builtin_length(args),
+        PureBuiltinId::Nth => builtin_nth(args),
+        PureBuiltinId::Nthcdr => builtin_nthcdr(args),
     }
 }
 
@@ -4124,18 +4157,7 @@ pub(crate) fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<Eval
         "eq" => builtin_eq(args),
         "eql" => builtin_eql(args),
         "equal" => builtin_equal(args),
-        // Cons/List
-        "cons" => builtin_cons(args),
-        "car" => builtin_car(args),
-        "cdr" => builtin_cdr(args),
-        "car-safe" => builtin_car_safe(args),
-        "cdr-safe" => builtin_cdr_safe(args),
-        "setcar" => builtin_setcar(args),
-        "setcdr" => builtin_setcdr(args),
-        "list" => builtin_list(args),
-        "length" => builtin_length(args),
-        "nth" => builtin_nth(args),
-        "nthcdr" => builtin_nthcdr(args),
+        // Cons/List (typed subset is dispatched above)
         "append" => builtin_append(args),
         "reverse" => builtin_reverse(args),
         "nreverse" => builtin_nreverse(args),
