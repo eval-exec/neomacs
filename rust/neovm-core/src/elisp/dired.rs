@@ -7,8 +7,9 @@
 //! - `system-users`, `system-groups`
 
 use super::error::{signal, EvalResult, Flow};
+use super::eval::Evaluator;
 use super::value::*;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 #[cfg(unix)]
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -613,57 +614,40 @@ pub(crate) fn builtin_directory_files_and_attributes(args: Vec<Value>) -> EvalRe
 /// Complete file name FILE in DIRECTORY.
 /// Returns the longest common completion prefix, or t if FILE is an exact
 /// and unique match, or nil if no completions exist.
-/// PREDICATE is accepted but currently ignored.
+/// This pure-dispatch variant supports symbol predicates.
 pub(crate) fn builtin_file_name_completion(args: Vec<Value>) -> EvalResult {
     expect_range_args("file-name-completion", &args, 2, 3)?;
 
     let file = expect_string("file-name-completion", &args[0])?;
     let directory = expect_string("file-name-completion", &args[1])?;
+    let predicate = args.get(2);
     if file.contains('/') {
         return Ok(Value::Nil);
     }
     let completions = collect_file_name_completions(&file, &directory)?;
+    let completions = filter_completions_by_symbol_predicate(predicate, &directory, completions)?;
+    Ok(resolve_file_name_completion(&file, completions))
+}
 
-    if completions.is_empty() {
+/// Evaluator-backed variant of `file-name-completion`.
+/// This supports arbitrary callable predicates and matches Emacs behavior of
+/// binding `default-directory` to DIRECTORY while predicate is invoked.
+pub(crate) fn builtin_file_name_completion_eval(
+    eval: &mut Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_range_args("file-name-completion", &args, 2, 3)?;
+
+    let file = expect_string("file-name-completion", &args[0])?;
+    let directory = expect_string("file-name-completion", &args[1])?;
+    let predicate = args.get(2);
+    if file.contains('/') {
         return Ok(Value::Nil);
     }
-
-    let filtered = filter_completion_candidates(&file, completions);
-    if filtered.is_empty() {
-        return Ok(Value::string(file));
-    }
-
-    // If there is exactly one completion and it matches FILE exactly, return t.
-    // For directory candidates ending in '/', Emacs returns the completion
-    // string when FILE lacks the trailing slash (e.g. ".." -> "../").
-    if filtered.len() == 1 {
-        let comp = &filtered[0];
-        if comp == &file {
-            return Ok(Value::True);
-        }
-        return Ok(Value::string(comp.clone()));
-    }
-
-    // Find the longest common prefix among completions.
-    let mut prefix = filtered[0].clone();
-    for comp in &filtered[1..] {
-        let common_len = prefix
-            .chars()
-            .zip(comp.chars())
-            .take_while(|(a, b)| a == b)
-            .count();
-        prefix.truncate(
-            prefix
-                .char_indices()
-                .nth(common_len)
-                .map(|(i, _)| i)
-                .unwrap_or(prefix.len()),
-        );
-    }
-
-    // If the prefix equals the input exactly and there are multiple matches,
-    // return the prefix (Emacs returns what was typed if ambiguous but valid prefix).
-    Ok(Value::string(prefix))
+    let completions = collect_file_name_completions(&file, &directory)?;
+    let completions =
+        filter_completions_by_eval_predicate(eval, predicate, &directory, completions)?;
+    Ok(resolve_file_name_completion(&file, completions))
 }
 
 /// (file-name-all-completions FILE DIRECTORY)
@@ -704,12 +688,198 @@ fn collect_file_name_completions(file: &str, directory: &str) -> Result<Vec<Stri
     Ok(completions.into_iter().collect())
 }
 
+fn resolve_file_name_completion(file: &str, completions: Vec<String>) -> Value {
+    if completions.is_empty() {
+        return Value::Nil;
+    }
+
+    let filtered = filter_completion_candidates(file, completions);
+    if filtered.is_empty() {
+        return Value::string(file);
+    }
+
+    // If there is exactly one completion and it matches FILE exactly, return t.
+    // For directory candidates ending in '/', Emacs returns the completion
+    // string when FILE lacks the trailing slash (e.g. ".." -> "../").
+    if filtered.len() == 1 {
+        let comp = &filtered[0];
+        if comp == file {
+            return Value::True;
+        }
+        return Value::string(comp.clone());
+    }
+
+    // Find the longest common prefix among completions.
+    let mut prefix = filtered[0].clone();
+    for comp in &filtered[1..] {
+        let common_len = prefix
+            .chars()
+            .zip(comp.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        prefix.truncate(
+            prefix
+                .char_indices()
+                .nth(common_len)
+                .map(|(i, _)| i)
+                .unwrap_or(prefix.len()),
+        );
+    }
+
+    // If the prefix equals the input exactly and there are multiple matches,
+    // return the prefix (Emacs returns what was typed if ambiguous but valid prefix).
+    Value::string(prefix)
+}
+
 fn filter_completion_candidates(file: &str, completions: Vec<String>) -> Vec<String> {
     completions
         .into_iter()
         .filter(|c| c != "./")
         .filter(|c| file.starts_with("..") || c != "../")
         .collect()
+}
+
+fn filter_completions_by_symbol_predicate(
+    predicate: Option<&Value>,
+    directory: &str,
+    completions: Vec<String>,
+) -> Result<Vec<String>, Flow> {
+    let Some(predicate) = predicate else {
+        return Ok(completions);
+    };
+    if predicate.is_nil() {
+        return Ok(completions);
+    }
+    let Some(symbol) = predicate_callable_name(predicate) else {
+        // Pure dispatch cannot evaluate lambda/object predicates.
+        return Ok(completions);
+    };
+
+    let mut filtered = Vec::new();
+    for candidate in completions {
+        if symbol_predicate_matches_candidate(symbol, directory, &candidate)? {
+            filtered.push(candidate);
+        }
+    }
+    Ok(filtered)
+}
+
+fn symbol_predicate_matches_candidate(
+    symbol: &str,
+    directory: &str,
+    candidate: &str,
+) -> Result<bool, Flow> {
+    if let Some(result) =
+        super::builtins::dispatch_builtin_pure(symbol, vec![Value::string(candidate)])
+    {
+        let result = result?;
+        if result.is_truthy() || !is_builtin_path_predicate(symbol) {
+            return Ok(result.is_truthy());
+        }
+
+        let absolute = std::path::Path::new(directory).join(candidate);
+        let absolute = absolute.to_string_lossy().into_owned();
+        if let Some(result) =
+            super::builtins::dispatch_builtin_pure(symbol, vec![Value::string(absolute)])
+        {
+            return Ok(result?.is_truthy());
+        }
+        return Ok(false);
+    }
+
+    // Fallback for pure mode: try absolute path to make path predicates useful
+    // without evaluator-backed dynamic binding.
+    let absolute = std::path::Path::new(directory).join(candidate);
+    let absolute = absolute.to_string_lossy().into_owned();
+    if let Some(result) =
+        super::builtins::dispatch_builtin_pure(symbol, vec![Value::string(absolute)])
+    {
+        return Ok(result?.is_truthy());
+    }
+
+    // Preserve current behavior for unknown/non-callable predicates in pure mode.
+    Ok(true)
+}
+
+fn filter_completions_by_eval_predicate(
+    eval: &mut Evaluator,
+    predicate: Option<&Value>,
+    directory: &str,
+    completions: Vec<String>,
+) -> Result<Vec<String>, Flow> {
+    let Some(predicate) = predicate else {
+        return Ok(completions);
+    };
+    if predicate.is_nil() {
+        return Ok(completions);
+    }
+
+    let mut filtered = Vec::new();
+    for candidate in completions {
+        let predicate_arg = predicate_argument_for_eval(eval, predicate, directory, &candidate);
+        let keep = with_default_directory_binding(eval, directory, |eval| {
+            eval.apply(predicate.clone(), vec![predicate_arg])
+        })?
+        .is_truthy();
+        if keep {
+            filtered.push(candidate);
+        }
+    }
+    Ok(filtered)
+}
+
+fn with_default_directory_binding<T>(
+    eval: &mut Evaluator,
+    directory: &str,
+    f: impl FnOnce(&mut Evaluator) -> Result<T, Flow>,
+) -> Result<T, Flow> {
+    let mut frame = HashMap::new();
+    frame.insert("default-directory".to_string(), Value::string(directory));
+    eval.dynamic.push(frame);
+    let result = f(eval);
+    eval.dynamic.pop();
+    result
+}
+
+fn predicate_argument_for_eval(
+    eval: &Evaluator,
+    predicate: &Value,
+    directory: &str,
+    candidate: &str,
+) -> Value {
+    let Some(symbol) = predicate_callable_name(predicate) else {
+        return Value::string(candidate);
+    };
+
+    // NeoVM path predicates currently resolve relative paths against process CWD.
+    // For builtin path predicates, pass an absolute candidate to match Emacs behavior
+    // where relative paths are interpreted under bound `default-directory`.
+    if eval.obarray.symbol_function(symbol).is_none() && is_builtin_path_predicate(symbol) {
+        let absolute = std::path::Path::new(directory).join(candidate);
+        return Value::string(absolute.to_string_lossy().into_owned());
+    }
+
+    Value::string(candidate)
+}
+
+fn is_builtin_path_predicate(name: &str) -> bool {
+    matches!(
+        name,
+        "file-directory-p"
+            | "file-exists-p"
+            | "file-readable-p"
+            | "file-writable-p"
+            | "file-regular-p"
+            | "file-symlink-p"
+            | "file-executable-p"
+    )
+}
+
+fn predicate_callable_name(predicate: &Value) -> Option<&str> {
+    match predicate {
+        Value::Symbol(name) | Value::Subr(name) => Some(name.as_str()),
+        _ => None,
+    }
 }
 
 /// (file-attributes FILENAME &optional ID-FORMAT)
@@ -1182,6 +1352,47 @@ mod tests {
             builtin_file_name_completion(vec![Value::string("subdir/"), Value::string(&dir_str)])
                 .unwrap();
         assert!(subdir_with_slash.is_nil());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_file_name_completion_predicate_with_eval() {
+        let (dir, dir_str) = make_test_dir("fnc_predicate");
+        create_file(&dir, "alpha.txt", "");
+        fs::create_dir(dir.join("subdir")).unwrap();
+
+        let mut eval = Evaluator::new();
+        eval.obarray
+            .set_symbol_value("default-directory", Value::string("/tmp/"));
+
+        let dirs_only_none = builtin_file_name_completion_eval(
+            &mut eval,
+            vec![
+                Value::string("a"),
+                Value::string(&dir_str),
+                Value::symbol("file-directory-p"),
+            ],
+        )
+        .unwrap();
+        assert!(dirs_only_none.is_nil());
+
+        let dirs_only_match = builtin_file_name_completion_eval(
+            &mut eval,
+            vec![
+                Value::string("s"),
+                Value::string(&dir_str),
+                Value::symbol("file-directory-p"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(dirs_only_match.as_str(), Some("subdir/"));
+
+        let bad_pred = builtin_file_name_completion_eval(
+            &mut eval,
+            vec![Value::string("a"), Value::string(&dir_str), Value::Int(123)],
+        );
+        assert!(bad_pred.is_err());
 
         let _ = fs::remove_dir_all(&dir);
     }

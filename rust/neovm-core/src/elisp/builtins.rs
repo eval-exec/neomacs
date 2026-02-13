@@ -3751,6 +3751,9 @@ pub(crate) fn dispatch_builtin(
         }
         "write-region" => return Some(super::fileio::builtin_write_region(eval, args)),
         "find-file-noselect" => return Some(super::fileio::builtin_find_file_noselect(eval, args)),
+        "file-name-completion" => {
+            return Some(super::dired::builtin_file_name_completion_eval(eval, args))
+        }
         // Keymap operations
         "make-keymap" => return Some(builtin_make_keymap(eval, args)),
         "make-sparse-keymap" => return Some(builtin_make_sparse_keymap(eval, args)),
