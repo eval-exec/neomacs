@@ -1,8 +1,9 @@
 FORMS ?= cases/core.forms
 EXPECTED ?= cases/core.expected.tsv
 NEOVM_OUT ?= cases/core.neovm.tsv
+CASES ?= cases/core cases/bindings cases/pcase cases/seq-position
 
-.PHONY: oracle neovm record check compare check-neovm
+.PHONY: oracle neovm record check compare check-neovm record-all check-all check-all-neovm
 
 oracle:
 	./run-oracle.sh $(FORMS)
@@ -32,3 +33,24 @@ check-neovm:
 	STRICT_FORM=1 ./compare-results.sh $(EXPECTED) "$$tmp_file"; \
 	rm -f "$$tmp_file"; \
 	echo "neovm output matches oracle baseline"
+
+record-all:
+	@set -e; \
+	for case in $(CASES); do \
+		echo "== $$case =="; \
+		$(MAKE) --no-print-directory record FORMS="$$case.forms" EXPECTED="$$case.expected.tsv"; \
+	done
+
+check-all:
+	@set -e; \
+	for case in $(CASES); do \
+		echo "== $$case =="; \
+		$(MAKE) --no-print-directory check FORMS="$$case.forms" EXPECTED="$$case.expected.tsv"; \
+	done
+
+check-all-neovm:
+	@set -e; \
+	for case in $(CASES); do \
+		echo "== $$case =="; \
+		$(MAKE) --no-print-directory check-neovm FORMS="$$case.forms" EXPECTED="$$case.expected.tsv"; \
+	done

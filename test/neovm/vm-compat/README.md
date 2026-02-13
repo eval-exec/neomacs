@@ -54,6 +54,14 @@ make check-neovm
 `compare-results.sh` checks index/form/result equality and reports drift.
 Set `STRICT_FORM=1` to fail on form-printing differences too.
 
+Run all checked-in corpora in one shot:
+
+```bash
+cd test/neovm/vm-compat
+make check-all
+make check-all-neovm
+```
+
 ## Next step
 
 Add a NeoVM runner that evaluates the same corpus and diffs against this oracle output.
