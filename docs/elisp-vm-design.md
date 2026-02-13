@@ -23,6 +23,12 @@ Compatibility scope is source-first and explicit:
 - Compatibility target is GNU Emacs Elisp source behavior (`.el`), not GNU `.elc` binary format compatibility.
 - Loading GNU Emacs `.elc` artifacts is explicitly unsupported in NeoVM.
 
+### Compatibility Matrix
+
+- `.el` (GNU Emacs Lisp source): required compatibility target.
+- `.elc` (GNU Emacs byte-compiled artifact): unsupported; loader must signal `file-error`.
+- `.neoc` (NeoVM parse cache sidecar): optional internal optimization artifact; never part of compatibility contract.
+
 ## Compatibility Verification Harness
 
 NeoVM compatibility should be verified continuously against GNU Emacs oracle results.
@@ -126,11 +132,14 @@ Implemented now:
   - cache stores parsed forms and bypasses parse work on valid hits
   - cache is non-authoritative: corruption, mismatch, or read failure must always fall back to source parse
   - cache format is internal to NeoVM and may change by schema/version without compatibility guarantees
+  - cache writes should be atomic (temp file + rename) so interrupted writes degrade to cache miss, not semantic failure
 
 Package/runtime policy:
 
 - Packages are expected to ship/load `.el` sources under NeoVM.
 - `.elc`-only package delivery is unsupported and should be treated as incompatible packaging for NeoVM.
+- When both `.el` and `.elc` are present, NeoVM resolves and loads `.el` source.
+- When only `.elc` is present, NeoVM must hard-fail with an explicit unsupported-artifact error.
 
 Not implemented yet:
 
@@ -394,6 +403,7 @@ Phase A (interpreter + register bytecode + IC + generational GC):
 - Interactive editor latency: about 20% to 50% improvement
 - Major GC pauses: substantially reduced versus non-generational baseline
 - Startup/load performance should be reported separately for cold parse-cache (`.neoc` miss) and warm parse-cache (`.neoc` hit) runs.
+- Startup/load reporting should also include post-edit cache rebuild cost (source changed -> cache invalidated -> rebuilt).
 
 Phase B (+ baseline JIT):
 
@@ -430,6 +440,11 @@ Phase C (+ optimizing JIT):
 - Bytecode behavior parity tests for NeoVM-compiled/internal bytecode and interpreted paths (not GNU `.elc` format parity)
 - Fuzzing reader/evaluator/error unwinding
 - Deterministic tests for deopt state reconstruction
+- Negative artifact tests:
+  - loading `.elc` signals expected `file-error`
+  - `get-load-suffixes` excludes `.elc`/`.elc.gz`
+  - corrupted or mismatched `.neoc` safely falls back to source parse
+  - lexical-binding mode changes produce distinct cache keys and no stale-cache semantic drift
 
 ### 10.2 Performance Gates
 
@@ -437,6 +452,7 @@ Phase C (+ optimizing JIT):
 - Interactive command latency suite
 - GC stress suite (allocation-heavy editing and LSP scenarios)
 - Long-session memory fragmentation and pause stability tests
+- Startup/load benchmarks must publish cold-cache, warm-cache, and post-edit rebuild numbers.
 
 ### 10.3 CI Guardrails
 
@@ -461,6 +477,14 @@ No phase is accepted without both correctness and performance gates.
 - Monomorphic and polymorphic ICs
 
 Expected outcome: first substantial speedup while preserving behavior.
+
+### Phase 2.5: Source Precompile Pipeline (NeoVM Internal)
+
+- Optional precompile step from `.el` to NeoVM-internal cache artifacts.
+- Background precompile hooks for package installation/update workflows.
+- Explicitly no GNU `.elc` ingestion; pipeline remains source-based.
+
+Expected outcome: improved startup/package-load latency without expanding compatibility surface.
 
 ### Phase 3: Generational GC
 
