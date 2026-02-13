@@ -10,3 +10,4 @@
 10	(condition-case err (directory-files vm-df-dir nil nil nil -1) (error (car err)))	OK wrong-type-argument
 11	(condition-case err (directory-files vm-df-dir nil nil nil "x") (error (car err)))	OK wrong-type-argument
 12	(condition-case err (directory-files vm-df-dir nil nil nil 0 nil) (error (car err)))	OK wrong-number-of-arguments
+13	(let* ((default-directory (file-name-directory vm-df-dir))) (equal (sort (copy-sequence (directory-files "directory-files-fixtures" nil "^[^.]")) #'string<) (sort (copy-sequence (directory-files vm-df-dir nil "^[^.]")) #'string<)))	OK t

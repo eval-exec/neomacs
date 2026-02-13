@@ -954,6 +954,47 @@ pub(crate) fn builtin_directory_files(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(files.into_iter().map(Value::string).collect()))
 }
 
+/// Evaluator-aware variant of `directory-files` that resolves relative DIR
+/// against dynamic/default `default-directory`.
+pub(crate) fn builtin_directory_files_eval(eval: &Evaluator, args: Vec<Value>) -> EvalResult {
+    expect_min_args("directory-files", &args, 1)?;
+    if args.len() > 5 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("directory-files"), Value::Int(args.len() as i64)],
+        ));
+    }
+    let dir = resolve_filename_for_eval(eval, &expect_string_strict(&args[0])?);
+    let full = args.get(1).is_some_and(|v| v.is_truthy());
+    let match_pattern = if let Some(val) = args.get(2) {
+        if val.is_truthy() {
+            Some(expect_string_strict(val)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let nosort = args.get(3).is_some_and(|v| v.is_truthy());
+    let count = if let Some(val) = args.get(4) {
+        match val {
+            Value::Int(n) if *n >= 0 => Some(*n as usize),
+            other => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("natnump"), other.clone()],
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    let files = directory_files(&dir, full, match_pattern.as_deref(), nosort, count)
+        .map_err(|e| signal("file-error", vec![Value::string(e)]))?;
+    Ok(Value::list(files.into_iter().map(Value::string).collect()))
+}
+
 /// (file-attributes FILENAME) -> list or nil
 pub(crate) fn builtin_file_attributes(args: Vec<Value>) -> EvalResult {
     expect_args("file-attributes", &args, 1)?;
@@ -1657,6 +1698,36 @@ mod tests {
         assert!(result.is_err());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_builtin_directory_files_eval_respects_default_directory() {
+        let base = std::env::temp_dir().join("neovm_dirfiles_eval_builtin");
+        let fixture = base.join("fixtures");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&fixture).unwrap();
+        fs::write(fixture.join("alpha.txt"), "").unwrap();
+        fs::write(fixture.join("beta.el"), "").unwrap();
+
+        let mut eval = Evaluator::new();
+        let base_str = format!("{}/", base.to_string_lossy());
+        eval.obarray
+            .set_symbol_value("default-directory", Value::string(&base_str));
+
+        let result = builtin_directory_files_eval(
+            &eval,
+            vec![
+                Value::string("fixtures"),
+                Value::Nil,
+                Value::string("\\.el$"),
+            ],
+        )
+        .unwrap();
+        let items = list_to_vec(&result).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].as_str(), Some("beta.el"));
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

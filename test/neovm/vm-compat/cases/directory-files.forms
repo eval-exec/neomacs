@@ -14,3 +14,6 @@
 (condition-case err (directory-files vm-df-dir nil nil nil -1) (error (car err)))
 (condition-case err (directory-files vm-df-dir nil nil nil "x") (error (car err)))
 (condition-case err (directory-files vm-df-dir nil nil nil 0 nil) (error (car err)))
+(let* ((default-directory (file-name-directory vm-df-dir)))
+  (equal (sort (copy-sequence (directory-files "directory-files-fixtures" nil "^[^.]")) #'string<)
+         (sort (copy-sequence (directory-files vm-df-dir nil "^[^.]")) #'string<)))
