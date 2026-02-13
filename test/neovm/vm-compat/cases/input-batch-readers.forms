@@ -13,3 +13,6 @@
 (condition-case err (read-variable "") (error (car err)))
 (condition-case err (y-or-n-p "Continue? ") (error (car err)))
 (condition-case err (yes-or-no-p "Confirm? ") (error (car err)))
+(condition-case err (read-char nil nil 0) (error (car err)))
+(condition-case err (read-event nil nil 0) (error (car err)))
+(condition-case err (read-char-exclusive nil nil 0) (error (car err)))

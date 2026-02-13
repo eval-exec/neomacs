@@ -12,3 +12,6 @@
 12	(condition-case err (read-variable "") (error (car err)))	OK end-of-file
 13	(condition-case err (y-or-n-p "Continue? ") (error (car err)))	OK end-of-file
 14	(condition-case err (yes-or-no-p "Confirm? ") (error (car err)))	OK end-of-file
+15	(condition-case err (read-char nil nil 0) (error (car err)))	OK nil
+16	(condition-case err (read-event nil nil 0) (error (car err)))	OK nil
+17	(condition-case err (read-char-exclusive nil nil 0) (error (car err)))	OK nil
