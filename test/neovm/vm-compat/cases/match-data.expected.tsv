@@ -1,0 +1,26 @@
+1	(set-match-data nil)	OK nil
+2	(match-data)	OK nil
+3	(string-match "a\\(b\\)?" "ab")	OK 0
+4	(match-data)	OK (0 2 1 2)
+5	(match-beginning 0)	OK 0
+6	(match-end 0)	OK 2
+7	(match-beginning 1)	OK 1
+8	(match-end 1)	OK 2
+9	(string-match "a\\(b\\)?" "a")	OK 0
+10	(match-data)	OK (0 1)
+11	(match-beginning 1)	OK nil
+12	(match-end 1)	OK nil
+13	(string-match "a" "ba" nil)	OK 1
+14	(string-match "a" "ba" -1)	OK 1
+15	(string-match "a" "ba" 3)	ERR (args-out-of-range ("ba" 3))
+16	(set-match-data '(1 2 3 4 5))	OK nil
+17	(match-data)	OK (1 2 3 4)
+18	(set-match-data '(1 nil 2 3))	ERR (wrong-type-argument (integer-or-marker-p nil))
+19	(set-match-data '(0 1 -1 -1))	OK nil
+20	(match-data)	OK (0 1)
+21	(set-match-data '(nil nil 1 2))	OK nil
+22	(match-data)	OK (nil nil 1 2)
+23	(set-match-data 1)	ERR (wrong-type-argument (listp 1))
+24	(set-match-data nil)	OK nil
+25	(match-beginning 0)	OK nil
+26	(match-end 9)	OK nil
