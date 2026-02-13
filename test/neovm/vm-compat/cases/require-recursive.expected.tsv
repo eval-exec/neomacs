@@ -1,0 +1,4 @@
+1	(progn (setq vm-rec-dir (expand-file-name "require-recursive-fixtures" (file-name-directory (getenv "NEOVM_FORMS_FILE")))) (setq load-path (cons vm-rec-dir load-path)) 'ok)	OK ok
+2	(condition-case err (require 'vm-rec-a) (error (car err)))	OK error
+3	(featurep 'vm-rec-a)	OK nil
+4	(featurep 'vm-rec-b)	OK nil

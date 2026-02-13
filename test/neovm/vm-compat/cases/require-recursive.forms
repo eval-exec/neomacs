@@ -1,0 +1,8 @@
+; recursive require cycle should signal `error` and avoid partial feature registration.
+(progn
+  (setq vm-rec-dir (expand-file-name "require-recursive-fixtures" (file-name-directory (getenv "NEOVM_FORMS_FILE"))))
+  (setq load-path (cons vm-rec-dir load-path))
+  'ok)
+(condition-case err (require 'vm-rec-a) (error (car err)))
+(featurep 'vm-rec-a)
+(featurep 'vm-rec-b)
