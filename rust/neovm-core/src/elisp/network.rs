@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use super::error::{signal, EvalResult, Flow};
+use super::error::{signal, Flow};
 use super::value::Value;
 
 // ---------------------------------------------------------------------------
