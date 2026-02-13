@@ -123,6 +123,10 @@ pub fn file_name_extension(filename: &str, period: bool) -> Option<String> {
 
 /// Return FILENAME without its extension.
 pub fn file_name_sans_extension(filename: &str) -> String {
+    // Emacs keeps directory-path forms unchanged.
+    if filename.ends_with('/') {
+        return filename.to_string();
+    }
     let path = Path::new(filename);
     let stem = path
         .file_stem()
@@ -1068,6 +1072,9 @@ mod tests {
         );
         assert_eq!(file_name_sans_extension("no_ext"), "no_ext");
         assert_eq!(file_name_sans_extension("archive.tar.gz"), "archive.tar");
+        assert_eq!(file_name_sans_extension("foo.bar/"), "foo.bar/");
+        assert_eq!(file_name_sans_extension("foo/"), "foo/");
+        assert_eq!(file_name_sans_extension("/tmp/foo.bar/"), "/tmp/foo.bar/");
     }
 
     #[test]
