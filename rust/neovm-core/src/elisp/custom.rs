@@ -696,21 +696,9 @@ mod tests {
     use super::*;
     use crate::elisp::{parse_forms, format_eval_result, Evaluator};
 
-    fn eval_one(src: &str) -> String {
-        let forms = parse_forms(src).expect("parse");
-        let mut ev = Evaluator::new();
-        let result = ev.eval_expr(&forms[0]);
-        format_eval_result(&result)
-    }
-
     fn eval_all(src: &str) -> Vec<String> {
         let forms = parse_forms(src).expect("parse");
         let mut ev = Evaluator::new();
-        ev.eval_forms(&forms).iter().map(format_eval_result).collect()
-    }
-
-    fn eval_all_with(ev: &mut Evaluator, src: &str) -> Vec<String> {
-        let forms = parse_forms(src).expect("parse");
         ev.eval_forms(&forms).iter().map(format_eval_result).collect()
     }
 
