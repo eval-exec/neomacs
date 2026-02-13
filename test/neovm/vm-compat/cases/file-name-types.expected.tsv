@@ -16,9 +16,11 @@
 16	(condition-case err (expand-file-name "a" nil nil) (error (car err)))	OK wrong-number-of-arguments
 17	(file-name-extension "foo.txt" t)	OK ".txt"
 18	(file-name-extension "foo" t)	OK ""
-19	(file-name-extension ".bashrc" t)	OK ""
-20	(file-name-extension "a." t)	OK "."
-21	(condition-case err (file-name-extension "x" nil nil) (error (car err)))	OK wrong-number-of-arguments
-22	(file-name-sans-extension "foo.bar/")	OK "foo.bar/"
-23	(file-name-sans-extension "foo/")	OK "foo/"
-24	(file-name-sans-extension "/tmp/foo.bar/")	OK "/tmp/foo.bar/"
+19	(file-name-extension "foo.bar/")	OK nil
+20	(file-name-extension "foo.bar/" t)	OK ""
+21	(file-name-extension ".bashrc" t)	OK ""
+22	(file-name-extension "a." t)	OK "."
+23	(condition-case err (file-name-extension "x" nil nil) (error (car err)))	OK wrong-number-of-arguments
+24	(file-name-sans-extension "foo.bar/")	OK "foo.bar/"
+25	(file-name-sans-extension "foo/")	OK "foo/"
+26	(file-name-sans-extension "/tmp/foo.bar/")	OK "/tmp/foo.bar/"
