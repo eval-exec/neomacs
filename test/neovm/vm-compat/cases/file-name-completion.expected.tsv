@@ -9,9 +9,14 @@
 9	(file-name-completion "../" vm-fnc-dir)	OK nil
 10	(file-name-completion "sub" vm-fnc-dir)	OK "subdir/"
 11	(file-name-completion "subdir/" vm-fnc-dir)	OK nil
-12	(file-name-all-completions "" vm-fnc-dir)	OK ("z" ".hidden" "../" "subdir/" "beta.el" "alpha.txt" "./")
-13	(file-name-all-completions "." vm-fnc-dir)	OK (".hidden" "../" "./")
-14	(file-name-all-completions ".." vm-fnc-dir)	OK ("../")
-15	(file-name-all-completions "sub" vm-fnc-dir)	OK ("subdir/")
-16	(file-name-all-completions "subdir/" vm-fnc-dir)	OK nil
-17	(file-name-all-completions "./" vm-fnc-dir)	OK nil
+12	(file-name-completion "s" vm-fnc-dir #'file-directory-p)	OK "subdir/"
+13	(file-name-completion "a" vm-fnc-dir #'file-directory-p)	OK nil
+14	(file-name-completion "a" vm-fnc-dir (lambda (x) (string-match-p "\\.txt\\'" x)))	OK "alpha.txt"
+15	(let ((default-directory "/tmp/")) (file-name-completion "s" vm-fnc-dir #'file-directory-p))	OK "subdir/"
+16	(condition-case err (file-name-completion "a" vm-fnc-dir 123) (car err))	ERR (invalid-function (123))
+17	(file-name-all-completions "" vm-fnc-dir)	OK ("z" ".hidden" "../" "subdir/" "beta.el" "alpha.txt" "./")
+18	(file-name-all-completions "." vm-fnc-dir)	OK (".hidden" "../" "./")
+19	(file-name-all-completions ".." vm-fnc-dir)	OK ("../")
+20	(file-name-all-completions "sub" vm-fnc-dir)	OK ("subdir/")
+21	(file-name-all-completions "subdir/" vm-fnc-dir)	OK nil
+22	(file-name-all-completions "./" vm-fnc-dir)	OK nil
