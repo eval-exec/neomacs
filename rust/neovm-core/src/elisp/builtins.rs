@@ -4231,33 +4231,7 @@ pub(crate) fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<Eval
         // Type predicates and equality (typed subset is dispatched above)
         // Cons/List (typed subset is dispatched above)
         // String (typed subset is dispatched above)
-        // Vector
-        "make-vector" => builtin_make_vector(args),
-        "vector" => builtin_vector(args),
-        "aref" => builtin_aref(args),
-        "aset" => builtin_aset(args),
-        "vconcat" => builtin_vconcat(args),
-        // Hash table
-        "make-hash-table" => builtin_make_hash_table(args),
-        "gethash" => builtin_gethash(args),
-        "puthash" => builtin_puthash(args),
-        "remhash" => builtin_remhash(args),
-        "clrhash" => builtin_clrhash(args),
-        "hash-table-count" => builtin_hash_table_count(args),
-        // Conversion
-        "float" => builtin_float(args),
-        "truncate" => builtin_truncate(args),
-        "floor" => builtin_floor(args),
-        "ceiling" => builtin_ceiling(args),
-        "round" => builtin_round(args),
-        "char-to-string" => builtin_char_to_string(args),
-        "string-to-char" => builtin_string_to_char(args),
-        // Plist
-        "plist-get" => builtin_plist_get(args),
-        "plist-put" => builtin_plist_put(args),
-        // Symbol
-        "symbol-name" => builtin_symbol_name(args),
-        "make-symbol" => builtin_make_symbol(args),
+        // Vector/hash/conversion/plist/symbol (typed subset is dispatched above)
         // Math
         "sqrt" => builtin_sqrt(args),
         "sin" => builtin_sin(args),
