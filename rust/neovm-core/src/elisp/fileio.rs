@@ -159,6 +159,25 @@ pub fn directory_file_name(filename: &str) -> String {
     filename.trim_end_matches('/').to_string()
 }
 
+/// Concatenate file name components with separator insertion between
+/// non-empty components, skipping empty components.
+/// Like Emacs `file-name-concat` after filtering nil/empty args.
+pub fn file_name_concat(parts: &[&str]) -> String {
+    let mut iter = parts.iter().copied().filter(|s| !s.is_empty());
+    let Some(first) = iter.next() else {
+        return String::new();
+    };
+
+    let mut out = first.to_string();
+    for part in iter {
+        if !out.ends_with('/') {
+            out.push('/');
+        }
+        out.push_str(part);
+    }
+    out
+}
+
 // ===========================================================================
 // File predicates (pure)
 // ===========================================================================
@@ -463,6 +482,32 @@ pub(crate) fn builtin_directory_file_name(args: Vec<Value>) -> EvalResult {
     expect_args("directory-file-name", &args, 1)?;
     let filename = expect_string(&args[0])?;
     Ok(Value::string(directory_file_name(&filename)))
+}
+
+/// (file-name-concat DIRECTORY &rest COMPONENTS) -> string
+pub(crate) fn builtin_file_name_concat(args: Vec<Value>) -> EvalResult {
+    expect_min_args("file-name-concat", &args, 1)?;
+
+    let mut parts = Vec::new();
+    for value in args {
+        match value {
+            Value::Nil => {}
+            Value::Str(s) => {
+                if !s.is_empty() {
+                    parts.push((*s).clone());
+                }
+            }
+            other => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("stringp"), other],
+                ));
+            }
+        }
+    }
+
+    let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+    Ok(Value::string(file_name_concat(&refs)))
 }
 
 /// (file-exists-p FILENAME) -> t or nil
@@ -866,6 +911,21 @@ mod tests {
         assert_eq!(directory_file_name(""), "");
     }
 
+    #[test]
+    fn test_file_name_concat() {
+        assert_eq!(file_name_concat(&["foo", "bar"]), "foo/bar");
+        assert_eq!(file_name_concat(&["foo", "bar", "zot"]), "foo/bar/zot");
+        assert_eq!(file_name_concat(&["foo/", "bar"]), "foo/bar");
+        assert_eq!(file_name_concat(&["foo/", "bar/", "zot"]), "foo/bar/zot");
+        assert_eq!(file_name_concat(&["foo", "/bar"]), "foo//bar");
+        assert_eq!(file_name_concat(&["foo"]), "foo");
+        assert_eq!(file_name_concat(&["foo/"]), "foo/");
+        assert_eq!(file_name_concat(&["foo", "", "", ""]), "foo");
+        assert_eq!(file_name_concat(&[""]), "");
+        assert_eq!(file_name_concat(&["", "bar"]), "bar");
+        assert_eq!(file_name_concat(&[]), "");
+    }
+
     // -----------------------------------------------------------------------
     // File predicates
     // -----------------------------------------------------------------------
@@ -1098,6 +1158,23 @@ mod tests {
 
         let result = builtin_directory_file_name(vec![Value::string("/home/user/")]);
         assert_eq!(result.unwrap().as_str(), Some("/home/user"));
+
+        let result = builtin_file_name_concat(vec![
+            Value::string("foo"),
+            Value::string(""),
+            Value::Nil,
+            Value::string("bar"),
+        ]);
+        assert_eq!(result.unwrap().as_str(), Some("foo/bar"));
+    }
+
+    #[test]
+    fn test_builtin_file_name_concat_strict_types() {
+        let result = builtin_file_name_concat(vec![Value::Nil, Value::string("bar")]);
+        assert_eq!(result.unwrap().as_str(), Some("bar"));
+
+        let result = builtin_file_name_concat(vec![Value::symbol("foo"), Value::string("bar")]);
+        assert!(result.is_err());
     }
 
     #[test]
