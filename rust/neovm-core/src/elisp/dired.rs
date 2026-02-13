@@ -14,17 +14,6 @@ use std::fs;
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flow> {
-    if args.len() < min {
-        Err(signal(
-            "wrong-number-of-arguments",
-            vec![Value::symbol(name), Value::Int(args.len() as i64)],
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 fn expect_range_args(name: &str, args: &[Value], min: usize, max: usize) -> Result<(), Flow> {
     if args.len() < min || args.len() > max {
         Err(signal(
