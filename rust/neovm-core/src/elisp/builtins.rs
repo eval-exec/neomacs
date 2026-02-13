@@ -5,6 +5,7 @@
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
+use std::collections::HashSet;
 use strum::EnumString;
 
 /// Expect exactly N arguments.
@@ -1909,25 +1910,49 @@ pub(crate) fn builtin_indirect_function(
 
     match &args[0] {
         Value::Symbol(name) => {
-            if let Some(function) = eval.obarray().indirect_function(name) {
+            if let Some(function) = resolve_indirect_symbol(eval, name) {
                 return Ok(function);
-            }
-
-            if let Some(function) = super::subr_info::fallback_macro_value(name) {
-                return Ok(function);
-            }
-
-            if super::subr_info::is_special_form(name)
-                || super::builtin_registry::is_dispatch_builtin_name(name)
-                || name.parse::<PureBuiltinId>().is_ok()
-            {
-                return Ok(Value::Subr(name.clone()));
             }
 
             Ok(Value::Nil)
         }
         Value::Nil => Ok(Value::Nil),
         other => Ok(other.clone()),
+    }
+}
+
+fn resolve_indirect_symbol(eval: &super::eval::Evaluator, name: &str) -> Option<Value> {
+    let mut current = name.to_string();
+    let mut seen = HashSet::new();
+
+    loop {
+        if !seen.insert(current.clone()) {
+            return None;
+        }
+
+        if let Some(function) = eval.obarray().symbol_function(&current) {
+            match function {
+                Value::Symbol(next) => {
+                    current = next.clone();
+                    continue;
+                }
+                other => return Some(other.clone()),
+            }
+        }
+
+        if let Some(function) = super::subr_info::fallback_macro_value(&current) {
+            return Some(function);
+        }
+
+        if super::subr_info::is_special_form(&current)
+            || super::subr_info::is_evaluator_callable_name(&current)
+            || super::builtin_registry::is_dispatch_builtin_name(&current)
+            || current.parse::<PureBuiltinId>().is_ok()
+        {
+            return Some(Value::Subr(current));
+        }
+
+        return None;
     }
 }
 
@@ -6624,6 +6649,12 @@ mod tests {
         let when_macro = builtin_indirect_function(&mut eval, vec![Value::symbol("when")])
             .expect("indirect-function should resolve when as a macro");
         assert!(matches!(when_macro, Value::Macro(_)));
+
+        eval.obarray_mut()
+            .set_symbol_function("alias-car", Value::symbol("car"));
+        let alias_car = builtin_indirect_function(&mut eval, vec![Value::symbol("alias-car")])
+            .expect("indirect-function should resolve alias chains ending in builtins");
+        assert_eq!(alias_car, Value::Subr("car".to_string()));
     }
 
     #[test]
@@ -6669,6 +6700,27 @@ mod tests {
         let passthrough = builtin_indirect_function(&mut eval, vec![Value::Int(42)])
             .expect("non-symbol should be returned as-is");
         assert_eq!(passthrough, Value::Int(42));
+    }
+
+    #[test]
+    fn indirect_function_resolves_deep_alias_chain_without_depth_cutoff() {
+        let mut eval = crate::elisp::eval::Evaluator::new();
+        let depth = 120;
+
+        for idx in 0..depth {
+            let name = format!("vm-test-deep-alias-{idx}");
+            let target = if idx == depth - 1 {
+                Value::symbol("car")
+            } else {
+                Value::symbol(format!("vm-test-deep-alias-{}", idx + 1))
+            };
+            eval.obarray_mut().set_symbol_function(&name, target);
+        }
+
+        let resolved =
+            builtin_indirect_function(&mut eval, vec![Value::symbol("vm-test-deep-alias-0")])
+                .expect("indirect-function should resolve deep alias chains");
+        assert_eq!(resolved, Value::Subr("car".to_string()));
     }
 
     #[test]
