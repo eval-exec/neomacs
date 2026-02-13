@@ -5,6 +5,7 @@
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
+use strum::EnumString;
 
 /// Expect exactly N arguments.
 fn expect_args(name: &str, args: &[Value], n: usize) -> Result<(), Flow> {
@@ -2835,6 +2836,36 @@ fn builtin_kbd(args: Vec<Value>) -> EvalResult {
 // Dispatch table
 // ===========================================================================
 
+#[derive(EnumString)]
+enum PureBuiltinId {
+    #[strum(serialize = "+")]
+    Add,
+    #[strum(serialize = "-")]
+    Sub,
+    #[strum(serialize = "*")]
+    Mul,
+    #[strum(serialize = "/")]
+    Div,
+    #[strum(serialize = "%", serialize = "mod")]
+    Mod,
+    #[strum(serialize = "1+")]
+    Add1,
+    #[strum(serialize = "1-")]
+    Sub1,
+}
+
+fn dispatch_builtin_id_pure(id: PureBuiltinId, args: Vec<Value>) -> EvalResult {
+    match id {
+        PureBuiltinId::Add => builtin_add(args),
+        PureBuiltinId::Sub => builtin_sub(args),
+        PureBuiltinId::Mul => builtin_mul(args),
+        PureBuiltinId::Div => builtin_div(args),
+        PureBuiltinId::Mod => builtin_mod(args),
+        PureBuiltinId::Add1 => builtin_add1(args),
+        PureBuiltinId::Sub1 => builtin_sub1(args),
+    }
+}
+
 /// Try to dispatch a builtin function by name. Returns None if not a known builtin.
 pub(crate) fn dispatch_builtin(
     eval: &mut super::eval::Evaluator,
@@ -3978,15 +4009,12 @@ pub(crate) fn dispatch_builtin(
 /// Dispatch to pure builtins that don't need evaluator access.
 /// Used by the bytecode VM.
 pub(crate) fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<EvalResult> {
+    if let Ok(id) = name.parse::<PureBuiltinId>() {
+        return Some(dispatch_builtin_id_pure(id, args));
+    }
+
     Some(match name {
-        // Arithmetic
-        "+" => builtin_add(args),
-        "-" => builtin_sub(args),
-        "*" => builtin_mul(args),
-        "/" => builtin_div(args),
-        "%" | "mod" => builtin_mod(args),
-        "1+" => builtin_add1(args),
-        "1-" => builtin_sub1(args),
+        // Arithmetic (typed subset is dispatched above)
         "max" => builtin_max(args),
         "min" => builtin_min(args),
         "abs" => builtin_abs(args),
