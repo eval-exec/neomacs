@@ -1907,6 +1907,17 @@ mod tests {
     }
 
     #[test]
+    fn fset_compiled_literal_coerces_to_compiled_function() {
+        let results = eval_all(
+            "(fset 'vm-elc-fset-placeholder #[(x) \"\\bT\\207\" [x] 1 (#$ . 83)])
+             (compiled-function-p (symbol-function 'vm-elc-fset-placeholder))
+             (functionp (symbol-function 'vm-elc-fset-placeholder))",
+        );
+        assert_eq!(results[1], "OK t");
+        assert_eq!(results[2], "OK t");
+    }
+
+    #[test]
     fn calling_compiled_literal_placeholder_signals_error() {
         let result = eval_one(
             "(progn

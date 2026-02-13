@@ -657,6 +657,38 @@ mod tests {
     }
 
     #[test]
+    fn load_elc_bytecode_literal_without_source_signals_explicit_error_on_call() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-load-elc-bytecode-call-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp fixture dir");
+        let compiled = dir.join("probe.elc");
+        fs::write(
+            &compiled,
+            ";ELC\x1e\0\0\0\n#@4data\n(defalias 'vm-bytecode-call-probe #[(x) \"\\bT\\207\" [x] 1 (#$ . 83)])\n",
+        )
+        .expect("write compiled fixture");
+
+        let mut eval = super::super::eval::Evaluator::new();
+        let loaded = load_file(&mut eval, &compiled).expect("load bytecode-literal elc");
+        assert_eq!(loaded, Value::True);
+
+        let forms = super::super::parser::parse_forms(
+            "(condition-case err (vm-bytecode-call-probe 1) (error (car err)))",
+        )
+        .expect("parse probe form");
+        let mut result = Value::Nil;
+        for form in &forms {
+            result = eval.eval(form).expect("evaluate probe form");
+        }
+        assert_eq!(result, Value::symbol("error"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn load_elc_with_source_prefers_source_for_compiled_literals() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
