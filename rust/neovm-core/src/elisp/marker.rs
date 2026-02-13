@@ -125,6 +125,21 @@ fn marker_position_value(v: &Value) -> Value {
     }
 }
 
+/// Return marker position as an integer.
+///
+/// Signals `error` when marker is unset, matching Emacs behavior in position
+/// contexts that require a concrete marker location.
+pub(crate) fn marker_position_as_int(v: &Value) -> Result<i64, Flow> {
+    expect_marker("marker-position", v)?;
+    match marker_position_value(v) {
+        Value::Int(n) => Ok(n),
+        _ => Err(signal(
+            "error",
+            vec![Value::string("Marker does not point anywhere")],
+        )),
+    }
+}
+
 /// Read the buffer-name field from a marker vector (index 1).
 fn marker_buffer_value(v: &Value) -> Value {
     match v {

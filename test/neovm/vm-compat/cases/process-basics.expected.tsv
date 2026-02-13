@@ -11,8 +11,11 @@
 11	(condition-case err (call-process "echo" nil '(t 99) nil "x") (error (car err)))	OK wrong-type-argument
 12	(with-temp-buffer (list (call-process "cat" "/etc/passwd" t nil) (> (length (buffer-string)) 0)))	OK (0 t)
 13	(with-temp-buffer (insert "abc") (list (call-process-region nil nil "cat" nil t nil) (buffer-string)))	OK (0 "abcabc")
-14	(with-temp-buffer (insert "abc") (list (call-process-region "xyz" nil "cat" nil t nil) (buffer-string)))	OK (0 "abcxyz")
-15	(condition-case err (call-process-region "xyz" nil "cat" t t nil) (error (car err)))	OK wrong-type-argument
-16	(condition-case err (call-process "cat" "/nonexistent/neovm-vm-compat-process-infile") (error (car err)))	OK file-missing
-17	(condition-case err (call-process "/nonexistent/neovm-vm-compat-missing-prog") (error (car err)))	OK file-missing
-18	(with-temp-buffer (insert "x") (condition-case err (call-process-region (point-min) (point-max) "/nonexistent/neovm-vm-compat-missing-prog") (error (car err))))	OK file-missing
+14	(with-temp-buffer (insert "abcdef") (goto-char 3) (let ((m (copy-marker (point)))) (list (call-process-region m (point-max) "cat" nil t nil) (buffer-string))))	OK (0 "abcdefcdef")
+15	(with-temp-buffer (insert "abc") (list (call-process-region "xyz" nil "cat" nil t nil) (buffer-string)))	OK (0 "abcxyz")
+16	(condition-case err (call-process-region "xyz" nil "cat" t t nil) (error (car err)))	OK wrong-type-argument
+17	(with-temp-buffer (insert "abc") (list (call-process-region (point-max) (point-min) "cat" nil t nil) (buffer-string)))	OK (0 "abcabc")
+18	(with-temp-buffer (insert "abc") (list (call-process-region (point-max) (point-min) "cat" t t nil) (buffer-string)))	OK (0 "abc")
+19	(condition-case err (call-process "cat" "/nonexistent/neovm-vm-compat-process-infile") (error (car err)))	OK file-missing
+20	(condition-case err (call-process "/nonexistent/neovm-vm-compat-missing-prog") (error (car err)))	OK file-missing
+21	(with-temp-buffer (insert "x") (condition-case err (call-process-region (point-min) (point-max) "/nonexistent/neovm-vm-compat-missing-prog") (error (car err))))	OK file-missing

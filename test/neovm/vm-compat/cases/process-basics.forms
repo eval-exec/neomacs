@@ -65,12 +65,26 @@
   (list (call-process-region nil nil "cat" nil t nil)
         (buffer-string)))
 (with-temp-buffer
+  (insert "abcdef")
+  (goto-char 3)
+  (let ((m (copy-marker (point))))
+    (list (call-process-region m (point-max) "cat" nil t nil)
+          (buffer-string))))
+(with-temp-buffer
   (insert "abc")
   (list (call-process-region "xyz" nil "cat" nil t nil)
         (buffer-string)))
 (condition-case err
     (call-process-region "xyz" nil "cat" t t nil)
   (error (car err)))
+(with-temp-buffer
+  (insert "abc")
+  (list (call-process-region (point-max) (point-min) "cat" nil t nil)
+        (buffer-string)))
+(with-temp-buffer
+  (insert "abc")
+  (list (call-process-region (point-max) (point-min) "cat" t t nil)
+        (buffer-string)))
 (condition-case err
     (call-process "cat" "/nonexistent/neovm-vm-compat-process-infile")
   (error (car err)))

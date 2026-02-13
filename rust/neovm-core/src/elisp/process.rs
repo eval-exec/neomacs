@@ -204,6 +204,7 @@ fn expect_int_or_marker(value: &Value) -> Result<i64, Flow> {
     match value {
         Value::Int(n) => Ok(*n),
         Value::Char(c) => Ok(*c as i64),
+        v if super::marker::is_marker(v) => super::marker::marker_position_as_int(v),
         other => Err(signal(
             "wrong-type-argument",
             vec![Value::symbol("integer-or-marker-p"), other.clone()],
@@ -659,7 +660,7 @@ pub(crate) fn builtin_call_process_region(
         _ => {
             let start = expect_int_or_marker(&args[0])? as usize;
             let end = expect_int_or_marker(&args[1])? as usize;
-            let (text, beg, e) = {
+            let (text, region_beg, region_end) = {
                 let buf = eval
                     .buffers
                     .current_buffer()
@@ -667,7 +668,12 @@ pub(crate) fn builtin_call_process_region(
                 // Convert 1-based Emacs positions to 0-based byte positions.
                 let beg = (start.saturating_sub(1)).min(buf.text.len());
                 let e = (end.saturating_sub(1)).min(buf.text.len());
-                (buf.text.text_range(beg, e), beg, e)
+                let (region_beg, region_end) = if beg <= e { (beg, e) } else { (e, beg) };
+                (
+                    buf.text.text_range(region_beg, region_end),
+                    region_beg,
+                    region_end,
+                )
             };
 
             if delete {
@@ -675,7 +681,7 @@ pub(crate) fn builtin_call_process_region(
                     .buffers
                     .current_buffer_mut()
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-                buf.delete_region(beg, e);
+                buf.delete_region(region_beg, region_end);
             }
 
             text
@@ -1294,6 +1300,44 @@ mod tests {
                  (error (car err)))"#
         ));
         assert_eq!(result, "OK wrong-type-argument");
+    }
+
+    #[test]
+    fn call_process_region_accepts_marker_positions() {
+        let cat = find_bin("cat");
+        let results = eval_all(&format!(
+            r#"(with-temp-buffer
+                 (insert "abcdef")
+                 (goto-char 3)
+                 (let ((m (copy-marker (point))))
+                   (list (call-process-region m (point-max) "{cat}" nil t nil)
+                         (buffer-string))))"#
+        ));
+        assert_eq!(results[0], r#"OK (0 "abcdefcdef")"#);
+    }
+
+    #[test]
+    fn call_process_region_reversed_bounds_are_accepted() {
+        let cat = find_bin("cat");
+        let results = eval_all(&format!(
+            r#"(with-temp-buffer
+                 (insert "abc")
+                 (list (call-process-region (point-max) (point-min) "{cat}" nil t nil)
+                       (buffer-string)))"#
+        ));
+        assert_eq!(results[0], r#"OK (0 "abcabc")"#);
+    }
+
+    #[test]
+    fn call_process_region_reversed_bounds_with_delete_delete_region() {
+        let cat = find_bin("cat");
+        let results = eval_all(&format!(
+            r#"(with-temp-buffer
+                 (insert "abc")
+                 (list (call-process-region (point-max) (point-min) "{cat}" t t nil)
+                       (buffer-string)))"#
+        ));
+        assert_eq!(results[0], r#"OK (0 "abc")"#);
     }
 
     #[test]
