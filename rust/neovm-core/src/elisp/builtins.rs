@@ -4072,6 +4072,25 @@ pub(crate) fn dispatch_builtin(
         "group-gid" => super::editfns::builtin_group_gid(args),
         "group-real-gid" => super::editfns::builtin_group_real_gid(args),
 
+        // Fns (pure)
+        "base64-encode-string" => super::fns::builtin_base64_encode_string(args),
+        "base64-decode-string" => super::fns::builtin_base64_decode_string(args),
+        "base64url-encode-string" => super::fns::builtin_base64url_encode_string(args),
+        "base64url-decode-string" => super::fns::builtin_base64url_decode_string(args),
+        "md5" => super::fns::builtin_md5(args),
+        "secure-hash" => super::fns::builtin_secure_hash(args),
+        "buffer-hash" => super::fns::builtin_buffer_hash(args),
+        "equal-including-properties" => super::fns::builtin_equal_including_properties(args),
+        "widget-get" => super::fns::builtin_widget_get(args),
+        "widget-put" => super::fns::builtin_widget_put(args),
+        "widget-apply" => super::fns::builtin_widget_apply(args),
+        "string-make-multibyte" => super::fns::builtin_string_make_multibyte(args),
+        "string-make-unibyte" => super::fns::builtin_string_make_unibyte(args),
+        "compare-strings" => super::fns::builtin_compare_strings(args),
+        "string-version-lessp" => super::fns::builtin_string_version_lessp(args),
+        "string-collate-lessp" => super::fns::builtin_string_collate_lessp(args),
+        "string-collate-equalp" => super::fns::builtin_string_collate_equalp(args),
+
         _ => return None,
     })
 }
