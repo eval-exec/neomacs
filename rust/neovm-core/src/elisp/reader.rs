@@ -719,7 +719,7 @@ pub(crate) fn builtin_read_from_minibuffer(
             _ => {}
         }
     }
-    Ok(Value::string(""))
+    Err(signal("end-of-file", vec![]))
 }
 
 // ---------------------------------------------------------------------------
@@ -741,7 +741,7 @@ pub(crate) fn builtin_read_string(
             _ => {}
         }
     }
-    Ok(Value::string(""))
+    Err(signal("end-of-file", vec![]))
 }
 
 // ---------------------------------------------------------------------------
@@ -786,7 +786,7 @@ pub(crate) fn builtin_completing_read(
             _ => {}
         }
     }
-    Ok(Value::string(""))
+    Err(signal("end-of-file", vec![]))
 }
 
 // ---------------------------------------------------------------------------

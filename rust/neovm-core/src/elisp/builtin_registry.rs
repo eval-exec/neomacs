@@ -534,6 +534,8 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "merge-face-attribute",
     "message",
     "min",
+    "minibuffer-depth",
+    "minibufferp",
     "minor-mode-key-binding",
     "mod",
     "modify-category-entry",
