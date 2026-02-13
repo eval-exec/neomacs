@@ -1,0 +1,19 @@
+1	(progn (setq vm-load-dir (expand-file-name "load-flags-fixtures" (file-name-directory (getenv "NEOVM_FORMS_FILE")))) (setq load-path (cons vm-load-dir load-path)) 'ok)	OK ok
+2	(setq vm-load-choice-file nil)	OK nil
+3	(load "vm-load-choice" nil nil nil nil)	OK t
+4	vm-load-choice-file	OK el
+5	(setq vm-load-choice-file nil)	OK nil
+6	(condition-case err (load "vm-load-choice" nil nil t nil) (error (car err)))	OK t
+7	vm-load-choice-file	OK plain
+8	(setq vm-load-only-el nil)	OK nil
+9	(condition-case err (load "vm-load-only-el" nil nil t nil) (error (car err)))	OK file-missing
+10	vm-load-only-el	OK nil
+11	(setq vm-load-only-el nil)	OK nil
+12	(load "vm-load-only-el" nil nil nil t)	OK t
+13	vm-load-only-el	OK ok
+14	(setq vm-load-only-plain nil)	OK nil
+15	(condition-case err (load "vm-load-only-plain" nil nil nil t) (error (car err)))	OK file-missing
+16	vm-load-only-plain	OK nil
+17	(condition-case err (load "vm-load-only-el" nil nil t t) (error (car err)))	OK file-missing
+18	(condition-case err (load "vm-load-only-plain" nil nil t t) (error (car err)))	OK t
+19	(condition-case err (load "vm-load-only-el" t nil t t) (error (car err)))	OK nil

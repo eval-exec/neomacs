@@ -1,0 +1,1 @@
+(setq vm-load-only-plain 'ok)

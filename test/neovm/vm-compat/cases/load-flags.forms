@@ -1,0 +1,29 @@
+; `load` flag behavior: noerror, nosuffix, must-suffix
+(progn
+  (setq vm-load-dir (expand-file-name "load-flags-fixtures" (file-name-directory (getenv "NEOVM_FORMS_FILE"))))
+  (setq load-path (cons vm-load-dir load-path))
+  'ok)
+
+(setq vm-load-choice-file nil)
+(load "vm-load-choice" nil nil nil nil)
+vm-load-choice-file
+
+(setq vm-load-choice-file nil)
+(condition-case err (load "vm-load-choice" nil nil t nil) (error (car err)))
+vm-load-choice-file
+
+(setq vm-load-only-el nil)
+(condition-case err (load "vm-load-only-el" nil nil t nil) (error (car err)))
+vm-load-only-el
+
+(setq vm-load-only-el nil)
+(load "vm-load-only-el" nil nil nil t)
+vm-load-only-el
+
+(setq vm-load-only-plain nil)
+(condition-case err (load "vm-load-only-plain" nil nil nil t) (error (car err)))
+vm-load-only-plain
+
+(condition-case err (load "vm-load-only-el" nil nil t t) (error (car err)))
+(condition-case err (load "vm-load-only-plain" nil nil t t) (error (car err)))
+(condition-case err (load "vm-load-only-el" t nil t t) (error (car err)))
