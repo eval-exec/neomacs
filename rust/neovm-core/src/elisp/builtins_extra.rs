@@ -168,12 +168,21 @@ fn flatten_value(val: &Value, out: &mut Vec<Value>) {
 /// `(take N LIST)` — first N elements.
 pub(crate) fn builtin_take(args: Vec<Value>) -> EvalResult {
     expect_args("take", &args, 2)?;
-    let n = expect_int(&args[0])? as usize;
+    let n = expect_int(&args[0])?;
+    if n <= 0 {
+        return Ok(Value::Nil);
+    }
     let list = &args[1];
+    if !matches!(list, Value::Nil | Value::Cons(_)) {
+        return Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("listp"), list.clone()],
+        ));
+    }
 
     let mut result = Vec::new();
     let mut cursor = list.clone();
-    for _ in 0..n {
+    for _ in 0..(n as usize) {
         match cursor {
             Value::Nil => break,
             Value::Cons(cell) => {
@@ -181,7 +190,12 @@ pub(crate) fn builtin_take(args: Vec<Value>) -> EvalResult {
                 result.push(pair.car.clone());
                 cursor = pair.cdr.clone();
             }
-            _ => break,
+            tail => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("listp"), tail],
+                ));
+            }
         }
     }
     Ok(Value::list(result))
