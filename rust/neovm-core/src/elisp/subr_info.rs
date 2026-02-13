@@ -218,20 +218,52 @@ pub(crate) fn is_evaluator_callable_name(name: &str) -> bool {
     matches!(name, "throw")
 }
 
-fn fallback_macro_arity(name: &str) -> Option<(usize, Option<usize>)> {
+#[derive(Clone, Copy)]
+struct FallbackMacroSpec {
+    min: usize,
+    max: Option<usize>,
+}
+
+fn fallback_macro_spec(name: &str) -> Option<FallbackMacroSpec> {
     match name {
-        "when" | "unless" | "dotimes" | "dolist" => Some((1, None)),
-        "with-current-buffer" | "with-syntax-table" | "with-eval-after-load" => Some((1, None)),
+        "when" | "unless" | "dotimes" | "dolist" => Some(FallbackMacroSpec { min: 1, max: None }),
+        "with-current-buffer" | "with-syntax-table" | "with-eval-after-load" => {
+            Some(FallbackMacroSpec { min: 1, max: None })
+        }
         "ignore-errors"
         | "setq-local"
         | "with-temp-buffer"
         | "with-output-to-string"
         | "track-mouse"
         | "eval-when-compile"
-        | "eval-and-compile" => Some((0, None)),
-        "defvar-local" => Some((2, Some(3))),
-        "prog2" => Some((2, None)),
+        | "eval-and-compile" => Some(FallbackMacroSpec { min: 0, max: None }),
+        "defvar-local" => Some(FallbackMacroSpec {
+            min: 2,
+            max: Some(3),
+        }),
+        "prog2" => Some(FallbackMacroSpec { min: 2, max: None }),
         _ => None,
+    }
+}
+
+fn fallback_macro_params(spec: FallbackMacroSpec) -> LambdaParams {
+    let required: Vec<String> = (0..spec.min).map(|idx| format!("arg{idx}")).collect();
+    let (optional, rest) = match spec.max {
+        None => (Vec::new(), Some("rest".to_string())),
+        Some(max) => {
+            debug_assert!(max >= spec.min);
+            let optional_count = max.saturating_sub(spec.min);
+            let optional = (0..optional_count)
+                .map(|idx| format!("arg{}", spec.min + idx))
+                .collect();
+            (optional, None)
+        }
+    };
+
+    LambdaParams {
+        required,
+        optional,
+        rest,
     }
 }
 
@@ -241,19 +273,9 @@ fn fallback_macro_arity(name: &str) -> Option<(usize, Option<usize>)> {
 /// introspection aligned with Emacs for core macros even when they are not
 /// materialized via Elisp bootstrap code in the function cell.
 pub(crate) fn fallback_macro_value(name: &str) -> Option<Value> {
-    let (min, max) = fallback_macro_arity(name)?;
-    let required = (0..min).map(|idx| format!("arg{idx}")).collect();
-    let rest = if max.is_none() {
-        Some("rest".to_string())
-    } else {
-        None
-    };
+    let spec = fallback_macro_spec(name)?;
     Some(Value::Macro(Arc::new(LambdaData {
-        params: LambdaParams {
-            required,
-            optional: Vec::new(),
-            rest,
-        },
+        params: fallback_macro_params(spec),
         body: vec![],
         env: None,
         docstring: None,
@@ -974,6 +996,19 @@ mod tests {
             let pair = cell.lock().unwrap();
             assert_eq!(pair.car.as_int(), Some(2));
             assert_eq!(pair.cdr.as_int(), Some(2));
+        } else {
+            panic!("expected cons cell");
+        }
+    }
+
+    #[test]
+    fn fallback_macro_defvar_local_preserves_optional_arity() {
+        let macro_value = fallback_macro_value("defvar-local").expect("fallback macro exists");
+        let result = builtin_func_arity(vec![macro_value]).unwrap();
+        if let Value::Cons(cell) = &result {
+            let pair = cell.lock().unwrap();
+            assert_eq!(pair.car.as_int(), Some(2));
+            assert_eq!(pair.cdr.as_int(), Some(3));
         } else {
             panic!("expected cons cell");
         }
