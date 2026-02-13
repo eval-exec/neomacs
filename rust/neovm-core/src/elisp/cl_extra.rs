@@ -2123,22 +2123,6 @@ mod tests {
     use super::*;
     use crate::elisp::{format_eval_result, parse_forms, Evaluator};
 
-    /// Helper: parse, evaluate all forms, return formatted results.
-    fn eval_all(src: &str) -> Vec<String> {
-        let forms = parse_forms(src).expect("parse");
-        let mut ev = Evaluator::new();
-        ev.eval_forms(&forms)
-            .iter()
-            .map(format_eval_result)
-            .collect()
-    }
-
-    /// Helper: parse, evaluate all forms, return last result formatted.
-    fn eval_last(src: &str) -> String {
-        let results = eval_all(src);
-        results.last().cloned().unwrap_or_else(|| "NONE".to_string())
-    }
-
     /// Helper that provides an evaluator with cl-extra special forms wired up.
     /// Since we cannot modify eval.rs, we simulate the special forms by calling them directly.
     fn eval_with_cl(src: &str) -> String {
