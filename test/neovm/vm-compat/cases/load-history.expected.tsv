@@ -1,0 +1,6 @@
+1	(progn (setq vm-lh-dir (expand-file-name "load-history-fixtures" (file-name-directory (getenv "NEOVM_FORMS_FILE")))) (setq load-path (cons vm-lh-dir load-path)) (setq load-history nil) (setq vm-lh-old-load-file-name load-file-name) 'ok)	OK ok
+2	(setq vm-load-history-ran nil)	OK nil
+3	(load "vm-load-history" nil nil nil nil)	OK t
+4	vm-load-history-ran	OK t
+5	(equal (car (car load-history)) (expand-file-name "vm-load-history.el" vm-lh-dir))	OK t
+6	(equal load-file-name vm-lh-old-load-file-name)	OK t

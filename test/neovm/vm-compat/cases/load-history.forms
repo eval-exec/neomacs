@@ -1,0 +1,15 @@
+; `load-history` should record loaded files and `load-file-name` should restore
+(progn
+  (setq vm-lh-dir (expand-file-name "load-history-fixtures" (file-name-directory (getenv "NEOVM_FORMS_FILE"))))
+  (setq load-path (cons vm-lh-dir load-path))
+  (setq load-history nil)
+  (setq vm-lh-old-load-file-name load-file-name)
+  'ok)
+
+(setq vm-load-history-ran nil)
+(load "vm-load-history" nil nil nil nil)
+vm-load-history-ran
+
+(equal (car (car load-history))
+       (expand-file-name "vm-load-history.el" vm-lh-dir))
+(equal load-file-name vm-lh-old-load-file-name)
