@@ -1,0 +1,17 @@
+; undo buffer argument compatibility: BUFFER-OR-NAME handling and type errors.
+(let* ((buf (generate-new-buffer "vm-undo-name"))
+       (name (buffer-name buf)))
+  (unwind-protect
+      (progn
+        (buffer-disable-undo name)
+        (buffer-local-value 'buffer-undo-list buf))
+    (kill-buffer buf)))
+(let* ((buf (generate-new-buffer "vm-undo-name"))
+       (name (buffer-name buf)))
+  (unwind-protect
+      (progn
+        (buffer-enable-undo name)
+        (buffer-local-value 'buffer-undo-list buf))
+    (kill-buffer buf)))
+(condition-case err (buffer-enable-undo 7) (error (car err)))
+(condition-case err (buffer-disable-undo 7) (error (car err)))

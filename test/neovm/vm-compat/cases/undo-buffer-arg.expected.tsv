@@ -1,0 +1,4 @@
+1	(let* ((buf (generate-new-buffer "vm-undo-name")) (name (buffer-name buf))) (unwind-protect (progn (buffer-disable-undo name) (buffer-local-value 'buffer-undo-list buf)) (kill-buffer buf)))	OK t
+2	(let* ((buf (generate-new-buffer "vm-undo-name")) (name (buffer-name buf))) (unwind-protect (progn (buffer-enable-undo name) (buffer-local-value 'buffer-undo-list buf)) (kill-buffer buf)))	OK nil
+3	(condition-case err (buffer-enable-undo 7) (error (car err)))	OK wrong-type-argument
+4	(condition-case err (buffer-disable-undo 7) (error (car err)))	OK wrong-type-argument
