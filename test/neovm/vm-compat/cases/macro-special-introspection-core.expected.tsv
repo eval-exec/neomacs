@@ -1,0 +1,10 @@
+1	(functionp 'if)	OK nil
+2	(special-form-p 'if)	OK t
+3	(functionp (indirect-function 'if))	OK nil
+4	(functionp 'when)	OK nil
+5	(macrop 'when)	OK t
+6	(macrop (symbol-function 'when))	OK t
+7	(special-form-p 'when)	OK nil
+8	(fboundp 'when)	OK t
+9	(func-arity (indirect-function 'message))	OK (1 . many)
+10	(func-arity (indirect-function 'car))	OK (1 . 1)

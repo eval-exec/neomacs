@@ -1,0 +1,11 @@
+; macro/special-form/functionp boundaries and func-arity parity for core callables.
+(functionp 'if)
+(special-form-p 'if)
+(functionp (indirect-function 'if))
+(functionp 'when)
+(macrop 'when)
+(macrop (symbol-function 'when))
+(special-form-p 'when)
+(fboundp 'when)
+(func-arity (indirect-function 'message))
+(func-arity (indirect-function 'car))
