@@ -4,6 +4,13 @@
 (with-temp-buffer
   (insert "abc")
   (call-process-region (point-min) (point-max) "true"))
+(with-temp-buffer
+  (list (call-process "echo" nil 2 nil "hello")
+        (buffer-string)))
+(with-temp-buffer
+  (insert "abc")
+  (list (call-process-region (point-min) (point-max) "cat" nil 3 nil)
+        (buffer-string)))
 (condition-case err
     (call-process "/nonexistent/neovm-vm-compat-missing-prog")
   (error (car err)))

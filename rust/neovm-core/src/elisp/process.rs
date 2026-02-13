@@ -6,7 +6,7 @@
 //! commands via `std::process::Command`.
 
 use std::collections::HashMap;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::Value;
@@ -227,6 +227,24 @@ fn signal_process_io(action: &str, target: Option<&str>, err: std::io::Error) ->
     signal(file_error_symbol(err.kind()), data)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CallProcessDestination {
+    /// Wait for process exit and discard output.
+    WaitDiscard,
+    /// Wait for process exit and insert stdout into current buffer.
+    WaitInsertCurrentBuffer,
+    /// Return immediately (integer destination semantics).
+    NoWaitDiscard,
+}
+
+fn classify_call_process_destination(destination: &Value) -> CallProcessDestination {
+    match destination {
+        Value::Int(_) => CallProcessDestination::NoWaitDiscard,
+        Value::Nil => CallProcessDestination::WaitDiscard,
+        _ => CallProcessDestination::WaitInsertCurrentBuffer,
+    }
+}
+
 /// Resolve a process argument: either a ProcessId integer or a name string.
 fn resolve_process(eval: &super::eval::Evaluator, value: &Value) -> Result<ProcessId, Flow> {
     match value {
@@ -305,15 +323,18 @@ pub(crate) fn builtin_call_process(
         None
     };
 
-    // DESTINATION: nil = discard, t = current buffer, 0 = discard (we treat
-    // nil and 0 the same), string = buffer name.  We simplify: if truthy and
-    // not 0, insert into current buffer.
+    // DESTINATION: integer => discard and return immediately (nil).
+    // nil => discard and wait.
+    // other non-nil => insert into current buffer and wait.
+    // Note: buffer-name and stderr routing forms are not modeled yet; this
+    // keeps current simplified insertion behavior while matching integer
+    // destination return semantics.
     let destination = if args.len() > 2 {
         &args[2]
     } else {
         &Value::Nil
     };
-    let insert_into_buffer = destination.is_truthy() && !matches!(destination, Value::Int(0));
+    let destination_behavior = classify_call_process_destination(destination);
 
     // DISPLAY (arg index 3): ignored in this implementation.
 
@@ -326,21 +347,44 @@ pub(crate) fn builtin_call_process(
         Vec::new()
     };
 
-    let output = Command::new(&program)
-        .args(&cmd_args)
-        .output()
-        .map_err(|e| signal_process_io("Searching for program", Some(&program), e))?;
+    match destination_behavior {
+        CallProcessDestination::NoWaitDiscard => {
+            let mut child = Command::new(&program)
+                .args(&cmd_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| signal_process_io("Searching for program", Some(&program), e))?;
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            Ok(Value::Nil)
+        }
+        CallProcessDestination::WaitDiscard => {
+            let status = Command::new(&program)
+                .args(&cmd_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| signal_process_io("Searching for program", Some(&program), e))?;
+            Ok(Value::Int(status.code().unwrap_or(-1) as i64))
+        }
+        CallProcessDestination::WaitInsertCurrentBuffer => {
+            let output = Command::new(&program)
+                .args(&cmd_args)
+                .output()
+                .map_err(|e| signal_process_io("Searching for program", Some(&program), e))?;
 
-    let exit_code = output.status.code().unwrap_or(-1);
-
-    if insert_into_buffer {
-        let stdout_str = String::from_utf8_lossy(&output.stdout).into_owned();
-        if let Some(buf) = eval.buffers.current_buffer_mut() {
-            buf.insert(&stdout_str);
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stdout_str = String::from_utf8_lossy(&output.stdout).into_owned();
+            if let Some(buf) = eval.buffers.current_buffer_mut() {
+                buf.insert(&stdout_str);
+            }
+            Ok(Value::Int(exit_code as i64))
         }
     }
-
-    Ok(Value::Int(exit_code as i64))
 }
 
 /// (call-process-region START END PROGRAM &optional DELETE DESTINATION DISPLAY &rest ARGS)
@@ -361,7 +405,7 @@ pub(crate) fn builtin_call_process_region(
     } else {
         &Value::Nil
     };
-    let insert_into_buffer = destination.is_truthy() && !matches!(destination, Value::Int(0));
+    let destination_behavior = classify_call_process_destination(destination);
     // DISPLAY (arg index 5): ignored.
 
     let cmd_args: Vec<String> = if args.len() > 6 {
@@ -397,33 +441,71 @@ pub(crate) fn builtin_call_process_region(
     }
 
     use std::io::Write;
-    let mut child = Command::new(&program)
-        .args(&cmd_args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| signal_process_io("Searching for program", Some(&program), e))?;
+    match destination_behavior {
+        CallProcessDestination::WaitInsertCurrentBuffer => {
+            let mut child = Command::new(&program)
+                .args(&cmd_args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| signal_process_io("Searching for program", Some(&program), e))?;
 
-    // Write region text to stdin.
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(region_text.as_bytes());
-    }
+            // Write region text to stdin.
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(region_text.as_bytes());
+            }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| signal_process_io("Process error", None, e))?;
+            let output = child
+                .wait_with_output()
+                .map_err(|e| signal_process_io("Process error", None, e))?;
 
-    let exit_code = output.status.code().unwrap_or(-1);
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stdout_str = String::from_utf8_lossy(&output.stdout).into_owned();
+            if let Some(buf) = eval.buffers.current_buffer_mut() {
+                buf.insert(&stdout_str);
+            }
 
-    if insert_into_buffer {
-        let stdout_str = String::from_utf8_lossy(&output.stdout).into_owned();
-        if let Some(buf) = eval.buffers.current_buffer_mut() {
-            buf.insert(&stdout_str);
+            Ok(Value::Int(exit_code as i64))
+        }
+        CallProcessDestination::WaitDiscard => {
+            let mut child = Command::new(&program)
+                .args(&cmd_args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| signal_process_io("Searching for program", Some(&program), e))?;
+
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(region_text.as_bytes());
+            }
+
+            let status = child
+                .wait()
+                .map_err(|e| signal_process_io("Process error", None, e))?;
+            Ok(Value::Int(status.code().unwrap_or(-1) as i64))
+        }
+        CallProcessDestination::NoWaitDiscard => {
+            let mut child = Command::new(&program)
+                .args(&cmd_args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| signal_process_io("Searching for program", Some(&program), e))?;
+
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(region_text.as_bytes());
+            }
+
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+
+            Ok(Value::Nil)
         }
     }
-
-    Ok(Value::Int(exit_code as i64))
 }
 
 /// (delete-process PROCESS) -> nil
@@ -797,6 +879,20 @@ mod tests {
     }
 
     #[test]
+    fn call_process_integer_destination_returns_nil() {
+        let echo = find_bin("echo");
+        // Any integer destination behaves like 0: discard and return nil.
+        let results = eval_all(&format!(
+            r#"(get-buffer-create "cp-int")
+               (set-buffer "cp-int")
+               (call-process "{echo}" nil 2 nil "hello")
+               (buffer-string)"#,
+        ));
+        assert_eq!(results[2], "OK nil");
+        assert_eq!(results[3], r#"OK """#);
+    }
+
+    #[test]
     fn call_process_false() {
         let false_bin = find_bin("false");
         // false exits with code 1
@@ -818,6 +914,21 @@ mod tests {
         assert_eq!(results[3], "OK 0");
         // Buffer should contain original text plus piped output
         assert!(results[4].contains("hello world"));
+    }
+
+    #[test]
+    fn call_process_region_integer_destination_returns_nil() {
+        let cat = find_bin("cat");
+        let results = eval_all(&format!(
+            r#"(get-buffer-create "cpr-int")
+               (set-buffer "cpr-int")
+               (erase-buffer)
+               (insert "abc")
+               (call-process-region 1 4 "{cat}" nil 3 nil)
+               (buffer-string)"#,
+        ));
+        assert_eq!(results[4], "OK nil");
+        assert_eq!(results[5], r#"OK "abc""#);
     }
 
     #[test]
