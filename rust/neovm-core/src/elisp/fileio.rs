@@ -4,7 +4,12 @@
 //! directory operations, and file attribute queries.
 
 use std::fs;
+#[cfg(unix)]
+use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
+use std::collections::VecDeque;
+
+use regex::Regex;
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::Value;
@@ -394,35 +399,103 @@ pub fn write_string_to_file(content: &str, filename: &str, append: bool) -> Resu
 /// Return a list of file names in DIR.
 /// If FULL is true, return absolute paths.
 /// If MATCH_REGEX is Some, only include entries whose names match the regex.
+/// If NOSORT is true, preserve filesystem enumeration order.
+/// COUNT limits the number of accepted entries during enumeration.
+#[cfg(unix)]
+fn read_directory_names(dir: &str) -> Result<Vec<String>, String> {
+    let dir_cstr = CString::new(dir)
+        .map_err(|_| format!("Opening directory {}: path contains interior NUL", dir))?;
+    let dirp = unsafe { libc::opendir(dir_cstr.as_ptr()) };
+    if dirp.is_null() {
+        return Err(format!(
+            "Opening directory {}: {}",
+            dir,
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let mut names = Vec::new();
+    loop {
+        let entry = unsafe { libc::readdir(dirp) };
+        if entry.is_null() {
+            break;
+        }
+        let raw_name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        names.push(raw_name.to_string_lossy().into_owned());
+    }
+
+    let _ = unsafe { libc::closedir(dirp) };
+    Ok(names)
+}
+
+#[cfg(not(unix))]
+fn read_directory_names(dir: &str) -> Result<Vec<String>, String> {
+    let entries = fs::read_dir(dir).map_err(|e| format!("Opening directory {}: {}", dir, e))?;
+    let mut names = vec![".".to_string(), "..".to_string()];
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Reading directory entry: {}", e))?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    Ok(names)
+}
+
 pub fn directory_files(
     dir: &str,
     full: bool,
     match_regex: Option<&str>,
+    nosort: bool,
+    count: Option<usize>,
 ) -> Result<Vec<String>, String> {
-    let entries = fs::read_dir(dir).map_err(|e| format!("Opening directory {}: {}", dir, e))?;
+    if count == Some(0) {
+        return Ok(Vec::new());
+    }
 
-    let mut result = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Reading directory entry: {}", e))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
+    let re = match match_regex {
+        Some(pattern) => Some(
+            Regex::new(pattern)
+                .map_err(|e| format!("Invalid regexp \"{}\": {}", pattern, e))?,
+        ),
+        None => None,
+    };
 
-        // Apply regex filter if provided
-        if let Some(pattern) = match_regex {
-            // Simple substring match (not full regex, to avoid pulling in the
-            // regex crate). Matches if the pattern appears anywhere in the name.
-            if !name.contains(pattern) {
+    let names = read_directory_names(dir)?;
+
+    // Emacs builds this list via `cons` while scanning readdir output.
+    // That makes NOSORT results reverse the traversal order and applies COUNT
+    // before sort.
+    let mut result = VecDeque::new();
+    let mut remaining = count.unwrap_or(usize::MAX);
+    let dir_with_slash = if dir.ends_with('/') {
+        dir.to_string()
+    } else {
+        format!("{dir}/")
+    };
+
+    for name in names {
+        if let Some(re) = re.as_ref() {
+            if !re.is_match(&name) {
                 continue;
             }
         }
 
         if full {
-            let full_path = Path::new(dir).join(&name);
-            result.push(full_path.to_string_lossy().into_owned());
+            result.push_front(format!("{dir_with_slash}{name}"));
         } else {
-            result.push(name);
+            result.push_front(name);
+        }
+
+        if remaining != usize::MAX {
+            remaining -= 1;
+            if remaining == 0 {
+                break;
+            }
         }
     }
-    result.sort();
+
+    let mut result: Vec<String> = result.into_iter().collect();
+    if !nosort {
+        result.sort();
+    }
     Ok(result)
 }
 
@@ -763,9 +836,15 @@ pub(crate) fn builtin_make_directory(args: Vec<Value>) -> EvalResult {
     Ok(Value::Nil)
 }
 
-/// (directory-files DIR &optional FULL MATCH) -> list of strings
+/// (directory-files DIR &optional FULL MATCH NOSORT COUNT) -> list of strings
 pub(crate) fn builtin_directory_files(args: Vec<Value>) -> EvalResult {
     expect_min_args("directory-files", &args, 1)?;
+    if args.len() > 5 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("directory-files"), Value::Int(args.len() as i64)],
+        ));
+    }
     let dir = expect_string_strict(&args[0])?;
     let full = args.get(1).is_some_and(|v| v.is_truthy());
     let match_pattern = if let Some(val) = args.get(2) {
@@ -777,7 +856,22 @@ pub(crate) fn builtin_directory_files(args: Vec<Value>) -> EvalResult {
     } else {
         None
     };
-    let files = directory_files(&dir, full, match_pattern.as_deref())
+    let nosort = args.get(3).is_some_and(|v| v.is_truthy());
+    let count = if let Some(val) = args.get(4) {
+        match val {
+            Value::Int(n) if *n >= 0 => Some(*n as usize),
+            other => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("natnump"), other.clone()],
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    let files = directory_files(&dir, full, match_pattern.as_deref(), nosort, count)
         .map_err(|e| signal("file-error", vec![Value::string(e)]))?;
     Ok(Value::list(files.into_iter().map(Value::string).collect()))
 }
@@ -977,6 +1071,7 @@ pub(crate) fn builtin_find_file_noselect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::elisp::value::list_to_vec;
     use std::io::Write;
 
     // -----------------------------------------------------------------------
@@ -1262,18 +1357,20 @@ mod tests {
         }
 
         // List files
-        let files = directory_files(&base_str, false, None).unwrap();
+        let files = directory_files(&base_str, false, None, false, None).unwrap();
+        assert!(files.contains(&".".to_string()));
+        assert!(files.contains(&"..".to_string()));
         assert!(files.contains(&"foo.txt".to_string()));
         assert!(files.contains(&"bar.txt".to_string()));
         assert!(files.contains(&"baz.el".to_string()));
 
         // List with filter
-        let filtered = directory_files(&base_str, false, Some(".el")).unwrap();
+        let filtered = directory_files(&base_str, false, Some("\\.el$"), false, None).unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0], "baz.el");
 
         // List with full paths
-        let full = directory_files(&base_str, true, None).unwrap();
+        let full = directory_files(&base_str, true, None, false, None).unwrap();
         for entry in &full {
             assert!(entry.starts_with(&base_str));
         }
@@ -1390,6 +1487,98 @@ mod tests {
         let result = builtin_file_exists_p(vec![Value::string("/no_such_file_xyz")]);
         assert!(result.is_ok());
         assert!(result.unwrap().is_nil());
+    }
+
+    #[test]
+    fn test_builtin_directory_files_args() {
+        let dir = std::env::temp_dir().join("neovm_dirfiles_builtin");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_string_lossy().to_string();
+        let file = dir.join("beta.el");
+        fs::write(&file, "").unwrap();
+        fs::write(dir.join("alpha.txt"), "").unwrap();
+        fs::write(dir.join(".hidden"), "").unwrap();
+
+        let result = builtin_directory_files(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::string("\\.el$"),
+            Value::Nil,
+            Value::Int(1),
+        ])
+        .unwrap();
+        let items = list_to_vec(&result).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].as_str(), Some("beta.el"));
+
+        let unsorted = builtin_directory_files(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::True,
+        ])
+        .unwrap();
+        let unsorted_items = list_to_vec(&unsorted).unwrap();
+
+        let unsorted_limited = builtin_directory_files(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::True,
+            Value::Int(2),
+        ])
+        .unwrap();
+        let unsorted_limited_items = list_to_vec(&unsorted_limited).unwrap();
+        let tail = &unsorted_items[unsorted_items.len() - 2..];
+        assert_eq!(unsorted_limited_items.as_slice(), tail);
+
+        let sorted_limited = builtin_directory_files(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Int(2),
+        ])
+        .unwrap();
+        let mut sorted_from_unsorted = unsorted_limited_items.clone();
+        sorted_from_unsorted.sort_by(|a, b| {
+            let a = a.as_str().unwrap_or_default();
+            let b = b.as_str().unwrap_or_default();
+            a.cmp(b)
+        });
+        assert_eq!(list_to_vec(&sorted_limited).unwrap(), sorted_from_unsorted);
+
+        let result = builtin_directory_files(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::True,
+            Value::Int(0),
+        ])
+        .unwrap();
+        assert!(list_to_vec(&result).unwrap().is_empty());
+
+        let result = builtin_directory_files(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Int(-1),
+        ]);
+        assert!(result.is_err());
+
+        let result = builtin_directory_files(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Int(0),
+            Value::Nil,
+        ]);
+        assert!(result.is_err());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

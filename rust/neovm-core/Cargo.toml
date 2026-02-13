@@ -12,5 +12,6 @@ core-backend-rust = []
 
 [dependencies]
 neovm-host-abi = { path = "../neovm-host-abi" }
+libc = "0.2"
 regex = "1"
 strum = { version = "0.26", features = ["derive"] }
