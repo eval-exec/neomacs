@@ -1,9 +1,12 @@
 1	(condition-case err (read-number "" 7) (error (car err)))	OK end-of-file
 2	(condition-case err (read-number "") (error (car err)))	OK end-of-file
-3	(condition-case err (read-string "") (error (car err)))	OK end-of-file
-4	(condition-case err (read-from-minibuffer "") (error (car err)))	OK end-of-file
-5	(condition-case err (completing-read "" '(("a") ("b"))) (error (car err)))	OK end-of-file
-6	(condition-case err (read-file-name "") (error (car err)))	OK end-of-file
-7	(condition-case err (read-buffer "") (error (car err)))	OK end-of-file
-8	(condition-case err (read-command "") (error (car err)))	OK end-of-file
-9	(condition-case err (read-variable "") (error (car err)))	OK end-of-file
+3	(condition-case err (read-string "" "init") (error (car err)))	OK end-of-file
+4	(condition-case err (read-string "") (error (car err)))	OK end-of-file
+5	(condition-case err (read-from-minibuffer "" "init") (error (car err)))	OK end-of-file
+6	(condition-case err (read-from-minibuffer "") (error (car err)))	OK end-of-file
+7	(condition-case err (completing-read "" '(("a") ("b")) nil nil "a") (error (car err)))	OK end-of-file
+8	(condition-case err (completing-read "" '(("a") ("b"))) (error (car err)))	OK end-of-file
+9	(condition-case err (read-file-name "") (error (car err)))	OK end-of-file
+10	(condition-case err (read-buffer "") (error (car err)))	OK end-of-file
+11	(condition-case err (read-command "") (error (car err)))	OK end-of-file
+12	(condition-case err (read-variable "") (error (car err)))	OK end-of-file

@@ -1,8 +1,11 @@
 ; batch-mode reader input behavior should signal end-of-file.
 (condition-case err (read-number "" 7) (error (car err)))
 (condition-case err (read-number "") (error (car err)))
+(condition-case err (read-string "" "init") (error (car err)))
 (condition-case err (read-string "") (error (car err)))
+(condition-case err (read-from-minibuffer "" "init") (error (car err)))
 (condition-case err (read-from-minibuffer "") (error (car err)))
+(condition-case err (completing-read "" '(("a") ("b")) nil nil "a") (error (car err)))
 (condition-case err (completing-read "" '(("a") ("b"))) (error (car err)))
 (condition-case err (read-file-name "") (error (car err)))
 (condition-case err (read-buffer "") (error (car err)))
