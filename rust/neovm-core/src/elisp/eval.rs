@@ -16,6 +16,7 @@ use super::interactive::InteractiveRegistry;
 use super::mode::ModeRegistry;
 use super::keymap::KeymapManager;
 use super::kill_ring::KillRing;
+use super::rect::RectangleState;
 use super::kmacro::KmacroManager;
 use super::network::NetworkManager;
 use super::process::ProcessManager;
@@ -68,6 +69,8 @@ pub struct Evaluator {
     pub(crate) custom: CustomManager,
     /// Kill ring — clipboard/kill ring for text editing.
     pub(crate) kill_ring: KillRing,
+    /// Rectangle state — stores the last killed rectangle for yank-rectangle.
+    pub(crate) rectangle: RectangleState,
     /// Interactive command registry — tracks interactive commands.
     pub(crate) interactive: InteractiveRegistry,
     /// Frame manager — owns all frames and windows.
@@ -123,6 +126,9 @@ impl Evaluator {
         // Initialize the standard error hierarchy (error, user-error, etc.)
         super::errors::init_standard_errors(&mut obarray);
 
+        // Initialize indentation variables (tab-width, indent-tabs-mode, etc.)
+        super::indent::init_indent_vars(&mut obarray);
+
         Self {
             obarray,
             dynamic: Vec::new(),
@@ -143,6 +149,7 @@ impl Evaluator {
             autoloads: AutoloadManager::new(),
             custom: CustomManager::new(),
             kill_ring: KillRing::new(),
+            rectangle: RectangleState::new(),
             interactive: InteractiveRegistry::new(),
             frames: FrameManager::new(),
             modes: ModeRegistry::new(),
