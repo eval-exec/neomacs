@@ -1,0 +1,32 @@
+; condition-case/unwind-protect control flow around introspection call sites.
+(let ((x 0))
+  (condition-case _
+      (progn (symbol-function 42) (setq x 1))
+    (wrong-type-argument (setq x 7)))
+  x)
+(let ((x 0))
+  (condition-case _
+      (unwind-protect (symbol-function 42) (setq x 5))
+    (wrong-type-argument x)))
+(let ((x 0))
+  (catch 'done
+    (condition-case _
+        (progn (symbol-function 42) (throw 'done 'bad))
+      (wrong-type-argument (throw 'done (setq x 3)))))
+  x)
+(let ((x 0))
+  (catch 'done
+    (unwind-protect
+        (throw 'done (symbol-function 'definitely-not-a-function))
+      (setq x 11)))
+  x)
+(let ((x 0))
+  (condition-case _
+      (progn (indirect-function 42) (setq x 1))
+    (error (setq x 9)))
+  x)
+(let ((x 0))
+  (condition-case _
+      (progn (indirect-function 'definitely-not-a-function) (setq x 4))
+    (error (setq x 8)))
+  x)

@@ -1,0 +1,6 @@
+1	(let ((x 0)) (condition-case _ (progn (symbol-function 42) (setq x 1)) (wrong-type-argument (setq x 7))) x)	OK 7
+2	(let ((x 0)) (condition-case _ (unwind-protect (symbol-function 42) (setq x 5)) (wrong-type-argument x)))	OK 5
+3	(let ((x 0)) (catch 'done (condition-case _ (progn (symbol-function 42) (throw 'done 'bad)) (wrong-type-argument (throw 'done (setq x 3))))) x)	OK 3
+4	(let ((x 0)) (catch 'done (unwind-protect (throw 'done (symbol-function 'definitely-not-a-function)) (setq x 11))) x)	OK 11
+5	(let ((x 0)) (condition-case _ (progn (indirect-function 42) (setq x 1)) (error (setq x 9))) x)	OK 1
+6	(let ((x 0)) (condition-case _ (progn (indirect-function 'definitely-not-a-function) (setq x 4)) (error (setq x 8))) x)	OK 4
