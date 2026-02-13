@@ -305,6 +305,7 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "execute-extended-command",
     "execute-kbd-macro",
     "executing-kbd-macro-p",
+    "exit-minibuffer",
     "expand-abbrev",
     "expand-file-name",
     "extract-rectangle",
@@ -534,7 +535,9 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "merge-face-attribute",
     "message",
     "min",
+    "minibuffer-contents",
     "minibuffer-depth",
+    "minibuffer-prompt",
     "minibufferp",
     "minor-mode-key-binding",
     "mod",
@@ -885,6 +888,9 @@ mod tests {
         assert!(is_dispatch_builtin_name("+"));
         assert!(is_dispatch_builtin_name("read-key"));
         assert!(is_dispatch_builtin_name("read-char-exclusive"));
+        assert!(is_dispatch_builtin_name("minibuffer-prompt"));
+        assert!(is_dispatch_builtin_name("minibuffer-contents"));
+        assert!(is_dispatch_builtin_name("exit-minibuffer"));
     }
 
     #[test]
