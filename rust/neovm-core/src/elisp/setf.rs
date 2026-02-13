@@ -581,28 +581,27 @@ pub(crate) fn sf_gv_define_simple_setter(
     if tail.len() < 2 || tail.len() > 3 {
         return Err(signal("wrong-number-of-arguments", vec![]));
     }
-    let getter = eval.eval(&tail[0])?;
-    let setter = eval.eval(&tail[1])?;
-    let getter_name = getter.as_symbol_name().ok_or_else(|| {
-        signal(
-            "wrong-type-argument",
-            vec![Value::symbol("symbolp"), getter.clone()],
-        )
-    })?;
-    let setter_sym = match &setter {
-        Value::Symbol(s) => Value::Symbol(s.clone()),
-        Value::Nil => Value::symbol("nil"),
-        Value::True => Value::symbol("t"),
+    let getter_name = match &tail[0] {
+        Expr::Symbol(s) => s.as_str(),
         other => {
             return Err(signal(
                 "wrong-type-argument",
-                vec![Value::symbol("symbolp"), other.clone()],
+                vec![Value::symbol("symbolp"), super::eval::quote_to_value(other)],
+            ))
+        }
+    };
+    let setter_sym = match &tail[1] {
+        Expr::Symbol(s) => Value::Symbol(s.clone()),
+        other => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("symbolp"), super::eval::quote_to_value(other)],
             ))
         }
     };
     eval.obarray_mut()
         .put_property(getter_name, "gv-setter", setter_sym);
-    Ok(getter)
+    Ok(Value::Symbol(getter_name.to_string()))
 }
 
 /// `(gv-define-setter GETTER LAMBDA)` -- register a lambda as the
@@ -618,18 +617,20 @@ pub(crate) fn sf_gv_define_setter(
     if tail.len() < 3 {
         return Err(signal("wrong-number-of-arguments", vec![]));
     }
-    let getter = eval.eval(&tail[0])?;
-    let getter_name = getter.as_symbol_name().ok_or_else(|| {
-        signal(
-            "wrong-type-argument",
-            vec![Value::symbol("symbolp"), getter.clone()],
-        )
-    })?;
+    let getter_name = match &tail[0] {
+        Expr::Symbol(s) => s.as_str(),
+        other => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("symbolp"), super::eval::quote_to_value(other)],
+            ))
+        }
+    };
     // Build a lambda from the arglist and body
     let lambda = eval.eval_lambda(&tail[1..])?;
     eval.obarray_mut()
         .put_property(getter_name, "gv-setter", lambda);
-    Ok(getter)
+    Ok(Value::Symbol(getter_name.to_string()))
 }
 
 // ===========================================================================
