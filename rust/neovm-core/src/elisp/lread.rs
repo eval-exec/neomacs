@@ -350,7 +350,7 @@ pub(crate) fn builtin_locate_file(args: Vec<Value>) -> EvalResult {
     let filename = expect_string(&args[0])?;
     let path = parse_path_argument(&args[1])?;
     let suffixes = parse_suffixes_argument(&args[2])?;
-    Ok(match locate_file_with_path_and_suffixes(&filename, &path, &suffixes) {
+    Ok(match locate_file_with_path_and_suffixes(&filename, &path, &suffixes, args.get(3))? {
         Some(found) => Value::string(found),
         None => Value::Nil,
     })
@@ -364,7 +364,7 @@ pub(crate) fn builtin_locate_file_internal(args: Vec<Value>) -> EvalResult {
     let filename = expect_string(&args[0])?;
     let path = parse_path_argument(&args[1])?;
     let suffixes = parse_suffixes_argument(&args[2])?;
-    Ok(match locate_file_with_path_and_suffixes(&filename, &path, &suffixes) {
+    Ok(match locate_file_with_path_and_suffixes(&filename, &path, &suffixes, args.get(3))? {
         Some(found) => Value::string(found),
         None => Value::Nil,
     })
@@ -451,7 +451,8 @@ fn locate_file_with_path_and_suffixes(
     filename: &str,
     path: &[String],
     suffixes: &[String],
-) -> Option<String> {
+    predicate: Option<&Value>,
+) -> Result<Option<String>, Flow> {
     let effective_suffixes: Vec<&str> = if suffixes.is_empty() {
         vec![""]
     } else {
@@ -462,11 +463,13 @@ fn locate_file_with_path_and_suffixes(
     if absolute || path.is_empty() {
         for suffix in &effective_suffixes {
             let candidate = format!("{filename}{suffix}");
-            if Path::new(&candidate).exists() {
-                return Some(candidate);
+            if Path::new(&candidate).exists()
+                && predicate_matches_candidate(predicate, &candidate)?
+            {
+                return Ok(Some(candidate));
             }
         }
-        return None;
+        return Ok(None);
     }
 
     for dir in path {
@@ -474,13 +477,37 @@ fn locate_file_with_path_and_suffixes(
         let base = base.to_string_lossy();
         for suffix in &effective_suffixes {
             let candidate = format!("{base}{suffix}");
-            if Path::new(&candidate).exists() {
-                return Some(candidate);
+            if Path::new(&candidate).exists()
+                && predicate_matches_candidate(predicate, &candidate)?
+            {
+                return Ok(Some(candidate));
             }
         }
     }
 
-    None
+    Ok(None)
+}
+
+fn predicate_matches_candidate(predicate: Option<&Value>, candidate: &str) -> Result<bool, Flow> {
+    let Some(predicate) = predicate else {
+        return Ok(true);
+    };
+    if predicate.is_nil() {
+        return Ok(true);
+    }
+
+    let Some(symbol) = predicate.as_symbol_name() else {
+        // We currently only support symbol predicates in pure dispatch;
+        // unknown predicate object shapes default to accepting candidate.
+        return Ok(true);
+    };
+    let Some(result) = super::builtins::dispatch_builtin_pure(symbol, vec![Value::string(candidate)])
+    else {
+        // Emacs locate-file tolerates non-callable predicate values in practice.
+        // Keep search behavior instead of surfacing an execution error here.
+        return Ok(true);
+    };
+    Ok(result?.is_truthy())
 }
 
 /// Compute the byte offset after the first s-expression in `input`.
@@ -958,6 +985,71 @@ mod tests {
             found.ends_with("probe.el"),
             "expected first matching suffix (.el), got {found}",
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn locate_file_respects_symbol_predicates() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-locate-file-predicate-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::write(dir.join("probe.el"), "(setq vm-locate 1)\n").expect("write .el");
+
+        let regular = builtin_locate_file(vec![
+            Value::string("probe"),
+            Value::list(vec![Value::string(dir.to_string_lossy())]),
+            Value::list(vec![Value::string(".el")]),
+            Value::symbol("file-regular-p"),
+        ])
+        .expect("locate-file with file-regular-p should evaluate");
+        assert!(
+            regular.as_str().is_some(),
+            "regular-file predicate should accept candidate",
+        );
+
+        let directory = builtin_locate_file(vec![
+            Value::string("probe"),
+            Value::list(vec![Value::string(dir.to_string_lossy())]),
+            Value::list(vec![Value::string(".el")]),
+            Value::symbol("file-directory-p"),
+        ])
+        .expect("locate-file with file-directory-p should evaluate");
+        assert!(directory.is_nil(), "directory predicate should reject file");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn locate_file_unknown_predicate_defaults_to_truthy_match() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-locate-file-bad-predicate-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::write(dir.join("probe.el"), "(setq vm-locate 1)\n").expect("write .el");
+
+        let result = builtin_locate_file(vec![
+            Value::string("probe"),
+            Value::list(vec![Value::string(dir.to_string_lossy())]),
+            Value::list(vec![Value::string(".el")]),
+            Value::symbol("definitely-not-a-real-predicate"),
+        ])
+        .expect("locate-file should evaluate");
+        let found = result
+            .as_str()
+            .expect("unknown predicate should not prevent match");
+        assert!(found.ends_with("probe.el"), "unexpected result: {found}");
 
         let _ = fs::remove_dir_all(&dir);
     }
