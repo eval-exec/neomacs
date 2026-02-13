@@ -8,6 +8,9 @@
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
+use std::collections::VecDeque;
+#[cfg(unix)]
+use std::ffi::{CStr, CString};
 use std::fs;
 
 // ---------------------------------------------------------------------------
@@ -41,6 +44,84 @@ fn ensure_trailing_slash(dir: &str) -> String {
         dir.to_string()
     } else {
         format!("{}/", dir)
+    }
+}
+
+#[cfg(unix)]
+fn read_directory_names(dir: &str) -> Result<Vec<String>, Flow> {
+    let dir_cstr = CString::new(dir).map_err(|_| {
+        signal(
+            "file-error",
+            vec![
+                Value::string("Opening directory"),
+                Value::string("path contains interior NUL"),
+                Value::string(dir),
+            ],
+        )
+    })?;
+    let dirp = unsafe { libc::opendir(dir_cstr.as_ptr()) };
+    if dirp.is_null() {
+        return Err(signal(
+            "file-error",
+            vec![
+                Value::string("Opening directory"),
+                Value::string(std::io::Error::last_os_error().to_string()),
+                Value::string(dir),
+            ],
+        ));
+    }
+
+    let mut names = Vec::new();
+    loop {
+        let entry = unsafe { libc::readdir(dirp) };
+        if entry.is_null() {
+            break;
+        }
+        let raw_name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        names.push(raw_name.to_string_lossy().into_owned());
+    }
+
+    let _ = unsafe { libc::closedir(dirp) };
+    Ok(names)
+}
+
+#[cfg(not(unix))]
+fn read_directory_names(dir: &str) -> Result<Vec<String>, Flow> {
+    let entries = fs::read_dir(dir).map_err(|e| {
+        signal(
+            "file-error",
+            vec![
+                Value::string("Opening directory"),
+                Value::string(e.to_string()),
+                Value::string(dir),
+            ],
+        )
+    })?;
+    let mut names = vec![".".to_string(), "..".to_string()];
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            signal(
+                "file-error",
+                vec![Value::string(format!("Reading directory entry: {}", e))],
+            )
+        })?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    Ok(names)
+}
+
+fn parse_wholenump_count(arg: Option<&Value>) -> Result<Option<usize>, Flow> {
+    match arg {
+        Some(Value::Int(n)) if *n >= 0 => Ok(Some(*n as usize)),
+        Some(v @ Value::Int(_)) => Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("wholenump"), v.clone()],
+        )),
+        Some(v) if v.is_truthy() => Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("wholenump"), v.clone()],
+        )),
+        _ => Ok(None),
     }
 }
 
@@ -310,16 +391,10 @@ pub(crate) fn builtin_directory_files(args: Vec<Value>) -> EvalResult {
         _ => None,
     };
     let nosort = args.get(3).is_some_and(|v| v.is_truthy());
-    let count = match args.get(4) {
-        Some(Value::Int(n)) => Some(*n as usize),
-        Some(v) if v.is_truthy() => {
-            return Err(signal(
-                "wrong-type-argument",
-                vec![Value::symbol("integerp"), v.clone()],
-            ));
-        }
-        _ => None,
-    };
+    let count = parse_wholenump_count(args.get(4))?;
+    if count == Some(0) {
+        return Ok(Value::Nil);
+    }
 
     // Compile regex if provided.
     let re = match &match_regexp {
@@ -338,28 +413,12 @@ pub(crate) fn builtin_directory_files(args: Vec<Value>) -> EvalResult {
         None => None,
     };
 
-    let entries = fs::read_dir(&dir).map_err(|e| {
-        signal(
-            "file-error",
-            vec![
-                Value::string("Opening directory"),
-                Value::string(e.to_string()),
-                Value::string(&dir),
-            ],
-        )
-    })?;
+    let names = read_directory_names(&dir)?;
 
     let dir_with_slash = ensure_trailing_slash(&dir);
-
-    let mut result: Vec<String> = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            signal(
-                "file-error",
-                vec![Value::string(format!("Reading directory entry: {}", e))],
-            )
-        })?;
-        let name = entry.file_name().to_string_lossy().into_owned();
+    let mut result: VecDeque<String> = VecDeque::new();
+    let mut remaining = count.unwrap_or(usize::MAX);
+    for name in names {
 
         // Apply regex filter.
         if let Some(ref re) = re {
@@ -369,20 +428,23 @@ pub(crate) fn builtin_directory_files(args: Vec<Value>) -> EvalResult {
         }
 
         if full_name {
-            result.push(format!("{}{}", dir_with_slash, name));
+            result.push_front(format!("{}{}", dir_with_slash, name));
         } else {
-            result.push(name);
+            result.push_front(name);
+        }
+
+        if remaining != usize::MAX {
+            remaining -= 1;
+            if remaining == 0 {
+                break;
+            }
         }
     }
 
+    let mut result: Vec<String> = result.into_iter().collect();
     // Sort unless NOSORT is non-nil.
     if !nosort {
         result.sort();
-    }
-
-    // Apply COUNT limit.
-    if let Some(n) = count {
-        result.truncate(n);
     }
 
     Ok(Value::list(result.into_iter().map(Value::string).collect()))
@@ -402,20 +464,11 @@ pub(crate) fn builtin_directory_files_and_attributes(args: Vec<Value>) -> EvalRe
         _ => None,
     };
     let nosort = args.get(3).is_some_and(|v| v.is_truthy());
-    let id_format_string = match args.get(4) {
-        Some(Value::Symbol(s)) if s == "string" => true,
-        _ => false,
-    };
-    let count = match args.get(5) {
-        Some(Value::Int(n)) => Some(*n as usize),
-        Some(v) if v.is_truthy() => {
-            return Err(signal(
-                "wrong-type-argument",
-                vec![Value::symbol("integerp"), v.clone()],
-            ));
-        }
-        _ => None,
-    };
+    let id_format_string = args.get(4).is_some_and(|v| v.is_truthy());
+    let count = parse_wholenump_count(args.get(5))?;
+    if count == Some(0) {
+        return Ok(Value::Nil);
+    }
 
     // Compile regex if provided.
     let re = match &match_regexp {
@@ -434,29 +487,12 @@ pub(crate) fn builtin_directory_files_and_attributes(args: Vec<Value>) -> EvalRe
         None => None,
     };
 
-    let entries = fs::read_dir(&dir).map_err(|e| {
-        signal(
-            "file-error",
-            vec![
-                Value::string("Opening directory"),
-                Value::string(e.to_string()),
-                Value::string(&dir),
-            ],
-        )
-    })?;
+    let names = read_directory_names(&dir)?;
 
     let dir_with_slash = ensure_trailing_slash(&dir);
-
-    // Collect (display_name, full_path) pairs.
-    let mut items: Vec<(String, String)> = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            signal(
-                "file-error",
-                vec![Value::string(format!("Reading directory entry: {}", e))],
-            )
-        })?;
-        let name = entry.file_name().to_string_lossy().into_owned();
+    let mut items: VecDeque<(String, String)> = VecDeque::new();
+    let mut remaining = count.unwrap_or(usize::MAX);
+    for name in names {
 
         // Apply regex filter.
         if let Some(ref re) = re {
@@ -467,17 +503,20 @@ pub(crate) fn builtin_directory_files_and_attributes(args: Vec<Value>) -> EvalRe
 
         let full_path = format!("{}{}", dir_with_slash, name);
         let display_name = if full_name { full_path.clone() } else { name };
-        items.push((display_name, full_path));
+        items.push_front((display_name, full_path));
+
+        if remaining != usize::MAX {
+            remaining -= 1;
+            if remaining == 0 {
+                break;
+            }
+        }
     }
 
+    let mut items: Vec<(String, String)> = items.into_iter().collect();
     // Sort unless NOSORT is non-nil.
     if !nosort {
         items.sort_by(|a, b| a.0.cmp(&b.0));
-    }
-
-    // Apply COUNT limit.
-    if let Some(n) = count {
-        items.truncate(n);
     }
 
     // Build result list of (NAME . ATTRIBUTES) cons cells.
@@ -881,6 +920,132 @@ mod tests {
             }
         }
         assert!(found, "test.txt not found in results");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_directory_files_and_attributes_order_and_count() {
+        let (dir, dir_str) = make_test_dir("dfa_count");
+        create_file(&dir, "alpha.txt", "");
+        create_file(&dir, "beta.txt", "");
+        create_file(&dir, "z.txt", "");
+
+        let unsorted = builtin_directory_files_and_attributes(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::True,
+        ])
+        .unwrap();
+        let unsorted_items = list_to_vec(&unsorted).unwrap();
+        let unsorted_names: Vec<String> = unsorted_items
+            .iter()
+            .map(|pair| {
+                if let Value::Cons(cell) = pair {
+                    cell.lock().unwrap().car.as_str().unwrap().to_string()
+                } else {
+                    panic!("expected cons pair");
+                }
+            })
+            .collect();
+        assert!(unsorted_names.contains(&".".to_string()));
+        assert!(unsorted_names.contains(&"..".to_string()));
+
+        let unsorted_limited = builtin_directory_files_and_attributes(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::True,
+            Value::Nil,
+            Value::Int(2),
+        ])
+        .unwrap();
+        let unsorted_limited_names: Vec<String> = list_to_vec(&unsorted_limited)
+            .unwrap()
+            .iter()
+            .map(|pair| {
+                if let Value::Cons(cell) = pair {
+                    cell.lock().unwrap().car.as_str().unwrap().to_string()
+                } else {
+                    panic!("expected cons pair");
+                }
+            })
+            .collect();
+        let tail = &unsorted_names[unsorted_names.len() - 2..];
+        assert_eq!(unsorted_limited_names.as_slice(), tail);
+
+        let sorted_limited = builtin_directory_files_and_attributes(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Int(2),
+        ])
+        .unwrap();
+        let sorted_limited_names: Vec<String> = list_to_vec(&sorted_limited)
+            .unwrap()
+            .iter()
+            .map(|pair| {
+                if let Value::Cons(cell) = pair {
+                    cell.lock().unwrap().car.as_str().unwrap().to_string()
+                } else {
+                    panic!("expected cons pair");
+                }
+            })
+            .collect();
+        let mut sorted_from_unsorted = unsorted_limited_names.clone();
+        sorted_from_unsorted.sort();
+        assert_eq!(sorted_limited_names, sorted_from_unsorted);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_directory_files_and_attributes_count_and_id_format() {
+        let (dir, dir_str) = make_test_dir("dfa_types");
+        create_file(&dir, "alpha.txt", "");
+
+        let result = builtin_directory_files_and_attributes(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Int(-1),
+        ]);
+        assert!(result.is_err());
+
+        let result = builtin_directory_files_and_attributes(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::string("x"),
+        ]);
+        assert!(result.is_err());
+
+        let result = builtin_directory_files_and_attributes(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::True,
+            Value::Int(1),
+        ])
+        .unwrap();
+        let items = list_to_vec(&result).unwrap();
+        assert_eq!(items.len(), 1);
+        let attrs = if let Value::Cons(cell) = &items[0] {
+            cell.lock().unwrap().cdr.clone()
+        } else {
+            panic!("expected cons pair");
+        };
+        let attrs_items = list_to_vec(&attrs).unwrap();
+        assert!(attrs_items[2].is_string());
+        assert!(attrs_items[3].is_string());
 
         let _ = fs::remove_dir_all(&dir);
     }
