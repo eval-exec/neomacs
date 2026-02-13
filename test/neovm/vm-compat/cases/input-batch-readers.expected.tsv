@@ -27,14 +27,17 @@
 27	(condition-case err (progn (setq unread-command-events (list 'foo)) (read-char-exclusive nil nil 0)) (error (car err)))	OK nil
 28	(condition-case err (progn (setq unread-command-events (list 97)) (read-char)) (error (car err)))	OK 97
 29	(condition-case err (progn (setq unread-command-events (list 97)) (read-key nil)) (error (car err)))	OK 97
-30	(condition-case err (progn (setq unread-command-events (list 97)) (read-key-sequence "")) (error (car err)))	OK "a"
-31	(condition-case err (progn (setq unread-command-events (list 97 98)) (read-key-sequence "")) (error (car err)))	OK "a"
-32	(condition-case err (progn (setq unread-command-events (list '(mouse-1))) (read-key-sequence "")) (error (car err)))	OK [(mouse-1)]
-33	(condition-case err (progn (setq unread-command-events (list 'foo)) (read-key-sequence "")) (error (car err)))	OK [foo]
-34	(condition-case err (progn (setq unread-command-events (list 97)) (read-event)) (error (car err)))	OK 97
-35	(condition-case err (progn (setq unread-command-events (list 97)) (read-char-exclusive)) (error (car err)))	OK 97
-36	(condition-case err (progn (setq unread-command-events (list 97)) (read-key-sequence-vector "")) (error (car err)))	OK [97]
-37	(condition-case err (progn (setq unread-command-events (list 97 98)) (read-key-sequence-vector "")) (error (car err)))	OK [97]
-38	(condition-case err (progn (setq unread-command-events (list '(mouse-1))) (read-key-sequence-vector "")) (error (car err)))	OK [(mouse-1)]
-39	(condition-case err (progn (setq unread-command-events (list 'foo)) (read-key-sequence-vector "")) (error (car err)))	OK [foo]
-40	(condition-case err (read-key-sequence-vector 123) (error (car err)))	OK wrong-type-argument
+30	(condition-case err (progn (setq unread-command-events (list 97 98)) (read-key nil)) (error (car err)))	OK 97
+31	(condition-case err (progn (setq unread-command-events (list '(mouse-1))) (read-key nil)) (error (car err)))	OK (mouse-1)
+32	(condition-case err (progn (setq unread-command-events (list 'foo)) (read-key nil)) (error (car err)))	OK foo
+33	(condition-case err (progn (setq unread-command-events (list 97)) (read-key-sequence "")) (error (car err)))	OK "a"
+34	(condition-case err (progn (setq unread-command-events (list 97 98)) (read-key-sequence "")) (error (car err)))	OK "a"
+35	(condition-case err (progn (setq unread-command-events (list '(mouse-1))) (read-key-sequence "")) (error (car err)))	OK [(mouse-1)]
+36	(condition-case err (progn (setq unread-command-events (list 'foo)) (read-key-sequence "")) (error (car err)))	OK [foo]
+37	(condition-case err (progn (setq unread-command-events (list 97)) (read-event)) (error (car err)))	OK 97
+38	(condition-case err (progn (setq unread-command-events (list 97)) (read-char-exclusive)) (error (car err)))	OK 97
+39	(condition-case err (progn (setq unread-command-events (list 97)) (read-key-sequence-vector "")) (error (car err)))	OK [97]
+40	(condition-case err (progn (setq unread-command-events (list 97 98)) (read-key-sequence-vector "")) (error (car err)))	OK [97]
+41	(condition-case err (progn (setq unread-command-events (list '(mouse-1))) (read-key-sequence-vector "")) (error (car err)))	OK [(mouse-1)]
+42	(condition-case err (progn (setq unread-command-events (list 'foo)) (read-key-sequence-vector "")) (error (car err)))	OK [foo]
+43	(condition-case err (read-key-sequence-vector 123) (error (car err)))	OK wrong-type-argument
