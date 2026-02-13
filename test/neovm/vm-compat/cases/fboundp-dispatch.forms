@@ -1,0 +1,6 @@
+; fboundp should report builtin dispatch names as bound.
+(fboundp 'message)
+(fboundp 'load)
+(fboundp 'symbol-value)
+(fboundp 'random)
+(fboundp 'definitely-not-a-builtin)
