@@ -1,0 +1,6 @@
+(seq-uniq '(1 2 1 3 2))
+(seq-uniq [1 2 1 3 2])
+(seq-uniq "abca")
+(seq-uniq nil)
+(seq-uniq 5)
+(seq-uniq '(1 . 2))
