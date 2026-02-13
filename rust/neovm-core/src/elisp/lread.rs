@@ -5,6 +5,7 @@
 
 use super::error::{signal, EvalResult, Flow, SignalData};
 use super::value::*;
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -343,18 +344,30 @@ pub(crate) fn builtin_get_load_suffixes(args: Vec<Value>) -> EvalResult {
 
 /// `(locate-file FILENAME PATH SUFFIXES &optional PREDICATE)`
 ///
-/// Stub: returns nil (file not found).
+/// Search PATH for FILENAME with each suffix in SUFFIXES.
 pub(crate) fn builtin_locate_file(args: Vec<Value>) -> EvalResult {
     expect_min_args("locate-file", &args, 3)?;
-    Ok(Value::Nil)
+    let filename = expect_string(&args[0])?;
+    let path = parse_path_argument(&args[1])?;
+    let suffixes = parse_suffixes_argument(&args[2])?;
+    Ok(match locate_file_with_path_and_suffixes(&filename, &path, &suffixes) {
+        Some(found) => Value::string(found),
+        None => Value::Nil,
+    })
 }
 
 /// `(locate-file-internal FILENAME PATH SUFFIXES &optional PREDICATE)`
 ///
-/// Stub: returns nil (file not found).
+/// Internal variant of `locate-file`; currently uses the same lookup behavior.
 pub(crate) fn builtin_locate_file_internal(args: Vec<Value>) -> EvalResult {
     expect_min_args("locate-file-internal", &args, 3)?;
-    Ok(Value::Nil)
+    let filename = expect_string(&args[0])?;
+    let path = parse_path_argument(&args[1])?;
+    let suffixes = parse_suffixes_argument(&args[2])?;
+    Ok(match locate_file_with_path_and_suffixes(&filename, &path, &suffixes) {
+        Some(found) => Value::string(found),
+        None => Value::Nil,
+    })
 }
 
 /// `(read-coding-system PROMPT &optional DEFAULT-CODING-SYSTEM)`
@@ -390,6 +403,85 @@ fn eval_error_to_flow(e: super::error::EvalError) -> Flow {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+fn expect_list(value: &Value) -> Result<Vec<Value>, Flow> {
+    list_to_vec(value).ok_or_else(|| {
+        signal(
+            "wrong-type-argument",
+            vec![Value::symbol("listp"), value.clone()],
+        )
+    })
+}
+
+fn parse_path_argument(value: &Value) -> Result<Vec<String>, Flow> {
+    let mut path = Vec::new();
+    for entry in expect_list(value)? {
+        match entry {
+            Value::Nil => path.push(".".to_string()),
+            Value::Str(s) => path.push((*s).clone()),
+            other => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("stringp"), other],
+                ))
+            }
+        }
+    }
+    Ok(path)
+}
+
+fn parse_suffixes_argument(value: &Value) -> Result<Vec<String>, Flow> {
+    let mut suffixes = Vec::new();
+    for entry in expect_list(value)? {
+        match entry {
+            Value::Nil => suffixes.push(String::new()),
+            Value::Str(s) => suffixes.push((*s).clone()),
+            other => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("stringp"), other],
+                ))
+            }
+        }
+    }
+    Ok(suffixes)
+}
+
+fn locate_file_with_path_and_suffixes(
+    filename: &str,
+    path: &[String],
+    suffixes: &[String],
+) -> Option<String> {
+    let effective_suffixes: Vec<&str> = if suffixes.is_empty() {
+        vec![""]
+    } else {
+        suffixes.iter().map(|s| s.as_str()).collect()
+    };
+
+    let absolute = Path::new(filename).is_absolute();
+    if absolute || path.is_empty() {
+        for suffix in &effective_suffixes {
+            let candidate = format!("{filename}{suffix}");
+            if Path::new(&candidate).exists() {
+                return Some(candidate);
+            }
+        }
+        return None;
+    }
+
+    for dir in path {
+        let base = Path::new(dir).join(filename);
+        let base = base.to_string_lossy();
+        for suffix in &effective_suffixes {
+            let candidate = format!("{base}{suffix}");
+            if Path::new(&candidate).exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
 
 /// Compute the byte offset after the first s-expression in `input`.
 /// Skips leading whitespace/comments, then skips one complete sexp.
@@ -842,18 +934,71 @@ mod tests {
     }
 
     #[test]
-    fn locate_file_returns_nil() {
-        let result =
-            builtin_locate_file(vec![Value::string("foo"), Value::Nil, Value::Nil]).unwrap();
+    fn locate_file_finds_first_matching_suffix() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-locate-file-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::write(dir.join("probe.el"), "(setq vm-locate 1)\n").expect("write .el");
+        fs::write(dir.join("probe.elc"), "compiled").expect("write .elc");
+
+        let result = builtin_locate_file(vec![
+            Value::string("probe"),
+            Value::list(vec![Value::string(dir.to_string_lossy())]),
+            Value::list(vec![Value::string(".el"), Value::string(".elc")]),
+        ])
+        .expect("locate-file should succeed");
+        let found = result.as_str().expect("locate-file should return path");
+        assert!(
+            found.ends_with("probe.el"),
+            "expected first matching suffix (.el), got {found}",
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn locate_file_internal_returns_nil_when_missing() {
+        let result = builtin_locate_file_internal(vec![
+            Value::string("definitely-missing-neovm-file"),
+            Value::list(vec![Value::string(".")]),
+            Value::list(vec![Value::string(".el")]),
+        ])
+        .expect("locate-file-internal should evaluate");
         assert!(result.is_nil());
     }
 
     #[test]
-    fn locate_file_internal_returns_nil() {
-        let result =
-            builtin_locate_file_internal(vec![Value::string("foo"), Value::Nil, Value::Nil])
-                .unwrap();
-        assert!(result.is_nil());
+    fn locate_file_internal_finds_requested_suffix() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-locate-file-internal-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::write(dir.join("probe.elc"), "compiled").expect("write .elc");
+
+        let result = builtin_locate_file_internal(vec![
+            Value::string("probe"),
+            Value::list(vec![Value::string(dir.to_string_lossy())]),
+            Value::list(vec![Value::string(".elc")]),
+        ])
+        .expect("locate-file-internal should succeed");
+        let found = result.as_str().expect("locate-file-internal should return path");
+        assert!(
+            found.ends_with("probe.elc"),
+            "expected .elc resolution, got {found}",
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
