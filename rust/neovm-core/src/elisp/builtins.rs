@@ -2906,6 +2906,20 @@ enum PureBuiltinId {
     Vectorp,
     #[strum(serialize = "characterp")]
     Characterp,
+    #[strum(serialize = "functionp")]
+    Functionp,
+    #[strum(serialize = "keywordp")]
+    Keywordp,
+    #[strum(serialize = "hash-table-p")]
+    HashTablep,
+    #[strum(serialize = "bufferp")]
+    Bufferp,
+    #[strum(serialize = "type-of")]
+    TypeOf,
+    #[strum(serialize = "sequencep")]
+    Sequencep,
+    #[strum(serialize = "arrayp")]
+    Arrayp,
 }
 
 fn dispatch_builtin_id_pure(id: PureBuiltinId, args: Vec<Value>) -> EvalResult {
@@ -2944,6 +2958,13 @@ fn dispatch_builtin_id_pure(id: PureBuiltinId, args: Vec<Value>) -> EvalResult {
         PureBuiltinId::Stringp => builtin_stringp(args),
         PureBuiltinId::Vectorp => builtin_vectorp(args),
         PureBuiltinId::Characterp => builtin_characterp(args),
+        PureBuiltinId::Functionp => builtin_functionp(args),
+        PureBuiltinId::Keywordp => builtin_keywordp(args),
+        PureBuiltinId::HashTablep => builtin_hash_table_p(args),
+        PureBuiltinId::Bufferp => builtin_bufferp(args),
+        PureBuiltinId::TypeOf => builtin_type_of(args),
+        PureBuiltinId::Sequencep => builtin_sequencep(args),
+        PureBuiltinId::Arrayp => builtin_arrayp(args),
     }
 }
 
@@ -3458,13 +3479,7 @@ pub(crate) fn dispatch_builtin(
 
         // Type predicates (typed subset is dispatched above)
         // Type predicates (typed subset is dispatched above)
-        "functionp" => builtin_functionp(args),
-        "keywordp" => builtin_keywordp(args),
-        "hash-table-p" => builtin_hash_table_p(args),
-        "bufferp" => builtin_bufferp(args),
-        "type-of" => builtin_type_of(args),
-        "sequencep" => builtin_sequencep(args),
-        "arrayp" => builtin_arrayp(args),
+        // Type predicates (typed subset is dispatched above)
 
         // Equality
         "eq" => builtin_eq(args),
