@@ -1,0 +1,11 @@
+1	97	OK 97
+2	(prin1-to-string 97)	OK "97"
+3	(with-output-to-string (prin1 97))	OK "97"
+4	(with-output-to-string (princ 97))	OK "97"
+5	(format "%S" 97)	OK "97"
+6	(aref "ab" 0)	OK 97
+7	(eq 97 97)	OK t
+8	(equal 97 97)	OK t
+9	(let ((h (make-hash-table :test 'eq))) (puthash 97 'x h) (gethash 97 h))	OK x
+10	(let ((h (make-hash-table :test 'eql))) (puthash 97 'x h) (gethash 97 h))	OK x
+11	(let ((h (make-hash-table :test 'equal))) (puthash 97 'x h) (gethash 97 h))	OK x

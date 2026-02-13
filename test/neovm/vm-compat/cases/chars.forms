@@ -1,0 +1,18 @@
+; Character values behave like integers in core printing/equality/hash semantics.
+?a
+(prin1-to-string ?a)
+(with-output-to-string (prin1 ?a))
+(with-output-to-string (princ ?a))
+(format "%S" ?a)
+(aref "ab" 0)
+(eq ?a 97)
+(equal ?a 97)
+(let ((h (make-hash-table :test 'eq)))
+  (puthash ?a 'x h)
+  (gethash 97 h))
+(let ((h (make-hash-table :test 'eql)))
+  (puthash ?a 'x h)
+  (gethash 97 h))
+(let ((h (make-hash-table :test 'equal)))
+  (puthash ?a 'x h)
+  (gethash 97 h))
