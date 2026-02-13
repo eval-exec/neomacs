@@ -178,6 +178,17 @@ pub fn file_name_concat(parts: &[&str]) -> String {
     out
 }
 
+/// Return true if FILENAME is an absolute file name.
+/// On Unix this means it starts with `/` or `~`.
+pub fn file_name_absolute_p(filename: &str) -> bool {
+    filename.starts_with('/') || filename.starts_with('~')
+}
+
+/// Return true if NAME is a directory name (ends with a directory separator).
+pub fn directory_name_p(name: &str) -> bool {
+    name.ends_with('/')
+}
+
 // ===========================================================================
 // File predicates (pure)
 // ===========================================================================
@@ -421,6 +432,16 @@ fn expect_string(value: &Value) -> Result<String, Flow> {
     }
 }
 
+fn expect_string_strict(value: &Value) -> Result<String, Flow> {
+    match value {
+        Value::Str(s) => Ok((**s).clone()),
+        other => Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("stringp"), other.clone()],
+        )),
+    }
+}
+
 /// (expand-file-name NAME &optional DEFAULT-DIRECTORY) -> string
 pub(crate) fn builtin_expand_file_name(args: Vec<Value>) -> EvalResult {
     expect_min_args("expand-file-name", &args, 1)?;
@@ -508,6 +529,20 @@ pub(crate) fn builtin_file_name_concat(args: Vec<Value>) -> EvalResult {
 
     let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
     Ok(Value::string(file_name_concat(&refs)))
+}
+
+/// (file-name-absolute-p FILENAME) -> t or nil
+pub(crate) fn builtin_file_name_absolute_p(args: Vec<Value>) -> EvalResult {
+    expect_args("file-name-absolute-p", &args, 1)?;
+    let filename = expect_string_strict(&args[0])?;
+    Ok(Value::bool(file_name_absolute_p(&filename)))
+}
+
+/// (directory-name-p NAME) -> t or nil
+pub(crate) fn builtin_directory_name_p(args: Vec<Value>) -> EvalResult {
+    expect_args("directory-name-p", &args, 1)?;
+    let name = expect_string_strict(&args[0])?;
+    Ok(Value::bool(directory_name_p(&name)))
 }
 
 /// (file-exists-p FILENAME) -> t or nil
@@ -926,6 +961,25 @@ mod tests {
         assert_eq!(file_name_concat(&[]), "");
     }
 
+    #[test]
+    fn test_file_name_absolute_p() {
+        assert!(file_name_absolute_p("/tmp"));
+        assert!(file_name_absolute_p("~/tmp"));
+        assert!(file_name_absolute_p("~"));
+        assert!(file_name_absolute_p("~root"));
+        assert!(!file_name_absolute_p("tmp"));
+        assert!(!file_name_absolute_p("./tmp"));
+    }
+
+    #[test]
+    fn test_directory_name_p() {
+        assert!(directory_name_p("/tmp/"));
+        assert!(directory_name_p("foo/"));
+        assert!(!directory_name_p("/tmp"));
+        assert!(!directory_name_p("foo"));
+        assert!(!directory_name_p(""));
+    }
+
     // -----------------------------------------------------------------------
     // File predicates
     // -----------------------------------------------------------------------
@@ -1174,6 +1228,30 @@ mod tests {
         assert_eq!(result.unwrap().as_str(), Some("bar"));
 
         let result = builtin_file_name_concat(vec![Value::symbol("foo"), Value::string("bar")]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_builtin_path_predicates() {
+        let result = builtin_file_name_absolute_p(vec![Value::string("/tmp")]);
+        assert_eq!(result.unwrap(), Value::True);
+
+        let result = builtin_file_name_absolute_p(vec![Value::string("tmp")]);
+        assert_eq!(result.unwrap(), Value::Nil);
+
+        let result = builtin_directory_name_p(vec![Value::string("foo/")]);
+        assert_eq!(result.unwrap(), Value::True);
+
+        let result = builtin_directory_name_p(vec![Value::string("foo")]);
+        assert_eq!(result.unwrap(), Value::Nil);
+    }
+
+    #[test]
+    fn test_builtin_path_predicates_strict_types() {
+        let result = builtin_file_name_absolute_p(vec![Value::symbol("foo")]);
+        assert!(result.is_err());
+
+        let result = builtin_directory_name_p(vec![Value::Nil]);
         assert!(result.is_err());
     }
 
