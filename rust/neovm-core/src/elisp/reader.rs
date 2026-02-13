@@ -874,6 +874,12 @@ pub(crate) fn builtin_read_key(
     eval: &mut super::eval::Evaluator,
     args: Vec<Value>,
 ) -> EvalResult {
+    if args.len() > 2 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("read-key"), Value::Int(args.len() as i64)],
+        ));
+    }
     expect_optional_prompt_string(&args)?;
     if let Some(event) = pop_unread_command_event(eval) {
         if let Some(n) = event_to_int(&event) {
@@ -1520,6 +1526,28 @@ mod tests {
         assert!(matches!(
             result,
             Err(Flow::Signal(sig)) if sig.symbol == "wrong-type-argument"
+        ));
+    }
+
+    #[test]
+    fn read_key_accepts_second_optional_arg() {
+        let mut ev = Evaluator::new();
+        ev.obarray
+            .set_symbol_value("unread-command-events", Value::list(vec![Value::Int(97)]));
+        let result = builtin_read_key(&mut ev, vec![Value::string("key: "), Value::Int(1)]).unwrap();
+        assert_eq!(result.as_int(), Some(97));
+    }
+
+    #[test]
+    fn read_key_rejects_more_than_two_args() {
+        let mut ev = Evaluator::new();
+        let result = builtin_read_key(
+            &mut ev,
+            vec![Value::string("key: "), Value::Nil, Value::Int(123)],
+        );
+        assert!(matches!(
+            result,
+            Err(Flow::Signal(sig)) if sig.symbol == "wrong-number-of-arguments"
         ));
     }
 
