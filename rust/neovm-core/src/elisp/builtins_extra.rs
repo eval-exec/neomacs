@@ -190,24 +190,14 @@ pub fn builtin_take(args: Vec<Value>) -> EvalResult {
 /// `(seq-uniq SEQ)` — remove duplicates (equal).
 pub fn builtin_seq_uniq(args: Vec<Value>) -> EvalResult {
     expect_args("seq-uniq", &args, 1)?;
-    let list = &args[0];
-
-    let mut result: Vec<Value> = Vec::new();
-    let mut cursor = list.clone();
-    loop {
-        match cursor {
-            Value::Nil => break,
-            Value::Cons(cell) => {
-                let pair = cell.lock().expect("poisoned");
-                let already = result
-                    .iter()
-                    .any(|v| super::value::equal_value(v, &pair.car, 0));
-                if !already {
-                    result.push(pair.car.clone());
-                }
-                cursor = pair.cdr.clone();
-            }
-            _ => break,
+    let elements = collect_sequence_strict(&args[0])?;
+    let mut result = Vec::new();
+    for value in &elements {
+        let already = result
+            .iter()
+            .any(|seen| super::value::equal_value(seen, value, 0));
+        if !already {
+            result.push(value.clone());
         }
     }
     Ok(Value::list(result))
