@@ -408,16 +408,17 @@ pub fn write_string_to_file(content: &str, filename: &str, append: bool) -> std:
 /// If NOSORT is true, preserve filesystem enumeration order.
 /// COUNT limits the number of accepted entries during enumeration.
 #[cfg(unix)]
-fn read_directory_names(dir: &str) -> Result<Vec<String>, String> {
-    let dir_cstr = CString::new(dir)
-        .map_err(|_| format!("Opening directory {}: path contains interior NUL", dir))?;
+fn read_directory_names(dir: &str) -> Result<Vec<String>, DirectoryFilesError> {
+    let dir_cstr = CString::new(dir).map_err(|_| DirectoryFilesError::Io {
+        action: "Opening directory",
+        err: std::io::Error::new(ErrorKind::InvalidInput, "path contains interior NUL"),
+    })?;
     let dirp = unsafe { libc::opendir(dir_cstr.as_ptr()) };
     if dirp.is_null() {
-        return Err(format!(
-            "Opening directory {}: {}",
-            dir,
-            std::io::Error::last_os_error()
-        ));
+        return Err(DirectoryFilesError::Io {
+            action: "Opening directory",
+            err: std::io::Error::last_os_error(),
+        });
     }
 
     let mut names = Vec::new();
@@ -435,31 +436,46 @@ fn read_directory_names(dir: &str) -> Result<Vec<String>, String> {
 }
 
 #[cfg(not(unix))]
-fn read_directory_names(dir: &str) -> Result<Vec<String>, String> {
-    let entries = fs::read_dir(dir).map_err(|e| format!("Opening directory {}: {}", dir, e))?;
+fn read_directory_names(dir: &str) -> Result<Vec<String>, DirectoryFilesError> {
+    let entries = fs::read_dir(dir).map_err(|e| DirectoryFilesError::Io {
+        action: "Opening directory",
+        err: e,
+    })?;
     let mut names = vec![".".to_string(), "..".to_string()];
     for entry in entries {
-        let entry = entry.map_err(|e| format!("Reading directory entry: {}", e))?;
+        let entry = entry.map_err(|e| DirectoryFilesError::Io {
+            action: "Reading directory entry",
+            err: e,
+        })?;
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
     Ok(names)
 }
 
-pub fn directory_files(
+#[derive(Debug)]
+enum DirectoryFilesError {
+    Io {
+        action: &'static str,
+        err: std::io::Error,
+    },
+    InvalidRegexp(String),
+}
+
+fn directory_files(
     dir: &str,
     full: bool,
     match_regex: Option<&str>,
     nosort: bool,
     count: Option<usize>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, DirectoryFilesError> {
     if count == Some(0) {
         return Ok(Vec::new());
     }
 
     let re = match match_regex {
-        Some(pattern) => Some(
-            Regex::new(pattern).map_err(|e| format!("Invalid regexp \"{}\": {}", pattern, e))?,
-        ),
+        Some(pattern) => Some(Regex::new(pattern).map_err(|e| {
+            DirectoryFilesError::InvalidRegexp(format!("Invalid regexp \"{}\": {}", pattern, e))
+        })?),
         None => None,
     };
 
@@ -837,6 +853,15 @@ fn signal_file_io_paths(err: std::io::Error, action: &str, from: &str, to: &str)
     signal_file_io_error(err, format!("{action} {from} to {to}"))
 }
 
+fn signal_directory_files_error(err: DirectoryFilesError, dir: &str) -> Flow {
+    match err {
+        DirectoryFilesError::Io { action, err } => signal_file_io_path(err, action, dir),
+        DirectoryFilesError::InvalidRegexp(msg) => {
+            signal("invalid-regexp", vec![Value::string(msg)])
+        }
+    }
+}
+
 fn delete_file_compat(filename: &str) -> Result<(), Flow> {
     match delete_file(filename) {
         Ok(()) => Ok(()),
@@ -1057,7 +1082,7 @@ pub(crate) fn builtin_directory_files(args: Vec<Value>) -> EvalResult {
     };
 
     let files = directory_files(&dir, full, match_pattern.as_deref(), nosort, count)
-        .map_err(|e| signal("file-error", vec![Value::string(e)]))?;
+        .map_err(|e| signal_directory_files_error(e, &dir))?;
     Ok(Value::list(files.into_iter().map(Value::string).collect()))
 }
 
@@ -1101,7 +1126,7 @@ pub(crate) fn builtin_directory_files_eval(eval: &Evaluator, args: Vec<Value>) -
     };
 
     let files = directory_files(&dir, full, match_pattern.as_deref(), nosort, count)
-        .map_err(|e| signal("file-error", vec![Value::string(e)]))?;
+        .map_err(|e| signal_directory_files_error(e, &dir))?;
     Ok(Value::list(files.into_iter().map(Value::string).collect()))
 }
 
@@ -1903,6 +1928,35 @@ mod tests {
         assert_eq!(items[0].as_str(), Some("beta.el"));
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_builtin_directory_files_nonexistent_signals_file_missing() {
+        let result = builtin_directory_files(vec![Value::string("/nonexistent_dir_xyz_12345")]);
+        match result {
+            Err(Flow::Signal(sig)) => assert_eq!(sig.symbol, "file-missing"),
+            other => panic!("expected file-missing signal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_builtin_directory_files_invalid_regexp_signals_invalid_regexp() {
+        let dir = std::env::temp_dir().join("neovm_dirfiles_invalid_regexp");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_string_lossy().to_string();
+
+        let result = builtin_directory_files(vec![
+            Value::string(&dir_str),
+            Value::Nil,
+            Value::string("[invalid"),
+        ]);
+        match result {
+            Err(Flow::Signal(sig)) => assert_eq!(sig.symbol, "invalid-regexp"),
+            other => panic!("expected invalid-regexp signal, got {:?}", other),
+        }
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
