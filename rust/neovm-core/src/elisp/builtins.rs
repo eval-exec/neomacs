@@ -3708,11 +3708,9 @@ pub(crate) fn dispatch_builtin(
         "internal-set-alternative-font-registry-alist" => super::font::builtin_internal_set_alternative_font_registry_alist(args),
 
         // Directory/file attributes (pure)
-        "directory-files" => super::dired::builtin_directory_files(args),
         "directory-files-and-attributes" => super::dired::builtin_directory_files_and_attributes(args),
         "file-name-completion" => super::dired::builtin_file_name_completion(args),
         "file-name-all-completions" => super::dired::builtin_file_name_all_completions(args),
-        "file-attributes" => super::dired::builtin_file_attributes(args),
         "file-attributes-lessp" => super::dired::builtin_file_attributes_lessp(args),
         "system-users" => super::dired::builtin_system_users(args),
         "system-groups" => super::dired::builtin_system_groups(args),
