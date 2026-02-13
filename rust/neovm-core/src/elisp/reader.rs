@@ -772,6 +772,15 @@ pub(crate) fn builtin_completing_read(
 /// Batch-mode behavior: signal `end-of-file`.
 pub(crate) fn builtin_y_or_n_p(args: Vec<Value>) -> EvalResult {
     expect_min_args("y-or-n-p", &args, 1)?;
+    match &args[0] {
+        Value::Str(_) | Value::Vector(_) | Value::Cons(_) | Value::Nil => {}
+        other => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("sequencep"), other.clone()],
+            ))
+        }
+    }
     Err(signal("end-of-file", vec![]))
 }
 
@@ -784,6 +793,7 @@ pub(crate) fn builtin_y_or_n_p(args: Vec<Value>) -> EvalResult {
 /// Batch-mode behavior: signal `end-of-file`.
 pub(crate) fn builtin_yes_or_no_p(args: Vec<Value>) -> EvalResult {
     expect_min_args("yes-or-no-p", &args, 1)?;
+    let _prompt = expect_string(&args[0])?;
     Err(signal("end-of-file", vec![]))
 }
 
@@ -1339,8 +1349,20 @@ mod tests {
     }
 
     #[test]
+    fn y_or_n_p_rejects_non_sequence_prompt() {
+        let result = builtin_y_or_n_p(vec![Value::Int(123)]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn yes_or_no_p_signals_end_of_file() {
         let result = builtin_yes_or_no_p(vec![Value::string("Confirm? ")]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn yes_or_no_p_rejects_non_string_prompt() {
+        let result = builtin_yes_or_no_p(vec![Value::Int(123)]);
         assert!(result.is_err());
     }
 
