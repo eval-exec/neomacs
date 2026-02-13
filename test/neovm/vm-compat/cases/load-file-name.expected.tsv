@@ -1,0 +1,11 @@
+1	(progn (setq vm-load-fname-dir (expand-file-name "load-file-name-fixtures" (file-name-directory (getenv "NEOVM_FORMS_FILE")))) 'ok)	OK ok
+2	(setq vm-load-fname-parent-seen nil)	OK nil
+3	(setq vm-load-fname-parent-after-child nil)	OK nil
+4	(setq vm-load-fname-child-seen nil)	OK nil
+5	(load (expand-file-name "vm-load-fname-parent" vm-load-fname-dir) nil 'nomessage)	OK t
+6	(file-name-nondirectory vm-load-fname-parent-seen)	OK "vm-load-fname-parent.el"
+7	(file-name-nondirectory vm-load-fname-child-seen)	OK "vm-load-fname-child.el"
+8	(file-name-nondirectory vm-load-fname-parent-after-child)	OK "vm-load-fname-parent.el"
+9	(or (null load-file-name) (stringp load-file-name))	OK t
+10	(featurep 'vm-load-fname-parent)	OK t
+11	(featurep 'vm-load-fname-child)	OK t

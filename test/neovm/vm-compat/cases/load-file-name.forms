@@ -1,0 +1,16 @@
+; load-file-name should be bound during load and restored across nested loads.
+(progn
+  (setq vm-load-fname-dir (expand-file-name "load-file-name-fixtures" (file-name-directory (getenv "NEOVM_FORMS_FILE"))))
+  'ok)
+
+(setq vm-load-fname-parent-seen nil)
+(setq vm-load-fname-parent-after-child nil)
+(setq vm-load-fname-child-seen nil)
+
+(load (expand-file-name "vm-load-fname-parent" vm-load-fname-dir) nil 'nomessage)
+(file-name-nondirectory vm-load-fname-parent-seen)
+(file-name-nondirectory vm-load-fname-child-seen)
+(file-name-nondirectory vm-load-fname-parent-after-child)
+(or (null load-file-name) (stringp load-file-name))
+(featurep 'vm-load-fname-parent)
+(featurep 'vm-load-fname-child)
