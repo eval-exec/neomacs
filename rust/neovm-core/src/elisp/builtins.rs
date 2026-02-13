@@ -3776,12 +3776,8 @@ pub(crate) fn dispatch_builtin(
         "json-parse-string" => super::json::builtin_json_parse_string(args),
 
         // Subr introspection (pure)
-        "subrp" => super::subr_info::builtin_subrp(args),
         "subr-name" => super::subr_info::builtin_subr_name(args),
         "subr-arity" => super::subr_info::builtin_subr_arity(args),
-        "functionp" => super::subr_info::builtin_functionp(args),
-        "byte-code-function-p" => super::subr_info::builtin_byte_code_function_p(args),
-        "closurep" => super::subr_info::builtin_closurep(args),
         "interpreted-function-p" => super::subr_info::builtin_interpreted_function_p(args),
         "special-form-p" => super::subr_info::builtin_special_form_p(args),
         "macrop" => super::subr_info::builtin_macrop(args),
