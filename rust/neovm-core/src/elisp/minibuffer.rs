@@ -686,6 +686,7 @@ pub(crate) fn builtin_read_variable(args: Vec<Value>) -> EvalResult {
 /// - `nil` if no matches
 pub(crate) fn builtin_try_completion(args: Vec<Value>) -> EvalResult {
     expect_min_args("try-completion", &args, 2)?;
+    expect_max_args("try-completion", &args, 3)?;
     let string = expect_string(&args[0])?;
     let candidates = value_to_string_list(&args[1]);
 
@@ -716,6 +717,7 @@ pub(crate) fn builtin_try_completion(args: Vec<Value>) -> EvalResult {
 /// Returns a list of all completions of STRING in COLLECTION.
 pub(crate) fn builtin_all_completions(args: Vec<Value>) -> EvalResult {
     expect_min_args("all-completions", &args, 2)?;
+    expect_max_args("all-completions", &args, 4)?;
     let string = expect_string(&args[0])?;
     let candidates = value_to_string_list(&args[1]);
 
@@ -733,6 +735,7 @@ pub(crate) fn builtin_all_completions(args: Vec<Value>) -> EvalResult {
 /// Returns t if STRING is an exact match in COLLECTION, nil otherwise.
 pub(crate) fn builtin_test_completion(args: Vec<Value>) -> EvalResult {
     expect_min_args("test-completion", &args, 2)?;
+    expect_max_args("test-completion", &args, 3)?;
     let string = expect_string(&args[0])?;
     let candidates = value_to_string_list(&args[1]);
     Ok(Value::bool(candidates.iter().any(|c| c == &string)))
@@ -1303,6 +1306,17 @@ mod tests {
     }
 
     #[test]
+    fn builtin_try_completion_rejects_more_than_three_args() {
+        let coll = Value::list(vec![Value::string("a")]);
+        let result =
+            builtin_try_completion(vec![Value::string(""), coll, Value::Nil, Value::Nil]);
+        assert!(matches!(
+            result,
+            Err(Flow::Signal(sig)) if sig.symbol == "wrong-number-of-arguments"
+        ));
+    }
+
+    #[test]
     fn builtin_all_completions_returns_list() {
         let coll = Value::list(vec![
             Value::string("apple"),
@@ -1312,6 +1326,22 @@ mod tests {
         let result = builtin_all_completions(vec![Value::string("app"), coll]).unwrap();
         let items = super::super::value::list_to_vec(&result).unwrap();
         assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn builtin_all_completions_rejects_more_than_four_args() {
+        let coll = Value::list(vec![Value::string("a")]);
+        let result = builtin_all_completions(vec![
+            Value::string(""),
+            coll,
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+        ]);
+        assert!(matches!(
+            result,
+            Err(Flow::Signal(sig)) if sig.symbol == "wrong-number-of-arguments"
+        ));
     }
 
     #[test]
@@ -1326,6 +1356,17 @@ mod tests {
         let coll = Value::list(vec![Value::string("alpha"), Value::string("beta")]);
         let result = builtin_test_completion(vec![Value::string("alp"), coll]).unwrap();
         assert!(matches!(result, Value::Nil));
+    }
+
+    #[test]
+    fn builtin_test_completion_rejects_more_than_three_args() {
+        let coll = Value::list(vec![Value::string("a")]);
+        let result =
+            builtin_test_completion(vec![Value::string(""), coll, Value::Nil, Value::Nil]);
+        assert!(matches!(
+            result,
+            Err(Flow::Signal(sig)) if sig.symbol == "wrong-number-of-arguments"
+        ));
     }
 
     #[test]

@@ -9,3 +9,9 @@
 9	(condition-case err (completing-read "" '("a" "b") nil nil nil nil nil nil nil) (error (car err)))	OK wrong-number-of-arguments
 10	(condition-case err (read-number 123) (error (car err)))	OK wrong-type-argument
 11	(condition-case err (read-number nil) (error (car err)))	OK wrong-type-argument
+12	(try-completion "" '("a") nil)	OK "a"
+13	(all-completions "" '("a") nil nil)	OK ("a")
+14	(test-completion "" '("a") nil)	OK nil
+15	(condition-case err (try-completion "" '("a") nil nil) (error (car err)))	OK wrong-number-of-arguments
+16	(condition-case err (all-completions "" '("a") nil nil nil) (error (car err)))	OK wrong-number-of-arguments
+17	(condition-case err (test-completion "" '("a") nil nil) (error (car err)))	OK wrong-number-of-arguments
