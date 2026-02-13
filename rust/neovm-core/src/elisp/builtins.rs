@@ -3290,9 +3290,6 @@ pub(crate) fn dispatch_builtin(
         "indent-according-to-mode" => return Some(super::indent::builtin_indent_according_to_mode(eval, args)),
         "back-to-indentation" => return Some(super::indent::builtin_back_to_indentation(eval, args)),
 
-        // Subr introspection (evaluator-dependent)
-        "indirect-function" => return Some(super::subr_info::builtin_indirect_function(eval, args)),
-
         // Case/char (evaluator-dependent)
         "upcase-region" => return Some(super::casefiddle::builtin_upcase_region(eval, args)),
         "downcase-region" => return Some(super::casefiddle::builtin_downcase_region(eval, args)),
