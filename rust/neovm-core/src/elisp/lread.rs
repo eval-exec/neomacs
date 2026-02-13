@@ -295,16 +295,19 @@ pub(crate) fn builtin_load(eval: &mut super::eval::Evaluator, args: Vec<Value>) 
         }
     };
     let noerror = args.get(1).is_some_and(|v| v.is_truthy());
+    let nosuffix = args.get(3).is_some_and(|v| v.is_truthy());
+    let must_suffix = args.get(4).is_some_and(|v| v.is_truthy());
 
     let load_path = super::load::get_load_path(&eval.obarray);
-    match super::load::find_file_in_load_path(&file, &load_path) {
+    match super::load::find_file_in_load_path_with_flags(
+        &file,
+        &load_path,
+        nosuffix,
+        must_suffix,
+    ) {
         Some(path) => super::load::load_file(eval, &path).map_err(eval_error_to_flow),
         None => {
-            // Try as absolute path
-            let path = std::path::Path::new(&file);
-            if path.exists() {
-                super::load::load_file(eval, path).map_err(eval_error_to_flow)
-            } else if noerror {
+            if noerror {
                 Ok(Value::Nil)
             } else {
                 Err(signal(
@@ -326,8 +329,12 @@ pub(crate) fn builtin_load(eval: &mut super::eval::Evaluator, args: Vec<Value>) 
 pub(crate) fn builtin_get_load_suffixes(args: Vec<Value>) -> EvalResult {
     let _ = args;
     Ok(Value::list(vec![
-        Value::string(".el"),
+        Value::string(".so"),
+        Value::string(".so.gz"),
         Value::string(".elc"),
+        Value::string(".elc.gz"),
+        Value::string(".el"),
+        Value::string(".el.gz"),
     ]))
 }
 

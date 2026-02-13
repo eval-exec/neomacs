@@ -4,31 +4,54 @@ use super::error::EvalError;
 use super::value::Value;
 use std::path::{Path, PathBuf};
 
+fn has_load_suffix(name: &str) -> bool {
+    name.ends_with(".el") || name.ends_with(".elc")
+}
+
+fn load_candidates(name: &str, no_suffix: bool, must_suffix: bool) -> Vec<String> {
+    if no_suffix {
+        return vec![name.to_string()];
+    }
+    if has_load_suffix(name) {
+        return vec![name.to_string()];
+    }
+    if must_suffix {
+        return vec![format!("{}.el", name)];
+    }
+    vec![format!("{}.el", name), name.to_string()]
+}
+
 /// Search for a file in the load path.
 pub fn find_file_in_load_path(name: &str, load_path: &[String]) -> Option<PathBuf> {
-    let name_el = if name.ends_with(".el") || name.ends_with(".elc") {
-        name.to_string()
-    } else {
-        format!("{}.el", name)
-    };
+    find_file_in_load_path_with_flags(name, load_path, false, false)
+}
 
-    // Try absolute path first
-    let path = Path::new(&name_el);
-    if path.is_absolute() && path.exists() {
-        return Some(path.to_path_buf());
+/// Search for a file in load-path with `load` optional suffix flags.
+///
+/// Behavior follows Emacs:
+/// - `no_suffix`: load only the exact filename.
+/// - `must_suffix`: require a suffixed file when FILE has no suffix.
+/// - default: try suffixed file first, then exact filename.
+pub fn find_file_in_load_path_with_flags(
+    name: &str,
+    load_path: &[String],
+    no_suffix: bool,
+    must_suffix: bool,
+) -> Option<PathBuf> {
+    let candidates = load_candidates(name, no_suffix, must_suffix);
+
+    for candidate in &candidates {
+        let path = Path::new(candidate);
+        if path.is_absolute() && path.exists() {
+            return Some(path.to_path_buf());
+        }
     }
 
-    // Search load-path
-    for dir in load_path {
-        let full = Path::new(dir).join(&name_el);
-        if full.exists() {
-            return Some(full);
-        }
-        // Also try without .el extension (exact name)
-        if !name.ends_with(".el") && !name.ends_with(".elc") {
-            let exact = Path::new(dir).join(name);
-            if exact.exists() {
-                return Some(exact);
+    for candidate in &candidates {
+        for dir in load_path {
+            let full = Path::new(dir).join(candidate);
+            if full.exists() {
+                return Some(full);
             }
         }
     }
@@ -106,6 +129,8 @@ pub fn load_file(eval: &mut super::eval::Evaluator, path: &Path) -> Result<Value
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn find_file_nonexistent() {
@@ -124,5 +149,45 @@ mod tests {
         );
         let paths = get_load_path(&ob);
         assert_eq!(paths, vec!["/usr/share/emacs/lisp", "/home/user/.emacs.d"]);
+    }
+
+    #[test]
+    fn find_file_with_suffix_flags() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-load-flags-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp fixture dir");
+
+        let plain = dir.join("choice");
+        let el = dir.join("choice.el");
+        fs::write(&plain, "plain").expect("write plain fixture");
+        fs::write(&el, "el").expect("write el fixture");
+
+        let load_path = vec![dir.to_string_lossy().to_string()];
+
+        // Default mode prefers suffixed files.
+        assert_eq!(
+            find_file_in_load_path_with_flags("choice", &load_path, false, false),
+            Some(el.clone())
+        );
+        // no-suffix mode only tries exact name.
+        assert_eq!(
+            find_file_in_load_path_with_flags("choice", &load_path, true, false),
+            Some(plain.clone())
+        );
+        // must-suffix mode rejects plain file and requires suffixed one.
+        assert_eq!(
+            find_file_in_load_path_with_flags("choice", &load_path, false, true),
+            Some(el)
+        );
+        // no-suffix takes precedence if both flags are set.
+        assert_eq!(
+            find_file_in_load_path_with_flags("choice", &load_path, true, true),
+            Some(plain)
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
