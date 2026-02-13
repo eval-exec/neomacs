@@ -592,4 +592,33 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn load_elc_paren_bytecode_literal_without_source_succeeds() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("neovm-load-elc-paren-bytecode-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp fixture dir");
+        let compiled = dir.join("probe.elc");
+        fs::write(
+            &compiled,
+            "(defalias 'vm-paren-bytecode-probe #((x) \"\\bT\\207\" [x] 1 (#$ . 83)))\n(provide 'vm-paren-bytecode-probe)\n",
+        )
+        .expect("write compiled fixture");
+
+        let mut eval = super::super::eval::Evaluator::new();
+        let loaded = load_file(&mut eval, &compiled).expect("load paren-bytecode elc");
+        assert_eq!(loaded, Value::True);
+        assert!(
+            matches!(
+                eval.obarray().symbol_function("vm-paren-bytecode-probe"),
+                Some(Value::Vector(_))
+            ),
+            "defalias should install a vector-backed function cell",
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
