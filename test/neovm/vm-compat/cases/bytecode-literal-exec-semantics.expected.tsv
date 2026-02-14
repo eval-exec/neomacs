@@ -52,3 +52,5 @@
 52	(funcall (car (read-from-string "#[(x y) \"\\10\\11\\231\\207\" [x y] 2]")) "ab" "ac")	OK t
 53	(funcall (car (read-from-string "#[(x y) \"\\10\\11\\110\\207\" [x y] 2]")) [1 2 3] 1)	OK 2
 54	(let ((v [1 2 3])) (funcall (car (read-from-string "#[(x y z) \"\\10\\11\\12\\111\\207\" [x y z] 3]")) v 1 9) v)	OK [1 9 3]
+55	(funcall (car (read-from-string "#[(x y) \"\\10\\11\\245\\207\" [x y] 2]")) 7 2)	OK 3
+56	(funcall (car (read-from-string "#[(x y) \"\\10\\11\\246\\207\" [x y] 2]")) 7 2)	OK 1

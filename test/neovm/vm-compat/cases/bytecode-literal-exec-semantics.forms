@@ -66,3 +66,5 @@
 (let ((v [1 2 3]))
   (funcall (car (read-from-string "#[(x y z) \"\\10\\11\\12\\111\\207\" [x y z] 3]")) v 1 9)
   v)
+(funcall (car (read-from-string "#[(x y) \"\\10\\11\\245\\207\" [x y] 2]")) 7 2)
+(funcall (car (read-from-string "#[(x y) \"\\10\\11\\246\\207\" [x y] 2]")) 7 2)
