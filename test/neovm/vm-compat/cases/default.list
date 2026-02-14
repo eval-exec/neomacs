@@ -53,6 +53,7 @@ cases/custom-set-semantics
 cases/bookmark-helper-availability
 cases/kmacro-helper-availability
 cases/cl-helper-availability
+cases/residual-helper-availability
 cases/bindings
 cases/specpdl-dynamic-unwind-semantics
 cases/buffer-locals
