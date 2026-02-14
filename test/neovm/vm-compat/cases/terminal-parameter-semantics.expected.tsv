@@ -1,12 +1,16 @@
 1	(fboundp 'terminal-parameter)	OK t
 2	(fboundp 'set-terminal-parameter)	OK t
-3	(condition-case err (terminal-live-p 1) (error (car err)))	OK nil
-4	(let* ((term (frame-terminal nil)) (_ (set-terminal-parameter term 'neovm-vmcompat-terminal-param 42))) (terminal-parameter term 'neovm-vmcompat-terminal-param))	OK 42
-5	(let* ((term (frame-terminal nil)) (_ (set-terminal-parameter term 'neovm-vmcompat-terminal-param nil))) (terminal-parameter term 'neovm-vmcompat-terminal-param))	OK nil
-6	(let* ((term (frame-terminal nil)) (_ (set-terminal-parameter term 'neovm-vmcompat-a 1)) (_ (set-terminal-parameter term 'neovm-vmcompat-b 2))) (list (terminal-parameter term 'neovm-vmcompat-a) (terminal-parameter term 'neovm-vmcompat-b)))	OK (1 2)
-7	(let* ((term (frame-terminal nil)) (_ (set-terminal-parameter term 'neovm-vmcompat-a 1))) (condition-case err (terminal-parameter term "neovm-vmcompat-string-key") (wrong-type-argument (car err))))	OK wrong-type-argument
-8	(let ((term (frame-terminal nil))) (set-terminal-parameter term "neovm-vmcompat-string-key" 1))	OK nil
-9	(condition-case err (terminal-parameter 1 'neovm-vmcompat-terminal-param) (wrong-type-argument (car err)))	OK wrong-type-argument
-10	(condition-case err (set-terminal-parameter 1 'neovm-vmcompat-terminal-param 1) (wrong-type-argument (car err)))	OK wrong-type-argument
-11	(condition-case err (terminal-parameter nil) (wrong-number-of-arguments (car err)))	OK wrong-number-of-arguments
-12	(condition-case err (set-terminal-parameter nil 'x) (wrong-number-of-arguments (car err)))	OK wrong-number-of-arguments
+3	(stringp (terminal-name (frame-terminal nil)))	OK t
+4	(let ((term (frame-terminal nil))) (terminal-live-p term))	OK t
+5	(let ((lst (terminal-list))) (and (consp lst) (terminal-live-p (car lst))))	OK t
+6	(condition-case err (terminal-live-p 1) (error (car err)))	OK nil
+7	(let* ((term (frame-terminal nil)) (_ (set-terminal-parameter term 'neovm-vmcompat-terminal-param 42))) (terminal-parameter term 'neovm-vmcompat-terminal-param))	OK 42
+8	(let* ((term (frame-terminal nil)) (_ (set-terminal-parameter term 'neovm-vmcompat-terminal-param nil))) (terminal-parameter term 'neovm-vmcompat-terminal-param))	OK nil
+9	(let* ((term (frame-terminal nil)) (_ (set-terminal-parameter term 'neovm-vmcompat-a 1)) (_ (set-terminal-parameter term 'neovm-vmcompat-b 2))) (list (terminal-parameter term 'neovm-vmcompat-a) (terminal-parameter term 'neovm-vmcompat-b)))	OK (1 2)
+10	(let* ((term (frame-terminal nil)) (_ (set-terminal-parameter term 'neovm-vmcompat-a 1))) (condition-case err (terminal-parameter term "neovm-vmcompat-string-key") (wrong-type-argument (car err))))	OK wrong-type-argument
+11	(let ((term (frame-terminal nil))) (set-terminal-parameter term "neovm-vmcompat-string-key" 1))	OK nil
+12	(condition-case err (terminal-parameter 1 'neovm-vmcompat-terminal-param) (wrong-type-argument (car err)))	OK wrong-type-argument
+13	(condition-case err (set-terminal-parameter 1 'neovm-vmcompat-terminal-param 1) (wrong-type-argument (car err)))	OK wrong-type-argument
+14	(condition-case err (terminal-name 1) (wrong-type-argument (car err)))	OK wrong-type-argument
+15	(condition-case err (terminal-parameter nil) (wrong-number-of-arguments (car err)))	OK wrong-number-of-arguments
+16	(condition-case err (set-terminal-parameter nil 'x) (wrong-number-of-arguments (car err)))	OK wrong-number-of-arguments

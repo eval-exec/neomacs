@@ -206,6 +206,11 @@ pub(crate) fn builtin_x_display_color_p(args: Vec<Value>) -> EvalResult {
 /// (terminal-name &optional TERMINAL) -> "neomacs"
 pub(crate) fn builtin_terminal_name(args: Vec<Value>) -> EvalResult {
     expect_max_args("terminal-name", &args, 1)?;
+    if let Some(term) = args.first() {
+        if !term.is_nil() {
+            expect_terminal_designator(term)?;
+        }
+    }
     Ok(Value::string("neomacs"))
 }
 
@@ -429,5 +434,11 @@ mod tests {
         assert_eq!(live_nil, Value::True);
         assert_eq!(live_string, Value::True);
         assert!(live_int.is_nil());
+    }
+
+    #[test]
+    fn terminal_name_rejects_invalid_designator() {
+        let result = builtin_terminal_name(vec![Value::Int(1)]);
+        assert!(result.is_err());
     }
 }
