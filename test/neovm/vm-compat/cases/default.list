@@ -17,6 +17,7 @@ cases/functionp-callable-matrix
 cases/funcall-apply-non-callable-matrix
 cases/funcall-arity-function-object-payloads
 cases/fmakunbound-fallback-boundary
+cases/fset-special-form-override-boundary
 cases/special-form-edges
 cases/special-form-arity-errors
 cases/special-form-type-errors

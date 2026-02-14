@@ -1,0 +1,16 @@
+(let ((orig (symbol-function 'if)))
+  (unwind-protect
+      (progn
+        (fset 'if (lambda (&rest _args) 'ov))
+        (if t 1 2))
+    (fset 'if orig)))
+(if t 1 2)
+(let ((orig (symbol-function 'if)))
+  (fset 'if orig)
+  (if t 1 2))
+(let ((orig (symbol-function 'prog1)))
+  (fset 'prog1 orig)
+  (prog1 1 2))
+(let ((orig (symbol-function 'car)))
+  (fset 'car orig)
+  (car '(1 2)))
