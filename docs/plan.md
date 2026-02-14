@@ -26,6 +26,11 @@ Last updated: 2026-02-14
   - removed unexposed bookmark helper builtin implementations
   - removed unexposed `string-repeat` helper implementation
   - removed unexposed `bool-vector-complement` implementation
+  - removed unexposed `base64url-decode-string` helper
+  - removed unexposed `hash-table-keys` / `hash-table-values` helpers
+  - removed unexposed `downcase-char` helper
+  - removed unexposed `find-coding-system` helper
+  - removed unexposed `word-at-point` helper
 - Kept branch green with targeted Rust tests and vm-compat checks after each slice.
 
 ## Doing
@@ -39,7 +44,6 @@ Last updated: 2026-02-14
 ## Next
 
 1. Run a full vm-compat verification pass (`check-all-neovm`) after the latest cleanup batch and record results.
-2. Continue dead-code cleanup for other unexposed helper implementations detected by warnings/scans, one small commit at a time.
-3. Expand focused oracle corpora for remaining high-risk areas still carrying stubs (search/input/minibuffer/display edges).
-4. Prioritize one high-impact stub-to-real implementation slice with oracle lock-in, then repeat.
-5. Keep Rust backend behind compile-time switch and preserve Emacs C core as default backend.
+2. Expand focused oracle corpora for remaining high-risk areas still carrying stubs (search/input/minibuffer/display edges).
+3. Prioritize one high-impact stub-to-real implementation slice with oracle lock-in, then repeat.
+4. Keep Rust backend behind compile-time switch and preserve Emacs C core as default backend.
