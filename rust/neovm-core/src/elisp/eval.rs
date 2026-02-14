@@ -1663,7 +1663,9 @@ impl Evaluator {
             Value::True => {
                 self.apply_named_callable("t", args, Value::Subr("t".to_string()), true)
             }
-            Value::Keyword(name) => Err(signal("void-function", vec![Value::symbol(name)])),
+            Value::Keyword(name) => {
+                self.apply_named_callable(&name, args, Value::Subr(name.clone()), true)
+            }
             Value::Nil => Err(signal("void-function", vec![Value::symbol("nil")])),
             _ => Err(signal("invalid-function", vec![function])),
         }
@@ -2554,6 +2556,45 @@ mod tests {
                      (fset 't orig)))"
             ),
             "OK (invalid-function t)"
+        );
+    }
+
+    #[test]
+    fn fset_keyword_function_cell_controls_funcall_and_apply_behavior() {
+        assert_eq!(
+            eval_one(
+                "(let ((orig (symbol-function :k)))
+                   (unwind-protect
+                       (progn
+                         (fset :k 'car)
+                         (funcall :k '(1 2)))
+                     (fset :k orig)))"
+            ),
+            "OK 1"
+        );
+
+        assert_eq!(
+            eval_one(
+                "(let ((orig (symbol-function :k)))
+                   (unwind-protect
+                       (progn
+                         (fset :k 'car)
+                         (apply :k '((1 2))))
+                     (fset :k orig)))"
+            ),
+            "OK 1"
+        );
+
+        assert_eq!(
+            eval_one(
+                "(let ((orig (symbol-function :k)))
+                   (unwind-protect
+                       (progn
+                         (fset :k 1)
+                         (condition-case err (funcall :k) (error err)))
+                     (fset :k orig)))"
+            ),
+            "OK (invalid-function :k)"
         );
     }
 
