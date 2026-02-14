@@ -229,7 +229,10 @@ impl ThreadManager {
 
     /// Return all thread ids.
     pub fn all_thread_ids(&self) -> Vec<u64> {
-        self.threads.keys().copied().collect()
+        self.threads
+            .iter()
+            .filter_map(|(id, thread)| (!thread.joined).then_some(*id))
+            .collect()
     }
 
     /// Return thread result (for join).
@@ -1064,10 +1067,24 @@ mod tests {
     #[test]
     fn all_thread_ids_includes_main_and_created() {
         let mut mgr = ThreadManager::new();
-        let _id = mgr.create_thread(Value::Nil, None);
+        let id = mgr.create_thread(Value::Nil, None);
         let ids = mgr.all_thread_ids();
         assert!(ids.len() >= 2);
         assert!(ids.contains(&0));
+        assert!(ids.contains(&id));
+    }
+
+    #[test]
+    fn all_thread_ids_excludes_joined_thread() {
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_thread(Value::Nil, None);
+        let before_join = mgr.all_thread_ids();
+        assert!(before_join.contains(&id));
+
+        let _ = mgr.join_thread(id);
+        let after_join = mgr.all_thread_ids();
+        assert!(!after_join.contains(&id));
+        assert!(after_join.contains(&0));
     }
 
     #[test]
