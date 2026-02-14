@@ -911,10 +911,22 @@ impl Evaluator {
 
     fn sf_defvar(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("defvar"), Value::Int(tail.len() as i64)],
+            ));
+        }
+        if tail.len() > 3 {
+            return Err(signal(
+                "error",
+                vec![Value::string("Too many arguments")],
+            ));
         }
         let Expr::Symbol(name) = &tail[0] else {
-            return Err(signal("wrong-type-argument", vec![]));
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("symbolp"), quote_to_value(&tail[0])],
+            ));
         };
         // Only set if not already bound. defvar always marks as special.
         if !self.obarray.boundp(name) {
@@ -931,10 +943,22 @@ impl Evaluator {
 
     fn sf_defconst(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.len() < 2 {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("defconst"), Value::Int(tail.len() as i64)],
+            ));
+        }
+        if tail.len() > 3 {
+            return Err(signal(
+                "error",
+                vec![Value::string("Too many arguments")],
+            ));
         }
         let Expr::Symbol(name) = &tail[0] else {
-            return Err(signal("wrong-type-argument", vec![]));
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("symbolp"), quote_to_value(&tail[0])],
+            ));
         };
         let value = self.eval(&tail[1])?;
         self.obarray.set_symbol_value(name, value);
@@ -1794,6 +1818,30 @@ mod tests {
     fn defvar_only_sets_if_unbound() {
         let results = eval_all("(defvar x 42) x (defvar x 99) x");
         assert_eq!(results, vec!["OK x", "OK 42", "OK x", "OK 42"]);
+    }
+
+    #[test]
+    fn defvar_and_defconst_error_payloads_match_oracle_edges() {
+        let results = eval_all(
+            "(condition-case err (defvar) (error err))
+             (condition-case err (defvar 1) (error err))
+             (condition-case err (defvar 'vm-dv) (error err))
+             (condition-case err (defvar vm-dv 1 \"doc\" t) (error err))
+             (condition-case err (defconst) (error err))
+             (condition-case err (defconst vm-dc) (error err))
+             (condition-case err (defconst 1 2) (error err))
+             (condition-case err (defconst 'vm-dc 1) (error err))
+             (condition-case err (defconst vm-dc 1 \"doc\" t) (error err))",
+        );
+        assert_eq!(results[0], "OK (wrong-number-of-arguments defvar 0)");
+        assert_eq!(results[1], "OK (wrong-type-argument symbolp 1)");
+        assert_eq!(results[2], "OK (wrong-type-argument symbolp 'vm-dv)");
+        assert_eq!(results[3], "OK (error \"Too many arguments\")");
+        assert_eq!(results[4], "OK (wrong-number-of-arguments defconst 0)");
+        assert_eq!(results[5], "OK (wrong-number-of-arguments defconst 1)");
+        assert_eq!(results[6], "OK (wrong-type-argument symbolp 1)");
+        assert_eq!(results[7], "OK (wrong-type-argument symbolp 'vm-dc)");
+        assert_eq!(results[8], "OK (error \"Too many arguments\")");
     }
 
     #[test]
