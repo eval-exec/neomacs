@@ -158,6 +158,12 @@ fn decode_opcode_subset(byte_stream: &str, const_len: usize) -> Option<Vec<Op>> 
                 pending.push(Pending::Op(Op::VarRef(idx as u16)));
                 pc += 1;
             }
+            // call 0..7 (function object already pushed on stack)
+            0o040..=0o047 => {
+                let argc = (b - 0o040) as u8;
+                pending.push(Pending::Op(Op::Call(argc)));
+                pc += 1;
+            }
             // goto-if-nil (16-bit bytecode stream offset)
             0o203 => {
                 let target = read_u16_operand(&bytes, pc + 1)? as usize;
@@ -920,6 +926,92 @@ mod tests {
             panic!("expected Value::ByteCode");
         };
         assert_eq!(bc.ops, vec![Op::VarRef(0), Op::Nreverse, Op::Return]);
+    }
+
+    #[test]
+    fn decodes_generic_call_opcode_subset() {
+        let call0 = Value::vector(vec![
+            Value::list(vec![]),
+            Value::string("\u{C0} \u{87}"),
+            Value::vector(vec![Value::symbol("list")]),
+            Value::Int(1),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(call0);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(bc.ops, vec![Op::Constant(0), Op::Call(0), Op::Return]);
+
+        let call1 = Value::vector(vec![
+            Value::list(vec![Value::symbol("x")]),
+            Value::string("\u{C1}\u{8}!\u{87}"),
+            Value::vector(vec![Value::symbol("x"), Value::symbol("reverse")]),
+            Value::Int(2),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(call1);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(
+            bc.ops,
+            vec![Op::Constant(1), Op::VarRef(0), Op::Call(1), Op::Return]
+        );
+
+        let call2 = Value::vector(vec![
+            Value::list(vec![Value::symbol("x"), Value::symbol("y")]),
+            Value::string("\u{C2}\u{8}\u{9}\"\u{87}"),
+            Value::vector(vec![
+                Value::symbol("x"),
+                Value::symbol("y"),
+                Value::symbol("append"),
+            ]),
+            Value::Int(3),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(call2);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(
+            bc.ops,
+            vec![
+                Op::Constant(2),
+                Op::VarRef(0),
+                Op::VarRef(1),
+                Op::Call(2),
+                Op::Return,
+            ]
+        );
+
+        let call3 = Value::vector(vec![
+            Value::list(vec![
+                Value::symbol("x"),
+                Value::symbol("y"),
+                Value::symbol("z"),
+            ]),
+            Value::string("\u{C3}\u{8}\u{9}\u{A}#\u{87}"),
+            Value::vector(vec![
+                Value::symbol("x"),
+                Value::symbol("y"),
+                Value::symbol("z"),
+                Value::symbol("append"),
+            ]),
+            Value::Int(4),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(call3);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(
+            bc.ops,
+            vec![
+                Op::Constant(3),
+                Op::VarRef(0),
+                Op::VarRef(1),
+                Op::VarRef(2),
+                Op::Call(3),
+                Op::Return,
+            ]
+        );
     }
 
     #[test]
