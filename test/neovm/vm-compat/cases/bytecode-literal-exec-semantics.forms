@@ -50,3 +50,13 @@
 (let ((c (cons 1 2)))
   (funcall (car (read-from-string "#[(x y) \"\\10\\11\\241\\207\" [x y] 2]")) c 9)
   c)
+
+(funcall (car (read-from-string "#[(x) \"\\10\\73\\207\" [x] 1]")) "abc")
+(funcall (car (read-from-string "#[(x) \"\\10\\74\\207\" [x] 1]")) '(1 2))
+(funcall (car (read-from-string "#[(x) \"\\10\\250\\207\" [x] 1]")) 7)
+(funcall (car (read-from-string "#[(x) \"\\10\\247\\207\" [x] 1]")) 7.5)
+(funcall (car (read-from-string "#[(x y) \"\\10\\11\\120\\207\" [x y] 2]")) "a" "b")
+(funcall (car (read-from-string "#[(x y) \"\\10\\11\\302\\117\\207\" [x y nil] 3]")) "abcd" 1)
+(funcall (car (read-from-string "#[(x) \"\\10\\107\\207\" [x] 1]")) '(1 2 3))
+(funcall (car (read-from-string "#[(n x) \"\\10\\11\\70\\207\" [n x] 2]")) 1 '(a b c))
+(funcall (car (read-from-string "#[(n x) \"\\10\\11\\233\\207\" [n x] 2]")) 1 '(a b c))

@@ -39,3 +39,12 @@
 39	(funcall (car (read-from-string "#[(x) \"\\10\\77\\207\" [x] 1]")) nil)	OK t
 40	(let ((c (cons 1 2))) (funcall (car (read-from-string "#[(x y) \"\\10\\11\\240\\207\" [x y] 2]")) c 9) c)	OK (9 . 2)
 41	(let ((c (cons 1 2))) (funcall (car (read-from-string "#[(x y) \"\\10\\11\\241\\207\" [x y] 2]")) c 9) c)	OK (1 . 9)
+42	(funcall (car (read-from-string "#[(x) \"\\10\\73\\207\" [x] 1]")) "abc")	OK t
+43	(funcall (car (read-from-string "#[(x) \"\\10\\74\\207\" [x] 1]")) '(1 2))	OK t
+44	(funcall (car (read-from-string "#[(x) \"\\10\\250\\207\" [x] 1]")) 7)	OK t
+45	(funcall (car (read-from-string "#[(x) \"\\10\\247\\207\" [x] 1]")) 7.5)	OK t
+46	(funcall (car (read-from-string "#[(x y) \"\\10\\11\\120\\207\" [x y] 2]")) "a" "b")	OK "ab"
+47	(funcall (car (read-from-string "#[(x y) \"\\10\\11\\302\\117\\207\" [x y nil] 3]")) "abcd" 1)	OK "bcd"
+48	(funcall (car (read-from-string "#[(x) \"\\10\\107\\207\" [x] 1]")) '(1 2 3))	OK 3
+49	(funcall (car (read-from-string "#[(n x) \"\\10\\11\\70\\207\" [n x] 2]")) 1 '(a b c))	OK b
+50	(funcall (car (read-from-string "#[(n x) \"\\10\\11\\233\\207\" [n x] 2]")) 1 '(a b c))	OK (b c)

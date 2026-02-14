@@ -2586,6 +2586,30 @@ mod tests {
     }
 
     #[test]
+    fn calling_sequence_compiled_literal_opcodes_executes() {
+        let results = eval_all(
+            "(funcall (car (read-from-string \"#[(x) \\\"\\\\10\\\\73\\\\207\\\" [x] 1]\")) \"abc\")
+             (funcall (car (read-from-string \"#[(x) \\\"\\\\10\\\\74\\\\207\\\" [x] 1]\")) '(1 2))
+             (funcall (car (read-from-string \"#[(x) \\\"\\\\10\\\\250\\\\207\\\" [x] 1]\")) 7)
+             (funcall (car (read-from-string \"#[(x) \\\"\\\\10\\\\247\\\\207\\\" [x] 1]\")) 7.5)
+             (funcall (car (read-from-string \"#[(x y) \\\"\\\\10\\\\11\\\\120\\\\207\\\" [x y] 2]\")) \"a\" \"b\")
+             (funcall (car (read-from-string \"#[(x y) \\\"\\\\10\\\\11\\\\302\\\\117\\\\207\\\" [x y nil] 3]\")) \"abcd\" 1)
+             (funcall (car (read-from-string \"#[(x) \\\"\\\\10\\\\107\\\\207\\\" [x] 1]\")) '(1 2 3))
+             (funcall (car (read-from-string \"#[(n x) \\\"\\\\10\\\\11\\\\70\\\\207\\\" [n x] 2]\")) 1 '(a b c))
+             (funcall (car (read-from-string \"#[(n x) \\\"\\\\10\\\\11\\\\233\\\\207\\\" [n x] 2]\")) 1 '(a b c))",
+        );
+        assert_eq!(results[0], "OK t");
+        assert_eq!(results[1], "OK t");
+        assert_eq!(results[2], "OK t");
+        assert_eq!(results[3], "OK t");
+        assert_eq!(results[4], "OK \"ab\"");
+        assert_eq!(results[5], "OK \"bcd\"");
+        assert_eq!(results[6], "OK 3");
+        assert_eq!(results[7], "OK b");
+        assert_eq!(results[8], "OK (b c)");
+    }
+
+    #[test]
     fn calling_compiled_literal_placeholder_signals_error() {
         let result = eval_one(
             "(progn
