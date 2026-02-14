@@ -1,0 +1,10 @@
+; substring bounds, nil/default index, and arity semantics
+(substring "abcdef" 1 4)
+(substring "abcdef" -3)
+(condition-case err (substring "abc" 5) (error (car err)))
+(condition-case err (substring "abc" 1 5) (error (car err)))
+(condition-case err (substring "abc" nil) (error (car err)))
+(condition-case err (substring "abc" 2 1) (error (car err)))
+(condition-case err (substring "abc" -5) (error (car err)))
+(condition-case err (substring "abc" 0 -5) (error (car err)))
+(condition-case err (substring "abc" nil nil nil) (error (car err)))

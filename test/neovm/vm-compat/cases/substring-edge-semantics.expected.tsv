@@ -1,0 +1,9 @@
+1	(substring "abcdef" 1 4)	OK "bcd"
+2	(substring "abcdef" -3)	OK "def"
+3	(condition-case err (substring "abc" 5) (error (car err)))	OK args-out-of-range
+4	(condition-case err (substring "abc" 1 5) (error (car err)))	OK args-out-of-range
+5	(condition-case err (substring "abc" nil) (error (car err)))	OK "abc"
+6	(condition-case err (substring "abc" 2 1) (error (car err)))	OK args-out-of-range
+7	(condition-case err (substring "abc" -5) (error (car err)))	OK args-out-of-range
+8	(condition-case err (substring "abc" 0 -5) (error (car err)))	OK args-out-of-range
+9	(condition-case err (substring "abc" nil nil nil) (error (car err)))	OK wrong-number-of-arguments
