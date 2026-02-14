@@ -1,0 +1,8 @@
+1	(string-to-number "42")	OK 42
+2	(string-to-number "2a" 16)	OK 42
+3	(string-to-number "2a" 10)	OK 2
+4	(string-to-number "3.5x")	OK 3.5
+5	(string-to-number "-1f" 16)	OK -31
+6	(condition-case err (string-to-number "10" 1) (error (car err)))	OK args-out-of-range
+7	(condition-case err (string-to-number "10" 37) (error (car err)))	OK args-out-of-range
+8	(condition-case err (string-to-number "10" nil nil) (error (car err)))	OK wrong-number-of-arguments

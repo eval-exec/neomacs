@@ -1,0 +1,9 @@
+; string-to-number prefix parse, radix bounds, and arity validation
+(string-to-number "42")
+(string-to-number "2a" 16)
+(string-to-number "2a" 10)
+(string-to-number "3.5x")
+(string-to-number "-1f" 16)
+(condition-case err (string-to-number "10" 1) (error (car err)))
+(condition-case err (string-to-number "10" 37) (error (car err)))
+(condition-case err (string-to-number "10" nil nil) (error (car err)))
