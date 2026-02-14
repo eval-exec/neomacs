@@ -514,16 +514,49 @@ pub(crate) fn builtin_error_message_string(
         .unwrap_or_else(|| sym_name.clone());
 
     if data.is_empty() {
-        Ok(Value::string(base_message))
-    } else {
-        // Format data items.
-        let data_strs: Vec<String> = data.iter().map(|v| super::print::print_value(v)).collect();
-        Ok(Value::string(format!(
-            "{}: {}",
-            base_message,
-            data_strs.join(", ")
-        )))
+        return Ok(Value::string(base_message));
     }
+
+    // Emacs treats a leading string datum as an override message.
+    // The remaining payload is appended with class-dependent separators.
+    if let Some(first_str) = data.first().and_then(|v| v.as_str().map(|s| s.to_string())) {
+        let rest = &data[1..];
+        if rest.is_empty() {
+            return Ok(Value::string(first_str));
+        }
+        let sep = if sym_name == "user-error" { ", " } else { ": " };
+        let quote_strings = sym_name == "error";
+        let rest_strs: Vec<String> = rest
+            .iter()
+            .map(|v| format_error_arg(v, quote_strings))
+            .collect();
+        return Ok(Value::string(format!("{first_str}{sep}{}", rest_strs.join(", "))));
+    }
+
+    // `user-error` prints payload data directly without the base prefix.
+    if sym_name == "user-error" {
+        let data_strs: Vec<String> = data.iter().map(|v| format_error_arg(v, false)).collect();
+        return Ok(Value::string(data_strs.join(", ")));
+    }
+
+    let data_strs: Vec<String> = data
+        .iter()
+        .map(|v| format_error_arg(v, true))
+        .collect();
+    Ok(Value::string(format!(
+        "{}: {}",
+        base_message,
+        data_strs.join(", ")
+    )))
+}
+
+fn format_error_arg(value: &Value, quote_strings: bool) -> String {
+    if !quote_strings {
+        if let Some(s) = value.as_str() {
+            return s.to_string();
+        }
+    }
+    super::print::print_value(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,6 +1222,74 @@ mod tests {
         assert!(result.is_ok());
         let msg = result.unwrap();
         assert_eq!(msg.as_str(), Some("mystery-error"));
+    }
+
+    #[test]
+    fn builtin_error_message_string_error_with_string_payload() {
+        let mut evaluator = super::super::eval::Evaluator::new();
+        init_standard_errors(&mut evaluator.obarray);
+
+        let err_data = Value::list(vec![Value::symbol("error"), Value::string("abc")]);
+        let result = builtin_error_message_string(&evaluator, vec![err_data]);
+        assert!(result.is_ok());
+        let msg = result.unwrap();
+        assert_eq!(msg.as_str(), Some("abc"));
+    }
+
+    #[test]
+    fn builtin_error_message_string_error_with_string_and_extra() {
+        let mut evaluator = super::super::eval::Evaluator::new();
+        init_standard_errors(&mut evaluator.obarray);
+
+        let err_data = Value::list(vec![
+            Value::symbol("error"),
+            Value::string("abc"),
+            Value::Int(1),
+        ]);
+        let result = builtin_error_message_string(&evaluator, vec![err_data]);
+        assert!(result.is_ok());
+        let msg = result.unwrap();
+        assert_eq!(msg.as_str(), Some("abc: 1"));
+    }
+
+    #[test]
+    fn builtin_error_message_string_user_error_variants() {
+        let mut evaluator = super::super::eval::Evaluator::new();
+        init_standard_errors(&mut evaluator.obarray);
+
+        let with_string = Value::list(vec![
+            Value::symbol("user-error"),
+            Value::string("u"),
+            Value::Int(1),
+        ]);
+        let with_string_result = builtin_error_message_string(&evaluator, vec![with_string]);
+        assert!(with_string_result.is_ok());
+        assert_eq!(with_string_result.unwrap().as_str(), Some("u, 1"));
+
+        let non_string = Value::list(vec![
+            Value::symbol("user-error"),
+            Value::symbol("integerp"),
+            Value::string("x"),
+        ]);
+        let non_string_result = builtin_error_message_string(&evaluator, vec![non_string]);
+        assert!(non_string_result.is_ok());
+        assert_eq!(non_string_result.unwrap().as_str(), Some("integerp, x"));
+    }
+
+    #[test]
+    fn builtin_error_message_string_file_error_string_payload() {
+        let mut evaluator = super::super::eval::Evaluator::new();
+        init_standard_errors(&mut evaluator.obarray);
+
+        let err_data = Value::list(vec![
+            Value::symbol("file-error"),
+            Value::string("No such file"),
+            Value::string("foo"),
+        ]);
+        let result = builtin_error_message_string(&evaluator, vec![err_data]);
+        assert!(result.is_ok());
+        let msg = result.unwrap();
+        assert_eq!(msg.as_str(), Some("No such file: foo"));
     }
 
     #[test]
