@@ -3060,33 +3060,131 @@ pub(crate) fn builtin_butlast(args: Vec<Value>) -> EvalResult {
     }
 }
 
+fn delete_from_list_in_place<F>(seq: &Value, should_delete: F) -> Result<Value, Flow>
+where
+    F: Fn(&Value) -> bool,
+{
+    let mut probe = seq.clone();
+    loop {
+        match probe {
+            Value::Nil => break,
+            Value::Cons(cell) => {
+                probe = cell.lock().expect("poisoned").cdr.clone();
+            }
+            tail => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("listp"), tail],
+                ))
+            }
+        }
+    }
+
+    let mut head = seq.clone();
+    loop {
+        match head.clone() {
+            Value::Nil => return Ok(Value::Nil),
+            Value::Cons(cell) => {
+                let remove = {
+                    let pair = cell.lock().expect("poisoned");
+                    should_delete(&pair.car)
+                };
+                if remove {
+                    head = cell.lock().expect("poisoned").cdr.clone();
+                } else {
+                    break;
+                }
+            }
+            _ => unreachable!("list shape checked above"),
+        }
+    }
+
+    let mut prev = match &head {
+        Value::Cons(cell) => cell.clone(),
+        Value::Nil => return Ok(Value::Nil),
+        _ => unreachable!("head must be list"),
+    };
+
+    loop {
+        let next = prev.lock().expect("poisoned").cdr.clone();
+        match next {
+            Value::Nil => break,
+            Value::Cons(next_cell) => {
+                let remove = {
+                    let pair = next_cell.lock().expect("poisoned");
+                    should_delete(&pair.car)
+                };
+                if remove {
+                    let after = next_cell.lock().expect("poisoned").cdr.clone();
+                    prev.lock().expect("poisoned").cdr = after;
+                } else {
+                    prev = next_cell;
+                }
+            }
+            _ => unreachable!("list shape checked above"),
+        }
+    }
+
+    Ok(head)
+}
+
 pub(crate) fn builtin_delete(args: Vec<Value>) -> EvalResult {
     expect_args("delete", &args, 2)?;
     let elt = &args[0];
-    let items = list_to_vec(&args[1]).ok_or_else(|| {
-        signal(
+    match &args[1] {
+        Value::Nil => Ok(Value::Nil),
+        Value::Cons(_) => delete_from_list_in_place(&args[1], |item| equal_value(elt, item, 0)),
+        Value::Vector(v) => {
+            let items = v.lock().expect("poisoned");
+            let mut changed = false;
+            let mut kept = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                if equal_value(elt, item, 0) {
+                    changed = true;
+                } else {
+                    kept.push(item.clone());
+                }
+            }
+            if changed {
+                Ok(Value::vector(kept))
+            } else {
+                Ok(args[1].clone())
+            }
+        }
+        Value::Str(s) => {
+            let mut changed = false;
+            let mut kept = Vec::new();
+            for cp in decode_storage_char_codes(s) {
+                let ch = Value::Int(cp as i64);
+                if equal_value(elt, &ch, 0) {
+                    changed = true;
+                } else {
+                    kept.push(ch);
+                }
+            }
+            if !changed {
+                return Ok(args[1].clone());
+            }
+            builtin_concat(vec![Value::list(kept)])
+        }
+        other => Err(signal(
             "wrong-type-argument",
-            vec![Value::symbol("listp"), args[1].clone()],
-        )
-    })?;
-    let filtered: Vec<Value> = items
-        .into_iter()
-        .filter(|v| !equal_value(elt, v, 0))
-        .collect();
-    Ok(Value::list(filtered))
+            vec![Value::symbol("sequencep"), other.clone()],
+        )),
+    }
 }
 
 pub(crate) fn builtin_delq(args: Vec<Value>) -> EvalResult {
     expect_args("delq", &args, 2)?;
     let elt = &args[0];
-    let items = list_to_vec(&args[1]).ok_or_else(|| {
-        signal(
+    match &args[1] {
+        Value::Nil => Ok(Value::Nil),
+        Value::Cons(_) => delete_from_list_in_place(&args[1], |item| eq_value(elt, item)),
+        _ => Err(signal(
             "wrong-type-argument",
             vec![Value::symbol("listp"), args[1].clone()],
-        )
-    })?;
-    let filtered: Vec<Value> = items.into_iter().filter(|v| !eq_value(elt, v)).collect();
-    Ok(Value::list(filtered))
+        )),
+    }
 }
 
 pub(crate) fn builtin_elt(args: Vec<Value>) -> EvalResult {
