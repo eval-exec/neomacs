@@ -181,6 +181,8 @@ Post-freeze updates:
   - `cases/nth-nthcdr-semantics`
 - Added sequence element accessor compatibility case:
   - `cases/elt-semantics`
+- Added array index typing compatibility case:
+  - `cases/aref-aset-index-semantics`
 - Added higher-order map primitive compatibility case:
   - `cases/map-family-semantics`
 - Added `ignore` callable compatibility case:
