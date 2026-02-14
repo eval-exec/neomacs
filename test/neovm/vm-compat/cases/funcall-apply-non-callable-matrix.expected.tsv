@@ -27,3 +27,4 @@
 27	(catch 'vm-tag (apply 'throw '(vm-tag 42)))	OK 42
 28	(condition-case err (apply 'throw '(vm-tag 42)) (error err))	OK (no-catch vm-tag 42)
 29	(condition-case err (apply 'throw '(vm-tag)) (error err))	OK (wrong-number-of-arguments #<subr throw> 1)
+30	(condition-case err (funcall 'throw) (error err))	OK (wrong-number-of-arguments #<subr throw> 0)

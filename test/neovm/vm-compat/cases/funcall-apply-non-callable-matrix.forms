@@ -28,3 +28,4 @@
 (catch 'vm-tag (apply 'throw '(vm-tag 42)))
 (condition-case err (apply 'throw '(vm-tag 42)) (error err))
 (condition-case err (apply 'throw '(vm-tag)) (error err))
+(condition-case err (funcall 'throw) (error err))
