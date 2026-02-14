@@ -237,6 +237,8 @@ Post-freeze updates:
   - `cases/fset-t-function-cell-semantics`
 - Added explicit `fset` on keyword-symbol function-cell compatibility case:
   - `cases/fset-keyword-function-cell-semantics`
+- Added `fset` alias-cycle compatibility case for symbol-designator links (`symbol`/`keyword`/`t`):
+  - `cases/fset-alias-cycle-symbol-designator-semantics`
 - Added bytecode literal reader compatibility case (legacy opt-in):
   - `cases/bytecode-literal-reader-semantics`
 - Added bytecode literal execution compatibility case (legacy opt-in):
