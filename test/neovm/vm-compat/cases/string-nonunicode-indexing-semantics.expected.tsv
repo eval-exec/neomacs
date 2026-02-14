@@ -1,0 +1,16 @@
+1	(string-to-char (char-to-string 1114112))	OK 1114112
+2	(string-to-char (char-to-string 4194303))	OK 4194303
+3	(string-to-list (char-to-string 1114112))	OK (1114112)
+4	(string-to-list (char-to-string 4194303))	OK (4194303)
+5	(string-width (char-to-string 1114112))	OK 1
+6	(string-width (char-to-string 4194303))	OK 4
+7	(length (char-to-string 1114112))	OK 1
+8	(length (char-to-string 4194303))	OK 1
+9	(aref (char-to-string 1114112) 0)	OK 1114112
+10	(aref (char-to-string 4194303) 0)	OK 4194303
+11	(substring (char-to-string 1114112) 0 1)	OK "ô€€"
+12	(substring (char-to-string 4194303) 0 1)	OK "\377"
+13	(concat (char-to-string 1114112) "A")	OK "ô€€A"
+14	(concat (char-to-string 4194303) "A")	OK "\377A"
+15	(prin1-to-string (char-to-string 1114112))	OK "\"ô€€\""
+16	(prin1-to-string (char-to-string 4194303))	OK "\"\\377\""
