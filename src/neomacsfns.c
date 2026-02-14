@@ -1080,17 +1080,25 @@ If the parameters specify a display, that display is used.  */)
   /* Call adjust_frame_size to initialize glyph matrices.
      CRITICAL: This sets glyphs_initialized_p which is required for redisplay!
 
-     In neomacs the winit window already exists (created by init_threaded).
-     We must size the frame to match that window, not the other way around.
-     (In official X11 Emacs the window is created AFTER adjust_frame_size,
-     so it can be sized to match the frame.  Here we do the reverse.)
+     Root frames: size to match the pre-existing winit window (created by
+     init_threaded), since in neomacs the window exists before the frame.
 
-     Compute text dimensions from the initial window size minus decorations
-     (fringes, scroll bars, internal borders) so that the resulting native
-     frame dimensions match the pre-existing winit window.  */
+     Child frames: size to match the user-specified width/height parameters
+     (in character units, converted to pixels using the frame's font).  */
   {
-    int win_w = dpyinfo->init_window_width;
-    int win_h = dpyinfo->init_window_height;
+    int win_w, win_h;
+    if (FRAME_PARENT_FRAME (f))
+      {
+        /* Child frames use the caller-specified character dimensions. */
+        win_w = width * FRAME_COLUMN_WIDTH (f);
+        win_h = height * FRAME_LINE_HEIGHT (f);
+      }
+    else
+      {
+        /* Root frames match the pre-existing winit window. */
+        win_w = dpyinfo->init_window_width;
+        win_h = dpyinfo->init_window_height;
+      }
     int text_width = win_w
       - FRAME_LEFT_FRINGE_WIDTH (f) - FRAME_RIGHT_FRINGE_WIDTH (f)
       - FRAME_SCROLL_BAR_AREA_WIDTH (f)

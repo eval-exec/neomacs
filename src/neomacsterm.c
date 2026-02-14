@@ -5590,7 +5590,7 @@ neomacs_make_frame_visible_invisible (struct frame *f, bool visible)
      next redisplay cycle re-adds when made visible. */
   if (FRAME_PARENT_FRAME (f) && dpyinfo && dpyinfo->display_handle)
     {
-      if (!visible)
+      if (!visible && FRAME_VISIBLE_P (f))
         neomacs_display_remove_child_frame (dpyinfo->display_handle,
                                             (uint64_t)(uintptr_t) f);
       if (visible)

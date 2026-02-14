@@ -1232,8 +1232,9 @@ impl RenderApp {
             }
             self.frame_dirty = true;
         }
-        // Remove child frames not updated for 60 cycles (~1 second at 60fps)
-        self.child_frames.prune_stale(60);
+        // Child frame lifetime is managed by explicit RemoveChildFrame commands
+        // from C code (frame deletion, visibility change, unparenting).
+        // No staleness pruning — child frames persist until explicitly removed.
 
         // Extract active cursor target for animation
         // Scan root frame first, then child frames (only one active cursor exists)
