@@ -25,6 +25,7 @@ cases/printing
 cases/prin1-to-string-noescape
 cases/chars
 cases/bindings
+cases/specpdl-dynamic-unwind-semantics
 cases/buffer-locals
 cases/buffer-local-value
 cases/defvar-local
