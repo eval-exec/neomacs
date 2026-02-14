@@ -5,8 +5,7 @@
 //! - Pure builtins: copy-alist, rassoc, rassq, assoc-default, make-list, safe-length,
 //!   subst-char-in-string, replace-regexp-in-string, string-match-p, string/char encoding
 //!   stubs, nconc (improved), locale-info
-//! - Eval-dependent builtins: backtrace-frame, called-interactively-p, recursion-depth,
-//!   abort-recursive-edit
+//! - Eval-dependent builtins: backtrace-frame, recursion-depth, abort-recursive-edit
 
 use super::error::{signal, EvalResult, Flow};
 use super::expr::Expr;
@@ -461,13 +460,6 @@ pub(crate) fn builtin_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
     }
 }
 
-/// `(with-output-to-string BODY...)` -- stub returning empty string.
-/// Proper implementation requires output stream redirection.
-pub(crate) fn builtin_with_output_to_string(args: Vec<Value>) -> EvalResult {
-    let _ = args;
-    Ok(Value::string(""))
-}
-
 /// `(string-match-p REGEXP STRING &optional START)` -- like `string-match`
 /// but does not change match data.
 pub(crate) fn builtin_string_match_p(args: Vec<Value>) -> EvalResult {
@@ -669,16 +661,6 @@ pub(crate) fn builtin_backtrace_frame(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("backtrace-frame", &args, 1)?;
-    Ok(Value::Nil)
-}
-
-/// `(called-interactively-p KIND)` -- stub returning nil.
-/// We never call functions interactively in the VM.
-pub(crate) fn builtin_called_interactively_p_misc(
-    _eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    let _ = args;
     Ok(Value::Nil)
 }
 
@@ -1157,14 +1139,6 @@ mod tests {
         assert!(result.is_nil());
     }
 
-    // ----- with-output-to-string -----
-
-    #[test]
-    fn with_output_to_string_stub() {
-        let result = builtin_with_output_to_string(vec![]).unwrap();
-        assert_eq!(result.as_str().unwrap(), "");
-    }
-
     // ----- eval-dependent builtins (need Evaluator) -----
 
     #[test]
@@ -1173,15 +1147,6 @@ mod tests {
         let result = builtin_recursion_depth(&mut eval, vec![]).unwrap();
         // At top level, depth is 0
         assert!(eq_value(&result, &Value::Int(0)));
-    }
-
-    #[test]
-    fn called_interactively_p_stub() {
-        let mut eval = super::super::eval::Evaluator::new();
-        let result =
-            builtin_called_interactively_p_misc(&mut eval, vec![Value::symbol("interactive")])
-                .unwrap();
-        assert!(result.is_nil());
     }
 
     #[test]
