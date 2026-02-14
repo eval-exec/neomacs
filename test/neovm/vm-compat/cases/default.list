@@ -93,6 +93,7 @@ cases/string-prefix-suffix-semantics
 cases/string-join-semantics
 cases/string-to-number-semantics
 cases/secure-hash-semantics
+cases/buffer-hash-semantics
 cases/substring-edge-semantics
 cases/aref-aset-index-semantics
 cases/copy-sequence-semantics

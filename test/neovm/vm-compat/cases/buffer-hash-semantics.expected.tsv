@@ -1,0 +1,6 @@
+1	(with-temp-buffer (insert "abc") (buffer-hash))	OK "a9993e364706816aba3e25717850c26c9cd0d89d"
+2	(with-temp-buffer (insert "abc") (buffer-hash (current-buffer)))	OK "a9993e364706816aba3e25717850c26c9cd0d89d"
+3	(with-temp-buffer (insert "abc") (buffer-hash (buffer-name)))	OK "a9993e364706816aba3e25717850c26c9cd0d89d"
+4	(with-temp-buffer (insert "abc") (buffer-hash nil))	OK "a9993e364706816aba3e25717850c26c9cd0d89d"
+5	(condition-case err (buffer-hash 1) (error err))	OK (wrong-type-argument stringp 1)
+6	(condition-case err (buffer-hash "*missing*") (error err))	OK (error "No buffer named *missing*")

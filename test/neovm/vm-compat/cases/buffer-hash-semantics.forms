@@ -1,0 +1,24 @@
+; buffer-hash should compute SHA1 over live buffer text and keep core error shapes.
+(with-temp-buffer
+  (insert "abc")
+  (buffer-hash))
+
+(with-temp-buffer
+  (insert "abc")
+  (buffer-hash (current-buffer)))
+
+(with-temp-buffer
+  (insert "abc")
+  (buffer-hash (buffer-name)))
+
+(with-temp-buffer
+  (insert "abc")
+  (buffer-hash nil))
+
+(condition-case err
+    (buffer-hash 1)
+  (error err))
+
+(condition-case err
+    (buffer-hash "*missing*")
+  (error err))
