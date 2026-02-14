@@ -192,7 +192,9 @@ pub(crate) fn builtin_call_interactively(eval: &mut Evaluator, args: Vec<Value>)
 /// `(interactive-p)` -> t if the calling function was called interactively.
 pub(crate) fn builtin_interactive_p(eval: &mut Evaluator, args: Vec<Value>) -> EvalResult {
     expect_args("interactive-p", &args, 0)?;
-    Ok(Value::bool(eval.interactive.is_called_interactively()))
+    let _ = eval;
+    // Emacs 30 keeps `interactive-p` obsolete; it effectively returns nil.
+    Ok(Value::Nil)
 }
 
 /// `(called-interactively-p &optional KIND)`
@@ -1977,6 +1979,15 @@ mod tests {
     fn interactive_p_false_by_default() {
         let mut ev = Evaluator::new();
         let result = builtin_interactive_p(&mut ev, vec![]);
+        assert!(result.unwrap().is_nil());
+    }
+
+    #[test]
+    fn interactive_p_nil_when_interactive() {
+        let mut ev = Evaluator::new();
+        ev.interactive.push_interactive_call(true);
+        let result = builtin_interactive_p(&mut ev, vec![]);
+        ev.interactive.pop_interactive_call();
         assert!(result.unwrap().is_nil());
     }
 
