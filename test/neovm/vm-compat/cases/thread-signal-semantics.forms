@@ -1,0 +1,5 @@
+(condition-case err (let ((th (current-thread))) (thread-signal th 'foo '(1 2)) (thread-last-error nil)) (t err))
+(condition-case err (let ((th (current-thread))) (thread-signal th 'foo 1) (thread-last-error nil)) (t err))
+(condition-case err (let ((th (current-thread))) (thread-signal th 'foo nil) (thread-last-error nil)) (t err))
+(condition-case err (let ((th (current-thread))) (thread-signal th 1 '(2))) (t err))
+(condition-case err (let ((th (current-thread))) (thread-signal th 'foo)) (t err))
