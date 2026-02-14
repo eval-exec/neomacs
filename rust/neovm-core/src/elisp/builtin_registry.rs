@@ -834,6 +834,7 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "transient-mark-mode",
     "transpose-chars",
     "transpose-lines",
+    "transpose-sexps",
     "transpose-words",
     "tty-top-frame",
     "tty-type",

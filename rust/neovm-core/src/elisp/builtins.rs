@@ -5629,6 +5629,7 @@ pub(crate) fn dispatch_builtin(
         "upcase-word" => return Some(super::kill_ring::builtin_upcase_word(eval, args)),
         "capitalize-word" => return Some(super::kill_ring::builtin_capitalize_word(eval, args)),
         "transpose-chars" => return Some(super::kill_ring::builtin_transpose_chars(eval, args)),
+        "transpose-sexps" => return Some(super::kill_ring::builtin_transpose_sexps(eval, args)),
         "transpose-words" => return Some(super::kill_ring::builtin_transpose_words(eval, args)),
         "transpose-lines" => return Some(super::kill_ring::builtin_transpose_lines(eval, args)),
         "indent-line-to" => return Some(super::kill_ring::builtin_indent_line_to(eval, args)),

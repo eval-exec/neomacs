@@ -244,6 +244,7 @@ fn builtin_command_name(name: &str) -> bool {
             | "yank-pop"
             | "transpose-chars"
             | "transpose-lines"
+            | "transpose-sexps"
             | "transpose-words"
             | "open-line"
             | "delete-horizontal-space"
@@ -430,6 +431,7 @@ fn default_command_execute_args(eval: &Evaluator, name: &str) -> Result<Vec<Valu
         | "upcase-word"
         | "capitalize-word"
         | "transpose-lines"
+        | "transpose-sexps"
         | "transpose-words" => Ok(vec![Value::Int(1)]),
         "kill-region" => interactive_region_args(eval, "user-error"),
         "kill-ring-save" => interactive_region_args(eval, "error"),
@@ -1860,6 +1862,7 @@ mod tests {
             "yank-pop",
             "transpose-chars",
             "transpose-lines",
+            "transpose-sexps",
             "upcase-word",
             "downcase-word",
             "capitalize-word",
@@ -2412,6 +2415,34 @@ mod tests {
                  (buffer-string))"#,
         );
         assert_eq!(results[0], "OK \"bb aa\"");
+    }
+
+    #[test]
+    fn command_execute_builtin_transpose_sexps_uses_default_prefix_arg() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "(aa) (bb)")
+                 (goto-char 5)
+                 (command-execute 'transpose-sexps)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"(bb) (aa)\"");
+    }
+
+    #[test]
+    fn call_interactively_builtin_transpose_sexps_uses_default_prefix_arg() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "(aa) (bb)")
+                 (goto-char 5)
+                 (call-interactively 'transpose-sexps)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"(bb) (aa)\"");
     }
 
     #[test]

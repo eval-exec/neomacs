@@ -13,7 +13,7 @@
 //!   delete-indentation, tab-to-tab-stop, indent-rigidly
 
 use super::error::{signal, EvalResult, Flow};
-use super::syntax::{backward_word, forward_word, SyntaxClass};
+use super::syntax::{backward_word, forward_word, scan_sexps, SyntaxClass, SyntaxTable};
 use super::value::Value;
 use crate::buffer::Buffer;
 
@@ -78,6 +78,64 @@ fn expect_string(value: &Value) -> Result<String, Flow> {
 #[inline]
 fn is_horizontal_space(ch: char) -> bool {
     ch == ' ' || ch == '\t'
+}
+
+fn skip_sexp_ignorable_forward(buf: &Buffer, table: &SyntaxTable, mut pos: usize) -> usize {
+    let pmax = buf.point_max();
+    while pos < pmax {
+        let Some(ch) = buf.char_after(pos) else {
+            break;
+        };
+        match table.char_syntax(ch) {
+            SyntaxClass::Whitespace | SyntaxClass::Comment | SyntaxClass::EndComment => {
+                pos += ch.len_utf8();
+            }
+            _ => break,
+        }
+    }
+    pos
+}
+
+fn previous_sexp_before(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    start: usize,
+) -> Option<(usize, usize)> {
+    let prev_start = scan_sexps(buf, table, start, -1).ok()?;
+    let prev_end = scan_sexps(buf, table, prev_start, 1).ok()?;
+    if prev_end <= start {
+        Some((prev_start, prev_end))
+    } else {
+        None
+    }
+}
+
+fn next_sexp_after(buf: &Buffer, table: &SyntaxTable, from: usize) -> Option<(usize, usize)> {
+    let start = skip_sexp_ignorable_forward(buf, table, from);
+    if start >= buf.point_max() {
+        return None;
+    }
+    let end = scan_sexps(buf, table, start, 1).ok()?;
+    if end > start {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
+fn pivot_sexp_at_point_or_after(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    pt: usize,
+) -> Option<(usize, usize)> {
+    if let Ok(start) = scan_sexps(buf, table, pt, -1) {
+        if let Ok(end) = scan_sexps(buf, table, start, 1) {
+            if pt > start && pt <= end {
+                return Some((start, end));
+            }
+        }
+    }
+    next_sexp_after(buf, table, pt)
 }
 
 // ===========================================================================
@@ -1343,6 +1401,106 @@ pub(crate) fn builtin_transpose_words(
     Ok(Value::Nil)
 }
 
+/// `(transpose-sexps ARG)` — interchange sexps around point.
+pub(crate) fn builtin_transpose_sexps(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("transpose-sexps", &args, 1)?;
+    let n = expect_int(&args[0])?;
+    if n == 0 {
+        return Ok(Value::Nil);
+    }
+
+    let buf = eval
+        .buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    if buf.read_only {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buf.name.clone())],
+        ));
+    }
+
+    let steps = n.unsigned_abs() as usize;
+    let backward = n < 0;
+    let two_sexp_error =
+        || signal("error", vec![Value::string("Don\u{2019}t have two things to transpose")]);
+
+    for _ in 0..steps {
+        let mut moved_only = false;
+        let (s1, e1, s2, e2) = {
+            let buf = eval
+                .buffers
+                .current_buffer()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            let table = buf.syntax_table.clone();
+            let pt = buf.point();
+            let pmin = buf.point_min();
+
+            // Emacs behavior: at BOB, forward transpose-sexps just advances point.
+            if !backward && pt == pmin {
+                let next_pt = scan_sexps(buf, &table, pt, 1)
+                    .map_err(|msg| signal("scan-error", vec![Value::string(&msg)]))?;
+                let buf_m = eval
+                    .buffers
+                    .current_buffer_mut()
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+                buf_m.goto_char(next_pt);
+                moved_only = true;
+                (0usize, 0usize, 0usize, 0usize)
+            } else {
+                let (pivot_start, pivot_end) =
+                    pivot_sexp_at_point_or_after(buf, &table, pt).ok_or_else(&two_sexp_error)?;
+
+                if backward {
+                    let (prev_start, prev_end) = previous_sexp_before(buf, &table, pivot_start)
+                        .ok_or_else(&two_sexp_error)?;
+                    (prev_start, prev_end, pivot_start, pivot_end)
+                } else if let Some((prev_start, prev_end)) =
+                    previous_sexp_before(buf, &table, pivot_start)
+                {
+                    (prev_start, prev_end, pivot_start, pivot_end)
+                } else {
+                    let (next_start, next_end) = next_sexp_after(buf, &table, pivot_end)
+                        .ok_or_else(&two_sexp_error)?;
+                    (pivot_start, pivot_end, next_start, next_end)
+                }
+            }
+        };
+
+        if moved_only {
+            continue;
+        }
+
+        let (sexp_a, between, sexp_b) = {
+            let buf_r = eval
+                .buffers
+                .current_buffer()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            (
+                buf_r.buffer_substring(s1, e1),
+                buf_r.buffer_substring(e1, s2),
+                buf_r.buffer_substring(s2, e2),
+            )
+        };
+
+        let buf_m = eval
+            .buffers
+            .current_buffer_mut()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        buf_m.delete_region(s1, e2);
+        buf_m.goto_char(s1);
+        buf_m.insert(&sexp_b);
+        buf_m.insert(&between);
+        buf_m.insert(&sexp_a);
+        buf_m.goto_char(s1 + sexp_b.len() + between.len());
+    }
+
+    Ok(Value::Nil)
+}
+
 /// `(transpose-lines ARG)` — interchange lines around point.
 pub(crate) fn builtin_transpose_lines(
     eval: &mut super::eval::Evaluator,
@@ -2491,6 +2649,30 @@ mod tests {
                  (transpose-words 1))"#,
         );
         assert!(result.starts_with("ERR"));
+    }
+
+    // -- transpose-sexps tests --
+
+    #[test]
+    fn transpose_sexps_basic() {
+        let results = eval_all(
+            r#"(insert "(aa) (bb)")
+               (goto-char 5)
+               (transpose-sexps 1)
+               (buffer-string)"#,
+        );
+        assert_eq!(results[3], r#"OK "(bb) (aa)""#);
+    }
+
+    #[test]
+    fn transpose_sexps_at_bob_advances_without_swapping() {
+        let results = eval_all(
+            r#"(insert "(aa) (bb)")
+               (goto-char 1)
+               (transpose-sexps 1)
+               (list (buffer-string) (point))"#,
+        );
+        assert_eq!(results[3], r#"OK ("(aa) (bb)" 5)"#);
     }
 
     // -- indent-line-to tests --
