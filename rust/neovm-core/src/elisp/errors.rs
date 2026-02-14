@@ -491,7 +491,7 @@ pub(crate) fn builtin_error_message_string(
 
     let error_data = &args[0];
 
-    // error_data should be (SYMBOL . DATA) — a cons cell.
+    // Emacs expects ERROR-DATA to be a list (or nil).
     let (sym_name, data) = match error_data {
         Value::Cons(cell) => {
             let pair = cell.lock().expect("poisoned");
@@ -506,10 +506,13 @@ pub(crate) fn builtin_error_message_string(
             };
             (sym, rest)
         }
-        Value::Symbol(s) => (s.clone(), vec![]),
         Value::Nil => return Ok(Value::string("peculiar error")),
-        Value::True => return Ok(Value::string("peculiar error")),
-        _ => return Ok(Value::string("peculiar error")),
+        _ => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("listp"), error_data.clone()],
+            ));
+        }
     };
 
     // Look up the error-message property.
@@ -1475,11 +1478,41 @@ mod tests {
     fn builtin_error_message_string_not_cons() {
         let evaluator = super::super::eval::Evaluator::new();
 
-        // Non-cons input — "peculiar error".
+        // Non-list input signals wrong-type-argument (listp VALUE).
         let result = builtin_error_message_string(&evaluator, vec![Value::Int(42)]);
-        assert!(result.is_ok());
-        let msg = result.unwrap();
-        assert_eq!(msg.as_str(), Some("peculiar error"));
+        assert!(result.is_err());
+        match result {
+            Err(Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol("listp"), Value::Int(42)]);
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn builtin_error_message_string_symbol_input_is_wrong_type() {
+        let evaluator = super::super::eval::Evaluator::new();
+
+        let result = builtin_error_message_string(&evaluator, vec![Value::symbol("foo")]);
+        assert!(result.is_err());
+        match result {
+            Err(Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol("listp"), Value::symbol("foo")]);
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
+        }
+
+        let result_true = builtin_error_message_string(&evaluator, vec![Value::True]);
+        assert!(result_true.is_err());
+        match result_true {
+            Err(Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol("listp"), Value::True]);
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
+        }
     }
 
     #[test]
