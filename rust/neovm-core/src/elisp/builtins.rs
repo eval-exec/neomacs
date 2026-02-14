@@ -1944,6 +1944,53 @@ pub(crate) fn builtin_apply(eval: &mut super::eval::Evaluator, args: Vec<Value>)
 // Higher-order
 // ===========================================================================
 
+fn for_each_sequence_element<F>(seq: &Value, mut f: F) -> Result<(), Flow>
+where
+    F: FnMut(Value) -> Result<(), Flow>,
+{
+    match seq {
+        Value::Nil => Ok(()),
+        Value::Cons(_) => {
+            let mut cursor = seq.clone();
+            loop {
+                match cursor {
+                    Value::Nil => break,
+                    Value::Cons(cell) => {
+                        let pair = cell.lock().expect("poisoned");
+                        let item = pair.car.clone();
+                        cursor = pair.cdr.clone();
+                        drop(pair);
+                        f(item)?;
+                    }
+                    tail => {
+                        return Err(signal(
+                            "wrong-type-argument",
+                            vec![Value::symbol("listp"), tail],
+                        ))
+                    }
+                }
+            }
+            Ok(())
+        }
+        Value::Vector(v) => {
+            for item in v.lock().expect("poisoned").iter().cloned() {
+                f(item)?;
+            }
+            Ok(())
+        }
+        Value::Str(s) => {
+            for cp in decode_storage_char_codes(s) {
+                f(Value::Int(cp as i64))?;
+            }
+            Ok(())
+        }
+        _ => Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("sequencep"), seq.clone()],
+        )),
+    }
+}
+
 pub(crate) fn builtin_mapcar(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
     if args.len() != 2 {
         return Err(signal(
@@ -1953,25 +2000,10 @@ pub(crate) fn builtin_mapcar(eval: &mut super::eval::Evaluator, args: Vec<Value>
     }
     let func = args[0].clone();
     let mut results = Vec::new();
-    let mut cursor = args[1].clone();
-    loop {
-        match cursor {
-            Value::Nil => break,
-            Value::Cons(cell) => {
-                let pair = cell.lock().expect("poisoned");
-                let item = pair.car.clone();
-                cursor = pair.cdr.clone();
-                drop(pair);
-                results.push(eval.apply(func.clone(), vec![item])?);
-            }
-            _ => {
-                return Err(signal(
-                    "wrong-type-argument",
-                    vec![Value::symbol("listp"), cursor],
-                ))
-            }
-        }
-    }
+    for_each_sequence_element(&args[1], |item| {
+        results.push(eval.apply(func.clone(), vec![item])?);
+        Ok(())
+    })?;
     Ok(Value::list(results))
 }
 
@@ -1983,27 +2015,60 @@ pub(crate) fn builtin_mapc(eval: &mut super::eval::Evaluator, args: Vec<Value>) 
         ));
     }
     let func = args[0].clone();
-    let list_val = args[1].clone();
-    let mut cursor = list_val.clone();
-    loop {
-        match cursor {
-            Value::Nil => break,
-            Value::Cons(cell) => {
-                let pair = cell.lock().expect("poisoned");
-                let item = pair.car.clone();
-                cursor = pair.cdr.clone();
-                drop(pair);
-                eval.apply(func.clone(), vec![item])?;
-            }
-            _ => {
-                return Err(signal(
-                    "wrong-type-argument",
-                    vec![Value::symbol("listp"), cursor],
-                ))
-            }
-        }
+    let seq = args[1].clone();
+    for_each_sequence_element(&seq, |item| {
+        eval.apply(func.clone(), vec![item])?;
+        Ok(())
+    })?;
+    Ok(seq)
+}
+
+pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
+    if args.len() != 3 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("mapconcat"), Value::Int(args.len() as i64)],
+        ));
     }
-    Ok(list_val)
+    let func = args[0].clone();
+    let sequence = args[1].clone();
+    let separator = args[2].clone();
+
+    let mut parts = Vec::new();
+    for_each_sequence_element(&sequence, |item| {
+        parts.push(eval.apply(func.clone(), vec![item])?);
+        Ok(())
+    })?;
+
+    if parts.is_empty() {
+        return Ok(Value::string(""));
+    }
+
+    let mut concat_args = Vec::with_capacity(parts.len() * 2 - 1);
+    for (index, part) in parts.into_iter().enumerate() {
+        if index > 0 {
+            concat_args.push(separator.clone());
+        }
+        concat_args.push(part);
+    }
+    builtin_concat(concat_args)
+}
+
+pub(crate) fn builtin_mapcan(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
+    if args.len() != 2 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("mapcan"), Value::Int(args.len() as i64)],
+        ));
+    }
+    let func = args[0].clone();
+    let sequence = args[1].clone();
+    let mut mapped = Vec::new();
+    for_each_sequence_element(&sequence, |item| {
+        mapped.push(eval.apply(func.clone(), vec![item])?);
+        Ok(())
+    })?;
+    builtin_nconc(mapped)
 }
 
 pub(crate) fn builtin_sort(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
@@ -4846,8 +4911,10 @@ pub(crate) fn dispatch_builtin(
     // Functions that need the evaluator (higher-order / obarray access)
     match name {
         "apply" => return Some(builtin_apply(eval, args)),
+        "mapcan" => return Some(builtin_mapcan(eval, args)),
         "mapcar" => return Some(builtin_mapcar(eval, args)),
         "mapc" => return Some(builtin_mapc(eval, args)),
+        "mapconcat" => return Some(builtin_mapconcat(eval, args)),
         "sort" => return Some(builtin_sort(eval, args)),
         "functionp" => return Some(builtin_functionp_eval(eval, args)),
         "macrop" => return Some(builtin_macrop_eval(eval, args)),
