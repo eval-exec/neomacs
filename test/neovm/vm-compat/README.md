@@ -130,7 +130,8 @@ make check-all-neovm-only
 
 Current NeoVM-only policy cases include source-only loading behavior (`.elc`
 rejection and `.neoc` fallback safety) plus NeoVM extension behavior
-(`neovm-precompile-file` cache warming).
+(`neovm-precompile-file` cache warming), and default-build `#[...]` literal
+non-callability policy (`cases/bytecode-literal-default-policy`).
 
 You can also precompile source files into NeoVM cache sidecars ahead of load:
 

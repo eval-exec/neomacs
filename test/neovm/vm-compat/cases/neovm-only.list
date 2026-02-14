@@ -1,3 +1,4 @@
 cases/load-suffixes
 cases/load-policy
 cases/precompile
+cases/bytecode-literal-default-policy

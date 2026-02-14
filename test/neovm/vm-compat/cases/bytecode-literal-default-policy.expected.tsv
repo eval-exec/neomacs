@@ -1,0 +1,5 @@
+1	(byte-code-function-p (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))	OK nil
+2	(functionp (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))	OK nil
+3	(type-of (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))	OK vector
+4	(condition-case err (funcall (car (read-from-string "#[nil \"\\300\\207\" [42] 1]"))) (error (car err)))	OK invalid-function
+5	(condition-case err (apply (car (read-from-string "#[(x) \"\\10\\207\" [x] 1]")) '(7)) (error (car err)))	OK invalid-function
