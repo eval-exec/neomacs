@@ -1,0 +1,16 @@
+1	(alist-get 'a '((a . 1) (b . 2)))	OK 1
+2	(alist-get 'z '((a . 1) (b . 2)))	OK nil
+3	(alist-get 'z '((a . 1) (b . 2)) 'none)	OK none
+4	(alist-get 'a '((a . 1) (a . 9)))	OK 1
+5	(alist-get 'a '((a . 1) (a . 9)) nil nil 'equal)	OK 1
+6	(alist-get "a" '(("a" . 1) ("a" . 9)) nil nil 'equal)	OK 1
+7	(alist-get 'a 'foo)	ERR (wrong-type-argument (listp foo))
+8	(alist-get 'a '((a . 1) . 2))	OK 1
+9	(alist-get 'b '((a . 1) . 2))	ERR (wrong-type-argument (listp ((a . 1) . 2)))
+10	(alist-get 'z '((a . 1) . 2) 'none)	ERR (wrong-type-argument (listp ((a . 1) . 2)))
+11	(alist-get 'a '((a . 1) (b . 2) . 3))	OK 1
+12	(alist-get 'b '((a . 1) (b . 2) . 3))	OK 2
+13	(alist-get 'z '((a . 1) (b . 2) . 3))	ERR (wrong-type-argument (listp ((a . 1) (b . 2) . 3)))
+14	(alist-get 'a '(a b c))	OK nil
+15	(alist-get nil '((nil . 1) (a . 2)))	OK 1
+16	(alist-get nil '((nil . 1) (a . 2)) 'none nil 'equal)	OK 1
