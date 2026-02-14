@@ -989,6 +989,34 @@ pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
 }
 
 pub(crate) fn builtin_concat(args: Vec<Value>) -> EvalResult {
+    fn push_concat_int(result: &mut String, n: i64) {
+        if n < 0 {
+            return;
+        }
+
+        let cp = n as u32;
+        if let Some(c) = char::from_u32(cp) {
+            result.push(c);
+            return;
+        }
+
+        // Emacs concat path for raw-byte non-Unicode chars uses byte->multibyte encoding.
+        if (0x3FFF00..=0x3FFFFF).contains(&cp) {
+            let b = (cp - 0x3FFF00) as u8;
+            let bytes = if b < 0x80 {
+                vec![b]
+            } else {
+                vec![0xC0 | ((b >> 6) & 0x01), 0x80 | (b & 0x3F)]
+            };
+            result.push_str(&bytes_to_storage_string(&bytes));
+            return;
+        }
+
+        if let Some(encoded) = encode_nonunicode_char_for_storage(cp) {
+            result.push_str(&encoded);
+        }
+    }
+
     let mut result = String::new();
     for arg in &args {
         match arg {
@@ -1000,9 +1028,7 @@ pub(crate) fn builtin_concat(args: Vec<Value>) -> EvalResult {
                         if let Value::Char(c) = item {
                             result.push(c);
                         } else if let Value::Int(n) = item {
-                            if let Some(c) = char::from_u32(n as u32) {
-                                result.push(c);
-                            }
+                            push_concat_int(&mut result, n);
                         }
                     }
                 }
@@ -1013,9 +1039,7 @@ pub(crate) fn builtin_concat(args: Vec<Value>) -> EvalResult {
                     if let Value::Char(c) = item {
                         result.push(*c);
                     } else if let Value::Int(n) = item {
-                        if let Some(c) = char::from_u32(*n as u32) {
-                            result.push(c);
-                        }
+                        push_concat_int(&mut result, *n);
                     }
                 }
             }

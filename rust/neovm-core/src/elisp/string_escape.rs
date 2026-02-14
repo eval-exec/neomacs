@@ -78,7 +78,11 @@ fn encode_emacs_extended_utf8(code: u32) -> Vec<u8> {
 fn decode_emacs_extended_utf8(bytes: &[u8]) -> Option<u32> {
     match bytes {
         [b0] => Some(*b0 as u32),
-        [b0, b1] if (b0 & 0xE0) == 0xC0 && (b1 & 0xC0) == 0x80 => {
+        // Emacs raw bytes 0x80..0xFF may appear as overlong C0/C1 sequences.
+        [b0, b1] if (*b0 == 0xC0 || *b0 == 0xC1) && (b1 & 0xC0) == 0x80 => {
+            Some(0x80 + (((b0 & 0x01) as u32) << 6) + ((b1 & 0x3F) as u32))
+        }
+        [b0, b1] if (0xC2..=0xDF).contains(b0) && (b1 & 0xC0) == 0x80 => {
             Some((((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32))
         }
         [b0, b1, b2]
@@ -443,5 +447,11 @@ mod tests {
         assert_eq!(storage_substring(&s, 0, 1), Some(ext));
         assert_eq!(storage_substring(&s, 1, 2), Some("A".to_string()));
         assert_eq!(storage_substring(&s, 2, 3), Some(raw));
+    }
+
+    #[test]
+    fn decode_storage_handles_overlong_raw_byte_encoding() {
+        let encoded = bytes_to_storage_string(&[0xC1, 0xBF]);
+        assert_eq!(decode_storage_char_codes(&encoded), vec![255]);
     }
 }
