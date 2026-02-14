@@ -1,0 +1,15 @@
+1	(plist-get '(:a 1 :b 2) :a)	OK 1
+2	(plist-get '(:a 1 :b 2) :z)	OK nil
+3	(plist-get '(:a 1 . :b) :a)	OK 1
+4	(plist-get '(:a 1 . :b) :b)	OK nil
+5	(let ((p (list :a 1 :b 2))) (let ((r (plist-put p :a 9))) (list r p (eq r p))))	OK ((:a 9 :b 2) (:a 9 :b 2) t)
+6	(let* ((p (list :a 1 :b 2)) (tail (cdr p))) (plist-put p :a 9) tail)	OK (9 :b 2)
+7	(let ((p (list :a 1 :b 2))) (let ((r (plist-put p :z 7))) (list r p (eq r p))))	OK ((:a 1 :b 2 :z 7) (:a 1 :b 2 :z 7) t)
+8	(let* ((p (list :a 1 :b 2)) (tail (cdr p))) (plist-put p :z 7) tail)	OK (1 :b 2 :z 7)
+9	(plist-put nil :a 1)	OK (:a 1)
+10	(plist-put '(:a 1 . :b) :a 9)	OK (:a 9 . :b)
+11	(plist-put '(:a 1 . :b) :z 7)	ERR (wrong-type-argument (plistp (:a 1 . :b)))
+12	(plist-put '(:a . :b) :a 9)	ERR (wrong-type-argument (plistp (:a . :b)))
+13	(plist-put 'foo :a 1)	ERR (wrong-type-argument (plistp foo))
+14	(plist-put '(a b c) 'a 9)	OK (a 9 c)
+15	(plist-put '(a b c) 'z 7)	ERR (wrong-type-argument (plistp (a b c)))
