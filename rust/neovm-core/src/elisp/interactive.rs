@@ -177,7 +177,7 @@ pub(crate) fn builtin_call_interactively(eval: &mut Evaluator, args: Vec<Value>)
     let Some((resolved_name, func)) = resolve_command_target(eval, func_val) else {
         return Err(signal("void-function", vec![func_val.clone()]));
     };
-    let call_args = default_command_invocation_args(eval, &resolved_name)?;
+    let call_args = default_call_interactively_args(eval, &resolved_name)?;
 
     // Mark as interactive call
     eval.interactive.push_interactive_call(true);
@@ -409,7 +409,7 @@ fn interactive_region_args(eval: &Evaluator, missing_mark_signal: &str) -> Resul
     Ok(vec![Value::Int(beg as i64), Value::Int(end as i64)])
 }
 
-fn default_command_invocation_args(eval: &Evaluator, name: &str) -> Result<Vec<Value>, Flow> {
+fn default_command_execute_args(eval: &Evaluator, name: &str) -> Result<Vec<Value>, Flow> {
     match name {
         "self-insert-command"
         | "delete-char"
@@ -422,6 +422,15 @@ fn default_command_invocation_args(eval: &Evaluator, name: &str) -> Result<Vec<V
         "kill-region" => interactive_region_args(eval, "user-error"),
         "kill-ring-save" => interactive_region_args(eval, "error"),
         _ => Ok(Vec::new()),
+    }
+}
+
+fn default_call_interactively_args(eval: &Evaluator, name: &str) -> Result<Vec<Value>, Flow> {
+    match name {
+        "upcase-region" | "downcase-region" | "capitalize-region" => {
+            interactive_region_args(eval, "error")
+        }
+        _ => default_command_execute_args(eval, name),
     }
 }
 
@@ -458,7 +467,7 @@ pub(crate) fn builtin_command_execute(eval: &mut Evaluator, args: Vec<Value>) ->
     let Some((resolved_name, func)) = resolve_command_target(eval, cmd) else {
         return Err(signal("void-function", vec![cmd.clone()]));
     };
-    let call_args = default_command_invocation_args(eval, &resolved_name)?;
+    let call_args = default_command_execute_args(eval, &resolved_name)?;
 
     eval.interactive.push_interactive_call(true);
     let result = eval.apply(func, call_args);
@@ -2376,6 +2385,51 @@ mod tests {
                  (current-kill 0 t))"#,
         );
         assert_eq!(results[0], "OK \"ab\"");
+    }
+
+    #[test]
+    fn call_interactively_builtin_upcase_region_uses_marked_region() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "abc")
+                 (goto-char 1)
+                 (set-mark 3)
+                 (call-interactively 'upcase-region)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"ABc\"");
+    }
+
+    #[test]
+    fn call_interactively_builtin_downcase_region_uses_marked_region() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "ABC")
+                 (goto-char 1)
+                 (set-mark 3)
+                 (call-interactively 'downcase-region)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"abC\"");
+    }
+
+    #[test]
+    fn call_interactively_builtin_capitalize_region_uses_marked_region() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "abc")
+                 (goto-char 1)
+                 (set-mark 3)
+                 (call-interactively 'capitalize-region)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"Abc\"");
     }
 
     #[test]
