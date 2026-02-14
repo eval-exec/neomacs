@@ -174,5 +174,7 @@ Post-freeze updates:
   - `cases/delete-delq-semantics`
 - Added destructive ordering compatibility case:
   - `cases/sort-semantics`
+- Added list tail/suffix compatibility case:
+  - `cases/last-butlast-semantics`
 - Full NeoVM gate is green with these additions:
   - `make check-all-neovm`
