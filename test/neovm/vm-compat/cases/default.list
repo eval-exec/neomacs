@@ -18,6 +18,7 @@ cases/functionp-callable-matrix
 cases/commandp-semantics
 cases/commandp-builtin-command-matrix
 cases/command-dispatch-semantics
+cases/command-prefix-state-return-shape
 cases/command-dispatch-line-motion-semantics
 cases/keyboard-quit-command-semantics
 cases/execute-extended-command-name-validation

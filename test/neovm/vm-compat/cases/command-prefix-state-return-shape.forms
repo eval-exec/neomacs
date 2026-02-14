@@ -1,0 +1,6 @@
+; command dispatch for universal-argument should return a non-command function object.
+(let ((v (condition-case err (command-execute 'universal-argument) (error err))))
+  (list (symbolp v) (functionp v) (commandp v)))
+
+(let ((v (condition-case err (call-interactively 'universal-argument) (error err))))
+  (list (symbolp v) (functionp v) (commandp v)))
