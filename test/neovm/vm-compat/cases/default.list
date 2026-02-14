@@ -98,6 +98,7 @@ cases/md5-semantics
 cases/md5-coding-semantics
 cases/coding-system-runtime-semantics
 cases/charset-priority-semantics
+cases/charset-id-internal-semantics
 cases/locale-info-semantics
 cases/secure-hash-semantics
 cases/secure-hash-binary-semantics

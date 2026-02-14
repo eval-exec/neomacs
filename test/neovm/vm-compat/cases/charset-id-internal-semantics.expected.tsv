@@ -1,0 +1,10 @@
+1	(charset-id-internal)	ERR (wrong-type-argument (charsetp nil))
+2	(charset-id-internal 'ascii)	OK 0
+3	(charset-id-internal 'unicode)	OK 2
+4	(charset-id-internal 'latin-iso8859-1)	OK 5
+5	(charset-id-internal 'unicode-bmp)	OK 144
+6	(charset-id-internal 'eight-bit)	OK 4
+7	(charset-id-internal 'emacs)	OK 3
+8	(condition-case err (charset-id-internal 'no-such-charset) (error err))	OK (wrong-type-argument charsetp no-such-charset)
+9	(condition-case err (charset-id-internal "ascii") (error err))	OK (wrong-type-argument charsetp "ascii")
+10	(condition-case err (charset-id-internal 1) (error err))	OK (wrong-type-argument charsetp 1)
