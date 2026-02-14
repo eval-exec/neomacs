@@ -329,6 +329,16 @@ fn decode_opcode_subset(byte_stream: &str, const_len: usize) -> Option<Vec<Op>> 
                 pending.push(Pending::Op(Op::Mul));
                 pc += 1;
             }
+            // /
+            0o245 => {
+                pending.push(Pending::Op(Op::Div));
+                pc += 1;
+            }
+            // %
+            0o246 => {
+                pending.push(Pending::Op(Op::Rem));
+                pc += 1;
+            }
             // equal
             0o232 => {
                 pending.push(Pending::Op(Op::Equal));
@@ -799,6 +809,33 @@ mod tests {
                 Op::Return,
             ]
         );
+    }
+
+    #[test]
+    fn decodes_div_rem_opcode_subset() {
+        let div = Value::vector(vec![
+            Value::list(vec![Value::symbol("x"), Value::symbol("y")]),
+            Value::string("\u{8}\u{9}\u{A5}\u{87}"),
+            Value::vector(vec![Value::symbol("x"), Value::symbol("y")]),
+            Value::Int(2),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(div);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(bc.ops, vec![Op::VarRef(0), Op::VarRef(1), Op::Div, Op::Return]);
+
+        let rem = Value::vector(vec![
+            Value::list(vec![Value::symbol("x"), Value::symbol("y")]),
+            Value::string("\u{8}\u{9}\u{A6}\u{87}"),
+            Value::vector(vec![Value::symbol("x"), Value::symbol("y")]),
+            Value::Int(2),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(rem);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(bc.ops, vec![Op::VarRef(0), Op::VarRef(1), Op::Rem, Op::Return]);
     }
 
     #[test]
