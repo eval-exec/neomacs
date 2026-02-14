@@ -12,7 +12,7 @@
 //!   newline-and-indent, delete-indentation, tab-to-tab-stop, indent-rigidly
 
 use super::error::{signal, EvalResult, Flow};
-use super::syntax::{backward_word, forward_word};
+use super::syntax::{backward_word, forward_word, SyntaxClass};
 use super::value::Value;
 use crate::buffer::Buffer;
 
@@ -1185,55 +1185,69 @@ pub(crate) fn builtin_transpose_words(
 
     let table = buf.syntax_table.clone();
     let pt = buf.point();
+    let pmin = buf.point_min();
+    let pmax = buf.point_max();
 
-    // Find end of word after point (or current word end).
-    let word2_end = forward_word(buf, &table, 1);
-    let word2_start = backward_word(buf, &table.clone(), 1);
+    let is_word_char = |ch: char| matches!(table.char_syntax(ch), SyntaxClass::Word);
 
-    // We need to find the word before word2_start by looking from word2_start backward.
-    let saved_pt = pt;
-
-    // Move point to word2_start to find the previous word.
-    let buf_mut = eval
-        .buffers
-        .current_buffer_mut()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    buf_mut.goto_char(word2_start);
-
-    let buf_immut = eval
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let word1_start = backward_word(buf_immut, &table, 1);
-    let word1_end = {
-        let buf_temp = eval
-            .buffers
-            .current_buffer_mut()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        buf_temp.goto_char(word1_start);
-        let buf_r = eval
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        forward_word(buf_r, &table, 1)
+    let word_start_before_or_at = |start_pos: usize| -> Option<usize> {
+        let mut pos = start_pos;
+        while pos > pmin {
+            let ch = buf.char_before(pos)?;
+            if !is_word_char(ch) {
+                break;
+            }
+            pos -= ch.len_utf8();
+        }
+        if pos < pmax {
+            let ch = buf.char_after(pos)?;
+            if is_word_char(ch) {
+                return Some(pos);
+            }
+        }
+        None
     };
 
-    if word1_start == word2_start {
-        // Same word — nothing to transpose.
-        let buf_m = eval
-            .buffers
-            .current_buffer_mut()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        buf_m.goto_char(saved_pt);
-        return Ok(Value::Nil);
-    }
+    let word_start_at_or_after = |start_pos: usize| -> Option<usize> {
+        let mut pos = start_pos;
+        while pos < pmax {
+            let ch = buf.char_after(pos)?;
+            if is_word_char(ch) {
+                return Some(pos);
+            }
+            pos += ch.len_utf8();
+        }
+        None
+    };
 
-    // Ensure ordering: word1 comes before word2.
-    let (w1s, w1e, w2s, w2e) = if word1_start < word2_start {
-        (word1_start, word1_end, word2_start, word2_end)
+    let word_end_from_start = |start_pos: usize| -> usize {
+        let mut pos = start_pos;
+        while pos < pmax {
+            let Some(ch) = buf.char_after(pos) else {
+                break;
+            };
+            if !is_word_char(ch) {
+                break;
+            }
+            pos += ch.len_utf8();
+        }
+        pos
+    };
+
+    let w1s = if pt > pmin
+        && buf
+            .char_before(pt)
+            .is_some_and(|ch| is_word_char(ch))
+    {
+        word_start_before_or_at(pt)
     } else {
-        (word2_start, word2_end, word1_start, word1_end)
-    };
+        word_start_at_or_after(pt)
+    }
+    .ok_or_else(|| signal("error", vec![Value::string("Don't have two things to transpose")]))?;
+    let w1e = word_end_from_start(w1s);
+    let w2s = word_start_at_or_after(w1e)
+        .ok_or_else(|| signal("error", vec![Value::string("Don't have two things to transpose")]))?;
+    let w2e = word_end_from_start(w2s);
 
     let buf_r = eval
         .buffers
@@ -1255,6 +1269,10 @@ pub(crate) fn builtin_transpose_words(
     buf_m.insert(&w2_text);
     buf_m.insert(&between);
     buf_m.insert(&w1_text);
+
+    // Keep point at the end of the transposed pair.
+    let new_pt = w1s + w2_text.len() + between.len() + w1_text.len();
+    buf_m.goto_char(new_pt);
 
     Ok(Value::Nil)
 }
@@ -2221,6 +2239,30 @@ mod tests {
                (buffer-string)"#,
         );
         assert_eq!(results[3], r#"OK "line2\nline1\n""#);
+    }
+
+    // -- transpose-words tests --
+
+    #[test]
+    fn transpose_words_basic() {
+        let results = eval_all(
+            r#"(insert "aa bb")
+               (goto-char 0)
+               (transpose-words 1)
+               (buffer-string)"#,
+        );
+        assert_eq!(results[3], r#"OK "bb aa""#);
+    }
+
+    #[test]
+    fn transpose_words_not_enough_words_errors() {
+        let result = eval_one(
+            r#"(with-temp-buffer
+                 (insert "aa")
+                 (goto-char 0)
+                 (transpose-words 1))"#,
+        );
+        assert!(result.starts_with("ERR"));
     }
 
     // -- indent-line-to tests --

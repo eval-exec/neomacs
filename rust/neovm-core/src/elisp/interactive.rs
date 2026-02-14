@@ -424,7 +424,8 @@ fn default_command_execute_args(eval: &Evaluator, name: &str) -> Result<Vec<Valu
         | "downcase-word"
         | "upcase-word"
         | "capitalize-word"
-        | "transpose-lines" => Ok(vec![Value::Int(1)]),
+        | "transpose-lines"
+        | "transpose-words" => Ok(vec![Value::Int(1)]),
         "kill-region" => interactive_region_args(eval, "user-error"),
         "kill-ring-save" => interactive_region_args(eval, "error"),
         "copy-region-as-kill" => interactive_region_args(eval, "error"),
@@ -2373,6 +2374,34 @@ mod tests {
                  (buffer-string))"#,
         );
         assert_eq!(results[0], "OK \"Abc def\"");
+    }
+
+    #[test]
+    fn command_execute_builtin_transpose_words_uses_default_prefix_arg() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "aa bb")
+                 (goto-char 1)
+                 (command-execute 'transpose-words)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"bb aa\"");
+    }
+
+    #[test]
+    fn call_interactively_builtin_transpose_words_uses_default_prefix_arg() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "aa bb")
+                 (goto-char 1)
+                 (call-interactively 'transpose-words)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"bb aa\"");
     }
 
     #[test]
