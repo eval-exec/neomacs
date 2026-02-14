@@ -188,12 +188,6 @@ pub(crate) fn builtin_frame_terminal(args: Vec<Value>) -> EvalResult {
     Ok(Value::string("neomacs"))
 }
 
-/// (selected-terminal) -> "neomacs"
-pub(crate) fn builtin_selected_terminal(args: Vec<Value>) -> EvalResult {
-    expect_max_args("selected-terminal", &args, 0)?;
-    Ok(Value::string("neomacs"))
-}
-
 /// (terminal-live-p TERMINAL) -> t
 pub(crate) fn builtin_terminal_live_p(args: Vec<Value>) -> EvalResult {
     expect_range_args("terminal-live-p", &args, 1, 1)?;
