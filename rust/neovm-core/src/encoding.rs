@@ -5,6 +5,7 @@
 //! APIs.
 
 use crate::elisp::value::Value;
+use crate::elisp::string_escape::storage_byte_len;
 
 // ---------------------------------------------------------------------------
 // Character classification
@@ -252,6 +253,13 @@ pub(crate) fn builtin_string_width(args: Vec<Value>) -> EvalResult {
     Ok(Value::Int(string_width(&s) as i64))
 }
 
+/// `(string-bytes STRING)` -> integer byte length of STRING.
+pub(crate) fn builtin_string_bytes(args: Vec<Value>) -> EvalResult {
+    expect_args("string-bytes", &args, 1)?;
+    let s = expect_string(&args[0])?;
+    Ok(Value::Int(storage_byte_len(&s) as i64))
+}
+
 /// `(multibyte-string-p STRING)` -> t or nil
 pub(crate) fn builtin_multibyte_string_p(args: Vec<Value>) -> EvalResult {
     expect_args("multibyte-string-p", &args, 1)?;
@@ -355,6 +363,12 @@ mod tests {
         assert_eq!(string_width("hello"), 5);
         assert_eq!(string_width("中文"), 4);
         assert_eq!(string_width("hi中"), 4);
+    }
+
+    #[test]
+    fn builtin_string_bytes_counts_utf8_length() {
+        let result = builtin_string_bytes(vec![Value::string("Aé中")]).unwrap();
+        assert_eq!(result, Value::Int(6));
     }
 
     #[test]

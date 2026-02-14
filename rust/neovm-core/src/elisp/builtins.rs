@@ -6357,6 +6357,7 @@ pub(crate) fn dispatch_builtin(
 
         // Character encoding
         "char-width" => crate::encoding::builtin_char_width(args),
+        "string-bytes" => crate::encoding::builtin_string_bytes(args),
         "multibyte-string-p" => crate::encoding::builtin_multibyte_string_p(args),
         "unibyte-string-p" => crate::encoding::builtin_unibyte_string_p(args),
         "encode-coding-string" => crate::encoding::builtin_encode_coding_string(args),
@@ -6843,6 +6844,7 @@ pub(crate) fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<Eval
         "kmacro-p" => super::kmacro::builtin_kmacro_p(args),
         // Character encoding (pure)
         "char-width" => crate::encoding::builtin_char_width(args),
+        "string-bytes" => crate::encoding::builtin_string_bytes(args),
         "multibyte-string-p" => crate::encoding::builtin_multibyte_string_p(args),
         "unibyte-string-p" => crate::encoding::builtin_unibyte_string_p(args),
         "encode-coding-string" => crate::encoding::builtin_encode_coding_string(args),
@@ -7748,6 +7750,11 @@ mod tests {
             .expect("builtin string-width should resolve")
             .expect("builtin string-width should evaluate");
         assert_eq!(width, Value::Int(2));
+
+        let bytes = dispatch_builtin_pure("string-bytes", vec![Value::string("ab")])
+            .expect("builtin string-bytes should resolve")
+            .expect("builtin string-bytes should evaluate");
+        assert_eq!(bytes, Value::Int(2));
     }
 
     #[test]
