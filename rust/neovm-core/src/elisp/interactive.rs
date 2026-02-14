@@ -223,7 +223,25 @@ pub(crate) fn builtin_commandp_interactive(eval: &mut Evaluator, args: Vec<Value
 fn builtin_command_name(name: &str) -> bool {
     matches!(
         name,
-        "ignore" | "eval-expression" | "self-insert-command" | "newline" | "execute-extended-command"
+        "ignore"
+            | "eval-expression"
+            | "self-insert-command"
+            | "newline"
+            | "execute-extended-command"
+            | "forward-char"
+            | "next-line"
+            | "previous-line"
+            | "kill-line"
+            | "switch-to-buffer"
+            | "find-file"
+            | "save-buffer"
+            | "set-mark-command"
+            | "other-window"
+            | "keyboard-quit"
+            | "quoted-insert"
+            | "universal-argument"
+            | "beginning-of-line"
+            | "end-of-line"
     )
 }
 
@@ -1673,6 +1691,13 @@ mod tests {
         let mut ev = Evaluator::new();
         let result =
             builtin_commandp_interactive(&mut ev, vec![Value::symbol("execute-extended-command")]);
+        assert!(result.unwrap().is_truthy());
+    }
+
+    #[test]
+    fn commandp_true_for_builtin_forward_char() {
+        let mut ev = Evaluator::new();
+        let result = builtin_commandp_interactive(&mut ev, vec![Value::symbol("forward-char")]);
         assert!(result.unwrap().is_truthy());
     }
 
