@@ -1,0 +1,2 @@
+1	(fboundp 'custom-group-p)	OK nil
+2	(condition-case err (custom-group-p 'editing) (error err))	OK (void-function custom-group-p)

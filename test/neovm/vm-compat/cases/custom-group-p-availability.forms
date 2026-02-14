@@ -1,0 +1,2 @@
+(fboundp 'custom-group-p)
+(condition-case err (custom-group-p 'editing) (error err))
