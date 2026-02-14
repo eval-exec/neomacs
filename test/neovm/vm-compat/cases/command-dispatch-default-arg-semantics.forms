@@ -66,6 +66,56 @@
 
 (condition-case err
     (with-temp-buffer
+      (insert "abc")
+      (goto-char 1)
+      (set-mark 3)
+      (command-execute 'kill-region)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (goto-char 1)
+      (set-mark 3)
+      (call-interactively 'kill-region)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (goto-char 1)
+      (set-mark 3)
+      (command-execute 'kill-ring-save)
+      (current-kill 0 t))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (goto-char 1)
+      (set-mark 3)
+      (call-interactively 'kill-ring-save)
+      (current-kill 0 t))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (goto-char 1)
+      (command-execute 'kill-region))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (goto-char 1)
+      (call-interactively 'kill-region))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
       (insert "abc def")
       (goto-char 1)
       (command-execute 'upcase-word)
