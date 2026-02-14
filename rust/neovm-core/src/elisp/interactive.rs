@@ -391,7 +391,14 @@ fn command_designator_p(eval: &Evaluator, designator: &Value) -> bool {
 
 fn default_command_invocation_args(name: &str) -> Vec<Value> {
     match name {
-        "self-insert-command" => vec![Value::Int(1)],
+        "self-insert-command"
+        | "delete-char"
+        | "kill-word"
+        | "backward-kill-word"
+        | "downcase-word"
+        | "upcase-word"
+        | "capitalize-word"
+        | "transpose-lines" => vec![Value::Int(1)],
         _ => Vec::new(),
     }
 }
@@ -2258,6 +2265,34 @@ mod tests {
         let result = builtin_command_execute(&mut ev, vec![Value::symbol("self-insert-command")])
             .expect("self-insert-command should execute");
         assert!(result.is_nil());
+    }
+
+    #[test]
+    fn command_execute_builtin_delete_char_uses_default_prefix_arg() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "abc")
+                 (goto-char 1)
+                 (command-execute 'delete-char)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"bc\"");
+    }
+
+    #[test]
+    fn call_interactively_builtin_delete_char_uses_default_prefix_arg() {
+        let mut ev = Evaluator::new();
+        let results = eval_all_with(
+            &mut ev,
+            r#"(with-temp-buffer
+                 (insert "abc")
+                 (goto-char 1)
+                 (call-interactively 'delete-char)
+                 (buffer-string))"#,
+        );
+        assert_eq!(results[0], "OK \"bc\"");
     }
 
     #[test]
