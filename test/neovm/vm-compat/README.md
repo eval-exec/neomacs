@@ -185,6 +185,8 @@ Post-freeze updates:
   - `cases/aref-aset-index-semantics`
 - Added sequence copy compatibility case:
   - `cases/copy-sequence-semantics`
+- Added list membership/alist lookup compatibility case:
+  - `cases/member-assoc-semantics`
 - Added higher-order map primitive compatibility case:
   - `cases/map-family-semantics`
 - Added `ignore` callable compatibility case:
