@@ -408,6 +408,9 @@ impl Evaluator {
         if let Expr::Symbol(name) = head {
             // Check for macro expansion first (from obarray function cell)
             if let Some(func) = self.obarray.symbol_function(name).cloned() {
+                if func.is_nil() {
+                    return Err(signal("void-function", vec![Value::symbol(name)]));
+                }
                 if let Value::Macro(_) = &func {
                     let expanded = self.expand_macro(func, tail)?;
                     return self.eval(&expanded);
@@ -1670,6 +1673,7 @@ impl Evaluator {
 
         let target = if let Some(func) = self.obarray.symbol_function(name).cloned() {
             match &func {
+                Value::Nil => NamedCallTarget::Void,
                 // `(fset 'foo (symbol-function 'foo))` writes `#<subr foo>` into
                 // the function cell. Treat this as a direct builtin/special-form
                 // callable, not an obarray indirection cycle.
@@ -2470,6 +2474,29 @@ mod tests {
             ),
             "OK 1"
         );
+    }
+
+    #[test]
+    fn fset_nil_reports_symbol_payload_for_void_function_calls() {
+        let results = eval_all(
+            "(fset 'vm-fsetnil nil)
+             (fboundp 'vm-fsetnil)
+             (condition-case err (vm-fsetnil) (error err))
+             (condition-case err (funcall 'vm-fsetnil) (error err))
+             (condition-case err (apply 'vm-fsetnil nil) (error err))
+             (fset 'length nil)
+             (fboundp 'length)
+             (condition-case err (length '(1 2)) (error err))",
+        );
+
+        assert_eq!(results[0], "OK nil");
+        assert_eq!(results[1], "OK nil");
+        assert_eq!(results[2], "OK (void-function vm-fsetnil)");
+        assert_eq!(results[3], "OK (void-function vm-fsetnil)");
+        assert_eq!(results[4], "OK (void-function vm-fsetnil)");
+        assert_eq!(results[5], "OK nil");
+        assert_eq!(results[6], "OK nil");
+        assert_eq!(results[7], "OK (void-function length)");
     }
 
     #[test]

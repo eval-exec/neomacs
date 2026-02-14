@@ -173,7 +173,10 @@ impl Obarray {
         if self.function_unbound.contains(name) {
             return false;
         }
-        self.symbols.get(name).is_some_and(|s| s.function.is_some())
+        self.symbols
+            .get(name)
+            .and_then(|s| s.function.as_ref())
+            .is_some_and(|f| !f.is_nil())
     }
 
     /// Get a property from the symbol's plist.

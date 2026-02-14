@@ -2425,10 +2425,12 @@ pub(crate) fn builtin_fboundp(eval: &mut super::eval::Evaluator, args: Vec<Value
     if eval.obarray().is_function_unbound(name) {
         return Ok(Value::Nil);
     }
+    if let Some(function) = eval.obarray().symbol_function(name) {
+        return Ok(Value::bool(!function.is_nil()));
+    }
     let macro_bound = super::subr_info::is_evaluator_macro_name(name);
     Ok(Value::bool(
-        eval.obarray().fboundp(name)
-            || super::subr_info::is_special_form(name)
+        super::subr_info::is_special_form(name)
             || macro_bound
             || super::subr_info::is_evaluator_callable_name(name)
             || super::builtin_registry::is_dispatch_builtin_name(name)
@@ -8156,6 +8158,28 @@ mod tests {
         let throw_functionp = builtin_functionp_eval(&mut eval, vec![Value::symbol("throw")])
             .expect("functionp should accept symbol");
         assert!(throw_functionp.is_nil());
+    }
+
+    #[test]
+    fn fset_nil_clears_fboundp_for_regular_and_fallback_names() {
+        let mut eval = crate::elisp::eval::Evaluator::new();
+
+        let regular = builtin_fset(&mut eval, vec![Value::symbol("vm-fsetnil"), Value::Nil])
+            .expect("fset should accept nil definition payload");
+        assert!(regular.is_nil());
+        let regular_bound = builtin_fboundp(&mut eval, vec![Value::symbol("vm-fsetnil")])
+            .expect("fboundp should accept symbol");
+        assert!(regular_bound.is_nil());
+        let regular_fn = builtin_symbol_function(&mut eval, vec![Value::symbol("vm-fsetnil")])
+            .expect("symbol-function should accept symbol");
+        assert!(regular_fn.is_nil());
+
+        let fallback = builtin_fset(&mut eval, vec![Value::symbol("length"), Value::Nil])
+            .expect("fset should accept nil for fallback builtin name");
+        assert!(fallback.is_nil());
+        let fallback_bound = builtin_fboundp(&mut eval, vec![Value::symbol("length")])
+            .expect("fboundp should honor explicit nil function cell");
+        assert!(fallback_bound.is_nil());
     }
 
     #[test]
