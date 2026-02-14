@@ -404,93 +404,6 @@ pub(crate) fn builtin_bookmark_rename(
     }
 }
 
-/// (bookmark-all-names) -> list of strings
-pub(crate) fn builtin_bookmark_all_names(
-    eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("bookmark-all-names", &args, 0)?;
-    let names: Vec<Value> = eval
-        .bookmarks
-        .all_names()
-        .into_iter()
-        .map(|n| Value::string(n.to_string()))
-        .collect();
-    Ok(Value::list(names))
-}
-
-/// (bookmark-get-filename NAME) -> string or nil
-pub(crate) fn builtin_bookmark_get_filename(
-    eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("bookmark-get-filename", &args, 1)?;
-    let name = expect_string(&args[0])?;
-    match eval.bookmarks.get(&name) {
-        Some(bm) => match &bm.filename {
-            Some(f) => Ok(Value::string(f.clone())),
-            None => Ok(Value::Nil),
-        },
-        None => Ok(Value::Nil),
-    }
-}
-
-/// (bookmark-get-position NAME) -> integer or nil
-pub(crate) fn builtin_bookmark_get_position(
-    eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("bookmark-get-position", &args, 1)?;
-    let name = expect_string(&args[0])?;
-    match eval.bookmarks.get(&name) {
-        Some(bm) => Ok(Value::Int(bm.position as i64)),
-        None => Ok(Value::Nil),
-    }
-}
-
-/// (bookmark-get-annotation NAME) -> string or nil
-pub(crate) fn builtin_bookmark_get_annotation(
-    eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("bookmark-get-annotation", &args, 1)?;
-    let name = expect_string(&args[0])?;
-    match eval.bookmarks.get(&name) {
-        Some(bm) => match &bm.annotation {
-            Some(a) => Ok(Value::string(a.clone())),
-            None => Ok(Value::Nil),
-        },
-        None => Ok(Value::Nil),
-    }
-}
-
-/// (bookmark-set-annotation NAME ANNOTATION) -> nil
-pub(crate) fn builtin_bookmark_set_annotation(
-    eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("bookmark-set-annotation", &args, 2)?;
-    let name = expect_string(&args[0])?;
-    let annotation = if args[1].is_nil() {
-        None
-    } else {
-        Some(expect_string(&args[1])?)
-    };
-    // Clone the bookmark data we need before mutably borrowing bookmarks
-    let existing = eval.bookmarks.get(&name).cloned();
-    match existing {
-        Some(mut bm) => {
-            bm.annotation = annotation;
-            eval.bookmarks.set(&name, bm);
-            Ok(Value::Nil)
-        }
-        None => Err(signal(
-            "error",
-            vec![Value::string(format!("No bookmark named \"{}\"", name))],
-        )),
-    }
-}
-
 /// (bookmark-save) -> string
 ///
 /// Serialize all bookmarks and return the string.  In a real Emacs this
@@ -832,77 +745,9 @@ mod tests {
         );
         assert!(result.is_ok());
 
-        // Old name gone, new name exists
-        let result = builtin_bookmark_get_position(&mut eval, vec![Value::string("old-name")]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_nil());
-
-        let result = builtin_bookmark_get_position(&mut eval, vec![Value::string("new-name")]);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), Value::Int(_)));
-    }
-
-    #[test]
-    fn test_builtin_bookmark_all_names() {
-        use super::super::eval::Evaluator;
-
-        let mut eval = Evaluator::new();
-
-        // Empty
-        let result = builtin_bookmark_all_names(&mut eval, vec![]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_nil()); // empty list is nil
-
-        // Add some
-        builtin_bookmark_set(&mut eval, vec![Value::string("b")]).unwrap();
-        builtin_bookmark_set(&mut eval, vec![Value::string("a")]).unwrap();
-
-        let result = builtin_bookmark_all_names(&mut eval, vec![]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_cons());
-    }
-
-    #[test]
-    fn test_builtin_bookmark_annotation() {
-        use super::super::eval::Evaluator;
-
-        let mut eval = Evaluator::new();
-
-        builtin_bookmark_set(
-            &mut eval,
-            vec![
-                Value::string("annotated"),
-                Value::Nil,
-                Value::string("my note"),
-            ],
-        )
-        .unwrap();
-
-        let result = builtin_bookmark_get_annotation(&mut eval, vec![Value::string("annotated")]);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_str(), Some("my note"));
-
-        // Update annotation
-        let result = builtin_bookmark_set_annotation(
-            &mut eval,
-            vec![Value::string("annotated"), Value::string("updated note")],
-        );
-        assert!(result.is_ok());
-
-        let result = builtin_bookmark_get_annotation(&mut eval, vec![Value::string("annotated")]);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_str(), Some("updated note"));
-
-        // Clear annotation
-        let result = builtin_bookmark_set_annotation(
-            &mut eval,
-            vec![Value::string("annotated"), Value::Nil],
-        );
-        assert!(result.is_ok());
-
-        let result = builtin_bookmark_get_annotation(&mut eval, vec![Value::string("annotated")]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_nil());
+        // Old name gone, new name exists.
+        assert!(eval.bookmarks.get("old-name").is_none());
+        assert!(eval.bookmarks.get("new-name").is_some());
     }
 
     #[test]
@@ -933,14 +778,12 @@ mod tests {
         let result = builtin_bookmark_load(&mut eval, vec![saved_data]);
         assert!(result.is_ok());
 
-        // Verify restored
-        let result = builtin_bookmark_get_filename(&mut eval, vec![Value::string("bm1")]);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_str(), Some("/file1.el"));
+        // Verify restored bookmark payloads.
+        let bm1 = eval.bookmarks.get("bm1").expect("bm1 restored");
+        assert_eq!(bm1.filename.as_deref(), Some("/file1.el"));
 
-        let result = builtin_bookmark_get_filename(&mut eval, vec![Value::string("bm2")]);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_str(), Some("/file2.el"));
+        let bm2 = eval.bookmarks.get("bm2").expect("bm2 restored");
+        assert_eq!(bm2.filename.as_deref(), Some("/file2.el"));
     }
 
     #[test]
