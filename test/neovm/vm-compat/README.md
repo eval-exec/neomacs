@@ -183,6 +183,8 @@ Post-freeze updates:
   - `cases/elt-semantics`
 - Added array index typing compatibility case:
   - `cases/aref-aset-index-semantics`
+- Added sequence copy compatibility case:
+  - `cases/copy-sequence-semantics`
 - Added higher-order map primitive compatibility case:
   - `cases/map-family-semantics`
 - Added `ignore` callable compatibility case:
