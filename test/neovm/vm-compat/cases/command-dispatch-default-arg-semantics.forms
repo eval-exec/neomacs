@@ -66,6 +66,38 @@
 
 (condition-case err
     (with-temp-buffer
+      (insert "abc def")
+      (goto-char 1)
+      (command-execute 'upcase-word)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc def")
+      (goto-char 1)
+      (command-execute 'capitalize-word)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc def")
+      (goto-char 1)
+      (call-interactively 'upcase-word)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc def")
+      (goto-char 1)
+      (call-interactively 'capitalize-word)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
       (insert "abc")
       (goto-char 1)
       (command-execute 'transpose-lines)
