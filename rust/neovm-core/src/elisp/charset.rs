@@ -281,14 +281,6 @@ pub(crate) fn builtin_charsetp(args: Vec<Value>) -> EvalResult {
     Ok(Value::bool(reg.contains(&name)))
 }
 
-/// `(charset-list)` -- return list of all charset names as symbols.
-pub(crate) fn builtin_charset_list(args: Vec<Value>) -> EvalResult {
-    expect_max_args("charset-list", &args, 0)?;
-    let reg = global_registry().lock().expect("poisoned");
-    let names: Vec<Value> = reg.names().into_iter().map(Value::symbol).collect();
-    Ok(Value::list(names))
-}
-
 /// `(charset-priority-list &optional HIGHESTP)` -- return list of charsets
 /// in priority order.  If HIGHESTP is non-nil, return only the highest
 /// priority charset.
@@ -493,12 +485,6 @@ pub(crate) fn builtin_charset_after(args: Vec<Value>) -> EvalResult {
     Ok(Value::symbol("unicode"))
 }
 
-/// `(unibyte-charset)` -- return symbol 'latin-iso8859-1.
-pub(crate) fn builtin_unibyte_charset(args: Vec<Value>) -> EvalResult {
-    expect_max_args("unibyte-charset", &args, 0)?;
-    Ok(Value::symbol("latin-iso8859-1"))
-}
-
 fn classify_string_charsets(s: &str) -> Vec<&'static str> {
     if s.is_empty() {
         return Vec::new();
@@ -639,23 +625,6 @@ mod tests {
     fn charsetp_wrong_arg_count() {
         assert!(builtin_charsetp(vec![]).is_err());
         assert!(builtin_charsetp(vec![Value::Nil, Value::Nil]).is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // Builtin tests: charset-list
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn charset_list_returns_list() {
-        let r = builtin_charset_list(vec![]).unwrap();
-        assert!(r.is_list());
-        let items = list_to_vec(&r).unwrap();
-        assert_eq!(items.len(), 6);
-    }
-
-    #[test]
-    fn charset_list_wrong_arg_count() {
-        assert!(builtin_charset_list(vec![Value::Nil]).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1147,21 +1116,6 @@ mod tests {
     #[test]
     fn charset_after_wrong_arg_count() {
         assert!(builtin_charset_after(vec![Value::Int(1), Value::Int(2)]).is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // Builtin tests: unibyte-charset
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn unibyte_charset_returns_latin() {
-        let r = builtin_unibyte_charset(vec![]).unwrap();
-        assert!(matches!(r, Value::Symbol(s) if s == "latin-iso8859-1"));
-    }
-
-    #[test]
-    fn unibyte_charset_wrong_arg_count() {
-        assert!(builtin_unibyte_charset(vec![Value::Nil]).is_err());
     }
 
     // -----------------------------------------------------------------------
