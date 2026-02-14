@@ -13,3 +13,11 @@
 13	(funcall (car (read-from-string "#[(x y) \"\\10\\11\\125\\207\" [x y] 2]")) 7 8)	OK nil
 14	(funcall (car (read-from-string "#[(x) \"\\10\\100\\207\" [x] 1]")) '(1 2))	OK 1
 15	(funcall (car (read-from-string "#[(x) \"\\10\\101\\207\" [x] 1]")) '(1 2))	OK (2)
+16	(funcall (car (read-from-string "#[(x) \"\\10\\203\\6\\0\\301\\207\\302\\207\" [x 1 2] 1]")) t)	OK 1
+17	(funcall (car (read-from-string "#[(x) \"\\10\\203\\6\\0\\301\\207\\302\\207\" [x 1 2] 1]")) nil)	OK 2
+18	(funcall (car (read-from-string "#[(x) \"\\10\\205\\5\\0\\301\\207\" [x 2] 1]")) t)	OK 2
+19	(funcall (car (read-from-string "#[(x) \"\\10\\205\\5\\0\\301\\207\" [x 2] 1]")) nil)	OK nil
+20	(funcall (car (read-from-string "#[(x) \"\\10\\206\\5\\0\\301\\207\" [x 2] 1]")) t)	OK t
+21	(funcall (car (read-from-string "#[(x) \"\\10\\206\\5\\0\\301\\207\" [x 2] 1]")) nil)	OK 2
+22	(funcall (car (read-from-string "#[(x) \"\\10\\204\\6\\0\\301\\207\\302\\207\" [x 1 2] 1]")) nil)	OK 1
+23	(funcall (car (read-from-string "#[(x) \"\\10\\204\\6\\0\\301\\207\\302\\207\" [x 1 2] 1]")) t)	OK 2
