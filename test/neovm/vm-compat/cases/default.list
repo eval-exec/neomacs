@@ -94,6 +94,7 @@ cases/string-trim-semantics
 cases/string-prefix-suffix-semantics
 cases/string-join-semantics
 cases/string-to-number-semantics
+cases/md5-semantics
 cases/secure-hash-semantics
 cases/buffer-hash-semantics
 cases/substring-edge-semantics

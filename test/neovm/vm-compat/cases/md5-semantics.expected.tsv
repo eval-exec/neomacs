@@ -1,0 +1,15 @@
+1	(md5 "abc")	OK "900150983cd24fb0d6963f7d28e17f72"
+2	(md5 "abc" 1 2)	OK "92eb5ffee6ae2fec3ad71c777531578f"
+3	(condition-case err (md5 "abc" 2 1) (error err))	OK (args-out-of-range "abc" 2 1)
+4	(condition-case err (md5 "abc" 1 10) (error err))	OK (args-out-of-range "abc" 1 10)
+5	(condition-case err (md5 "abc" t 2) (error err))	OK (wrong-type-argument integerp t)
+6	(condition-case err (md5 1) (error err))	OK (error "Invalid object argument" 1)
+7	(condition-case err (md5 nil) (error err))	OK (error "Invalid object argument" "nil")
+8	(with-temp-buffer (insert "abc") (md5 (current-buffer)))	OK "900150983cd24fb0d6963f7d28e17f72"
+9	(with-temp-buffer (insert "abc") (md5 (current-buffer) 4 3))	OK "4a8a08f09d37b73795649038408b5f33"
+10	(with-temp-buffer (insert "abc") (condition-case err (md5 (current-buffer) 0 3) (error err)))	OK (args-out-of-range 0 3)
+11	(with-temp-buffer (insert "abc") (condition-case err (md5 (current-buffer) 5) (error err)))	OK (args-out-of-range 5 nil)
+12	(with-temp-buffer (insert "abc") (condition-case err (md5 (current-buffer) t 3) (error err)))	OK (wrong-type-argument integer-or-marker-p t)
+13	(with-temp-buffer (insert "abc") (let ((m (copy-marker 2))) (md5 (current-buffer) m 4)))	OK "5360af35bde9ebd8f01f492dc059593c"
+14	(with-temp-buffer (insert "abc") (let ((m (make-marker))) (condition-case err (md5 (current-buffer) m 4) (error err))))	OK (error "Marker does not point anywhere")
+15	(let ((b (generate-new-buffer " *md5-dead*"))) (kill-buffer b) (condition-case err (md5 b) (error err)))	OK (error "Selecting deleted buffer")

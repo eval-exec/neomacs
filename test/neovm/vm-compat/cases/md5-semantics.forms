@@ -1,0 +1,54 @@
+; md5 should match GNU Emacs for string/buffer objects and core error paths.
+(md5 "abc")
+(md5 "abc" 1 2)
+(condition-case err
+    (md5 "abc" 2 1)
+  (error err))
+(condition-case err
+    (md5 "abc" 1 10)
+  (error err))
+(condition-case err
+    (md5 "abc" t 2)
+  (error err))
+(condition-case err
+    (md5 1)
+  (error err))
+(condition-case err
+    (md5 nil)
+  (error err))
+(with-temp-buffer
+  (insert "abc")
+  (md5 (current-buffer)))
+(with-temp-buffer
+  (insert "abc")
+  (md5 (current-buffer) 4 3))
+(with-temp-buffer
+  (insert "abc")
+  (condition-case err
+      (md5 (current-buffer) 0 3)
+    (error err)))
+(with-temp-buffer
+  (insert "abc")
+  (condition-case err
+      (md5 (current-buffer) 5)
+    (error err)))
+(with-temp-buffer
+  (insert "abc")
+  (condition-case err
+      (md5 (current-buffer) t 3)
+    (error err)))
+(with-temp-buffer
+  (insert "abc")
+  (let ((m (copy-marker 2)))
+    (md5 (current-buffer) m 4)))
+(with-temp-buffer
+  (insert "abc")
+  (let ((m (make-marker)))
+    (condition-case err
+        (md5 (current-buffer) m 4)
+      (error err))))
+(let ((b (generate-new-buffer " *md5-dead*")))
+  (kill-buffer b)
+  (condition-case err
+      (md5 b)
+    (error err)))
