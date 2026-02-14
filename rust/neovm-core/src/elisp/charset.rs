@@ -231,6 +231,55 @@ fn charset_name(value: &Value) -> Result<String, Flow> {
     }
 }
 
+fn require_known_charset(value: &Value) -> Result<String, Flow> {
+    let name = match value {
+        Value::Symbol(s) => s.clone(),
+        other => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("charsetp"), other.clone()],
+            ))
+        }
+    };
+    let reg = global_registry().lock().expect("poisoned");
+    if reg.contains(&name) {
+        Ok(name)
+    } else {
+        Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("charsetp"), Value::symbol(name)],
+        ))
+    }
+}
+
+fn decode_char_codepoint_arg(value: &Value) -> Result<i64, Flow> {
+    match value {
+        Value::Int(n) if *n >= 0 => Ok(*n),
+        Value::Float(f)
+            if f.is_finite() && *f >= 0.0 && f.fract() == 0.0 && *f <= i64::MAX as f64 =>
+        {
+            Ok(*f as i64)
+        }
+        _ => Err(signal(
+            "error",
+            vec![Value::string(
+                "Not an in-range integer, integral float, or cons of integers",
+            )],
+        )),
+    }
+}
+
+fn encode_char_input(value: &Value) -> Result<i64, Flow> {
+    match value {
+        Value::Char(c) => Ok(*c as i64),
+        Value::Int(n) if (0..=0x3FFFFF).contains(n) => Ok(*n),
+        other => Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("characterp"), other.clone()],
+        )),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pure builtins (Vec<Value> -> EvalResult)
 // ---------------------------------------------------------------------------
@@ -408,68 +457,46 @@ pub(crate) fn builtin_find_charset_string(args: Vec<Value>) -> EvalResult {
     }
 }
 
-/// `(decode-char CHARSET CODE-POINT)` -- for unicode/ascii, just return the
-/// code-point as character.
+/// `(decode-char CHARSET CODE-POINT)` -- decode code-point in CHARSET space.
 pub(crate) fn builtin_decode_char(args: Vec<Value>) -> EvalResult {
     expect_args("decode-char", &args, 2)?;
-    let name = charset_name(&args[0])?;
-    let code_point = match &args[1] {
-        Value::Int(n) => *n,
-        Value::Char(c) => *c as i64,
-        other => {
-            return Err(signal(
-                "wrong-type-argument",
-                vec![Value::symbol("integerp"), other.clone()],
-            ));
-        }
+    let name = require_known_charset(&args[0])?;
+    let code_point = decode_char_codepoint_arg(&args[1])?;
+
+    let decoded = match name.as_str() {
+        "ascii" => (code_point <= 0x7F).then_some(code_point),
+        "eight-bit" => (0x80..=0xFF)
+            .contains(&code_point)
+            .then_some(0x3FFF00 + code_point),
+        "latin-iso8859-1" => (0x20..=0x7F)
+            .contains(&code_point)
+            .then_some(code_point + 0x80),
+        "unicode" => (code_point <= 0x10FFFF).then_some(code_point),
+        "unicode-bmp" => (code_point <= 0xFFFF).then_some(code_point),
+        "emacs" => (code_point <= 0x3FFF7F).then_some(code_point),
+        _ => None,
     };
 
-    let reg = global_registry().lock().expect("poisoned");
-    if !reg.contains(&name) {
-        return Err(signal(
-            "error",
-            vec![Value::string("Invalid charset"), Value::symbol(name)],
-        ));
-    }
-    drop(reg);
-
-    // For unicode-family and ascii charsets, the code-point maps directly
-    // to the character.
-    if code_point < 0 || code_point > 0x10FFFF {
-        return Ok(Value::Nil);
-    }
-    match char::from_u32(code_point as u32) {
-        Some(ch) => Ok(Value::Int(ch as i64)),
-        None => Ok(Value::Nil),
-    }
+    Ok(decoded.map_or(Value::Nil, Value::Int))
 }
 
-/// `(encode-char CH CHARSET)` -- for unicode/ascii, just return the
-/// character as integer code-point.
+/// `(encode-char CH CHARSET)` -- encode CH in CHARSET space.
 pub(crate) fn builtin_encode_char(args: Vec<Value>) -> EvalResult {
     expect_args("encode-char", &args, 2)?;
-    let ch = match &args[0] {
-        Value::Int(n) => *n,
-        Value::Char(c) => *c as i64,
-        other => {
-            return Err(signal(
-                "wrong-type-argument",
-                vec![Value::symbol("characterp"), other.clone()],
-            ));
-        }
+    let ch = encode_char_input(&args[0])?;
+    let name = require_known_charset(&args[1])?;
+
+    let encoded = match name.as_str() {
+        "ascii" => (ch <= 0x7F).then_some(ch),
+        "eight-bit" => (0x3FFF80..=0x3FFFFF).contains(&ch).then_some(ch - 0x3FFF00),
+        "latin-iso8859-1" => (0xA0..=0xFF).contains(&ch).then_some(ch - 0x80),
+        "unicode" => (ch <= 0x10FFFF).then_some(ch),
+        "unicode-bmp" => (ch <= 0xFFFF).then_some(ch),
+        "emacs" => (ch <= 0x3FFF7F).then_some(ch),
+        _ => None,
     };
-    let name = charset_name(&args[1])?;
 
-    let reg = global_registry().lock().expect("poisoned");
-    if !reg.contains(&name) {
-        return Err(signal(
-            "error",
-            vec![Value::string("Invalid charset"), Value::symbol(name)],
-        ));
-    }
-    drop(reg);
-
-    Ok(Value::Int(ch))
+    Ok(encoded.map_or(Value::Nil, Value::Int))
 }
 
 /// `(clear-charset-maps)` -- stub, return nil.
@@ -965,16 +992,32 @@ mod tests {
     }
 
     #[test]
+    fn decode_char_eight_bit_maps_to_raw_byte_range() {
+        let r = builtin_decode_char(vec![Value::symbol("eight-bit"), Value::Int(255)]).unwrap();
+        assert!(matches!(r, Value::Int(0x3FFFFF)));
+    }
+
+    #[test]
     fn decode_char_invalid_code_point() {
-        // Surrogate code-point is not a valid char.
         let r = builtin_decode_char(vec![Value::symbol("unicode"), Value::Int(0xD800)]).unwrap();
-        assert!(r.is_nil());
+        assert!(matches!(r, Value::Int(0xD800)));
     }
 
     #[test]
     fn decode_char_negative() {
-        let r = builtin_decode_char(vec![Value::symbol("unicode"), Value::Int(-1)]).unwrap();
-        assert!(r.is_nil());
+        let r = builtin_decode_char(vec![Value::symbol("unicode"), Value::Int(-1)]);
+        match r {
+            Err(Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol, "error");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::string(
+                        "Not an in-range integer, integral float, or cons of integers"
+                    )]
+                );
+            }
+            other => panic!("expected decode-char error signal, got {other:?}"),
+        }
     }
 
     #[test]
@@ -985,14 +1028,34 @@ mod tests {
 
     #[test]
     fn decode_char_unknown_charset() {
-        assert!(builtin_decode_char(vec![Value::symbol("nonexistent"), Value::Int(65)]).is_err());
+        let r = builtin_decode_char(vec![Value::symbol("nonexistent"), Value::Int(65)]);
+        match r {
+            Err(Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::symbol("charsetp"), Value::symbol("nonexistent")]
+                );
+            }
+            other => panic!("expected wrong-type-argument charsetp, got {other:?}"),
+        }
     }
 
     #[test]
     fn decode_char_wrong_type() {
-        assert!(
-            builtin_decode_char(vec![Value::symbol("ascii"), Value::string("not an int")]).is_err()
-        );
+        let r = builtin_decode_char(vec![Value::symbol("ascii"), Value::string("not an int")]);
+        match r {
+            Err(Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol, "error");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::string(
+                        "Not an in-range integer, integral float, or cons of integers"
+                    )]
+                );
+            }
+            other => panic!("expected decode-char type error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1020,6 +1083,12 @@ mod tests {
     }
 
     #[test]
+    fn encode_char_eight_bit_raw_byte_maps_back_to_byte() {
+        let r = builtin_encode_char(vec![Value::Int(0x3FFFFF), Value::symbol("eight-bit")]).unwrap();
+        assert!(matches!(r, Value::Int(255)));
+    }
+
+    #[test]
     fn encode_char_with_char_value() {
         let r = builtin_encode_char(vec![Value::Char('Z'), Value::symbol("unicode")]).unwrap();
         assert!(matches!(r, Value::Int(90)));
@@ -1027,7 +1096,17 @@ mod tests {
 
     #[test]
     fn encode_char_unknown_charset() {
-        assert!(builtin_encode_char(vec![Value::Int(65), Value::symbol("nonexistent")]).is_err());
+        let r = builtin_encode_char(vec![Value::Int(65), Value::symbol("nonexistent")]);
+        match r {
+            Err(Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::symbol("charsetp"), Value::symbol("nonexistent")]
+                );
+            }
+            other => panic!("expected wrong-type-argument charsetp, got {other:?}"),
+        }
     }
 
     #[test]
