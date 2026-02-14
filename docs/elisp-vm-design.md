@@ -73,6 +73,12 @@ The compatibility corpus now explicitly guards core callable introspection behav
   - truly non-callable objects report `invalid-function`
   - non-local exit behavior through `condition-case`/`unwind-protect` remains oracle-aligned for these probes
 
+Additional oracle-checked primitive guardrails added in the same compatibility-first style:
+
+- Reader stream edges: `read-from-string` index semantics and `read` stream/arity error boundaries
+- Obarray argument boundaries: `intern`, `intern-soft`, `unintern`, `mapatoms` optional OBARRAY validation
+- String primitive edges: `split-string`, `string-trim*`, `string-prefix-p`/`string-suffix-p`, `string-join`, `string-to-number`, and `substring` bounds/arity semantics
+
 ## Design Principles
 
 1. Compatibility first, then speed.
