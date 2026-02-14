@@ -2492,6 +2492,16 @@ mod tests {
     }
 
     #[test]
+    fn calling_simple_compiled_literal_executes() {
+        let results = eval_all(
+            "(funcall (car (read-from-string \"#[nil \\\"\\\\300\\\\207\\\" [42] 1]\")))
+             (funcall (car (read-from-string \"#[(x) \\\"\\\\10\\\\207\\\" [x] 1]\")) 'vm-x)",
+        );
+        assert_eq!(results[0], "OK 42");
+        assert_eq!(results[1], "OK vm-x");
+    }
+
+    #[test]
     fn calling_compiled_literal_placeholder_signals_error() {
         let result = eval_one(
             "(progn

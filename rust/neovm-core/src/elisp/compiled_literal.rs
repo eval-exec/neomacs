@@ -5,13 +5,15 @@ use super::error::{signal, Flow};
 use super::value::{list_to_vec, LambdaParams, Value};
 
 /// Convert parsed Emacs compiled-function literal vectors into typed
-/// `Value::ByteCode` placeholders. The placeholder is intentionally explicit:
-/// calls raise an error until native Emacs bytecode decoding/execution lands.
+/// `Value::ByteCode` functions.
+///
+/// For now we decode a compatibility subset of GNU Emacs bytecode opcodes.
+/// Unknown opcode streams still coerce to an explicit placeholder that raises.
 pub(crate) fn maybe_coerce_compiled_literal_function(value: Value) -> Value {
     let Value::Vector(items_ref) = &value else {
         return value;
     };
-    let Some(bytecode) = compiled_literal_vector_to_placeholder_bytecode(items_ref) else {
+    let Some(bytecode) = compiled_literal_vector_to_bytecode(items_ref) else {
         return value;
     };
     Value::ByteCode(std::sync::Arc::new(bytecode))
@@ -81,7 +83,7 @@ pub(crate) fn placeholder_from_byte_code_form(args: &[Value]) -> Result<Value, F
     }
 }
 
-fn compiled_literal_vector_to_placeholder_bytecode(
+fn compiled_literal_vector_to_bytecode(
     items_ref: &std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
 ) -> Option<ByteCodeFunction> {
     let items = items_ref.lock().ok()?;
@@ -101,6 +103,7 @@ fn compiled_literal_vector_to_placeholder_bytecode(
         _ => return None,
     };
 
+    let byte_stream = items[1].as_str()?;
     let mut bytecode = ByteCodeFunction::new(params);
     bytecode.max_stack = max_stack;
     bytecode.constants = constants_ref.lock().ok()?.clone();
@@ -108,10 +111,59 @@ fn compiled_literal_vector_to_placeholder_bytecode(
         bytecode.docstring = Some((**s).clone());
     }
 
-    let idx = bytecode.add_symbol("%%unimplemented-elc-bytecode");
-    bytecode.emit(Op::CallBuiltin(idx, 0));
-    bytecode.emit(Op::Return);
+    if let Some(decoded) = decode_opcode_subset(byte_stream, bytecode.constants.len()) {
+        bytecode.ops = decoded;
+    } else {
+        let idx = bytecode.add_symbol("%%unimplemented-elc-bytecode");
+        bytecode.emit(Op::CallBuiltin(idx, 0));
+        bytecode.emit(Op::Return);
+    }
     Some(bytecode)
+}
+
+fn decode_opcode_subset(byte_stream: &str, const_len: usize) -> Option<Vec<Op>> {
+    let bytes = decode_unibyte_stream(byte_stream)?;
+    let mut ops = Vec::with_capacity(bytes.len());
+    for b in bytes {
+        match b {
+            // byte-constant 0..63
+            0o300..=0o377 => {
+                let idx = (b - 0o300) as usize;
+                if idx >= const_len {
+                    return None;
+                }
+                ops.push(Op::Constant(idx as u16));
+            }
+            // varref 0..7
+            0o010..=0o017 => {
+                let idx = (b - 0o010) as usize;
+                if idx >= const_len {
+                    return None;
+                }
+                ops.push(Op::VarRef(idx as u16));
+            }
+            // return
+            0o207 => ops.push(Op::Return),
+            _ => return None,
+        }
+    }
+
+    if ops.is_empty() {
+        return None;
+    }
+    Some(ops)
+}
+
+fn decode_unibyte_stream(byte_stream: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(byte_stream.len());
+    for ch in byte_stream.chars() {
+        let code = ch as u32;
+        if code > u8::MAX as u32 {
+            return None;
+        }
+        out.push(code as u8);
+    }
+    Some(out)
 }
 
 fn parse_compiled_literal_params(value: &Value) -> Option<LambdaParams> {
@@ -212,6 +264,36 @@ mod tests {
             }
             other => panic!("unexpected placeholder ops: {other:?}"),
         }
+    }
+
+    #[test]
+    fn decodes_constant_return_opcode_subset() {
+        let literal = Value::vector(vec![
+            Value::Nil,
+            Value::string("\u{C0}\u{87}"),
+            Value::vector(vec![Value::Int(42)]),
+            Value::Int(1),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(literal);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(bc.ops, vec![Op::Constant(0), Op::Return]);
+    }
+
+    #[test]
+    fn decodes_varref_return_opcode_subset() {
+        let literal = Value::vector(vec![
+            Value::list(vec![Value::symbol("x")]),
+            Value::string("\u{8}\u{87}"),
+            Value::vector(vec![Value::symbol("x")]),
+            Value::Int(1),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(literal);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(bc.ops, vec![Op::VarRef(0), Op::Return]);
     }
 
     #[test]
