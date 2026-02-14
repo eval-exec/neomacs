@@ -75,6 +75,70 @@ fn encode_emacs_extended_utf8(code: u32) -> Vec<u8> {
     }
 }
 
+fn decode_emacs_extended_utf8(bytes: &[u8]) -> Option<u32> {
+    match bytes {
+        [b0] => Some(*b0 as u32),
+        [b0, b1] if (b0 & 0xE0) == 0xC0 && (b1 & 0xC0) == 0x80 => {
+            Some((((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32))
+        }
+        [b0, b1, b2]
+            if (b0 & 0xF0) == 0xE0 && (b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 =>
+        {
+            Some(
+                (((b0 & 0x0F) as u32) << 12)
+                    | (((b1 & 0x3F) as u32) << 6)
+                    | ((b2 & 0x3F) as u32),
+            )
+        }
+        [b0, b1, b2, b3]
+            if (b0 & 0xF8) == 0xF0
+                && (b1 & 0xC0) == 0x80
+                && (b2 & 0xC0) == 0x80
+                && (b3 & 0xC0) == 0x80 =>
+        {
+            Some(
+                (((b0 & 0x07) as u32) << 18)
+                    | (((b1 & 0x3F) as u32) << 12)
+                    | (((b2 & 0x3F) as u32) << 6)
+                    | ((b3 & 0x3F) as u32),
+            )
+        }
+        [b0, b1, b2, b3, b4]
+            if (b0 & 0xFC) == 0xF8
+                && (b1 & 0xC0) == 0x80
+                && (b2 & 0xC0) == 0x80
+                && (b3 & 0xC0) == 0x80
+                && (b4 & 0xC0) == 0x80 =>
+        {
+            Some(
+                (((b0 & 0x03) as u32) << 24)
+                    | (((b1 & 0x3F) as u32) << 18)
+                    | (((b2 & 0x3F) as u32) << 12)
+                    | (((b3 & 0x3F) as u32) << 6)
+                    | ((b4 & 0x3F) as u32),
+            )
+        }
+        [b0, b1, b2, b3, b4, b5]
+            if (b0 & 0xFE) == 0xFC
+                && (b1 & 0xC0) == 0x80
+                && (b2 & 0xC0) == 0x80
+                && (b3 & 0xC0) == 0x80
+                && (b4 & 0xC0) == 0x80
+                && (b5 & 0xC0) == 0x80 =>
+        {
+            Some(
+                (((b0 & 0x01) as u32) << 30)
+                    | (((b1 & 0x3F) as u32) << 24)
+                    | (((b2 & 0x3F) as u32) << 18)
+                    | (((b3 & 0x3F) as u32) << 12)
+                    | (((b4 & 0x3F) as u32) << 6)
+                    | ((b5 & 0x3F) as u32),
+            )
+        }
+        _ => None,
+    }
+}
+
 fn encode_extended_sequence_for_storage(bytes: &[u8]) -> String {
     let mut out = String::new();
     out.push(char::from_u32(EXT_SEQ_PREFIX).expect("valid extended prefix sentinel"));
@@ -102,6 +166,43 @@ pub(crate) fn bytes_to_storage_string(bytes: &[u8]) -> String {
         out.push_str(&encode_extended_sequence_for_storage(chunk));
     }
     out
+}
+
+fn decode_storage_units(s: &str) -> Vec<(u32, usize)> {
+    let mut out = Vec::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        let code = ch as u32;
+        if (RAW_BYTE_SENTINEL_MIN..=RAW_BYTE_SENTINEL_MAX).contains(&code) {
+            let raw = (code - RAW_BYTE_SENTINEL_BASE) as u8;
+            out.push((0x3FFF00 + raw as u32, 4));
+            continue;
+        }
+
+        if code == EXT_SEQ_PREFIX {
+            if let Some(bytes) = decode_extended_sequence(&mut chars) {
+                if let Some(cp) = decode_emacs_extended_utf8(&bytes) {
+                    out.push((cp, 1));
+                    continue;
+                }
+            }
+        }
+
+        out.push((code, 1));
+    }
+
+    out
+}
+
+/// Decode NeoVM string storage into Emacs character codes.
+pub(crate) fn decode_storage_char_codes(s: &str) -> Vec<u32> {
+    decode_storage_units(s).into_iter().map(|(cp, _)| cp).collect()
+}
+
+/// Compute Emacs-like display width for NeoVM string storage.
+pub(crate) fn storage_string_display_width(s: &str) -> usize {
+    decode_storage_units(s).into_iter().map(|(_, width)| width).sum()
 }
 
 fn decode_extended_sequence(chars: &mut Peekable<Chars<'_>>) -> Option<Vec<u8>> {
@@ -253,5 +354,16 @@ mod tests {
             format_lisp_string_bytes(&encoded),
             vec![b'"', 0xF4, 0x90, 0x80, 0x80, b'A', b'"']
         );
+    }
+
+    #[test]
+    fn decode_storage_char_codes_handles_nonunicode_and_raw_byte() {
+        let encoded = format!(
+            "{}{}",
+            encode_nonunicode_char_for_storage(0x110000).expect("should encode"),
+            encode_nonunicode_char_for_storage(0x3FFFFF).expect("raw byte should encode")
+        );
+        assert_eq!(decode_storage_char_codes(&encoded), vec![0x110000, 0x3FFFFF]);
+        assert_eq!(storage_string_display_width(&encoded), 5);
     }
 }

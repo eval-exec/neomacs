@@ -4,7 +4,10 @@
 //! The evaluator dispatches here after evaluating the argument expressions.
 
 use super::error::{signal, EvalResult, Flow};
-use super::string_escape::{bytes_to_storage_string, encode_nonunicode_char_for_storage};
+use super::string_escape::{
+    bytes_to_storage_string, decode_storage_char_codes, encode_nonunicode_char_for_storage,
+    storage_string_display_width,
+};
 use super::value::*;
 use std::collections::HashSet;
 use strum::EnumString;
@@ -1300,11 +1303,13 @@ pub(crate) fn builtin_aref(args: Vec<Value>) -> EvalResult {
                 .cloned()
                 .ok_or_else(|| signal("args-out-of-range", vec![args[0].clone(), args[1].clone()]))
         }
-        Value::Str(s) => s
-            .chars()
-            .nth(idx)
-            .map(Value::Char)
-            .ok_or_else(|| signal("args-out-of-range", vec![args[0].clone(), args[1].clone()])),
+        Value::Str(s) => {
+            let codes = decode_storage_char_codes(s);
+            codes
+                .get(idx)
+                .map(|cp| Value::Int(*cp as i64))
+                .ok_or_else(|| signal("args-out-of-range", vec![args[0].clone(), args[1].clone()]))
+        }
         _ => Err(signal(
             "wrong-type-argument",
             vec![Value::symbol("arrayp"), args[0].clone()],
@@ -1526,14 +1531,24 @@ pub(crate) fn builtin_char_to_string(args: Vec<Value>) -> EvalResult {
     expect_args("char-to-string", &args, 1)?;
     match &args[0] {
         Value::Char(c) => Ok(Value::string(c.to_string())),
-        Value::Int(n) => char::from_u32(*n as u32)
-            .map(|c| Value::string(c.to_string()))
-            .ok_or_else(|| {
-                signal(
+        Value::Int(n) => {
+            if *n < 0 {
+                return Err(signal(
                     "wrong-type-argument",
                     vec![Value::symbol("characterp"), args[0].clone()],
-                )
-            }),
+                ));
+            }
+            if let Some(c) = char::from_u32(*n as u32) {
+                Ok(Value::string(c.to_string()))
+            } else if let Some(encoded) = encode_nonunicode_char_for_storage(*n as u32) {
+                Ok(Value::string(encoded))
+            } else {
+                Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("characterp"), args[0].clone()],
+                ))
+            }
+        }
         other => Err(signal(
             "wrong-type-argument",
             vec![Value::symbol("characterp"), other.clone()],
@@ -1544,7 +1559,8 @@ pub(crate) fn builtin_char_to_string(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_string_to_char(args: Vec<Value>) -> EvalResult {
     expect_args("string-to-char", &args, 1)?;
     let s = expect_string(&args[0])?;
-    Ok(Value::Int(s.chars().next().map(|c| c as i64).unwrap_or(0)))
+    let first = decode_storage_char_codes(&s).into_iter().next().unwrap_or(0);
+    Ok(Value::Int(first as i64))
 }
 
 // ===========================================================================
@@ -2815,15 +2831,17 @@ pub(crate) fn builtin_make_string(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_string_to_list(args: Vec<Value>) -> EvalResult {
     expect_args("string-to-list", &args, 1)?;
     let s = expect_string(&args[0])?;
-    let chars: Vec<Value> = s.chars().map(Value::Char).collect();
+    let chars: Vec<Value> = decode_storage_char_codes(&s)
+        .into_iter()
+        .map(|cp| Value::Int(cp as i64))
+        .collect();
     Ok(Value::list(chars))
 }
 
 pub(crate) fn builtin_string_width(args: Vec<Value>) -> EvalResult {
     expect_args("string-width", &args, 1)?;
     let s = expect_string(&args[0])?;
-    // Simple: count chars (proper Unicode width would need unicode-width crate)
-    Ok(Value::Int(s.chars().count() as i64))
+    Ok(Value::Int(storage_string_display_width(&s) as i64))
 }
 
 // ===========================================================================
