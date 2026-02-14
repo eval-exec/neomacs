@@ -1,0 +1,18 @@
+; interactive-p stays nil in Emacs 30.2, including interactive call paths.
+(interactive-p)
+
+(let ((result nil))
+  (fset 'neo-ip-test
+        (lambda ()
+          (interactive)
+          (setq result (interactive-p))))
+  (call-interactively 'neo-ip-test)
+  result)
+
+(let ((result nil))
+  (fset 'neo-ip-test2
+        (lambda ()
+          (interactive)
+          (setq result (interactive-p))))
+  (command-execute 'neo-ip-test2)
+  result)
