@@ -26,3 +26,8 @@
       (b 'vm-if-cycle-b))
   (fset a b)
   (fset b a))
+(defalias 'vm-da-cycle-self 'vm-da-cycle-self)
+(let ((a 'vm-da-cycle-a)
+      (b 'vm-da-cycle-b))
+  (defalias a b)
+  (defalias b a))

@@ -8,3 +8,5 @@
 8	(let ((i 0)) (while (< i 120) (fset (intern (format "vm-if-deep-noerror-%d" i)) (if (= i 119) 'car (intern (format "vm-if-deep-noerror-%d" (1+ i))))) (setq i (1+ i))) (indirect-function 'vm-if-deep-noerror-0 t))	OK #<subr car>
 9	(fset 'vm-if-cycle-self 'vm-if-cycle-self)	ERR (cyclic-function-indirection (vm-if-cycle-self))
 10	(let ((a 'vm-if-cycle-a) (b 'vm-if-cycle-b)) (fset a b) (fset b a))	ERR (cyclic-function-indirection (vm-if-cycle-b))
+11	(defalias 'vm-da-cycle-self 'vm-da-cycle-self)	ERR (cyclic-function-indirection (vm-da-cycle-self))
+12	(let ((a 'vm-da-cycle-a) (b 'vm-da-cycle-b)) (defalias a b) (defalias b a))	ERR (cyclic-function-indirection (vm-da-cycle-b))
