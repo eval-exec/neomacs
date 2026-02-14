@@ -1667,7 +1667,7 @@ impl Evaluator {
                 if args.len() != 2 {
                     return Err(signal(
                         "wrong-number-of-arguments",
-                        vec![Value::symbol("throw"), Value::Int(args.len() as i64)],
+                        vec![Value::Subr("throw".to_string()), Value::Int(args.len() as i64)],
                     ));
                 }
                 Err(Flow::Throw {
@@ -2312,7 +2312,7 @@ mod tests {
         );
         assert_eq!(
             eval_one("(condition-case err (funcall 'throw) (error err))"),
-            "OK (wrong-number-of-arguments throw 0)"
+            "OK (wrong-number-of-arguments #<subr throw> 0)"
         );
     }
 

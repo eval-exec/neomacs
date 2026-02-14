@@ -915,7 +915,7 @@ impl<'a> Vm<'a> {
                 if args.len() != 2 {
                     return Err(signal(
                         "wrong-number-of-arguments",
-                        vec![Value::symbol("throw"), Value::Int(args.len() as i64)],
+                        vec![Value::Subr("throw".to_string()), Value::Int(args.len() as i64)],
                     ));
                 }
                 return Err(Flow::Throw {
