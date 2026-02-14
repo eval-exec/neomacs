@@ -3,6 +3,7 @@ use neovm_core::TaskScheduler;
 use neovm_host_abi::{LispValue, Signal, TaskError, TaskOptions};
 use neovm_worker::{WorkerConfig, WorkerRuntime};
 use std::fs;
+use std::io::{self, Write};
 use std::time::Duration;
 
 fn render_task_error(err: TaskError) -> String {
@@ -16,6 +17,22 @@ fn render_task_error(err: TaskError) -> String {
 fn render_signal(signal: Signal) -> String {
     let payload = signal.data.unwrap_or_else(|| "nil".to_string());
     format!("({} {})", signal.symbol, payload)
+}
+
+fn write_status_line(index: usize, rendered_form: &str, status_bytes: &[u8]) {
+    let mut out = io::stdout().lock();
+    out.write_all((index + 1).to_string().as_bytes())
+        .expect("failed writing case index");
+    out.write_all(b"\t")
+        .expect("failed writing TSV separator");
+    out.write_all(rendered_form.as_bytes())
+        .expect("failed writing rendered form");
+    out.write_all(b"\t")
+        .expect("failed writing TSV separator");
+    out.write_all(status_bytes)
+        .expect("failed writing status payload");
+    out.write_all(b"\n")
+        .expect("failed writing line terminator");
 }
 
 fn main() {
@@ -74,7 +91,11 @@ fn main() {
                         data: None,
                     },
                 };
-                println!("{}\t{}\tERR {}", index + 1, rendered_form, render_signal(signal));
+                write_status_line(
+                    index,
+                    &rendered_form,
+                    format!("ERR {}", render_signal(signal)).as_bytes(),
+                );
                 continue;
             }
         };
@@ -82,12 +103,12 @@ fn main() {
         let result = TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1)));
         match result {
             Ok(value) => {
-                let rendered = String::from_utf8(value.bytes)
-                    .unwrap_or_else(|_| "<non-utf8-value>".to_string());
-                println!("{}\t{}\tOK {}", index + 1, rendered_form, rendered);
+                let mut status = b"OK ".to_vec();
+                status.extend_from_slice(&value.bytes);
+                write_status_line(index, &rendered_form, &status);
             }
             Err(err) => {
-                println!("{}\t{}\t{}", index + 1, rendered_form, render_task_error(err));
+                write_status_line(index, &rendered_form, render_task_error(err).as_bytes());
             }
         }
     }

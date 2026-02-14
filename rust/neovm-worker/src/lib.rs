@@ -462,7 +462,7 @@ impl WorkerRuntime {
                 match eval.eval_expr(form) {
                     Ok(value) => {
                         last = LispValue {
-                            bytes: elisp::print_value(&value).into_bytes(),
+                            bytes: elisp::print_value_bytes(&value),
                         };
                     }
                     Err(err) => return Err(eval_error_to_task_error(err)),
