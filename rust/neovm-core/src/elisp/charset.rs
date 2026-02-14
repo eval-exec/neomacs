@@ -10,7 +10,7 @@
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Charset data types
@@ -122,6 +122,27 @@ impl CharsetRegistry {
     /// Return the priority-ordered list of charset names.
     pub fn priority_list(&self) -> &[String] {
         &self.priority
+    }
+
+    /// Move the requested charset names to the front of the priority list
+    /// (deduplicated, preserving relative order for remaining entries).
+    pub fn set_priority(&mut self, requested: &[String]) {
+        let mut seen = HashSet::with_capacity(self.priority.len() + requested.len());
+        let mut reordered = Vec::with_capacity(self.priority.len() + requested.len());
+
+        for name in requested {
+            if seen.insert(name.clone()) {
+                reordered.push(name.clone());
+            }
+        }
+
+        for name in &self.priority {
+            if seen.insert(name.clone()) {
+                reordered.push(name.clone());
+            }
+        }
+
+        self.priority = reordered;
     }
 
     /// Return the plist for a charset, or None if not found.
@@ -239,10 +260,31 @@ pub(crate) fn builtin_charset_priority_list(args: Vec<Value>) -> EvalResult {
     }
 }
 
-/// `(set-charset-priority &rest CHARSETS)` -- stub, return nil.
+/// `(set-charset-priority &rest CHARSETS)` -- set charset detection priority.
 pub(crate) fn builtin_set_charset_priority(args: Vec<Value>) -> EvalResult {
-    // Accept any number of arguments (including zero).
-    let _ = args;
+    expect_min_args("set-charset-priority", &args, 1)?;
+
+    let mut reg = global_registry().lock().expect("poisoned");
+    let mut requested = Vec::with_capacity(args.len());
+    for arg in &args {
+        let name = match arg {
+            Value::Symbol(s) => s.clone(),
+            _ => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("charsetp"), arg.clone()],
+                ));
+            }
+        };
+        if !reg.contains(&name) {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("charsetp"), arg.clone()],
+            ));
+        }
+        requested.push(name);
+    }
+    reg.set_priority(&requested);
     Ok(Value::Nil)
 }
 
@@ -534,17 +576,35 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn set_charset_priority_stub() {
-        let r =
-            builtin_set_charset_priority(vec![Value::symbol("ascii"), Value::symbol("unicode")])
-                .unwrap();
-        assert!(r.is_nil());
+    fn registry_set_priority_reorders_and_dedups() {
+        let mut reg = CharsetRegistry::new();
+        reg.set_priority(&[
+            "ascii".to_string(),
+            "unicode".to_string(),
+            "ascii".to_string(),
+        ]);
+        assert_eq!(reg.priority[0], "ascii");
+        assert_eq!(reg.priority[1], "unicode");
     }
 
     #[test]
-    fn set_charset_priority_no_args() {
-        let r = builtin_set_charset_priority(vec![]).unwrap();
-        assert!(r.is_nil());
+    fn set_charset_priority_requires_at_least_one_arg() {
+        assert!(builtin_set_charset_priority(vec![]).is_err());
+    }
+
+    #[test]
+    fn set_charset_priority_rejects_unknown_charset() {
+        let r = builtin_set_charset_priority(vec![Value::symbol("vm-no-such-charset")]);
+        match r {
+            Err(Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::symbol("charsetp"), Value::symbol("vm-no-such-charset")]
+                );
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------------
