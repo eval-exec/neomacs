@@ -2788,6 +2788,14 @@ pub(crate) fn builtin_make_string(args: Vec<Value>) -> EvalResult {
             match char::from_u32(*c as u32) {
                 Some(ch) => ch,
                 None => {
+                    if (0x3FFF80..=0x3FFFFF).contains(c) {
+                        // Emacs internal raw-byte chars map this range to bytes 0x80..0xFF.
+                        // Represent these with a private-use sentinel and render as octal in
+                        // `format_lisp_string` to preserve oracle-visible behavior.
+                        let raw = (*c as u32) - 0x3FFF00;
+                        let sentinel = char::from_u32(0xE000 + raw).expect("valid raw-byte sentinel");
+                        return Ok(Value::string(std::iter::repeat(sentinel).take(count).collect::<String>()));
+                    }
                     // Emacs accepts broader internal character codes. When these
                     // cannot be represented as Unicode scalar values in Rust, emit
                     // replacement characters to keep observable oracle parity.

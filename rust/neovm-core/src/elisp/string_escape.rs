@@ -16,6 +16,12 @@ pub(crate) fn format_lisp_string(s: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\u{07}' => out.push_str("\\a"),
             '\u{1b}' => out.push_str("\\e"),
+            // NeoVM internal sentinel for Emacs raw-byte chars 0x80..0xFF.
+            c if (c as u32) >= 0xE080 && (c as u32) <= 0xE0FF => {
+                let byte = (c as u32) - 0xE000;
+                out.push('\\');
+                out.push_str(&format!("{:03o}", byte));
+            }
             c if (c as u32) < 0x20 || c == '\u{7f}' => {
                 out.push('\\');
                 out.push_str(&format!("{:03o}", c as u32));
@@ -40,5 +46,14 @@ mod tests {
     #[test]
     fn keeps_non_bmp_visible() {
         assert_eq!(format_lisp_string("\u{10ffff}"), "\"\u{10ffff}\"");
+    }
+
+    #[test]
+    fn escapes_raw_byte_sentinel_as_octal() {
+        let raw_377 = char::from_u32(0xE0FF).expect("valid sentinel scalar");
+        assert_eq!(
+            format_lisp_string(&raw_377.to_string()),
+            "\"\\377\""
+        );
     }
 }
