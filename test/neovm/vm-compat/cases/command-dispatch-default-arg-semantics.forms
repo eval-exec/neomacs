@@ -116,6 +116,20 @@
 
 (condition-case err
     (with-temp-buffer
+      (insert "abc")
+      (goto-char 1)
+      (command-execute 'kill-ring-save))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (goto-char 1)
+      (call-interactively 'kill-ring-save))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
       (insert "abc def")
       (goto-char 1)
       (command-execute 'upcase-word)
