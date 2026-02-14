@@ -1,0 +1,4 @@
+(length (all-threads))
+(let ((before (length (all-threads)))) (let ((th (make-thread (lambda () nil)))) (list before (length (all-threads)) (thread-join th) (length (all-threads)))))
+(let ((th (make-thread (lambda () nil)))) (thread-join th) (if (memq th (all-threads)) t nil))
+(let ((a (make-thread (lambda () nil))) (b (make-thread (lambda () nil)))) (list (eq (car (all-threads)) (current-thread)) (if (memq a (all-threads)) t nil) (if (memq b (all-threads)) t nil)))
