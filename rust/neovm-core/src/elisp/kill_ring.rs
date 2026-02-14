@@ -9,7 +9,8 @@
 //!   downcase-word, upcase-word, capitalize-word
 //! - Transpose commands: transpose-chars, transpose-words, transpose-lines
 //! - Indent/newline commands: indent-line-to, indent-to, newline,
-//!   newline-and-indent, delete-indentation, tab-to-tab-stop, indent-rigidly
+//!   newline-and-indent, open-line, delete-horizontal-space, just-one-space,
+//!   delete-indentation, tab-to-tab-stop, indent-rigidly
 
 use super::error::{signal, EvalResult, Flow};
 use super::syntax::{backward_word, forward_word, SyntaxClass};
@@ -42,6 +43,17 @@ fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flow> {
     }
 }
 
+fn expect_max_args(name: &str, args: &[Value], max: usize) -> Result<(), Flow> {
+    if args.len() > max {
+        Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol(name), Value::Int(args.len() as i64)],
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn expect_int(value: &Value) -> Result<i64, Flow> {
     match value {
         Value::Int(n) => Ok(*n),
@@ -61,6 +73,11 @@ fn expect_string(value: &Value) -> Result<String, Flow> {
             vec![Value::symbol("stringp"), other.clone()],
         )),
     }
+}
+
+#[inline]
+fn is_horizontal_space(ch: char) -> bool {
+    ch == ' ' || ch == '\t'
 }
 
 // ===========================================================================
@@ -1612,6 +1629,168 @@ pub(crate) fn builtin_newline_and_indent(
     Ok(Value::Nil)
 }
 
+/// `(open-line N)` — insert N newlines after point, leaving point before them.
+pub(crate) fn builtin_open_line(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
+    expect_max_args("open-line", &args, 1)?;
+    let n = if args.is_empty() || args[0].is_nil() {
+        1i64
+    } else {
+        expect_int(&args[0])?
+    };
+
+    if n < 0 {
+        return Err(signal(
+            "error",
+            vec![Value::string("open-line expects a non-negative count")],
+        ));
+    }
+
+    let buf = eval
+        .buffers
+        .current_buffer_mut()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    if buf.read_only {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buf.name.clone())],
+        ));
+    }
+
+    let pt = buf.point();
+    if n > 0 {
+        let newlines = "\n".repeat(n as usize);
+        buf.insert(&newlines);
+        buf.goto_char(pt);
+    }
+
+    Ok(Value::Nil)
+}
+
+/// `(delete-horizontal-space &optional BACKWARD-ONLY)` —
+/// delete spaces/tabs around point (or only before point when BACKWARD-ONLY).
+pub(crate) fn builtin_delete_horizontal_space(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("delete-horizontal-space", &args, 1)?;
+    let backward_only = args.first().is_some_and(Value::is_truthy);
+
+    let buf = eval
+        .buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    if buf.read_only {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buf.name.clone())],
+        ));
+    }
+
+    let pmin = buf.point_min();
+    let pmax = buf.point_max();
+    let pt = buf.point();
+
+    let mut left = pt;
+    while left > pmin {
+        let Some(ch) = buf.char_before(left) else {
+            break;
+        };
+        if !is_horizontal_space(ch) {
+            break;
+        }
+        left -= ch.len_utf8();
+    }
+
+    let mut right = pt;
+    if !backward_only {
+        while right < pmax {
+            let Some(ch) = buf.char_after(right) else {
+                break;
+            };
+            if !is_horizontal_space(ch) {
+                break;
+            }
+            right += ch.len_utf8();
+        }
+    }
+
+    let buf = eval
+        .buffers
+        .current_buffer_mut()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    buf.delete_region(left, right);
+    Ok(Value::Nil)
+}
+
+/// `(just-one-space &optional N)` —
+/// replace surrounding spaces/tabs with exactly |N| spaces (default 1).
+pub(crate) fn builtin_just_one_space(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("just-one-space", &args, 1)?;
+    let count = if args.is_empty() || args[0].is_nil() {
+        1usize
+    } else {
+        let raw = expect_int(&args[0])?;
+        if raw == i64::MIN {
+            i64::MAX as usize
+        } else {
+            raw.unsigned_abs() as usize
+        }
+    };
+
+    let buf = eval
+        .buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    if buf.read_only {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buf.name.clone())],
+        ));
+    }
+
+    let pmin = buf.point_min();
+    let pmax = buf.point_max();
+    let pt = buf.point();
+
+    let mut left = pt;
+    while left > pmin {
+        let Some(ch) = buf.char_before(left) else {
+            break;
+        };
+        if !is_horizontal_space(ch) {
+            break;
+        }
+        left -= ch.len_utf8();
+    }
+
+    let mut right = pt;
+    while right < pmax {
+        let Some(ch) = buf.char_after(right) else {
+            break;
+        };
+        if !is_horizontal_space(ch) {
+            break;
+        }
+        right += ch.len_utf8();
+    }
+
+    let buf = eval
+        .buffers
+        .current_buffer_mut()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    buf.delete_region(left, right);
+    if count > 0 {
+        buf.insert(&" ".repeat(count));
+    }
+    Ok(Value::Nil)
+}
+
 /// `(delete-indentation &optional ARG BEG END)` — join this line to the previous one.
 /// With ARG, join this line to the following one.
 pub(crate) fn builtin_delete_indentation(
@@ -2379,6 +2558,67 @@ mod tests {
         );
         // Should add newline + 4 spaces of indentation (copying prev line).
         assert_eq!(results[2], r#"OK "    hello\n    ""#);
+    }
+
+    // -- open-line tests --
+
+    #[test]
+    fn open_line_keeps_point_before_inserted_newlines() {
+        let results = eval_all(
+            r#"(insert "ab")
+               (goto-char 2)
+               (open-line 2)
+               (list (buffer-string) (point))"#,
+        );
+        assert_eq!(results[3], r#"OK ("a\n\nb" 2)"#);
+    }
+
+    // -- delete-horizontal-space tests --
+
+    #[test]
+    fn delete_horizontal_space_deletes_both_sides() {
+        let results = eval_all(
+            r#"(insert "a \t  b")
+               (goto-char 4)
+               (delete-horizontal-space)
+               (list (buffer-string) (point))"#,
+        );
+        assert_eq!(results[3], r#"OK ("ab" 2)"#);
+    }
+
+    #[test]
+    fn delete_horizontal_space_backward_only() {
+        let results = eval_all(
+            r#"(insert "a \t  b")
+               (goto-char 4)
+               (delete-horizontal-space t)
+               (list (buffer-string) (point))"#,
+        );
+        assert_eq!(results[3], r#"OK ("a  b" 2)"#);
+    }
+
+    // -- just-one-space tests --
+
+    #[test]
+    fn just_one_space_default() {
+        let results = eval_all(
+            r#"(insert "a \t  b")
+               (goto-char 4)
+               (just-one-space)
+               (list (buffer-string) (point))"#,
+        );
+        assert_eq!(results[3], r#"OK ("a b" 3)"#);
+    }
+
+    #[test]
+    fn just_one_space_zero() {
+        let results = eval_all(
+            r#"(insert "a \t  b")
+               (goto-char 4)
+               (just-one-space 0)
+               (list (buffer-string) (point))"#,
+        );
+        assert_eq!(results[3], r#"OK ("ab" 2)"#);
     }
 
     // -- delete-indentation tests --

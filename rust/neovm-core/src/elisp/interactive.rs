@@ -245,6 +245,9 @@ fn builtin_command_name(name: &str) -> bool {
             | "transpose-chars"
             | "transpose-lines"
             | "transpose-words"
+            | "open-line"
+            | "delete-horizontal-space"
+            | "just-one-space"
             | "delete-indentation"
             | "indent-for-tab-command"
             | "upcase-word"
@@ -1870,6 +1873,9 @@ mod tests {
             "kill-ring-save",
             "kill-whole-line",
             "copy-region-as-kill",
+            "open-line",
+            "delete-horizontal-space",
+            "just-one-space",
             "delete-indentation",
             "indent-for-tab-command",
             "transpose-words",

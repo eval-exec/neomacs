@@ -5637,6 +5637,11 @@ pub(crate) fn dispatch_builtin(
         "newline-and-indent" => {
             return Some(super::kill_ring::builtin_newline_and_indent(eval, args))
         }
+        "open-line" => return Some(super::kill_ring::builtin_open_line(eval, args)),
+        "delete-horizontal-space" => {
+            return Some(super::kill_ring::builtin_delete_horizontal_space(eval, args))
+        }
+        "just-one-space" => return Some(super::kill_ring::builtin_just_one_space(eval, args)),
         "delete-indentation" => {
             return Some(super::kill_ring::builtin_delete_indentation(eval, args))
         }
