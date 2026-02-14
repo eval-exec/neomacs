@@ -61,6 +61,17 @@ Focused introspection gate:
 cd test/neovm/vm-compat && make check-introspection-neovm
 ```
 
+Builtin registry parity gate:
+
+```bash
+cd test/neovm/vm-compat && make check-builtin-registry-fboundp
+```
+
+This checks `fboundp` parity for every name in `DISPATCH_BUILTIN_NAMES`
+against GNU Emacs `-Q`. Any drift must be either fixed or explicitly listed in
+`test/neovm/vm-compat/cases/builtin-registry-fboundp-allowlist.txt`
+(currently only `neovm-precompile-file`).
+
 ### Introspection Compatibility Guarantees (Oracle-Checked)
 
 The compatibility corpus now explicitly guards core callable introspection behavior against GNU Emacs oracle output:
