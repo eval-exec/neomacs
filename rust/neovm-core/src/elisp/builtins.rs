@@ -2551,18 +2551,73 @@ pub(crate) fn builtin_string_join(args: Vec<Value>) -> EvalResult {
 
 pub(crate) fn builtin_split_string(args: Vec<Value>) -> EvalResult {
     expect_min_args("split-string", &args, 1)?;
+    expect_max_args("split-string", &args, 4)?;
     let s = expect_string(&args[0])?;
-    let sep = if args.len() > 1 {
-        expect_string(&args[1])?
-    } else {
-        "[ \t\n\r]+".to_string()
+
+    let separator = match args.get(1) {
+        None | Some(Value::Nil) => None,
+        Some(other) => Some(expect_string(other)?),
     };
-    // Simple string split (not regex for now)
-    let parts: Vec<Value> = s
-        .split(&sep)
-        .filter(|p| !p.is_empty())
-        .map(|p| Value::string(p.to_string()))
-        .collect();
+    let omit_nulls = args.get(2).is_some_and(|v| v.is_truthy());
+    let trim_regex = match args.get(3) {
+        None | Some(Value::Nil) => None,
+        Some(other) => Some(expect_string(other)?),
+    };
+
+    let (splitter, default_omit_nulls) = match separator {
+        Some(pattern) => {
+            let compiled = regex::Regex::new(&pattern).map_err(|e| {
+                signal(
+                    "invalid-regexp",
+                    vec![Value::string(format!("Invalid regexp \"{}\": {}", pattern, e))],
+                )
+            })?;
+            (compiled, false)
+        }
+        None => (
+            regex::Regex::new(r"[ \f\t\n\r\v]+").expect("default split regexp should compile"),
+            true,
+        ),
+    };
+
+    let trimmer = match trim_regex {
+        Some(pattern) => Some(regex::Regex::new(&pattern).map_err(|e| {
+            signal(
+                "invalid-regexp",
+                vec![Value::string(format!("Invalid regexp \"{}\": {}", pattern, e))],
+            )
+        })?),
+        None => None,
+    };
+
+    let should_omit_nulls = default_omit_nulls || omit_nulls;
+    let mut parts = Vec::new();
+    for part in splitter.split(&s) {
+        let mut segment = part.to_string();
+        if let Some(trim_re) = trimmer.as_ref() {
+            loop {
+                let Some(m) = trim_re.find(&segment) else { break };
+                if m.start() == 0 && m.end() > 0 {
+                    segment = segment[m.end()..].to_string();
+                } else {
+                    break;
+                }
+            }
+            loop {
+                let tail = trim_re
+                    .find_iter(&segment)
+                    .filter(|m| m.end() == segment.len() && m.start() < m.end())
+                    .last();
+                let Some(m) = tail else { break };
+                segment = segment[..m.start()].to_string();
+            }
+        }
+        if should_omit_nulls && segment.is_empty() {
+            continue;
+        }
+        parts.push(Value::string(segment));
+    }
+
     Ok(Value::list(parts))
 }
 
