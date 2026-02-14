@@ -1141,6 +1141,79 @@ pub(crate) fn builtin_format(args: Vec<Value>) -> EvalResult {
     Ok(Value::string(result))
 }
 
+pub(crate) fn builtin_format_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("format", &args, 1)?;
+    let fmt_str = expect_string(&args[0])?;
+    let mut result = String::new();
+    let mut arg_idx = 1;
+    let mut chars = fmt_str.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            if let Some(&spec) = chars.peek() {
+                chars.next();
+                match spec {
+                    's' => {
+                        if arg_idx < args.len() {
+                            match &args[arg_idx] {
+                                Value::Str(s) => result.push_str(s),
+                                other => result.push_str(&print_value_eval(eval, other)),
+                            }
+                            arg_idx += 1;
+                        }
+                    }
+                    'S' => {
+                        if arg_idx < args.len() {
+                            result.push_str(&print_value_eval(eval, &args[arg_idx]));
+                            arg_idx += 1;
+                        }
+                    }
+                    'd' => {
+                        if arg_idx < args.len() {
+                            if let Ok(n) = expect_int(&args[arg_idx]) {
+                                result.push_str(&n.to_string());
+                            }
+                            arg_idx += 1;
+                        }
+                    }
+                    'f' => {
+                        if arg_idx < args.len() {
+                            if let Ok(f) = expect_number(&args[arg_idx]) {
+                                result.push_str(&format!("{:.6}", f));
+                            }
+                            arg_idx += 1;
+                        }
+                    }
+                    'c' => {
+                        if arg_idx < args.len() {
+                            if let Ok(n) = expect_int(&args[arg_idx]) {
+                                if let Some(c) = char::from_u32(n as u32) {
+                                    result.push(c);
+                                }
+                            }
+                            arg_idx += 1;
+                        }
+                    }
+                    '%' => result.push('%'),
+                    _ => {
+                        result.push('%');
+                        result.push(spec);
+                    }
+                }
+            } else {
+                result.push('%');
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    Ok(Value::string(result))
+}
+
 // ===========================================================================
 // Vector operations
 // ===========================================================================
@@ -1516,9 +1589,41 @@ pub(crate) fn builtin_message(args: Vec<Value>) -> EvalResult {
     Ok(Value::string(msg))
 }
 
+pub(crate) fn builtin_message_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("message", &args, 1)?;
+    let msg = if args.len() == 1 {
+        match &args[0] {
+            Value::Str(s) => (**s).clone(),
+            other => print_value_eval(eval, other),
+        }
+    } else {
+        match builtin_format_eval(eval, args.clone())? {
+            Value::Str(s) => (*s).clone(),
+            _ => String::new(),
+        }
+    };
+    eprintln!("{}", msg);
+    Ok(Value::string(msg))
+}
+
 pub(crate) fn builtin_error(args: Vec<Value>) -> EvalResult {
     expect_min_args("error", &args, 1)?;
     let msg = match builtin_format(args)? {
+        Value::Str(s) => (*s).clone(),
+        _ => "error".to_string(),
+    };
+    Err(signal("error", vec![Value::string(msg)]))
+}
+
+pub(crate) fn builtin_error_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("error", &args, 1)?;
+    let msg = match builtin_format_eval(eval, args)? {
         Value::Str(s) => (*s).clone(),
         _ => "error".to_string(),
     };
@@ -4643,6 +4748,9 @@ pub(crate) fn dispatch_builtin(
         }
 
         // Reader/printer (evaluator-dependent)
+        "format" => return Some(builtin_format_eval(eval, args)),
+        "message" => return Some(builtin_message_eval(eval, args)),
+        "error" => return Some(builtin_error_eval(eval, args)),
         "read-from-string" => return Some(super::reader::builtin_read_from_string(eval, args)),
         "read" => return Some(super::reader::builtin_read(eval, args)),
         "read-from-minibuffer" => {
@@ -6714,6 +6822,36 @@ mod tests {
         .expect("prin1-to-string should resolve with extra args")
         .expect("prin1-to-string should evaluate with extra args");
         assert_eq!(result, Value::string("1"));
+    }
+
+    #[test]
+    fn format_prints_thread_handles_as_opaque_in_eval_dispatch() {
+        let mut eval = crate::elisp::eval::Evaluator::new();
+        let thread = dispatch_builtin(&mut eval, "current-thread", vec![])
+            .expect("current-thread should resolve")
+            .expect("current-thread should evaluate");
+
+        let upper = dispatch_builtin(&mut eval, "format", vec![Value::string("%S"), thread.clone()])
+            .expect("format should resolve for %S")
+            .expect("format should evaluate for %S");
+        assert!(upper.as_str().is_some_and(|s| s.starts_with("#<thread")));
+
+        let lower = dispatch_builtin(&mut eval, "format", vec![Value::string("%s"), thread])
+            .expect("format should resolve for %s")
+            .expect("format should evaluate for %s");
+        assert!(lower.as_str().is_some_and(|s| s.starts_with("#<thread")));
+    }
+
+    #[test]
+    fn message_prints_thread_handles_as_opaque_in_eval_dispatch() {
+        let mut eval = crate::elisp::eval::Evaluator::new();
+        let thread = dispatch_builtin(&mut eval, "current-thread", vec![])
+            .expect("current-thread should resolve")
+            .expect("current-thread should evaluate");
+        let message = dispatch_builtin(&mut eval, "message", vec![Value::string("%S"), thread])
+            .expect("message should resolve")
+            .expect("message should evaluate");
+        assert!(message.as_str().is_some_and(|s| s.starts_with("#<thread")));
     }
 
     #[test]
