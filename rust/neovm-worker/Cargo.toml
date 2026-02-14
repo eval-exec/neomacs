@@ -11,5 +11,5 @@ core-backend-emacs-c = ["neovm-core/core-backend-emacs-c"]
 core-backend-rust = ["neovm-core/core-backend-rust"]
 
 [dependencies]
-neovm-core = { path = "../neovm-core" }
+neovm-core = { path = "../neovm-core", default-features = false }
 neovm-host-abi = { path = "../neovm-host-abi" }
