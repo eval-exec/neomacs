@@ -24,6 +24,7 @@
 (commandp 'yank-pop)
 (commandp 'transpose-chars)
 (commandp 'transpose-lines)
+(commandp 'transpose-sexps)
 (commandp 'upcase-word)
 (commandp 'downcase-word)
 (commandp 'capitalize-word)
