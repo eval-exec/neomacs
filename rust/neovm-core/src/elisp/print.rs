@@ -1,7 +1,7 @@
 //! Value printing (Lisp representation).
 
 use super::expr::{self, Expr};
-use super::value::Value;
+use super::value::{list_to_vec, Value};
 
 /// Print a `Value` as a Lisp string.
 pub fn print_value(value: &Value) -> String {
@@ -16,6 +16,9 @@ pub fn print_value(value: &Value) -> String {
         // Emacs chars are integer values, so print as codepoint.
         Value::Char(c) => (*c as u32).to_string(),
         Value::Cons(_) => {
+            if let Some(shorthand) = print_list_shorthand(value) {
+                return shorthand;
+            }
             let mut out = String::from("(");
             print_cons(value, &mut out);
             out.push(')');
@@ -106,6 +109,29 @@ fn format_params(params: &super::value::LambdaParams) -> String {
     }
 }
 
+fn print_list_shorthand(value: &Value) -> Option<String> {
+    let items = list_to_vec(value)?;
+    if items.len() != 2 {
+        return None;
+    }
+
+    let head = match &items[0] {
+        Value::Symbol(name) => name.as_str(),
+        _ => return None,
+    };
+
+    let prefix = match head {
+        "quote" => "'",
+        "function" => "#'",
+        "\\`" => "`",
+        "\\," => ",",
+        "\\,@" => ",@",
+        _ => return None,
+    };
+
+    Some(format!("{prefix}{}", print_value(&items[1])))
+}
+
 fn print_cons(value: &Value, out: &mut String) {
     let mut cursor = value.clone();
     let mut first = true;
@@ -158,6 +184,24 @@ mod tests {
     fn print_list() {
         let lst = Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
         assert_eq!(print_value(&lst), "(1 2 3)");
+    }
+
+    #[test]
+    fn print_quote_shorthand_lists() {
+        let quoted = Value::list(vec![Value::symbol("quote"), Value::symbol("foo")]);
+        let function = Value::list(vec![Value::symbol("function"), Value::symbol("car")]);
+        let quasiquoted = Value::list(vec![
+            Value::symbol("\\`"),
+            Value::list(vec![Value::symbol("a"), Value::symbol("b")]),
+        ]);
+        let unquoted = Value::list(vec![Value::symbol("\\,"), Value::symbol("x")]);
+        let unquote_splice = Value::list(vec![Value::symbol("\\,@"), Value::symbol("xs")]);
+
+        assert_eq!(print_value(&quoted), "'foo");
+        assert_eq!(print_value(&function), "#'car");
+        assert_eq!(print_value(&quasiquoted), "`(a b)");
+        assert_eq!(print_value(&unquoted), ",x");
+        assert_eq!(print_value(&unquote_splice), ",@xs");
     }
 
     #[test]

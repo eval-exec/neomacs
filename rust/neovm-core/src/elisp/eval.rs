@@ -1838,10 +1838,10 @@ mod tests {
         );
         assert_eq!(results[0], "OK (wrong-number-of-arguments (2 . 2) 0)");
         assert_eq!(results[1], "OK (wrong-type-argument symbolp 1)");
-        assert_eq!(results[2], "OK (wrong-type-argument symbolp (quote vm-df))");
+        assert_eq!(results[2], "OK (wrong-type-argument symbolp 'vm-df)");
         assert_eq!(results[3], "OK (wrong-number-of-arguments (2 . 2) 0)");
         assert_eq!(results[4], "OK (wrong-type-argument symbolp 1)");
-        assert_eq!(results[5], "OK (wrong-type-argument symbolp (quote vm-dm))");
+        assert_eq!(results[5], "OK (wrong-type-argument symbolp 'vm-dm)");
     }
 
     #[test]
