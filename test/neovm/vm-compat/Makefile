@@ -5,13 +5,14 @@ CASES ?= cases/core cases/fboundp-core cases/fboundp-dispatch cases/fboundp-macr
 NEOVM_ONLY_CASES ?= cases/load-suffixes cases/load-policy cases/precompile
 ALL_NEOVM_CASES ?= $(CASES) $(NEOVM_ONLY_CASES)
 INTROSPECTION_CASES ?= cases/fboundp-core cases/fboundp-dispatch cases/fboundp-macro-boundary cases/symbol-function-core cases/symbol-function-error-paths cases/indirect-function-core cases/indirect-function-alias-chains cases/condition-case-unwind-introspection cases/subr-introspection-core cases/macro-special-introspection-core cases/function-special-form-edges cases/autoload-macro-introspection cases/functionp-callable-matrix cases/funcall-apply-non-callable-matrix cases/special-form-edges cases/special-form-arity-errors cases/special-form-type-errors cases/def-special-form-errors cases/func-arity-fallback-macros cases/thread-introspection cases/thread-handle-identity cases/thread-handle-printing cases/thread-help-function-arglist cases/thread-subr-arity cases/thread-mutex-error-payloads cases/condition-variable-mutex-ownership
+THREAD_CASES ?= cases/thread-introspection cases/thread-name-semantics cases/thread-all-threads-semantics cases/thread-handle-identity cases/thread-handle-printing cases/thread-help-function-arglist cases/thread-subr-arity cases/thread-make-thread-name-validation cases/thread-mutex-error-payloads cases/thread-sync-error-payloads cases/thread-sync-semantics cases/thread-condition-wait-arity cases/thread-make-thread-noncallable cases/thread-join-semantics cases/thread-join-error-paths cases/thread-signal-semantics cases/thread-signal-last-error cases/thread-last-error-publication cases/thread-last-error-clear-flag cases/condition-variable-mutex-ownership
 BENCH_SOURCE ?= cases/load-policy-fixtures/vm-policy-cache-probe.el
 BENCH_ITERS ?= 100
 ERT_ALLOWLIST ?= cases/ert-allowlist-smoke.txt
 ERT_EXPECTED ?= cases/ert-allowlist-smoke.expected.tsv
 ERT_LOAD_FILES ?= cases/ert-allowlist-fixtures/smoke-tests.el
 
-.PHONY: oracle neovm record check compare check-neovm record-all check-all check-all-neovm check-all-neovm-only check-introspection-neovm ert-oracle record-ert-allowlist check-ert-allowlist bench-load-cache
+.PHONY: oracle neovm record check compare check-neovm record-all check-all check-all-neovm check-all-neovm-only check-introspection-neovm check-thread-neovm ert-oracle record-ert-allowlist check-ert-allowlist bench-load-cache
 
 oracle:
 	./run-oracle.sh $(FORMS)
@@ -73,6 +74,13 @@ check-all-neovm-only:
 check-introspection-neovm:
 	@set -e; \
 	for case in $(INTROSPECTION_CASES); do \
+		echo "== $$case =="; \
+		$(MAKE) --no-print-directory check-neovm FORMS="$$case.forms" EXPECTED="$$case.expected.tsv"; \
+	done
+
+check-thread-neovm:
+	@set -e; \
+	for case in $(THREAD_CASES); do \
 		echo "== $$case =="; \
 		$(MAKE) --no-print-directory check-neovm FORMS="$$case.forms" EXPECTED="$$case.expected.tsv"; \
 	done

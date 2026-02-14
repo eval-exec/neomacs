@@ -71,6 +71,13 @@ cd test/neovm/vm-compat
 make check-introspection-neovm
 ```
 
+Run the focused thread primitive suite (faster loop for `make-thread`/`thread-join`/`thread-last-error`/`thread-signal`/mutex/condition-variable semantics):
+
+```bash
+cd test/neovm/vm-compat
+make check-thread-neovm
+```
+
 Run the ERT allowlist oracle scaffold (for upstream differential bootstrapping):
 
 ```bash
