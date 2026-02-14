@@ -1,0 +1,19 @@
+; md5 coding-system arg should match GNU Emacs validation/noerror behavior.
+(condition-case err
+    (md5 "abc" nil nil 1)
+  (error err))
+(condition-case err
+    (md5 "abc" nil nil "utf-8")
+  (error err))
+(condition-case err
+    (md5 "abc" nil nil nil)
+  (error err))
+(condition-case err
+    (md5 "abc" nil nil 'utf-8)
+  (error err))
+(condition-case err
+    (md5 "abc" nil nil 'no-such)
+  (error err))
+(condition-case err
+    (md5 "abc" nil nil 'no-such t)
+  (error err))

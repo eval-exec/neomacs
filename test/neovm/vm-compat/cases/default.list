@@ -95,6 +95,7 @@ cases/string-prefix-suffix-semantics
 cases/string-join-semantics
 cases/string-to-number-semantics
 cases/md5-semantics
+cases/md5-coding-semantics
 cases/secure-hash-semantics
 cases/secure-hash-buffer-semantics
 cases/buffer-hash-semantics

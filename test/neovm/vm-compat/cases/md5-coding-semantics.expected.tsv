@@ -1,0 +1,6 @@
+1	(condition-case err (md5 "abc" nil nil 1) (error err))	OK (coding-system-error 1)
+2	(condition-case err (md5 "abc" nil nil "utf-8") (error err))	OK (coding-system-error "utf-8")
+3	(condition-case err (md5 "abc" nil nil nil) (error err))	OK "900150983cd24fb0d6963f7d28e17f72"
+4	(condition-case err (md5 "abc" nil nil 'utf-8) (error err))	OK "900150983cd24fb0d6963f7d28e17f72"
+5	(condition-case err (md5 "abc" nil nil 'no-such) (error err))	OK (coding-system-error no-such)
+6	(condition-case err (md5 "abc" nil nil 'no-such t) (error err))	OK "900150983cd24fb0d6963f7d28e17f72"
