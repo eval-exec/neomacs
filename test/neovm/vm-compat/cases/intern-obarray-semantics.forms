@@ -1,0 +1,9 @@
+; intern / intern-soft optional OBARRAY arity+type boundaries
+(intern "vm-intern-probe")
+(eq (intern "vm-intern-probe") (intern "vm-intern-probe"))
+(intern-soft "vm-intern-probe")
+(intern-soft "vm-intern-missing")
+(condition-case err (intern 1) (error (car err)))
+(condition-case err (intern-soft 1) (error (car err)))
+(condition-case err (intern "x" 1) (error (car err)))
+(condition-case err (intern-soft "x" 1) (error (car err)))

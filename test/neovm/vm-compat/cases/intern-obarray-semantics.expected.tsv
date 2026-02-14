@@ -1,0 +1,8 @@
+1	(intern "vm-intern-probe")	OK vm-intern-probe
+2	(eq (intern "vm-intern-probe") (intern "vm-intern-probe"))	OK t
+3	(intern-soft "vm-intern-probe")	OK vm-intern-probe
+4	(intern-soft "vm-intern-missing")	OK nil
+5	(condition-case err (intern 1) (error (car err)))	OK wrong-type-argument
+6	(condition-case err (intern-soft 1) (error (car err)))	OK wrong-type-argument
+7	(condition-case err (intern "x" 1) (error (car err)))	OK wrong-type-argument
+8	(condition-case err (intern-soft "x" 1) (error (car err)))	OK wrong-type-argument
