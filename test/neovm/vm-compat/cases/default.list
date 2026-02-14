@@ -99,6 +99,7 @@ cases/md5-semantics
 cases/md5-coding-semantics
 cases/coding-system-runtime-semantics
 cases/charsetp-semantics
+cases/charset-plist-error-semantics
 cases/charset-priority-semantics
 cases/charset-id-internal-semantics
 cases/charset-encode-decode-semantics
