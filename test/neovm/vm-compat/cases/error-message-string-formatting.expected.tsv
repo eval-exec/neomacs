@@ -4,9 +4,10 @@
 4	(error-message-string '(user-error "u" 1))	OK "u, 1"
 5	(error-message-string '(user-error integerp "x"))	OK "integerp, x"
 6	(error-message-string '(file-error "No such file" "foo"))	OK "No such file: foo"
-7	(error-message-string '(error 1 2))	OK "peculiar error: 2"
-8	(error-message-string '(file-error 1 2))	OK "peculiar error: 2"
-9	(error-message-string '(args-out-of-range "abc" 9))	OK "Args out of range: \"abc\", 9"
-10	(error-message-string '(void-variable x))	OK "Symbol’s value as variable is void: x"
-11	(error-message-string '(void-function x))	OK "Symbol’s function definition is void: x"
-12	(let ((msg (condition-case e (progn (error "%S" (current-thread)) "") (error (error-message-string e))))) (string-prefix-p "#<thread" msg))	OK t
+7	(error-message-string '(file-missing "Opening input file" "No such file or directory" "/tmp/nope"))	OK "Opening input file: No such file or directory, /tmp/nope"
+8	(error-message-string '(error 1 2))	OK "peculiar error: 2"
+9	(error-message-string '(file-error 1 2))	OK "peculiar error: 2"
+10	(error-message-string '(args-out-of-range "abc" 9))	OK "Args out of range: \"abc\", 9"
+11	(error-message-string '(void-variable x))	OK "Symbol’s value as variable is void: x"
+12	(error-message-string '(void-function x))	OK "Symbol’s function definition is void: x"
+13	(let ((msg (condition-case e (progn (error "%S" (current-thread)) "") (error (error-message-string e))))) (string-prefix-p "#<thread" msg))	OK t

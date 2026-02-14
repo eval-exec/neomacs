@@ -4,6 +4,7 @@
 (error-message-string '(user-error "u" 1))
 (error-message-string '(user-error integerp "x"))
 (error-message-string '(file-error "No such file" "foo"))
+(error-message-string '(file-missing "Opening input file" "No such file or directory" "/tmp/nope"))
 (error-message-string '(error 1 2))
 (error-message-string '(file-error 1 2))
 (error-message-string '(args-out-of-range "abc" 9))

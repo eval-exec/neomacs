@@ -531,9 +531,11 @@ pub(crate) fn builtin_error_message_string(
         return Ok(Value::string(data_strs.join(", ")));
     }
 
-    // `error` and `file-error` require a leading string for user-facing detail;
-    // otherwise Emacs reports a peculiar error.
-    if sym_name == "error" || sym_name == "file-error" {
+    let is_file_error_family = signal_matches_hierarchical(&eval.obarray, &sym_name, "file-error");
+
+    // `error` and file-error-family conditions use a leading string for
+    // user-facing detail.
+    if sym_name == "error" || is_file_error_family {
         if let Some(first_str) = data.first().and_then(|v| v.as_str().map(|s| s.to_string())) {
             let rest = &data[1..];
             if rest.is_empty() {
@@ -546,13 +548,17 @@ pub(crate) fn builtin_error_message_string(
                 .collect();
             return Ok(Value::string(format!("{first_str}: {}", rest_strs.join(", "))));
         }
-        if let Some(detail) = data.get(1) {
-            return Ok(Value::string(format!(
-                "peculiar error: {}",
-                format_error_arg(detail, true)
-            )));
+        // Exact `error`/`file-error` without a leading string keep Emacs'
+        // "peculiar error" behavior.
+        if sym_name == "error" || sym_name == "file-error" {
+            if let Some(detail) = data.get(1) {
+                return Ok(Value::string(format!(
+                    "peculiar error: {}",
+                    format_error_arg(detail, true)
+                )));
+            }
+            return Ok(Value::string("peculiar error"));
         }
-        return Ok(Value::string("peculiar error"));
     }
 
     let data_strs: Vec<String> = data
@@ -1321,6 +1327,26 @@ mod tests {
         assert!(result.is_ok());
         let msg = result.unwrap();
         assert_eq!(msg.as_str(), Some("No such file: foo"));
+    }
+
+    #[test]
+    fn builtin_error_message_string_file_missing_string_payload() {
+        let mut evaluator = super::super::eval::Evaluator::new();
+        init_standard_errors(&mut evaluator.obarray);
+
+        let err_data = Value::list(vec![
+            Value::symbol("file-missing"),
+            Value::string("Opening input file"),
+            Value::string("No such file or directory"),
+            Value::string("/tmp/probe"),
+        ]);
+        let result = builtin_error_message_string(&evaluator, vec![err_data]);
+        assert!(result.is_ok());
+        let msg = result.unwrap();
+        assert_eq!(
+            msg.as_str(),
+            Some("Opening input file: No such file or directory, /tmp/probe")
+        );
     }
 
     #[test]
