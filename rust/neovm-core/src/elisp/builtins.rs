@@ -5374,6 +5374,7 @@ pub(crate) fn dispatch_builtin(
         "re-search-forward" => return Some(builtin_re_search_forward(eval, args)),
         "re-search-backward" => return Some(builtin_re_search_backward(eval, args)),
         "looking-at" => return Some(builtin_looking_at(eval, args)),
+        "looking-at-p" => return Some(builtin_looking_at_p(eval, args)),
         "string-match" => return Some(builtin_string_match_eval(eval, args)),
         "match-string" => return Some(builtin_match_string(eval, args)),
         "match-beginning" => return Some(builtin_match_beginning(eval, args)),
@@ -7194,6 +7195,25 @@ pub(crate) fn builtin_looking_at(
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
     match super::regex::looking_at(buf, &pattern, &mut eval.match_data) {
+        Ok(matched) => Ok(Value::bool(matched)),
+        Err(msg) => Err(signal("invalid-regexp", vec![Value::string(msg)])),
+    }
+}
+
+pub(crate) fn builtin_looking_at_p(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("looking-at-p", &args, 1)?;
+    let pattern = expect_string(&args[0])?;
+
+    let buf = eval
+        .buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    let mut throwaway_match_data = None;
+    match super::regex::looking_at(buf, &pattern, &mut throwaway_match_data) {
         Ok(matched) => Ok(Value::bool(matched)),
         Err(msg) => Err(signal("invalid-regexp", vec![Value::string(msg)])),
     }

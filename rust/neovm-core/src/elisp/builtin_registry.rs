@@ -434,6 +434,7 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "logxor",
     "long-line-optimizations-p",
     "looking-at",
+    "looking-at-p",
     "lookup-image-map",
     "lookup-key",
     "macrop",
