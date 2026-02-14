@@ -2523,16 +2523,26 @@ pub(crate) fn builtin_isnan(args: Vec<Value>) -> EvalResult {
 // ===========================================================================
 
 pub(crate) fn builtin_string_prefix_p(args: Vec<Value>) -> EvalResult {
-    expect_args("string-prefix-p", &args, 2)?;
-    let prefix = expect_string(&args[0])?;
-    let s = expect_string(&args[1])?;
+    expect_min_args("string-prefix-p", &args, 2)?;
+    expect_max_args("string-prefix-p", &args, 3)?;
+    let mut prefix = expect_string(&args[0])?;
+    let mut s = expect_string(&args[1])?;
+    if args.get(2).is_some_and(|v| v.is_truthy()) {
+        prefix = prefix.to_lowercase();
+        s = s.to_lowercase();
+    }
     Ok(Value::bool(s.starts_with(&prefix)))
 }
 
 pub(crate) fn builtin_string_suffix_p(args: Vec<Value>) -> EvalResult {
-    expect_args("string-suffix-p", &args, 2)?;
-    let suffix = expect_string(&args[0])?;
-    let s = expect_string(&args[1])?;
+    expect_min_args("string-suffix-p", &args, 2)?;
+    expect_max_args("string-suffix-p", &args, 3)?;
+    let mut suffix = expect_string(&args[0])?;
+    let mut s = expect_string(&args[1])?;
+    if args.get(2).is_some_and(|v| v.is_truthy()) {
+        suffix = suffix.to_lowercase();
+        s = s.to_lowercase();
+    }
     Ok(Value::bool(s.ends_with(&suffix)))
 }
 
