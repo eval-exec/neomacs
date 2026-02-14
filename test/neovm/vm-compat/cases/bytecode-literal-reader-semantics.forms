@@ -1,0 +1,8 @@
+; compiled-function literal reader semantics via read-from-string.
+(byte-code-function-p (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))
+(functionp (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))
+(func-arity (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))
+
+(byte-code-function-p (car (read-from-string "#[(x) \"\\10\\207\" [x] 1]")))
+(functionp (car (read-from-string "#[(x) \"\\10\\207\" [x] 1]")))
+(func-arity (car (read-from-string "#[(x) \"\\10\\207\" [x] 1]")))

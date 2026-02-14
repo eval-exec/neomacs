@@ -1,0 +1,6 @@
+1	(byte-code-function-p (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))	OK t
+2	(functionp (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))	OK t
+3	(func-arity (car (read-from-string "#[nil \"\\300\\207\" [0] 1]")))	OK (0 . 0)
+4	(byte-code-function-p (car (read-from-string "#[(x) \"\\10\\207\" [x] 1]")))	OK t
+5	(functionp (car (read-from-string "#[(x) \"\\10\\207\" [x] 1]")))	OK t
+6	(func-arity (car (read-from-string "#[(x) \"\\10\\207\" [x] 1]")))	OK (1 . 1)
