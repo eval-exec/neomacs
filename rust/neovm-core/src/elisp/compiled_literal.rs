@@ -351,6 +351,11 @@ fn decode_opcode_subset(byte_stream: &str, const_len: usize) -> Option<Vec<Op>> 
                 pending.push(Pending::Op(Op::Rem));
                 pc += 1;
             }
+            // nconc (binary; N-ary forms compile as repeated nconc opcodes)
+            0o244 => {
+                pending.push(Pending::Op(Op::Nconc));
+                pc += 1;
+            }
             // equal
             0o232 => {
                 pending.push(Pending::Op(Op::Equal));
@@ -1009,6 +1014,51 @@ mod tests {
                 Op::VarRef(1),
                 Op::VarRef(2),
                 Op::Call(3),
+                Op::Return,
+            ]
+        );
+    }
+
+    #[test]
+    fn decodes_nconc_opcode_subset() {
+        let nconc2 = Value::vector(vec![
+            Value::list(vec![Value::symbol("x"), Value::symbol("y")]),
+            Value::string("\u{8}\u{9}\u{A4}\u{87}"),
+            Value::vector(vec![Value::symbol("x"), Value::symbol("y")]),
+            Value::Int(2),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(nconc2);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(bc.ops, vec![Op::VarRef(0), Op::VarRef(1), Op::Nconc, Op::Return]);
+
+        let nconc3 = Value::vector(vec![
+            Value::list(vec![
+                Value::symbol("x"),
+                Value::symbol("y"),
+                Value::symbol("z"),
+            ]),
+            Value::string("\u{8}\u{9}\u{A4}\u{A}\u{A4}\u{87}"),
+            Value::vector(vec![
+                Value::symbol("x"),
+                Value::symbol("y"),
+                Value::symbol("z"),
+            ]),
+            Value::Int(3),
+        ]);
+        let coerced = maybe_coerce_compiled_literal_function(nconc3);
+        let Value::ByteCode(bc) = coerced else {
+            panic!("expected Value::ByteCode");
+        };
+        assert_eq!(
+            bc.ops,
+            vec![
+                Op::VarRef(0),
+                Op::VarRef(1),
+                Op::Nconc,
+                Op::VarRef(2),
+                Op::Nconc,
                 Op::Return,
             ]
         );

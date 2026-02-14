@@ -374,6 +374,12 @@ impl<'a> Vm<'a> {
                         ));
                     }
                 }
+                Op::Nconc => {
+                    let b = stack.pop().unwrap_or(Value::Nil);
+                    let a = stack.pop().unwrap_or(Value::Nil);
+                    let result = self.dispatch_vm_builtin("nconc", vec![a, b])?;
+                    stack.push(result);
+                }
                 Op::Nreverse => {
                     let list = stack.pop().unwrap_or(Value::Nil);
                     let result = self.dispatch_vm_builtin("nreverse", vec![list])?;
