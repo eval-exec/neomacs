@@ -556,14 +556,20 @@ impl Evaluator {
 
     fn sf_quote(&self, tail: &[Expr]) -> EvalResult {
         if tail.len() != 1 {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("quote"), Value::Int(tail.len() as i64)],
+            ));
         }
         Ok(quote_to_value(&tail[0]))
     }
 
     fn sf_function(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.len() != 1 {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("function"), Value::Int(tail.len() as i64)],
+            ));
         }
         match &tail[0] {
             Expr::List(items) => {
@@ -581,7 +587,10 @@ impl Evaluator {
 
     fn sf_let(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("let"), Value::Int(tail.len() as i64)],
+            ));
         }
 
         let mut lexical_bindings = HashMap::new();
@@ -619,7 +628,18 @@ impl Evaluator {
                 }
             }
             Expr::Symbol(s) if s == "nil" => {} // (let nil ...)
-            _ => return Err(signal("wrong-type-argument", vec![])),
+            Expr::DottedList(_, last) => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("listp"), quote_to_value(last)],
+                ))
+            }
+            other => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("listp"), quote_to_value(other)],
+                ))
+            }
         }
 
         let pushed_lex = !lexical_bindings.is_empty();
@@ -642,13 +662,27 @@ impl Evaluator {
 
     fn sf_let_star(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("let*"), Value::Int(tail.len() as i64)],
+            ));
         }
 
         let entries = match &tail[0] {
             Expr::List(entries) => entries.clone(),
             Expr::Symbol(s) if s == "nil" => Vec::new(),
-            _ => return Err(signal("wrong-type-argument", vec![])),
+            Expr::DottedList(_, last) => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("listp"), quote_to_value(last)],
+                ))
+            }
+            other => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("listp"), quote_to_value(other)],
+                ))
+            }
         };
 
         let use_lexical = self.lexical_binding();
@@ -782,7 +816,10 @@ impl Evaluator {
 
     fn sf_if(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.len() < 2 {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("if"), Value::Int(tail.len() as i64)],
+            ));
         }
         let cond = self.eval(&tail[0])?;
         if cond.is_truthy() {
@@ -834,7 +871,10 @@ impl Evaluator {
 
     fn sf_while(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("while"), Value::Int(tail.len() as i64)],
+            ));
         }
         loop {
             let cond = self.eval(&tail[0])?;
@@ -855,7 +895,10 @@ impl Evaluator {
 
     fn sf_prog1(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("prog1"), Value::Int(tail.len() as i64)],
+            ));
         }
         let first = self.eval(&tail[0])?;
         for form in &tail[1..] {
@@ -866,7 +909,13 @@ impl Evaluator {
 
     fn sf_when(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![
+                    Value::cons(Value::Int(1), Value::Int(1)),
+                    Value::Int(tail.len() as i64),
+                ],
+            ));
         }
         let cond = self.eval(&tail[0])?;
         if cond.is_truthy() {
@@ -878,7 +927,13 @@ impl Evaluator {
 
     fn sf_unless(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![
+                    Value::cons(Value::Int(1), Value::Int(1)),
+                    Value::Int(tail.len() as i64),
+                ],
+            ));
         }
         let cond = self.eval(&tail[0])?;
         if cond.is_nil() {
@@ -1010,7 +1065,10 @@ impl Evaluator {
 
     fn sf_catch(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("catch"), Value::Int(tail.len() as i64)],
+            ));
         }
         let tag = self.eval(&tail[0])?;
         match self.sf_progn(&tail[1..]) {
@@ -1025,7 +1083,10 @@ impl Evaluator {
 
     fn sf_throw(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.len() != 2 {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("throw"), Value::Int(tail.len() as i64)],
+            ));
         }
         let tag = self.eval(&tail[0])?;
         let value = self.eval(&tail[1])?;
@@ -1034,7 +1095,10 @@ impl Evaluator {
 
     fn sf_unwind_protect(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.is_empty() {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![Value::symbol("unwind-protect"), Value::Int(tail.len() as i64)],
+            ));
         }
         let primary = self.eval(&tail[0]);
         let cleanup = self.sf_progn(&tail[1..]);
@@ -1046,7 +1110,13 @@ impl Evaluator {
 
     fn sf_condition_case(&mut self, tail: &[Expr]) -> EvalResult {
         if tail.len() < 3 {
-            return Err(signal("wrong-number-of-arguments", vec![]));
+            return Err(signal(
+                "wrong-number-of-arguments",
+                vec![
+                    Value::symbol("condition-case"),
+                    Value::Int(tail.len() as i64),
+                ],
+            ));
         }
 
         let var = match &tail[0] {
@@ -1974,6 +2044,62 @@ mod tests {
         assert_eq!(
             eval_one("(condition-case err (function 1 2) (error (car err)))"),
             "OK wrong-number-of-arguments"
+        );
+    }
+
+    #[test]
+    fn special_form_arity_payloads_match_oracle_edges() {
+        let results = eval_all(
+            "(condition-case err (if) (error err))
+             (condition-case err (if t) (error err))
+             (condition-case err (when) (error err))
+             (condition-case err (unless) (error err))
+             (condition-case err (quote) (error err))
+             (condition-case err (quote 1 2) (error err))
+             (condition-case err (function) (error err))
+             (condition-case err (function 1 2) (error err))
+             (condition-case err (prog1) (error err))
+             (condition-case err (catch) (error err))
+             (condition-case err (throw) (error err))
+             (condition-case err (condition-case) (error err))
+             (condition-case err (let) (error err))
+             (condition-case err (let*) (error err))
+             (condition-case err (while) (error err))
+             (condition-case err (unwind-protect) (error err))",
+        );
+        assert_eq!(results[0], "OK (wrong-number-of-arguments if 0)");
+        assert_eq!(results[1], "OK (wrong-number-of-arguments if 1)");
+        assert_eq!(results[2], "OK (wrong-number-of-arguments (1 . 1) 0)");
+        assert_eq!(results[3], "OK (wrong-number-of-arguments (1 . 1) 0)");
+        assert_eq!(results[4], "OK (wrong-number-of-arguments quote 0)");
+        assert_eq!(results[5], "OK (wrong-number-of-arguments quote 2)");
+        assert_eq!(results[6], "OK (wrong-number-of-arguments function 0)");
+        assert_eq!(results[7], "OK (wrong-number-of-arguments function 2)");
+        assert_eq!(results[8], "OK (wrong-number-of-arguments prog1 0)");
+        assert_eq!(results[9], "OK (wrong-number-of-arguments catch 0)");
+        assert_eq!(results[10], "OK (wrong-number-of-arguments throw 0)");
+        assert_eq!(
+            results[11],
+            "OK (wrong-number-of-arguments condition-case 0)"
+        );
+        assert_eq!(results[12], "OK (wrong-number-of-arguments let 0)");
+        assert_eq!(results[13], "OK (wrong-number-of-arguments let* 0)");
+        assert_eq!(results[14], "OK (wrong-number-of-arguments while 0)");
+        assert_eq!(
+            results[15],
+            "OK (wrong-number-of-arguments unwind-protect 0)"
+        );
+    }
+
+    #[test]
+    fn let_dotted_binding_list_reports_listp_tail_payload() {
+        assert_eq!(
+            eval_one("(condition-case err (let ((x 1) . 2) x) (error err))"),
+            "OK (wrong-type-argument listp 2)"
+        );
+        assert_eq!(
+            eval_one("(condition-case err (let* ((x 1) . 2) x) (error err))"),
+            "OK (wrong-type-argument listp 2)"
         );
     }
 
