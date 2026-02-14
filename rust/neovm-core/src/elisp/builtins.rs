@@ -1012,23 +1012,63 @@ pub(crate) fn builtin_concat(args: Vec<Value>) -> EvalResult {
 
 pub(crate) fn builtin_string_to_number(args: Vec<Value>) -> EvalResult {
     expect_min_args("string-to-number", &args, 1)?;
+    expect_max_args("string-to-number", &args, 2)?;
     let s = expect_string(&args[0])?;
     let base = if args.len() > 1 {
-        expect_int(&args[1])? as u32
+        expect_int(&args[1])?
     } else {
         10
     };
 
-    let s = s.trim();
+    if base < 2 || base > 36 {
+        return Err(signal("args-out-of-range", vec![Value::Int(base)]));
+    }
+
+    let s = s.trim_start();
     if base == 10 {
-        if let Ok(n) = s.parse::<i64>() {
-            return Ok(Value::Int(n));
+        let number_prefix = regex::Regex::new(
+            r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+        )
+        .expect("number prefix regexp should compile");
+        if let Some(m) = number_prefix.find(s) {
+            let token = m.as_str();
+            let is_float = token.contains('.') || token.contains('e') || token.contains('E');
+            if is_float {
+                if let Ok(f) = token.parse::<f64>() {
+                    return Ok(Value::Float(f));
+                }
+            } else if let Ok(n) = token.parse::<i64>() {
+                return Ok(Value::Int(n));
+            }
         }
-        if let Ok(f) = s.parse::<f64>() {
-            return Ok(Value::Float(f));
+    } else {
+        let bytes = s.as_bytes();
+        let mut pos = 0usize;
+        let mut negative = false;
+        if pos < bytes.len() {
+            if bytes[pos] == b'+' {
+                pos += 1;
+            } else if bytes[pos] == b'-' {
+                negative = true;
+                pos += 1;
+            }
         }
-    } else if let Ok(n) = i64::from_str_radix(s, base) {
-        return Ok(Value::Int(n));
+        let digit_start = pos;
+        while pos < bytes.len() {
+            let ch = bytes[pos] as char;
+            let Some(d) = ch.to_digit(36) else { break };
+            if (d as i64) < base {
+                pos += 1;
+            } else {
+                break;
+            }
+        }
+        if pos > digit_start {
+            let token = &s[digit_start..pos];
+            if let Ok(parsed) = i64::from_str_radix(token, base as u32) {
+                return Ok(Value::Int(if negative { -parsed } else { parsed }));
+            }
+        }
     }
     Ok(Value::Int(0))
 }
