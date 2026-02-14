@@ -1,0 +1,5 @@
+(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-wait cv 0)) (mutex-unlock m)))
+(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-case err (condition-wait cv 0) (error err))) (mutex-unlock m)))
+(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-wait cv 0.0)) (mutex-unlock m)))
+(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-wait cv -1)) (mutex-unlock m)))
+(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-case err (condition-wait cv "x") (error err))) (mutex-unlock m)))

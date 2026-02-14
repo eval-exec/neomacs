@@ -1,0 +1,5 @@
+1	(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-wait cv 0)) (mutex-unlock m)))	ERR (wrong-number-of-arguments (condition-wait 2))
+2	(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-case err (condition-wait cv 0) (error err))) (mutex-unlock m)))	OK (wrong-number-of-arguments condition-wait 2)
+3	(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-wait cv 0.0)) (mutex-unlock m)))	ERR (wrong-number-of-arguments (condition-wait 2))
+4	(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-wait cv -1)) (mutex-unlock m)))	ERR (wrong-number-of-arguments (condition-wait 2))
+5	(let ((m (make-mutex))) (mutex-lock m) (unwind-protect (let ((cv (make-condition-variable m))) (condition-case err (condition-wait cv "x") (error err))) (mutex-unlock m)))	OK (wrong-number-of-arguments condition-wait 2)
