@@ -1,0 +1,5 @@
+(make-string 1 255)
+(make-string 1 4194176)
+(prin1-to-string (make-string 1 4194176))
+(make-string 1 4194303)
+(prin1-to-string (make-string 1 4194303))

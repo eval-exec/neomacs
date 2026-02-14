@@ -1,0 +1,5 @@
+1	(make-string 1 255)	OK "ÿ"
+2	(make-string 1 4194176)	OK "\200"
+3	(prin1-to-string (make-string 1 4194176))	OK "\"\\200\""
+4	(make-string 1 4194303)	OK "\377"
+5	(prin1-to-string (make-string 1 4194303))	OK "\"\\377\""
