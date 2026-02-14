@@ -11,7 +11,7 @@
 //! - Pure builtins: coding-system-list, coding-system-aliases, coding-system-get,
 //!   coding-system-put, coding-system-base, coding-system-eol-type,
 //!   coding-system-type, coding-system-change-eol-conversion,
-//!   coding-system-change-text-conversion, find-coding-system,
+//!   coding-system-change-text-conversion,
 //!   detect-coding-string, detect-coding-region, keyboard-coding-system,
 //!   terminal-coding-system, set-keyboard-coding-system,
 //!   set-terminal-coding-system, coding-system-priority-list
@@ -609,21 +609,6 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
         Ok(Value::symbol(text_base))
     } else {
         Ok(Value::symbol(format!("{}{}", text_base, eol_suffix)))
-    }
-}
-
-/// `(find-coding-system CODING-SYSTEM)` -- return CODING-SYSTEM if it is a
-/// known coding system (resolving aliases), nil otherwise.
-pub(crate) fn builtin_find_coding_system(
-    mgr: &CodingSystemManager,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("find-coding-system", &args, 1)?;
-    let name = coding_system_name(&args[0])?;
-    if mgr.is_known(&name) {
-        Ok(args[0].clone())
-    } else {
-        Ok(Value::Nil)
     }
 }
 
@@ -1265,29 +1250,6 @@ mod tests {
         .unwrap();
         // utf-8 has undecided eol -> no suffix
         assert!(matches!(result, Value::Symbol(s) if s == "latin-1"));
-    }
-
-    // ----- find-coding-system -----
-
-    #[test]
-    fn find_coding_system_known() {
-        let m = mgr();
-        let result = builtin_find_coding_system(&m, vec![Value::symbol("utf-8")]).unwrap();
-        assert!(matches!(result, Value::Symbol(s) if s == "utf-8"));
-    }
-
-    #[test]
-    fn find_coding_system_alias() {
-        let m = mgr();
-        let result = builtin_find_coding_system(&m, vec![Value::symbol("iso-8859-1")]).unwrap();
-        assert!(matches!(result, Value::Symbol(s) if s == "iso-8859-1"));
-    }
-
-    #[test]
-    fn find_coding_system_unknown() {
-        let m = mgr();
-        let result = builtin_find_coding_system(&m, vec![Value::symbol("nonexistent")]).unwrap();
-        assert!(result.is_nil());
     }
 
     // ----- detect-coding-string -----
