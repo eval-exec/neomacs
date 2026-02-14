@@ -354,14 +354,6 @@ pub(crate) fn builtin_string_pad(args: Vec<Value>) -> EvalResult {
     }
 }
 
-/// `(string-repeat STRING COUNT)`.
-pub(crate) fn builtin_string_repeat(args: Vec<Value>) -> EvalResult {
-    expect_args("string-repeat", &args, 2)?;
-    let s = expect_string(&args[0])?;
-    let count = expect_int(&args[1])? as usize;
-    Ok(Value::string(s.repeat(count)))
-}
-
 /// `(string-replace FROM TO IN)` — replace all occurrences.
 pub(crate) fn builtin_string_replace(args: Vec<Value>) -> EvalResult {
     expect_args("string-replace", &args, 3)?;
@@ -825,12 +817,6 @@ mod tests {
         let result =
             builtin_string_search(vec![Value::string("xyz"), Value::string("hello")]).unwrap();
         assert!(result.is_nil());
-    }
-
-    #[test]
-    fn string_repeat() {
-        let result = builtin_string_repeat(vec![Value::string("ab"), Value::Int(3)]).unwrap();
-        assert_eq!(result.as_str(), Some("ababab"));
     }
 
     #[test]
