@@ -12,7 +12,6 @@
 //! - `move-to-window-line` — move to a specific window line
 //! - `tool-bar-height` — get tool bar height
 //! - `tab-bar-height` — get tab bar height
-//! - `display-line-numbers-update-width` — update line number display width
 //! - `line-number-display-width` — get line number display width
 //! - `long-line-optimizations-p` — check if long-line optimizations are enabled
 
@@ -155,16 +154,6 @@ pub(crate) fn builtin_tab_bar_height(args: Vec<Value>) -> EvalResult {
     Ok(Value::Int(0))
 }
 
-/// (display-line-numbers-update-width) -> nil
-///
-/// Update the display line numbers width. Stub implementation
-/// always returns nil.
-pub(crate) fn builtin_display_line_numbers_update_width(args: Vec<Value>) -> EvalResult {
-    expect_args("display-line-numbers-update-width", &args, 0)?;
-    // Stub: return nil
-    Ok(Value::Nil)
-}
-
 /// (line-number-display-width &optional ON-DISPLAY) -> integer
 ///
 /// Get the width of the line number display. Returns 0 (no line numbers).
@@ -292,12 +281,6 @@ mod tests {
 
         let result = builtin_tab_bar_height(vec![Value::symbol("frame")]).unwrap();
         assert_eq!(result, Value::Int(0));
-    }
-
-    #[test]
-    fn test_display_line_numbers_update_width() {
-        let result = builtin_display_line_numbers_update_width(vec![]).unwrap();
-        assert!(result.is_nil());
     }
 
     #[test]
