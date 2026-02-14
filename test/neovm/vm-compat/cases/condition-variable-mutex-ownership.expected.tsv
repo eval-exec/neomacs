@@ -1,0 +1,3 @@
+1	(let ((m (make-mutex))) (let ((cv (make-condition-variable m))) (condition-case err (condition-notify cv) (error (car err)))))	OK error
+2	(let ((m (make-mutex))) (let ((cv (make-condition-variable m))) (mutex-lock m) (prog1 (condition-notify cv) (mutex-unlock m))))	OK nil
+3	(let ((m (make-mutex))) (let ((cv (make-condition-variable m))) (condition-case err (condition-wait cv) (error (car err)))))	OK error
