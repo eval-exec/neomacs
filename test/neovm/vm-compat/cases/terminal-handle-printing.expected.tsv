@@ -1,0 +1,10 @@
+1	(fboundp 'frame-terminal)	OK t
+2	(fboundp 'terminal-list)	OK t
+3	(fboundp 'terminal-name)	OK t
+4	(string-prefix-p "#<terminal" (prin1-to-string (frame-terminal nil)))	OK t
+5	(let ((lst (terminal-list))) (and (consp lst) (string-prefix-p "#<terminal" (prin1-to-string (car lst)))))	OK t
+6	(string-prefix-p "#<terminal" (format "%S" (frame-terminal nil)))	OK t
+7	(string-prefix-p "#<terminal" (format "%s" (frame-terminal nil)))	OK t
+8	(let ((msg (condition-case e (progn (error "%S" (frame-terminal nil)) "") (error (error-message-string e))))) (string-prefix-p "#<terminal" msg))	OK t
+9	(terminal-name (frame-terminal nil))	OK "initial_terminal"
+10	(equal (prin1-to-string (frame-terminal nil)) (let ((lst (terminal-list))) (prin1-to-string (car lst))))	OK t

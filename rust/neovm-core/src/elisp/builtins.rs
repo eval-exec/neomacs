@@ -3873,6 +3873,9 @@ fn write_print_output(
 }
 
 fn print_threading_handle(eval: &super::eval::Evaluator, value: &Value) -> Option<String> {
+    if let Some(handle) = super::display::print_terminal_handle(value) {
+        return Some(handle);
+    }
     if let Some(id) = eval.threads.thread_id_from_handle(value) {
         return Some(format!("#<thread {id}>"));
     }

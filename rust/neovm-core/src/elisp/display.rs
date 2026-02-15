@@ -16,6 +16,9 @@ thread_local! {
         Arc::new(Mutex::new(vec![Value::symbol("--neovm-terminal--")]));
 }
 
+const TERMINAL_NAME: &str = "initial_terminal";
+const TERMINAL_ID: u64 = 0;
+
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------
@@ -100,6 +103,18 @@ fn is_terminal_handle(value: &Value) -> bool {
         Value::Vector(v) => TERMINAL_HANDLE.with(|handle| Arc::ptr_eq(v, handle)),
         _ => false,
     }
+}
+
+pub(crate) fn terminal_handle_id(value: &Value) -> Option<u64> {
+    if is_terminal_handle(value) {
+        Some(TERMINAL_ID)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn print_terminal_handle(value: &Value) -> Option<String> {
+    terminal_handle_id(value).map(|id| format!("#<terminal {id} on {TERMINAL_NAME}>"))
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +242,7 @@ pub(crate) fn builtin_x_display_color_p(args: Vec<Value>) -> EvalResult {
 // Terminal builtins
 // ---------------------------------------------------------------------------
 
-/// (terminal-name &optional TERMINAL) -> "neomacs"
+/// (terminal-name &optional TERMINAL) -> "initial_terminal"
 pub(crate) fn builtin_terminal_name(args: Vec<Value>) -> EvalResult {
     expect_max_args("terminal-name", &args, 1)?;
     if let Some(term) = args.first() {
@@ -235,7 +250,7 @@ pub(crate) fn builtin_terminal_name(args: Vec<Value>) -> EvalResult {
             expect_terminal_designator(term)?;
         }
     }
-    Ok(Value::string("neomacs"))
+    Ok(Value::string(TERMINAL_NAME))
 }
 
 /// (terminal-list) -> list containing one opaque terminal handle.
@@ -457,7 +472,7 @@ mod tests {
     fn terminal_live_p_reflects_designator_shape() {
         let live_nil = builtin_terminal_live_p(vec![Value::Nil]).unwrap();
         let live_handle = builtin_terminal_live_p(vec![terminal_handle_value()]).unwrap();
-        let live_string = builtin_terminal_live_p(vec![Value::string("neomacs")]).unwrap();
+        let live_string = builtin_terminal_live_p(vec![Value::string("initial_terminal")]).unwrap();
         let live_int = builtin_terminal_live_p(vec![Value::Int(1)]).unwrap();
         assert_eq!(live_nil, Value::True);
         assert_eq!(live_handle, Value::True);
