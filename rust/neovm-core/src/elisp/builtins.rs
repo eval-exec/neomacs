@@ -5574,6 +5574,7 @@ pub(crate) fn dispatch_builtin(
         "rename-file" => return Some(super::fileio::builtin_rename_file_eval(eval, args)),
         "copy-file" => return Some(super::fileio::builtin_copy_file_eval(eval, args)),
         "make-directory" => return Some(super::fileio::builtin_make_directory_eval(eval, args)),
+        "make-temp-file" => return Some(super::fileio::builtin_make_temp_file_eval(eval, args)),
         "find-file-noselect" => return Some(super::fileio::builtin_find_file_noselect(eval, args)),
         "directory-files" => return Some(super::fileio::builtin_directory_files_eval(eval, args)),
         "directory-files-and-attributes" => {
@@ -6469,6 +6470,7 @@ pub(crate) fn dispatch_builtin(
         "rename-file" => super::fileio::builtin_rename_file(args),
         "copy-file" => super::fileio::builtin_copy_file(args),
         "make-directory" => super::fileio::builtin_make_directory(args),
+        "make-temp-file" => super::fileio::builtin_make_temp_file(args),
         "directory-files" => super::fileio::builtin_directory_files(args),
         "file-attributes" => super::dired::builtin_file_attributes(args),
 
@@ -7001,6 +7003,7 @@ pub(crate) fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<Eval
         "rename-file" => super::fileio::builtin_rename_file(args),
         "copy-file" => super::fileio::builtin_copy_file(args),
         "make-directory" => super::fileio::builtin_make_directory(args),
+        "make-temp-file" => super::fileio::builtin_make_temp_file(args),
         "directory-files" => super::fileio::builtin_directory_files(args),
         "file-attributes" => super::dired::builtin_file_attributes(args),
         // Keymap (pure)

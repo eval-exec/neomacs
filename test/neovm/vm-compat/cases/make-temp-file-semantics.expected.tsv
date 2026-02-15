@@ -1,0 +1,8 @@
+1	(let ((p (make-temp-file "neovm-mtf-"))) (prog1 (list (stringp p) (file-exists-p p)) (delete-file p)))	OK (t t)
+2	(condition-case err (make-temp-file 1) (error err))	OK (wrong-type-argument sequencep 1)
+3	(condition-case err (make-temp-file "neovm-mtf-" nil 1) (error err))	OK (wrong-type-argument stringp 1)
+4	(let ((p (make-temp-file "neovm-mtf-" nil nil 1))) (prog1 (list (stringp p) (file-exists-p p)) (delete-file p)))	OK (t t)
+5	(let ((p (make-temp-file "neovm-mtf-dir-" t))) (list (stringp p) (file-directory-p p)))	OK (t t)
+6	(let ((p (make-temp-file "neovm-mtf-text-" nil ".txt" "abc"))) (prog1 (with-temp-buffer (insert-file-contents p) (buffer-string)) (delete-file p)))	OK "abc"
+7	(let ((temporary-file-directory "/tmp/")) (let ((p (make-temp-file "neovm-mtf-var-"))) (prog1 (string-prefix-p "/tmp/" p) (delete-file p))))	OK t
+8	(condition-case err (make-temp-file "neovm-mtf-" nil nil nil nil) (error err))	OK (wrong-number-of-arguments make-temp-file 5)

@@ -1,0 +1,39 @@
+; make-temp-file core semantics and error payloads.
+
+(let ((p (make-temp-file "neovm-mtf-")))
+  (prog1
+      (list (stringp p) (file-exists-p p))
+    (delete-file p)))
+
+(condition-case err
+    (make-temp-file 1)
+  (error err))
+
+(condition-case err
+    (make-temp-file "neovm-mtf-" nil 1)
+  (error err))
+
+(let ((p (make-temp-file "neovm-mtf-" nil nil 1)))
+  (prog1
+      (list (stringp p) (file-exists-p p))
+    (delete-file p)))
+
+(let ((p (make-temp-file "neovm-mtf-dir-" t)))
+  (list (stringp p) (file-directory-p p)))
+
+(let ((p (make-temp-file "neovm-mtf-text-" nil ".txt" "abc")))
+  (prog1
+      (with-temp-buffer
+        (insert-file-contents p)
+        (buffer-string))
+    (delete-file p)))
+
+(let ((temporary-file-directory "/tmp/"))
+  (let ((p (make-temp-file "neovm-mtf-var-")))
+    (prog1
+        (string-prefix-p "/tmp/" p)
+      (delete-file p))))
+
+(condition-case err
+    (make-temp-file "neovm-mtf-" nil nil nil nil)
+  (error err))

@@ -7,8 +7,10 @@ use std::collections::VecDeque;
 #[cfg(unix)]
 use std::ffi::{CStr, CString};
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
 
@@ -263,6 +265,8 @@ pub fn file_name_absolute_p(filename: &str) -> bool {
 pub fn directory_name_p(name: &str) -> bool {
     name.ends_with('/')
 }
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn env_name_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
@@ -686,6 +690,20 @@ fn expect_string_strict(value: &Value) -> Result<String, Flow> {
     }
 }
 
+fn expect_temp_prefix(value: &Value) -> Result<String, Flow> {
+    match value {
+        Value::Str(s) => Ok((**s).clone()),
+        Value::Nil | Value::Cons(_) | Value::Vector(_) => Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("stringp"), value.clone()],
+        )),
+        other => Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("sequencep"), other.clone()],
+        )),
+    }
+}
+
 fn validate_file_truename_counter(counter: &Value) -> Result<(), Flow> {
     if counter.is_nil() {
         return Ok(());
@@ -706,6 +724,79 @@ fn validate_file_truename_counter(counter: &Value) -> Result<(), Flow> {
         }
     }
     Ok(())
+}
+
+fn temporary_file_directory_for_eval(eval: &Evaluator) -> Option<String> {
+    for frame in eval.dynamic.iter().rev() {
+        if let Some(value) = frame.get("temporary-file-directory") {
+            if let Value::Str(s) = value {
+                return Some((**s).clone());
+            }
+        }
+    }
+    match eval.obarray.symbol_value("temporary-file-directory") {
+        Some(Value::Str(s)) => Some((**s).clone()),
+        _ => None,
+    }
+}
+
+fn make_temp_file_impl(
+    temp_dir: &str,
+    prefix: &str,
+    dir_flag: bool,
+    suffix: &str,
+    text: Option<&str>,
+) -> Result<String, Flow> {
+    let base = PathBuf::from(temp_dir);
+
+    for _ in 0..256 {
+        let nonce = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let candidate = base.join(format!("{prefix}{now:x}{nonce:x}{suffix}"));
+        let candidate_str = candidate.to_string_lossy().into_owned();
+
+        if dir_flag {
+            match fs::create_dir(&candidate) {
+                Ok(()) => {
+                    if let Some(contents) = text {
+                        let mut file = fs::OpenOptions::new()
+                            .write(true)
+                            .open(&candidate)
+                            .map_err(|err| signal_file_io_path(err, "Writing to", &candidate_str))?;
+                        file.write_all(contents.as_bytes())
+                            .map_err(|err| signal_file_io_path(err, "Writing to", &candidate_str))?;
+                    }
+                    return Ok(candidate_str);
+                }
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(signal_file_io_path(err, "Creating directory", &candidate_str)),
+            }
+        } else {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(mut file) => {
+                    if let Some(contents) = text {
+                        file.write_all(contents.as_bytes())
+                            .map_err(|err| signal_file_io_path(err, "Writing to", &candidate_str))?;
+                    }
+                    return Ok(candidate_str);
+                }
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(signal_file_io_path(err, "Creating file", &candidate_str)),
+            }
+        }
+    }
+
+    Err(signal(
+        "file-error",
+        vec![Value::string("Cannot create temporary file")],
+    ))
 }
 
 /// (expand-file-name NAME &optional DEFAULT-DIRECTORY) -> string
@@ -766,6 +857,62 @@ pub(crate) fn builtin_expand_file_name_eval(eval: &Evaluator, args: Vec<Value>) 
         &name,
         default_dir.as_deref(),
     )))
+}
+
+/// (make-temp-file PREFIX &optional DIR-FLAG SUFFIX TEXT) -> string
+pub(crate) fn builtin_make_temp_file(args: Vec<Value>) -> EvalResult {
+    expect_min_args("make-temp-file", &args, 1)?;
+    if args.len() > 4 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("make-temp-file"), Value::Int(args.len() as i64)],
+        ));
+    }
+
+    let prefix = expect_temp_prefix(&args[0])?;
+    let dir_flag = args.get(1).is_some_and(|value| value.is_truthy());
+    let suffix = match args.get(2) {
+        None | Some(Value::Nil) => String::new(),
+        Some(value) => expect_string_strict(value)?,
+    };
+    let text = match args.get(3) {
+        None | Some(Value::Nil) => None,
+        Some(Value::Str(s)) => Some((**s).clone()),
+        Some(_) => None,
+    };
+    let temp_dir = std::env::temp_dir().to_string_lossy().into_owned();
+
+    let path = make_temp_file_impl(&temp_dir, &prefix, dir_flag, &suffix, text.as_deref())?;
+    Ok(Value::string(path))
+}
+
+/// Evaluator-aware variant of `make-temp-file` that honors dynamic
+/// `temporary-file-directory`.
+pub(crate) fn builtin_make_temp_file_eval(eval: &Evaluator, args: Vec<Value>) -> EvalResult {
+    expect_min_args("make-temp-file", &args, 1)?;
+    if args.len() > 4 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("make-temp-file"), Value::Int(args.len() as i64)],
+        ));
+    }
+
+    let prefix = expect_temp_prefix(&args[0])?;
+    let dir_flag = args.get(1).is_some_and(|value| value.is_truthy());
+    let suffix = match args.get(2) {
+        None | Some(Value::Nil) => String::new(),
+        Some(value) => expect_string_strict(value)?,
+    };
+    let text = match args.get(3) {
+        None | Some(Value::Nil) => None,
+        Some(Value::Str(s)) => Some((**s).clone()),
+        Some(_) => None,
+    };
+    let temp_dir = temporary_file_directory_for_eval(eval)
+        .unwrap_or_else(|| std::env::temp_dir().to_string_lossy().into_owned());
+
+    let path = make_temp_file_impl(&temp_dir, &prefix, dir_flag, &suffix, text.as_deref())?;
+    Ok(Value::string(path))
 }
 
 /// (file-truename FILENAME &optional COUNTER PREV-DIRS) -> string
@@ -1960,6 +2107,69 @@ mod tests {
 
         let value = builtin_file_truename_eval(&eval, vec![Value::string("alpha.txt")]).unwrap();
         assert_eq!(value.as_str(), Some("/tmp/neovm-file-truename/alpha.txt"));
+    }
+
+    #[test]
+    fn test_builtin_make_temp_file_core_paths() {
+        let file = builtin_make_temp_file(vec![Value::string("neovm-mtf-")]).unwrap();
+        let file_path = file.as_str().unwrap().to_string();
+        assert!(file_exists_p(&file_path));
+        delete_file(&file_path).unwrap();
+
+        let dir = builtin_make_temp_file(vec![Value::string("neovm-mtf-dir-"), Value::True]).unwrap();
+        let dir_path = dir.as_str().unwrap().to_string();
+        assert!(file_directory_p(&dir_path));
+        fs::remove_dir(&dir_path).unwrap();
+
+        let with_text = builtin_make_temp_file(vec![
+            Value::string("neovm-mtf-text-"),
+            Value::Nil,
+            Value::string(".txt"),
+            Value::string("abc"),
+        ])
+        .unwrap();
+        let text_path = with_text.as_str().unwrap().to_string();
+        assert_eq!(read_file_contents(&text_path).unwrap(), "abc");
+        delete_file(&text_path).unwrap();
+    }
+
+    #[test]
+    fn test_builtin_make_temp_file_validation() {
+        let err = builtin_make_temp_file(vec![Value::Int(1)]).unwrap_err();
+        match err {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol("sequencep"), Value::Int(1)]);
+            }
+            other => panic!("expected signal, got {:?}", other),
+        }
+
+        let err = builtin_make_temp_file(vec![Value::string("neo"), Value::Nil, Value::Int(1)]).unwrap_err();
+        match err {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::Int(1)]);
+            }
+            other => panic!("expected signal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_builtin_make_temp_file_eval_honors_temp_directory() {
+        let mut eval = Evaluator::new();
+        let dir = std::env::temp_dir().join("neovm-mtf-eval");
+        let _ = fs::create_dir_all(&dir);
+        eval.obarray.set_symbol_value(
+            "temporary-file-directory",
+            Value::string(format!("{}/", dir.to_string_lossy())),
+        );
+
+        let value = builtin_make_temp_file_eval(&eval, vec![Value::string("eval-neo-")]).unwrap();
+        let path = value.as_str().unwrap().to_string();
+        assert!(path.starts_with(&dir.to_string_lossy().to_string()));
+        assert!(file_exists_p(&path));
+        delete_file(&path).unwrap();
+        let _ = fs::remove_dir(&dir);
     }
 
     #[test]

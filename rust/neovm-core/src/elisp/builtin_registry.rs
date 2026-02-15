@@ -464,6 +464,7 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "make-sparse-keymap",
     "make-symbol",
     "make-syntax-table",
+    "make-temp-file",
     "make-thread",
     "make-variable-buffer-local",
     "makunbound",

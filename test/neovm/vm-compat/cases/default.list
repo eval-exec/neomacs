@@ -65,6 +65,7 @@ cases/bindings
 cases/specpdl-dynamic-unwind-semantics
 cases/get-file-buffer-semantics
 cases/file-truename-semantics
+cases/make-temp-file-semantics
 cases/buffer-locals
 cases/buffer-local-value
 cases/buffer-local-variables-semantics

@@ -4,6 +4,28 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `make-temp-file` compatibility slice:
+  - added pure + evaluator-aware implementations in `rust/neovm-core/src/elisp/fileio.rs`:
+    - `builtin_make_temp_file`
+    - `builtin_make_temp_file_eval`
+  - semantics aligned with oracle subset:
+    - arity `1..4`
+    - `PREFIX` type payloads distinguish `sequencep` vs `stringp` mismatch classes
+    - `SUFFIX` validates `stringp` when non-nil
+    - non-string `TEXT` arguments are ignored (oracle behavior)
+    - supports `DIR-FLAG` directory creation
+    - evaluator path honors dynamic `temporary-file-directory`
+  - registered and dispatched `make-temp-file` in:
+    - `rust/neovm-core/src/elisp/builtins.rs`
+    - `rust/neovm-core/src/elisp/builtin_registry.rs`
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/make-temp-file-semantics.forms`
+    - `test/neovm/vm-compat/cases/make-temp-file-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml make_temp_file -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/make-temp-file-semantics.forms EXPECTED=cases/make-temp-file-semantics.expected.tsv` (pass, 8/8)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Implemented `file-truename` compatibility slice:
   - added path-level `file_truename` resolution in `rust/neovm-core/src/elisp/fileio.rs`:
     - expands relative paths against default directory
