@@ -1,0 +1,33 @@
+; Newline insertion commands should honor dynamic/local/global `buffer-read-only`.
+(with-temp-buffer
+  (setq buffer-read-only t)
+  (condition-case err (newline) (error (car err))))
+(with-temp-buffer
+  (let ((buffer-read-only t))
+    (condition-case err (newline) (error (car err)))))
+(let ((orig (default-value 'buffer-read-only)))
+  (unwind-protect
+      (progn
+        (setq-default buffer-read-only t)
+        (with-temp-buffer
+          (condition-case err (newline) (error (car err)))))
+    (setq-default buffer-read-only orig)))
+(with-temp-buffer
+  (insert "ab")
+  (goto-char 2)
+  (setq buffer-read-only t)
+  (condition-case err (open-line 1) (error (car err))))
+(with-temp-buffer
+  (insert "ab")
+  (goto-char 2)
+  (let ((buffer-read-only t))
+    (condition-case err (open-line 1) (error (car err)))))
+(with-temp-buffer
+  (insert "ab")
+  (goto-char 2)
+  (open-line 1)
+  (list (point) (point-max)))
+(with-temp-buffer
+  (insert "x")
+  (setq buffer-read-only t)
+  (condition-case err (newline-and-indent) (error (car err))))
