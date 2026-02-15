@@ -2504,6 +2504,17 @@ Last updated: 2026-02-15
     - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/transpose-lines-command-context-semantics` (pass, 8/8)
     - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/transpose-lines-prefix-arg-semantics` (pass, 3/3)
     - `make -C test/neovm/vm-compat check-neovm-list LIST=cases/default.list` (pass)
+- Added core `cxr` accessors and locked behavior with oracle corpus:
+  - implemented pure builtins: `caar`, `cadr`, `cdar`, `cddr` with `car`/`cdr`-consistent arity and `wrong-type-argument` behavior
+  - wired evaluator dispatch and builtin registry entries for parity in `fboundp`/introspection paths
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/cxr-semantics.forms`
+    - `test/neovm/vm-compat/cases/cxr-semantics.expected.tsv`
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/cxr-semantics.forms EXPECTED=cases/cxr-semantics.expected.tsv` (pass, 11/11)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/fboundp-core` (pass, 4/4)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/member-assoc-semantics` (pass, 16/16)
 
 ## Doing
 
