@@ -1,0 +1,14 @@
+1	(setq kill-ring (list "a" "b" "c"))	OK ("a" "b" "c")
+2	(setq kill-ring-yank-pointer '("b" . "c"))	OK ("b" . "c")
+3	(condition-case err (current-kill 0 t) (error (car err)))	OK wrong-type-argument
+4	(setq kill-ring (list "a" "b" "c"))	OK ("a" "b" "c")
+5	(setq kill-ring-yank-pointer '("b" . "c"))	OK ("b" . "c")
+6	(condition-case err (current-kill 0 nil) (error (car err)))	OK wrong-type-argument
+7	(condition-case err (car kill-ring-yank-pointer) (error (car err)))	OK "b"
+8	(setq kill-ring (list "a" "b" "c"))	OK ("a" "b" "c")
+9	(setq kill-ring-yank-pointer '(1 2))	OK (1 2)
+10	(condition-case err (current-kill 0 t) (error (car err)))	OK "b"
+11	(setq kill-ring (list "a" "b" "c"))	OK ("a" "b" "c")
+12	(setq kill-ring-yank-pointer '(1 2))	OK (1 2)
+13	(condition-case err (current-kill 0 nil) (error (car err)))	OK "b"
+14	(condition-case err (car kill-ring-yank-pointer) (error (car err)))	OK "b"

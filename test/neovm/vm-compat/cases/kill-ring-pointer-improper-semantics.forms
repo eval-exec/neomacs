@@ -1,0 +1,30 @@
+; kill-ring-yank-pointer behavior for improper/non-string list pointers.
+(setq kill-ring (list "a" "b" "c"))
+(setq kill-ring-yank-pointer '("b" . "c"))
+(condition-case err
+    (current-kill 0 t)
+  (error (car err)))
+
+(setq kill-ring (list "a" "b" "c"))
+(setq kill-ring-yank-pointer '("b" . "c"))
+(condition-case err
+    (current-kill 0 nil)
+  (error (car err)))
+(condition-case err
+    (car kill-ring-yank-pointer)
+  (error (car err)))
+
+(setq kill-ring (list "a" "b" "c"))
+(setq kill-ring-yank-pointer '(1 2))
+(condition-case err
+    (current-kill 0 t)
+  (error (car err)))
+
+(setq kill-ring (list "a" "b" "c"))
+(setq kill-ring-yank-pointer '(1 2))
+(condition-case err
+    (current-kill 0 nil)
+  (error (car err)))
+(condition-case err
+    (car kill-ring-yank-pointer)
+  (error (car err)))
