@@ -8,6 +8,9 @@
     (redraw-frame)
   (error (car err)))
 (condition-case err
+    (redraw-frame 1)
+  (error (car err)))
+(condition-case err
     (redraw-frame nil nil)
   (error (car err)))
 
@@ -24,6 +27,9 @@
     (open-termscript "/tmp/neovm-vm-compat-termscript.log")
   (error (car err)))
 (condition-case err
+    (open-termscript nil)
+  (error (car (cdr err))))
+(condition-case err
     (open-termscript)
   (error (car err)))
 
@@ -32,10 +38,22 @@
     (send-string-to-terminal "")
   (error (car err)))
 (condition-case err
+    (send-string-to-terminal "" 1)
+  (error (car err)))
+(condition-case err
+    (send-string-to-terminal "" (car (terminal-list)))
+  (error (car err)))
+(condition-case err
     (send-string-to-terminal)
   (error (car err)))
 
 (fboundp 'internal-show-cursor)
+(condition-case err
+    (internal-show-cursor nil t)
+  (error (car err)))
+(condition-case err
+    (internal-show-cursor 1 nil)
+  (error (car err)))
 (condition-case err
     (internal-show-cursor nil nil)
   (error (car err)))
@@ -46,6 +64,9 @@
 (fboundp 'internal-show-cursor-p)
 (condition-case err
     (internal-show-cursor-p)
+  (error (car err)))
+(condition-case err
+    (internal-show-cursor-p 1)
   (error (car err)))
 (condition-case err
     (internal-show-cursor-p nil nil)
