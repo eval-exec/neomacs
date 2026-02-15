@@ -4,6 +4,34 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented display query designator compatibility slice:
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/display-query-designator-semantics.forms`
+    - `test/neovm/vm-compat/cases/display-query-designator-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - aligned optional display designator semantics for:
+    - `display-graphic-p`
+    - `display-color-p`
+    - `display-pixel-width`
+    - `display-pixel-height`
+    - `display-mm-width`
+    - `display-mm-height`
+    - `display-screens`
+    - `display-color-cells`
+    - `display-planes`
+    - `display-visual-class`
+    - `display-backing-store`
+  - behavior now matches oracle in batch mode:
+    - accepts `nil` and live terminal handle designators
+    - signals `error` on invalid designators instead of silently returning defaults
+  - verified:
+    - `cargo test display::tests -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/display-query-designator-semantics.forms EXPECTED=cases/display-query-designator-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/display-batch-semantics.forms EXPECTED=cases/display-batch-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/display-stub-semantics.forms EXPECTED=cases/display-stub-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/x-display-batch-semantics.forms EXPECTED=cases/x-display-batch-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Implemented batch reader `end-of-file` payload compatibility slice:
   - added and enabled oracle corpus:
     - `test/neovm/vm-compat/cases/read-batch-error-payloads.forms`
