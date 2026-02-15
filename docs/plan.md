@@ -18,6 +18,17 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Removed dead legacy buffer pure-module slice after prior dead-surface trims:
+  - updated:
+    - deleted: `rust/neovm-core/src/elisp/buffer/pure.rs`
+      - removed now-unreferenced `make-indirect-buffer` / `buffer-base-buffer` pure stubs
+    - `rust/neovm-core/src/elisp/buffer.rs`
+      - removed `pure` module wiring/re-export and stale module comment entries
+    - `rust/neovm-core/src/elisp/buffer/tests.rs`
+      - removed stale local tests bound only to deleted pure stubs
+  - verified:
+    - `cargo test current_buffer_returns_scratch -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/get-file-buffer-semantics` (pass, 4/4)
 - Removed dead duplicate pure overlay stub surface from legacy buffer module:
   - updated:
     - `rust/neovm-core/src/elisp/buffer/pure.rs`
