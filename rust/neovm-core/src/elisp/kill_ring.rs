@@ -2279,11 +2279,96 @@ pub(crate) fn builtin_transpose_lines(
     expect_args("transpose-lines", &args, 1)?;
     let n = expect_int(&args[0])?;
 
+    let two_line_error =
+        || signal("error", vec![Value::string("Don\u{2019}t have two things to transpose")]);
+
     if n < 0 {
-        return Err(signal(
-            "error",
-            vec![Value::string("Don’t have two things to transpose")],
-        ));
+        let steps = (-n) as usize;
+        for _ in 0..steps {
+            let (left_start, right_start, right_end) = {
+                let buf = eval
+                    .buffers
+                    .current_buffer()
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+                let pmin = buf.point_min();
+                let pmax = buf.point_max();
+                let pt = buf.point();
+
+                // Emacs transposes only newline-terminated lines on the negative
+                // path; a trailing unterminated line at EOB is not a swap unit.
+                let mut complete_lines: Vec<(usize, usize)> = Vec::new();
+                let mut cursor = pmin;
+                while cursor < pmax {
+                    let tail = buf.buffer_substring(cursor, pmax);
+                    let end = if let Some(nl_off) = tail.find('\n') {
+                        cursor + nl_off + 1
+                    } else {
+                        break;
+                    };
+                    complete_lines.push((cursor, end));
+                    cursor = end;
+                }
+
+                let mut right_idx: Option<usize> = None;
+                for (idx, (start, _end)) in complete_lines.iter().copied().enumerate() {
+                    if start >= pt {
+                        break;
+                    }
+                    right_idx = Some(idx);
+                }
+
+                let right_idx = right_idx.ok_or_else(&two_line_error)?;
+                if right_idx == 0 {
+                    return Err(two_line_error());
+                }
+                let left_idx = right_idx - 1;
+                let (left_start, _left_end) = complete_lines[left_idx];
+                let (right_start, right_end) = complete_lines[right_idx];
+                (left_start, right_start, right_end)
+            };
+
+            let buf = eval
+                .buffers
+                .current_buffer()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            if region_case_read_only(eval, buf) {
+                return Err(signal(
+                    "buffer-read-only",
+                    vec![Value::string(buf.name.clone())],
+                ));
+            }
+
+            let (left_line, between, right_line) = {
+                let buf_r = eval
+                    .buffers
+                    .current_buffer()
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+                (
+                    buf_r.buffer_substring(left_start, right_start),
+                    String::new(),
+                    buf_r.buffer_substring(right_start, right_end),
+                )
+            };
+
+            let buf_m = eval
+                .buffers
+                .current_buffer_mut()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            buf_m.delete_region(left_start, right_end);
+            buf_m.goto_char(left_start);
+            buf_m.insert(&right_line);
+            buf_m.insert(&between);
+            buf_m.insert(&left_line);
+
+            // Keep point on the moved-left line for repeated negative transposes.
+            let right_point_offset = if right_line.ends_with('\n') && !right_line.is_empty() {
+                right_line.len() - 1
+            } else {
+                right_line.len()
+            };
+            buf_m.goto_char(left_start + right_point_offset);
+        }
+        return Ok(Value::Nil);
     }
     if n == 0 {
         return Ok(Value::Nil);
