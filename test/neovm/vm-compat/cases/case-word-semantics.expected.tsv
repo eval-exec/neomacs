@@ -1,0 +1,10 @@
+1	(with-temp-buffer (insert "hELLO wORLD") (goto-char (point-min)) (upcase-word 1) (list (buffer-string) (point)))	OK ("HELLO wORLD" 6)
+2	(with-temp-buffer (insert "HELLO wORLD") (goto-char (point-min)) (downcase-word 1) (list (buffer-string) (point)))	OK ("hello wORLD" 6)
+3	(with-temp-buffer (insert "hELLO wORLD") (goto-char (point-min)) (capitalize-word 1) (list (buffer-string) (point)))	OK ("Hello wORLD" 6)
+4	(with-temp-buffer (insert "Hello World") (goto-char (point-max)) (upcase-word -1) (list (buffer-string) (point)))	OK ("Hello WORLD" 12)
+5	(with-temp-buffer (insert "Hello World") (goto-char (point-max)) (downcase-word -1) (list (buffer-string) (point)))	OK ("Hello world" 12)
+6	(with-temp-buffer (insert "hELLO wORLD") (goto-char (point-max)) (capitalize-word -2) (list (buffer-string) (point)))	OK ("Hello World" 12)
+7	(with-temp-buffer (insert "foo") (goto-char (point-min)) (upcase-word 0) (list (buffer-string) (point)))	OK ("foo" 1)
+8	(with-temp-buffer (insert "foo") (goto-char (point-min)) (downcase-word 0) (list (buffer-string) (point)))	OK ("foo" 1)
+9	(with-temp-buffer (insert "foo") (goto-char (point-min)) (capitalize-word 0) (list (buffer-string) (point)))	OK ("foo" 1)
+10	(with-temp-buffer (insert "foo") (setq buffer-read-only t) (condition-case err (upcase-word 1) (error (car err))))	OK nil

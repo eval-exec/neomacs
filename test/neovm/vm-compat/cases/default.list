@@ -26,6 +26,7 @@ cases/interactive-p-semantics
 cases/where-is-internal-semantics
 cases/command-dispatch-default-arg-semantics
 cases/case-region-optional-arg-semantics
+cases/case-word-semantics
 cases/transpose-words-semantics
 cases/transpose-sexps-semantics
 cases/transpose-paragraphs-semantics

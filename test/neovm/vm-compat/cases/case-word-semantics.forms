@@ -1,0 +1,61 @@
+; Word case command semantics and point movement.
+(with-temp-buffer
+  (insert "hELLO wORLD")
+  (goto-char (point-min))
+  (upcase-word 1)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "HELLO wORLD")
+  (goto-char (point-min))
+  (downcase-word 1)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "hELLO wORLD")
+  (goto-char (point-min))
+  (capitalize-word 1)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "Hello World")
+  (goto-char (point-max))
+  (upcase-word -1)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "Hello World")
+  (goto-char (point-max))
+  (downcase-word -1)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "hELLO wORLD")
+  (goto-char (point-max))
+  (capitalize-word -2)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "foo")
+  (goto-char (point-min))
+  (upcase-word 0)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "foo")
+  (goto-char (point-min))
+  (downcase-word 0)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "foo")
+  (goto-char (point-min))
+  (capitalize-word 0)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "foo")
+  (setq buffer-read-only t)
+  (condition-case err
+      (upcase-word 1)
+    (error (car err))))
