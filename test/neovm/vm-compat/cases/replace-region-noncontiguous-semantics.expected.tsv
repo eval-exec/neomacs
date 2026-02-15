@@ -1,0 +1,8 @@
+1	(with-temp-buffer (insert "foo foo") (goto-char (point-min)) (replace-string "foo" "bar" nil nil nil nil t) (buffer-string))	ERR (error ("The mark is not set now, so there is no region"))
+2	(with-temp-buffer (insert "foo foo") (goto-char (point-min)) (replace-regexp "foo" "bar" nil nil nil nil t) (buffer-string))	ERR (error ("The mark is not set now, so there is no region"))
+3	(with-temp-buffer (insert "foo foo") (goto-char (point-min)) (let ((unread-command-events (list 33))) (query-replace "foo" "bar" nil nil nil nil t)) (buffer-string))	ERR (error ("The mark is not set now, so there is no region"))
+4	(with-temp-buffer (insert "foo foo") (goto-char (point-min)) (let ((unread-command-events (list 33))) (query-replace-regexp "foo" "bar" nil nil nil nil t)) (buffer-string))	ERR (error ("The mark is not set now, so there is no region"))
+5	(with-temp-buffer (insert "foo foo") (goto-char 5) (set-mark 1) (replace-string "foo" "bar" nil nil nil nil t) (list (buffer-string) (point)))	OK ("foo foo" 8)
+6	(with-temp-buffer (insert "foo foo") (goto-char 5) (set-mark 1) (let ((unread-command-events (list 33))) (query-replace "foo" "bar" nil nil nil nil t)) (list (buffer-string) (point)))	OK ("foo foo" 8)
+7	(with-temp-buffer (insert "foo foo") (goto-char 5) (set-mark 1) (replace-string "foo" "bar" nil nil nil t t) (list (buffer-string) (point)))	OK ("bar foo" 1)
+8	(with-temp-buffer (insert "foo foo") (goto-char 5) (set-mark 1) (let ((unread-command-events (list 33))) (query-replace "foo" "bar" nil nil nil t t)) (list (buffer-string) (point)))	OK ("bar foo" 1)

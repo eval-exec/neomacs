@@ -249,6 +249,7 @@ cases/replace-string-semantics
 cases/replace-delimited-semantics
 cases/replace-backward-semantics
 cases/replace-backward-edge-semantics
+cases/replace-region-noncontiguous-semantics
 cases/query-replace-batch-semantics
 cases/looking-at-p-semantics
 cases/search-count

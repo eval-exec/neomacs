@@ -1,0 +1,55 @@
+(with-temp-buffer
+  (insert "foo foo")
+  (goto-char (point-min))
+  (replace-string "foo" "bar" nil nil nil nil t)
+  (buffer-string))
+
+(with-temp-buffer
+  (insert "foo foo")
+  (goto-char (point-min))
+  (replace-regexp "foo" "bar" nil nil nil nil t)
+  (buffer-string))
+
+(with-temp-buffer
+  (insert "foo foo")
+  (goto-char (point-min))
+  (let ((unread-command-events (list ?!)))
+    (query-replace "foo" "bar" nil nil nil nil t))
+  (buffer-string))
+
+(with-temp-buffer
+  (insert "foo foo")
+  (goto-char (point-min))
+  (let ((unread-command-events (list ?!)))
+    (query-replace-regexp "foo" "bar" nil nil nil nil t))
+  (buffer-string))
+
+(with-temp-buffer
+  (insert "foo foo")
+  (goto-char 5)
+  (set-mark 1)
+  (replace-string "foo" "bar" nil nil nil nil t)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "foo foo")
+  (goto-char 5)
+  (set-mark 1)
+  (let ((unread-command-events (list ?!)))
+    (query-replace "foo" "bar" nil nil nil nil t))
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "foo foo")
+  (goto-char 5)
+  (set-mark 1)
+  (replace-string "foo" "bar" nil nil nil t t)
+  (list (buffer-string) (point)))
+
+(with-temp-buffer
+  (insert "foo foo")
+  (goto-char 5)
+  (set-mark 1)
+  (let ((unread-command-events (list ?!)))
+    (query-replace "foo" "bar" nil nil nil t t))
+  (list (buffer-string) (point)))

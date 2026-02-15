@@ -83,7 +83,19 @@ fn replacement_region_bounds(
     start_arg: Option<&Value>,
     end_arg: Option<&Value>,
     backward: bool,
+    region_noncontiguous: bool,
 ) -> Result<(usize, usize), Flow> {
+    if region_noncontiguous {
+        let mark = buf.mark().ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string("The mark is not set now, so there is no region")],
+            )
+        })?;
+        let pt = buf.point();
+        return Ok((pt.min(mark), pt.max(mark)));
+    }
+
     let start = match start_arg {
         Some(v) if !v.is_nil() => lisp_pos_to_byte(buf, expect_integer_or_marker(v)?),
         _ if backward => buf.point_min(),
@@ -1274,12 +1286,40 @@ pub(crate) fn builtin_replace_string_eval(
     let to = expect_string(&args[1])?;
     let delimited = args.get(2).is_some_and(|v| !v.is_nil());
     let backward = args.get(5).is_some_and(|v| !v.is_nil());
+    let region_noncontiguous = args.get(6).is_some_and(|v| !v.is_nil());
+    if region_noncontiguous && !backward {
+        let point_max = {
+            let buf = eval
+                .buffers
+                .current_buffer()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            if buf.mark().is_none() {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("The mark is not set now, so there is no region")],
+                ));
+            }
+            buf.point_max()
+        };
+        let buf = eval
+            .buffers
+            .current_buffer_mut()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        buf.goto_char(point_max);
+        return Ok(Value::Nil);
+    }
     let (start, end, source, read_only, buffer_name) = {
         let buf = eval
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let (start, end) = replacement_region_bounds(buf, args.get(3), args.get(4), backward)?;
+        let (start, end) = replacement_region_bounds(
+            buf,
+            args.get(3),
+            args.get(4),
+            backward,
+            region_noncontiguous,
+        )?;
         (
             start,
             end,
@@ -1396,13 +1436,41 @@ pub(crate) fn builtin_replace_regexp_eval(
     let to = expect_string(&args[1])?;
     let delimited = args.get(2).is_some_and(|v| !v.is_nil());
     let backward = args.get(5).is_some_and(|v| !v.is_nil());
+    let region_noncontiguous = args.get(6).is_some_and(|v| !v.is_nil());
+    if region_noncontiguous && !backward {
+        let point_max = {
+            let buf = eval
+                .buffers
+                .current_buffer()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            if buf.mark().is_none() {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("The mark is not set now, so there is no region")],
+                ));
+            }
+            buf.point_max()
+        };
+        let buf = eval
+            .buffers
+            .current_buffer_mut()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        buf.goto_char(point_max);
+        return Ok(Value::Nil);
+    }
 
     let (start, end, source, read_only, buffer_name) = {
         let buf = eval
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let (start, end) = replacement_region_bounds(buf, args.get(3), args.get(4), backward)?;
+        let (start, end) = replacement_region_bounds(
+            buf,
+            args.get(3),
+            args.get(4),
+            backward,
+            region_noncontiguous,
+        )?;
         (
             start,
             end,
