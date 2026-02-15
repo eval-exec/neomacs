@@ -517,14 +517,14 @@ for sequences like ->, =>, !=, == etc."
 
 (declare-function neomacs-set-font-backend "neomacsterm.c" (backend))
 
-(defcustom neomacs-font-backend 'emacs
+(defcustom neomacs-font-backend 'cosmic
   "Font metrics backend for the layout engine.
-`emacs' (default) uses C/fontconfig font metrics.
-`cosmic' uses cosmic-text font metrics, matching the render thread's
-font resolution.  This eliminates width mismatches between layout and
-rendering when C fontconfig and cosmic-text resolve different font files."
-  :type '(choice (const :tag "Emacs C (fontconfig)" emacs)
-                 (const :tag "Cosmic-text" cosmic))
+`cosmic' (default) uses cosmic-text font metrics, matching the render
+thread's font resolution.  This eliminates width mismatches between
+layout and rendering when C fontconfig and cosmic-text resolve different
+font files.  `emacs' uses the legacy C/fontconfig font metrics."
+  :type '(choice (const :tag "Cosmic-text (Recommended)" cosmic)
+                 (const :tag "Emacs C (fontconfig)" emacs))
   :group 'frames
   :set (lambda (sym val)
          (set-default sym val)

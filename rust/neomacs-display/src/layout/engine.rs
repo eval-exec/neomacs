@@ -185,7 +185,7 @@ impl LayoutEngine {
             ligatures_enabled: false,
             default_font_family: String::new(),
             font_metrics: None,
-            use_cosmic_metrics: false,
+            use_cosmic_metrics: true,
         }
     }
 
