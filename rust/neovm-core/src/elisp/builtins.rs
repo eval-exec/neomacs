@@ -87,6 +87,27 @@ fn expect_integer_or_marker(value: &Value) -> Result<i64, Flow> {
     }
 }
 
+/// Extract a non-negative integer, signaling `wholenump` on failure.
+fn expect_wholenump(value: &Value) -> Result<i64, Flow> {
+    let n = match value {
+        Value::Int(n) => *n,
+        Value::Char(c) => *c as i64,
+        _ => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("wholenump"), value.clone()],
+            ))
+        }
+    };
+    if n < 0 {
+        return Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("wholenump"), value.clone()],
+        ));
+    }
+    Ok(n)
+}
+
 enum NumberOrMarker {
     Int(i64),
     Float(f64),
@@ -4592,6 +4613,105 @@ pub(crate) fn builtin_char_before(
     }
 }
 
+fn is_unibyte_storage_string(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|ch| (0xE300..=0xE3FF).contains(&(ch as u32)))
+}
+
+fn get_byte_from_multibyte_char_code(code: u32) -> EvalResult {
+    if code <= 0x7F {
+        return Ok(Value::Int(code as i64));
+    }
+    if (0x3FFF80..=0x3FFFFF).contains(&code) {
+        return Ok(Value::Int((code - 0x3FFF00) as i64));
+    }
+    Err(signal(
+        "error",
+        vec![Value::string(format!(
+            "Not an ASCII nor an 8-bit character: {code}"
+        ))],
+    ))
+}
+
+/// `(get-byte &optional POSITION STRING)` -- return a byte value at point or in STRING.
+pub(crate) fn builtin_get_byte(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
+    expect_max_args("get-byte", &args, 2)?;
+
+    // STRING path: POSITION is a zero-based character index.
+    if args.get(1).is_some_and(|v| !v.is_nil()) {
+        let string_value = args[1].clone();
+        let s = expect_string(&args[1])?;
+        let pos = if args.is_empty() || args[0].is_nil() {
+            0usize
+        } else {
+            expect_wholenump(&args[0])? as usize
+        };
+
+        let char_len = storage_char_len(&s);
+        if pos >= char_len && !s.is_empty() {
+            return Err(signal(
+                "args-out-of-range",
+                vec![string_value, Value::Int(pos as i64)],
+            ));
+        }
+
+        // Emacs returns 0 for the terminating NUL when indexing an empty string.
+        if char_len == 0 {
+            return Ok(Value::Int(0));
+        }
+
+        let code = decode_storage_char_codes(&s)[pos];
+        if is_unibyte_storage_string(&s) {
+            return Ok(Value::Int((code & 0xFF) as i64));
+        }
+        return get_byte_from_multibyte_char_code(code);
+    }
+
+    // Buffer path: POSITION is a 1-based character position.
+    let buf = eval
+        .buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    let byte_pos = if args.is_empty() || args[0].is_nil() {
+        buf.point()
+    } else {
+        let pos = expect_integer_or_marker(&args[0])?;
+        let point_min = buf.text.byte_to_char(buf.point_min()) as i64 + 1;
+        let point_max = buf.text.byte_to_char(buf.point_max()) as i64 + 1;
+        if pos < point_min || pos >= point_max {
+            return Err(signal(
+                "args-out-of-range",
+                vec![args[0].clone(), Value::Int(point_min), Value::Int(point_max)],
+            ));
+        }
+        buf.text.char_to_byte((pos - 1) as usize)
+    };
+
+    if byte_pos >= buf.text.len() {
+        return Ok(Value::Int(0));
+    }
+
+    if !buf.multibyte {
+        return Ok(Value::Int(buf.text.byte_at(byte_pos) as i64));
+    }
+
+    let code = match buf.char_after(byte_pos) {
+        Some(ch) => ch as u32,
+        None => return Ok(Value::Int(0)),
+    };
+
+    if (0xE080..=0xE0FF).contains(&code) {
+        return Ok(Value::Int((code - 0xE000) as i64));
+    }
+    if (0xE300..=0xE3FF).contains(&code) {
+        return Ok(Value::Int((code - 0xE300) as i64));
+    }
+
+    get_byte_from_multibyte_char_code(code)
+}
+
 /// (buffer-local-value VARIABLE BUFFER) → value
 pub(crate) fn builtin_buffer_local_value(
     eval: &mut super::eval::Evaluator,
@@ -5370,6 +5490,7 @@ pub(crate) fn dispatch_builtin(
         "generate-new-buffer" => return Some(builtin_generate_new_buffer(eval, args)),
         "char-after" => return Some(builtin_char_after(eval, args)),
         "char-before" => return Some(builtin_char_before(eval, args)),
+        "get-byte" => return Some(builtin_get_byte(eval, args)),
         "buffer-local-value" => return Some(builtin_buffer_local_value(eval, args)),
         // Search / regex operations
         "search-forward" => return Some(builtin_search_forward(eval, args)),
@@ -6458,7 +6579,6 @@ pub(crate) fn dispatch_builtin(
         "capitalize" => super::casefiddle::builtin_capitalize(args),
         "upcase-initials" => super::casefiddle::builtin_upcase_initials(args),
         "char-resolve-modifiers" => super::casefiddle::builtin_char_resolve_modifiers(args),
-        "get-byte" => super::casefiddle::builtin_get_byte(args),
 
         // Font/face (pure)
         "fontp" => super::font::builtin_fontp(args),
@@ -8828,5 +8948,113 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_byte_string_semantics_match_oracle_edges() {
+        let mut eval = crate::elisp::eval::Evaluator::new();
+
+        assert_eq!(
+            builtin_get_byte(&mut eval, vec![Value::Int(0), Value::string("abc")]).unwrap(),
+            Value::Int(97)
+        );
+        assert_eq!(
+            builtin_get_byte(&mut eval, vec![Value::Int(1), Value::string("abc")]).unwrap(),
+            Value::Int(98)
+        );
+        assert_eq!(
+            builtin_get_byte(&mut eval, vec![Value::Nil, Value::string("abc")]).unwrap(),
+            Value::Int(97)
+        );
+
+        let out_of_range =
+            builtin_get_byte(&mut eval, vec![Value::Int(3), Value::string("abc")]).unwrap_err();
+        match out_of_range {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "args-out-of-range");
+                assert_eq!(sig.data, vec![Value::string("abc"), Value::Int(3)]);
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+
+        let negative =
+            builtin_get_byte(&mut eval, vec![Value::Int(-1), Value::string("abc")]).unwrap_err();
+        match negative {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol("wholenump"), Value::Int(-1)]);
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+
+        let non_ascii = builtin_get_byte(&mut eval, vec![Value::Int(0), Value::string("é")])
+            .expect_err("multibyte non-byte8 should signal");
+        match non_ascii {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "error");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::string("Not an ASCII nor an 8-bit character: 233")]
+                );
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_byte_buffer_semantics_match_oracle_edges() {
+        let mut eval = crate::elisp::eval::Evaluator::new();
+        builtin_erase_buffer(&mut eval, vec![]).unwrap();
+        builtin_insert(&mut eval, vec![Value::string("abc")]).unwrap();
+
+        assert_eq!(builtin_get_byte(&mut eval, vec![]).unwrap(), Value::Int(0));
+        assert_eq!(
+            builtin_get_byte(&mut eval, vec![Value::Int(1)]).unwrap(),
+            Value::Int(97)
+        );
+        assert_eq!(
+            builtin_get_byte(&mut eval, vec![Value::Int(2)]).unwrap(),
+            Value::Int(98)
+        );
+        assert_eq!(
+            builtin_get_byte(&mut eval, vec![Value::Int(3)]).unwrap(),
+            Value::Int(99)
+        );
+
+        builtin_goto_char(&mut eval, vec![Value::Int(2)]).unwrap();
+        assert_eq!(builtin_get_byte(&mut eval, vec![Value::Nil]).unwrap(), Value::Int(98));
+
+        let zero = builtin_get_byte(&mut eval, vec![Value::Int(0)]).unwrap_err();
+        match zero {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "args-out-of-range");
+                assert_eq!(sig.data, vec![Value::Int(0), Value::Int(1), Value::Int(4)]);
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+
+        let end = builtin_get_byte(&mut eval, vec![Value::Int(4)]).unwrap_err();
+        match end {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "args-out-of-range");
+                assert_eq!(sig.data, vec![Value::Int(4), Value::Int(1), Value::Int(4)]);
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_byte_unibyte_string_returns_raw_byte_values() {
+        let mut eval = crate::elisp::eval::Evaluator::new();
+        let s = builtin_unibyte_string(vec![Value::Int(255), Value::Int(65)]).unwrap();
+
+        assert_eq!(
+            builtin_get_byte(&mut eval, vec![Value::Int(0), s.clone()]).unwrap(),
+            Value::Int(255)
+        );
+        assert_eq!(
+            builtin_get_byte(&mut eval, vec![Value::Int(1), s]).unwrap(),
+            Value::Int(65)
+        );
     }
 }
