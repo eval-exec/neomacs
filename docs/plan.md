@@ -1779,6 +1779,7 @@ Last updated: 2026-02-15
   - `string-match` / `string-match-p` variable corpus now covers uppercase-pattern matching under `case-fold-search=t`
   - `search-forward` / `search-backward` / `re-search-forward` / `re-search-backward` variable corpus now includes uppercase-pattern checks under `case-fold-search=t`
   - `looking-at` corpus now includes uppercase-pattern checks under `case-fold-search=t`
+  - `string-match` and `looking-at` corpora now also lock `search-upper-case` toggles (`t` and `nil`) with uppercase patterns
   - added line-filter-specific variable corpus:
     - `test/neovm/vm-compat/cases/line-filter-case-fold-variable-semantics.forms`
     - `test/neovm/vm-compat/cases/line-filter-case-fold-variable-semantics.expected.tsv`
