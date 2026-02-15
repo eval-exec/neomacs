@@ -1,0 +1,13 @@
+; Monitor attribute frame links should expose one live frame in batch mode.
+(let* ((attrs (car (display-monitor-attributes-list)))
+       (frames (cdr (assq 'frames attrs))))
+  (and (= (length frames) 1)
+       (frame-live-p (car frames))))
+(let* ((attrs (frame-monitor-attributes))
+       (frames (cdr (assq 'frames attrs))))
+  (and (= (length frames) 1)
+       (frame-live-p (car frames))))
+(let* ((attrs (car (display-monitor-attributes-list (car (terminal-list)))))
+       (frames (cdr (assq 'frames attrs))))
+  (and (= (length frames) 1)
+       (frame-live-p (car frames))))

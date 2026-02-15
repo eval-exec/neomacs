@@ -112,7 +112,7 @@ fn get_leaf<'a>(frames: &'a FrameManager, fid: FrameId, wid: WindowId) -> Result
 ///
 /// In batch compatibility mode, GNU Emacs still has an initial frame (`F1`).
 /// When the evaluator has no frame yet, synthesize one on demand.
-fn ensure_selected_frame_id(eval: &mut super::eval::Evaluator) -> FrameId {
+pub(crate) fn ensure_selected_frame_id(eval: &mut super::eval::Evaluator) -> FrameId {
     if let Some(fid) = eval.frames.selected_frame().map(|f| f.id) {
         return fid;
     }

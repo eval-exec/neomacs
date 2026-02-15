@@ -1,0 +1,3 @@
+1	(let* ((attrs (car (display-monitor-attributes-list))) (frames (cdr (assq 'frames attrs)))) (and (= (length frames) 1) (frame-live-p (car frames))))	OK t
+2	(let* ((attrs (frame-monitor-attributes)) (frames (cdr (assq 'frames attrs)))) (and (= (length frames) 1) (frame-live-p (car frames))))	OK t
+3	(let* ((attrs (car (display-monitor-attributes-list (car (terminal-list))))) (frames (cdr (assq 'frames attrs)))) (and (= (length frames) 1) (frame-live-p (car frames))))	OK t

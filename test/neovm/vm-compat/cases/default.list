@@ -66,6 +66,7 @@ cases/minibuffer-batch
 cases/input-batch-readers
 cases/display-batch-semantics
 cases/display-monitor-semantics
+cases/display-monitor-frames-semantics
 cases/terminal-parameter-semantics
 cases/terminal-handle-printing
 cases/frame-batch-semantics

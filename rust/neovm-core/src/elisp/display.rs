@@ -353,8 +353,35 @@ pub(crate) fn builtin_display_monitor_attributes_list(args: Vec<Value>) -> EvalR
             ));
         }
     }
-    let monitor = make_monitor_alist();
+    let monitor = make_monitor_alist(Value::Nil);
     Ok(Value::list(vec![monitor]))
+}
+
+/// Evaluator-aware variant of `display-monitor-attributes-list`.
+///
+/// This populates the `frames` slot from the live frame list.
+pub(crate) fn builtin_display_monitor_attributes_list_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("display-monitor-attributes-list", &args, 1)?;
+    if let Some(display) = args.first() {
+        if !display.is_nil() && !terminal_designator_p(display) {
+            return Err(signal(
+                "error",
+                vec![Value::string("Invalid argument 1 in 'get-device-terminal'")],
+            ));
+        }
+    }
+
+    let _ = super::window_cmds::ensure_selected_frame_id(eval);
+    let frames = eval
+        .frames
+        .frame_list()
+        .into_iter()
+        .map(|fid| Value::Int(fid.0 as i64))
+        .collect::<Vec<_>>();
+    Ok(Value::list(vec![make_monitor_alist(Value::list(frames))]))
 }
 
 /// (frame-monitor-attributes &optional FRAME) -> alist with geometry info
@@ -368,11 +395,38 @@ pub(crate) fn builtin_frame_monitor_attributes(args: Vec<Value>) -> EvalResult {
             ));
         }
     }
-    Ok(make_monitor_alist())
+    Ok(make_monitor_alist(Value::Nil))
+}
+
+/// Evaluator-aware variant of `frame-monitor-attributes`.
+///
+/// This populates the `frames` slot from the live frame list.
+pub(crate) fn builtin_frame_monitor_attributes_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("frame-monitor-attributes", &args, 1)?;
+    if let Some(frame) = args.first() {
+        if !frame.is_nil() && !terminal_designator_p(frame) {
+            return Err(signal(
+                "error",
+                vec![Value::string("Invalid argument 1 in 'get-device-terminal'")],
+            ));
+        }
+    }
+
+    let _ = super::window_cmds::ensure_selected_frame_id(eval);
+    let frames = eval
+        .frames
+        .frame_list()
+        .into_iter()
+        .map(|fid| Value::Int(fid.0 as i64))
+        .collect::<Vec<_>>();
+    Ok(make_monitor_alist(Value::list(frames)))
 }
 
 /// Build a single monitor alist with reasonable default values.
-fn make_monitor_alist() -> Value {
+fn make_monitor_alist(frames: Value) -> Value {
     // geometry: (x y width height)
     let geometry = Value::list(vec![
         Value::Int(0),
@@ -391,9 +445,6 @@ fn make_monitor_alist() -> Value {
 
     // mm-size: (width-mm height-mm)
     let mm_size = Value::list(vec![Value::Nil, Value::Nil]);
-
-    // frames: nil (no frame objects in our stub)
-    let frames = Value::Nil;
 
     make_alist(vec![
         (Value::symbol("geometry"), geometry),
@@ -511,5 +562,27 @@ mod tests {
         let handle = builtin_frame_terminal(vec![Value::Nil]).unwrap();
         let live = builtin_terminal_live_p(vec![handle]).unwrap();
         assert_eq!(live, Value::True);
+    }
+
+    #[test]
+    fn eval_monitor_attributes_include_bootstrapped_frame() {
+        let mut eval = crate::elisp::Evaluator::new();
+        let list = builtin_display_monitor_attributes_list_eval(&mut eval, vec![]).unwrap();
+        let monitors = list_to_vec(&list).expect("monitor list");
+        let attrs = list_to_vec(monitors.first().expect("first monitor")).expect("monitor attrs");
+
+        let mut frames_value = Value::Nil;
+        for attr in attrs {
+            if let Value::Cons(cell) = attr {
+                let pair = cell.lock().expect("poisoned");
+                if matches!(&pair.car, Value::Symbol(name) if name == "frames") {
+                    frames_value = pair.cdr.clone();
+                    break;
+                }
+            }
+        }
+
+        let frames = list_to_vec(&frames_value).expect("frames list");
+        assert_eq!(frames.len(), 1);
     }
 }
