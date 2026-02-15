@@ -1,0 +1,10 @@
+; Lock in undo max-arity behavior.
+(condition-case err (undo 1 2) (error err))
+(condition-case err (undo 1 2 3) (error err))
+
+; Keep one normal path.
+(with-temp-buffer
+  (buffer-enable-undo)
+  (insert "x")
+  (condition-case err (undo 1) (error (car err)))
+  (buffer-string))

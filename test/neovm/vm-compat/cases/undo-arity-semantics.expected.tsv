@@ -1,0 +1,3 @@
+1	(condition-case err (undo 1 2) (error err))	OK (wrong-number-of-arguments undo 2)
+2	(condition-case err (undo 1 2 3) (error err))	OK (wrong-number-of-arguments undo 3)
+3	(with-temp-buffer (buffer-enable-undo) (insert "x") (condition-case err (undo 1) (error (car err))) (buffer-string))	OK ""
