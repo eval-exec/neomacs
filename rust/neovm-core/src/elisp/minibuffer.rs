@@ -823,10 +823,14 @@ pub(crate) fn builtin_top_level(args: Vec<Value>) -> EvalResult {
 
 /// `(exit-recursive-edit)` — exit innermost recursive edit.
 ///
-/// Stub (batch/non-interactive): returns nil.
+/// Batch/non-interactive: signal GNU-compatible user-error when not in a
+/// recursive edit.
 pub(crate) fn builtin_exit_recursive_edit(args: Vec<Value>) -> EvalResult {
     expect_args("exit-recursive-edit", &args, 0)?;
-    Ok(Value::Nil)
+    Err(signal(
+        "user-error",
+        vec![Value::string("No recursive edit is in progress")],
+    ))
 }
 
 /// `(exit-minibuffer)` — exit the active minibuffer.
@@ -1467,9 +1471,12 @@ mod tests {
     }
 
     #[test]
-    fn builtin_exit_recursive_edit_stub_returns_nil() {
-        let result = builtin_exit_recursive_edit(vec![]).unwrap();
-        assert!(matches!(result, Value::Nil));
+    fn builtin_exit_recursive_edit_signals_user_error() {
+        let result = builtin_exit_recursive_edit(vec![]);
+        assert!(matches!(
+            result,
+            Err(Flow::Signal(sig)) if sig.symbol == "user-error"
+        ));
     }
 
     #[test]
