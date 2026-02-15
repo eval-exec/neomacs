@@ -1,9 +1,11 @@
 # NeoVM / Neomacs Plan
 
-Last updated: 2026-02-14
+Last updated: 2026-02-15
 
 ## Done
 
+- Full suite baseline verified after `safe-date-to-time` slice:
+  - `cd test/neovm/vm-compat && NEOVM_ORACLE_EMACS=/nix/store/hql3zwz5b4ywd2qwx8jssp4dyb7nx4cb-emacs-30.2/bin/emacs make check-all-neovm` (pass)
 - Full suite baseline verified after latest cleanup:
   - `cd test/neovm/vm-compat && make check-all-neovm` (pass)
 - Full suite re-verified after terminal parameter semantics slice:
