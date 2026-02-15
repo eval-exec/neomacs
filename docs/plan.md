@@ -4,6 +4,17 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `minibufferp` compatibility slice:
+  - aligned arity to GNU behavior (accepts 0..=2 args; >2 is `wrong-number-of-arguments`)
+  - added buffer-like validation for the first arg (`nil` / string / buffer accepted; otherwise `wrong-type-argument bufferp ...`)
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/minibufferp-semantics.forms`
+    - `test/neovm/vm-compat/cases/minibufferp-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test builtin_minibufferp -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/minibufferp-semantics.forms EXPECTED=cases/minibufferp-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Reduced dead search shim surface after evaluator routing:
   - removed unused `search.rs` eval-stub wrappers (`posix-search-*`, `word-search-*`, `search-forward/backward`, `re-search-forward/backward`, `replace-match`) now superseded by `builtins.rs` evaluator implementations
   - re-verified search slices after cleanup:
