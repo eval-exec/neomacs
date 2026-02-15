@@ -54,7 +54,7 @@ fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flow> {
     }
 }
 
-fn require_string(name: &str, val: &Value) -> Result<String, Flow> {
+fn require_string(_name: &str, val: &Value) -> Result<String, Flow> {
     match val {
         Value::Str(s) => Ok((**s).clone()),
         other => Err(signal(
@@ -64,7 +64,7 @@ fn require_string(name: &str, val: &Value) -> Result<String, Flow> {
     }
 }
 
-fn require_int(name: &str, val: &Value) -> Result<i64, Flow> {
+fn require_int(_name: &str, val: &Value) -> Result<i64, Flow> {
     match val {
         Value::Int(n) => Ok(*n),
         Value::Char(c) => Ok(*c as i64),
@@ -300,7 +300,7 @@ fn days_in_month(y: i64, m: u32) -> u32 {
 /// broken-down UTC time fields.  No external crate needed.
 fn unix_to_broken_down(timestamp: i64) -> BrokenDownTime {
     // Handle negative timestamps (before epoch).
-    let mut remaining = timestamp;
+    let remaining = timestamp;
     let second_of_day;
     let mut day_count; // days since epoch (can be negative)
 
