@@ -10,7 +10,6 @@
 
 use std::collections::HashMap;
 
-use super::error::{signal, EvalResult, Flow};
 use super::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -634,87 +633,6 @@ impl Default for ModeRegistry {
 /// Otherwise we check if `filename` ends with `pattern` OR equals `pattern`.
 fn filename_matches_pattern(filename: &str, pattern: &str) -> bool {
     filename.ends_with(pattern)
-}
-
-// ---------------------------------------------------------------------------
-// Built-in functions (callable from the evaluator)
-// ---------------------------------------------------------------------------
-
-/// Expect exactly N arguments, returning a `Flow` error on mismatch.
-fn expect_args(name: &str, args: &[Value], n: usize) -> Result<(), Flow> {
-    if args.len() != n {
-        Err(signal(
-            "wrong-number-of-arguments",
-            vec![Value::symbol(name), Value::Int(args.len() as i64)],
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-/// Expect at least N arguments.
-fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flow> {
-    if args.len() < min {
-        Err(signal(
-            "wrong-number-of-arguments",
-            vec![Value::symbol(name), Value::Int(args.len() as i64)],
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-/// `(fundamental-mode)` — return the symbol `fundamental-mode`.
-///
-/// In a real evaluator this would also switch the current buffer's mode.
-/// Here we just return the mode symbol.
-pub(crate) fn builtin_fundamental_mode(args: Vec<Value>) -> EvalResult {
-    expect_args("fundamental-mode", &args, 0)?;
-    Ok(Value::symbol("fundamental-mode"))
-}
-
-/// `(major-mode)` — return the current major mode as a symbol.
-///
-/// Without an evaluator context we return `fundamental-mode` as the default.
-pub(crate) fn builtin_major_mode(args: Vec<Value>) -> EvalResult {
-    expect_args("major-mode", &args, 0)?;
-    // Without access to the evaluator/registry, return the default.
-    Ok(Value::symbol("fundamental-mode"))
-}
-
-/// `(minor-mode-list)` — return a list of active minor mode symbols.
-///
-/// Without an evaluator context we return nil (no active minor modes).
-pub(crate) fn builtin_minor_mode_list(args: Vec<Value>) -> EvalResult {
-    expect_args("minor-mode-list", &args, 0)?;
-    Ok(Value::Nil)
-}
-
-/// `(derived-mode-p MODE &rest MODES)` — return non-nil if the current
-/// buffer's major mode derives from any of MODES.
-///
-/// Without an evaluator context, we check if the first arg matches any of the rest.
-pub(crate) fn builtin_derived_mode_p(args: Vec<Value>) -> EvalResult {
-    expect_min_args("derived-mode-p", &args, 1)?;
-    // Without registry context, do a simple symbol name equality check:
-    // first arg is the mode, rest are ancestors to check.
-    let current = match args[0].as_symbol_name() {
-        Some(s) => s.to_string(),
-        None => {
-            return Err(signal(
-                "wrong-type-argument",
-                vec![Value::symbol("symbolp"), args[0].clone()],
-            ))
-        }
-    };
-    for ancestor in &args[1..] {
-        if let Some(name) = ancestor.as_symbol_name() {
-            if current == name {
-                return Ok(Value::True);
-            }
-        }
-    }
-    Ok(Value::Nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -1347,70 +1265,6 @@ mod tests {
                     .iter()
                     .all(|m| { reg.global_minor_modes.contains(&m.to_string()) })
         );
-    }
-
-    // -------------------------------------------------------------------
-    // Builtin functions
-    // -------------------------------------------------------------------
-
-    #[test]
-    fn builtin_fundamental_mode_returns_symbol() {
-        let result = builtin_fundamental_mode(vec![]);
-        assert!(result.is_ok());
-        let val = result.unwrap();
-        assert_eq!(val.as_symbol_name(), Some("fundamental-mode"));
-    }
-
-    #[test]
-    fn builtin_fundamental_mode_wrong_args() {
-        let result = builtin_fundamental_mode(vec![Value::Int(1)]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn builtin_major_mode_returns_symbol() {
-        let result = builtin_major_mode(vec![]);
-        assert!(result.is_ok());
-        let val = result.unwrap();
-        assert!(val.as_symbol_name().is_some());
-    }
-
-    #[test]
-    fn builtin_minor_mode_list_returns_nil() {
-        let result = builtin_minor_mode_list(vec![]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_nil());
-    }
-
-    #[test]
-    fn builtin_derived_mode_p_match() {
-        let result = builtin_derived_mode_p(vec![
-            Value::symbol("text-mode"),
-            Value::symbol("prog-mode"),
-            Value::symbol("text-mode"),
-        ]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_truthy());
-    }
-
-    #[test]
-    fn builtin_derived_mode_p_no_match() {
-        let result =
-            builtin_derived_mode_p(vec![Value::symbol("text-mode"), Value::symbol("prog-mode")]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_nil());
-    }
-
-    #[test]
-    fn builtin_derived_mode_p_wrong_type() {
-        let result = builtin_derived_mode_p(vec![Value::Int(42)]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn builtin_derived_mode_p_no_args() {
-        let result = builtin_derived_mode_p(vec![]);
-        assert!(result.is_err());
     }
 
     // -------------------------------------------------------------------
