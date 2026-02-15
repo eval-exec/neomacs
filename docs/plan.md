@@ -5,19 +5,29 @@ Last updated: 2026-02-15
 ## Doing
 
 - Continue the `buffer-read-only` variable-compat sweep in `rust/neovm-core/src/elisp/kill_ring.rs`.
-- Lock remaining raw `buf.read_only` mutators (`transpose-sentences`, `transpose-paragraphs`, `transpose-lines`) with mutation-aware checks.
+- Lock remaining raw `buf.read_only` mutators (`transpose-paragraphs`, `transpose-lines`) with mutation-aware checks.
 - Expand command-context compatibility corpus around interactive editing commands.
 - Keeping each slice small: runtime patch -> oracle corpus -> docs note -> push.
 
 ## Next
 
 - Finish the rest of `transpose-*` read-only variable checks and add dedicated oracle corpora.
-- Add focused read-only corpora for `transpose-chars` and any remaining transpose mutators not yet locked.
+- Add focused read-only corpora for `transpose-chars`, `transpose-paragraphs`, and `transpose-lines`.
 - Audit adjacent kill-ring command-context paths (`kill-new`, rotation, point updates) for batch-oracle deltas.
 - Run targeted regression checks after each slice (`command-dispatch-default-arg-semantics`, touched command corpus, and focused `yank`/`yank-pop` suites).
 
 ## Done
 
+- Aligned `transpose-sentences` read-only variable behavior with oracle semantics:
+  - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
+    - `transpose-sentences` now checks read-only at mutation time so boundary errors win when no edit is possible
+    - mutation path honors dynamic/buffer-local/global `buffer-read-only`
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/transpose-sentences-read-only-variable-semantics.forms`
+    - `test/neovm/vm-compat/cases/transpose-sentences-read-only-variable-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/transpose-sentences-read-only-variable-semantics` (pass, 4/4)
 - Aligned `transpose-sexps` read-only variable behavior with oracle semantics:
   - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
     - `transpose-sexps` now honors dynamic/buffer-local/global `buffer-read-only`
