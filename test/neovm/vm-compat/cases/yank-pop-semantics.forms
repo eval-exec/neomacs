@@ -1,0 +1,41 @@
+; if the kill ring is empty and there is no yank command context, signal empty-ring error.
+(condition-case err
+    (yank-pop)
+  (error (car (cdr err))))
+
+; yank-pop without yank command context: end-of-file when ring is non-empty.
+(with-temp-buffer
+  (kill-new "first")
+  (kill-new "second")
+  (yank)
+  (condition-case err (yank-pop) (error (car err))))
+
+; with explicit yank command context, yank-pop rotates the previous yank region.
+(with-temp-buffer
+  (kill-new "first")
+  (kill-new "second")
+  (yank)
+  (setq last-command 'yank)
+  (yank-pop)
+  (buffer-string))
+
+; yank-pop in yank context but without a stored yank region signals wrong-type-argument.
+(with-temp-buffer
+  (kill-new "hello")
+  (setq last-command 'yank)
+  (condition-case err
+      (yank-pop)
+    (error (list (car err)
+                 (car (cdr err))
+                 (car (cdr (cdr err)))))))
+
+; last-command = 'yank-pop does not satisfy yank-pop's command-context gate in batch eval.
+(with-temp-buffer
+  (kill-new "one")
+  (kill-new "two")
+  (kill-new "three")
+  (yank)
+  (setq last-command 'yank-pop)
+  (condition-case err
+      (yank-pop)
+    (error (car err))))

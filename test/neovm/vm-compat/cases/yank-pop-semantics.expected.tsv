@@ -1,0 +1,5 @@
+1	(condition-case err (yank-pop) (error (car (cdr err))))	OK "Kill ring is empty"
+2	(with-temp-buffer (kill-new "first") (kill-new "second") (yank) (condition-case err (yank-pop) (error (car err))))	Yank from kill-ring: OK end-of-file
+3	(with-temp-buffer (kill-new "first") (kill-new "second") (yank) (setq last-command 'yank) (yank-pop) (buffer-string))	OK "first"
+4	(with-temp-buffer (kill-new "hello") (setq last-command 'yank) (condition-case err (yank-pop) (error (list (car err) (car (cdr err)) (car (cdr (cdr err)))))))	OK (wrong-type-argument number-or-marker-p nil)
+5	(with-temp-buffer (kill-new "one") (kill-new "two") (kill-new "three") (yank) (setq last-command 'yank-pop) (condition-case err (yank-pop) (error (car err))))	Yank from kill-ring: OK end-of-file
