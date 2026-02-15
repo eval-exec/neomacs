@@ -1,0 +1,39 @@
+; symbol-file file-origin semantics.
+
+(symbol-file 'car)
+
+(symbol-file 1)
+
+(symbol-file "x")
+
+(condition-case err
+    (symbol-file)
+  (error err))
+
+(condition-case err
+    (symbol-file 'car 'defun 'extra)
+  (error err))
+
+(autoload 'neovm-symbol-file-probe "neovm-symbol-file-probe-file")
+
+(symbol-file 'neovm-symbol-file-probe)
+
+(symbol-file 'neovm-symbol-file-probe nil)
+
+(symbol-file 'neovm-symbol-file-probe 'defun)
+
+(symbol-file 'neovm-symbol-file-probe 'defun t)
+
+(symbol-file 'neovm-symbol-file-probe 'var)
+
+(symbol-file 'neovm-symbol-file-probe 'function)
+
+(symbol-file 'neovm-symbol-file-probe :defun)
+
+(symbol-file 'neovm-symbol-file-probe 1)
+
+(symbol-file (make-symbol "tmp-sym"))
+
+(condition-case err
+    (symbol-file 'neovm-symbol-file-probe 'defun t :extra)
+  (error err))

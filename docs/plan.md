@@ -4,6 +4,27 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `symbol-file` compatibility slice (stub -> evaluator-backed subset):
+  - added evaluator-aware dispatch in `rust/neovm-core/src/elisp/builtins.rs` for `symbol-file`
+  - implemented `builtin_symbol_file_eval` in `rust/neovm-core/src/elisp/autoload.rs`:
+    - supports arity `1..3` (and `wrong-number-of-arguments` at 0 or 4+)
+    - returns `nil` for non-symbol designators
+    - resolves autoloaded function origin file for default / `TYPE=nil` / `TYPE='defun`
+    - returns `nil` for other `TYPE` selectors
+  - added/expanded unit tests in `autoload.rs` for:
+    - autoload file return path
+    - type gating
+    - third-arg acceptance and four-arg error
+    - non-symbol behavior
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/symbol-file-semantics.forms`
+    - `test/neovm/vm-compat/cases/symbol-file-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+    - wired into `test/neovm/vm-compat/cases/introspection.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml symbol_file -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/symbol-file-semantics.forms EXPECTED=cases/symbol-file-semantics.expected.tsv` (pass, 16/16)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Expanded legacy bytecode vm-compat corpus for `.elc` literal execution edges:
   - added:
     - `test/neovm/vm-compat/cases/bytecode-literal-edge-opcodes-semantics.forms`

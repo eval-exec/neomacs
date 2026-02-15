@@ -5474,6 +5474,7 @@ pub(crate) fn dispatch_builtin(
         // Loading
         "load" => return Some(builtin_load(eval, args)),
         "load-file" => return Some(builtin_load_file(eval, args)),
+        "symbol-file" => return Some(super::autoload::builtin_symbol_file_eval(eval, args)),
         "neovm-precompile-file" => return Some(builtin_neovm_precompile_file(eval, args)),
         "eval" => return Some(builtin_eval(eval, args)),
         // Buffer operations

@@ -1,0 +1,16 @@
+1	(symbol-file 'car)	OK nil
+2	(symbol-file 1)	OK nil
+3	(symbol-file "x")	OK nil
+4	(condition-case err (symbol-file) (error err))	OK (wrong-number-of-arguments symbol-file 0)
+5	(condition-case err (symbol-file 'car 'defun 'extra) (error err))	OK nil
+6	(autoload 'neovm-symbol-file-probe "neovm-symbol-file-probe-file")	OK neovm-symbol-file-probe
+7	(symbol-file 'neovm-symbol-file-probe)	OK "neovm-symbol-file-probe-file"
+8	(symbol-file 'neovm-symbol-file-probe nil)	OK "neovm-symbol-file-probe-file"
+9	(symbol-file 'neovm-symbol-file-probe 'defun)	OK "neovm-symbol-file-probe-file"
+10	(symbol-file 'neovm-symbol-file-probe 'defun t)	OK "neovm-symbol-file-probe-file"
+11	(symbol-file 'neovm-symbol-file-probe 'var)	OK nil
+12	(symbol-file 'neovm-symbol-file-probe 'function)	OK nil
+13	(symbol-file 'neovm-symbol-file-probe :defun)	OK nil
+14	(symbol-file 'neovm-symbol-file-probe 1)	OK nil
+15	(symbol-file (make-symbol "tmp-sym"))	OK nil
+16	(condition-case err (symbol-file 'neovm-symbol-file-probe 'defun t :extra) (error err))	OK (wrong-number-of-arguments symbol-file 4)

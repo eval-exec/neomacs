@@ -14,6 +14,7 @@ cases/subr-introspection-core
 cases/macro-special-introspection-core
 cases/function-special-form-edges
 cases/autoload-macro-introspection
+cases/symbol-file-semantics
 cases/functionp-callable-matrix
 cases/documentation-property-semantics
 cases/documentation-semantics

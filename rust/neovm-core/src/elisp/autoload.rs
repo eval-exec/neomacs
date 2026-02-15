@@ -275,13 +275,62 @@ pub(crate) fn builtin_autoload_do_load(
 /// `(symbol-file SYMBOL &optional TYPE)` — return the file that defined SYMBOL.
 /// Stub: always returns nil for now.
 pub(crate) fn builtin_symbol_file(args: Vec<Value>) -> EvalResult {
-    if args.is_empty() || args.len() > 2 {
+    if args.is_empty() || args.len() > 3 {
         return Err(signal(
             "wrong-number-of-arguments",
             vec![Value::symbol("symbol-file"), Value::Int(args.len() as i64)],
         ));
     }
     // Stub: we don't track symbol origins yet.
+    Ok(Value::Nil)
+}
+
+/// Evaluator-aware `(symbol-file SYMBOL &optional TYPE)`.
+///
+/// NeoVM currently tracks symbol origin only for autoloaded function symbols.
+/// This matches GNU Emacs behavior for the currently supported subset:
+/// - non-symbol SYMBOL returns nil
+/// - TYPE nil/missing/`defun` queries function definition origin
+/// - other TYPE values return nil
+pub(crate) fn builtin_symbol_file_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    if args.is_empty() || args.len() > 3 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("symbol-file"), Value::Int(args.len() as i64)],
+        ));
+    }
+
+    let symbol_name = match args[0].as_symbol_name() {
+        Some(name) => name,
+        None => return Ok(Value::Nil),
+    };
+
+    let function_origin_requested = if args.len() == 1 || matches!(args[1], Value::Nil) {
+        true
+    } else {
+        matches!(args[1].as_symbol_name(), Some("defun"))
+    };
+    if !function_origin_requested {
+        return Ok(Value::Nil);
+    }
+
+    if let Some(entry) = eval.autoloads.get_entry(symbol_name) {
+        return Ok(Value::string(entry.file.clone()));
+    }
+
+    if let Some(fndef) = eval.obarray.symbol_function(symbol_name).cloned() {
+        if is_autoload_value(&fndef) {
+            if let Some(items) = list_to_vec(&fndef) {
+                if let Some(Value::Str(file)) = items.get(1) {
+                    return Ok(Value::string((**file).clone()));
+                }
+            }
+        }
+    }
+
     Ok(Value::Nil)
 }
 
@@ -948,6 +997,52 @@ mod tests {
     fn symbol_file_returns_nil() {
         let result = eval_one("(symbol-file 'cons)");
         assert_eq!(result, "OK nil");
+    }
+
+    #[test]
+    fn symbol_file_returns_autoload_file_for_function() {
+        let result = eval_one(
+            r#"(progn (autoload 'sym-file-probe "sym-file-probe-file") (symbol-file 'sym-file-probe))"#,
+        );
+        assert_eq!(result, r#"OK "sym-file-probe-file""#);
+    }
+
+    #[test]
+    fn symbol_file_type_gate_matches_defun_only() {
+        let results = eval_all(
+            r#"(autoload 'sym-file-type-probe "sym-file-type-probe-file")
+               (symbol-file 'sym-file-type-probe 'defun)
+               (symbol-file 'sym-file-type-probe 'var)
+               (symbol-file 'sym-file-type-probe 'function)"#,
+        );
+        assert_eq!(results[1], r#"OK "sym-file-type-probe-file""#);
+        assert_eq!(results[2], "OK nil");
+        assert_eq!(results[3], "OK nil");
+    }
+
+    #[test]
+    fn symbol_file_non_symbol_returns_nil() {
+        let results = eval_all(
+            r#"(symbol-file 1)
+               (symbol-file "x")
+               (symbol-file 'car 1)"#,
+        );
+        assert_eq!(results[0], "OK nil");
+        assert_eq!(results[1], "OK nil");
+        assert_eq!(results[2], "OK nil");
+    }
+
+    #[test]
+    fn symbol_file_accepts_third_arg_but_not_fourth() {
+        let results = eval_all(
+            r#"(autoload 'sym-file-arity-probe "sym-file-arity-probe-file")
+               (symbol-file 'sym-file-arity-probe 'defun t)
+               (condition-case err
+                   (symbol-file 'sym-file-arity-probe 'defun t :extra)
+                 (error err))"#,
+        );
+        assert_eq!(results[1], r#"OK "sym-file-arity-probe-file""#);
+        assert_eq!(results[2], "OK (wrong-number-of-arguments symbol-file 4)");
     }
 
     #[test]
