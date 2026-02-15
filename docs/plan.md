@@ -5,17 +5,30 @@ Last updated: 2026-02-15
 ## Doing
 
 - Continue command-context and read-only variable compatibility sweep in `rust/neovm-core/src/elisp/kill_ring.rs`.
-- Audit remaining edge paths for `kill-ring-yank-pointer` when pointer/list shapes are invalid.
+- Audit duplicate-entry edge paths for `kill-ring-yank-pointer` pointer resolution.
 - Keeping each slice small: runtime patch -> oracle corpus -> docs note -> push.
 
 ## Next
 
-- Expand oracle corpus for malformed/non-tail `kill-ring-yank-pointer` values and fallback behavior.
+- Expand oracle corpus for duplicate-entry and pointer-disambiguation behavior.
 - Audit `yank`/`yank-pop` behavior with empty kill-ring entries and pointer wrap rules.
 - Run targeted regression checks after each slice (`command-dispatch-default-arg-semantics`, touched command corpus, and focused `yank`/`yank-pop` suites).
 
 ## Done
 
+- Aligned malformed `kill-ring-yank-pointer` semantics to oracle behavior:
+  - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
+    - strict pointer sync path now signals `wrong-type-argument` for non-list pointer values in `current-kill`/`yank`/`yank-pop`
+    - cons-pointer matching now accepts structural tail matches (`equal`) in addition to identity matches (`eq`)
+    - unmatched cons pointers now fall back to the ring tail (last entry), matching oracle behavior
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/kill-ring-yank-pointer-invalid-semantics.forms`
+    - `test/neovm/vm-compat/cases/kill-ring-yank-pointer-invalid-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/kill-ring-yank-pointer-invalid-semantics` (pass, 20/20)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/kill-ring-yank-pointer-semantics` (pass, 16/16)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Aligned explicit `kill-ring-yank-pointer` variable semantics with internal ring pointer state:
   - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
     - sync now imports pointer state from dynamic/global `kill-ring-yank-pointer` tail into in-memory `yank_pointer`
