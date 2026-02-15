@@ -1201,28 +1201,7 @@ pub(crate) fn builtin_capitalize_region(
 
     let (beg, end) = resolve_case_region(eval, beg_val, end_val, args.get(2))?;
     let text = buf.buffer_substring(beg, end);
-
-    // Capitalize each word: first letter upper, rest lower.
-    let mut result = String::with_capacity(text.len());
-    let mut in_word = false;
-    for ch in text.chars() {
-        if ch.is_alphanumeric() {
-            if !in_word {
-                // Start of a new word — capitalize.
-                for c in ch.to_uppercase() {
-                    result.push(c);
-                }
-                in_word = true;
-            } else {
-                for c in ch.to_lowercase() {
-                    result.push(c);
-                }
-            }
-        } else {
-            result.push(ch);
-            in_word = false;
-        }
-    }
+    let result = capitalize_words_preserving_boundaries(&text);
 
     if text == result {
         return Ok(Value::Nil);
@@ -1239,6 +1218,29 @@ pub(crate) fn builtin_capitalize_region(
     buf.goto_char(saved_pt.min(buf.point_max()));
 
     Ok(Value::Nil)
+}
+
+fn capitalize_words_preserving_boundaries(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut in_word = false;
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            if !in_word {
+                for c in ch.to_uppercase() {
+                    result.push(c);
+                }
+                in_word = true;
+            } else {
+                for c in ch.to_lowercase() {
+                    result.push(c);
+                }
+            }
+        } else {
+            result.push(ch);
+            in_word = false;
+        }
+    }
+    result
 }
 
 /// `(upcase-initials-region BEG END)` — uppercase first char of each word in region.
@@ -1417,24 +1419,7 @@ pub(crate) fn builtin_capitalize_word(
         (target, pt)
     };
     let text = buf.buffer_substring(beg, end);
-
-    // Capitalize: first alpha upper, rest lower.
-    let mut result = String::with_capacity(text.len());
-    let mut found_alpha = false;
-    for ch in text.chars() {
-        if ch.is_alphabetic() && !found_alpha {
-            for c in ch.to_uppercase() {
-                result.push(c);
-            }
-            found_alpha = true;
-        } else if found_alpha && ch.is_alphabetic() {
-            for c in ch.to_lowercase() {
-                result.push(c);
-            }
-        } else {
-            result.push(ch);
-        }
-    }
+    let result = capitalize_words_preserving_boundaries(&text);
 
     let buf = eval
         .buffers
