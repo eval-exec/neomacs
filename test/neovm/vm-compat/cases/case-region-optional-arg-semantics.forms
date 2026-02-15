@@ -1,0 +1,79 @@
+; REGION-NONCONTIGUOUS-P compatibility for case-region builtins.
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (upcase-region 1 3 t)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (set-mark 3)
+      (upcase-region 1 3 t)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "ABC")
+      (downcase-region 1 3 t)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "ABC")
+      (set-mark 3)
+      (downcase-region 1 3 t)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (capitalize-region 1 3 t)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (set-mark 3)
+      (capitalize-region 1 3 t)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (upcase-region 1 3 nil)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "ABC")
+      (downcase-region 1 3 nil)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (capitalize-region 1 3 nil)
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (upcase-region 1 3 '(x))
+      (buffer-string))
+  (error err))
+
+(condition-case err
+    (with-temp-buffer
+      (insert "abc")
+      (upcase-region 1 3 t nil))
+  (error err))
