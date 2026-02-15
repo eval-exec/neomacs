@@ -33,6 +33,7 @@ cases/transpose-words-semantics
 cases/transpose-words-read-only-variable-semantics
 cases/transpose-sexps-semantics
 cases/transpose-sexps-read-only-variable-semantics
+cases/transpose-sentences-read-only-variable-semantics
 cases/transpose-paragraphs-semantics
 cases/command-prefix-state-return-shape
 cases/command-dispatch-line-motion-semantics

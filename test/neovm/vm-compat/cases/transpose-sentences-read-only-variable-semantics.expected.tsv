@@ -1,0 +1,4 @@
+1	(with-temp-buffer (insert "One. Two. Three.") (goto-char 6) (setq buffer-read-only t) (condition-case err (transpose-sentences 1) (error (car err))))	OK end-of-buffer
+2	(with-temp-buffer (insert "One. Two. Three.") (goto-char 6) (let ((buffer-read-only t)) (condition-case err (transpose-sentences 1) (error (car err)))))	OK end-of-buffer
+3	(let ((orig (default-value 'buffer-read-only))) (unwind-protect (progn (setq-default buffer-read-only t) (with-temp-buffer (insert "One. Two. Three.") (goto-char 6) (condition-case err (progn (transpose-sentences 1) (buffer-string)) (error (car err))))) (setq-default buffer-read-only orig)))	OK end-of-buffer
+4	(with-temp-buffer (insert "One. Two. Three.") (goto-char 6) (transpose-sentences 1) (buffer-string))	ERR (end-of-buffer nil)

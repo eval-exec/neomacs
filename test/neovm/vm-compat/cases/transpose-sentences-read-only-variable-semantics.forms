@@ -1,0 +1,32 @@
+; transpose-sentences should honor dynamic/local/global `buffer-read-only`.
+(with-temp-buffer
+  (insert "One. Two. Three.")
+  (goto-char 6)
+  (setq buffer-read-only t)
+  (condition-case err (transpose-sentences 1) (error (car err))))
+
+(with-temp-buffer
+  (insert "One. Two. Three.")
+  (goto-char 6)
+  (let ((buffer-read-only t))
+    (condition-case err (transpose-sentences 1) (error (car err)))))
+
+(let ((orig (default-value 'buffer-read-only)))
+  (unwind-protect
+      (progn
+        (setq-default buffer-read-only t)
+        (with-temp-buffer
+          (insert "One. Two. Three.")
+          (goto-char 6)
+          (condition-case err
+              (progn
+                (transpose-sentences 1)
+                (buffer-string))
+            (error (car err)))))
+    (setq-default buffer-read-only orig)))
+
+(with-temp-buffer
+  (insert "One. Two. Three.")
+  (goto-char 6)
+  (transpose-sentences 1)
+  (buffer-string))
