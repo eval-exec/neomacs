@@ -5,18 +5,27 @@ Last updated: 2026-02-15
 ## Doing
 
 - Finishing the `buffer-read-only` variable-compat sweep in `rust/neovm-core/src/elisp/kill_ring.rs`.
-- Locking the latest runtime slice with oracle corpus for `indent-rigidly` read-only variable semantics.
+- Locking remaining raw `buf.read_only` mutators (`yank-pop`, `transpose-*`, case-word mutators) with mutation-aware checks.
 - Keeping each slice small: runtime patch -> oracle corpus -> docs note -> push.
 
 ## Next
 
-- Add `test/neovm/vm-compat/cases/indent-rigidly-read-only-variable-semantics.{forms,expected.tsv}` and wire to `test/neovm/vm-compat/cases/default.list`.
 - Investigate and lock `yank-pop` behavior deltas (currently hitting oracle `end-of-file` paths in some probes).
 - Continue the remaining raw `buf.read_only` kill-ring mutators (`transpose-*`, case-word mutators) with mutation-aware read-only checks and corpus lock-in.
 - Run targeted regression checks after each slice (`command-dispatch-default-arg-semantics` plus touched command corpus).
 
 ## Done
 
+- Aligned `indent-rigidly` read-only behavior with oracle variable semantics:
+  - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
+    - `indent-rigidly` now honors dynamic/buffer-local/global `buffer-read-only` only when region text would actually change
+    - no-op paths (`ARG=0`, empty range, or unchanged transformation) now return without signaling read-only
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/indent-rigidly-read-only-variable-semantics.forms`
+    - `test/neovm/vm-compat/cases/indent-rigidly-read-only-variable-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/indent-rigidly-read-only-variable-semantics` (pass, 5/5)
 - Aligned `delete-indentation` read-only behavior with oracle variable semantics:
   - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
     - `delete-indentation` now honors dynamic/buffer-local/global `buffer-read-only` for real join operations
