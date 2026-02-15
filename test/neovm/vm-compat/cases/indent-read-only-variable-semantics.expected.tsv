@@ -1,0 +1,6 @@
+1	(with-temp-buffer (insert (concat (string 9) "foo")) (setq buffer-read-only t) (condition-case err (move-to-column 2 t) (error (car err))))	OK buffer-read-only
+2	(with-temp-buffer (insert " foo") (setq buffer-read-only t) (condition-case err (indent-according-to-mode) (error (car err))))	OK buffer-read-only
+3	(with-temp-buffer (insert "foo") (setq buffer-read-only t) (condition-case err (indent-for-tab-command) (error (car err))))	OK buffer-read-only
+4	(with-temp-buffer (insert (concat " a" (string 10) " b" (string 10))) (setq buffer-read-only t) (condition-case err (indent-region (point-min) (point-max) 0) (error (car err))))	OK buffer-read-only
+5	(with-temp-buffer (insert (concat (string 9) "foo")) (let ((buffer-read-only t)) (condition-case err (move-to-column 2 t) (error (car err)))))	OK buffer-read-only
+6	(let ((orig (default-value 'buffer-read-only))) (unwind-protect (progn (setq-default buffer-read-only t) (with-temp-buffer (condition-case err (indent-for-tab-command) (error (car err))))) (setq-default buffer-read-only orig)))	OK nil

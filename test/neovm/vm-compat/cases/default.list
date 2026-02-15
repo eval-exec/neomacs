@@ -63,6 +63,7 @@ cases/move-to-column-force-semantics
 cases/back-to-indentation-semantics
 cases/indent-region-semantics
 cases/indent-mode-semantics
+cases/indent-read-only-variable-semantics
 cases/tab-to-tab-stop-semantics
 cases/indent-line-to-semantics
 cases/custom-group-p-availability
