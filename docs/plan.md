@@ -84,6 +84,19 @@ Last updated: 2026-02-15
     - `cargo test --manifest-path rust/neovm-core/Cargo.toml delimited_match -- --nocapture` (pass)
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-delimited-semantics.forms EXPECTED=cases/replace-delimited-semantics.expected.tsv` (pass, 12/12)
     - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+- Aligned `BACKWARD` replacement defaults in evaluator-backed search builtins:
+  - updated `rust/neovm-core/src/elisp/isearch.rs`:
+    - `replace-string` / `replace-regexp` now treat omitted start/end as `(point-min .. point)` when `BACKWARD` is non-nil
+    - replacement point placement now matches backward flow (point to region start)
+    - `query-replace` / `query-replace-regexp` inherit behavior via evaluator routing
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/replace-backward-semantics.forms`
+    - `test/neovm/vm-compat/cases/replace-backward-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-backward-semantics.forms EXPECTED=cases/replace-backward-semantics.expected.tsv` (pass, 9/9)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-delimited-semantics.forms EXPECTED=cases/replace-delimited-semantics.expected.tsv` (pass, 12/12)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 
 - Implemented and locked search-stack evaluator subsets with oracle corpus:
   - `replace-regexp`:
