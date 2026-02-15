@@ -342,9 +342,17 @@ pub(crate) fn builtin_resume_tty(args: Vec<Value>) -> EvalResult {
 /// (display-monitor-attributes-list &optional DISPLAY) -> list with one monitor alist
 ///
 /// Returns a list containing a single alist describing the primary monitor.
-/// Keys: geometry, workarea, mm-size, frames, name, source.
+/// Keys: geometry, workarea, mm-size, frames.
 pub(crate) fn builtin_display_monitor_attributes_list(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-monitor-attributes-list", &args, 1)?;
+    if let Some(display) = args.first() {
+        if !display.is_nil() && !terminal_designator_p(display) {
+            return Err(signal(
+                "error",
+                vec![Value::string("Invalid argument 1 in 'get-device-terminal'")],
+            ));
+        }
+    }
     let monitor = make_monitor_alist();
     Ok(Value::list(vec![monitor]))
 }
@@ -352,6 +360,14 @@ pub(crate) fn builtin_display_monitor_attributes_list(args: Vec<Value>) -> EvalR
 /// (frame-monitor-attributes &optional FRAME) -> alist with geometry info
 pub(crate) fn builtin_frame_monitor_attributes(args: Vec<Value>) -> EvalResult {
     expect_max_args("frame-monitor-attributes", &args, 1)?;
+    if let Some(frame) = args.first() {
+        if !frame.is_nil() && !terminal_designator_p(frame) {
+            return Err(signal(
+                "error",
+                vec![Value::string("Invalid argument 1 in 'get-device-terminal'")],
+            ));
+        }
+    }
     Ok(make_monitor_alist())
 }
 
@@ -361,20 +377,20 @@ fn make_monitor_alist() -> Value {
     let geometry = Value::list(vec![
         Value::Int(0),
         Value::Int(0),
-        Value::Int(1920),
-        Value::Int(1080),
+        Value::Int(80),
+        Value::Int(25),
     ]);
 
     // workarea: (x y width height)
     let workarea = Value::list(vec![
         Value::Int(0),
         Value::Int(0),
-        Value::Int(1920),
-        Value::Int(1080),
+        Value::Int(80),
+        Value::Int(25),
     ]);
 
-    // mm-size: (width-mm . height-mm)
-    let mm_size = Value::cons(Value::Int(530), Value::Int(300));
+    // mm-size: (width-mm height-mm)
+    let mm_size = Value::list(vec![Value::Nil, Value::Nil]);
 
     // frames: nil (no frame objects in our stub)
     let frames = Value::Nil;
@@ -384,8 +400,6 @@ fn make_monitor_alist() -> Value {
         (Value::symbol("workarea"), workarea),
         (Value::symbol("mm-size"), mm_size),
         (Value::symbol("frames"), frames),
-        (Value::symbol("name"), Value::string("default")),
-        (Value::symbol("source"), Value::string("neomacs")),
     ])
 }
 

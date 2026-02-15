@@ -1,0 +1,9 @@
+1	(length (display-monitor-attributes-list))	OK 1
+2	(let* ((attrs (car (display-monitor-attributes-list))) (g (cdr (assq 'geometry attrs))) (w (cdr (assq 'workarea attrs))) (mm (cdr (assq 'mm-size attrs))) (frames (cdr (assq 'frames attrs)))) (list g w mm (listp frames)))	OK ((0 0 80 25) (0 0 80 25) (nil nil) t)
+3	(let* ((attrs (frame-monitor-attributes)) (g (cdr (assq 'geometry attrs))) (w (cdr (assq 'workarea attrs))) (mm (cdr (assq 'mm-size attrs))) (frames (cdr (assq 'frames attrs)))) (list g w mm (listp frames)))	OK ((0 0 80 25) (0 0 80 25) (nil nil) t)
+4	(equal (display-monitor-attributes-list) (display-monitor-attributes-list nil))	OK t
+5	(equal (frame-monitor-attributes) (frame-monitor-attributes nil))	OK t
+6	(let ((term (car (terminal-list)))) (length (display-monitor-attributes-list term)))	OK 1
+7	(condition-case err (display-monitor-attributes-list 1) (error (car err)))	OK error
+8	(condition-case err (frame-monitor-attributes 1) (error (car err)))	OK error
+9	(let* ((attrs (frame-monitor-attributes (car (terminal-list)))) (g (cdr (assq 'geometry attrs)))) g)	OK (0 0 80 25)
