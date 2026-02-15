@@ -1675,10 +1675,10 @@ impl LayoutEngine {
                         let img_cols = (total_w / char_w).ceil() as i32;
                         col += img_cols;
                         x_offset += total_w;
-                        // Advance rows if image is taller than one line
-                        let img_rows = ((total_h / char_h).ceil() as i32).max(1);
-                        if img_rows > 1 {
-                            row += img_rows - 1;
+                        // Track height for row advancement at newline/wrap
+                        // (don't advance row now — allows multiple media on same line)
+                        if total_h > row_max_height {
+                            row_max_height = total_h;
                         }
                     }
 
@@ -1710,9 +1710,10 @@ impl LayoutEngine {
                         let vid_cols = (vid_w / char_w).ceil() as i32;
                         col += vid_cols;
                         x_offset += vid_w;
-                        let vid_rows = ((vid_h / char_h).ceil() as i32).max(1);
-                        if vid_rows > 1 {
-                            row += vid_rows - 1;
+                        // Track height for row advancement at newline/wrap
+                        // (don't advance row now — allows multiple media on same line)
+                        if vid_h > row_max_height {
+                            row_max_height = vid_h;
                         }
                     }
 
@@ -1744,9 +1745,10 @@ impl LayoutEngine {
                         let wk_cols = (wk_w / char_w).ceil() as i32;
                         col += wk_cols;
                         x_offset += wk_w;
-                        let wk_rows = ((wk_h / char_h).ceil() as i32).max(1);
-                        if wk_rows > 1 {
-                            row += wk_rows - 1;
+                        // Track height for row advancement at newline/wrap
+                        // (don't advance row now — allows multiple media on same line)
+                        if wk_h > row_max_height {
+                            row_max_height = wk_h;
                         }
                     }
 

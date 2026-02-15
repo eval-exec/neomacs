@@ -29,7 +29,15 @@
       (let ((test-vid (expand-file-name "test/data/video/test.mp4")))
         (and (file-exists-p test-vid) test-vid))
       nil)
-  "Path to test video, or nil if not found.")
+  "Path to first test video, or nil if not found.")
+
+(defvar inline-media-test-video-path-2
+  (or (let ((home-vid (expand-file-name "~/Videos/4k_test.mp4")))
+        (and (file-exists-p home-vid) home-vid))
+      (let ((test-vid (expand-file-name "test/data/video/test.mp4")))
+        (and (file-exists-p test-vid) test-vid))
+      nil)
+  "Path to second test video, or nil if not found.")
 
 (defvar inline-media-test-url "https://www.reddit.com/"
   "URL to load in WebKit view.")
@@ -44,9 +52,8 @@
   "Run the inline media test."
   (interactive)
 
-  ;; Resize frame to be tall enough for all three media types
-  ;; Each media is 225px high, plus text, so need ~900px minimum
-  (set-frame-size (selected-frame) 100 60)  ; columns x lines (taller)
+  ;; Resize frame large enough for all media side-by-side
+  (set-frame-size (selected-frame) 160 70)  ; columns x lines
   (set-frame-position (selected-frame) 50 50)
 
   (switch-to-buffer (get-buffer-create "*Inline Media Test*"))
@@ -84,31 +91,40 @@
        (inline-media-test-log "WebKit: ERROR %S" err)))
     (insert "\n")
 
-    ;; === Section 2: Inline Video ===
-    (insert "--- 2. Inline Video ---\n")
-    (if inline-media-test-video-path
+    ;; === Section 2: Inline Video (two side-by-side) ===
+    (insert "--- 2. Inline Video (x2 side-by-side) ---\n")
+    (if (and inline-media-test-video-path inline-media-test-video-path-2)
         (condition-case err
-            (let ((video-id (neomacs-video-insert inline-media-test-video-path
-                                                   media-width media-height)))
-              (if video-id
-                  (progn
-                    ;; Start video playback so frames are visible
-                    (neomacs-video-play video-id)
+            (progn
+              ;; Insert both videos on the same line, then play both
+              (let ((video-id-1 (neomacs-video-insert inline-media-test-video-path
+                                                      media-width media-height)))
+                ;; Point is now after video 1 (same line, no newline)
+                (let ((video-id-2 (neomacs-video-insert inline-media-test-video-path-2
+                                                        media-width media-height)))
+                  ;; Now play both simultaneously
+                  (when video-id-1 (neomacs-video-play video-id-1))
+                  (when video-id-2 (neomacs-video-play video-id-2))
+                  (cond
+                   ((and video-id-1 video-id-2)
                     (insert "\n")
-                    (insert (format "Video ID: %d, File: %s (%dx%d)\n"
-                                    video-id
+                    (insert (format "Video 1: %s (ID %d), Video 2: %s (ID %d) — %dx%d each\n"
                                     (file-name-nondirectory inline-media-test-video-path)
+                                    video-id-1
+                                    (file-name-nondirectory inline-media-test-video-path-2)
+                                    video-id-2
                                     media-width media-height))
-                    (insert "Playing video...\n")
+                    (insert "Playing both videos simultaneously...\n")
                     (setq success-count (1+ success-count))
-                    (inline-media-test-log "Video: OK (id=%d)" video-id))
-                (insert "[Video creation failed]\n")
-                (inline-media-test-log "Video: FAILED (neomacs-video-insert returned nil)")))
+                    (inline-media-test-log "Video: OK (id1=%d, id2=%d)" video-id-1 video-id-2))
+                   (t
+                    (insert "\n[Video creation failed]\n")
+                    (inline-media-test-log "Video: FAILED (one or both returned nil)"))))))
           (error
            (insert (format "[Video error: %S]\n" err))
            (inline-media-test-log "Video: ERROR %S" err)))
       (insert "[No test video found - skipping]\n")
-      (insert "Set inline-media-test-video-path or place video at ~/Videos/test.mp4\n")
+      (insert "Need both ~/Videos/4k_f1.mp4 and ~/Videos/4k_test.mp4\n")
       (inline-media-test-log "Video: SKIPPED (no file)"))
     (insert "\n")
 
