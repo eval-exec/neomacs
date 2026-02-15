@@ -402,6 +402,12 @@ pub(crate) fn builtin_timer_activate(
 /// Stub implementation: just returns t.
 pub(crate) fn builtin_sit_for(args: Vec<Value>) -> EvalResult {
     expect_min_args("sit-for", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("sit-for"), Value::Int(args.len() as i64)],
+        ));
+    }
     // Validate that the first arg is a number
     let _secs = expect_number(&args[0])?;
     // In a full implementation this would yield to the event loop.
@@ -647,6 +653,13 @@ mod tests {
         // Wrong type
         let result = builtin_sit_for(vec![Value::string("bad")]);
         assert!(result.is_err());
+
+        // Wrong arity
+        let result = builtin_sit_for(vec![Value::Int(0), Value::Nil, Value::Nil]);
+        assert!(matches!(
+            result,
+            Err(Flow::Signal(sig)) if sig.symbol == "wrong-number-of-arguments"
+        ));
     }
 
     #[test]
