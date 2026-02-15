@@ -483,6 +483,7 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "message",
     "min",
     "minibuffer-contents",
+    "minibuffer-contents-no-properties",
     "minibuffer-depth",
     "minibuffer-prompt",
     "minibufferp",
@@ -850,6 +851,7 @@ mod tests {
         assert!(is_dispatch_builtin_name("read-char-exclusive"));
         assert!(is_dispatch_builtin_name("minibuffer-prompt"));
         assert!(is_dispatch_builtin_name("minibuffer-contents"));
+        assert!(is_dispatch_builtin_name("minibuffer-contents-no-properties"));
         assert!(is_dispatch_builtin_name("exit-minibuffer"));
         assert!(is_dispatch_builtin_name("recursive-edit"));
         assert!(is_dispatch_builtin_name("exit-recursive-edit"));

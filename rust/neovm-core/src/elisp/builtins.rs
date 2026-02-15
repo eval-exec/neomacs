@@ -5896,6 +5896,9 @@ pub(crate) fn dispatch_builtin(
         "minibuffer-contents" => {
             return Some(super::minibuffer::builtin_minibuffer_contents(eval, args))
         }
+        "minibuffer-contents-no-properties" => {
+            return Some(super::minibuffer::builtin_minibuffer_contents_no_properties(eval, args))
+        }
         "exit-minibuffer" => return Some(super::minibuffer::builtin_exit_minibuffer(args)),
         "minibuffer-depth" => return Some(super::minibuffer::builtin_minibuffer_depth(args)),
         "princ" => return Some(builtin_princ_eval(eval, args)),

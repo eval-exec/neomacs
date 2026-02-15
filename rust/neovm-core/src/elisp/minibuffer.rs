@@ -765,6 +765,24 @@ pub(crate) fn builtin_minibuffer_contents(
     Ok(Value::string(text))
 }
 
+/// `(minibuffer-contents-no-properties)` — returns minibuffer contents
+/// without text properties.
+///
+/// NeoVM stores plain strings for this path, so this is equivalent to
+/// `minibuffer-contents` in batch mode.
+pub(crate) fn builtin_minibuffer_contents_no_properties(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("minibuffer-contents-no-properties", &args, 0)?;
+    let text = eval
+        .buffers
+        .current_buffer()
+        .map(|buf| buf.buffer_string())
+        .unwrap_or_default();
+    Ok(Value::string(text))
+}
+
 /// `(minibuffer-depth)` — returns the current recursive minibuffer depth.
 ///
 /// Stub: returns 0.
@@ -1472,6 +1490,27 @@ mod tests {
             .insert("probe");
         let result = builtin_minibuffer_contents(&mut eval, vec![]).unwrap();
         assert!(matches!(result, Value::Str(ref s) if &**s == "probe"));
+    }
+
+    #[test]
+    fn builtin_minibuffer_contents_no_properties_returns_current_buffer_text() {
+        let mut eval = super::super::eval::Evaluator::new();
+        eval.buffers
+            .current_buffer_mut()
+            .expect("scratch buffer")
+            .insert("probe");
+        let result = builtin_minibuffer_contents_no_properties(&mut eval, vec![]).unwrap();
+        assert!(matches!(result, Value::Str(ref s) if &**s == "probe"));
+    }
+
+    #[test]
+    fn builtin_minibuffer_contents_no_properties_rejects_args() {
+        let mut eval = super::super::eval::Evaluator::new();
+        let result = builtin_minibuffer_contents_no_properties(&mut eval, vec![Value::Nil]);
+        assert!(matches!(
+            result,
+            Err(Flow::Signal(sig)) if sig.symbol == "wrong-number-of-arguments"
+        ));
     }
 
     #[test]
