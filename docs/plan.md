@@ -4,6 +4,27 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented batch reader `end-of-file` payload compatibility slice:
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/read-batch-error-payloads.forms`
+    - `test/neovm/vm-compat/cases/read-batch-error-payloads.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - aligned batch reader error payloads to GNU Emacs:
+    - `read-from-minibuffer`
+    - `read-string`
+    - `read-number`
+    - `completing-read`
+    - `y-or-n-p`
+    - `yes-or-no-p`
+  - all now signal:
+    - `(end-of-file "Error reading from stdin")`
+  - verified:
+    - `cargo test reader::tests:: -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/read-batch-error-payloads.forms EXPECTED=cases/read-batch-error-payloads.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/input-batch-readers.forms EXPECTED=cases/input-batch-readers.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/read-batch-input-semantics.forms EXPECTED=cases/read-batch-input-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Implemented `undo` result/payload compatibility slice:
   - added and enabled oracle corpus:
     - `test/neovm/vm-compat/cases/undo-result-semantics.forms`
