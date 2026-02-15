@@ -123,6 +123,12 @@ Last updated: 2026-02-15
   - `test/neovm/vm-compat/cases/display-monitor-semantics.forms`
   - `test/neovm/vm-compat/cases/display-monitor-semantics.expected.tsv`
   - wired into `test/neovm/vm-compat/cases/default.list`
+- Aligned generic value printer with terminal-handle rendering:
+  - top-level/result printing now renders terminal handles as `#<terminal ...>` instead of raw vector internals
+  - byte-printing path (`print_value_bytes`) now mirrors the same terminal-handle representation
+- Expanded oracle corpus for terminal-handle top-level rendering:
+  - `test/neovm/vm-compat/cases/terminal-handle-printing.forms` now includes raw `(frame-terminal)` / `(car (terminal-list))` output checks
+  - refreshed `test/neovm/vm-compat/cases/terminal-handle-printing.expected.tsv`
 - Kept branch green with targeted Rust tests and vm-compat checks after each slice.
 
 ## Doing
