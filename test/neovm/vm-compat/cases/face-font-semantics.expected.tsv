@@ -1,0 +1,18 @@
+1	(fboundp 'face-font)	OK t
+2	(face-font 'default)	OK nil
+3	(face-font 'default nil)	OK nil
+4	(face-font 'default nil nil)	OK nil
+5	(face-font 'default nil t)	OK nil
+6	(face-font "default")	OK nil
+7	(face-font "mode-line")	OK nil
+8	(condition-case err (face-font "unknown-face") (error err))	OK (error "Invalid face" unknown-face)
+9	(condition-case err (face-font "") (error err))	OK (error "Invalid face" ##)
+10	(condition-case err (face-font 1) (error err))	OK (error "Invalid face" 1)
+11	(condition-case err (face-font 'unknown-face) (error err))	OK (error "Invalid face" unknown-face)
+12	(condition-case err (face-font nil) (error err))	OK (error "Invalid face")
+13	(condition-case err (face-font t) (error err))	OK (error "Invalid face" t)
+14	(condition-case err (face-font) (error err))	OK (wrong-number-of-arguments face-font 0)
+15	(condition-case err (face-font 'default nil nil nil) (error err))	OK (wrong-number-of-arguments face-font 4)
+16	(internal-make-lisp-face 'face-font-x)	OK [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified]
+17	(condition-case err (face-font 'face-font-x) (error err))	OK (error "Invalid face" face-font-x)
+18	(condition-case err (face-font "face-font-x") (error err))	OK (error "Invalid face" face-font-x)
