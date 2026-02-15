@@ -5591,6 +5591,9 @@ pub(crate) fn dispatch_builtin(
         "match-data" => return Some(builtin_match_data_eval(eval, args)),
         "set-match-data" => return Some(builtin_set_match_data_eval(eval, args)),
         "replace-match" => return Some(builtin_replace_match(eval, args)),
+        "replace-regexp-in-string" => {
+            return Some(super::search::builtin_replace_regexp_in_string_eval(eval, args))
+        }
         "query-replace" => return Some(super::isearch::builtin_query_replace_eval(eval, args)),
         "query-replace-regexp" => {
             return Some(super::isearch::builtin_query_replace_regexp_eval(eval, args))

@@ -249,6 +249,7 @@ cases/line-filter-edge-semantics
 cases/replace-regexp-semantics
 cases/replace-regexp-backref-semantics
 cases/replace-regexp-in-string-semantics
+cases/replace-regexp-in-string-variable-semantics
 cases/replace-string-semantics
 cases/replace-query-case-fold-variable-semantics
 cases/replace-delimited-semantics

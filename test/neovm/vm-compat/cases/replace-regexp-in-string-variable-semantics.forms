@@ -1,0 +1,9 @@
+(let ((case-fold-search nil))
+  (replace-regexp-in-string "a" "x" "A"))
+
+(let ((case-fold-search t))
+  (replace-regexp-in-string "a" "x" "A"))
+
+(let ((case-fold-search t)
+      (search-upper-case nil))
+  (replace-regexp-in-string "A" "x" "a"))

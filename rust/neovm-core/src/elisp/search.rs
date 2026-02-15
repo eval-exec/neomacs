@@ -401,6 +401,10 @@ pub(crate) fn builtin_looking_at(args: Vec<Value>) -> EvalResult {
 /// `(replace-regexp-in-string REGEXP REP STRING &optional FIXEDCASE LITERAL SUBEXP START)`
 /// -- replace all matches of REGEXP in STRING with REP.
 pub(crate) fn builtin_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
+    builtin_replace_regexp_in_string_with_case_fold(args, true)
+}
+
+fn builtin_replace_regexp_in_string_with_case_fold(args: Vec<Value>, case_fold: bool) -> EvalResult {
     expect_min_args("replace-regexp-in-string", &args, 3)?;
     let pattern = expect_string(&args[0])?;
     let rep = expect_string(&args[1])?;
@@ -410,9 +414,12 @@ pub(crate) fn builtin_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
     let _subexp = args.get(5);
     let start = normalize_string_start_arg(&s, args.get(6))?;
 
-    // Emacs defaults `case-fold-search` to non-nil, and this pure builtin
-    // currently follows that default behavior.
-    let rust_pattern = format!("(?i:{})", super::regex::translate_emacs_regex(&pattern));
+    let translated = super::regex::translate_emacs_regex(&pattern);
+    let rust_pattern = if case_fold {
+        format!("(?i:{translated})")
+    } else {
+        translated
+    };
     let re = regex::Regex::new(&rust_pattern)
         .map_err(|e| signal("invalid-regexp", vec![Value::string(e.to_string())]))?;
 
@@ -431,6 +438,25 @@ pub(crate) fn builtin_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
         .into_owned();
 
     Ok(Value::string(replaced))
+}
+
+fn dynamic_or_global_symbol_value(eval: &super::eval::Evaluator, name: &str) -> Option<Value> {
+    for frame in eval.dynamic.iter().rev() {
+        if let Some(value) = frame.get(name) {
+            return Some(value.clone());
+        }
+    }
+    eval.obarray.symbol_value(name).cloned()
+}
+
+pub(crate) fn builtin_replace_regexp_in_string_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    let case_fold = dynamic_or_global_symbol_value(eval, "case-fold-search")
+        .map(|value| !value.is_nil())
+        .unwrap_or(true);
+    builtin_replace_regexp_in_string_with_case_fold(args, case_fold)
 }
 
 // ---------------------------------------------------------------------------
