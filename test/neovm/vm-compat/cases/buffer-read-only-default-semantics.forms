@@ -1,0 +1,21 @@
+; buffer-read-only is an auto buffer-local variable with a separate default value.
+(default-value 'buffer-read-only)
+(with-temp-buffer
+  (setq buffer-read-only t)
+  (default-value 'buffer-read-only))
+(with-temp-buffer
+  (setq buffer-read-only t)
+  (list buffer-read-only
+        (default-value 'buffer-read-only)
+        (local-variable-p 'buffer-read-only)))
+(let ((buffer-read-only t))
+  (default-value 'buffer-read-only))
+(let ((orig (default-value 'buffer-read-only)))
+  (unwind-protect
+      (progn
+        (setq-default buffer-read-only t)
+        (with-temp-buffer
+          (list buffer-read-only
+                (default-value 'buffer-read-only)
+                (local-variable-p 'buffer-read-only))))
+    (setq-default buffer-read-only orig)))

@@ -1,0 +1,5 @@
+1	(default-value 'buffer-read-only)	OK nil
+2	(with-temp-buffer (setq buffer-read-only t) (default-value 'buffer-read-only))	OK nil
+3	(with-temp-buffer (setq buffer-read-only t) (list buffer-read-only (default-value 'buffer-read-only) (local-variable-p 'buffer-read-only)))	OK (t nil t)
+4	(let ((buffer-read-only t)) (default-value 'buffer-read-only))	OK nil
+5	(let ((orig (default-value 'buffer-read-only))) (unwind-protect (progn (setq-default buffer-read-only t) (with-temp-buffer (list buffer-read-only (default-value 'buffer-read-only) (local-variable-p 'buffer-read-only)))) (setq-default buffer-read-only orig)))	OK (nil t t)

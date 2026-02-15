@@ -82,6 +82,7 @@ cases/delete-directory-semantics
 cases/delete-file-trash-semantics
 cases/make-symbolic-link-semantics
 cases/buffer-locals
+cases/buffer-read-only-default-semantics
 cases/buffer-local-value
 cases/buffer-local-variables-semantics
 cases/defvar-local
