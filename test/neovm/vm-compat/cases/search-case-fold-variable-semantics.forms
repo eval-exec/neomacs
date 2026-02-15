@@ -41,3 +41,27 @@
   (insert "A")
   (goto-char (point-max))
   (re-search-backward "a" nil t))
+
+(with-temp-buffer
+  (insert "a")
+  (goto-char (point-min))
+  (let ((case-fold-search t))
+    (search-forward "A" nil t)))
+
+(with-temp-buffer
+  (insert "a")
+  (goto-char (point-min))
+  (let ((case-fold-search t))
+    (re-search-forward "A" nil t)))
+
+(with-temp-buffer
+  (insert "a")
+  (goto-char (point-max))
+  (let ((case-fold-search t))
+    (search-backward "A" nil t)))
+
+(with-temp-buffer
+  (insert "a")
+  (goto-char (point-max))
+  (let ((case-fold-search t))
+    (re-search-backward "A" nil t)))
