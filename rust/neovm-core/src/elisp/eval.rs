@@ -150,6 +150,7 @@ impl Evaluator {
         obarray.set_symbol_value("print-length", Value::Nil);
         obarray.set_symbol_value("print-level", Value::Nil);
         obarray.set_symbol_value("standard-output", Value::True);
+        obarray.set_symbol_value("buffer-read-only", Value::Nil);
 
         // Mark standard variables as special (dynamically bound)
         for name in &[
@@ -166,6 +167,7 @@ impl Evaluator {
             "print-length",
             "print-level",
             "standard-output",
+            "buffer-read-only",
         ] {
             obarray.make_special(name);
         }
@@ -175,6 +177,9 @@ impl Evaluator {
 
         // Initialize indentation variables (tab-width, indent-tabs-mode, etc.)
         super::indent::init_indent_vars(&mut obarray);
+
+        let mut custom = CustomManager::new();
+        custom.make_variable_buffer_local("buffer-read-only");
 
         Self {
             obarray,
@@ -195,7 +200,7 @@ impl Evaluator {
             bookmarks: BookmarkManager::new(),
             abbrevs: AbbrevManager::new(),
             autoloads: AutoloadManager::new(),
-            custom: CustomManager::new(),
+            custom,
             kill_ring: KillRing::new(),
             rectangle: RectangleState::new(),
             interactive: InteractiveRegistry::new(),
