@@ -1901,17 +1901,6 @@ pub(crate) fn builtin_transpose_sentences(
         return Ok(Value::Nil);
     }
 
-    let buf = eval
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    if buf.read_only {
-        return Err(signal(
-            "buffer-read-only",
-            vec![Value::string(buf.name.clone())],
-        ));
-    }
-
     let steps = n.unsigned_abs() as usize;
     let backward = n < 0;
 
@@ -1955,6 +1944,17 @@ pub(crate) fn builtin_transpose_sentences(
             let (second_start, second_end) = spans[second_idx];
             (first_start, first_end, second_start, second_end)
         };
+
+        let buf = eval
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        if region_case_read_only(eval, buf) {
+            return Err(signal(
+                "buffer-read-only",
+                vec![Value::string(buf.name.clone())],
+            ));
+        }
 
         let (sentence_a, between, sentence_b) = {
             let buf_r = eval
