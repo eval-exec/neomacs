@@ -1,0 +1,17 @@
+; Lock in batch transient-mark-mode argument and state behavior.
+(transient-mark-mode)
+transient-mark-mode
+(transient-mark-mode -1)
+transient-mark-mode
+(transient-mark-mode nil)
+transient-mark-mode
+(transient-mark-mode 0)
+(transient-mark-mode 1)
+(transient-mark-mode 0.5)
+(transient-mark-mode 1.5)
+(transient-mark-mode 'lambda)
+(transient-mark-mode '(4))
+(transient-mark-mode '(-1))
+(condition-case err
+    (transient-mark-mode nil nil)
+  (error (car err)))

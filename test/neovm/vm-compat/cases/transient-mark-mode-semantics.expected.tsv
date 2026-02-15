@@ -1,0 +1,14 @@
+1	(transient-mark-mode)	OK t
+2	transient-mark-mode	OK t
+3	(transient-mark-mode -1)	OK nil
+4	transient-mark-mode	OK nil
+5	(transient-mark-mode nil)	OK t
+6	transient-mark-mode	OK t
+7	(transient-mark-mode 0)	OK nil
+8	(transient-mark-mode 1)	OK t
+9	(transient-mark-mode 0.5)	OK nil
+10	(transient-mark-mode 1.5)	OK t
+11	(transient-mark-mode 'lambda)	OK t
+12	(transient-mark-mode '(4))	OK t
+13	(transient-mark-mode '(-1))	OK t
+14	(condition-case err (transient-mark-mode nil nil) (error (car err)))	OK wrong-number-of-arguments
