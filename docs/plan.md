@@ -4,6 +4,25 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `copy-file` optional-args compatibility slice:
+  - updated pure + evaluator-aware builtins in `rust/neovm-core/src/elisp/fileio.rs`:
+    - `builtin_copy_file`
+    - `builtin_copy_file_eval`
+  - semantics aligned with oracle subset:
+    - arity `2..6`
+    - strict `stringp` validation for `FROM` and `TO`
+    - destination pre-existence signals `file-already-exists` when `OK-IF-ALREADY-EXISTS` is `nil`
+    - destination replacement allowed when `OK-IF-ALREADY-EXISTS` is non-`nil`
+    - trailing optional args accepted (keep-time / uid-gid / xattrs flags)
+    - evaluator path resolves relative names against dynamic/default `default-directory`
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/copy-file-semantics.forms`
+    - `test/neovm/vm-compat/cases/copy-file-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml copy_file_optional -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/copy-file-semantics.forms EXPECTED=cases/copy-file-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Implemented `rename-file` overwrite-guard compatibility slice:
   - updated pure + evaluator-aware builtins in `rust/neovm-core/src/elisp/fileio.rs`:
     - `builtin_rename_file`

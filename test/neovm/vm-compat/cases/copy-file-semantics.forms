@@ -1,0 +1,57 @@
+; copy-file argument validation and overwrite semantics.
+
+(condition-case err
+    (copy-file 1 "/tmp/x")
+  (error err))
+
+(condition-case err
+    (copy-file "/tmp/x" 1)
+  (error err))
+
+(condition-case err
+    (copy-file "/tmp/x")
+  (error err))
+
+(let* ((base (make-temp-file "neovm-copy-file-" t))
+       (src (expand-file-name "src.txt" base))
+       (dst (expand-file-name "dst.txt" base)))
+  (with-temp-buffer (insert "x") (write-region nil nil src))
+  (prog1
+      (list (copy-file src dst)
+            (file-exists-p dst)
+            (condition-case err
+                (copy-file src dst)
+              (error (car err)))
+            (condition-case err
+                (copy-file src dst t)
+              (error (car err))))
+    (delete-file dst)
+    (delete-file src)
+    (delete-directory base)))
+
+(let* ((base (make-temp-file "neovm-copy-file-opt-" t))
+       (src (expand-file-name "src.txt" base))
+       (dst (expand-file-name "dst.txt" base)))
+  (with-temp-buffer (insert "x") (write-region nil nil src))
+  (prog1
+      (condition-case err
+          (copy-file src dst nil t t t)
+        (error (car err)))
+    (delete-file dst)
+    (delete-file src)
+    (delete-directory base)))
+
+(condition-case err
+    (copy-file "a" "b" nil nil nil nil nil)
+  (error err))
+
+(let* ((base (make-temp-file "neovm-copy-file-eval-" t))
+       (src (expand-file-name "src.txt" base)))
+  (with-temp-buffer (insert "x") (write-region nil nil src))
+  (prog1
+      (let ((default-directory (file-name-as-directory base)))
+        (list (copy-file "src.txt" "dst.txt")
+              (file-exists-p "dst.txt")))
+    (delete-file (expand-file-name "dst.txt" base))
+    (delete-file src)
+    (delete-directory base)))

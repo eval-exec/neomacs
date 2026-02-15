@@ -2082,8 +2082,26 @@ pub(crate) fn builtin_rename_file_eval(eval: &Evaluator, args: Vec<Value>) -> Ev
 /// (copy-file FROM TO) -> nil
 pub(crate) fn builtin_copy_file(args: Vec<Value>) -> EvalResult {
     expect_min_args("copy-file", &args, 2)?;
+    if args.len() > 6 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("copy-file"), Value::Int(args.len() as i64)],
+        ));
+    }
     let from = expect_string_strict(&args[0])?;
     let to = expect_string_strict(&args[1])?;
+    let ok_if_exists = args.get(2).is_some_and(|value| value.is_truthy());
+    if fs::symlink_metadata(&to).is_ok() && !ok_if_exists {
+        return Err(signal(
+            "file-already-exists",
+            vec![
+                Value::string("Copying"),
+                Value::string(format!("File exists: {to}")),
+                Value::string(&from),
+                Value::string(&to),
+            ],
+        ));
+    }
     copy_file(&from, &to).map_err(|e| signal_file_io_paths(e, "Copying", &from, &to))?;
     Ok(Value::Nil)
 }
@@ -2092,8 +2110,26 @@ pub(crate) fn builtin_copy_file(args: Vec<Value>) -> EvalResult {
 /// against dynamic/default `default-directory`.
 pub(crate) fn builtin_copy_file_eval(eval: &Evaluator, args: Vec<Value>) -> EvalResult {
     expect_min_args("copy-file", &args, 2)?;
+    if args.len() > 6 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("copy-file"), Value::Int(args.len() as i64)],
+        ));
+    }
     let from = resolve_filename_for_eval(eval, &expect_string_strict(&args[0])?);
     let to = resolve_filename_for_eval(eval, &expect_string_strict(&args[1])?);
+    let ok_if_exists = args.get(2).is_some_and(|value| value.is_truthy());
+    if fs::symlink_metadata(&to).is_ok() && !ok_if_exists {
+        return Err(signal(
+            "file-already-exists",
+            vec![
+                Value::string("Copying"),
+                Value::string(format!("File exists: {to}")),
+                Value::string(&from),
+                Value::string(&to),
+            ],
+        ));
+    }
     copy_file(&from, &to).map_err(|e| signal_file_io_paths(e, "Copying", &from, &to))?;
     Ok(Value::Nil)
 }
@@ -3058,6 +3094,62 @@ mod tests {
     }
 
     #[test]
+    fn test_builtin_copy_file_optional_arg_semantics() {
+        let dir = std::env::temp_dir().join("neovm_builtin_copy_optional");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("src.txt");
+        let dst = dir.join("dst.txt");
+        fs::write(&src, b"src").unwrap();
+        fs::write(&dst, b"dst").unwrap();
+        let src_s = src.to_string_lossy().to_string();
+        let dst_s = dst.to_string_lossy().to_string();
+
+        let err = builtin_copy_file(vec![Value::string(&src_s), Value::string(&dst_s)]).unwrap_err();
+        match err {
+            Flow::Signal(sig) => assert_eq!(sig.symbol, "file-already-exists"),
+            other => panic!("expected signal, got {:?}", other),
+        }
+
+        assert_eq!(
+            builtin_copy_file(vec![Value::string(&src_s), Value::string(&dst_s), Value::True])
+                .unwrap(),
+            Value::Nil
+        );
+
+        assert_eq!(
+            builtin_copy_file(vec![
+                Value::string(&src_s),
+                Value::string(&dst_s),
+                Value::True,
+                Value::True,
+                Value::True,
+                Value::True,
+            ])
+            .unwrap(),
+            Value::Nil
+        );
+
+        let err = builtin_copy_file(vec![
+            Value::string("a"),
+            Value::string("b"),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+        ])
+        .unwrap_err();
+        match err {
+            Flow::Signal(sig) => assert_eq!(sig.symbol, "wrong-number-of-arguments"),
+            other => panic!("expected wrong-number-of-arguments, got {:?}", other),
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_builtin_add_name_to_file_semantics() {
         let dir = std::env::temp_dir().join("neovm_add_name_to_file_test");
         let _ = fs::remove_dir_all(&dir);
@@ -3664,6 +3756,41 @@ mod tests {
         );
         assert!(!base.join("src.txt").exists());
         assert!(base.join("dst.txt").exists());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_builtin_copy_file_eval_optional_arg_semantics() {
+        let base = std::env::temp_dir().join("neovm_copy_eval_optional");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("src.txt"), "src").unwrap();
+        fs::write(base.join("dst.txt"), "dst").unwrap();
+
+        let mut eval = Evaluator::new();
+        let base_str = format!("{}/", base.to_string_lossy());
+        eval.obarray
+            .set_symbol_value("default-directory", Value::string(&base_str));
+
+        let err = builtin_copy_file_eval(
+            &eval,
+            vec![Value::string("src.txt"), Value::string("dst.txt")],
+        )
+        .unwrap_err();
+        match err {
+            Flow::Signal(sig) => assert_eq!(sig.symbol, "file-already-exists"),
+            other => panic!("expected signal, got {:?}", other),
+        }
+
+        assert_eq!(
+            builtin_copy_file_eval(
+                &eval,
+                vec![Value::string("src.txt"), Value::string("dst.txt"), Value::True],
+            )
+            .unwrap(),
+            Value::Nil
+        );
 
         let _ = fs::remove_dir_all(&base);
     }
