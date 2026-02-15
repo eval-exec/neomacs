@@ -1,0 +1,9 @@
+1	(fboundp 'replace-regexp-in-string)	OK t
+2	(replace-regexp-in-string "a" "x" "a a")	OK "x x"
+3	(replace-regexp-in-string "a" "x" "A a")	OK "X x"
+4	(replace-regexp-in-string "a" "x" "A a" t)	OK "x x"
+5	(replace-regexp-in-string "\\(a\\)" "[\\1]" "a a")	OK "[a] [a]"
+6	(replace-regexp-in-string "[0-9]+" "X" "111 222 333" nil nil nil 4)	OK "X X"
+7	(condition-case err (replace-regexp-in-string "[a-" "x" "abc") (invalid-regexp (car err)))	OK invalid-regexp
+8	(condition-case err (replace-regexp-in-string 1 "x" "abc") (error err))	OK (wrong-type-argument stringp 1)
+9	(condition-case err (replace-regexp-in-string "a") (wrong-number-of-arguments (car err)))	OK wrong-number-of-arguments

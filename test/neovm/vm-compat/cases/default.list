@@ -242,6 +242,7 @@ cases/how-many-semantics
 cases/flush-lines-semantics
 cases/keep-lines-semantics
 cases/replace-regexp-semantics
+cases/replace-regexp-in-string-semantics
 cases/replace-string-semantics
 cases/looking-at-p-semantics
 cases/search-count

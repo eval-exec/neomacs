@@ -111,6 +111,76 @@ fn normalize_string_start_arg(string: &str, start: Option<&Value>) -> Result<usi
     Ok(start_idx as usize)
 }
 
+fn preserve_case(replacement: &str, matched: &str) -> String {
+    if matched.is_empty() || replacement.is_empty() {
+        return replacement.to_string();
+    }
+
+    let all_upper = matched
+        .chars()
+        .all(|c| !c.is_alphabetic() || c.is_uppercase());
+    let has_alpha = matched.chars().any(|c| c.is_alphabetic());
+    if all_upper && has_alpha {
+        return replacement.to_uppercase();
+    }
+
+    let mut chars = matched.chars();
+    let first = chars.next().unwrap();
+    let first_upper = first.is_uppercase();
+    let rest_lower = chars.all(|c| !c.is_alphabetic() || c.is_lowercase());
+    if first_upper && rest_lower {
+        let mut out = String::with_capacity(replacement.len());
+        let mut rep_chars = replacement.chars();
+        if let Some(ch) = rep_chars.next() {
+            for uc in ch.to_uppercase() {
+                out.push(uc);
+            }
+        }
+        out.extend(rep_chars);
+        return out;
+    }
+
+    replacement.to_string()
+}
+
+fn expand_emacs_replacement(rep: &str, caps: &regex::Captures<'_>, literal: bool) -> String {
+    if literal {
+        return rep.to_string();
+    }
+
+    let mut out = String::with_capacity(rep.len());
+    let mut chars = rep.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+
+        let Some(next) = chars.next() else {
+            out.push('\\');
+            break;
+        };
+
+        match next {
+            '&' => {
+                if let Some(m) = caps.get(0) {
+                    out.push_str(m.as_str());
+                }
+            }
+            '1'..='9' => {
+                let idx = next.to_digit(10).unwrap() as usize;
+                if let Some(m) = caps.get(idx) {
+                    out.push_str(m.as_str());
+                }
+            }
+            '\\' => out.push('\\'),
+            other => out.push(other),
+        }
+    }
+
+    out
+}
+
 fn flatten_match_data(md: &super::regex::MatchData) -> Value {
     let mut trailing = md.groups.len();
     while trailing > 0 && md.groups[trailing - 1].is_none() {
@@ -334,50 +404,32 @@ pub(crate) fn builtin_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
     let pattern = expect_string(&args[0])?;
     let rep = expect_string(&args[1])?;
     let s = expect_string(&args[2])?;
-    let _fixedcase = args.get(3).is_some_and(|v| v.is_truthy());
+    let fixedcase = args.get(3).is_some_and(|v| v.is_truthy());
     let literal = args.get(4).is_some_and(|v| v.is_truthy());
     let _subexp = args.get(5);
-    let start = if args.len() > 6 {
-        expect_int(&args[6])? as usize
-    } else {
-        0
-    };
+    let start = normalize_string_start_arg(&s, args.get(6))?;
 
-    let rust_pattern = super::regex::translate_emacs_regex(&pattern);
+    // Emacs defaults `case-fold-search` to non-nil, and this pure builtin
+    // currently follows that default behavior.
+    let rust_pattern = format!("(?i:{})", super::regex::translate_emacs_regex(&pattern));
     let re = regex::Regex::new(&rust_pattern)
         .map_err(|e| signal("invalid-regexp", vec![Value::string(e.to_string())]))?;
 
-    let search_region = if start > 0 && start < s.len() {
-        &s[start..]
-    } else {
-        &s
-    };
+    let search_region = &s[start..];
+    let replaced = re
+        .replace_all(search_region, |caps: &regex::Captures<'_>| {
+            let base = expand_emacs_replacement(&rep, caps, literal);
+            if fixedcase {
+                base
+            } else if let Some(m) = caps.get(0) {
+                preserve_case(&base, m.as_str())
+            } else {
+                base
+            }
+        })
+        .into_owned();
 
-    let result = if literal {
-        re.replace_all(search_region, regex::NoExpand(&rep))
-            .into_owned()
-    } else {
-        // Translate Emacs-style back-references (\1, \&, etc.) to regex crate style ($1, ${0})
-        let rust_rep = rep
-            .replace("\\&", "${0}")
-            .replace("\\1", "${1}")
-            .replace("\\2", "${2}")
-            .replace("\\3", "${3}")
-            .replace("\\4", "${4}")
-            .replace("\\5", "${5}")
-            .replace("\\6", "${6}")
-            .replace("\\7", "${7}")
-            .replace("\\8", "${8}")
-            .replace("\\9", "${9}");
-        re.replace_all(search_region, rust_rep.as_str())
-            .into_owned()
-    };
-
-    if start > 0 && start < s.len() {
-        Ok(Value::string(format!("{}{}", &s[..start], result)))
-    } else {
-        Ok(Value::string(result))
-    }
+    Ok(Value::string(replaced))
 }
 
 // ---------------------------------------------------------------------------
@@ -615,7 +667,28 @@ mod tests {
             Value::Nil,    // subexp
             Value::Int(4), // start
         ]);
-        assert_str(result.unwrap(), "111 X X");
+        assert_str(result.unwrap(), "X X");
+    }
+
+    #[test]
+    fn replace_regexp_preserves_case_when_fixedcase_nil() {
+        let result = builtin_replace_regexp_in_string(vec![
+            Value::string("a"),
+            Value::string("x"),
+            Value::string("A a"),
+        ]);
+        assert_str(result.unwrap(), "X x");
+    }
+
+    #[test]
+    fn replace_regexp_fixedcase_disables_case_preserve() {
+        let result = builtin_replace_regexp_in_string(vec![
+            Value::string("a"),
+            Value::string("x"),
+            Value::string("A a"),
+            Value::True, // fixedcase
+        ]);
+        assert_str(result.unwrap(), "x x");
     }
 
     #[test]
