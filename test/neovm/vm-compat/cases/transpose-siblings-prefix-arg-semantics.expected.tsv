@@ -1,0 +1,6 @@
+1	(with-temp-buffer (insert "(a) (b) (c)") (goto-char 1) (let ((current-prefix-arg 2)) (call-interactively 'transpose-sexps) (buffer-string)))	OK "(a) (b) (c)"
+2	(with-temp-buffer (insert "(a) (b) (c)") (goto-char 1) (let ((current-prefix-arg 2)) (command-execute 'transpose-sexps) (buffer-string)))	OK "(a) (b) (c)"
+3	(with-temp-buffer (insert "(a) (b) (c)") (goto-char 9) (let ((current-prefix-arg '-)) (call-interactively 'transpose-sexps) (buffer-string)))	OK "(b) (a) (c)"
+4	(with-temp-buffer (insert "One. Two. Three.") (goto-char 1) (let ((current-prefix-arg 2)) (call-interactively 'transpose-sentences) (buffer-string)))	ERR (end-of-buffer nil)
+5	(with-temp-buffer (insert "One. Two. Three.") (goto-char 1) (let ((current-prefix-arg 2)) (command-execute 'transpose-sentences) (buffer-string)))	ERR (end-of-buffer nil)
+6	(with-temp-buffer (insert "One. Two. Three.") (goto-char 11) (let ((current-prefix-arg '-)) (call-interactively 'transpose-sentences) (buffer-string)))	ERR (error ("Don’t have two things to transpose"))

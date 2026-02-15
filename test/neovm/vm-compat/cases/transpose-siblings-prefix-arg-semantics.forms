@@ -1,0 +1,43 @@
+; transpose-sexps / transpose-sentences prefix-arg command dispatch behavior.
+
+(with-temp-buffer
+  (insert "(a) (b) (c)")
+  (goto-char 1)
+  (let ((current-prefix-arg 2))
+    (call-interactively 'transpose-sexps)
+    (buffer-string)))
+
+(with-temp-buffer
+  (insert "(a) (b) (c)")
+  (goto-char 1)
+  (let ((current-prefix-arg 2))
+    (command-execute 'transpose-sexps)
+    (buffer-string)))
+
+(with-temp-buffer
+  (insert "(a) (b) (c)")
+  (goto-char 9)
+  (let ((current-prefix-arg '-))
+    (call-interactively 'transpose-sexps)
+    (buffer-string)))
+
+(with-temp-buffer
+  (insert "One. Two. Three.")
+  (goto-char 1)
+  (let ((current-prefix-arg 2))
+    (call-interactively 'transpose-sentences)
+    (buffer-string)))
+
+(with-temp-buffer
+  (insert "One. Two. Three.")
+  (goto-char 1)
+  (let ((current-prefix-arg 2))
+    (command-execute 'transpose-sentences)
+    (buffer-string)))
+
+(with-temp-buffer
+  (insert "One. Two. Three.")
+  (goto-char 11)
+  (let ((current-prefix-arg '-))
+    (call-interactively 'transpose-sentences)
+    (buffer-string)))
