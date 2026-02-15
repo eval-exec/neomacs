@@ -222,15 +222,6 @@ pub fn translate_emacs_regex(pattern: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Internal: compile an Emacs regex pattern
-// ---------------------------------------------------------------------------
-
-fn compile_emacs_regex(pattern: &str) -> Result<Regex, String> {
-    let rust_pattern = translate_emacs_regex(pattern);
-    Regex::new(&rust_pattern).map_err(|e| format!("Invalid regexp: {}", e))
-}
-
 fn compile_emacs_regex_case_fold(pattern: &str, case_fold: bool) -> Result<Regex, String> {
     let rust_pattern = translate_emacs_regex(pattern);
     let wrapped = if case_fold {
