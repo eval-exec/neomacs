@@ -402,15 +402,22 @@ pub(crate) fn builtin_insert_kbd_macro(
 
 /// (kbd-macro-query FLAG) -> nil
 ///
-/// Query the user during keyboard macro execution.
-/// In this VM implementation, this is a stub that returns nil
-/// (no interactive terminal to query).
+/// Compatibility subset:
+/// - arity is exactly 1
+/// - when neither recording nor executing a keyboard macro, signal
+///   `(user-error "Not defining or executing kbd macro")`
+/// - otherwise return nil (interactive query flow is not implemented yet)
 pub(crate) fn builtin_kbd_macro_query(
-    _eval: &mut super::eval::Evaluator,
-    _args: Vec<Value>,
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
 ) -> EvalResult {
-    // In a full Emacs, this would pause playback and prompt the user.
-    // In the VM, we simply continue (no-op).
+    expect_args("kbd-macro-query", &args, 1)?;
+    if !eval.kmacro.recording {
+        return Err(signal(
+            "user-error",
+            vec![Value::string("Not defining or executing kbd macro")],
+        ));
+    }
     Ok(Value::Nil)
 }
 
@@ -999,13 +1006,38 @@ mod tests {
     }
 
     #[test]
-    fn test_kbd_macro_query_stub() {
+    fn test_kbd_macro_query_subset() {
         use super::super::eval::Evaluator;
 
         let mut eval = Evaluator::new();
-        let result = builtin_kbd_macro_query(&mut eval, vec![]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_nil());
+
+        let wrong_arity = builtin_kbd_macro_query(&mut eval, vec![]).unwrap_err();
+        match wrong_arity {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-number-of-arguments");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::symbol("kbd-macro-query"), Value::Int(0)]
+                );
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+
+        let not_recording = builtin_kbd_macro_query(&mut eval, vec![Value::True]).unwrap_err();
+        match not_recording {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "user-error");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::string("Not defining or executing kbd macro")]
+                );
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+
+        eval.kmacro.start_recording(false);
+        let ok = builtin_kbd_macro_query(&mut eval, vec![Value::Nil]).unwrap();
+        assert!(ok.is_nil());
     }
 
     #[test]

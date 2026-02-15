@@ -4,6 +4,20 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `kbd-macro-query` compatibility subset and oracle lock-in:
+  - updated `rust/neovm-core/src/elisp/kmacro.rs`:
+    - enforced exact arity of 1
+    - aligned non-recording/non-executing behavior to `(user-error "Not defining or executing kbd macro")`
+    - kept recording-mode path as no-op `nil` pending interactive query support
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/kbd-macro-query-semantics.forms`
+    - `test/neovm/vm-compat/cases/kbd-macro-query-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml test_kbd_macro_query_subset -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/kbd-macro-query-semantics.forms EXPECTED=cases/kbd-macro-query-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Implemented pure `looking-at` regexp validation subset:
   - updated `rust/neovm-core/src/elisp/search.rs`:
     - pure dispatch now compiles translated regexp and signals `invalid-regexp` for malformed patterns

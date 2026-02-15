@@ -1,0 +1,4 @@
+1	(kbd-macro-query)	ERR (wrong-number-of-arguments (kbd-macro-query 0))
+2	(condition-case err (kbd-macro-query t) (error err))	OK (user-error "Not defining or executing kbd macro")
+3	(condition-case err (kbd-macro-query nil) (error err))	OK (user-error "Not defining or executing kbd macro")
+4	(condition-case err (kbd-macro-query t t) (error err))	OK (wrong-number-of-arguments kbd-macro-query 2)
