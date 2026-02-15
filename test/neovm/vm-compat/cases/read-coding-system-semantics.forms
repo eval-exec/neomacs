@@ -1,0 +1,12 @@
+; Lock in batch read-coding-system/read-non-nil-coding-system semantics.
+(condition-case err (read-coding-system "") (error err))
+(condition-case err (read-coding-system "" nil) (error err))
+(condition-case err (read-coding-system "" 'utf-8) (error err))
+(condition-case err (read-coding-system "" 1) (error err))
+(condition-case err (read-coding-system nil) (error err))
+(condition-case err (read-coding-system 1) (error err))
+(condition-case err (read-coding-system "" nil nil) (error err))
+(condition-case err (read-non-nil-coding-system "") (error err))
+(condition-case err (read-non-nil-coding-system nil) (error err))
+(condition-case err (read-non-nil-coding-system 1) (error err))
+(condition-case err (read-non-nil-coding-system "" nil) (error err))

@@ -74,6 +74,7 @@ cases/transient-mark-mode-semantics
 cases/input-batch-readers
 cases/read-batch-input-semantics
 cases/read-batch-error-payloads
+cases/read-coding-system-semantics
 cases/timer-semantics
 cases/display-stub-semantics
 cases/display-batch-semantics
