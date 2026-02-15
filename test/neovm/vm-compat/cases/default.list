@@ -86,6 +86,7 @@ cases/bindings
 cases/mark-semantics
 cases/region-beginning-end-semantics
 cases/use-region-p-semantics
+cases/mark-activation-commands-semantics
 cases/specpdl-dynamic-unwind-semantics
 cases/get-file-buffer-semantics
 cases/file-truename-semantics
