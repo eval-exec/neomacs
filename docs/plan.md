@@ -4,6 +4,48 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `zlib-decompress-region` compatibility slice (stub -> oracle-aligned error/type subset):
+  - updated `rust/neovm-core/src/elisp/xml.rs`:
+    - arity aligned to `2..3`
+    - `START` / `END` now validate `integer-or-marker-p`
+    - batch behavior now signals `(error "This function can be called only in unibyte buffers")`
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/zlib-decompress-region-semantics.forms`
+    - `test/neovm/vm-compat/cases/zlib-decompress-region-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml zlib_decompress_region -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/zlib-decompress-region-semantics.forms EXPECTED=cases/zlib-decompress-region-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
+- Implemented `libxml-parse-xml-region` compatibility slice (arity/type subset lock-in):
+  - updated `rust/neovm-core/src/elisp/xml.rs`:
+    - arity aligned to `0..4`
+    - optional `START` / `END` now validate `integer-or-marker-p` only when non-`nil`
+    - kept current parser fallback return shape `nil`
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/libxml-parse-xml-region-semantics.forms`
+    - `test/neovm/vm-compat/cases/libxml-parse-xml-region-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml libxml_parse_xml_region_arity_and_type_subset -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/libxml-parse-xml-region-semantics.forms EXPECTED=cases/libxml-parse-xml-region-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
+- Implemented `libxml-parse-html-region` compatibility slice (arity/type subset lock-in):
+  - updated `rust/neovm-core/src/elisp/xml.rs`:
+    - arity aligned to `0..4`
+    - optional `START` / `END` now validate `integer-or-marker-p` only when non-`nil`
+    - preserved current parser fallback return shape `nil`
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/libxml-parse-html-region-semantics.forms`
+    - `test/neovm/vm-compat/cases/libxml-parse-html-region-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml libxml_parse_html_region_arity_and_type_subset -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/libxml-parse-html-region-semantics.forms EXPECTED=cases/libxml-parse-html-region-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Implemented `format-mode-line` / `pos-visible-in-window-p` batch compatibility slice:
   - updated `rust/neovm-core/src/elisp/xdisp.rs`:
     - `format-mode-line` arity aligned to `1..4` (no 0-arg path)
