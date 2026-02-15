@@ -11,6 +11,7 @@
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
+use crate::buffer::Buffer;
 
 // ---------------------------------------------------------------------------
 // Argument helpers (local to this module)
@@ -125,6 +126,26 @@ fn tab_width(eval: &super::eval::Evaluator) -> usize {
         Some(Value::Char(c)) if (*c as u32) > 0 => *c as usize,
         _ => 8,
     }
+}
+
+fn buffer_read_only_active(eval: &super::eval::Evaluator, buf: &Buffer) -> bool {
+    if buf.read_only {
+        return true;
+    }
+
+    for frame in eval.dynamic.iter().rev() {
+        if let Some(value) = frame.get("buffer-read-only").cloned() {
+            return value.is_truthy();
+        }
+    }
+
+    if let Some(value) = buf.get_buffer_local("buffer-read-only") {
+        return value.is_truthy();
+    }
+
+    eval.obarray
+        .symbol_value("buffer-read-only")
+        .is_some_and(|value| value.is_truthy())
 }
 
 fn line_bounds(text: &str, begv: usize, zv: usize, point: usize) -> (usize, usize) {
@@ -242,6 +263,10 @@ pub(crate) fn builtin_move_to_column_eval(
     let target = expect_wholenump(&args[0])?;
     let force = args.get(1).is_some_and(|v| v.is_truthy());
     let tabw = tab_width(eval);
+    let read_only = eval
+        .buffers
+        .current_buffer()
+        .is_some_and(|buf| buffer_read_only_active(eval, buf));
 
     let Some(buf) = eval.buffers.current_buffer_mut() else {
         return Ok(Value::Int(0));
@@ -288,7 +313,7 @@ pub(crate) fn builtin_move_to_column_eval(
     }
 
     if let Some((tab_byte, col_before_tab)) = tab_split {
-        if buf.read_only {
+        if read_only {
             return Err(signal(
                 "buffer-read-only",
                 vec![Value::string(buf.name.clone())],
@@ -303,7 +328,7 @@ pub(crate) fn builtin_move_to_column_eval(
     buf.goto_char(dest_byte);
 
     if force && reached < target {
-        if buf.read_only {
+        if read_only {
             return Err(signal(
                 "buffer-read-only",
                 vec![Value::string(buf.name.clone())],
@@ -338,7 +363,7 @@ pub(crate) fn builtin_indent_region(
     let Some(buf) = eval.buffers.current_buffer() else {
         return Ok(Value::True);
     };
-    if buf.read_only {
+    if buffer_read_only_active(eval, buf) {
         return Err(signal(
             "buffer-read-only",
             vec![Value::string(buf.name.clone())],
@@ -459,16 +484,21 @@ pub(crate) fn builtin_indent_for_tab_command(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("indent-for-tab-command", &args, 1)?;
+    let read_only_buffer_name = eval.buffers.current_buffer().and_then(|buf| {
+        if buffer_read_only_active(eval, buf) {
+            Some(buf.name.clone())
+        } else {
+            None
+        }
+    });
+    if let Some(name) = read_only_buffer_name {
+        return Err(signal("buffer-read-only", vec![Value::string(name)]));
+    }
+
     let buf = eval
         .buffers
         .current_buffer_mut()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    if buf.read_only {
-        return Err(signal(
-            "buffer-read-only",
-            vec![Value::string(buf.name.clone())],
-        ));
-    }
     buf.insert("\t");
     Ok(Value::Nil)
 }
@@ -486,7 +516,7 @@ pub(crate) fn builtin_indent_according_to_mode(
     let Some(buf) = eval.buffers.current_buffer() else {
         return Ok(Value::Nil);
     };
-    if buf.read_only {
+    if buffer_read_only_active(eval, buf) {
         return Err(signal(
             "buffer-read-only",
             vec![Value::string(buf.name.clone())],
