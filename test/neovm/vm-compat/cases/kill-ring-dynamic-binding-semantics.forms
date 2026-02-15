@@ -1,0 +1,12 @@
+; kill-ring dynamic binding semantics with `let`.
+(let ((kill-ring nil))
+  (kill-new "a")
+  (current-kill 0 t))
+
+(let ((kill-ring nil))
+  (condition-case err
+      (current-kill 0 t)
+    (error (car err))))
+
+(let ((kill-ring (list "z")))
+  (current-kill 0 t))
