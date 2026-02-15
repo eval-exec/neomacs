@@ -1,0 +1,3 @@
+1	(with-temp-buffer (insert "a") (newline) (insert "b") (newline) (insert "c") (newline) (goto-char 1) (let ((current-prefix-arg 2)) (call-interactively 'transpose-lines) (split-string (buffer-string) (string 10) t)))	OK ("b" "c" "a")
+2	(with-temp-buffer (insert "a") (newline) (insert "b") (newline) (insert "c") (newline) (goto-char 1) (let ((current-prefix-arg 2)) (command-execute 'transpose-lines) (split-string (buffer-string) (string 10) t)))	OK ("b" "a" "c")
+3	(with-temp-buffer (insert "a") (newline) (insert "b") (newline) (insert "c") (newline) (goto-char (point-max)) (let ((current-prefix-arg '-)) (condition-case err (progn (call-interactively 'transpose-lines) (split-string (buffer-string) (string 10) t)) (error (car err)))))	OK ("a" "c" "b")
