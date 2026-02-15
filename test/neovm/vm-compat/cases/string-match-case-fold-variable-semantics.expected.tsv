@@ -6,3 +6,7 @@
 6	(let ((case-fold-search t)) (string-match-p "a" "A"))	OK 0
 7	(let ((case-fold-search t)) (string-match "A" "a"))	OK 0
 8	(let ((case-fold-search t)) (string-match-p "A" "a"))	OK 0
+9	(let ((case-fold-search t) (search-upper-case t)) (string-match "A" "a"))	OK 0
+10	(let ((case-fold-search t) (search-upper-case t)) (string-match-p "A" "a"))	OK 0
+11	(let ((case-fold-search t) (search-upper-case nil)) (string-match "A" "a"))	OK 0
+12	(let ((case-fold-search t) (search-upper-case nil)) (string-match-p "A" "a"))	OK 0

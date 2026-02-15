@@ -52,6 +52,20 @@
   (let ((case-fold-search t))
     (looking-at-p "A")))
 
+(with-temp-buffer
+  (insert "a")
+  (goto-char (point-min))
+  (let ((case-fold-search t)
+        (search-upper-case t))
+    (looking-at "A")))
+
+(with-temp-buffer
+  (insert "a")
+  (goto-char (point-min))
+  (let ((case-fold-search t)
+        (search-upper-case nil))
+    (looking-at "A")))
+
 (condition-case err (looking-at "[") (invalid-regexp (car err)))
 (condition-case err (looking-at) (wrong-number-of-arguments (car err)))
 (condition-case err (looking-at 1) (error err))

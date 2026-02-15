@@ -8,6 +8,8 @@
 8	(with-temp-buffer (insert "A") (goto-char (point-min)) (looking-at-p "a"))	OK t
 9	(with-temp-buffer (insert "a") (goto-char (point-min)) (let ((case-fold-search t)) (looking-at "A")))	OK t
 10	(with-temp-buffer (insert "a") (goto-char (point-min)) (let ((case-fold-search t)) (looking-at-p "A")))	OK t
-11	(condition-case err (looking-at "[") (invalid-regexp (car err)))	OK invalid-regexp
-12	(condition-case err (looking-at) (wrong-number-of-arguments (car err)))	OK wrong-number-of-arguments
-13	(condition-case err (looking-at 1) (error err))	OK (wrong-type-argument stringp 1)
+11	(with-temp-buffer (insert "a") (goto-char (point-min)) (let ((case-fold-search t) (search-upper-case t)) (looking-at "A")))	OK t
+12	(with-temp-buffer (insert "a") (goto-char (point-min)) (let ((case-fold-search t) (search-upper-case nil)) (looking-at "A")))	OK t
+13	(condition-case err (looking-at "[") (invalid-regexp (car err)))	OK invalid-regexp
+14	(condition-case err (looking-at) (wrong-number-of-arguments (car err)))	OK wrong-number-of-arguments
+15	(condition-case err (looking-at 1) (error err))	OK (wrong-type-argument stringp 1)

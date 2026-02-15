@@ -7,3 +7,8 @@
 (let ((case-fold-search t)) (string-match-p "a" "A"))
 (let ((case-fold-search t)) (string-match "A" "a"))
 (let ((case-fold-search t)) (string-match-p "A" "a"))
+
+(let ((case-fold-search t) (search-upper-case t)) (string-match "A" "a"))
+(let ((case-fold-search t) (search-upper-case t)) (string-match-p "A" "a"))
+(let ((case-fold-search t) (search-upper-case nil)) (string-match "A" "a"))
+(let ((case-fold-search t) (search-upper-case nil)) (string-match-p "A" "a"))
