@@ -4,6 +4,16 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Aligned `delete-indentation` read-only behavior with oracle variable semantics:
+  - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
+    - `delete-indentation` now honors dynamic/buffer-local/global `buffer-read-only` for real join operations
+    - no-op paths (no previous/next line to join) now return without signaling read-only
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/delete-indentation-read-only-variable-semantics.forms`
+    - `test/neovm/vm-compat/cases/delete-indentation-read-only-variable-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/delete-indentation-read-only-variable-semantics` (pass, 5/5)
 - Aligned `yank` read-only behavior with oracle variable semantics:
   - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
     - `yank` now honors dynamic/buffer-local/global `buffer-read-only` before insertion
