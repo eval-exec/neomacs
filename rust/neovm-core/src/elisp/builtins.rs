@@ -673,35 +673,43 @@ pub(crate) fn builtin_cons(args: Vec<Value>) -> EvalResult {
     Ok(Value::cons(args[0].clone(), args[1].clone()))
 }
 
-pub(crate) fn builtin_car(args: Vec<Value>) -> EvalResult {
-    expect_args("car", &args, 1)?;
-    match &args[0] {
+fn car_value(value: &Value) -> Result<Value, Flow> {
+    match value {
         Value::Nil => Ok(Value::Nil),
         Value::Cons(cell) => Ok(cell.lock().expect("poisoned").car.clone()),
         _ => Err(signal(
             "wrong-type-argument",
-            vec![Value::symbol("listp"), args[0].clone()],
+            vec![Value::symbol("listp"), value.clone()],
         )),
     }
 }
 
-pub(crate) fn builtin_cdr(args: Vec<Value>) -> EvalResult {
-    expect_args("cdr", &args, 1)?;
-    match &args[0] {
+fn cdr_value(value: &Value) -> Result<Value, Flow> {
+    match value {
         Value::Nil => Ok(Value::Nil),
         Value::Cons(cell) => Ok(cell.lock().expect("poisoned").cdr.clone()),
         _ => Err(signal(
             "wrong-type-argument",
-            vec![Value::symbol("listp"), args[0].clone()],
+            vec![Value::symbol("listp"), value.clone()],
         )),
     }
+}
+
+pub(crate) fn builtin_car(args: Vec<Value>) -> EvalResult {
+    expect_args("car", &args, 1)?;
+    car_value(&args[0])
+}
+
+pub(crate) fn builtin_cdr(args: Vec<Value>) -> EvalResult {
+    expect_args("cdr", &args, 1)?;
+    cdr_value(&args[0])
 }
 
 fn apply_cxr(mut value: Value, ops: &[u8]) -> EvalResult {
     for op in ops {
         value = match op {
-            b'a' => builtin_car(vec![value])?,
-            b'd' => builtin_cdr(vec![value])?,
+            b'a' => car_value(&value)?,
+            b'd' => cdr_value(&value)?,
             _ => unreachable!("invalid cxr op"),
         };
     }
