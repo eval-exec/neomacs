@@ -1669,6 +1669,19 @@ Last updated: 2026-02-15
     - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/replace-backward-edge-semantics.forms EXPECTED=cases/replace-backward-edge-semantics.expected.tsv` (pass)
     - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/replace-region-noncontiguous-semantics.forms EXPECTED=cases/replace-region-noncontiguous-semantics.expected.tsv` (pass)
     - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+- Aligned `keep-lines`/`flush-lines` edge semantics:
+  - fixed point placement after line filtering to always land at normalized range start (including reversed `RSTART`/`REND` arguments)
+  - aligned `flush-lines` success return value to integer `0` (including match and no-match paths)
+  - added and enabled edge corpus:
+    - `test/neovm/vm-compat/cases/line-filter-edge-semantics.forms`
+    - `test/neovm/vm-compat/cases/line-filter-edge-semantics.expected.tsv`
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `NEOVM_ORACLE_EMACS=/nix/store/hql3zwz5b4ywd2qwx8jssp4dyb7nx4cb-emacs-30.2/bin/emacs make -C test/neovm/vm-compat record FORMS=cases/line-filter-edge-semantics.forms EXPECTED=cases/line-filter-edge-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/line-filter-edge-semantics.forms EXPECTED=cases/line-filter-edge-semantics.expected.tsv` (pass, 7/7)
+    - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/flush-lines-semantics.forms EXPECTED=cases/flush-lines-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/keep-lines-semantics.forms EXPECTED=cases/keep-lines-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Kept branch green with targeted Rust tests and vm-compat checks after each slice.
 
 ## Doing
