@@ -2526,6 +2526,17 @@ Last updated: 2026-02-15
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/cxr-3level-semantics.forms EXPECTED=cases/cxr-3level-semantics.expected.tsv` (pass, 11/11)
     - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/cxr-semantics` (pass, 11/11)
     - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+- Aligned default `fboundp`/callability semantics for subr-x-only string helpers:
+  - removed builtin exposure of `string-chop-newline`, `string-pad`, `string-fill`, and `string-limit` from default NeoVM dispatch/registry
+  - this matches oracle default startup behavior (`fboundp` nil and direct call -> `void-function`) while keeping implementations internal for future explicit library-loading paths
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/subr-x-string-helper-availability.forms`
+    - `test/neovm/vm-compat/cases/subr-x-string-helper-availability.expected.tsv`
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/subr-x-string-helper-availability.forms EXPECTED=cases/subr-x-string-helper-availability.expected.tsv` (pass, 8/8)
+    - `NEOVM_ORACLE_EMACS=/nix/store/ha7zx1gahhj7lrx223m9rpwh89vbqq9z-emacs-git-with-packages-20240702.0/bin/emacs make -C test/neovm/vm-compat check-builtin-registry-fboundp` (pass; only allowlisted drift remains)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 
 ## Doing
 
