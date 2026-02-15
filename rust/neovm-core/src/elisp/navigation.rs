@@ -48,6 +48,15 @@ fn no_buffer() -> Flow {
     signal("error", vec![Value::string("No current buffer")])
 }
 
+fn dynamic_or_global_symbol_value(eval: &super::eval::Evaluator, name: &str) -> Option<Value> {
+    for frame in eval.dynamic.iter().rev() {
+        if let Some(v) = frame.get(name) {
+            return Some(v.clone());
+        }
+    }
+    eval.obarray.symbol_value(name).cloned()
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -736,12 +745,19 @@ pub(crate) fn builtin_use_region_p(
     _args: Vec<Value>,
 ) -> EvalResult {
     let buf = eval.buffers.current_buffer().ok_or_else(no_buffer)?;
-    let mark_active = buf
-        .properties
-        .get("mark-active")
+    let mark_active = match dynamic_or_global_symbol_value(eval, "mark-active") {
+        Some(v) => v.is_truthy(),
+        None => buf
+            .properties
+            .get("mark-active")
+            .is_some_and(|v| v.is_truthy()),
+    };
+    let transient_mark_mode = dynamic_or_global_symbol_value(eval, "transient-mark-mode")
         .is_some_and(|v| v.is_truthy());
-    let has_mark = buf.mark().is_some();
-    Ok(Value::bool(mark_active && has_mark))
+    let non_empty_region = buf.mark().is_some_and(|m| m != buf.point());
+    Ok(Value::bool(
+        mark_active && transient_mark_mode && non_empty_region,
+    ))
 }
 
 /// (deactivate-mark &optional FORCE)
