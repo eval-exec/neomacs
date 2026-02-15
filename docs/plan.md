@@ -1807,6 +1807,25 @@ Last updated: 2026-02-15
     - `make -C test/neovm/vm-compat check-all-neovm` (pass)
   - expanded variable corpus matrix to include explicit `search-upper-case=t` uppercase-pattern case:
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-regexp-in-string-variable-semantics.forms EXPECTED=cases/replace-regexp-in-string-variable-semantics.expected.tsv` (pass, 4/4)
+- Aligned `case-replace` semantics across replace/query-replace stack:
+  - replacement case preservation now honors dynamic/global `case-replace`:
+    - when `case-replace=nil`, replacements are inserted literally (no case adaptation)
+    - case adaptation now only applies when search is case-folding and `case-replace` is enabled
+  - capitalized-match adaptation now preserves replacement tail verbatim (only first char upcased), matching oracle behavior for payloads like `"bAr" -> "BAr"`
+  - affected evaluator paths:
+    - `replace-string`, `replace-regexp`
+    - `query-replace`, `query-replace-regexp` (shared replacement internals)
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/case-replace-semantics.forms`
+    - `test/neovm/vm-compat/cases/case-replace-semantics.expected.tsv`
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/case-replace-semantics.forms EXPECTED=cases/case-replace-semantics.expected.tsv` (pass, 11/11)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-string-semantics.forms EXPECTED=cases/replace-string-semantics.expected.tsv` (pass, 6/6)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-regexp-semantics.forms EXPECTED=cases/replace-regexp-semantics.expected.tsv` (pass, 8/8)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/query-replace-batch-semantics.forms EXPECTED=cases/query-replace-batch-semantics.expected.tsv` (pass, 10/10)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-query-case-fold-variable-semantics.forms EXPECTED=cases/replace-query-case-fold-variable-semantics.expected.tsv` (pass, 10/10)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Kept branch green with targeted Rust tests and vm-compat checks after each slice.
 
 ## Doing
