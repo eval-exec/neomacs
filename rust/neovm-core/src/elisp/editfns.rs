@@ -109,54 +109,6 @@ fn ensure_current_buffer_writable(eval: &super::eval::Evaluator) -> Result<(), F
 // Eval-dependent builtins (need &mut Evaluator for buffer access)
 // ---------------------------------------------------------------------------
 
-/// `(char-after &optional POS)` — return character after POS (or point).
-/// Returns nil if POS is at end of accessible region.
-pub(crate) fn builtin_char_after(
-    eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_max_args("char-after", &args, 1)?;
-    match eval.buffers.current_buffer() {
-        Some(buf) => {
-            let byte = if args.is_empty() || args[0].is_nil() {
-                buf.pt
-            } else {
-                let pos = expect_integer("char-after", &args[0])?;
-                lisp_pos_to_byte(buf, pos)
-            };
-            match buf.char_after(byte) {
-                Some(ch) => Ok(Value::Int(ch as i64)),
-                None => Ok(Value::Nil),
-            }
-        }
-        None => Ok(Value::Nil),
-    }
-}
-
-/// `(char-before &optional POS)` — return character before POS (or point).
-/// Returns nil if POS is at beginning of accessible region.
-pub(crate) fn builtin_char_before(
-    eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_max_args("char-before", &args, 1)?;
-    match eval.buffers.current_buffer() {
-        Some(buf) => {
-            let byte = if args.is_empty() || args[0].is_nil() {
-                buf.pt
-            } else {
-                let pos = expect_integer("char-before", &args[0])?;
-                lisp_pos_to_byte(buf, pos)
-            };
-            match buf.char_before(byte) {
-                Some(ch) => Ok(Value::Int(ch as i64)),
-                None => Ok(Value::Nil),
-            }
-        }
-        None => Ok(Value::Nil),
-    }
-}
-
 /// Collect the insertable text from a mixed list of strings and characters.
 fn collect_insert_text(_name: &str, args: &[Value]) -> Result<String, Flow> {
     let mut text = String::new();
