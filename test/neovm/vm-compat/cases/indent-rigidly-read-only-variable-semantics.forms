@@ -1,0 +1,25 @@
+; indent-rigidly should honor `buffer-read-only` on real mutations and allow no-op paths.
+(with-temp-buffer
+  (insert (concat "a" (string 10) "b"))
+  (setq buffer-read-only t)
+  (condition-case err (indent-rigidly 1 (point-max) 1) (error (car err))))
+(with-temp-buffer
+  (insert (concat "a" (string 10) "b"))
+  (let ((buffer-read-only t))
+    (condition-case err (indent-rigidly 1 (point-max) 1) (error (car err)))))
+(with-temp-buffer
+  (insert (concat "a" (string 10) "b"))
+  (setq buffer-read-only t)
+  (condition-case err (indent-rigidly 1 (point-max) 0) (error (car err))))
+(with-temp-buffer
+  (insert (concat "a" (string 10) "b"))
+  (setq buffer-read-only t)
+  (condition-case err (indent-rigidly 2 2 1) (error (car err))))
+(let ((orig (default-value 'buffer-read-only)))
+  (unwind-protect
+      (progn
+        (setq-default buffer-read-only t)
+        (with-temp-buffer
+          (insert (concat "a" (string 10) "b"))
+          (condition-case err (indent-rigidly 1 (point-max) 1) (error (car err)))))
+    (setq-default buffer-read-only orig)))

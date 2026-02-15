@@ -66,6 +66,7 @@ cases/indent-mode-semantics
 cases/indent-read-only-variable-semantics
 cases/tab-to-tab-stop-semantics
 cases/indent-line-to-semantics
+cases/indent-rigidly-read-only-variable-semantics
 cases/custom-group-p-availability
 cases/custom-set-semantics
 cases/bookmark-helper-availability
