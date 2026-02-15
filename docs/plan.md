@@ -18,6 +18,18 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Removed dead duplicate pure overlay stub surface from legacy buffer module:
+  - updated:
+    - `rust/neovm-core/src/elisp/buffer/pure.rs`
+      - deleted unused pure overlay stub wrappers (`overlay-lists`/`overlayp`/`make-overlay`/`delete-overlay`/`overlay-start`/`overlay-end`/`overlay-buffer`/`overlay-get`/`overlay-put`/`overlays-at`/`overlays-in`)
+    - `rust/neovm-core/src/elisp/buffer/tests.rs`
+      - removed stale local tests bound to deleted dead wrappers
+    - `rust/neovm-core/src/elisp/buffer.rs`
+      - removed stale module comment entries for deleted wrappers
+  - verified:
+    - `cargo test overlay_put -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/overlay-arity-semantics` (pass, 8/8)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/remove-overlays-arity-semantics` (pass, 3/3)
 - Removed dead duplicate pure `get-file-buffer` stub surface:
   - updated:
     - `rust/neovm-core/src/elisp/buffer/pure.rs`
