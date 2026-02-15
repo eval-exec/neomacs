@@ -1707,6 +1707,22 @@ Last updated: 2026-02-15
     - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/string-match-case-fold-semantics.forms EXPECTED=cases/string-match-case-fold-semantics.expected.tsv` (pass)
     - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/match-data.forms EXPECTED=cases/match-data.expected.tsv` (pass)
     - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+- Aligned `search-forward` / `search-backward` / `re-search-forward` / `re-search-backward` with `case-fold-search` variable semantics:
+  - evaluator search dispatch now reads dynamic/global `case-fold-search` and passes case-fold mode into literal and regexp search engines
+  - regex search primitives now support explicit case-fold mode for forward/backward literal and regexp paths
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/search-case-fold-variable-semantics.forms`
+    - `test/neovm/vm-compat/cases/search-case-fold-variable-semantics.expected.tsv`
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `NEOVM_ORACLE_EMACS=/nix/store/hql3zwz5b4ywd2qwx8jssp4dyb7nx4cb-emacs-30.2/bin/emacs make -C test/neovm/vm-compat record FORMS=cases/search-case-fold-variable-semantics.forms EXPECTED=cases/search-case-fold-variable-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/search-case-fold-variable-semantics.forms EXPECTED=cases/search-case-fold-variable-semantics.expected.tsv` (pass, 8/8)
+    - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/search-count.forms EXPECTED=cases/search-count.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/search-buffer.forms EXPECTED=cases/search-buffer.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat --no-print-directory check-neovm FORMS=cases/search-posix-word-semantics.forms EXPECTED=cases/search-posix-word-semantics.expected.tsv` (pass)
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml regex::tests::search_forward_case_fold_true -- --nocapture` (pass)
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml regex::tests::looking_at_respects_case_fold_false -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Kept branch green with targeted Rust tests and vm-compat checks after each slice.
 
 ## Doing
