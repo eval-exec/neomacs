@@ -1,0 +1,5 @@
+; Lock in batch reader end-of-file payload semantics.
+(condition-case err (read-number "") (error err))
+(condition-case err (read-string "") (error err))
+(condition-case err (read-from-minibuffer "") (error err))
+(condition-case err (completing-read "" '(("a") ("b"))) (error err))

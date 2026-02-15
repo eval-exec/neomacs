@@ -1,0 +1,4 @@
+1	(condition-case err (read-number "") (error err))	OK (end-of-file "Error reading from stdin")
+2	(condition-case err (read-string "") (error err))	OK (end-of-file "Error reading from stdin")
+3	(condition-case err (read-from-minibuffer "") (error err))	OK (end-of-file "Error reading from stdin")
+4	(condition-case err (completing-read "" '(("a") ("b"))) (error err))	OK (end-of-file "Error reading from stdin")
