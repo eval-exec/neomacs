@@ -1044,10 +1044,17 @@ pub(crate) fn builtin_yank(eval: &mut super::eval::Evaluator, args: Vec<Value>) 
 
 /// `(yank-pop &optional ARG)` — replace yanked text with an older kill.
 pub(crate) fn builtin_yank_pop(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    if !eval.kill_ring.last_was_yank {
+    let yank_command_in_progress = matches!(
+        dynamic_or_global_symbol_value(eval, "last-command"),
+        Some(Value::Symbol(ref name)) if name == "yank" || name == "yank-pop"
+    );
+    if !yank_command_in_progress {
+        if eval.kill_ring.is_empty() {
+            return Err(signal("error", vec![Value::string("Kill ring is empty")]));
+        }
         return Err(signal(
-            "error",
-            vec![Value::string("Previous command was not a yank")],
+            "end-of-file",
+            vec![Value::string("Error reading from stdin")],
         ));
     }
 
@@ -1057,10 +1064,30 @@ pub(crate) fn builtin_yank_pop(eval: &mut super::eval::Evaluator, args: Vec<Valu
         expect_int(&args[0])?
     };
 
-    let (old_start, old_end) = eval
-        .kill_ring
-        .last_yank_region
-        .ok_or_else(|| signal("error", vec![Value::string("No previous yank")]))?;
+    let (old_start, old_end) = match eval.kill_ring.last_yank_region {
+        Some(region) => region,
+        None => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::Symbol("number-or-marker-p".to_string()), Value::Nil],
+            ))
+        }
+    };
+
+    {
+        let buf = eval
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let pmin = buf.point_min();
+        let pmax = buf.point_max();
+        if old_start < pmin || old_end > pmax || old_start > old_end {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::Symbol("number-or-marker-p".to_string()), Value::Nil],
+            ));
+        }
+    }
 
     // Rotate to get new text.
     let new_text = eval
@@ -3018,17 +3045,30 @@ mod tests {
             r#"(kill-new "first")
                (kill-new "second")
                (yank)
+               (setq last-command 'yank)
                (yank-pop)
                (buffer-string)"#,
         );
         // After yank-pop, "second" should be replaced by "first".
-        assert_eq!(results[4], r#"OK "first""#);
+        assert_eq!(results[5], r#"OK "first""#);
     }
 
     #[test]
     fn yank_pop_without_yank_errors() {
         let results = eval_all(r#"(kill-new "hello") (yank-pop)"#);
-        assert!(results[1].starts_with("ERR"));
+        assert!(results[1].contains("end-of-file"));
+    }
+
+    #[test]
+    fn yank_pop_empty_ring_errors() {
+        let result = eval_one("(yank-pop)");
+        assert!(result.contains("Kill ring is empty"));
+    }
+
+    #[test]
+    fn yank_pop_without_region_errors() {
+        let results = eval_all(r#"(kill-new "hello") (setq last-command 'yank) (yank-pop)"#);
+        assert!(results[2].contains("wrong-type-argument"));
     }
 
     // -- downcase-region tests --
