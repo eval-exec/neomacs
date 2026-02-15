@@ -1,0 +1,6 @@
+1	(with-temp-buffer (insert (concat "A" (char-to-string 10) "a" (char-to-string 10))) (goto-char (point-min)) (let ((case-fold-search nil)) (keep-lines "a")) (split-string (buffer-string) (char-to-string 10) t))	OK ("a")
+2	(with-temp-buffer (insert (concat "A" (char-to-string 10) "a" (char-to-string 10))) (goto-char (point-min)) (keep-lines "a") (split-string (buffer-string) (char-to-string 10) t))	OK ("A" "a")
+3	(with-temp-buffer (insert (concat "A" (char-to-string 10) "a" (char-to-string 10))) (goto-char (point-min)) (let ((case-fold-search t)) (keep-lines "A")) (split-string (buffer-string) (char-to-string 10) t))	OK ("A")
+4	(with-temp-buffer (insert (concat "A" (char-to-string 10) "a" (char-to-string 10))) (goto-char (point-min)) (let ((case-fold-search nil)) (flush-lines "a")) (split-string (buffer-string) (char-to-string 10) t))	OK ("A")
+5	(with-temp-buffer (insert (concat "A" (char-to-string 10) "a" (char-to-string 10))) (goto-char (point-min)) (flush-lines "a") (split-string (buffer-string) (char-to-string 10) t))	OK nil
+6	(with-temp-buffer (insert (concat "A" (char-to-string 10) "a" (char-to-string 10))) (goto-char (point-min)) (let ((case-fold-search t)) (flush-lines "A")) (split-string (buffer-string) (char-to-string 10) t))	OK ("a")

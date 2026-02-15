@@ -244,6 +244,7 @@ cases/count-how-many-case-fold-variable-semantics
 cases/how-many-semantics
 cases/flush-lines-semantics
 cases/keep-lines-semantics
+cases/line-filter-case-fold-variable-semantics
 cases/line-filter-edge-semantics
 cases/replace-regexp-semantics
 cases/replace-regexp-backref-semantics
