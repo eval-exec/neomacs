@@ -1626,15 +1626,24 @@ pub(crate) fn builtin_count_matches_eval(
 
 /// `(isearch-forward)` — stub: initiates forward incremental search.
 pub(crate) fn builtin_isearch_forward(args: Vec<Value>) -> EvalResult {
-    // Interactive search requires a running event loop; return nil as a stub.
     let _ = &args;
-    Ok(Value::Nil)
+    Err(signal(
+        "error",
+        vec![Value::string(
+            "move-to-window-line called from unrelated buffer",
+        )],
+    ))
 }
 
 /// `(isearch-backward)` — stub: initiates backward incremental search.
 pub(crate) fn builtin_isearch_backward(args: Vec<Value>) -> EvalResult {
     let _ = &args;
-    Ok(Value::Nil)
+    Err(signal(
+        "error",
+        vec![Value::string(
+            "move-to-window-line called from unrelated buffer",
+        )],
+    ))
 }
 
 /// `(query-replace FROM TO &optional DELIMITED START END BACKWARD REGION-NONCONTIGUOUS)` — stub.

@@ -235,6 +235,7 @@ cases/textprop-arity-semantics
 cases/propertize-semantics
 cases/widget-apply-semantics
 cases/remove-overlays-arity-semantics
+cases/isearch-batch-semantics
 cases/search-buffer
 cases/count-matches-semantics
 cases/how-many-semantics

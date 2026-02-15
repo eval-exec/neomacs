@@ -405,6 +405,8 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "internal-set-lisp-face-attribute",
     "interpreted-function-p",
     "invisible-p",
+    "isearch-backward",
+    "isearch-forward",
     "json-insert",
     "json-parse-buffer",
     "json-parse-string",

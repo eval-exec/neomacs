@@ -1,0 +1,6 @@
+1	(fboundp 'isearch-forward)	OK t
+2	(fboundp 'isearch-backward)	OK t
+3	(condition-case err (isearch-forward) (error err))	OK (error "move-to-window-line called from unrelated buffer")
+4	(condition-case err (isearch-backward) (error err))	OK (error "move-to-window-line called from unrelated buffer")
+5	(condition-case err (isearch-forward 1) (error err))	OK (error "move-to-window-line called from unrelated buffer")
+6	(condition-case err (isearch-backward 1) (error err))	OK (error "move-to-window-line called from unrelated buffer")

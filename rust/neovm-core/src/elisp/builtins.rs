@@ -5579,6 +5579,8 @@ pub(crate) fn dispatch_builtin(
         "search-backward" => return Some(builtin_search_backward(eval, args)),
         "re-search-forward" => return Some(builtin_re_search_forward(eval, args)),
         "re-search-backward" => return Some(builtin_re_search_backward(eval, args)),
+        "isearch-forward" => return Some(super::isearch::builtin_isearch_forward(args)),
+        "isearch-backward" => return Some(super::isearch::builtin_isearch_backward(args)),
         "looking-at" => return Some(builtin_looking_at(eval, args)),
         "looking-at-p" => return Some(builtin_looking_at_p(eval, args)),
         "string-match" => return Some(builtin_string_match_eval(eval, args)),

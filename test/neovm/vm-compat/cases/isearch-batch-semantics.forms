@@ -1,0 +1,6 @@
+(fboundp 'isearch-forward)
+(fboundp 'isearch-backward)
+(condition-case err (isearch-forward) (error err))
+(condition-case err (isearch-backward) (error err))
+(condition-case err (isearch-forward 1) (error err))
+(condition-case err (isearch-backward 1) (error err))
