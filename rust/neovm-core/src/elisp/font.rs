@@ -488,14 +488,31 @@ pub(crate) fn builtin_defined_colors(args: Vec<Value>) -> EvalResult {
 /// `(face-id FACE)` -- stub, return 0.
 pub(crate) fn builtin_face_id(args: Vec<Value>) -> EvalResult {
     expect_args("face-id", &args, 1)?;
-    Ok(Value::Int(0))
+    if let Value::Symbol(name) = &args[0] {
+        if KNOWN_FACES.contains(&name.as_str()) {
+            return Ok(Value::Int(0));
+        }
+    }
+    let rendered = super::print::print_value(&args[0]);
+    Err(signal(
+        "error",
+        vec![Value::string(format!("Not a face: {rendered}"))],
+    ))
 }
 
 /// `(face-font FACE &optional FRAME CHARACTER)` -- stub, return nil.
 pub(crate) fn builtin_face_font(args: Vec<Value>) -> EvalResult {
     expect_min_args("face-font", &args, 1)?;
     expect_max_args("face-font", &args, 3)?;
-    Ok(Value::Nil)
+    if let Value::Symbol(name) = &args[0] {
+        if KNOWN_FACES.contains(&name.as_str()) {
+            return Ok(Value::Nil);
+        }
+    }
+    Err(signal(
+        "error",
+        vec![Value::string("Invalid face"), args[0].clone()],
+    ))
 }
 
 /// `(internal-face-x-get-resource RESOURCE CLASS FRAME)` -- stub, return nil.
@@ -878,9 +895,21 @@ mod tests {
     }
 
     #[test]
+    fn face_id_rejects_invalid_face() {
+        let result = builtin_face_id(vec![Value::Int(1)]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn face_font_stub() {
         let result = builtin_face_font(vec![Value::symbol("default")]).unwrap();
         assert!(result.is_nil());
+    }
+
+    #[test]
+    fn face_font_rejects_invalid_face() {
+        let result = builtin_face_font(vec![Value::Int(1)]);
+        assert!(result.is_err());
     }
 
     #[test]
