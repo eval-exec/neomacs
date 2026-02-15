@@ -1757,7 +1757,7 @@ pub(crate) fn builtin_transpose_sexps(
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    if buf.read_only {
+    if region_case_read_only(eval, buf) {
         return Err(signal(
             "buffer-read-only",
             vec![Value::string(buf.name.clone())],
