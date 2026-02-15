@@ -1,9 +1,8 @@
 //! Case conversion and character builtins.
 //!
 //! Implements `upcase`, `downcase`, `capitalize`, `upcase-initials`,
-//! `characterp`, `char-or-string-p`, `max-char`, `char-width`,
-//! `string-width`, `unibyte-char-to-multibyte`, `multibyte-char-to-unibyte`,
-//! `char-resolve-modifiers`, and `get-byte`.
+//! `characterp`, `unibyte-char-to-multibyte`,
+//! `multibyte-char-to-unibyte`, `char-resolve-modifiers`, and `get-byte`.
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
@@ -73,34 +72,6 @@ fn code_to_char(code: i64) -> Option<char> {
     } else {
         None
     }
-}
-
-/// Return the display width of a single character.
-/// CJK fullwidth and wide characters return 2; most others return 1.
-fn char_display_width(c: char) -> usize {
-    let cp = c as u32;
-    if is_cjk_fullwidth(cp) {
-        2
-    } else {
-        1
-    }
-}
-
-/// Check whether a Unicode code point is CJK fullwidth / wide.
-///
-/// Uses the Unicode East Asian Width ranges specified in the task:
-/// U+1100-U+115F, U+2E80-U+A4CF, U+F900-U+FAFF, U+FE10-U+FE6F,
-/// U+FF01-U+FF60, U+FFE0-U+FFE6, U+20000-U+2FA1F.
-fn is_cjk_fullwidth(cp: u32) -> bool {
-    matches!(cp,
-        0x1100..=0x115F
-        | 0x2E80..=0xA4CF
-        | 0xF900..=0xFAFF
-        | 0xFE10..=0xFE6F
-        | 0xFF01..=0xFF60
-        | 0xFFE0..=0xFFE6
-        | 0x20000..=0x2FA1F
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -276,124 +247,6 @@ pub(crate) fn builtin_characterp(args: Vec<Value>) -> EvalResult {
         _ => false,
     };
     Ok(Value::bool(is_char))
-}
-
-/// `(char-or-string-p OBJECT)` -- return t if OBJECT is a character or string.
-pub(crate) fn builtin_char_or_string_p(args: Vec<Value>) -> EvalResult {
-    expect_args("char-or-string-p", &args, 1)?;
-    let ok = match &args[0] {
-        Value::Char(_) => true,
-        Value::Int(n) => (0..=MAX_UNICODE).contains(n),
-        Value::Str(_) => true,
-        _ => false,
-    };
-    Ok(Value::bool(ok))
-}
-
-/// `(max-char &optional UNICODE)` -- return max character code.
-/// If UNICODE is non-nil, return 0x10FFFF; otherwise return 0x3FFFFF.
-pub(crate) fn builtin_max_char(args: Vec<Value>) -> EvalResult {
-    expect_min_max_args("max-char", &args, 0, 1)?;
-    let unicode = args.first().map(|v| v.is_truthy()).unwrap_or(false);
-    if unicode {
-        Ok(Value::Int(MAX_UNICODE))
-    } else {
-        Ok(Value::Int(MAX_CHAR))
-    }
-}
-
-/// `(char-width CHAR)` -- return display width of CHAR.
-/// Most characters have width 1; CJK fullwidth characters have width 2.
-pub(crate) fn builtin_char_width(args: Vec<Value>) -> EvalResult {
-    expect_args("char-width", &args, 1)?;
-    let code = extract_char_code(&args[0]).ok_or_else(|| {
-        signal(
-            "wrong-type-argument",
-            vec![Value::symbol("characterp"), args[0].clone()],
-        )
-    })?;
-    if !is_valid_char(code) {
-        return Err(signal(
-            "args-out-of-range",
-            vec![args[0].clone(), Value::Int(0), Value::Int(MAX_CHAR)],
-        ));
-    }
-    let width = match code_to_char(code) {
-        Some(c) => char_display_width(c) as i64,
-        None => 1, // non-Unicode Emacs internal chars default to width 1
-    };
-    Ok(Value::Int(width))
-}
-
-/// `(string-width STRING &optional FROM TO)` -- return total display width.
-pub(crate) fn builtin_string_width(args: Vec<Value>) -> EvalResult {
-    expect_min_max_args("string-width", &args, 1, 3)?;
-    let s = match &args[0] {
-        Value::Str(s) => s.clone(),
-        other => {
-            return Err(signal(
-                "wrong-type-argument",
-                vec![Value::symbol("stringp"), other.clone()],
-            ));
-        }
-    };
-
-    // Collect chars for index-based slicing.
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len() as i64;
-
-    let from = if args.len() >= 2 {
-        match &args[1] {
-            Value::Nil => 0i64,
-            Value::Int(n) => {
-                if *n < 0 || *n > len {
-                    return Err(signal(
-                        "args-out-of-range",
-                        vec![args[0].clone(), args[1].clone()],
-                    ));
-                }
-                *n
-            }
-            other => {
-                return Err(signal(
-                    "wrong-type-argument",
-                    vec![Value::symbol("integerp"), other.clone()],
-                ));
-            }
-        }
-    } else {
-        0
-    };
-
-    let to = if args.len() >= 3 {
-        match &args[2] {
-            Value::Nil => len,
-            Value::Int(n) => {
-                if *n < from || *n > len {
-                    return Err(signal(
-                        "args-out-of-range",
-                        vec![args[0].clone(), args[2].clone()],
-                    ));
-                }
-                *n
-            }
-            other => {
-                return Err(signal(
-                    "wrong-type-argument",
-                    vec![Value::symbol("integerp"), other.clone()],
-                ));
-            }
-        }
-    } else {
-        len
-    };
-
-    let width: usize = chars[from as usize..to as usize]
-        .iter()
-        .map(|c| char_display_width(*c))
-        .sum();
-
-    Ok(Value::Int(width as i64))
 }
 
 /// `(unibyte-char-to-multibyte CH)` -- convert unibyte char to multibyte.
@@ -658,132 +511,6 @@ mod tests {
     }
 
     // =======================================================================
-    // char-or-string-p
-    // =======================================================================
-
-    #[test]
-    fn char_or_string_p_char() {
-        let result = builtin_char_or_string_p(vec![Value::Char('x')]).unwrap();
-        assert!(result.is_truthy());
-    }
-
-    #[test]
-    fn char_or_string_p_string() {
-        let result = builtin_char_or_string_p(vec![Value::string("hello")]).unwrap();
-        assert!(result.is_truthy());
-    }
-
-    #[test]
-    fn char_or_string_p_int_valid() {
-        let result = builtin_char_or_string_p(vec![Value::Int(65)]).unwrap();
-        assert!(result.is_truthy());
-    }
-
-    #[test]
-    fn char_or_string_p_nil() {
-        let result = builtin_char_or_string_p(vec![Value::Nil]).unwrap();
-        assert!(result.is_nil());
-    }
-
-    // =======================================================================
-    // max-char
-    // =======================================================================
-
-    #[test]
-    fn max_char_default() {
-        let result = builtin_max_char(vec![]).unwrap();
-        assert_eq!(result.as_int(), Some(0x3FFFFF));
-    }
-
-    #[test]
-    fn max_char_nil() {
-        let result = builtin_max_char(vec![Value::Nil]).unwrap();
-        assert_eq!(result.as_int(), Some(0x3FFFFF));
-    }
-
-    #[test]
-    fn max_char_unicode() {
-        let result = builtin_max_char(vec![Value::True]).unwrap();
-        assert_eq!(result.as_int(), Some(0x10FFFF));
-    }
-
-    // =======================================================================
-    // char-width
-    // =======================================================================
-
-    #[test]
-    fn char_width_ascii() {
-        let result = builtin_char_width(vec![Value::Int('A' as i64)]).unwrap();
-        assert_eq!(result.as_int(), Some(1));
-    }
-
-    #[test]
-    fn char_width_cjk() {
-        // U+4E2D = Chinese character (in 0x2E80..0xA4CF range)
-        let result = builtin_char_width(vec![Value::Int(0x4E2D)]).unwrap();
-        assert_eq!(result.as_int(), Some(2));
-    }
-
-    #[test]
-    fn char_width_fullwidth_latin() {
-        // U+FF21 = fullwidth 'A' (in 0xFF01..0xFF60 range)
-        let result = builtin_char_width(vec![Value::Int(0xFF21)]).unwrap();
-        assert_eq!(result.as_int(), Some(2));
-    }
-
-    #[test]
-    fn char_width_hangul() {
-        // U+1100 = Hangul Choseong Kiyeok (start of 0x1100..0x115F)
-        let result = builtin_char_width(vec![Value::Int(0x1100)]).unwrap();
-        assert_eq!(result.as_int(), Some(2));
-    }
-
-    #[test]
-    fn char_width_wrong_type() {
-        let result = builtin_char_width(vec![Value::string("a")]);
-        assert!(result.is_err());
-    }
-
-    // =======================================================================
-    // string-width
-    // =======================================================================
-
-    #[test]
-    fn string_width_ascii() {
-        let result = builtin_string_width(vec![Value::string("hello")]).unwrap();
-        assert_eq!(result.as_int(), Some(5));
-    }
-
-    #[test]
-    fn string_width_empty() {
-        let result = builtin_string_width(vec![Value::string("")]).unwrap();
-        assert_eq!(result.as_int(), Some(0));
-    }
-
-    #[test]
-    fn string_width_with_cjk() {
-        // 2 CJK chars + 1 ASCII = 2*2 + 1 = 5
-        let s = "\u{4E2D}\u{6587}a";
-        let result = builtin_string_width(vec![Value::string(s)]).unwrap();
-        assert_eq!(result.as_int(), Some(5));
-    }
-
-    #[test]
-    fn string_width_with_range() {
-        let result =
-            builtin_string_width(vec![Value::string("hello"), Value::Int(1), Value::Int(3)])
-                .unwrap();
-        // chars[1..3] = "el" = width 2
-        assert_eq!(result.as_int(), Some(2));
-    }
-
-    #[test]
-    fn string_width_wrong_type() {
-        let result = builtin_string_width(vec![Value::Int(42)]);
-        assert!(result.is_err());
-    }
-
-    // =======================================================================
     // unibyte-char-to-multibyte
     // =======================================================================
 
@@ -897,19 +624,6 @@ mod tests {
     }
 
     #[test]
-    fn string_width_nil_from() {
-        let result = builtin_string_width(vec![Value::string("hello"), Value::Nil]).unwrap();
-        assert_eq!(result.as_int(), Some(5));
-    }
-
-    #[test]
-    fn string_width_nil_to() {
-        let result =
-            builtin_string_width(vec![Value::string("hello"), Value::Int(0), Value::Nil]).unwrap();
-        assert_eq!(result.as_int(), Some(5));
-    }
-
-    #[test]
     fn wrong_arity_upcase() {
         let result = builtin_upcase(vec![]);
         assert!(result.is_err());
@@ -921,9 +635,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn wrong_arity_char_width() {
-        let result = builtin_char_width(vec![]);
-        assert!(result.is_err());
-    }
 }
