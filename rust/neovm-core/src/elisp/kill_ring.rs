@@ -450,6 +450,11 @@ impl KillRing {
         if text.is_empty() {
             return;
         }
+        self.push_allow_empty(text);
+    }
+
+    /// Push a new entry onto the kill ring, preserving empty strings.
+    pub fn push_allow_empty(&mut self, text: String) {
         self.entries.insert(0, text);
         if self.entries.len() > self.max_size {
             self.entries.truncate(self.max_size);
@@ -460,7 +465,7 @@ impl KillRing {
     /// Replace the most recent entry instead of pushing a new one.
     pub fn replace_top(&mut self, text: String) {
         if self.entries.is_empty() {
-            self.push(text);
+            self.push_allow_empty(text);
         } else {
             self.entries[0] = text;
         }
@@ -486,7 +491,17 @@ impl KillRing {
 
     /// Get the current kill (at yank_pointer).  Returns None if empty.
     pub fn current(&self) -> Option<&str> {
-        self.entries.get(self.yank_pointer).map(|s| s.as_str())
+        self.peek(0)
+    }
+
+    /// Peek at the entry offset by `n` from yank_pointer without moving it.
+    pub fn peek(&self, n: i64) -> Option<&str> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        let len = self.entries.len() as i64;
+        let idx = ((self.yank_pointer as i64 + n) % len + len) % len;
+        self.entries.get(idx as usize).map(|s| s.as_str())
     }
 
     /// Rotate the yank pointer by `n` positions (positive = older entries).
@@ -586,7 +601,7 @@ pub(crate) fn builtin_kill_new(eval: &mut super::eval::Evaluator, args: Vec<Valu
     if replace {
         eval.kill_ring.replace_top(text);
     } else {
-        eval.kill_ring.push(text);
+        eval.kill_ring.push_allow_empty(text);
     }
     Ok(Value::Nil)
 }
@@ -619,8 +634,8 @@ pub(crate) fn builtin_current_kill(
     }
 
     if do_not_move {
-        // Just return current without moving.
-        Ok(Value::string(eval.kill_ring.current().unwrap_or("")))
+        // Return the offset entry without moving the yank pointer.
+        Ok(Value::string(eval.kill_ring.peek(n).unwrap_or("")))
     } else {
         let text = eval.kill_ring.rotate(n).unwrap_or("").to_string();
         Ok(Value::string(text))
@@ -2932,6 +2947,24 @@ mod tests {
         assert_eq!(results[3], r#"OK "c""#);
         assert_eq!(results[4], r#"OK "b""#);
         assert_eq!(results[5], r#"OK "a""#);
+    }
+
+    #[test]
+    fn current_kill_do_not_move_uses_offset() {
+        let results = eval_all(
+            r#"(kill-new "a") (kill-new "b")
+               (list (current-kill 0 t)
+                     (current-kill 1 t)
+                     (current-kill -1 t)
+                     (current-kill 0 t))"#,
+        );
+        assert_eq!(results[2], r#"OK ("b" "a" "a" "b")"#);
+    }
+
+    #[test]
+    fn kill_new_allows_empty_entry() {
+        let results = eval_all(r#"(kill-new "x") (kill-new "") (current-kill 0 t)"#);
+        assert_eq!(results[2], r#"OK """#);
     }
 
     #[test]
