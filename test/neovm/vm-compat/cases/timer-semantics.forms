@@ -2,6 +2,7 @@
 (fboundp 'run-with-idle-timer)
 (fboundp 'cancel-timer)
 (fboundp 'timer-activate)
+(fboundp 'sleep-for)
 (timerp nil)
 
 (condition-case err
@@ -22,9 +23,26 @@
 
 (sit-for 0)
 (sit-for 0 t)
+(sleep-for 0)
 
 (condition-case err
     (sit-for "0")
+  (error (car err)))
+
+(condition-case err
+    (sleep-for)
+  (error (car err)))
+
+(condition-case err
+    (sleep-for 0 0 0)
+  (error (car err)))
+
+(condition-case err
+    (sleep-for "1")
+  (error (car err)))
+
+(condition-case err
+    (sleep-for 0 "1")
   (error (car err)))
 
 (condition-case err
