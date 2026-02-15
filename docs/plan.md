@@ -12,12 +12,24 @@ Last updated: 2026-02-15
 
 ## Next
 
-- Add one focused corpus for `deactivate-mark` / `exchange-point-and-mark` around mark-active publication and unset-mark errors.
+- Add one focused corpus for `transient-mark-mode` + `set-mark-command`/`activate-mark` interactions in batch mode.
 - Continue promoting already-green non-default corpora to `default.list` one-by-one with targeted checks.
 - Keep validating list hygiene and merged-case dedupe as list membership changes.
 
 ## Done
 
+- Aligned mark-activation command semantics with oracle behavior:
+  - updated `rust/neovm-core/src/elisp/navigation.rs`:
+    - `exchange-point-and-mark` now signals `user-error` when mark is unset
+  - added corpus:
+    - `test/neovm/vm-compat/cases/mark-activation-commands-semantics.forms`
+    - `test/neovm/vm-compat/cases/mark-activation-commands-semantics.expected.tsv`
+  - wired into:
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/mark-activation-commands-semantics.forms EXPECTED=cases/mark-activation-commands-semantics.expected.tsv` (pass, 5/5)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/mark-activation-commands-semantics` (pass, 5/5)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Aligned `use-region-p` gating semantics with oracle behavior:
   - updated `rust/neovm-core/src/elisp/navigation.rs`:
     - `use-region-p` now requires: `mark-active`, `transient-mark-mode`, mark set, and non-empty region (`point != mark`)
