@@ -1,0 +1,7 @@
+1	(with-temp-buffer (insert (string 97 10 32 32 98 10 10 9 99)) (indent-region (point-min) (point-max) 2) (string-to-list (buffer-string)))	OK (32 32 97 10 32 32 98 10 10 32 32 99)
+2	(with-temp-buffer (insert "a") (indent-region (point-min) (point-max) 2))	OK t
+3	(with-temp-buffer (insert (string 97 10 32 32 98)) (indent-region (point-min) (point-max)) (string-to-list (buffer-string)))	OK (97 10 98)
+4	(with-temp-buffer (insert (string 97 10 98)) (indent-region (point-max) (point-min) 1) (string-to-list (buffer-string)))	OK (97 10 98)
+5	(condition-case err (indent-region 1 1 "x") (error err))	OK t
+6	(condition-case err (indent-region) (error err))	OK (wrong-number-of-arguments indent-region 0)
+7	(condition-case err (indent-region 1 1 0 nil) (error err))	OK (wrong-number-of-arguments indent-region 4)

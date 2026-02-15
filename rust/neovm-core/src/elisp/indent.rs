@@ -322,15 +322,76 @@ pub(crate) fn builtin_move_to_column_eval(
 /// Indent each nonblank line in the region.
 /// Stub: does nothing, returns nil.
 pub(crate) fn builtin_indent_region(
-    _eval: &mut super::eval::Evaluator,
+    eval: &mut super::eval::Evaluator,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("indent-region", &args, 2)?;
     expect_max_args("indent-region", &args, 3)?;
-    let _start = expect_int(&args[0])?;
-    let _end = expect_int(&args[1])?;
-    // Optional COLUMN argument is accepted but ignored.
-    Ok(Value::Nil)
+    let start = expect_int(&args[0])?;
+    let end = expect_int(&args[1])?;
+    let target_column = match args.get(2) {
+        Some(Value::Int(n)) => Some((*n).max(0) as usize),
+        Some(Value::Char(c)) => Some((*c as i64).max(0) as usize),
+        _ => None,
+    };
+
+    let Some(buf) = eval.buffers.current_buffer() else {
+        return Ok(Value::True);
+    };
+    if buf.read_only {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buf.name.clone())],
+        ));
+    }
+
+    let point_min = buf.text.byte_to_char(buf.point_min()) as i64 + 1;
+    let point_max = buf.text.byte_to_char(buf.point_max()) as i64 + 1;
+    let a = start.clamp(point_min, point_max);
+    let b = end.clamp(point_min, point_max);
+    if a >= b {
+        return Ok(Value::True);
+    }
+    let region_start = buf.text.char_to_byte((a - 1).max(0) as usize);
+    let region_end = buf.text.char_to_byte((b - 1).max(0) as usize);
+
+    let text = buf.text.to_string();
+    let region = &text[region_start..region_end];
+
+    let mut rewritten = String::with_capacity(
+        region
+            .len()
+            .saturating_add(target_column.unwrap_or(0).saturating_mul(4)),
+    );
+    for segment in region.split_inclusive('\n') {
+        let (line, has_newline) = match segment.strip_suffix('\n') {
+            Some(prefix) => (prefix, true),
+            None => (segment, false),
+        };
+
+        if line.chars().all(|ch| ch == ' ' || ch == '\t') {
+            rewritten.push_str(line);
+        } else {
+            let trimmed = line.trim_start_matches([' ', '\t']);
+            if let Some(column) = target_column {
+                rewritten.push_str(&" ".repeat(column));
+            }
+            rewritten.push_str(trimmed);
+        }
+
+        if has_newline {
+            rewritten.push('\n');
+        }
+    }
+
+    let Some(buf) = eval.buffers.current_buffer_mut() else {
+        return Ok(Value::Nil);
+    };
+    buf.delete_region(region_start, region_end);
+    buf.goto_char(region_start);
+    buf.insert(&rewritten);
+
+    Ok(Value::True)
 }
 
 /// (indent-line-to COLUMN) -> nil
@@ -686,6 +747,65 @@ mod tests {
 
         let fourth = ev.eval(&forms[3]).expect("eval indented second line");
         assert_eq!(fourth, Value::Int(4));
+    }
+
+    #[test]
+    fn eval_indent_region_column_subset() {
+        let mut ev = super::super::eval::Evaluator::new();
+        let forms = super::super::parser::parse_forms(
+            r#"
+            (with-temp-buffer
+              (insert (string 97 10 32 32 98 10 10 9 99))
+              (indent-region (point-min) (point-max) 2)
+              (string-to-list (buffer-string)))
+            (with-temp-buffer
+              (insert (string 97 10 32 32 98))
+              (indent-region (point-min) (point-max))
+              (string-to-list (buffer-string)))
+            (with-temp-buffer
+              (insert (string 97 10 98))
+              (indent-region (point-max) (point-min) 1)
+              (string-to-list (buffer-string)))
+            (with-temp-buffer
+              (insert "a")
+              (indent-region (point-min) (point-max) "x"))
+            "#,
+        )
+        .expect("parse forms");
+
+        let first = ev.eval(&forms[0]).expect("eval indent-region column");
+        assert_eq!(
+            list_to_vec(&first).expect("first byte list"),
+            vec![
+                Value::Int(32),
+                Value::Int(32),
+                Value::Int(97),
+                Value::Int(10),
+                Value::Int(32),
+                Value::Int(32),
+                Value::Int(98),
+                Value::Int(10),
+                Value::Int(10),
+                Value::Int(32),
+                Value::Int(32),
+                Value::Int(99),
+            ]
+        );
+
+        let second = ev.eval(&forms[1]).expect("eval indent-region nil column");
+        assert_eq!(
+            list_to_vec(&second).expect("second byte list"),
+            vec![Value::Int(97), Value::Int(10), Value::Int(98),]
+        );
+
+        let third = ev.eval(&forms[2]).expect("eval indent-region swapped bounds");
+        assert_eq!(
+            list_to_vec(&third).expect("third byte list"),
+            vec![Value::Int(97), Value::Int(10), Value::Int(98),]
+        );
+
+        let fourth = ev.eval(&forms[3]).expect("eval indent-region non-numeric column");
+        assert_eq!(fourth, Value::True);
     }
 
     #[test]
