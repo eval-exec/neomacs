@@ -86,6 +86,7 @@ cases/buffer-locals
 cases/buffer-read-only-default-semantics
 cases/edit-read-only-variable-semantics
 cases/newline-read-only-variable-semantics
+cases/whitespace-read-only-variable-semantics
 cases/buffer-local-value
 cases/buffer-local-variables-semantics
 cases/defvar-local

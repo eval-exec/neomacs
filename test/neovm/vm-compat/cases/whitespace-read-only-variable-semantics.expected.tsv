@@ -1,0 +1,10 @@
+1	(with-temp-buffer (insert " a") (goto-char 2) (setq buffer-read-only t) (condition-case err (delete-horizontal-space) (error (car err))))	OK buffer-read-only
+2	(with-temp-buffer (insert " a") (goto-char 2) (let ((buffer-read-only t)) (condition-case err (delete-horizontal-space) (error (car err)))))	OK buffer-read-only
+3	(with-temp-buffer (insert "ab") (goto-char 2) (setq buffer-read-only t) (condition-case err (delete-horizontal-space) (error (car err))))	OK nil
+4	(with-temp-buffer (insert " a") (goto-char 2) (setq buffer-read-only t) (condition-case err (just-one-space) (error (car err))))	OK nil
+5	(with-temp-buffer (insert "   a") (goto-char 3) (setq buffer-read-only t) (condition-case err (just-one-space) (error (car err))))	OK buffer-read-only
+6	(with-temp-buffer (insert "   a") (goto-char 3) (let ((buffer-read-only t)) (condition-case err (just-one-space) (error (car err)))))	OK buffer-read-only
+7	(with-temp-buffer (insert "a") (setq buffer-read-only t) (condition-case err (tab-to-tab-stop) (error (car err))))	OK buffer-read-only
+8	(with-temp-buffer (insert "a") (setq buffer-read-only t) (condition-case err (indent-line-to 4) (error (car err))))	OK buffer-read-only
+9	(with-temp-buffer (insert "    a") (goto-char (point-min)) (setq buffer-read-only t) (condition-case err (indent-line-to 4) (error (car err))))	OK nil
+10	(let ((orig (default-value 'buffer-read-only))) (unwind-protect (progn (setq-default buffer-read-only t) (with-temp-buffer (condition-case err (progn (tab-to-tab-stop) 'ok) (error (car err))))) (setq-default buffer-read-only orig)))	OK ok
