@@ -5,17 +5,30 @@ Last updated: 2026-02-15
 ## Doing
 
 - Continue command-context and read-only variable compatibility sweep in `rust/neovm-core/src/elisp/kill_ring.rs`.
-- Audit duplicate-entry edge paths for `kill-ring-yank-pointer` pointer resolution.
+- Audit pointer wrap behavior across `current-kill`, `yank`, and `yank-pop`.
 - Keeping each slice small: runtime patch -> oracle corpus -> docs note -> push.
 
 ## Next
 
-- Expand oracle corpus for duplicate-entry and pointer-disambiguation behavior.
+- Expand oracle corpus for pointer wrap and empty-entry ring behavior.
 - Audit `yank`/`yank-pop` behavior with empty kill-ring entries and pointer wrap rules.
 - Run targeted regression checks after each slice (`command-dispatch-default-arg-semantics`, touched command corpus, and focused `yank`/`yank-pop` suites).
 
 ## Done
 
+- Fixed pointer-tail matching deadlock and locked duplicate-entry semantics:
+  - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
+    - replaced recursive structural cons comparison in pointer-tail matching with string-suffix matching over decoded ring entries
+    - avoids mutex re-lock deadlock when comparing overlapping tails (e.g. `kill-ring` vs `(cdr kill-ring)`)
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/kill-ring-yank-pointer-duplicate-semantics.forms`
+    - `test/neovm/vm-compat/cases/kill-ring-yank-pointer-duplicate-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/kill-ring-yank-pointer-duplicate-semantics` (pass, 17/17)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/kill-ring-yank-pointer-invalid-semantics` (pass, 20/20)
+    - `cargo test current_kill -- --nocapture` in `rust/neovm-core` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Aligned malformed `kill-ring-yank-pointer` semantics to oracle behavior:
   - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
     - strict pointer sync path now signals `wrong-type-argument` for non-list pointer values in `current-kill`/`yank`/`yank-pop`
