@@ -64,6 +64,7 @@ cases/undo-basics
 cases/undo-buffer-arg
 cases/minibuffer-batch
 cases/input-batch-readers
+cases/display-batch-semantics
 cases/terminal-parameter-semantics
 cases/default-directory
 cases/expand-file-name-default-directory

@@ -115,41 +115,40 @@ fn make_alist(pairs: Vec<(Value, Value)>) -> Value {
 // Display query builtins
 // ---------------------------------------------------------------------------
 
-/// (display-graphic-p &optional DISPLAY) -> t
-/// We are always a GUI application.
+/// (display-graphic-p &optional DISPLAY) -> nil in batch-style vm context.
 pub(crate) fn builtin_display_graphic_p(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-graphic-p", &args, 1)?;
-    Ok(Value::True)
+    Ok(Value::Nil)
 }
 
-/// (display-color-p &optional DISPLAY) -> t
+/// (display-color-p &optional DISPLAY) -> nil in batch-style vm context.
 pub(crate) fn builtin_display_color_p(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-color-p", &args, 1)?;
-    Ok(Value::True)
+    Ok(Value::Nil)
 }
 
-/// (display-pixel-width &optional DISPLAY) -> 1920
+/// (display-pixel-width &optional DISPLAY) -> 80 (terminal columns in batch).
 pub(crate) fn builtin_display_pixel_width(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-pixel-width", &args, 1)?;
-    Ok(Value::Int(1920))
+    Ok(Value::Int(80))
 }
 
-/// (display-pixel-height &optional DISPLAY) -> 1080
+/// (display-pixel-height &optional DISPLAY) -> 25 (terminal rows in batch).
 pub(crate) fn builtin_display_pixel_height(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-pixel-height", &args, 1)?;
-    Ok(Value::Int(1080))
+    Ok(Value::Int(25))
 }
 
-/// (display-mm-width &optional DISPLAY) -> 530
+/// (display-mm-width &optional DISPLAY) -> nil in batch-style vm context.
 pub(crate) fn builtin_display_mm_width(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-mm-width", &args, 1)?;
-    Ok(Value::Int(530))
+    Ok(Value::Nil)
 }
 
-/// (display-mm-height &optional DISPLAY) -> 300
+/// (display-mm-height &optional DISPLAY) -> nil in batch-style vm context.
 pub(crate) fn builtin_display_mm_height(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-mm-height", &args, 1)?;
-    Ok(Value::Int(300))
+    Ok(Value::Nil)
 }
 
 /// (display-screens &optional DISPLAY) -> 1
@@ -158,38 +157,38 @@ pub(crate) fn builtin_display_screens(args: Vec<Value>) -> EvalResult {
     Ok(Value::Int(1))
 }
 
-/// (display-color-cells &optional DISPLAY) -> 16777216 (24-bit color)
+/// (display-color-cells &optional DISPLAY) -> 0 in batch-style vm context.
 pub(crate) fn builtin_display_color_cells(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-color-cells", &args, 1)?;
-    Ok(Value::Int(16777216))
+    Ok(Value::Int(0))
 }
 
-/// (display-planes &optional DISPLAY) -> 24
+/// (display-planes &optional DISPLAY) -> 3 in batch-style vm context.
 pub(crate) fn builtin_display_planes(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-planes", &args, 1)?;
-    Ok(Value::Int(24))
+    Ok(Value::Int(3))
 }
 
-/// (display-visual-class &optional DISPLAY) -> 'true-color
+/// (display-visual-class &optional DISPLAY) -> 'static-gray in batch-style vm context.
 pub(crate) fn builtin_display_visual_class(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-visual-class", &args, 1)?;
-    Ok(Value::symbol("true-color"))
+    Ok(Value::symbol("static-gray"))
 }
 
-/// (display-backing-store &optional DISPLAY) -> 'always
+/// (display-backing-store &optional DISPLAY) -> 'not-useful in batch-style vm context.
 pub(crate) fn builtin_display_backing_store(args: Vec<Value>) -> EvalResult {
     expect_max_args("display-backing-store", &args, 1)?;
-    Ok(Value::symbol("always"))
+    Ok(Value::symbol("not-useful"))
 }
 
 // ---------------------------------------------------------------------------
 // X display builtins (compatibility stubs)
 // ---------------------------------------------------------------------------
 
-/// (x-display-list) -> ("") — list with one empty string representing our display
+/// (x-display-list) -> nil in batch-style vm context.
 pub(crate) fn builtin_x_display_list(args: Vec<Value>) -> EvalResult {
     expect_max_args("x-display-list", &args, 0)?;
-    Ok(Value::list(vec![Value::string("")]))
+    Ok(Value::Nil)
 }
 
 /// (x-open-connection DISPLAY &optional XRM-STRING MUST-SUCCEED) -> nil
