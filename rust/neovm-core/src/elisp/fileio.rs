@@ -1218,9 +1218,15 @@ pub(crate) fn builtin_file_symlink_p_eval(eval: &Evaluator, args: Vec<Value>) ->
     Ok(Value::bool(file_symlink_p(&filename)))
 }
 
-/// (delete-file FILENAME) -> nil
+/// (delete-file FILENAME &optional TRASH) -> nil
 pub(crate) fn builtin_delete_file(args: Vec<Value>) -> EvalResult {
-    expect_args("delete-file", &args, 1)?;
+    expect_min_args("delete-file", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("delete-file"), Value::Int(args.len() as i64)],
+        ));
+    }
     let filename = expect_string_strict(&args[0])?;
     delete_file_compat(&filename)?;
     Ok(Value::Nil)
@@ -1229,7 +1235,13 @@ pub(crate) fn builtin_delete_file(args: Vec<Value>) -> EvalResult {
 /// Evaluator-aware variant of `delete-file` that resolves relative paths
 /// against dynamic/default `default-directory`.
 pub(crate) fn builtin_delete_file_eval(eval: &Evaluator, args: Vec<Value>) -> EvalResult {
-    expect_args("delete-file", &args, 1)?;
+    expect_min_args("delete-file", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("delete-file"), Value::Int(args.len() as i64)],
+        ));
+    }
     let filename = expect_string_strict(&args[0])?;
     let filename = resolve_filename_for_eval(eval, &filename);
     delete_file_compat(&filename)?;
@@ -2030,6 +2042,32 @@ mod tests {
         let path_str = path.to_string_lossy().to_string();
         let _ = fs::remove_file(&path);
         assert!(delete_file_compat(&path_str).is_ok());
+    }
+
+    #[test]
+    fn test_builtin_delete_file_accepts_optional_trash_arg() {
+        let path = std::env::temp_dir().join("neovm_delete_file_trash_arg.tmp");
+        let path_str = path.to_string_lossy().to_string();
+        let _ = fs::remove_file(&path);
+        fs::write(&path, b"x").unwrap();
+
+        let result = builtin_delete_file(vec![Value::string(&path_str), Value::True]).unwrap();
+        assert_eq!(result, Value::Nil);
+        assert!(!path.exists());
+
+        let err = builtin_delete_file(vec![
+            Value::string(&path_str),
+            Value::Nil,
+            Value::Nil,
+        ])
+        .unwrap_err();
+        match err {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-number-of-arguments");
+                assert_eq!(sig.data, vec![Value::symbol("delete-file"), Value::Int(3)]);
+            }
+            other => panic!("expected signal, got {:?}", other),
+        }
     }
 
     #[test]

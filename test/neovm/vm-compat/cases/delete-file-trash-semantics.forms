@@ -1,0 +1,12 @@
+; delete-file accepts optional TRASH arg and preserves core errors.
+
+(condition-case err
+    (delete-file 1)
+  (error err))
+
+(condition-case err
+    (delete-file "/tmp/neovm-delete-file-trash-missing" nil nil)
+  (error err))
+
+(let ((f (make-temp-file "neovm-delete-file-trash-")))
+  (list (delete-file f t) (file-exists-p f)))

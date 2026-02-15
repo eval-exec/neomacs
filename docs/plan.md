@@ -4,6 +4,19 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `delete-file` optional `TRASH` compatibility slice:
+  - extended `delete-file` arity in `rust/neovm-core/src/elisp/fileio.rs` from exact 1 to `1..2` for both pure and evaluator-aware paths
+  - preserved strict `stringp` validation for `FILENAME`
+  - kept missing-file behavior as successful no-op (existing compat behavior)
+  - added unit coverage for optional arg acceptance and `wrong-number-of-arguments` at 3 args
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/delete-file-trash-semantics.forms`
+    - `test/neovm/vm-compat/cases/delete-file-trash-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml delete_file -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/delete-file-trash-semantics.forms EXPECTED=cases/delete-file-trash-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Implemented `make-symbolic-link` compatibility slice:
   - added pure + evaluator-aware builtins in `rust/neovm-core/src/elisp/fileio.rs`:
     - `builtin_make_symbolic_link`
