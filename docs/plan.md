@@ -4,20 +4,39 @@ Last updated: 2026-02-15
 
 ## Doing
 
-- Expand kill-ring/yank pointer corpus around normalization and command-context edges.
-- Keep default-suite case lists authoritative and append passing corpora in small slices.
-- Continue `yank-pop` parity lock-in for command-context error ordering and mark-marker interactions.
-- Continue navigation/mark behavior parity around mark activity and region introspection helpers.
+- Continue compatibility-first maintenance with small commit slices.
+- Keep builtin dispatch surface and registry in lock-step for `fboundp`/introspection parity.
+- Run targeted vm-compat checks after each behavior-affecting slice.
 - Keep `.elc` reader/exec compatibility corpora explicitly non-default while `.elc` binary compatibility remains disabled.
 
 ## Next
 
-- Add one focused corpus for paragraph/line transpose siblings with signed interactive prefix counts.
-- Continue promoting already-green non-default corpora to `default.list` one-by-one with targeted checks.
-- Keep validating list hygiene and merged-case dedupe as list membership changes.
+1. Keep `check-all-neovm` as a recurring post-slice gate to catch regressions early.
+2. Land one evaluator-backed builtin currently stubbed in the batch compatibility surface, with oracle corpus lock-in.
+3. Expand focused oracle corpora for remaining high-risk stub areas (search/input/minibuffer/display edges).
+4. Keep Rust backend behind compile-time switch and preserve Emacs C core as default backend.
 
 ## Done
 
+- Reduced `cxr` dispatch overhead without behavior changes:
+  - updated:
+    - `rust/neovm-core/src/elisp/builtins.rs`
+      - added internal `car_value` / `cdr_value` helpers
+      - switched `car`, `cdr`, and shared `apply_cxr` path to helper reuse
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/cxr-semantics` (pass, 11/11)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/cxr-3level-semantics` (pass, 11/11)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/cxr-4level-common-semantics` (pass, 7/7)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/cxr-4level-first-batch-semantics` (pass, 10/10)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/cxr-4level-second-batch-semantics` (pass, 11/11)
+- Improved vm-compat single-case ergonomics for long case-name workflows:
+  - updated:
+    - `test/neovm/vm-compat/Makefile`
+      - `check-one-neovm` now accepts both `CASE=cases/<name>` and `CASE=<name>`
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/cxr-semantics` (pass, 11/11)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cxr-semantics` (pass, 11/11)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Aligned transpose-sibling prefix behavior for `transpose-sexps`/`transpose-sentences`:
   - updated:
     - `rust/neovm-core/src/elisp/kill_ring.rs`
