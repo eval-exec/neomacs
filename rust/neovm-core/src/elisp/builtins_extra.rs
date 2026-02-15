@@ -445,19 +445,6 @@ pub(crate) fn builtin_closurep(args: Vec<Value>) -> EvalResult {
     Ok(Value::bool(matches!(&args[0], Value::Lambda(_))))
 }
 
-/// `(commandp OBJ)` -> t if OBJ can be used as a command.
-/// Stub: anything callable is a command.
-pub(crate) fn builtin_commandp(args: Vec<Value>) -> EvalResult {
-    expect_args("commandp", &args, 1)?;
-    Ok(Value::bool(args[0].is_function()))
-}
-
-/// `(nlistp OBJ)` -> t if not a list.
-pub(crate) fn builtin_nlistp(args: Vec<Value>) -> EvalResult {
-    expect_args("nlistp", &args, 1)?;
-    Ok(Value::bool(!args[0].is_list()))
-}
-
 /// `(natnump OBJ)` -> t if natural number (>= 0).
 pub(crate) fn builtin_natnump(args: Vec<Value>) -> EvalResult {
     expect_args("natnump", &args, 1)?;
