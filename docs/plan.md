@@ -698,6 +698,27 @@ Last updated: 2026-02-15
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/internal-make-copy-lisp-face-semantics.forms EXPECTED=cases/internal-make-copy-lisp-face-semantics.expected.tsv` (pass, 42/42)
     - `make -C test/neovm/vm-compat validate-case-lists` (pass)
     - `NEOVM_ORACLE_EMACS=/nix/store/hql3zwz5b4ywd2qwx8jssp4dyb7nx4cb-emacs-30.2/bin/emacs make -C test/neovm/vm-compat check-builtin-registry-fboundp` (pass; expected allowlisted drift only)
+- Implemented and locked-in `get-byte` semantics (string + buffer paths):
+  - moved `get-byte` dispatch to evaluator-dependent path so buffer/point semantics are available
+  - aligned string behavior:
+    - zero-based character indexing
+    - `nil` position default
+    - `args-out-of-range` payloads
+    - `wholenump` validation for string indices
+    - non-ASCII/non-byte8 error message payloads
+  - aligned buffer behavior:
+    - 1-based character positions against accessible range
+    - `(get-byte nil)` at point and end-of-buffer `0` behavior
+    - `args-out-of-range` payload shape `(pos point-min point-max)`
+  - added oracle corpus:
+    - `test/neovm/vm-compat/cases/get-byte-semantics.forms`
+    - `test/neovm/vm-compat/cases/get-byte-semantics.expected.tsv`
+    - enabled in `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml get_byte -- --nocapture` (pass)
+    - `NEOVM_ORACLE_EMACS=/nix/store/hql3zwz5b4ywd2qwx8jssp4dyb7nx4cb-emacs-30.2/bin/emacs make -C test/neovm/vm-compat record FORMS=cases/get-byte-semantics.forms EXPECTED=cases/get-byte-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/get-byte-semantics.forms EXPECTED=cases/get-byte-semantics.expected.tsv` (pass, 21/21)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Kept branch green with targeted Rust tests and vm-compat checks after each slice.
 
 ## Doing
