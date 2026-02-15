@@ -105,6 +105,7 @@ cases/directory-file-name
 cases/directory-files
 cases/directory-files-and-attributes
 cases/file-attributes
+cases/system-users-groups-semantics
 cases/file-ops-relative
 cases/fileio-relative
 cases/file-error-conditions

@@ -1,0 +1,11 @@
+; Lock in system-users/system-groups list + arity semantics.
+(listp (system-users))
+(listp (system-groups))
+(consp (system-users))
+(consp (system-groups))
+(let ((u (user-login-name))) (and (stringp u) (consp (member u (system-users)))))
+(let ((g (car (system-groups)))) (and (stringp g) (consp (member g (system-groups)))))
+(consp (member "root" (system-users)))
+(consp (member "root" (system-groups)))
+(condition-case err (system-users 1) (error (car err)))
+(condition-case err (system-groups 1) (error (car err)))

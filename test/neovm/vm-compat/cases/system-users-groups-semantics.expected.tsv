@@ -1,0 +1,10 @@
+1	(listp (system-users))	OK t
+2	(listp (system-groups))	OK t
+3	(consp (system-users))	OK t
+4	(consp (system-groups))	OK t
+5	(let ((u (user-login-name))) (and (stringp u) (consp (member u (system-users)))))	OK t
+6	(let ((g (car (system-groups)))) (and (stringp g) (consp (member g (system-groups)))))	OK t
+7	(consp (member "root" (system-users)))	OK t
+8	(consp (member "root" (system-groups)))	OK t
+9	(condition-case err (system-users 1) (error (car err)))	OK wrong-number-of-arguments
+10	(condition-case err (system-groups 1) (error (car err)))	OK wrong-number-of-arguments
