@@ -4,6 +4,46 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented and locked search-stack evaluator subsets with oracle corpus:
+  - `replace-regexp`:
+    - added evaluator-backed replacement path in `rust/neovm-core/src/elisp/isearch.rs`
+    - wired dispatch/registry in `rust/neovm-core/src/elisp/builtins.rs` and `rust/neovm-core/src/elisp/builtin_registry.rs`
+    - added corpus:
+      - `test/neovm/vm-compat/cases/replace-regexp-semantics.forms`
+      - `test/neovm/vm-compat/cases/replace-regexp-semantics.expected.tsv`
+      - enabled in `test/neovm/vm-compat/cases/default.list`
+  - `keep-lines`:
+    - implemented evaluator subset with region-aware line filtering in `rust/neovm-core/src/elisp/isearch.rs`
+    - wired dispatch/registry
+    - added corpus:
+      - `test/neovm/vm-compat/cases/keep-lines-semantics.forms`
+      - `test/neovm/vm-compat/cases/keep-lines-semantics.expected.tsv`
+      - enabled in `test/neovm/vm-compat/cases/default.list`
+  - `flush-lines`:
+    - implemented evaluator subset with region-aware matching-line deletion in `rust/neovm-core/src/elisp/isearch.rs`
+    - wired dispatch/registry
+    - added corpus:
+      - `test/neovm/vm-compat/cases/flush-lines-semantics.forms`
+      - `test/neovm/vm-compat/cases/flush-lines-semantics.expected.tsv`
+      - enabled in `test/neovm/vm-compat/cases/default.list`
+  - `how-many`:
+    - implemented evaluator regex counting subset in `rust/neovm-core/src/elisp/isearch.rs`
+    - wired dispatch/registry
+    - added corpus:
+      - `test/neovm/vm-compat/cases/how-many-semantics.forms`
+      - `test/neovm/vm-compat/cases/how-many-semantics.expected.tsv`
+      - enabled in `test/neovm/vm-compat/cases/default.list`
+  - `bool-vector-p`:
+    - removed duplicate dead stub from `rust/neovm-core/src/elisp/builtins_extra.rs`
+    - added oracle corpus:
+      - `test/neovm/vm-compat/cases/bool-vector-p-semantics.forms`
+      - `test/neovm/vm-compat/cases/bool-vector-p-semantics.expected.tsv`
+      - enabled in `test/neovm/vm-compat/cases/default.list`
+  - batch verification:
+    - targeted `check-neovm` passed for each new corpus above
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
+
 - Exposed `memory-use-counts` in NeoVM dispatch/registry and locked compatibility semantics:
   - updated `rust/neovm-core/src/elisp/builtins_extra.rs`:
     - enforced strict arity `0` for `memory-use-counts`
@@ -1483,12 +1523,13 @@ Last updated: 2026-02-15
   - run oracle/parity checks after each behavior-affecting change
   - remove dead helper code that is not part of exposed compatibility surface
 - Identify the next high-impact builtin still stubbed in NeoVM core and land it as a small implementation + oracle-corpus lock-in slice.
+  - current focus: `query-replace` / `query-replace-regexp` batch-safe subset work
 - Reduce vm-compat operator friction for large case sets (small Makefile UX improvements).
   - added list-driven targets: `record-list`, `check-list`, `check-neovm-list` with `LIST=cases/<name>.list`
 
 ## Next
 
 1. Keep `check-all-neovm` as a recurring post-slice gate (detect regressions before they batch up).
-2. Expand focused oracle corpora for remaining high-risk areas still carrying stubs (search/input/minibuffer/display edges).
-3. Prioritize one high-impact stub-to-real implementation slice with oracle lock-in, then repeat.
+2. Land a minimal non-interactive subset for `query-replace` and `query-replace-regexp`, with explicit oracle lock-in.
+3. Expand focused oracle corpora for remaining high-risk areas still carrying stubs (search/input/minibuffer/display edges).
 4. Keep Rust backend behind compile-time switch and preserve Emacs C core as default backend.
