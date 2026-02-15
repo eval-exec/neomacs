@@ -43,6 +43,15 @@ const MAX_CHAR: i64 = 0x3FFFFF;
 /// Maximum Unicode code point.
 const MAX_UNICODE: i64 = 0x10FFFF;
 
+const CHAR_META: i64 = 0x8000000;
+const CHAR_CTL: i64 = 0x4000000;
+const CHAR_SHIFT: i64 = 0x2000000;
+const CHAR_HYPER: i64 = 0x1000000;
+const CHAR_SUPER: i64 = 0x0800000;
+const CHAR_ALT: i64 = 0x0400000;
+const CHAR_MODIFIER_MASK: i64 =
+    CHAR_META | CHAR_CTL | CHAR_SHIFT | CHAR_HYPER | CHAR_SUPER | CHAR_ALT;
+
 /// Return true if `code` is a valid Emacs character code.
 fn is_valid_char(code: i64) -> bool {
     (0..=MAX_CHAR).contains(&code)
@@ -436,16 +445,48 @@ pub(crate) fn builtin_multibyte_char_to_unibyte(args: Vec<Value>) -> EvalResult 
 }
 
 /// `(char-resolve-modifiers CHAR)` -- resolve modifier bits in character.
-/// For now, return the character as-is.
+/// Resolve shift/control modifiers into the base character where possible.
 pub(crate) fn builtin_char_resolve_modifiers(args: Vec<Value>) -> EvalResult {
     expect_args("char-resolve-modifiers", &args, 1)?;
-    let code = extract_char_code(&args[0]).ok_or_else(|| {
-        signal(
-            "wrong-type-argument",
-            vec![Value::symbol("characterp"), args[0].clone()],
-        )
-    })?;
-    Ok(Value::Int(code))
+
+    let code = match &args[0] {
+        Value::Int(n) => *n,
+        Value::Char(c) => *c as i64,
+        other => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("fixnump"), other.clone()],
+            ))
+        }
+    };
+
+    let modifiers = code & CHAR_MODIFIER_MASK;
+    let mut base = code & !CHAR_MODIFIER_MASK;
+    let mut remaining_mods = modifiers;
+
+    if remaining_mods & CHAR_SHIFT != 0 {
+        if base >= 'a' as i64 && base <= 'z' as i64 {
+            base = base - 'a' as i64 + 'A' as i64;
+            remaining_mods &= !CHAR_SHIFT;
+        } else if base >= 'A' as i64 && base <= 'Z' as i64 {
+            remaining_mods &= !CHAR_SHIFT;
+        }
+    }
+
+    if remaining_mods & CHAR_CTL != 0 {
+        if base >= '@' as i64 && base <= '_' as i64 {
+            base &= 0x1F;
+            remaining_mods &= !CHAR_CTL;
+        } else if base >= 'a' as i64 && base <= 'z' as i64 {
+            base &= 0x1F;
+            remaining_mods &= !CHAR_CTL;
+        } else if base == '?' as i64 {
+            base = 127;
+            remaining_mods &= !CHAR_CTL;
+        }
+    }
+
+    Ok(Value::Int(base | remaining_mods))
 }
 
 /// `(get-byte &optional POSITION STRING)` -- return byte at position in string.
@@ -859,9 +900,29 @@ mod tests {
     // =======================================================================
 
     #[test]
-    fn char_resolve_modifiers_passthrough() {
-        let result = builtin_char_resolve_modifiers(vec![Value::Int(65)]).unwrap();
-        assert_eq!(result.as_int(), Some(65));
+    fn char_resolve_modifiers_resolves_shift_lowercase() {
+        let result = builtin_char_resolve_modifiers(vec![Value::Int(0x2000000 | ('a' as i64))])
+            .unwrap();
+        assert_eq!(result.as_int(), Some('A' as i64));
+    }
+
+    #[test]
+    fn char_resolve_modifiers_clears_shift_on_uppercase() {
+        let result = builtin_char_resolve_modifiers(vec![Value::Int(0x2000000 | ('A' as i64))])
+            .unwrap();
+        assert_eq!(result.as_int(), Some('A' as i64));
+    }
+
+    #[test]
+    fn char_resolve_modifiers_wrong_type_predicate() {
+        let result = builtin_char_resolve_modifiers(vec![Value::string("a")]).unwrap_err();
+        match result {
+            super::super::error::Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::string("a")]);
+            }
+            other => panic!("expected signal flow, got {other:?}"),
+        }
     }
 
     // =======================================================================
