@@ -1,0 +1,60 @@
+; transpose-lines argument/boundary command-context semantics.
+(with-temp-buffer
+  (insert (concat "a" (make-string 1 10) "b" (make-string 1 10) "c" (make-string 1 10)))
+  (goto-char 1)
+  (transpose-lines 1)
+  (subst-char-in-string 10 ?| (buffer-string) t))
+
+(with-temp-buffer
+  (insert (concat "a" (make-string 1 10) "b" (make-string 1 10) "c" (make-string 1 10)))
+  (goto-char 1)
+  (transpose-lines 2)
+  (subst-char-in-string 10 ?| (buffer-string) t))
+
+(with-temp-buffer
+  (insert (concat "a" (make-string 1 10) "b" (make-string 1 10) "c" (make-string 1 10)))
+  (goto-char 3)
+  (transpose-lines 1)
+  (subst-char-in-string 10 ?| (buffer-string) t))
+
+(with-temp-buffer
+  (insert (concat "a" (make-string 1 10) "b" (make-string 1 10) "c" (make-string 1 10)))
+  (goto-char 3)
+  (transpose-lines -1)
+  (subst-char-in-string 10 ?| (buffer-string) t))
+
+(with-temp-buffer
+  (insert "solo")
+  (goto-char 1)
+  (condition-case err
+      (progn
+        (transpose-lines 1)
+        (subst-char-in-string 10 ?| (buffer-string) t))
+    (error (car err))))
+
+(with-temp-buffer
+  (insert "solo")
+  (goto-char 1)
+  (condition-case err
+      (progn
+        (transpose-lines -1)
+        (subst-char-in-string 10 ?| (buffer-string) t))
+    (error (car err))))
+
+(with-temp-buffer
+  (insert (concat "a" (make-string 1 10) "b"))
+  (goto-char (point-max))
+  (condition-case err
+      (progn
+        (transpose-lines 1)
+        (subst-char-in-string 10 ?| (buffer-string) t))
+    (error (car err))))
+
+(with-temp-buffer
+  (insert (concat "a" (make-string 1 10) "b"))
+  (goto-char (point-max))
+  (condition-case err
+      (progn
+        (transpose-lines -1)
+        (subst-char-in-string 10 ?| (buffer-string) t))
+    (error (car err))))

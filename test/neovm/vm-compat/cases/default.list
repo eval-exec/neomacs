@@ -38,6 +38,7 @@ cases/transpose-sentences-read-only-variable-semantics
 cases/transpose-paragraphs-semantics
 cases/transpose-paragraphs-read-only-variable-semantics
 cases/transpose-lines-read-only-variable-semantics
+cases/transpose-lines-command-context-semantics
 cases/command-prefix-state-return-shape
 cases/command-dispatch-line-motion-semantics
 cases/keyboard-quit-command-semantics

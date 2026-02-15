@@ -1,0 +1,8 @@
+1	(with-temp-buffer (insert (concat "a" (make-string 1 10) "b" (make-string 1 10) "c" (make-string 1 10))) (goto-char 1) (transpose-lines 1) (subst-char-in-string 10 124 (buffer-string) t))	OK "b|a|c|"
+2	(with-temp-buffer (insert (concat "a" (make-string 1 10) "b" (make-string 1 10) "c" (make-string 1 10))) (goto-char 1) (transpose-lines 2) (subst-char-in-string 10 124 (buffer-string) t))	OK "b|c|a|"
+3	(with-temp-buffer (insert (concat "a" (make-string 1 10) "b" (make-string 1 10) "c" (make-string 1 10))) (goto-char 3) (transpose-lines 1) (subst-char-in-string 10 124 (buffer-string) t))	OK "b|a|c|"
+4	(with-temp-buffer (insert (concat "a" (make-string 1 10) "b" (make-string 1 10) "c" (make-string 1 10))) (goto-char 3) (transpose-lines -1) (subst-char-in-string 10 124 (buffer-string) t))	ERR (error ("Don’t have two things to transpose"))
+5	(with-temp-buffer (insert "solo") (goto-char 1) (condition-case err (progn (transpose-lines 1) (subst-char-in-string 10 124 (buffer-string) t)) (error (car err))))	OK "|solo|"
+6	(with-temp-buffer (insert "solo") (goto-char 1) (condition-case err (progn (transpose-lines -1) (subst-char-in-string 10 124 (buffer-string) t)) (error (car err))))	OK error
+7	(with-temp-buffer (insert (concat "a" (make-string 1 10) "b")) (goto-char (point-max)) (condition-case err (progn (transpose-lines 1) (subst-char-in-string 10 124 (buffer-string) t)) (error (car err))))	OK "b|a|"
+8	(with-temp-buffer (insert (concat "a" (make-string 1 10) "b")) (goto-char (point-max)) (condition-case err (progn (transpose-lines -1) (subst-char-in-string 10 124 (buffer-string) t)) (error (car err))))	OK error
