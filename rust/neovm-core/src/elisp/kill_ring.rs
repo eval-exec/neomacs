@@ -1347,13 +1347,6 @@ pub(crate) fn builtin_downcase_word(
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
-    if buf.read_only {
-        return Err(signal(
-            "buffer-read-only",
-            vec![Value::string(buf.name.clone())],
-        ));
-    }
-
     let table = buf.syntax_table.clone();
     let pt = buf.point();
     let target = forward_word(buf, &table, n);
@@ -1365,6 +1358,15 @@ pub(crate) fn builtin_downcase_word(
     };
     let text = buf.buffer_substring(beg, end);
     let lower = text.to_lowercase();
+    if text == lower {
+        return Ok(Value::Nil);
+    }
+    if region_case_read_only(eval, buf) {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buf.name.clone())],
+        ));
+    }
 
     let buf = eval
         .buffers
@@ -1391,13 +1393,6 @@ pub(crate) fn builtin_upcase_word(
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
-    if buf.read_only {
-        return Err(signal(
-            "buffer-read-only",
-            vec![Value::string(buf.name.clone())],
-        ));
-    }
-
     let table = buf.syntax_table.clone();
     let pt = buf.point();
     let target = forward_word(buf, &table, n);
@@ -1409,6 +1404,15 @@ pub(crate) fn builtin_upcase_word(
     };
     let text = buf.buffer_substring(beg, end);
     let upper = text.to_uppercase();
+    if text == upper {
+        return Ok(Value::Nil);
+    }
+    if region_case_read_only(eval, buf) {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buf.name.clone())],
+        ));
+    }
 
     let buf = eval
         .buffers
@@ -1434,13 +1438,6 @@ pub(crate) fn builtin_capitalize_word(
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
-    if buf.read_only {
-        return Err(signal(
-            "buffer-read-only",
-            vec![Value::string(buf.name.clone())],
-        ));
-    }
-
     let table = buf.syntax_table.clone();
     let pt = buf.point();
     let target = forward_word(buf, &table, n);
@@ -1452,6 +1449,15 @@ pub(crate) fn builtin_capitalize_word(
     };
     let text = buf.buffer_substring(beg, end);
     let result = capitalize_words_preserving_boundaries(&text);
+    if text == result {
+        return Ok(Value::Nil);
+    }
+    if region_case_read_only(eval, buf) {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buf.name.clone())],
+        ));
+    }
 
     let buf = eval
         .buffers
