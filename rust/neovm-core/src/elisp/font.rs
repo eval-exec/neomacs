@@ -749,7 +749,19 @@ fn lisp_face_attribute_value(face: &str, attr: &str, defaults_frame: bool) -> Va
 }
 
 fn resolve_known_face_name_for_compare(face: &Value, defaults_frame: bool) -> Result<String, Flow> {
-    resolve_face_name_for_domain(face, defaults_frame)
+    match face {
+        Value::Str(name) => {
+            if face_exists_for_domain(name, defaults_frame) {
+                Ok((**name).clone())
+            } else {
+                Err(signal(
+                    "error",
+                    vec![Value::string("Invalid face"), Value::symbol(name.as_str())],
+                ))
+            }
+        }
+        _ => resolve_face_name_for_domain(face, defaults_frame),
+    }
 }
 
 fn face_attr_value_name(attr: &Value) -> Result<String, Flow> {
@@ -1859,6 +1871,12 @@ mod tests {
     }
 
     #[test]
+    fn internal_lisp_face_empty_p_accepts_string_face_name() {
+        let result = builtin_internal_lisp_face_empty_p(vec![Value::string("default")]).unwrap();
+        assert!(result.is_nil());
+    }
+
+    #[test]
     fn internal_lisp_face_empty_p_defaults_frame_is_empty() {
         let result =
             builtin_internal_lisp_face_empty_p(vec![Value::symbol("default"), Value::True]).unwrap();
@@ -1887,6 +1905,16 @@ mod tests {
             Value::symbol("default"),
             Value::symbol("mode-line"),
             Value::True,
+        ])
+        .unwrap();
+        assert!(result.is_truthy());
+    }
+
+    #[test]
+    fn internal_lisp_face_equal_p_accepts_string_face_names() {
+        let result = builtin_internal_lisp_face_equal_p(vec![
+            Value::string("default"),
+            Value::string("default"),
         ])
         .unwrap();
         assert!(result.is_truthy());
