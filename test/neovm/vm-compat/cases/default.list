@@ -78,6 +78,7 @@ cases/font-batch-semantics
 cases/face-batch-semantics
 cases/face-id-semantics
 cases/face-font-semantics
+cases/internal-set-font-selection-order-semantics
 cases/internal-lisp-face-semantics
 cases/internal-lisp-face-comparators
 cases/internal-get-lisp-face-attribute-matrix

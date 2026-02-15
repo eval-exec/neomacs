@@ -1,0 +1,17 @@
+; Lock in internal-set-font-selection-order validation and payload shape.
+(fboundp 'internal-set-font-selection-order)
+(condition-case err (internal-set-font-selection-order) (error err))
+(condition-case err (internal-set-font-selection-order nil nil) (error err))
+(condition-case err (internal-set-font-selection-order nil) (error err))
+(condition-case err (internal-set-font-selection-order t) (error err))
+(condition-case err (internal-set-font-selection-order [1 2]) (error err))
+(condition-case err (internal-set-font-selection-order '(:width :height :weight)) (error err))
+(condition-case err (internal-set-font-selection-order '(:width :height :weight :slant :foo)) (error err))
+(condition-case err (internal-set-font-selection-order '(:width :width :height :weight :slant)) (error err))
+(condition-case err (internal-set-font-selection-order '(width height weight slant)) (error err))
+(condition-case err (internal-set-font-selection-order '(:width . :height)) (error err))
+(condition-case err (internal-set-font-selection-order '(:width height :weight :slant)) (error err))
+
+(internal-set-font-selection-order '(:width :height :weight :slant))
+(internal-set-font-selection-order '(:slant :weight :height :width))
+(internal-set-font-selection-order '(:height :weight :slant :width))

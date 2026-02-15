@@ -1,0 +1,15 @@
+1	(fboundp 'internal-set-font-selection-order)	OK t
+2	(condition-case err (internal-set-font-selection-order) (error err))	OK (wrong-number-of-arguments internal-set-font-selection-order 0)
+3	(condition-case err (internal-set-font-selection-order nil nil) (error err))	OK (wrong-number-of-arguments internal-set-font-selection-order 2)
+4	(condition-case err (internal-set-font-selection-order nil) (error err))	OK (error "Invalid font sort order")
+5	(condition-case err (internal-set-font-selection-order t) (error err))	OK (wrong-type-argument listp t)
+6	(condition-case err (internal-set-font-selection-order [1 2]) (error err))	OK (wrong-type-argument listp [1 2])
+7	(condition-case err (internal-set-font-selection-order '(:width :height :weight)) (error err))	OK (error "Invalid font sort order" :width :height :weight)
+8	(condition-case err (internal-set-font-selection-order '(:width :height :weight :slant :foo)) (error err))	OK (error "Invalid font sort order" :width :height :weight :slant :foo)
+9	(condition-case err (internal-set-font-selection-order '(:width :width :height :weight :slant)) (error err))	OK (error "Invalid font sort order" :width :width :height :weight :slant)
+10	(condition-case err (internal-set-font-selection-order '(width height weight slant)) (error err))	OK (error "Invalid font sort order" width height weight slant)
+11	(condition-case err (internal-set-font-selection-order '(:width . :height)) (error err))	OK (error "Invalid font sort order" (:width . :height))
+12	(condition-case err (internal-set-font-selection-order '(:width height :weight :slant)) (error err))	OK (error "Invalid font sort order" :width height :weight :slant)
+13	(internal-set-font-selection-order '(:width :height :weight :slant))	OK nil
+14	(internal-set-font-selection-order '(:slant :weight :height :width))	OK nil
+15	(internal-set-font-selection-order '(:height :weight :slant :width))	OK nil
