@@ -4,6 +4,21 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Aligned `tab-to-tab-stop` semantics with oracle and locked with corpus:
+  - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
+    - enforced exact arity `0` (`wrong-number-of-arguments` on extra args)
+    - switched batch subset behavior from space-padding to inserting a literal TAB character
+    - updated unit expectation for `tab-to-tab-stop` behavior
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/tab-to-tab-stop-semantics.forms`
+    - `test/neovm/vm-compat/cases/tab-to-tab-stop-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml kill_ring::tests::tab_to_tab_stop_basic -- --nocapture` (pass)
+    - `NEOVM_ORACLE_EMACS=/nix/store/hql3zwz5b4ywd2qwx8jssp4dyb7nx4cb-emacs-30.2/bin/emacs make -C test/neovm/vm-compat record FORMS=cases/tab-to-tab-stop-semantics.forms EXPECTED=cases/tab-to-tab-stop-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/tab-to-tab-stop-semantics.forms EXPECTED=cases/tab-to-tab-stop-semantics.expected.tsv` (pass, 4/4)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Implemented evaluator-backed `indent-according-to-mode` / `reindent-then-newline-and-indent` compatibility subset and oracle lock-in:
   - updated `rust/neovm-core/src/elisp/indent.rs`:
     - replaced `indent-according-to-mode` stub with evaluator behavior (batch subset: remove leading spaces/tabs on current line)
