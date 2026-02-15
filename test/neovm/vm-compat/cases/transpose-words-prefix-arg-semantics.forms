@@ -1,0 +1,41 @@
+; transpose-words should honor signed counts in direct and interactive paths.
+
+(with-temp-buffer
+  (insert "one two three")
+  (goto-char 1)
+  (transpose-words 2)
+  (buffer-string))
+
+(with-temp-buffer
+  (insert "one two three")
+  (goto-char 9)
+  (transpose-words -1)
+  (buffer-string))
+
+(with-temp-buffer
+  (insert "one two three")
+  (goto-char 1)
+  (let ((current-prefix-arg 2))
+    (call-interactively 'transpose-words)
+    (buffer-string)))
+
+(with-temp-buffer
+  (insert "one two three")
+  (goto-char 9)
+  (let ((current-prefix-arg '-))
+    (call-interactively 'transpose-words)
+    (buffer-string)))
+
+(with-temp-buffer
+  (insert "one two three")
+  (goto-char 1)
+  (let ((current-prefix-arg 2))
+    (command-execute 'transpose-words)
+    (buffer-string)))
+
+(with-temp-buffer
+  (insert "one two three")
+  (goto-char 9)
+  (let ((current-prefix-arg '-))
+    (command-execute 'transpose-words)
+    (buffer-string)))
