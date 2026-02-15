@@ -12,12 +12,28 @@ Last updated: 2026-02-15
 
 ## Next
 
-- Add one focused corpus for another `call-interactively` prefix-arg path to keep `command-execute`/`call-interactively` separation explicit.
+- Add one focused corpus for additional prefix-arg conversion edge cases (`(16)`, negative, malformed list) on another command family.
 - Continue promoting already-green non-default corpora to `default.list` one-by-one with targeted checks.
 - Keep validating list hygiene and merged-case dedupe as list membership changes.
 
 ## Done
 
+- Aligned `call-interactively` numeric prefix conversion for single-arg motion/edit commands:
+  - updated:
+    - `rust/neovm-core/src/elisp/interactive.rs`
+      - added `prefix_numeric_value` conversion helper for `current-prefix-arg`
+      - `call-interactively` now passes converted numeric prefix for command families that take one prefix-count arg
+      - `command-execute` retains default-arg behavior (no dynamic prefix propagation)
+  - added corpus:
+    - `test/neovm/vm-compat/cases/call-interactively-prefix-numeric-arg-semantics.forms`
+    - `test/neovm/vm-compat/cases/call-interactively-prefix-numeric-arg-semantics.expected.tsv`
+  - wired into:
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/call-interactively-prefix-numeric-arg-semantics` (pass, 7/7)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/command-dispatch-default-arg-semantics` (pass, 46/46)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass after promotion)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Aligned `call-interactively` prefix plumbing for `set-mark-command`:
   - updated:
     - `rust/neovm-core/src/elisp/interactive.rs`
