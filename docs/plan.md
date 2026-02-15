@@ -70,6 +70,20 @@ Last updated: 2026-02-15
     - `cargo test --manifest-path rust/neovm-core/Cargo.toml regex::tests::looking_at_ -- --nocapture` (pass)
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/looking-at-p-semantics.forms EXPECTED=cases/looking-at-p-semantics.expected.tsv` (pass, 9/9)
     - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+- Aligned `DELIMITED` replacement semantics in evaluator-backed search builtins:
+  - updated `rust/neovm-core/src/elisp/isearch.rs`:
+    - added delimited boundary helpers and enforcement in `replace-string` evaluator path
+    - added delimited boundary filtering in `replace-regexp` evaluator path
+    - `query-replace` and `query-replace-regexp` inherit behavior via evaluator routing
+    - added unit coverage for delimited boundary helper behavior
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/replace-delimited-semantics.forms`
+    - `test/neovm/vm-compat/cases/replace-delimited-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml delimited_match -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-delimited-semantics.forms EXPECTED=cases/replace-delimited-semantics.expected.tsv` (pass, 12/12)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 
 - Implemented and locked search-stack evaluator subsets with oracle corpus:
   - `replace-regexp`:
