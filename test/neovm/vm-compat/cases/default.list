@@ -64,6 +64,7 @@ cases/defvar-local
 cases/setq-local
 cases/undo-basics
 cases/undo-buffer-arg
+cases/undo-arity-semantics
 cases/minibuffer-batch
 cases/minibufferp-semantics
 cases/exit-recursive-edit-semantics

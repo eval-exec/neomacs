@@ -35,6 +35,17 @@ fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flow> {
     }
 }
 
+fn expect_max_args(name: &str, args: &[Value], max: usize) -> Result<(), Flow> {
+    if args.len() > max {
+        Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol(name), Value::Int(args.len() as i64)],
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn expect_int(value: &Value) -> Result<i64, Flow> {
     match value {
         Value::Int(n) => Ok(*n),
@@ -106,6 +117,7 @@ pub(crate) fn builtin_primitive_undo(args: Vec<Value>) -> EvalResult {
 ///
 pub(crate) fn builtin_undo(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
     expect_min_args("undo", &args, 0)?;
+    expect_max_args("undo", &args, 1)?;
 
     // If ARG is provided, verify it's an integer
     let mut count = 1i64;
@@ -261,8 +273,7 @@ mod tests {
 
         let mut eval = Evaluator::new();
         let result = builtin_undo(&mut eval, vec![Value::Int(2), Value::Int(3)]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_nil());
+        assert!(result.is_err());
     }
 
     #[test]
