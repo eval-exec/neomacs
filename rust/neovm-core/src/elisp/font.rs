@@ -783,6 +783,27 @@ fn frame_defaults_flag(frame: Option<&Value>) -> Result<bool, Flow> {
     }
 }
 
+fn proper_list_to_vec_or_listp_error(value: &Value) -> Result<Vec<Value>, Flow> {
+    let mut out = Vec::new();
+    let mut cursor = value.clone();
+    loop {
+        match cursor {
+            Value::Nil => return Ok(out),
+            Value::Cons(cell) => {
+                let cell = cell.lock().expect("poisoned");
+                out.push(cell.car.clone());
+                cursor = cell.cdr.clone();
+            }
+            other => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::symbol("listp"), other],
+                ));
+            }
+        }
+    }
+}
+
 fn check_non_empty_string(value: &Value, empty_message: &str) -> Result<(), Flow> {
     match value {
         Value::Str(s) => {
@@ -1470,13 +1491,35 @@ pub(crate) fn builtin_internal_set_font_selection_order(args: Vec<Value>) -> Eva
 /// `(internal-set-alternative-font-family-alist ALIST)` -- stub, return nil.
 pub(crate) fn builtin_internal_set_alternative_font_family_alist(args: Vec<Value>) -> EvalResult {
     expect_args("internal-set-alternative-font-family-alist", &args, 1)?;
-    Ok(Value::Nil)
+    let entries = proper_list_to_vec_or_listp_error(&args[0])?;
+    let mut normalized = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let members = proper_list_to_vec_or_listp_error(&entry)?;
+        let mut converted = Vec::with_capacity(members.len());
+        for member in members {
+            match member {
+                Value::Str(s) => converted.push(Value::symbol((*s).clone())),
+                other => {
+                    return Err(signal(
+                        "wrong-type-argument",
+                        vec![Value::symbol("stringp"), other],
+                    ));
+                }
+            }
+        }
+        normalized.push(Value::list(converted));
+    }
+    Ok(Value::list(normalized))
 }
 
 /// `(internal-set-alternative-font-registry-alist ALIST)` -- stub, return nil.
 pub(crate) fn builtin_internal_set_alternative_font_registry_alist(args: Vec<Value>) -> EvalResult {
     expect_args("internal-set-alternative-font-registry-alist", &args, 1)?;
-    Ok(Value::Nil)
+    let entries = proper_list_to_vec_or_listp_error(&args[0])?;
+    for entry in entries {
+        let _ = proper_list_to_vec_or_listp_error(&entry)?;
+    }
+    Ok(args[0].clone())
 }
 
 // ===========================================================================
@@ -2105,10 +2148,27 @@ mod tests {
     }
 
     #[test]
+    fn internal_set_alternative_font_family_alist_converts_strings_to_symbols() {
+        let input = Value::list(vec![Value::list(vec![Value::string("Foo"), Value::string("Bar")])]);
+        let result = builtin_internal_set_alternative_font_family_alist(vec![input]).unwrap();
+        let outer = list_to_vec(&result).expect("outer list");
+        let inner = list_to_vec(&outer[0]).expect("inner list");
+        assert_eq!(inner[0].as_symbol_name(), Some("Foo"));
+        assert_eq!(inner[1].as_symbol_name(), Some("Bar"));
+    }
+
+    #[test]
     fn internal_set_alternative_font_registry_alist_stub() {
         let result =
             builtin_internal_set_alternative_font_registry_alist(vec![Value::Nil]).unwrap();
         assert!(result.is_nil());
+    }
+
+    #[test]
+    fn internal_set_alternative_font_registry_alist_preserves_values() {
+        let input = Value::list(vec![Value::list(vec![Value::Int(1), Value::Int(2)])]);
+        let result = builtin_internal_set_alternative_font_registry_alist(vec![input.clone()]).unwrap();
+        assert_eq!(result, input);
     }
 
     // -----------------------------------------------------------------------
