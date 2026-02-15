@@ -1,0 +1,10 @@
+1	(progn (fset 'vm-doc-lambda (lambda nil "lamdoc" nil)) (documentation 'vm-doc-lambda))	OK "lamdoc"
+2	(progn (fset 'vm-doc-nodoc (lambda nil nil)) (documentation 'vm-doc-nodoc))	OK nil
+3	(progn (put 'vm-doc-prop-only 'function-documentation "prop-only") (documentation 'vm-doc-prop-only))	OK "prop-only"
+4	(progn (put 'vm-doc-prop-num 'function-documentation 9) (documentation 'vm-doc-prop-num))	OK nil
+5	(condition-case err (documentation 'vm-doc-missing) (error (car err)))	OK void-function
+6	(progn (fset 'vm-doc-noncallable 7) (condition-case err (documentation 'vm-doc-noncallable) (error (car err))))	OK invalid-function
+7	(progn (fset 'vm-doc-noncall-prop 7) (put 'vm-doc-noncall-prop 'function-documentation "np") (documentation 'vm-doc-noncall-prop))	OK "np"
+8	(condition-case err (documentation '(1 2)) (error (car err)))	OK invalid-function
+9	(progn (put 'vm-doc-raw 'function-documentation "rawdoc") (documentation 'vm-doc-raw t))	OK "rawdoc"
+10	(progn (fset 'vm-doc-nil nil) (condition-case err (documentation 'vm-doc-nil) (error (car err))))	OK void-function
