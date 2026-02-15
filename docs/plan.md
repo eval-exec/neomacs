@@ -5,7 +5,7 @@ Last updated: 2026-02-15
 ## Doing
 
 - Finishing the `buffer-read-only` variable-compat sweep in `rust/neovm-core/src/elisp/kill_ring.rs`.
-- Locking remaining raw `buf.read_only` mutators (`yank-pop`, `transpose-*`, case-word mutators) with mutation-aware checks.
+- Locking remaining raw `buf.read_only` mutators (`yank-pop`, `transpose-*`) with mutation-aware checks.
 - Keeping each slice small: runtime patch -> oracle corpus -> docs note -> push.
 
 ## Next
@@ -16,6 +16,17 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Aligned case-word mutator read-only behavior with oracle variable semantics:
+  - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
+    - `downcase-word`, `upcase-word`, and `capitalize-word` now honor dynamic/buffer-local/global `buffer-read-only` only when text would change
+    - no-op paths (e.g. `ARG=0` or unchanged casing) now return without signaling read-only
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/case-word-read-only-variable-semantics.forms`
+    - `test/neovm/vm-compat/cases/case-word-read-only-variable-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/case-word-read-only-variable-semantics` (pass, 5/5)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/case-word-semantics` (pass, 10/10)
 - Aligned `indent-rigidly` read-only behavior with oracle variable semantics:
   - updated `rust/neovm-core/src/elisp/kill_ring.rs`:
     - `indent-rigidly` now honors dynamic/buffer-local/global `buffer-read-only` only when region text would actually change
