@@ -451,6 +451,20 @@ fn copy_defaults_overrides(src: &str, dst: &str) {
     }
 }
 
+fn merge_defaults_overrides_into_selected(face_name: &str) {
+    let mut state = face_attr_state().lock().expect("poisoned");
+    let defaults = state.defaults_overrides.get(face_name).cloned();
+    if let Some(attrs) = defaults {
+        let selected = state.selected_overrides.entry(face_name.to_string()).or_default();
+        for (attr, value) in attrs {
+            if matches!(&value, Value::Symbol(s) if s == "unspecified" || s == "relative") {
+                continue;
+            }
+            selected.insert(attr, value);
+        }
+    }
+}
+
 fn symbol_name_for_face_value(face: &Value) -> Option<String> {
     match face {
         Value::Nil => Some("nil".to_string()),
@@ -513,6 +527,38 @@ fn resolve_face_name_for_domain(face: &Value, defaults_frame: bool) -> Result<St
         Value::Nil | Value::True | Value::Symbol(_) => {
             let name = symbol_name_for_face_value(face).expect("symbol-like");
             if face_exists_for_domain(&name, defaults_frame) {
+                Ok(name)
+            } else if face.is_nil() {
+                Err(signal("error", vec![Value::string("Invalid face")]))
+            } else {
+                Err(signal(
+                    "error",
+                    vec![Value::string("Invalid face"), face.clone()],
+                ))
+            }
+        }
+        _ => Err(signal(
+            "error",
+            vec![Value::string("Invalid face"), face.clone()],
+        )),
+    }
+}
+
+fn resolve_face_name_for_merge(face: &Value) -> Result<String, Flow> {
+    match face {
+        Value::Str(name) => {
+            if face_exists_for_domain(name, true) {
+                Ok((**name).clone())
+            } else {
+                Err(signal(
+                    "error",
+                    vec![Value::string("Invalid face"), Value::symbol(name.as_str())],
+                ))
+            }
+        }
+        Value::Nil | Value::True | Value::Symbol(_) => {
+            let name = symbol_name_for_face_value(face).expect("symbol-like");
+            if face_exists_for_domain(&name, true) {
                 Ok(name)
             } else if face.is_nil() {
                 Err(signal("error", vec![Value::string("Invalid face")]))
@@ -1060,9 +1106,22 @@ pub(crate) fn builtin_internal_lisp_face_empty_p(args: Vec<Value>) -> EvalResult
     Ok(Value::True)
 }
 
-/// `(internal-merge-in-global-face FACE FRAME)` -- stub, return nil.
+/// `(internal-merge-in-global-face FACE FRAME)` -- merge concrete defaults-face
+/// overrides into selected-frame face state.
 pub(crate) fn builtin_internal_merge_in_global_face(args: Vec<Value>) -> EvalResult {
     expect_args("internal-merge-in-global-face", &args, 2)?;
+    if !matches!(args[1], Value::Int(n) if n > 0) {
+        return Err(signal(
+            "wrong-type-argument",
+            vec![Value::symbol("frame-live-p"), args[1].clone()],
+        ));
+    }
+    let face_name = resolve_face_name_for_merge(&args[0])?;
+    if !KNOWN_FACES.contains(&face_name.as_str()) {
+        mark_created_lisp_face(&face_name);
+        mark_selected_created_lisp_face(&face_name);
+    }
+    merge_defaults_overrides_into_selected(&face_name);
     Ok(Value::Nil)
 }
 
@@ -1650,11 +1709,31 @@ mod tests {
     }
 
     #[test]
-    fn internal_merge_in_global_face_stub() {
-        let result =
-            builtin_internal_merge_in_global_face(vec![Value::symbol("default"), Value::Nil])
-                .unwrap();
-        assert!(result.is_nil());
+    fn internal_merge_in_global_face_rejects_non_frame_designator() {
+        let result = builtin_internal_merge_in_global_face(vec![Value::symbol("default"), Value::Nil]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn internal_merge_in_global_face_copies_defaults_into_selected_face() {
+        let face = Value::symbol("__neovm_merge_face_unit_test");
+        let _ = builtin_internal_make_lisp_face(vec![face.clone()]).unwrap();
+        let _ = builtin_internal_set_lisp_face_attribute(vec![
+            face.clone(),
+            Value::Keyword("foreground".to_string()),
+            Value::string("white"),
+            Value::True,
+        ])
+        .unwrap();
+        let merged =
+            builtin_internal_merge_in_global_face(vec![face.clone(), Value::Int(1)]).unwrap();
+        assert!(merged.is_nil());
+        let got = builtin_internal_get_lisp_face_attribute(vec![
+            face.clone(),
+            Value::Keyword(":foreground".to_string()),
+        ])
+        .unwrap();
+        assert_eq!(got.as_str(), Some("white"));
     }
 
     #[test]
