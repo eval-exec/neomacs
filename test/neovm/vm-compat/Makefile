@@ -154,7 +154,11 @@ check-one-neovm:
 		echo "usage: make check-one-neovm CASE=cases/<name>"; \
 		exit 2; \
 	fi
-	$(MAKE) --no-print-directory check-neovm FORMS="$(CASE).forms" EXPECTED="$(CASE).expected.tsv"
+	@case_path="$(CASE)"; \
+	if [ "$${case_path#cases/}" = "$$case_path" ]; then \
+		case_path="cases/$$case_path"; \
+	fi; \
+	$(MAKE) --no-print-directory check-neovm FORMS="$$case_path.forms" EXPECTED="$$case_path.expected.tsv"
 
 validate-case-lists:
 	@set -e; \
