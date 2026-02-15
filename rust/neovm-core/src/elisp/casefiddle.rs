@@ -3,7 +3,7 @@
 //! Implements `upcase`, `downcase`, `capitalize`, `upcase-initials`,
 //! `characterp`, `char-or-string-p`, `max-char`, `char-width`,
 //! `string-width`, `unibyte-char-to-multibyte`, `multibyte-char-to-unibyte`,
-//! `char-resolve-modifiers`, `get-byte`, and region/word case stubs.
+//! `char-resolve-modifiers`, and `get-byte`.
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
@@ -497,73 +497,6 @@ pub(crate) fn builtin_get_byte(args: Vec<Value>) -> EvalResult {
 }
 
 // ---------------------------------------------------------------------------
-// Eval-dependent builtins (stubs)
-// ---------------------------------------------------------------------------
-
-/// `(upcase-region BEG END &optional REGION-NONCONTIGUOUS-P)` -- stub, return nil.
-pub(crate) fn builtin_upcase_region(
-    _eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_min_max_args("upcase-region", &args, 2, 3)?;
-    Ok(Value::Nil)
-}
-
-/// `(downcase-region BEG END &optional REGION-NONCONTIGUOUS-P)` -- stub, return nil.
-pub(crate) fn builtin_downcase_region(
-    _eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_min_max_args("downcase-region", &args, 2, 3)?;
-    Ok(Value::Nil)
-}
-
-/// `(capitalize-region BEG END &optional REGION-NONCONTIGUOUS-P)` -- stub, return nil.
-pub(crate) fn builtin_capitalize_region(
-    _eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_min_max_args("capitalize-region", &args, 2, 3)?;
-    Ok(Value::Nil)
-}
-
-/// `(upcase-initials-region BEG END)` -- stub, return nil.
-pub(crate) fn builtin_upcase_initials_region(
-    _eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("upcase-initials-region", &args, 2)?;
-    Ok(Value::Nil)
-}
-
-/// `(upcase-word ARG)` -- stub, return nil.
-pub(crate) fn builtin_upcase_word(
-    _eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("upcase-word", &args, 1)?;
-    Ok(Value::Nil)
-}
-
-/// `(downcase-word ARG)` -- stub, return nil.
-pub(crate) fn builtin_downcase_word(
-    _eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("downcase-word", &args, 1)?;
-    Ok(Value::Nil)
-}
-
-/// `(capitalize-word ARG)` -- stub, return nil.
-pub(crate) fn builtin_capitalize_word(
-    _eval: &mut super::eval::Evaluator,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("capitalize-word", &args, 1)?;
-    Ok(Value::Nil)
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -939,62 +872,6 @@ mod tests {
     fn get_byte_with_args() {
         let result = builtin_get_byte(vec![Value::Int(0), Value::string("hello")]).unwrap();
         assert_eq!(result.as_int(), Some(0));
-    }
-
-    // =======================================================================
-    // Eval-dependent stubs
-    // =======================================================================
-
-    #[test]
-    fn upcase_region_stub() {
-        let mut eval = super::super::eval::Evaluator::new();
-        let result = builtin_upcase_region(&mut eval, vec![Value::Int(1), Value::Int(10)]).unwrap();
-        assert!(result.is_nil());
-    }
-
-    #[test]
-    fn downcase_region_stub() {
-        let mut eval = super::super::eval::Evaluator::new();
-        let result =
-            builtin_downcase_region(&mut eval, vec![Value::Int(1), Value::Int(10)]).unwrap();
-        assert!(result.is_nil());
-    }
-
-    #[test]
-    fn capitalize_region_stub() {
-        let mut eval = super::super::eval::Evaluator::new();
-        let result =
-            builtin_capitalize_region(&mut eval, vec![Value::Int(1), Value::Int(10)]).unwrap();
-        assert!(result.is_nil());
-    }
-
-    #[test]
-    fn upcase_initials_region_stub() {
-        let mut eval = super::super::eval::Evaluator::new();
-        let result =
-            builtin_upcase_initials_region(&mut eval, vec![Value::Int(1), Value::Int(10)]).unwrap();
-        assert!(result.is_nil());
-    }
-
-    #[test]
-    fn upcase_word_stub() {
-        let mut eval = super::super::eval::Evaluator::new();
-        let result = builtin_upcase_word(&mut eval, vec![Value::Int(1)]).unwrap();
-        assert!(result.is_nil());
-    }
-
-    #[test]
-    fn downcase_word_stub() {
-        let mut eval = super::super::eval::Evaluator::new();
-        let result = builtin_downcase_word(&mut eval, vec![Value::Int(1)]).unwrap();
-        assert!(result.is_nil());
-    }
-
-    #[test]
-    fn capitalize_word_stub() {
-        let mut eval = super::super::eval::Evaluator::new();
-        let result = builtin_capitalize_word(&mut eval, vec![Value::Int(1)]).unwrap();
-        assert!(result.is_nil());
     }
 
     // =======================================================================
