@@ -768,6 +768,16 @@ pub(crate) fn builtin_cdddr(args: Vec<Value>) -> EvalResult {
     apply_cxr(args[0].clone(), b"ddd")
 }
 
+pub(crate) fn builtin_cadddr(args: Vec<Value>) -> EvalResult {
+    expect_args("cadddr", &args, 1)?;
+    apply_cxr(args[0].clone(), b"ddda")
+}
+
+pub(crate) fn builtin_cddddr(args: Vec<Value>) -> EvalResult {
+    expect_args("cddddr", &args, 1)?;
+    apply_cxr(args[0].clone(), b"dddd")
+}
+
 pub(crate) fn builtin_car_safe(args: Vec<Value>) -> EvalResult {
     expect_args("car-safe", &args, 1)?;
     match &args[0] {
@@ -5351,6 +5361,10 @@ enum PureBuiltinId {
     Cddar,
     #[strum(serialize = "cdddr")]
     Cdddr,
+    #[strum(serialize = "cadddr")]
+    Cadddr,
+    #[strum(serialize = "cddddr")]
+    Cddddr,
     #[strum(serialize = "car-safe")]
     CarSafe,
     #[strum(serialize = "cdr-safe")]
@@ -5573,6 +5587,8 @@ fn dispatch_builtin_id_pure(id: PureBuiltinId, args: Vec<Value>) -> EvalResult {
         PureBuiltinId::Cdadr => builtin_cdadr(args),
         PureBuiltinId::Cddar => builtin_cddar(args),
         PureBuiltinId::Cdddr => builtin_cdddr(args),
+        PureBuiltinId::Cadddr => builtin_cadddr(args),
+        PureBuiltinId::Cddddr => builtin_cddddr(args),
         PureBuiltinId::CarSafe => builtin_car_safe(args),
         PureBuiltinId::CdrSafe => builtin_cdr_safe(args),
         PureBuiltinId::Setcar => builtin_setcar(args),
@@ -6677,6 +6693,8 @@ pub(crate) fn dispatch_builtin(
         "cdadr" => builtin_cdadr(args),
         "cddar" => builtin_cddar(args),
         "cdddr" => builtin_cdddr(args),
+        "cadddr" => builtin_cadddr(args),
+        "cddddr" => builtin_cddddr(args),
         "car-safe" => builtin_car_safe(args),
         "cdr-safe" => builtin_cdr_safe(args),
         "setcar" => builtin_setcar(args),
