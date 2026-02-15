@@ -18,6 +18,13 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Removed dead `misc` duplicate `nconc` wrapper surface:
+  - updated:
+    - `rust/neovm-core/src/elisp/misc.rs`
+      - deleted unreferenced `builtin_nconc_improved` wrapper and stale local tests bound only to that dead helper
+  - verified:
+    - `cargo test 'elisp::misc::tests::' -- --nocapture` (pass, 54 tests)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/nconc-destructive-semantics` (pass, 11/11)
 - Removed dead buffer-live/rename/other wrapper surface from legacy buffer module:
   - updated:
     - `rust/neovm-core/src/elisp/buffer/stateful.rs`
