@@ -487,38 +487,6 @@ pub(crate) fn builtin_cl_coerce(args: Vec<Value>) -> EvalResult {
 // CL-lib eval-dependent operations
 // ===========================================================================
 
-/// `(cl-map TYPE FN &rest SEQS)` — map over sequences, return target type.
-pub(crate) fn builtin_cl_map(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    expect_min_args("cl-map", &args, 3)?;
-    let target = type_name_str(&args[0]);
-    let func = args[1].clone();
-    let seqs: Vec<Vec<Value>> = args[2..].iter().map(|s| collect_sequence(s)).collect();
-    if seqs.is_empty() {
-        return Ok(Value::Nil);
-    }
-    let min_len = seqs.iter().map(|s| s.len()).min().unwrap_or(0);
-    let mut results = Vec::new();
-    for i in 0..min_len {
-        let call_args: Vec<Value> = seqs.iter().map(|s| s[i].clone()).collect();
-        results.push(eval.apply(func.clone(), call_args)?);
-    }
-    match target {
-        "vector" => Ok(Value::vector(results)),
-        "string" => {
-            let s: String = results
-                .iter()
-                .filter_map(|v| match v {
-                    Value::Char(c) => Some(*c),
-                    Value::Int(n) => char::from_u32(*n as u32),
-                    _ => None,
-                })
-                .collect();
-            Ok(Value::string(s))
-        }
-        _ => Ok(Value::list(results)),
-    }
-}
-
 /// `(cl-every PRED &rest SEQS)` — all elements satisfy predicate.
 pub(crate) fn builtin_cl_every(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
     expect_min_args("cl-every", &args, 2)?;
@@ -557,18 +525,6 @@ pub(crate) fn builtin_cl_some(eval: &mut super::eval::Evaluator, args: Vec<Value
     Ok(Value::Nil)
 }
 
-/// `(cl-notevery PRED &rest SEQS)` — not all satisfy.
-pub(crate) fn builtin_cl_notevery(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    let result = builtin_cl_every(eval, args)?;
-    Ok(Value::bool(result.is_nil()))
-}
-
-/// `(cl-notany PRED &rest SEQS)` — none satisfy.
-pub(crate) fn builtin_cl_notany(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    let result = builtin_cl_some(eval, args)?;
-    Ok(Value::bool(result.is_nil()))
-}
-
 /// `(cl-reduce FN SEQ &optional INITIAL-VALUE)` — reduce/fold.
 pub(crate) fn builtin_cl_reduce(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
     expect_min_args("cl-reduce", &args, 2)?;
@@ -592,93 +548,6 @@ pub(crate) fn builtin_cl_reduce(eval: &mut super::eval::Evaluator, args: Vec<Val
         acc = eval.apply(func.clone(), vec![acc, elem])?;
     }
     Ok(acc)
-}
-
-/// `(cl-remove-if PRED SEQ)` — remove elements matching predicate.
-pub(crate) fn builtin_cl_remove_if(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    expect_args("cl-remove-if", &args, 2)?;
-    let pred = args[0].clone();
-    let elems = collect_sequence(&args[1]);
-    let mut result = Vec::new();
-    for e in elems {
-        let r = eval.apply(pred.clone(), vec![e.clone()])?;
-        if r.is_nil() {
-            result.push(e);
-        }
-    }
-    Ok(Value::list(result))
-}
-
-/// `(cl-remove-if-not PRED SEQ)` — keep only elements matching predicate.
-pub(crate) fn builtin_cl_remove_if_not(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    expect_args("cl-remove-if-not", &args, 2)?;
-    let pred = args[0].clone();
-    let elems = collect_sequence(&args[1]);
-    let mut result = Vec::new();
-    for e in elems {
-        let r = eval.apply(pred.clone(), vec![e.clone()])?;
-        if r.is_truthy() {
-            result.push(e);
-        }
-    }
-    Ok(Value::list(result))
-}
-
-/// `(cl-find-if PRED SEQ)` — find first element matching predicate.
-pub(crate) fn builtin_cl_find_if(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    expect_args("cl-find-if", &args, 2)?;
-    let pred = args[0].clone();
-    let elems = collect_sequence(&args[1]);
-    for e in elems {
-        let r = eval.apply(pred.clone(), vec![e.clone()])?;
-        if r.is_truthy() {
-            return Ok(e);
-        }
-    }
-    Ok(Value::Nil)
-}
-
-/// `(cl-count-if PRED SEQ)` — count elements matching predicate.
-pub(crate) fn builtin_cl_count_if(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    expect_args("cl-count-if", &args, 2)?;
-    let pred = args[0].clone();
-    let elems = collect_sequence(&args[1]);
-    let mut count = 0i64;
-    for e in elems {
-        let r = eval.apply(pred.clone(), vec![e])?;
-        if r.is_truthy() {
-            count += 1;
-        }
-    }
-    Ok(Value::Int(count))
-}
-
-/// `(cl-sort SEQ PRED)` — sort with predicate (not guaranteed stable).
-pub(crate) fn builtin_cl_sort(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    expect_args("cl-sort", &args, 2)?;
-    let pred = args[1].clone();
-    let mut items = collect_sequence(&args[0]);
-
-    // Insertion sort (stable, supports fallible predicates)
-    for i in 1..items.len() {
-        let mut j = i;
-        while j > 0 {
-            let result = eval.apply(pred.clone(), vec![items[j].clone(), items[j - 1].clone()])?;
-            if result.is_truthy() {
-                items.swap(j, j - 1);
-                j -= 1;
-            } else {
-                break;
-            }
-        }
-    }
-    Ok(Value::list(items))
-}
-
-/// `(cl-stable-sort SEQ PRED)` — stable sort with predicate.
-pub(crate) fn builtin_cl_stable_sort(eval: &mut super::eval::Evaluator, args: Vec<Value>) -> EvalResult {
-    // Same as cl-sort since our insertion sort is already stable
-    builtin_cl_sort(eval, args)
 }
 
 // ===========================================================================
