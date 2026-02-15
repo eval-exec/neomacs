@@ -1,0 +1,28 @@
+; file-modes argument validation and mode return semantics.
+
+(condition-case err
+    (file-modes)
+  (error err))
+
+(condition-case err
+    (file-modes 1)
+  (error err))
+
+(file-modes "/tmp/neovm-file-modes-missing")
+
+(let ((f (make-temp-file "neovm-file-modes-core-")))
+  (prog1
+      (list (integerp (file-modes f))
+            (integerp (file-modes f t)))
+    (delete-file f)))
+
+(let* ((base (make-temp-file "neovm-file-modes-eval-" t))
+       (f (expand-file-name "alpha.txt" base)))
+  (with-temp-buffer
+    (insert "x")
+    (write-region nil nil f))
+  (prog1
+      (let ((default-directory (file-name-as-directory base)))
+        (integerp (file-modes "alpha.txt")))
+    (delete-file f)
+    (delete-directory base)))

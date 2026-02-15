@@ -4,6 +4,27 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `file-modes` compatibility slice:
+  - added pure + evaluator-aware builtins in `rust/neovm-core/src/elisp/fileio.rs`:
+    - `builtin_file_modes`
+    - `builtin_file_modes_eval`
+  - semantics aligned with oracle subset:
+    - arity `1..2`
+    - strict `stringp` validation for `FILENAME`
+    - missing/unreadable paths return `nil`
+    - Unix mode return value normalized to permission bits (`mode & 07777`)
+    - evaluator path resolves relative names against dynamic/default `default-directory`
+  - registered and dispatched `file-modes` in:
+    - `rust/neovm-core/src/elisp/builtins.rs`
+    - `rust/neovm-core/src/elisp/builtin_registry.rs`
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/file-modes-semantics.forms`
+    - `test/neovm/vm-compat/cases/file-modes-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml file_modes -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/file-modes-semantics.forms EXPECTED=cases/file-modes-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Implemented `make-nearby-temp-file` compatibility slice:
   - added pure + evaluator-aware builtins in `rust/neovm-core/src/elisp/fileio.rs`:
     - `builtin_make_nearby_temp_file`

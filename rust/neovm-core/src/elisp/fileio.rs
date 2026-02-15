@@ -641,6 +641,23 @@ pub fn file_attributes(filename: &str) -> Option<FileAttributes> {
     })
 }
 
+fn file_modes(filename: &str) -> Option<u32> {
+    let meta = fs::symlink_metadata(filename).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Some(meta.permissions().mode() & 0o7777)
+    }
+    #[cfg(not(unix))]
+    {
+        Some(if meta.permissions().readonly() {
+            0o444
+        } else {
+            0o644
+        })
+    }
+}
+
 // ===========================================================================
 // Builtin wrappers — pure (no evaluator needed)
 // ===========================================================================
@@ -1311,6 +1328,40 @@ pub(crate) fn builtin_file_symlink_p_eval(eval: &Evaluator, args: Vec<Value>) ->
     let filename = expect_string_strict(&args[0])?;
     let filename = resolve_filename_for_eval(eval, &filename);
     Ok(Value::bool(file_symlink_p(&filename)))
+}
+
+/// (file-modes FILENAME &optional FLAG) -> integer or nil
+pub(crate) fn builtin_file_modes(args: Vec<Value>) -> EvalResult {
+    expect_min_args("file-modes", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("file-modes"), Value::Int(args.len() as i64)],
+        ));
+    }
+    let filename = expect_string_strict(&args[0])?;
+    match file_modes(&filename) {
+        Some(mode) => Ok(Value::Int(mode as i64)),
+        None => Ok(Value::Nil),
+    }
+}
+
+/// Evaluator-aware variant of `file-modes` that resolves relative paths
+/// against dynamic/default `default-directory`.
+pub(crate) fn builtin_file_modes_eval(eval: &Evaluator, args: Vec<Value>) -> EvalResult {
+    expect_min_args("file-modes", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("file-modes"), Value::Int(args.len() as i64)],
+        ));
+    }
+    let filename = expect_string_strict(&args[0])?;
+    let filename = resolve_filename_for_eval(eval, &filename);
+    match file_modes(&filename) {
+        Some(mode) => Ok(Value::Int(mode as i64)),
+        None => Ok(Value::Nil),
+    }
 }
 
 /// (delete-file FILENAME &optional TRASH) -> nil
@@ -2626,6 +2677,38 @@ mod tests {
         let result = builtin_file_exists_p(vec![Value::string("/no_such_file_xyz")]);
         assert!(result.is_ok());
         assert!(result.unwrap().is_nil());
+    }
+
+    #[test]
+    fn test_builtin_file_modes_semantics() {
+        assert_eq!(builtin_file_modes(vec![Value::string("/tmp/neovm-file-modes-missing")]).unwrap(), Value::Nil);
+
+        let path = builtin_make_temp_file(vec![Value::string("neovm-file-modes-")]).unwrap();
+        let path_str = path.as_str().unwrap().to_string();
+        let mode = builtin_file_modes(vec![Value::string(&path_str)]).unwrap();
+        assert!(matches!(mode, Value::Int(_)));
+        let with_flag = builtin_file_modes(vec![Value::string(&path_str), Value::True]).unwrap();
+        assert!(matches!(with_flag, Value::Int(_)));
+        delete_file(&path_str).unwrap();
+    }
+
+    #[test]
+    fn test_builtin_file_modes_eval_respects_default_directory() {
+        let base = std::env::temp_dir().join("neovm-file-modes-eval");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let file = base.join("alpha.txt");
+        fs::write(&file, b"x").unwrap();
+
+        let mut eval = Evaluator::new();
+        eval.obarray.set_symbol_value(
+            "default-directory",
+            Value::string(format!("{}/", base.to_string_lossy())),
+        );
+        let mode = builtin_file_modes_eval(&eval, vec![Value::string("alpha.txt")]).unwrap();
+        assert!(matches!(mode, Value::Int(_)));
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

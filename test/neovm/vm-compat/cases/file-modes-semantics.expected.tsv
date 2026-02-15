@@ -1,0 +1,5 @@
+1	(condition-case err (file-modes) (error err))	OK (wrong-number-of-arguments file-modes 0)
+2	(condition-case err (file-modes 1) (error err))	OK (wrong-type-argument stringp 1)
+3	(file-modes "/tmp/neovm-file-modes-missing")	OK nil
+4	(let ((f (make-temp-file "neovm-file-modes-core-"))) (prog1 (list (integerp (file-modes f)) (integerp (file-modes f t))) (delete-file f)))	OK (t t)
+5	(let* ((base (make-temp-file "neovm-file-modes-eval-" t)) (f (expand-file-name "alpha.txt" base))) (with-temp-buffer (insert "x") (write-region nil nil f)) (prog1 (let ((default-directory (file-name-as-directory base))) (integerp (file-modes "alpha.txt"))) (delete-file f) (delete-directory base)))	OK t
