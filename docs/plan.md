@@ -6,16 +6,30 @@ Last updated: 2026-02-15
 
 - Expand kill-ring/yank pointer corpus around normalization and command-context edges.
 - Keep default-suite case lists authoritative and append passing corpora in small slices.
+- Continue `yank-pop` parity lock-in for malformed pointer seeds and early-error publication behavior.
 - Keep `.elc` reader/exec compatibility corpora explicitly non-default while `.elc` binary compatibility remains disabled.
 
 ## Next
 
-- Add another focused `yank-pop` corpus for malformed pointer + rotation combinations not yet locked.
+- Add one focused corpus for `yank-pop` improper-pointer behavior under explicit command context (`last-command='yank`).
 - Continue promoting already-green non-default corpora to `default.list` one-by-one with targeted checks.
-- Run `check-all-neovm` after next 3-5 corpus/list promotions to catch integration regressions early.
+- Run `check-all-neovm` after the next 2-4 corpus/list promotions to catch integration regressions early.
 
 ## Done
 
+- Aligned `yank-pop` pointer publication-on-error semantics with oracle behavior:
+  - updated `rust/neovm-core/src/elisp/kill_ring.rs` so `yank-pop` now syncs/publishes `kill-ring-yank-pointer` before command-context gating (`end-of-file` path)
+  - added corpus:
+    - `test/neovm/vm-compat/cases/yank-pop-pointer-normalize-error-semantics.forms`
+    - `test/neovm/vm-compat/cases/yank-pop-pointer-normalize-error-semantics.expected.tsv`
+  - wired into:
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/yank-pop-pointer-normalize-error-semantics.forms EXPECTED=cases/yank-pop-pointer-normalize-error-semantics.expected.tsv` (pass, 5/5)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/yank-pop-pointer-normalize-error-semantics` (pass, 5/5)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/yank-pop-semantics` (pass, 5/5)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/yank-pop-pointer-seed-semantics` (pass, 3/3)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Aligned `yank` pointer publication semantics with oracle behavior:
   - updated `rust/neovm-core/src/elisp/kill_ring.rs` so `yank` always syncs/publishes `kill-ring-yank-pointer` during command setup, even when insertion later errors (e.g. read-only paths)
   - added corpus:
