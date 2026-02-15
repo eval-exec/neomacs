@@ -1,0 +1,5 @@
+1	(with-temp-buffer (insert (concat "a" (string 10) " b")) (goto-char 4) (setq buffer-read-only t) (condition-case err (delete-indentation) (error (car err))))	OK buffer-read-only
+2	(with-temp-buffer (insert (concat "a" (string 10) " b")) (goto-char 4) (let ((buffer-read-only t)) (condition-case err (delete-indentation) (error (car err)))))	OK buffer-read-only
+3	(with-temp-buffer (insert "ab") (goto-char 1) (setq buffer-read-only t) (condition-case err (delete-indentation) (error (car err))))	OK nil
+4	(with-temp-buffer (insert "ab") (goto-char (point-max)) (setq buffer-read-only t) (condition-case err (delete-indentation t) (error (car err))))	OK nil
+5	(let ((orig (default-value 'buffer-read-only))) (unwind-protect (progn (setq-default buffer-read-only t) (with-temp-buffer (insert (concat "a" (string 10) " b")) (goto-char 4) (condition-case err (delete-indentation) (error (car err))))) (setq-default buffer-read-only orig)))	OK nil

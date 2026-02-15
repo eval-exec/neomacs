@@ -1,0 +1,30 @@
+; delete-indentation should honor `buffer-read-only` for real joins and allow no-op paths.
+(with-temp-buffer
+  (insert (concat "a" (string 10) " b"))
+  (goto-char 4)
+  (setq buffer-read-only t)
+  (condition-case err (delete-indentation) (error (car err))))
+(with-temp-buffer
+  (insert (concat "a" (string 10) " b"))
+  (goto-char 4)
+  (let ((buffer-read-only t))
+    (condition-case err (delete-indentation) (error (car err)))))
+(with-temp-buffer
+  (insert "ab")
+  (goto-char 1)
+  (setq buffer-read-only t)
+  (condition-case err (delete-indentation) (error (car err))))
+(with-temp-buffer
+  (insert "ab")
+  (goto-char (point-max))
+  (setq buffer-read-only t)
+  (condition-case err (delete-indentation t) (error (car err))))
+(let ((orig (default-value 'buffer-read-only)))
+  (unwind-protect
+      (progn
+        (setq-default buffer-read-only t)
+        (with-temp-buffer
+          (insert (concat "a" (string 10) " b"))
+          (goto-char 4)
+          (condition-case err (delete-indentation) (error (car err)))))
+    (setq-default buffer-read-only orig)))
