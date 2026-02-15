@@ -1,0 +1,6 @@
+1	(with-temp-buffer (setq buffer-read-only t) (condition-case err (insert "x") (error (car err))))	OK buffer-read-only
+2	(with-temp-buffer (insert "abc") (goto-char 2) (setq buffer-read-only t) (condition-case err (delete-char 1) (error (car err))))	OK buffer-read-only
+3	(with-temp-buffer (insert "abc") (setq buffer-read-only t) (condition-case err (delete-region 1 2) (error (car err))))	OK buffer-read-only
+4	(with-temp-buffer (let ((buffer-read-only t)) (condition-case err (insert "x") (error (car err)))))	OK buffer-read-only
+5	(let ((orig (default-value 'buffer-read-only))) (unwind-protect (progn (setq-default buffer-read-only t) (with-temp-buffer (condition-case err (insert "x") (error (car err))))) (setq-default buffer-read-only orig)))	OK nil
+6	(with-temp-buffer (insert "abc") (setq buffer-read-only t) (condition-case err (erase-buffer) (error (car err))))	OK buffer-read-only

@@ -1,0 +1,27 @@
+; Core editing builtins should honor dynamic/local/global `buffer-read-only` variable state.
+(with-temp-buffer
+  (setq buffer-read-only t)
+  (condition-case err (insert "x") (error (car err))))
+(with-temp-buffer
+  (insert "abc")
+  (goto-char 2)
+  (setq buffer-read-only t)
+  (condition-case err (delete-char 1) (error (car err))))
+(with-temp-buffer
+  (insert "abc")
+  (setq buffer-read-only t)
+  (condition-case err (delete-region 1 2) (error (car err))))
+(with-temp-buffer
+  (let ((buffer-read-only t))
+    (condition-case err (insert "x") (error (car err)))))
+(let ((orig (default-value 'buffer-read-only)))
+  (unwind-protect
+      (progn
+        (setq-default buffer-read-only t)
+        (with-temp-buffer
+          (condition-case err (insert "x") (error (car err)))))
+    (setq-default buffer-read-only orig)))
+(with-temp-buffer
+  (insert "abc")
+  (setq buffer-read-only t)
+  (condition-case err (erase-buffer) (error (car err))))
