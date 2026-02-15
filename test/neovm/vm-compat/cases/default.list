@@ -55,6 +55,7 @@ cases/chars
 cases/char-resolve-modifiers-semantics
 cases/char-byte-conversion-semantics
 cases/get-byte-semantics
+cases/string-pixel-width-semantics
 cases/custom-group-p-availability
 cases/custom-set-semantics
 cases/bookmark-helper-availability

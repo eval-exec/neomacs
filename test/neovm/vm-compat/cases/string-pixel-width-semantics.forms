@@ -1,0 +1,11 @@
+; string-pixel-width batch semantics: column widths, tabs, and payloads.
+(string-pixel-width "")
+(string-pixel-width "hello")
+(string-pixel-width "漢字")
+(string-pixel-width (concat "e" "\u0301"))
+(string-pixel-width (string 9))
+(string-pixel-width (concat "a" (string 9) "b"))
+(string-pixel-width (propertize "ab" 'face 'bold))
+(condition-case err (string-pixel-width 1) (error (car err)))
+(condition-case err (string-pixel-width) (error (car err)))
+(condition-case err (string-pixel-width "a" "b") (error (car err)))

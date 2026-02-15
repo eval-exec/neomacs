@@ -4,6 +4,24 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `string-pixel-width` batch compatibility slice:
+  - updated `rust/neovm-core/src/elisp/format.rs`:
+    - replaced fixed `len * 8` stub with column-accurate width computation
+    - aligned tab expansion to next 8-column boundary
+    - reused Unicode/control width rules via `crate::encoding::char_width`
+  - expanded unit coverage:
+    - ASCII width behavior
+    - empty string behavior
+    - tab alignment (`"\t"`, `"a\t"`, `"a\tb"`)
+    - wide + combining character behavior
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/string-pixel-width-semantics.forms`
+    - `test/neovm/vm-compat/cases/string-pixel-width-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml string_pixel_width -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/string-pixel-width-semantics.forms EXPECTED=cases/string-pixel-width-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Implemented `make-directory` arity/parents compatibility slice:
   - updated pure + evaluator-aware builtins in `rust/neovm-core/src/elisp/fileio.rs`:
     - `builtin_make_directory`

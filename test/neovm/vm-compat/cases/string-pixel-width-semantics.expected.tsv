@@ -1,0 +1,10 @@
+1	(string-pixel-width "")	OK 0
+2	(string-pixel-width "hello")	OK 5
+3	(string-pixel-width "漢字")	OK 4
+4	(string-pixel-width (concat "e" "́"))	OK 1
+5	(string-pixel-width (string 9))	OK 8
+6	(string-pixel-width (concat "a" (string 9) "b"))	OK 9
+7	(string-pixel-width (propertize "ab" 'face 'bold))	OK 2
+8	(condition-case err (string-pixel-width 1) (error (car err)))	OK wrong-type-argument
+9	(condition-case err (string-pixel-width) (error (car err)))	OK wrong-number-of-arguments
+10	(condition-case err (string-pixel-width "a" "b") (error (car err)))	OK wrong-number-of-arguments

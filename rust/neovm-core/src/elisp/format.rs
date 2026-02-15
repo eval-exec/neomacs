@@ -10,7 +10,7 @@
 //! - `string-clean-whitespace` — collapse whitespace and trim
 //! - `string-fill` — fill/wrap text at a given column width
 //! - `string-limit` — truncate string to a given length
-//! - `string-pixel-width` — stub returning length * 8
+//! - `string-pixel-width` — batch-compatible display-column width
 //! - `string-glyph-split` — split string into grapheme clusters (chars)
 //! - `string-equal-ignore-case` — case-insensitive string comparison
 
@@ -965,15 +965,28 @@ pub(crate) fn builtin_string_limit(args: Vec<Value>) -> EvalResult {
 // string-pixel-width
 // ---------------------------------------------------------------------------
 
-/// `(string-pixel-width STRING)` -- return the pixel width of STRING.
+fn string_pixel_width(s: &str) -> i64 {
+    let mut columns = 0usize;
+    for ch in s.chars() {
+        if ch == '\t' {
+            let tab_width = 8usize;
+            columns += tab_width - (columns % tab_width);
+        } else {
+            columns += crate::encoding::char_width(ch);
+        }
+    }
+    columns as i64
+}
+
+/// `(string-pixel-width STRING)` -- return the display-column width of STRING
+/// in batch mode.
 ///
-/// Stub implementation: returns `length * 8` (approximating a fixed-width
-/// font at 8 pixels per character).
+/// Oracle behavior in batch is column-based (not GUI pixel metrics), including
+/// tab expansion to the next 8-column boundary.
 pub(crate) fn builtin_string_pixel_width(args: Vec<Value>) -> EvalResult {
     expect_args("string-pixel-width", &args, 1)?;
     let s = require_string("string-pixel-width", &args[0])?;
-    let width = s.chars().count() as i64 * 8;
-    Ok(Value::Int(width))
+    Ok(Value::Int(string_pixel_width(&s)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1410,13 +1423,52 @@ mod tests {
     #[test]
     fn string_pixel_width_basic() {
         let result = builtin_string_pixel_width(vec![Value::string("hello")]);
-        assert_eq!(result.unwrap().as_int().unwrap(), 40); // 5 * 8
+        assert_eq!(result.unwrap().as_int().unwrap(), 5);
     }
 
     #[test]
     fn string_pixel_width_empty() {
         let result = builtin_string_pixel_width(vec![Value::string("")]);
         assert_eq!(result.unwrap().as_int().unwrap(), 0);
+    }
+
+    #[test]
+    fn string_pixel_width_tabs_and_wide_chars() {
+        assert_eq!(
+            builtin_string_pixel_width(vec![Value::string("\t")])
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            8
+        );
+        assert_eq!(
+            builtin_string_pixel_width(vec![Value::string("a\t")])
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            8
+        );
+        assert_eq!(
+            builtin_string_pixel_width(vec![Value::string("a\tb")])
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            9
+        );
+        assert_eq!(
+            builtin_string_pixel_width(vec![Value::string("漢字")])
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            4
+        );
+        assert_eq!(
+            builtin_string_pixel_width(vec![Value::string("e\u{0301}")])
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            1
+        );
     }
 
     // ===================================================================
