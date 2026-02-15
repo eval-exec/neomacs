@@ -90,6 +90,7 @@ cases/read-batch-input-semantics
 cases/read-batch-error-payloads
 cases/zlib-decompress-region-semantics
 cases/libxml-parse-xml-region-semantics
+cases/libxml-parse-html-region-semantics
 cases/read-coding-system-semantics
 cases/timer-semantics
 cases/display-stub-semantics

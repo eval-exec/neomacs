@@ -65,9 +65,19 @@ fn expect_integer_or_marker(value: &Value) -> Result<i64, Flow> {
 /// (libxml-parse-html-region START END &optional BASE-URL DISCARD-COMMENTS)
 /// Stub: returns nil (libxml not available in pure Rust yet).
 pub(crate) fn builtin_libxml_parse_html_region(args: Vec<Value>) -> EvalResult {
-    expect_min_args("libxml-parse-html-region", &args, 2)?;
+    expect_min_args("libxml-parse-html-region", &args, 0)?;
     expect_max_args("libxml-parse-html-region", &args, 4)?;
-    // Stub: libxml parsing not implemented
+    if let Some(start) = args.first() {
+        if !start.is_nil() {
+            let _ = expect_integer_or_marker(start)?;
+        }
+    }
+    if let Some(end) = args.get(1) {
+        if !end.is_nil() {
+            let _ = expect_integer_or_marker(end)?;
+        }
+    }
+    // Stub parser path: we intentionally return nil until libxml parser support lands.
     Ok(Value::Nil)
 }
 
@@ -201,6 +211,46 @@ mod tests {
                 assert_eq!(
                     sig.data,
                     vec![Value::symbol("libxml-parse-xml-region"), Value::Int(5)]
+                );
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn libxml_parse_html_region_arity_and_type_subset() {
+        assert_eq!(
+            builtin_libxml_parse_html_region(vec![Value::Int(1), Value::Int(1)]).unwrap(),
+            Value::Nil
+        );
+
+        let wrong_type =
+            builtin_libxml_parse_html_region(vec![Value::string("x"), Value::Int(1)]).unwrap_err();
+        match wrong_type {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::symbol("integer-or-marker-p"), Value::string("x")]
+                );
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+
+        let wrong_arity = builtin_libxml_parse_html_region(vec![
+            Value::Int(1),
+            Value::Int(1),
+            Value::Nil,
+            Value::Nil,
+            Value::Nil,
+        ])
+        .unwrap_err();
+        match wrong_arity {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-number-of-arguments");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::symbol("libxml-parse-html-region"), Value::Int(5)]
                 );
             }
             other => panic!("unexpected flow: {other:?}"),

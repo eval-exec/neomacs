@@ -1,0 +1,4 @@
+1	(condition-case err (libxml-parse-html-region 1 1 1 1 1) (error err))	OK (wrong-number-of-arguments libxml-parse-html-region 5)
+2	(condition-case err (libxml-parse-html-region "x" 1) (error err))	OK (wrong-type-argument integer-or-marker-p "x")
+3	(condition-case err (libxml-parse-html-region 1 "x") (error err))	OK (wrong-type-argument integer-or-marker-p "x")
+4	(condition-case err (null (libxml-parse-html-region 1 1)) (error err))	OK t

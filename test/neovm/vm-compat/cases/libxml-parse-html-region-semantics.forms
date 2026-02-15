@@ -1,0 +1,4 @@
+(condition-case err (libxml-parse-html-region 1 1 1 1 1) (error err))
+(condition-case err (libxml-parse-html-region "x" 1) (error err))
+(condition-case err (libxml-parse-html-region 1 "x") (error err))
+(condition-case err (null (libxml-parse-html-region 1 1)) (error err))
