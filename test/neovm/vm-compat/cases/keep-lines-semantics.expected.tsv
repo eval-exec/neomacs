@@ -1,0 +1,7 @@
+1	(fboundp 'keep-lines)	OK t
+2	(with-temp-buffer (insert (concat "a" (string 10) "bb" (string 10) "c" (string 10))) (goto-char (point-max)) (keep-lines "b") (list (point) (split-string (buffer-string) (string 10) t)))	OK (8 ("a" "bb" "c"))
+3	(with-temp-buffer (insert (concat "a" (string 10) "bb" (string 10) "c" (string 10))) (goto-char (point-min)) (keep-lines "b") (list (point) (split-string (buffer-string) (string 10) t)))	OK (1 ("bb"))
+4	(with-temp-buffer (insert (concat "aa" (string 10) "bb" (string 10) "cc" (string 10) "dd" (string 10))) (goto-char (point-min)) (keep-lines "b" 4 10) (split-string (buffer-string) (string 10) t))	OK ("aa" "bb" "dd")
+5	(condition-case err (keep-lines) (wrong-number-of-arguments (car err)))	OK wrong-number-of-arguments
+6	(condition-case err (keep-lines 1) (error err))	OK (wrong-type-argument sequencep 1)
+7	(condition-case err (keep-lines "[a-") (invalid-regexp (car err)))	OK nil

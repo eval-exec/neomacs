@@ -5590,6 +5590,7 @@ pub(crate) fn dispatch_builtin(
         "replace-match" => return Some(builtin_replace_match(eval, args)),
         "replace-string" => return Some(super::isearch::builtin_replace_string_eval(eval, args)),
         "replace-regexp" => return Some(super::isearch::builtin_replace_regexp_eval(eval, args)),
+        "keep-lines" => return Some(super::isearch::builtin_keep_lines_eval(eval, args)),
         // File I/O (evaluator-dependent)
         "expand-file-name" => {
             return Some(super::fileio::builtin_expand_file_name_eval(eval, args))

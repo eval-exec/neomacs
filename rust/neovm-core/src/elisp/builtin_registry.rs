@@ -409,6 +409,7 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "just-one-space",
     "kbd",
     "kbd-macro-query",
+    "keep-lines",
     "key-binding",
     "keyboard-coding-system",
     "keyboard-quit",

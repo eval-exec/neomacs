@@ -98,6 +98,34 @@ fn replacement_region_bounds(
     }
 }
 
+fn line_operation_region_bounds(
+    buf: &crate::buffer::Buffer,
+    start_arg: Option<&Value>,
+    end_arg: Option<&Value>,
+) -> Result<(usize, usize), Flow> {
+    let start = match start_arg {
+        Some(v) if !v.is_nil() => lisp_pos_to_byte(buf, expect_integer_or_marker(v)?),
+        _ => buf.point(),
+    };
+    let end = match end_arg {
+        Some(v) if !v.is_nil() => lisp_pos_to_byte(buf, expect_integer_or_marker(v)?),
+        _ => buf.point_max(),
+    };
+    if start <= end {
+        Ok((start, end))
+    } else {
+        Ok((end, start))
+    }
+}
+
+fn line_start_at_or_before(source: &str, at: usize) -> usize {
+    let pos = at.min(source.len());
+    match source[..pos].rfind('\n') {
+        Some(idx) => idx + 1,
+        None => 0,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Search direction
 // ---------------------------------------------------------------------------
@@ -1338,6 +1366,88 @@ pub(crate) fn builtin_replace_regexp_eval(
     buf.goto_char(start);
     buf.insert(&out);
     buf.goto_char(start + out.len());
+
+    Ok(Value::Nil)
+}
+
+/// `(keep-lines REGEXP &optional RSTART REND INTERACTIVE)` —
+/// evaluator-backed non-interactive line filtering subset.
+pub(crate) fn builtin_keep_lines_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_max_args("keep-lines", &args, 1, 4)?;
+    let regexp = expect_sequence_string(&args[0])?;
+
+    let (point_min, start, end, source, read_only, buffer_name) = {
+        let buf = eval
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let (start, end) = line_operation_region_bounds(buf, args.get(1), args.get(2))?;
+        (
+            buf.point_min(),
+            start,
+            end,
+            buf.buffer_substring(buf.point_min(), buf.point_max()),
+            buf.read_only,
+            buf.name.clone(),
+        )
+    };
+
+    let case_fold = resolve_case_fold(None, &regexp);
+    let pattern = build_regex_pattern(&regexp, case_fold);
+    let re = match Regex::new(&pattern) {
+        Ok(re) => re,
+        Err(_) => return Ok(Value::Nil),
+    };
+
+    let rel_start = start.saturating_sub(point_min).min(source.len());
+    let rel_end = end.saturating_sub(point_min).min(source.len());
+    let mut rel_cursor = line_start_at_or_before(&source, rel_start);
+    let mut delete_ranges: Vec<(usize, usize)> = Vec::new();
+
+    while rel_cursor < source.len() {
+        let abs_line_start = point_min + rel_cursor;
+        if abs_line_start >= point_min + rel_end {
+            break;
+        }
+
+        let line_tail = &source[rel_cursor..];
+        let line_len = match line_tail.find('\n') {
+            Some(idx) => idx + 1,
+            None => line_tail.len(),
+        };
+        let rel_line_end = rel_cursor + line_len;
+        let line = if source.as_bytes().get(rel_line_end.wrapping_sub(1)) == Some(&b'\n') {
+            &source[rel_cursor..rel_line_end - 1]
+        } else {
+            &source[rel_cursor..rel_line_end]
+        };
+
+        if !re.is_match(line) {
+            delete_ranges.push((point_min + rel_cursor, point_min + rel_line_end));
+        }
+        rel_cursor = rel_line_end;
+    }
+
+    if delete_ranges.is_empty() {
+        return Ok(Value::Nil);
+    }
+    if read_only {
+        return Err(signal(
+            "buffer-read-only",
+            vec![Value::string(buffer_name)],
+        ));
+    }
+
+    let buf = eval
+        .buffers
+        .current_buffer_mut()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    for (del_start, del_end) in delete_ranges.into_iter().rev() {
+        buf.delete_region(del_start, del_end);
+    }
 
     Ok(Value::Nil)
 }
