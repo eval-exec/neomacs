@@ -4,6 +4,24 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `backtrace-frame` compatibility slice:
+  - replaced misc stub with evaluator-backed compatibility behavior:
+    - enforces `wholenump` argument validation and 1..=2 arity
+    - supports optional `BASE` filtering (`BASE` non-nil returns `nil`)
+    - returns deterministic list-shaped frames for low indices and `nil` for deep indices
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/backtrace-frame-semantics.forms`
+    - `test/neovm/vm-compat/cases/backtrace-frame-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - expanded `rust/neovm-core/src/elisp/misc.rs` unit coverage for:
+    - low-frame shape behavior
+    - `BASE` semantics
+    - arity and `wholenump` error payloads
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml backtrace_frame -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/backtrace-frame-semantics.forms EXPECTED=cases/backtrace-frame-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Implemented `system-users` / `system-groups` compatibility slice:
   - replaced dired stubs with real account/group discovery from `/etc/passwd` and `/etc/group`
   - aligned output ordering with oracle behavior (reverse file order)
