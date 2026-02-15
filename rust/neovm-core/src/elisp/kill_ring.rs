@@ -1257,30 +1257,39 @@ pub(crate) fn builtin_yank_pop(eval: &mut super::eval::Evaluator, args: Vec<Valu
         expect_int(&args[0])?
     };
 
-    let (old_start, old_end) = match eval.kill_ring.last_yank_region {
-        Some(region) => region,
-        None => {
-            return Err(signal(
-                "wrong-type-argument",
-                vec![Value::Symbol("number-or-marker-p".to_string()), Value::Nil],
-            ))
-        }
-    };
-
-    {
-        let buf = eval
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let pmin = buf.point_min();
-        let pmax = buf.point_max();
-        if old_start < pmin || old_end > pmax || old_start > old_end {
+    let (old_start, old_end) = {
+        if eval.kill_ring.last_yank_region.is_none() {
             return Err(signal(
                 "wrong-type-argument",
                 vec![Value::Symbol("number-or-marker-p".to_string()), Value::Nil],
             ));
         }
-    }
+        let buf = eval
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let mark = match buf.mark() {
+            Some(m) => m,
+            None => {
+                return Err(signal(
+                    "wrong-type-argument",
+                    vec![Value::Symbol("number-or-marker-p".to_string()), Value::Nil],
+                ))
+            }
+        };
+        let pt = buf.point();
+        let pmin = buf.point_min();
+        let pmax = buf.point_max();
+        let a = mark.min(pt);
+        let b = mark.max(pt);
+        if a < pmin || b > pmax {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::Symbol("number-or-marker-p".to_string()), Value::Nil],
+            ));
+        }
+        (a, b)
+    };
 
     // Rotate to get new text.
     let new_text = eval
