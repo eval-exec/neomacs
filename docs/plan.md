@@ -18,6 +18,16 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Removed dead duplicate `seq-into` wrapper from `cl_lib`:
+  - updated:
+    - `rust/neovm-core/src/elisp/cl_lib.rs`
+      - deleted unreferenced local `seq-into` implementation (active dispatch stays on `builtins_extra` path).
+      - removed stale local helper and wrapper-only test coverage tied to that dead implementation.
+  - verified:
+    - `cargo test 'elisp::cl_lib::tests::' -- --nocapture` (pass, 10 tests)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/cl-helper-availability` (pass, 86/86)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/seq-more` (pass, 16/16)
+
 - Removed additional dead `debug` module wrapper surface:
   - updated:
     - `rust/neovm-core/src/elisp/debug.rs`

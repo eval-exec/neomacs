@@ -66,15 +66,6 @@ fn collect_sequence(val: &Value) -> Vec<Value> {
     }
 }
 
-/// Convert a type-name symbol to a string for type dispatch.
-fn type_name_str(val: &Value) -> &str {
-    match val {
-        Value::Symbol(s) => s.as_str(),
-        Value::Keyword(s) => s.as_str(),
-        _ => "",
-    }
-}
-
 fn seq_position_list_elements(seq: &Value) -> Result<Vec<Value>, Flow> {
     let mut elements = Vec::new();
     let mut cursor = seq.clone();
@@ -474,28 +465,6 @@ pub(crate) fn builtin_seq_max(args: Vec<Value>) -> EvalResult {
     Ok(max_val.clone())
 }
 
-/// `(seq-into SEQ TYPE)` — convert sequence type.
-pub(crate) fn builtin_seq_into(args: Vec<Value>) -> EvalResult {
-    expect_args("seq-into", &args, 2)?;
-    let elems = collect_sequence(&args[0]);
-    let target = type_name_str(&args[1]);
-    match target {
-        "vector" => Ok(Value::vector(elems)),
-        "string" => {
-            let s: String = elems
-                .iter()
-                .filter_map(|v| match v {
-                    Value::Char(c) => Some(*c),
-                    Value::Int(n) => char::from_u32(*n as u32),
-                    _ => None,
-                })
-                .collect();
-            Ok(Value::string(s))
-        }
-        _ => Ok(Value::list(elems)),
-    }
-}
-
 // ===========================================================================
 // Seq.el eval-dependent operations
 // ===========================================================================
@@ -756,13 +725,6 @@ mod tests {
             Some(1)
         );
         assert_eq!(builtin_seq_max(vec![list]).unwrap().as_int(), Some(3));
-    }
-
-    #[test]
-    fn seq_into_vector() {
-        let list = Value::list(vec![Value::Int(1), Value::Int(2)]);
-        let result = builtin_seq_into(vec![list, Value::symbol("vector")]).unwrap();
-        assert!(result.is_vector());
     }
 
     // --- Eval-dependent tests (using Evaluator) ---
