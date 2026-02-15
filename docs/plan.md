@@ -12,12 +12,25 @@ Last updated: 2026-02-15
 
 ## Next
 
-- Add one focused corpus for `region-active-p` / `use-region-p` behavior around `mark-active` and transient-mark mode.
+- Add one focused corpus for `deactivate-mark` / `exchange-point-and-mark` around mark-active publication and unset-mark errors.
 - Continue promoting already-green non-default corpora to `default.list` one-by-one with targeted checks.
 - Keep validating list hygiene and merged-case dedupe as list membership changes.
 
 ## Done
 
+- Aligned `use-region-p` gating semantics with oracle behavior:
+  - updated `rust/neovm-core/src/elisp/navigation.rs`:
+    - `use-region-p` now requires: `mark-active`, `transient-mark-mode`, mark set, and non-empty region (`point != mark`)
+    - dynamic/global `mark-active` and `transient-mark-mode` bindings now participate in evaluation
+  - added corpus:
+    - `test/neovm/vm-compat/cases/use-region-p-semantics.forms`
+    - `test/neovm/vm-compat/cases/use-region-p-semantics.expected.tsv`
+  - wired into:
+    - `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/use-region-p-semantics.forms EXPECTED=cases/use-region-p-semantics.expected.tsv` (pass, 8/8)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/use-region-p-semantics` (pass, 8/8)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Aligned `region-beginning`/`region-end` unset-mark error symbol behavior:
   - updated `rust/neovm-core/src/elisp/navigation.rs`:
     - unset-mark paths now signal `error` (matching oracle), not `mark-not-set`
