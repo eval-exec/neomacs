@@ -1,0 +1,14 @@
+1	(setq kill-ring (list "a" "b" "c"))	OK ("a" "b" "c")
+2	(setq kill-ring-yank-pointer (cdr (cdr kill-ring)))	OK ("c")
+3	(current-kill 1 nil)	OK "a"
+4	(car kill-ring-yank-pointer)	OK "a"
+5	(current-kill -1 nil)	OK "c"
+6	(car kill-ring-yank-pointer)	OK "c"
+7	(setq kill-ring (list "" "x"))	OK ("" "x")
+8	(setq kill-ring-yank-pointer kill-ring)	OK ("" "x")
+9	(current-kill 0 t)	OK ""
+10	(current-kill 1 nil)	OK "x"
+11	(car kill-ring-yank-pointer)	OK "x"
+12	(current-kill 1 nil)	OK ""
+13	(car kill-ring-yank-pointer)	OK ""
+14	(with-temp-buffer (setq kill-ring (list "" "x")) (setq kill-ring-yank-pointer kill-ring) (yank) (let ((last-command 'yank)) (yank-pop 1)) (list (buffer-string) (car kill-ring-yank-pointer)))	OK ("x" "x")

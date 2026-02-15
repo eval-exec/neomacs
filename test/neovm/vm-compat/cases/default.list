@@ -104,6 +104,7 @@ cases/kill-ring-setq-pointer-semantics
 cases/kill-ring-yank-pointer-semantics
 cases/kill-ring-yank-pointer-invalid-semantics
 cases/kill-ring-yank-pointer-duplicate-semantics
+cases/kill-ring-pointer-wrap-semantics
 cases/yank-read-only-variable-semantics
 cases/yank-pop-read-only-variable-semantics
 cases/yank-pop-semantics

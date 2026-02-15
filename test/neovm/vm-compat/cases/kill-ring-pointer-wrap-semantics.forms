@@ -1,0 +1,23 @@
+; kill-ring pointer wrap and empty-entry semantics.
+(setq kill-ring (list "a" "b" "c"))
+(setq kill-ring-yank-pointer (cdr (cdr kill-ring)))
+(current-kill 1 nil)
+(car kill-ring-yank-pointer)
+(current-kill -1 nil)
+(car kill-ring-yank-pointer)
+
+(setq kill-ring (list "" "x"))
+(setq kill-ring-yank-pointer kill-ring)
+(current-kill 0 t)
+(current-kill 1 nil)
+(car kill-ring-yank-pointer)
+(current-kill 1 nil)
+(car kill-ring-yank-pointer)
+
+(with-temp-buffer
+  (setq kill-ring (list "" "x"))
+  (setq kill-ring-yank-pointer kill-ring)
+  (yank)
+  (let ((last-command 'yank))
+    (yank-pop 1))
+  (list (buffer-string) (car kill-ring-yank-pointer)))
