@@ -433,6 +433,15 @@ fn command_designator_p(eval: &Evaluator, designator: &Value) -> bool {
     command_object_p(eval, None, designator)
 }
 
+fn dynamic_or_global_symbol_value(eval: &Evaluator, name: &str) -> Option<Value> {
+    for frame in eval.dynamic.iter().rev() {
+        if let Some(v) = frame.get(name) {
+            return Some(v.clone());
+        }
+    }
+    eval.obarray.symbol_value(name).cloned()
+}
+
 fn interactive_region_args(eval: &Evaluator, missing_mark_signal: &str) -> Result<Vec<Value>, Flow> {
     let buf = eval
         .buffers
@@ -482,6 +491,9 @@ fn default_command_execute_args(eval: &Evaluator, name: &str) -> Result<Vec<Valu
 
 fn default_call_interactively_args(eval: &Evaluator, name: &str) -> Result<Vec<Value>, Flow> {
     match name {
+        "set-mark-command" => Ok(vec![
+            dynamic_or_global_symbol_value(eval, "current-prefix-arg").unwrap_or(Value::Nil),
+        ]),
         "upcase-region" | "downcase-region" | "capitalize-region" => {
             interactive_region_args(eval, "error")
         }
