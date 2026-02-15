@@ -1,0 +1,7 @@
+1	(with-temp-buffer (insert "abc def") (goto-char 1) (setq buffer-read-only t) (condition-case err (kill-word 1) (error (car err))))	OK buffer-read-only
+2	(with-temp-buffer (insert "abc def") (goto-char 1) (let ((buffer-read-only t)) (condition-case err (kill-word 1) (error (car err)))))	OK buffer-read-only
+3	(with-temp-buffer (insert "abc def") (goto-char 1) (setq buffer-read-only t) (condition-case err (kill-word 0) (error (car err))))	OK nil
+4	(with-temp-buffer (insert "abc def") (goto-char (point-max)) (setq buffer-read-only t) (condition-case err (backward-kill-word 1) (error (car err))))	OK buffer-read-only
+5	(with-temp-buffer (insert "abc def") (goto-char (point-max)) (let ((buffer-read-only t)) (condition-case err (backward-kill-word 1) (error (car err)))))	OK buffer-read-only
+6	(with-temp-buffer (insert "abc def") (goto-char (point-max)) (setq buffer-read-only t) (condition-case err (backward-kill-word 0) (error (car err))))	OK nil
+7	(let ((orig (default-value 'buffer-read-only))) (unwind-protect (progn (setq-default buffer-read-only t) (with-temp-buffer (insert "abc") (condition-case err (kill-word 1) (error (car err))))) (setq-default buffer-read-only orig)))	OK nil

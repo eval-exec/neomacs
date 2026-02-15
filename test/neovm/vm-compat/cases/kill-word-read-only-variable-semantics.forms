@@ -1,0 +1,39 @@
+; kill-word family should honor dynamic/local/global `buffer-read-only` on mutation.
+(with-temp-buffer
+  (insert "abc def")
+  (goto-char 1)
+  (setq buffer-read-only t)
+  (condition-case err (kill-word 1) (error (car err))))
+(with-temp-buffer
+  (insert "abc def")
+  (goto-char 1)
+  (let ((buffer-read-only t))
+    (condition-case err (kill-word 1) (error (car err)))))
+(with-temp-buffer
+  (insert "abc def")
+  (goto-char 1)
+  (setq buffer-read-only t)
+  (condition-case err (kill-word 0) (error (car err))))
+(with-temp-buffer
+  (insert "abc def")
+  (goto-char (point-max))
+  (setq buffer-read-only t)
+  (condition-case err (backward-kill-word 1) (error (car err))))
+(with-temp-buffer
+  (insert "abc def")
+  (goto-char (point-max))
+  (let ((buffer-read-only t))
+    (condition-case err (backward-kill-word 1) (error (car err)))))
+(with-temp-buffer
+  (insert "abc def")
+  (goto-char (point-max))
+  (setq buffer-read-only t)
+  (condition-case err (backward-kill-word 0) (error (car err))))
+(let ((orig (default-value 'buffer-read-only)))
+  (unwind-protect
+      (progn
+        (setq-default buffer-read-only t)
+        (with-temp-buffer
+          (insert "abc")
+          (condition-case err (kill-word 1) (error (car err)))))
+    (setq-default buffer-read-only orig)))

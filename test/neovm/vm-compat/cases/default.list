@@ -85,6 +85,7 @@ cases/make-symbolic-link-semantics
 cases/buffer-locals
 cases/buffer-read-only-default-semantics
 cases/edit-read-only-variable-semantics
+cases/kill-word-read-only-variable-semantics
 cases/newline-read-only-variable-semantics
 cases/whitespace-read-only-variable-semantics
 cases/buffer-local-value
