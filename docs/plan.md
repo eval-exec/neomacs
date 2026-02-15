@@ -4,6 +4,24 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented evaluator-backed `indent-region` compatibility subset and oracle lock-in:
+  - updated `rust/neovm-core/src/elisp/indent.rs`:
+    - replaced stub with evaluator behavior for region indentation
+    - aligned return value to `t` (oracle-compatible)
+    - aligned omitted/non-numeric third arg behavior to mode-like reindent path (batch subset: dedent to column `0`)
+    - aligned reversed bounds (`START >= END`) to no-op success (`t`)
+    - kept read-only buffer signal behavior
+    - added evaluator unit coverage for numeric column, omitted column, reversed bounds, and non-numeric third arg
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/indent-region-semantics.forms`
+    - `test/neovm/vm-compat/cases/indent-region-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml indent::tests::eval_indent_region_column_subset -- --nocapture` (pass)
+    - `NEOVM_ORACLE_EMACS=/nix/store/hql3zwz5b4ywd2qwx8jssp4dyb7nx4cb-emacs-30.2/bin/emacs make -C test/neovm/vm-compat record FORMS=cases/indent-region-semantics.forms EXPECTED=cases/indent-region-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/indent-region-semantics.forms EXPECTED=cases/indent-region-semantics.expected.tsv` (pass, 7/7)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Implemented evaluator-backed `back-to-indentation` compatibility semantics and oracle lock-in:
   - updated `rust/neovm-core/src/elisp/indent.rs`:
     - added arity validation (`0` args)
