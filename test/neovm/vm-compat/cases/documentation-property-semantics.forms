@@ -1,0 +1,8 @@
+(documentation-property 'vm-docprop-symbol 'variable-documentation)
+(progn (put 'vm-docprop-symbol 'variable-documentation "doc") (documentation-property 'vm-docprop-symbol 'variable-documentation))
+(progn (put 'vm-docprop-symbol 'variable-documentation 9) (documentation-property 'vm-docprop-symbol 'variable-documentation))
+(progn (put 'vm-docprop-symbol 'function-documentation "fdoc") (documentation-property 'vm-docprop-symbol 'function-documentation))
+(documentation-property 'vm-docprop-symbol 1)
+(progn (put 'vm-docprop-symbol 'x "v") (documentation-property 'vm-docprop-symbol 'x t))
+(condition-case err (documentation-property 1 'variable-documentation) (error (car err)))
+(condition-case err (documentation-property 'vm-docprop-symbol) (error (car err)))

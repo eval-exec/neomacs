@@ -1,0 +1,8 @@
+1	(documentation-property 'vm-docprop-symbol 'variable-documentation)	OK nil
+2	(progn (put 'vm-docprop-symbol 'variable-documentation "doc") (documentation-property 'vm-docprop-symbol 'variable-documentation))	OK "doc"
+3	(progn (put 'vm-docprop-symbol 'variable-documentation 9) (documentation-property 'vm-docprop-symbol 'variable-documentation))	OK nil
+4	(progn (put 'vm-docprop-symbol 'function-documentation "fdoc") (documentation-property 'vm-docprop-symbol 'function-documentation))	OK "fdoc"
+5	(documentation-property 'vm-docprop-symbol 1)	OK nil
+6	(progn (put 'vm-docprop-symbol 'x "v") (documentation-property 'vm-docprop-symbol 'x t))	OK "v"
+7	(condition-case err (documentation-property 1 'variable-documentation) (error (car err)))	OK wrong-type-argument
+8	(condition-case err (documentation-property 'vm-docprop-symbol) (error (car err)))	OK wrong-number-of-arguments

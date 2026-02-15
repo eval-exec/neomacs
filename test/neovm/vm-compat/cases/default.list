@@ -15,6 +15,7 @@ cases/macro-special-introspection-core
 cases/function-special-form-edges
 cases/autoload-macro-introspection
 cases/functionp-callable-matrix
+cases/documentation-property-semantics
 cases/commandp-semantics
 cases/commandp-builtin-command-matrix
 cases/command-dispatch-semantics
