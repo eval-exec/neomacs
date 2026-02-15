@@ -18,6 +18,17 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Removed dead duplicate buffer-local wrappers from legacy buffer stateful surface:
+  - updated:
+    - `rust/neovm-core/src/elisp/buffer/stateful.rs`
+      - deleted unused `buffer-local-value` / `buffer-local-variables` wrappers shadowed by active dispatch implementations
+    - `rust/neovm-core/src/elisp/buffer/tests.rs`
+      - removed stale local tests bound only to deleted dead wrappers
+    - `rust/neovm-core/src/elisp/buffer.rs`
+      - removed stale module comment entries for deleted wrappers
+  - verified:
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/buffer-local-value` (pass, 5/5)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/buffer-local-variables-semantics` (pass, 7/7)
 - Removed dead legacy buffer `bury-buffer` / `buffer-swap-text` stub surface:
   - updated:
     - `rust/neovm-core/src/elisp/buffer/stateful.rs`
