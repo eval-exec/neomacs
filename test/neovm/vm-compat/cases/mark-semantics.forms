@@ -1,0 +1,7 @@
+; mark return-value semantics with unset/set/cleared mark states.
+(with-temp-buffer (mark))
+(with-temp-buffer (mark t))
+(with-temp-buffer (set-mark (point-min)) (mark))
+(with-temp-buffer (set-mark (point-min)) (mark t))
+(with-temp-buffer (set-marker (mark-marker) nil) (mark))
+(with-temp-buffer (let ((transient-mark-mode t)) (mark)))

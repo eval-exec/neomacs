@@ -1,0 +1,6 @@
+1	(with-temp-buffer (mark))	OK nil
+2	(with-temp-buffer (mark t))	OK nil
+3	(with-temp-buffer (set-mark (point-min)) (mark))	OK 1
+4	(with-temp-buffer (set-mark (point-min)) (mark t))	OK 1
+5	(with-temp-buffer (set-marker (mark-marker) nil) (mark))	OK nil
+6	(with-temp-buffer (let ((transient-mark-mode t)) (mark)))	OK nil
