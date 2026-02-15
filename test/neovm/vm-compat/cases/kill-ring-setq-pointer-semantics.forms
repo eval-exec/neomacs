@@ -1,0 +1,24 @@
+; kill-ring `setq` and pointer-sensitive command semantics.
+(setq kill-ring (list "x"))
+(current-kill 0 t)
+
+(setq kill-ring (list "a" "b"))
+(list (current-kill 0 t) (current-kill 1 t) (current-kill 0 t))
+
+(setq kill-ring (list "a" "b"))
+(current-kill 1 nil)
+(current-kill 0 t)
+
+(setq kill-ring (list "z"))
+(kill-new "n")
+kill-ring
+
+(setq kill-ring nil)
+(condition-case err
+    (current-kill 0 t)
+  (error (car err)))
+
+(setq kill-ring (list "m"))
+(with-temp-buffer
+  (yank)
+  (buffer-string))

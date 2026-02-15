@@ -100,6 +100,7 @@ cases/newline-read-only-variable-semantics
 cases/whitespace-read-only-variable-semantics
 cases/kill-ring-command-context-semantics
 cases/kill-ring-dynamic-binding-semantics
+cases/kill-ring-setq-pointer-semantics
 cases/yank-read-only-variable-semantics
 cases/yank-pop-read-only-variable-semantics
 cases/yank-pop-semantics

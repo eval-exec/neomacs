@@ -1,0 +1,14 @@
+1	(setq kill-ring (list "x"))	OK ("x")
+2	(current-kill 0 t)	OK "x"
+3	(setq kill-ring (list "a" "b"))	OK ("a" "b")
+4	(list (current-kill 0 t) (current-kill 1 t) (current-kill 0 t))	OK ("a" "b" "a")
+5	(setq kill-ring (list "a" "b"))	OK ("a" "b")
+6	(current-kill 1 nil)	OK "b"
+7	(current-kill 0 t)	OK "b"
+8	(setq kill-ring (list "z"))	OK ("z")
+9	(kill-new "n")	OK nil
+10	kill-ring	OK ("n" "z")
+11	(setq kill-ring nil)	OK nil
+12	(condition-case err (current-kill 0 t) (error (car err)))	OK error
+13	(setq kill-ring (list "m"))	OK ("m")
+14	(with-temp-buffer (yank) (buffer-string))	OK "m"
