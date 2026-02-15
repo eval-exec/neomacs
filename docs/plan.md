@@ -18,6 +18,15 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Removed dead duplicate casefiddle region/word stub wrappers:
+  - updated:
+    - `rust/neovm-core/src/elisp/casefiddle.rs`
+      - deleted unused eval-dependent stub wrappers for `upcase-region`/`downcase-region`/`capitalize-region`/`upcase-initials-region`/`upcase-word`/`downcase-word`/`capitalize-word` (active dispatch stays in `kill_ring.rs`)
+      - removed stale local tests bound to those dead wrappers
+  - verified:
+    - `cargo test upcase_string -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/case-region-optional-arg-semantics` (pass, 11/11)
+    - `make -C test/neovm/vm-compat check-one-neovm CASE=cases/case-region-read-only-semantics` (pass, 5/5)
 - Removed dead duplicate buffer undo stubs from legacy buffer module surface:
   - updated:
     - `rust/neovm-core/src/elisp/buffer/stateful.rs`
