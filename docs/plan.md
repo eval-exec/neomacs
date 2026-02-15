@@ -1820,11 +1820,12 @@ Last updated: 2026-02-15
     - `test/neovm/vm-compat/cases/case-replace-semantics.expected.tsv`
     - `test/neovm/vm-compat/cases/default.list`
   - verified:
-    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/case-replace-semantics.forms EXPECTED=cases/case-replace-semantics.expected.tsv` (pass, 11/11)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/case-replace-semantics.forms EXPECTED=cases/case-replace-semantics.expected.tsv` (pass, 14/14)
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-string-semantics.forms EXPECTED=cases/replace-string-semantics.expected.tsv` (pass, 6/6)
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-regexp-semantics.forms EXPECTED=cases/replace-regexp-semantics.expected.tsv` (pass, 8/8)
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/query-replace-batch-semantics.forms EXPECTED=cases/query-replace-batch-semantics.expected.tsv` (pass, 10/10)
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/replace-query-case-fold-variable-semantics.forms EXPECTED=cases/replace-query-case-fold-variable-semantics.expected.tsv` (pass, 10/10)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/query-replace-edge-semantics.forms EXPECTED=cases/query-replace-edge-semantics.expected.tsv` (pass, 12/12)
     - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Kept branch green with targeted Rust tests and vm-compat checks after each slice.
 
