@@ -259,6 +259,7 @@ cases/substring-edge-semantics
 cases/aref-aset-index-semantics
 cases/copy-sequence-semantics
 cases/cxr-semantics
+cases/cxr-3level-semantics
 cases/member-assoc-semantics
 cases/alist-get-semantics
 cases/plist-semantics
