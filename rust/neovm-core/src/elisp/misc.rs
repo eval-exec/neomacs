@@ -3,8 +3,7 @@
 //! Contains:
 //! - Special forms: prog2, with-temp-buffer, save-current-buffer, track-mouse, with-syntax-table
 //! - Pure builtins: copy-alist, rassoc, rassq, assoc-default, make-list, safe-length,
-//!   subst-char-in-string, replace-regexp-in-string, string-match-p, string/char encoding
-//!   stubs, nconc (improved), locale-info
+//!   subst-char-in-string, string/char encoding stubs, locale-info
 //! - Eval-dependent builtins: backtrace-frame, recursion-depth
 
 use super::error::{signal, EvalResult, Flow};
@@ -428,81 +427,6 @@ pub(crate) fn builtin_subst_char_in_string(args: Vec<Value>) -> EvalResult {
     Ok(Value::string(result))
 }
 
-/// `(replace-regexp-in-string REGEXP REP STRING &optional FIXEDCASE LITERAL SUBEXP START)` --
-/// replace all matches of REGEXP in STRING with REP.
-pub(crate) fn builtin_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
-    expect_min_args("replace-regexp-in-string", &args, 3)?;
-    let pattern = expect_string(&args[0])?;
-    let rep = expect_string(&args[1])?;
-    let s = expect_string(&args[2])?;
-    let _fixedcase = args.get(3).is_some_and(|v| v.is_truthy());
-    let literal = args.get(4).is_some_and(|v| v.is_truthy());
-    let _subexp = args.get(5);
-    let start = if args.len() > 6 {
-        expect_int(&args[6])? as usize
-    } else {
-        0
-    };
-
-    let rust_pattern = super::regex::translate_emacs_regex(&pattern);
-    let re = regex::Regex::new(&rust_pattern)
-        .map_err(|e| signal("invalid-regexp", vec![Value::string(format!("{e}"))]))?;
-
-    let search_region = if start > 0 && start < s.len() {
-        &s[start..]
-    } else {
-        &s
-    };
-
-    let result = if literal {
-        re.replace_all(search_region, regex::NoExpand(&rep))
-            .into_owned()
-    } else {
-        // Translate Emacs-style back-references (\1, \2, etc.) to regex crate style ($1, $2)
-        let rust_rep = rep
-            .replace("\\&", "${0}")
-            .replace("\\1", "${1}")
-            .replace("\\2", "${2}")
-            .replace("\\3", "${3}")
-            .replace("\\4", "${4}")
-            .replace("\\5", "${5}")
-            .replace("\\6", "${6}")
-            .replace("\\7", "${7}")
-            .replace("\\8", "${8}")
-            .replace("\\9", "${9}");
-        re.replace_all(search_region, rust_rep.as_str())
-            .into_owned()
-    };
-
-    if start > 0 && start < s.len() {
-        Ok(Value::string(format!("{}{}", &s[..start], result)))
-    } else {
-        Ok(Value::string(result))
-    }
-}
-
-/// `(string-match-p REGEXP STRING &optional START)` -- like `string-match`
-/// but does not change match data.
-pub(crate) fn builtin_string_match_p(args: Vec<Value>) -> EvalResult {
-    expect_min_args("string-match-p", &args, 2)?;
-    let pattern = expect_string(&args[0])?;
-    let s = expect_string(&args[1])?;
-    let start = if args.len() > 2 {
-        expect_int(&args[2])? as usize
-    } else {
-        0
-    };
-
-    // Use string_match_full with a throwaway match data so we don't
-    // modify the evaluator's match data.
-    let mut throwaway: Option<super::regex::MatchData> = None;
-    match super::regex::string_match_full(&pattern, &s, start, &mut throwaway) {
-        Ok(Some(pos)) => Ok(Value::Int(pos as i64)),
-        Ok(None) => Ok(Value::Nil),
-        Err(msg) => Err(signal("invalid-regexp", vec![Value::string(msg)])),
-    }
-}
-
 /// `(string-to-multibyte STRING)` -- convert unibyte storage bytes to multibyte chars.
 pub(crate) fn builtin_string_to_multibyte(args: Vec<Value>) -> EvalResult {
     expect_args("string-to-multibyte", &args, 1)?;
@@ -851,62 +775,6 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(result.as_str().unwrap(), "hello");
-    }
-
-    // ----- replace-regexp-in-string -----
-
-    #[test]
-    fn replace_regexp_basic() {
-        let result = builtin_replace_regexp_in_string(vec![
-            Value::string("o"),
-            Value::string("0"),
-            Value::string("foo bar boo"),
-        ])
-        .unwrap();
-        assert_eq!(result.as_str().unwrap(), "f00 bar b00");
-    }
-
-    #[test]
-    fn replace_regexp_literal() {
-        // With literal flag set, REP is not treated as a replacement pattern
-        let result = builtin_replace_regexp_in_string(vec![
-            Value::string("o"),
-            Value::string("$0"),
-            Value::string("foo"),
-            Value::Nil,  // fixedcase
-            Value::True, // literal
-        ])
-        .unwrap();
-        assert_eq!(result.as_str().unwrap(), "f$0$0");
-    }
-
-    // ----- string-match-p -----
-
-    #[test]
-    fn string_match_p_found() {
-        let result =
-            builtin_string_match_p(vec![Value::string("ba."), Value::string("foobar")]).unwrap();
-        // Should find "bar" starting at position 3
-        assert!(eq_value(&result, &Value::Int(3)));
-    }
-
-    #[test]
-    fn string_match_p_not_found() {
-        let result =
-            builtin_string_match_p(vec![Value::string("xyz"), Value::string("foobar")]).unwrap();
-        assert!(result.is_nil());
-    }
-
-    #[test]
-    fn string_match_p_with_start() {
-        let result = builtin_string_match_p(vec![
-            Value::string("o"),
-            Value::string("foobar"),
-            Value::Int(3),
-        ])
-        .unwrap();
-        // No 'o' at or after position 3
-        assert!(result.is_nil());
     }
 
     // ----- string encoding identity stubs -----
