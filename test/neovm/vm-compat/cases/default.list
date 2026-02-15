@@ -49,6 +49,7 @@ cases/func-arity-fallback-macros
 cases/printing
 cases/prin1-to-string-noescape
 cases/chars
+cases/char-resolve-modifiers-semantics
 cases/char-byte-conversion-semantics
 cases/get-byte-semantics
 cases/custom-group-p-availability

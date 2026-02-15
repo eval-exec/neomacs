@@ -1,0 +1,14 @@
+1	(char-resolve-modifiers 97)	OK 97
+2	(char-resolve-modifiers 65)	OK 65
+3	(char-resolve-modifiers 33554529)	OK 65
+4	(char-resolve-modifiers 33554497)	OK 65
+5	(char-resolve-modifiers 67108961)	OK 1
+6	(char-resolve-modifiers 67108927)	OK 127
+7	(char-resolve-modifiers 67108928)	OK 0
+8	(char-resolve-modifiers 67108959)	OK 31
+9	(char-resolve-modifiers 134217825)	OK 134217825
+10	(char-resolve-modifiers 201326689)	OK 134217729
+11	(char-resolve-modifiers 100663393)	OK 1
+12	(char-resolve-modifiers 16777313)	OK 16777313
+13	(condition-case err (char-resolve-modifiers "a") (error err))	OK (wrong-type-argument fixnump "a")
+14	(condition-case err (char-resolve-modifiers) (error (car err)))	OK wrong-number-of-arguments
