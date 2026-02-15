@@ -4,6 +4,16 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `internal-set-font-selection-order` compatibility slice:
+  - replaced nil stub with oracle-compatible validation: accepts only permutations of `(:width :height :weight :slant)` and reports GNU-style list/type/error payloads for invalid orders
+  - preserved batch behavior where valid orders return `nil` without mutating the exposed compatibility surface
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/internal-set-font-selection-order-semantics.forms`
+    - `test/neovm/vm-compat/cases/internal-set-font-selection-order-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test font::tests -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/internal-set-font-selection-order-semantics.forms EXPECTED=cases/internal-set-font-selection-order-semantics.expected.tsv` (pass)
 - Implemented `face-font` compatibility slice:
   - aligned face argument semantics with oracle behavior (known symbol/string faces return `nil`, invalid faces keep oracle-compatible `Invalid face` payloads)
   - preserved optional-argument behavior (`FRAME`/`CHARACTER` accepted and ignored for valid faces in batch compatibility path)
