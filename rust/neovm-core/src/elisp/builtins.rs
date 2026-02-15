@@ -5787,6 +5787,25 @@ pub(crate) fn dispatch_builtin(
         "frame-live-p" => return Some(super::window_cmds::builtin_frame_live_p(eval, args)),
         "windowp" => return Some(super::window_cmds::builtin_windowp(eval, args)),
         "framep" => return Some(super::window_cmds::builtin_framep(eval, args)),
+        "display-graphic-p" => return Some(super::display::builtin_display_graphic_p_eval(eval, args)),
+        "display-color-p" => return Some(super::display::builtin_display_color_p_eval(eval, args)),
+        "display-pixel-width" => return Some(super::display::builtin_display_pixel_width_eval(eval, args)),
+        "display-pixel-height" => {
+            return Some(super::display::builtin_display_pixel_height_eval(eval, args))
+        }
+        "display-mm-width" => return Some(super::display::builtin_display_mm_width_eval(eval, args)),
+        "display-mm-height" => return Some(super::display::builtin_display_mm_height_eval(eval, args)),
+        "display-screens" => return Some(super::display::builtin_display_screens_eval(eval, args)),
+        "display-color-cells" => {
+            return Some(super::display::builtin_display_color_cells_eval(eval, args))
+        }
+        "display-planes" => return Some(super::display::builtin_display_planes_eval(eval, args)),
+        "display-visual-class" => {
+            return Some(super::display::builtin_display_visual_class_eval(eval, args))
+        }
+        "display-backing-store" => {
+            return Some(super::display::builtin_display_backing_store_eval(eval, args))
+        }
         "display-monitor-attributes-list" => {
             return Some(super::display::builtin_display_monitor_attributes_list_eval(
                 eval, args,

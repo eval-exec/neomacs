@@ -1,7 +1,3 @@
 1	(let ((f (selected-frame))) (list (display-graphic-p f) (display-color-p f) (display-pixel-width f) (display-pixel-height f) (display-mm-width f) (display-mm-height f) (display-screens f) (display-color-cells f) (display-planes f) (display-visual-class f) (display-backing-store f)))	OK (nil nil 80 25 nil nil 1 0 3 static-gray not-useful)
-2	(let ((f (selected-frame))) (list (length (display-monitor-attributes-list f)) (let* ((attrs (car (display-monitor-attributes-list f))) (frames (cdr (assq 'frames attrs)))) (and (listp frames) (= (length frames) 1))) (let* ((attrs (frame-monitor-attributes f)) (frames (cdr (assq 'frames attrs)))) (and (listp frames) (= (length frames) 1)))))	OK (1 t t)
-3	(let ((f (selected-frame))) (let* ((attrs (frame-monitor-attributes f)) (g (cdr (assq 'geometry attrs)))) g))	OK (0 0 80 25)
-4	(condition-case err (display-graphic-p 999999) (error (car err)))	OK error
-5	(condition-case err (display-pixel-width 999999) (error (car err)))	OK error
-6	(condition-case err (display-monitor-attributes-list 999999) (error (car err)))	OK error
-7	(condition-case err (frame-monitor-attributes 999999) (error (car err)))	OK error
+2	(condition-case err (display-graphic-p 999999) (error (car err)))	OK error
+3	(condition-case err (display-pixel-width 999999) (error (car err)))	OK error

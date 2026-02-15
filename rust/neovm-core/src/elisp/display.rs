@@ -6,6 +6,7 @@
 
 use super::error::{signal, EvalResult, Flow};
 use super::value::*;
+use crate::window::FrameId;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -116,6 +117,39 @@ fn expect_display_designator(value: &Value) -> Result<(), Flow> {
             vec![Value::string("Invalid argument 1 in 'get-device-terminal'")],
         ))
     }
+}
+
+fn live_frame_designator_p(eval: &mut super::eval::Evaluator, value: &Value) -> bool {
+    match value {
+        Value::Int(id) if *id >= 0 => eval.frames.get(FrameId(*id as u64)).is_some(),
+        _ => false,
+    }
+}
+
+fn expect_display_designator_eval(
+    eval: &mut super::eval::Evaluator,
+    value: &Value,
+) -> Result<(), Flow> {
+    if value.is_nil() || terminal_designator_p(value) || live_frame_designator_p(eval, value) {
+        Ok(())
+    } else {
+        Err(signal(
+            "error",
+            vec![Value::string("Invalid argument 1 in 'get-device-terminal'")],
+        ))
+    }
+}
+
+fn expect_optional_display_designator_eval(
+    eval: &mut super::eval::Evaluator,
+    name: &str,
+    args: &[Value],
+) -> Result<(), Flow> {
+    expect_max_args(name, args, 1)?;
+    if let Some(display) = args.first() {
+        expect_display_designator_eval(eval, display)?;
+    }
+    Ok(())
 }
 
 fn terminal_handle_value() -> Value {
@@ -316,6 +350,105 @@ pub(crate) fn builtin_display_backing_store(args: Vec<Value>) -> EvalResult {
     if let Some(display) = args.first() {
         expect_display_designator(display)?;
     }
+    Ok(Value::symbol("not-useful"))
+}
+
+/// Evaluator-aware variant of `display-graphic-p`.
+pub(crate) fn builtin_display_graphic_p_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-graphic-p", &args)?;
+    Ok(Value::Nil)
+}
+
+/// Evaluator-aware variant of `display-color-p`.
+pub(crate) fn builtin_display_color_p_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-color-p", &args)?;
+    Ok(Value::Nil)
+}
+
+/// Evaluator-aware variant of `display-pixel-width`.
+pub(crate) fn builtin_display_pixel_width_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-pixel-width", &args)?;
+    Ok(Value::Int(80))
+}
+
+/// Evaluator-aware variant of `display-pixel-height`.
+pub(crate) fn builtin_display_pixel_height_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-pixel-height", &args)?;
+    Ok(Value::Int(25))
+}
+
+/// Evaluator-aware variant of `display-mm-width`.
+pub(crate) fn builtin_display_mm_width_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-mm-width", &args)?;
+    Ok(Value::Nil)
+}
+
+/// Evaluator-aware variant of `display-mm-height`.
+pub(crate) fn builtin_display_mm_height_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-mm-height", &args)?;
+    Ok(Value::Nil)
+}
+
+/// Evaluator-aware variant of `display-screens`.
+pub(crate) fn builtin_display_screens_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-screens", &args)?;
+    Ok(Value::Int(1))
+}
+
+/// Evaluator-aware variant of `display-color-cells`.
+pub(crate) fn builtin_display_color_cells_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-color-cells", &args)?;
+    Ok(Value::Int(0))
+}
+
+/// Evaluator-aware variant of `display-planes`.
+pub(crate) fn builtin_display_planes_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-planes", &args)?;
+    Ok(Value::Int(3))
+}
+
+/// Evaluator-aware variant of `display-visual-class`.
+pub(crate) fn builtin_display_visual_class_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-visual-class", &args)?;
+    Ok(Value::symbol("static-gray"))
+}
+
+/// Evaluator-aware variant of `display-backing-store`.
+pub(crate) fn builtin_display_backing_store_eval(
+    eval: &mut super::eval::Evaluator,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_optional_display_designator_eval(eval, "display-backing-store", &args)?;
     Ok(Value::symbol("not-useful"))
 }
 
@@ -939,5 +1072,68 @@ mod tests {
 
         let frames = list_to_vec(&frames_value).expect("frames list");
         assert_eq!(frames.len(), 1);
+    }
+
+    #[test]
+    fn eval_display_queries_accept_live_frame_designator() {
+        let mut eval = crate::elisp::Evaluator::new();
+        let frame_id = crate::elisp::window_cmds::ensure_selected_frame_id(&mut eval).0 as i64;
+
+        assert!(
+            builtin_display_graphic_p_eval(&mut eval, vec![Value::Int(frame_id)])
+                .unwrap()
+                .is_nil()
+        );
+        assert!(
+            builtin_display_color_p_eval(&mut eval, vec![Value::Int(frame_id)])
+                .unwrap()
+                .is_nil()
+        );
+        assert_eq!(
+            builtin_display_pixel_width_eval(&mut eval, vec![Value::Int(frame_id)]).unwrap(),
+            Value::Int(80)
+        );
+        assert_eq!(
+            builtin_display_pixel_height_eval(&mut eval, vec![Value::Int(frame_id)]).unwrap(),
+            Value::Int(25)
+        );
+        assert!(
+            builtin_display_mm_width_eval(&mut eval, vec![Value::Int(frame_id)])
+                .unwrap()
+                .is_nil()
+        );
+        assert!(
+            builtin_display_mm_height_eval(&mut eval, vec![Value::Int(frame_id)])
+                .unwrap()
+                .is_nil()
+        );
+        assert_eq!(
+            builtin_display_screens_eval(&mut eval, vec![Value::Int(frame_id)]).unwrap(),
+            Value::Int(1)
+        );
+        assert_eq!(
+            builtin_display_color_cells_eval(&mut eval, vec![Value::Int(frame_id)]).unwrap(),
+            Value::Int(0)
+        );
+        assert_eq!(
+            builtin_display_planes_eval(&mut eval, vec![Value::Int(frame_id)]).unwrap(),
+            Value::Int(3)
+        );
+        assert_eq!(
+            builtin_display_visual_class_eval(&mut eval, vec![Value::Int(frame_id)]).unwrap(),
+            Value::symbol("static-gray")
+        );
+        assert_eq!(
+            builtin_display_backing_store_eval(&mut eval, vec![Value::Int(frame_id)]).unwrap(),
+            Value::symbol("not-useful")
+        );
+    }
+
+    #[test]
+    fn eval_display_queries_reject_invalid_frame_designator() {
+        let mut eval = crate::elisp::Evaluator::new();
+        let _ = crate::elisp::window_cmds::ensure_selected_frame_id(&mut eval);
+        let result = builtin_display_pixel_width_eval(&mut eval, vec![Value::Int(999_999)]);
+        assert!(result.is_err());
     }
 }
