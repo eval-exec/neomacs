@@ -4015,8 +4015,27 @@ pub(crate) fn builtin_print_eval(
 
 pub(crate) fn builtin_propertize(args: Vec<Value>) -> EvalResult {
     expect_min_args("propertize", &args, 1)?;
-    // Stub: ignore properties, return the string
-    Ok(args[0].clone())
+
+    let s = match &args[0] {
+        Value::Str(s) => (**s).clone(),
+        other => {
+            return Err(signal(
+                "wrong-type-argument",
+                vec![Value::symbol("stringp"), other.clone()],
+            ));
+        }
+    };
+
+    // `propertize` requires an odd argument count: 1 string + plist pairs.
+    if args.len() % 2 == 0 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("propertize"), Value::Int(args.len() as i64)],
+        ));
+    }
+
+    // NeoVM does not attach text properties to string values yet.
+    Ok(Value::string(s))
 }
 
 pub(crate) fn builtin_gensym(args: Vec<Value>) -> EvalResult {
@@ -7772,6 +7791,66 @@ mod tests {
         .expect("builtin string should resolve")
         .expect("builtin string should evaluate");
         assert_eq!(result, Value::string("ABC"));
+    }
+
+    #[test]
+    fn pure_dispatch_typed_propertize_validates_and_returns_string() {
+        let result = dispatch_builtin_pure(
+            "propertize",
+            vec![
+                Value::string("x"),
+                Value::symbol("face"),
+                Value::symbol("bold"),
+            ],
+        )
+        .expect("builtin propertize should resolve")
+        .expect("builtin propertize should evaluate");
+        assert_eq!(result, Value::string("x"));
+    }
+
+    #[test]
+    fn pure_dispatch_typed_propertize_non_string_signals_stringp() {
+        let result = dispatch_builtin_pure("propertize", vec![Value::Int(1)])
+            .expect("builtin propertize should resolve")
+            .expect_err("propertize should reject non-string first arg");
+        match result {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::Int(1)]);
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pure_dispatch_typed_propertize_odd_property_list_signals_arity() {
+        let result = dispatch_builtin_pure(
+            "propertize",
+            vec![Value::string("x"), Value::symbol("face")],
+        )
+        .expect("builtin propertize should resolve")
+        .expect_err("propertize should reject odd property argument count");
+        match result {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "wrong-number-of-arguments");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::symbol("propertize"), Value::Int(2)]
+                );
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pure_dispatch_typed_propertize_accepts_non_symbol_property_keys() {
+        let result = dispatch_builtin_pure(
+            "propertize",
+            vec![Value::string("x"), Value::Int(1), Value::symbol("v")],
+        )
+        .expect("builtin propertize should resolve")
+        .expect("builtin propertize should evaluate");
+        assert_eq!(result, Value::string("x"));
     }
 
     #[test]
