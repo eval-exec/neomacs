@@ -264,6 +264,7 @@ cases/cxr-3level-semantics
 cases/cxr-4level-first-batch-semantics
 cases/cxr-4level-common-semantics
 cases/cxr-4level-second-batch-semantics
+cases/cxr-4level-fboundp-availability
 cases/member-assoc-semantics
 cases/alist-get-semantics
 cases/plist-semantics
