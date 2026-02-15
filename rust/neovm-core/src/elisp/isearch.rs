@@ -141,6 +141,25 @@ fn line_start_at_or_before(source: &str, at: usize) -> usize {
     }
 }
 
+fn dynamic_or_global_symbol_value(eval: &super::eval::Evaluator, name: &str) -> Option<Value> {
+    for frame in eval.dynamic.iter().rev() {
+        if let Some(value) = frame.get(name) {
+            return Some(value.clone());
+        }
+    }
+    eval.obarray.symbol_value(name).cloned()
+}
+
+fn case_fold_for_pattern(eval: &super::eval::Evaluator, pattern: &str) -> bool {
+    let case_fold_search_enabled = dynamic_or_global_symbol_value(eval, "case-fold-search")
+        .map(|value| !value.is_nil())
+        .unwrap_or(true);
+    if !case_fold_search_enabled {
+        return false;
+    }
+    resolve_case_fold(None, pattern)
+}
+
 // ---------------------------------------------------------------------------
 // Search direction
 // ---------------------------------------------------------------------------
@@ -1648,7 +1667,7 @@ pub(crate) fn builtin_keep_lines_eval(
         (buf.point_min(), start, end, buf.buffer_substring(buf.point_min(), buf.point_max()))
     };
 
-    let case_fold = resolve_case_fold(None, &regexp);
+    let case_fold = case_fold_for_pattern(eval, &regexp);
     let pattern = build_regex_pattern(&regexp, case_fold);
     let re = match Regex::new(&pattern) {
         Ok(re) => re,
@@ -1716,7 +1735,7 @@ pub(crate) fn builtin_flush_lines_eval(
         (buf.point_min(), start, end, buf.buffer_substring(buf.point_min(), buf.point_max()))
     };
 
-    let case_fold = resolve_case_fold(None, &regexp);
+    let case_fold = case_fold_for_pattern(eval, &regexp);
     let pattern = build_regex_pattern(&regexp, case_fold);
     let re = Regex::new(&pattern).map_err(|e| {
         signal(
@@ -1791,7 +1810,7 @@ pub(crate) fn builtin_how_many_eval(
         return Ok(Value::Int(source.chars().count() as i64));
     }
 
-    let case_fold = resolve_case_fold(None, &regexp);
+    let case_fold = case_fold_for_pattern(eval, &regexp);
     let pattern = build_regex_pattern(&regexp, case_fold);
     let re = Regex::new(&pattern).map_err(|e| {
         signal(
@@ -1835,7 +1854,7 @@ pub(crate) fn builtin_count_matches_eval(
         return Ok(Value::Int(source.chars().count() as i64));
     }
 
-    let case_fold = resolve_case_fold(None, &regexp);
+    let case_fold = case_fold_for_pattern(eval, &regexp);
     let pattern = build_regex_pattern(&regexp, case_fold);
     let re = Regex::new(&pattern).map_err(|e| {
         signal(

@@ -240,6 +240,7 @@ cases/remove-overlays-arity-semantics
 cases/isearch-batch-semantics
 cases/search-buffer
 cases/count-matches-semantics
+cases/count-how-many-case-fold-variable-semantics
 cases/how-many-semantics
 cases/flush-lines-semantics
 cases/keep-lines-semantics

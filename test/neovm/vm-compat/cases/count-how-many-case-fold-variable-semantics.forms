@@ -1,0 +1,33 @@
+(with-temp-buffer
+  (insert "A A")
+  (goto-char (point-min))
+  (let ((case-fold-search nil))
+    (count-matches "a")))
+
+(with-temp-buffer
+  (insert "A A")
+  (goto-char (point-min))
+  (count-matches "a"))
+
+(with-temp-buffer
+  (insert "a a")
+  (goto-char (point-min))
+  (let ((case-fold-search t))
+    (count-matches "A")))
+
+(with-temp-buffer
+  (insert "A A")
+  (goto-char (point-min))
+  (let ((case-fold-search nil))
+    (how-many "a")))
+
+(with-temp-buffer
+  (insert "A A")
+  (goto-char (point-min))
+  (how-many "a"))
+
+(with-temp-buffer
+  (insert "a a")
+  (goto-char (point-min))
+  (let ((case-fold-search t))
+    (how-many "A")))
