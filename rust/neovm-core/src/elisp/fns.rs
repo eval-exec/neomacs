@@ -878,10 +878,38 @@ pub(crate) fn builtin_widget_put(args: Vec<Value>) -> EvalResult {
 }
 
 /// (widget-apply WIDGET PROPERTY &rest ARGS)
-/// Stub: always returns nil.
+/// Apply WIDGET's PROPERTY function to WIDGET and ARGS.
 pub(crate) fn builtin_widget_apply(args: Vec<Value>) -> EvalResult {
     expect_min_args("widget-apply", &args, 2)?;
-    Ok(Value::Nil)
+    let widget = args[0].clone();
+    let property = args[1].clone();
+
+    let function = builtin_widget_get(vec![widget.clone(), property])?;
+    if function.is_nil() {
+        return Err(signal("void-function", vec![Value::Nil]));
+    }
+
+    let mut call_args = Vec::with_capacity(args.len().saturating_sub(1));
+    call_args.push(widget);
+    call_args.extend_from_slice(&args[2..]);
+
+    match function {
+        Value::Symbol(name) => {
+            if let Some(result) = super::builtins::dispatch_builtin_pure(&name, call_args) {
+                result
+            } else {
+                Err(signal("void-function", vec![Value::symbol(name)]))
+            }
+        }
+        Value::Subr(name) => {
+            if let Some(result) = super::builtins::dispatch_builtin_pure(&name, call_args) {
+                result
+            } else {
+                Err(signal("void-function", vec![Value::symbol(name)]))
+            }
+        }
+        other => Err(signal("invalid-function", vec![other])),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2005,10 +2033,65 @@ mod tests {
     }
 
     #[test]
-    fn widget_apply_stub() {
+    fn widget_apply_missing_property_signals_void_function_nil() {
         let widget = Value::list(vec![Value::symbol("button")]);
+        let err = builtin_widget_apply(vec![widget, Value::Keyword("action".into())])
+            .expect_err("widget-apply should signal void-function for missing property");
+        match err {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "void-function");
+                assert_eq!(sig.data, vec![Value::Nil]);
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn widget_apply_calls_symbol_property_with_widget_as_first_arg() {
+        let widget = Value::list(vec![
+            Value::symbol("button"),
+            Value::Keyword("action".into()),
+            Value::symbol("car"),
+        ]);
         let r = builtin_widget_apply(vec![widget, Value::Keyword("action".into())]).unwrap();
-        assert!(r.is_nil());
+        assert_eq!(r, Value::symbol("button"));
+    }
+
+    #[test]
+    fn widget_apply_passes_rest_arguments() {
+        let widget = Value::list(vec![
+            Value::symbol("button"),
+            Value::Keyword("action".into()),
+            Value::symbol("list"),
+        ]);
+        let r = builtin_widget_apply(vec![
+            widget.clone(),
+            Value::Keyword("action".into()),
+            Value::Int(1),
+            Value::Int(2),
+        ])
+        .unwrap();
+        assert_eq!(r, Value::list(vec![widget, Value::Int(1), Value::Int(2)]));
+    }
+
+    #[test]
+    fn widget_apply_non_callable_property_signals_invalid_function() {
+        let widget = Value::list(vec![
+            Value::symbol("button"),
+            Value::Keyword("action".into()),
+            Value::Int(7),
+        ]);
+        let err =
+            builtin_widget_apply(vec![widget, Value::Keyword("action".into())]).expect_err(
+                "widget-apply should reject non-callable property values",
+            );
+        match err {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "invalid-function");
+                assert_eq!(sig.data, vec![Value::Int(7)]);
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
     }
 
     // ---- Line break in base64 ----
