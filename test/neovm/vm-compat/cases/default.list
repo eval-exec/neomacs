@@ -29,6 +29,7 @@ cases/case-region-optional-arg-semantics
 cases/case-region-read-only-semantics
 cases/case-word-semantics
 cases/case-word-read-only-variable-semantics
+cases/transpose-chars-read-only-variable-semantics
 cases/transpose-words-semantics
 cases/transpose-words-read-only-variable-semantics
 cases/transpose-sexps-semantics
