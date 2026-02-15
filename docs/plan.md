@@ -39,6 +39,20 @@ Last updated: 2026-02-15
     - `make -C test/neovm/vm-compat check-neovm FORMS=cases/tty-batch-semantics.forms EXPECTED=cases/tty-batch-semantics.expected.tsv` (pass)
     - `make -C test/neovm/vm-compat validate-case-lists` (pass)
     - `make -C test/neovm/vm-compat check-all-neovm` (pass)
+- Added X display batch semantics compatibility slice:
+  - `x-open-connection` now enforces string display argument typing and returns display-open errors in batch context
+  - `x-close-connection` now dispatches batch-compatible error classes for nil/string/non-frame designators
+  - `x-display-pixel-width` / `x-display-pixel-height` now signal batch/X-not-available errors and frame-designator type errors
+  - `x-display-color-p` now returns `nil` for batch current display and reports argument-shape errors for invalid designators
+  - added oracle corpus:
+    - `test/neovm/vm-compat/cases/x-display-batch-semantics.forms`
+    - `test/neovm/vm-compat/cases/x-display-batch-semantics.expected.tsv`
+    - enabled in `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test display::tests -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/x-display-batch-semantics.forms EXPECTED=cases/x-display-batch-semantics.expected.tsv` (pass)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
+    - `make -C test/neovm/vm-compat check-all-neovm` (pass)
 - Added timer compatibility slice (`run-at-time` / `run-with-idle-timer` / `timer-activate`):
   - `run-at-time` now accepts GNU-compatible immediate specs for `nil` and numeric-prefixed strings like `"0 sec"` (while invalid specs signal `error`)
   - `run-with-timer` compatibility is now lock-in covered for numeric, `nil`, and `"0 sec"` immediate forms
