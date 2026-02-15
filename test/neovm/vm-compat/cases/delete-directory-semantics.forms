@@ -1,0 +1,37 @@
+; delete-directory core semantics.
+
+(condition-case err
+    (delete-directory 1)
+  (error err))
+
+(condition-case err
+    (delete-directory "/tmp/neovm-delete-directory-missing")
+  (error (car err)))
+
+(let ((d (make-temp-file "neovm-del-dir-empty-" t)))
+  (list (delete-directory d) (file-exists-p d)))
+
+(let* ((d (make-temp-file "neovm-del-dir-nonempty-" t))
+       (f (expand-file-name "child.txt" d)))
+  (with-temp-buffer
+    (insert "x")
+    (write-region nil nil f))
+  (prog1
+      (condition-case err
+          (list 'ok (delete-directory d) (file-exists-p d))
+        (error (list 'err (car err) (file-exists-p d))))
+    (delete-file f)
+    (delete-directory d)))
+
+(let* ((d (make-temp-file "neovm-del-dir-rec-" t))
+       (sub (expand-file-name "sub" d))
+       (f (expand-file-name "child.txt" sub)))
+  (make-directory sub)
+  (with-temp-buffer
+    (insert "x")
+    (write-region nil nil f))
+  (list (delete-directory d t) (file-exists-p d)))
+
+(condition-case err
+    (delete-directory "/tmp" nil nil nil)
+  (error err))

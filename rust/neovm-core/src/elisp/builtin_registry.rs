@@ -193,6 +193,7 @@ const DISPATCH_BUILTIN_NAMES: &[&str] = &[
     "define-key",
     "defined-colors",
     "delete-char",
+    "delete-directory",
     "delete-extract-rectangle",
     "delete-file",
     "delete-frame",

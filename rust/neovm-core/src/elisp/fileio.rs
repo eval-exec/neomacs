@@ -1236,6 +1236,48 @@ pub(crate) fn builtin_delete_file_eval(eval: &Evaluator, args: Vec<Value>) -> Ev
     Ok(Value::Nil)
 }
 
+/// (delete-directory DIRECTORY &optional RECURSIVE TRASH) -> nil
+pub(crate) fn builtin_delete_directory(args: Vec<Value>) -> EvalResult {
+    expect_min_args("delete-directory", &args, 1)?;
+    if args.len() > 3 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("delete-directory"), Value::Int(args.len() as i64)],
+        ));
+    }
+    let directory = expect_string_strict(&args[0])?;
+    let recursive = args.get(1).is_some_and(|value| value.is_truthy());
+    let result = if recursive {
+        fs::remove_dir_all(&directory)
+    } else {
+        fs::remove_dir(&directory)
+    };
+    result.map_err(|err| signal_file_io_path(err, "Removing directory", &directory))?;
+    Ok(Value::Nil)
+}
+
+/// Evaluator-aware variant of `delete-directory` that resolves relative paths
+/// against dynamic/default `default-directory`.
+pub(crate) fn builtin_delete_directory_eval(eval: &Evaluator, args: Vec<Value>) -> EvalResult {
+    expect_min_args("delete-directory", &args, 1)?;
+    if args.len() > 3 {
+        return Err(signal(
+            "wrong-number-of-arguments",
+            vec![Value::symbol("delete-directory"), Value::Int(args.len() as i64)],
+        ));
+    }
+    let directory = expect_string_strict(&args[0])?;
+    let directory = resolve_filename_for_eval(eval, &directory);
+    let recursive = args.get(1).is_some_and(|value| value.is_truthy());
+    let result = if recursive {
+        fs::remove_dir_all(&directory)
+    } else {
+        fs::remove_dir(&directory)
+    };
+    result.map_err(|err| signal_file_io_path(err, "Removing directory", &directory))?;
+    Ok(Value::Nil)
+}
+
 /// (rename-file FROM TO) -> nil
 pub(crate) fn builtin_rename_file(args: Vec<Value>) -> EvalResult {
     expect_args("rename-file", &args, 2)?;
@@ -1909,6 +1951,59 @@ mod tests {
         let path_str = path.to_string_lossy().to_string();
         let _ = fs::remove_file(&path);
         assert!(delete_file_compat(&path_str).is_ok());
+    }
+
+    #[test]
+    fn test_builtin_delete_directory_basic_and_recursive() {
+        let root = std::env::temp_dir().join("neovm_delete_directory_test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let root_str = root.to_string_lossy().to_string();
+
+        // Non-recursive removal succeeds for empty directories.
+        assert_eq!(
+            builtin_delete_directory(vec![Value::string(&root_str)]).unwrap(),
+            Value::Nil
+        );
+        assert!(!root.exists());
+
+        // Non-recursive removal fails for non-empty directories.
+        fs::create_dir_all(&root).unwrap();
+        let nested = root.join("child.txt");
+        fs::write(&nested, b"x").unwrap();
+        let err = builtin_delete_directory(vec![Value::string(&root_str)]).unwrap_err();
+        match err {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol, "file-error");
+            }
+            other => panic!("expected signal, got {:?}", other),
+        }
+
+        // Recursive removal succeeds.
+        assert_eq!(
+            builtin_delete_directory(vec![Value::string(&root_str), Value::True]).unwrap(),
+            Value::Nil
+        );
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn test_builtin_delete_directory_eval_resolves_default_directory() {
+        let base = std::env::temp_dir().join("neovm-delete-dir-eval");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let mut eval = Evaluator::new();
+        eval.obarray.set_symbol_value(
+            "default-directory",
+            Value::string(format!("{}/", base.to_string_lossy())),
+        );
+
+        let child = base.join("child");
+        fs::create_dir_all(&child).unwrap();
+        builtin_delete_directory_eval(&eval, vec![Value::string("child")]).unwrap();
+        assert!(!child.exists());
+
+        let _ = fs::remove_dir_all(base);
     }
 
     // -----------------------------------------------------------------------

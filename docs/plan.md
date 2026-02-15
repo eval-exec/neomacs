@@ -4,6 +4,26 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `delete-directory` compatibility slice:
+  - added pure + evaluator-aware builtins in `rust/neovm-core/src/elisp/fileio.rs`:
+    - `builtin_delete_directory`
+    - `builtin_delete_directory_eval`
+  - semantics aligned with oracle subset:
+    - arity `1..3`
+    - `stringp` validation for `DIRECTORY`
+    - recursive behavior via optional `RECURSIVE` arg (`remove_dir_all` vs `remove_dir`)
+    - relative path resolution against eval-time `default-directory`
+  - registered and dispatched `delete-directory` in:
+    - `rust/neovm-core/src/elisp/builtins.rs`
+    - `rust/neovm-core/src/elisp/builtin_registry.rs`
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/delete-directory-semantics.forms`
+    - `test/neovm/vm-compat/cases/delete-directory-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test --manifest-path rust/neovm-core/Cargo.toml delete_directory -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/delete-directory-semantics.forms EXPECTED=cases/delete-directory-semantics.expected.tsv` (pass, 6/6)
+    - `make -C test/neovm/vm-compat validate-case-lists` (pass)
 - Implemented `make-temp-file` compatibility slice:
   - added pure + evaluator-aware implementations in `rust/neovm-core/src/elisp/fileio.rs`:
     - `builtin_make_temp_file`

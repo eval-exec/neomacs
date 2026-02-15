@@ -5571,6 +5571,7 @@ pub(crate) fn dispatch_builtin(
         }
         "write-region" => return Some(super::fileio::builtin_write_region(eval, args)),
         "delete-file" => return Some(super::fileio::builtin_delete_file_eval(eval, args)),
+        "delete-directory" => return Some(super::fileio::builtin_delete_directory_eval(eval, args)),
         "rename-file" => return Some(super::fileio::builtin_rename_file_eval(eval, args)),
         "copy-file" => return Some(super::fileio::builtin_copy_file_eval(eval, args)),
         "make-directory" => return Some(super::fileio::builtin_make_directory_eval(eval, args)),
@@ -6467,6 +6468,7 @@ pub(crate) fn dispatch_builtin(
         "file-regular-p" => super::fileio::builtin_file_regular_p(args),
         "file-symlink-p" => super::fileio::builtin_file_symlink_p(args),
         "delete-file" => super::fileio::builtin_delete_file(args),
+        "delete-directory" => super::fileio::builtin_delete_directory(args),
         "rename-file" => super::fileio::builtin_rename_file(args),
         "copy-file" => super::fileio::builtin_copy_file(args),
         "make-directory" => super::fileio::builtin_make_directory(args),
@@ -7000,6 +7002,7 @@ pub(crate) fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<Eval
         "file-regular-p" => super::fileio::builtin_file_regular_p(args),
         "file-symlink-p" => super::fileio::builtin_file_symlink_p(args),
         "delete-file" => super::fileio::builtin_delete_file(args),
+        "delete-directory" => super::fileio::builtin_delete_directory(args),
         "rename-file" => super::fileio::builtin_rename_file(args),
         "copy-file" => super::fileio::builtin_copy_file(args),
         "make-directory" => super::fileio::builtin_make_directory(args),
