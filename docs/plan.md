@@ -4,6 +4,17 @@ Last updated: 2026-02-15
 
 ## Done
 
+- Implemented `internal-set-lisp-face-attribute` compatibility slice:
+  - replaced stub behavior with oracle-compatible argument checking, frame domain routing (`nil`/`t`/`0`), and return value (`FACE`)
+  - added selected/default face override state and connected it to `internal-get-lisp-face-attribute`, `internal-lisp-face-equal-p`, `internal-lisp-face-empty-p`, `internal-make-lisp-face`, and `internal-copy-lisp-face`
+  - added set-path validation and normalization for high-impact attributes (`:foreground`, `:background`, `:height`, `:weight`, `:slant`, `:width`, `:inherit`, `:bold`, `:italic`, `:inverse-video`, `:extend`)
+  - added and enabled oracle corpus:
+    - `test/neovm/vm-compat/cases/internal-set-lisp-face-attribute-semantics.forms`
+    - `test/neovm/vm-compat/cases/internal-set-lisp-face-attribute-semantics.expected.tsv`
+    - wired into `test/neovm/vm-compat/cases/default.list`
+  - verified:
+    - `cargo test font::tests -- --nocapture` (pass)
+    - `make -C test/neovm/vm-compat check-neovm FORMS=cases/internal-set-lisp-face-attribute-semantics.forms EXPECTED=cases/internal-set-lisp-face-attribute-semantics.expected.tsv` (pass)
 - Added display/terminal stub compatibility slice:
   - exposed and wired display-side builtins: `redraw-frame`, `redraw-display`, `open-termscript`, `ding`, `send-string-to-terminal`, `internal-show-cursor`, `internal-show-cursor-p`
   - exposed `last-nonminibuffer-frame` and locked current batch behavior to oracle
