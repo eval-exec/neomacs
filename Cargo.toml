@@ -110,7 +110,7 @@ arboard = "3.4"
 # GStreamer (video)
 gstreamer = "0.23"
 gstreamer-video = "0.23"
-gstreamer-app = "0.23"
+gstreamer-app = "0.25"
 gstreamer-allocators = "0.23"
 
 # Terminal emulation
