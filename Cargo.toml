@@ -95,7 +95,7 @@ gmp-mpfr-sys = { version = "1.7", default-features = false, features = ["use-sys
 
 # GPU / windowing
 winit = "0.30"
-wgpu = "28"
+wgpu = "29"
 wgpu-hal = { version = "28", features = ["vulkan"] }
 raw-window-handle = "0.6"
 ash = "0.38"
