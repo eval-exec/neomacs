@@ -15,7 +15,7 @@ crossbeam-deque.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["plotters", "cargo_bench_support"] }
 
 [[bench]]
 name = "alloc_throughput"
