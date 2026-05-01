@@ -1544,26 +1544,25 @@ dependencies = [
 
 [[package]]
 name = "gstreamer-allocators"
-version = "0.23.5"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45f3c36aa5bc98e5dbfd19a27536373167ab1ad734ffafb84d5d65203fe75208"
+checksum = "92b9867fab2889baa59250d600bceee3dea56e5a28631d88bf1bd9f43e0b2549"
 dependencies = [
- "glib 0.20.12",
- "gstreamer 0.23.7",
+ "glib 0.22.7",
+ "gstreamer 0.25.1",
  "gstreamer-allocators-sys",
  "libc",
- "once_cell",
 ]
 
 [[package]]
 name = "gstreamer-allocators-sys"
-version = "0.23.5"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c005b6cfae0c7e97b0ea95921f561fc8a8786b734cec25c29363a52305074a10"
+checksum = "ea44ee4a86b39bcdcfd260179b7dbfdd5f81955d6fee35f11264934caf65230c"
 dependencies = [
- "glib-sys 0.20.10",
- "gobject-sys 0.20.10",
- "gstreamer-sys 0.23.6",
+ "glib-sys 0.22.6",
+ "gobject-sys 0.22.6",
+ "gstreamer-sys 0.25.0",
  "libc",
  "system-deps",
 ]
@@ -4071,7 +4070,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

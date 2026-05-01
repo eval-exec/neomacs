@@ -111,7 +111,7 @@ arboard = "3.4"
 gstreamer = "0.23"
 gstreamer-video = "0.23"
 gstreamer-app = "0.25"
-gstreamer-allocators = "0.23"
+gstreamer-allocators = "0.25"
 
 # Terminal emulation
 alacritty_terminal = "0.25"
