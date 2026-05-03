@@ -386,6 +386,26 @@ fn run_fresh_build(options: &FreshBuildOptions) -> Result<()> {
     patch_primary_executable_fingerprint(options, &paths)?;
     copy_executable_role_images(options, &paths)?;
 
+    // macOS: re-sign all role binaries after patching.  Patching the pdump
+    // fingerprint modifies the executable image in-place, which invalidates
+    // the code signature.  Without a fresh ad-hoc signature the kernel sends
+    // SIGKILL when the binary is executed (exit status: signal 9).
+    #[cfg(target_os = "macos")]
+    {
+        for bin in [&paths.temacs, &paths.bootstrap, &paths.final_bin] {
+            if bin.exists() {
+                let status = std::process::Command::new("codesign")
+                    .args(["--force", "--sign", "-", bin.to_str().unwrap()])
+                    .status()?;
+                if !status.success() {
+                    return Err(
+                        format!("codesign failed on {}", bin.display()).into()
+                    );
+                }
+            }
+        }
+    }
+
     if !options.dry_run {
         ensure_binaries_exist(&paths)?;
     }
