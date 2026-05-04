@@ -60,7 +60,7 @@ sha2 = "0.11"
 # Misc
 regex = "1"
 rustc-hash = "2"
-strum = { version = "0.26", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 unicode_names2 = "2.0.0"
 unicode-script = "0.5"
 stacker = "0.1"
