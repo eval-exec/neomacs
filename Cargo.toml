@@ -117,7 +117,7 @@ gstreamer-app = "0.25"
 gstreamer-allocators = "0.25"
 
 # Terminal emulation
-alacritty_terminal = "0.25"
+alacritty_terminal = "0.26"
 parking_lot = "0.12"
 portable-pty = "0.9"
 smallvec = "1.13"
