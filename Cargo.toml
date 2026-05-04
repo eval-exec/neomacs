@@ -136,7 +136,7 @@ polling = "3"
 
 # TLS
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 rustls-pki-types = "1"
 
 # Windows
