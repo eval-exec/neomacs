@@ -104,7 +104,7 @@ wgpu-hal = { version = "29", features = ["vulkan"] }
 raw-window-handle = "0.6"
 ash = "0.38"
 pollster = "0.4"
-resvg = "0.44"
+resvg = "0.47"
 cosmic-text = "0.18.2"
 swash = "0.2.6"
 fontdb = "0.23"
