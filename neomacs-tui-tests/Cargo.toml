@@ -13,6 +13,6 @@ publish = false
 # rendered output of GNU Emacs against Neomacs.
 
 [dependencies]
-vt100 = "0.15"
+vt100 = "0.16"
 pty-process = "0.5"
 libc = { workspace = true }
