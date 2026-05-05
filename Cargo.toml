@@ -81,7 +81,7 @@ cfg-if = "1.0"
 bitflags = "2.0"
 bytemuck = { version = "1.18", features = ["derive"] }
 memmap2 = "0.9"
-image = "0.24"
+image = "0.25"
 allsorts = "0.16.1"
 encoding_rs = "0.8"
 
