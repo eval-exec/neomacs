@@ -2413,7 +2413,7 @@ dependencies = [
  "ttf-parser 0.25.1",
  "wgpu",
  "wgpu-hal",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "winit",
  "x11-dl",
 ]
@@ -3829,7 +3829,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
