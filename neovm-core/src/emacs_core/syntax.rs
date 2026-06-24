@@ -1422,9 +1422,12 @@ fn maybe_skip_comment_backward(
         buffer: buf,
         point: start_byte,
     };
-    let _ = forward_comment_backward(&mut scanner, 1, honor_properties);
-    let next = buffer_byte_to_char_pos(buf, scanner.point_emacs_byte_pos());
-    (next < idx).then_some(next)
+    if forward_comment_backward(&mut scanner, 1, honor_properties) {
+        let next = buffer_byte_to_char_pos(buf, scanner.point_emacs_byte_pos());
+        (next < idx).then_some(next)
+    } else {
+        None
+    }
 }
 
 fn skip_sexp_ignored_forward(

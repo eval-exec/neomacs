@@ -988,6 +988,34 @@ fn backward_sexp_motion_skips_nested_block_comments() {
 }
 
 #[test]
+fn backward_comment_skip_requires_matching_comment_start() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "ab");
+    builtin_modify_syntax_entry(
+        &mut eval,
+        vec![Value::fixnum('a' as i64), Value::string("w 3")],
+    )
+    .expect("install first two-char comment-end syntax");
+    builtin_modify_syntax_entry(
+        &mut eval,
+        vec![Value::fixnum('b' as i64), Value::string("w 4")],
+    )
+    .expect("install second two-char comment-end syntax");
+
+    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let entry = SyntaxTable::for_buffer(buf)
+        .get_entry('b')
+        .expect("syntax entry for b");
+    assert_eq!(entry.class, SyntaxClass::Word);
+    assert!(entry.flags.contains(SyntaxFlags::COMMENT_END_SECOND));
+    assert_eq!(
+        maybe_skip_comment_backward(buf, 2, false, entry.class, entry.flags),
+        None
+    );
+}
+
+#[test]
 fn sexp_motion_respects_parse_sexp_ignore_comments_for_block_comments() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
