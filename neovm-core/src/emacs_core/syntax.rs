@@ -1246,7 +1246,9 @@ pub fn scan_sexps(
     from: usize,
     count: i64,
 ) -> Result<usize, String> {
-    match scan_sexps_with_options(buf, table, from, count, false).map_err(|err| err.message)? {
+    match scan_sexps_with_options(buf, table, from, count, false, false)
+        .map_err(|err| err.message)?
+    {
         Some(pos) => Ok(pos),
         None if count < 0 => Ok(buf.accessible_emacs_byte_region().start().get()),
         None => Ok(buf.accessible_emacs_byte_region().end().get()),
@@ -1259,6 +1261,7 @@ fn scan_sexps_with_options(
     from: usize,
     count: i64,
     honor_properties: bool,
+    ignore_comments: bool,
 ) -> Result<Option<usize>, ScanListError> {
     if count == 0 {
         return Ok(Some(from));
@@ -1275,20 +1278,55 @@ fn scan_sexps_with_options(
 
     if count > 0 {
         for _ in 0..count {
-            idx = skip_sexp_ignored_forward(buf, &chars, idx, stop_bound, table, honor_properties);
+            let skipped = skip_sexp_ignored_forward(
+                buf,
+                &chars,
+                idx,
+                stop_bound,
+                table,
+                honor_properties,
+                ignore_comments,
+            );
+            idx = skipped.position();
+            if matches!(skipped, IgnoredSkip::UnterminatedComment(_)) {
+                continue;
+            }
             if idx >= stop_bound {
                 return Ok(None);
             }
-            idx = scan_sexp_forward(buf, &chars, stop_bound, idx, table, honor_properties)?;
+            idx = scan_sexp_forward(
+                buf,
+                &chars,
+                stop_bound,
+                idx,
+                table,
+                honor_properties,
+                ignore_comments,
+            )?;
         }
     } else {
         for _ in 0..(-count) {
-            idx =
-                skip_sexp_ignored_backward(buf, &chars, idx, start_bound, table, honor_properties);
+            idx = skip_sexp_ignored_backward(
+                buf,
+                &chars,
+                idx,
+                start_bound,
+                table,
+                honor_properties,
+                ignore_comments,
+            );
             if idx <= start_bound {
                 return Ok(None);
             }
-            idx = scan_sexp_backward(buf, &chars, idx, start_bound, table, honor_properties)?;
+            idx = scan_sexp_backward(
+                buf,
+                &chars,
+                idx,
+                start_bound,
+                table,
+                honor_properties,
+                ignore_comments,
+            )?;
         }
     }
 
@@ -1297,15 +1335,96 @@ fn scan_sexps_with_options(
     ))
 }
 
-fn is_sexp_ignored_syntax(class: SyntaxClass) -> bool {
+fn is_sexp_ignored_syntax(class: SyntaxClass, ignore_comments: bool) -> bool {
     matches!(
         class,
         SyntaxClass::Whitespace
-            | SyntaxClass::Comment
             | SyntaxClass::EndComment
             | SyntaxClass::Punctuation
             | SyntaxClass::Quote
-    )
+    ) || (!ignore_comments && class == SyntaxClass::Comment)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommentSkip {
+    Complete(usize),
+    Unterminated(usize),
+}
+
+impl CommentSkip {
+    fn next(self) -> usize {
+        match self {
+            CommentSkip::Complete(next) | CommentSkip::Unterminated(next) => next,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IgnoredSkip {
+    At(usize),
+    UnterminatedComment(usize),
+}
+
+impl IgnoredSkip {
+    fn position(self) -> usize {
+        match self {
+            IgnoredSkip::At(pos) | IgnoredSkip::UnterminatedComment(pos) => pos,
+        }
+    }
+}
+
+fn maybe_skip_comment_forward(
+    buf: &Buffer,
+    idx: usize,
+    honor_properties: bool,
+    class: SyntaxClass,
+    flags: SyntaxFlags,
+) -> Option<CommentSkip> {
+    if !(class == SyntaxClass::Comment
+        || class == SyntaxClass::CommentFence
+        || flags.contains(SyntaxFlags::COMMENT_START_FIRST))
+    {
+        return None;
+    }
+
+    let start_byte = buffer_char_to_emacs_byte_pos(buf, CharPos0::new(idx));
+    let mut scanner = ForwardCommentCursor {
+        buffer: buf,
+        point: start_byte,
+    };
+    let complete = forward_comment_forward(&mut scanner, 1, honor_properties);
+    let next = buffer_byte_to_char_pos(buf, scanner.point_emacs_byte_pos());
+    if next <= idx {
+        None
+    } else if complete {
+        Some(CommentSkip::Complete(next))
+    } else {
+        Some(CommentSkip::Unterminated(next))
+    }
+}
+
+fn maybe_skip_comment_backward(
+    buf: &Buffer,
+    idx: usize,
+    honor_properties: bool,
+    class: SyntaxClass,
+    flags: SyntaxFlags,
+) -> Option<usize> {
+    if !(class == SyntaxClass::EndComment
+        || class == SyntaxClass::CommentFence
+        || flags.contains(SyntaxFlags::COMMENT_END_SECOND))
+    {
+        return None;
+    }
+
+    let start_byte = buffer_char_to_emacs_byte_pos(buf, CharPos0::new(idx));
+    let mut scanner = ForwardCommentCursor {
+        buffer: buf,
+        point: start_byte,
+    };
+    let _ = forward_comment_backward(&mut scanner, 1, honor_properties);
+    let next = buffer_byte_to_char_pos(buf, scanner.point_emacs_byte_pos());
+    (next < idx).then_some(next)
 }
 
 fn skip_sexp_ignored_forward(
@@ -1315,22 +1434,32 @@ fn skip_sexp_ignored_forward(
     stop: usize,
     table: &SyntaxTable,
     honor_properties: bool,
-) -> usize {
-    while idx < stop
-        && is_sexp_ignored_syntax(
-            effective_syntax_entry_for_abs_char(
-                buf,
-                table,
-                chars.char_at(idx),
-                idx,
-                honor_properties,
-            )
-            .class,
-        )
-    {
-        idx += 1;
+    ignore_comments: bool,
+) -> IgnoredSkip {
+    let mut skipped_unterminated_comment = false;
+    while idx < stop {
+        let c = chars.char_at(idx);
+        let entry = effective_syntax_entry_for_abs_char(buf, table, c, idx, honor_properties);
+        let class = entry.class;
+        if ignore_comments
+            && let Some(skip) =
+                maybe_skip_comment_forward(buf, idx, honor_properties, class, entry.flags)
+        {
+            skipped_unterminated_comment |= matches!(skip, CommentSkip::Unterminated(_));
+            idx = skip.next();
+            continue;
+        }
+        if is_sexp_ignored_syntax(class, ignore_comments) {
+            idx += 1;
+            continue;
+        }
+        break;
     }
-    idx
+    if skipped_unterminated_comment {
+        IgnoredSkip::UnterminatedComment(idx)
+    } else {
+        IgnoredSkip::At(idx)
+    }
 }
 
 fn skip_sexp_ignored_backward(
@@ -1340,20 +1469,25 @@ fn skip_sexp_ignored_backward(
     start: usize,
     table: &SyntaxTable,
     honor_properties: bool,
+    ignore_comments: bool,
 ) -> usize {
-    while idx > start
-        && is_sexp_ignored_syntax(
-            effective_syntax_entry_for_abs_char(
-                buf,
-                table,
-                chars.char_at(idx - 1),
-                idx - 1,
-                honor_properties,
-            )
-            .class,
-        )
-    {
-        idx -= 1;
+    while idx > start {
+        let prev = idx - 1;
+        let c = chars.char_at(prev);
+        let entry = effective_syntax_entry_for_abs_char(buf, table, c, prev, honor_properties);
+        let class = entry.class;
+        if ignore_comments
+            && let Some(next) =
+                maybe_skip_comment_backward(buf, idx, honor_properties, class, entry.flags)
+        {
+            idx = next;
+            continue;
+        }
+        if is_sexp_ignored_syntax(class, ignore_comments) {
+            idx -= 1;
+            continue;
+        }
+        break;
     }
     idx
 }
@@ -1416,6 +1550,7 @@ fn scan_lists_with_options(
     count: i64,
     initial_depth: i64,
     honor_properties: bool,
+    ignore_comments: bool,
 ) -> Result<Option<usize>, ScanListError> {
     let chars = BufferChars::new(buf, CharPos0::ZERO);
     let mut idx = from;
@@ -1432,11 +1567,22 @@ fn scan_lists_with_options(
             let mut found = false;
             while idx < stop {
                 let ch = chars.char_at(idx);
-                let class =
-                    effective_syntax_entry_for_abs_char(buf, table, ch, idx, honor_properties)
-                        .class;
+                let entry =
+                    effective_syntax_entry_for_abs_char(buf, table, ch, idx, honor_properties);
+                let class = entry.class;
                 if depth == min_depth {
                     last_good = idx;
+                }
+                if ignore_comments
+                    && let Some(skip) =
+                        maybe_skip_comment_forward(buf, idx, honor_properties, class, entry.flags)
+                {
+                    idx = skip.next();
+                    if matches!(skip, CommentSkip::Unterminated(_)) && depth == 0 {
+                        found = true;
+                        break;
+                    }
+                    continue;
                 }
                 idx += 1;
 
@@ -1497,11 +1643,23 @@ fn scan_lists_with_options(
             while idx > start {
                 idx -= 1;
                 let ch = chars.char_at(idx);
-                let class =
-                    effective_syntax_entry_for_abs_char(buf, table, ch, idx, honor_properties)
-                        .class;
+                let entry =
+                    effective_syntax_entry_for_abs_char(buf, table, ch, idx, honor_properties);
+                let class = entry.class;
                 if depth == min_depth {
                     last_good = idx;
+                }
+                if ignore_comments
+                    && let Some(next) = maybe_skip_comment_backward(
+                        buf,
+                        idx + 1,
+                        honor_properties,
+                        class,
+                        entry.flags,
+                    )
+                {
+                    idx = next;
+                    continue;
                 }
 
                 match class {
@@ -1594,28 +1752,21 @@ fn scan_sexp_forward(
     start: usize,
     table: &SyntaxTable,
     honor_properties: bool,
+    ignore_comments: bool,
 ) -> Result<usize, ScanListError> {
-    let mut idx = start;
+    let skipped = skip_sexp_ignored_forward(
+        buf,
+        chars,
+        start,
+        len,
+        table,
+        honor_properties,
+        ignore_comments,
+    );
+    let mut idx = skipped.position();
 
-    // Skip whitespace and comments
-    while idx < len
-        && matches!(
-            effective_syntax_entry_for_abs_char(
-                buf,
-                table,
-                chars.char_at(idx),
-                idx,
-                honor_properties
-            )
-            .class,
-            SyntaxClass::Whitespace
-                | SyntaxClass::Comment
-                | SyntaxClass::EndComment
-                | SyntaxClass::Punctuation
-                | SyntaxClass::Quote
-        )
-    {
-        idx += 1;
+    if matches!(skipped, IgnoredSkip::UnterminatedComment(_)) {
+        return Ok(idx);
     }
 
     if idx >= len {
@@ -1633,8 +1784,16 @@ fn scan_sexp_forward(
             idx += 1;
             while idx < len && depth > 0 {
                 let c = chars.char_at(idx);
-                let s =
-                    effective_syntax_entry_for_abs_char(buf, table, c, idx, honor_properties).class;
+                let entry =
+                    effective_syntax_entry_for_abs_char(buf, table, c, idx, honor_properties);
+                let s = entry.class;
+                if ignore_comments
+                    && let Some(skip) =
+                        maybe_skip_comment_forward(buf, idx, honor_properties, s, entry.flags)
+                {
+                    idx = skip.next();
+                    continue;
+                }
                 match s {
                     SyntaxClass::Open => {
                         depth += 1;
@@ -1756,29 +1915,17 @@ fn scan_sexp_backward(
     start_bound: usize,
     table: &SyntaxTable,
     honor_properties: bool,
+    ignore_comments: bool,
 ) -> Result<usize, ScanListError> {
-    let mut idx = start;
-
-    // Skip whitespace and comments backward
-    while idx > start_bound
-        && matches!(
-            effective_syntax_entry_for_abs_char(
-                buf,
-                table,
-                chars.char_at(idx - 1),
-                idx - 1,
-                honor_properties
-            )
-            .class,
-            SyntaxClass::Whitespace
-                | SyntaxClass::Comment
-                | SyntaxClass::EndComment
-                | SyntaxClass::Punctuation
-                | SyntaxClass::Quote
-        )
-    {
-        idx -= 1;
-    }
+    let mut idx = skip_sexp_ignored_backward(
+        buf,
+        chars,
+        start,
+        start_bound,
+        table,
+        honor_properties,
+        ignore_comments,
+    );
 
     if idx == start_bound {
         return Err(ScanListError::unbalanced(idx, start));
@@ -1796,8 +1943,16 @@ fn scan_sexp_backward(
             while idx > start_bound && depth > 0 {
                 idx -= 1;
                 let c = chars.char_at(idx);
-                let s =
-                    effective_syntax_entry_for_abs_char(buf, table, c, idx, honor_properties).class;
+                let entry =
+                    effective_syntax_entry_for_abs_char(buf, table, c, idx, honor_properties);
+                let s = entry.class;
+                if ignore_comments
+                    && let Some(next) =
+                        maybe_skip_comment_backward(buf, idx + 1, honor_properties, s, entry.flags)
+                {
+                    idx = next;
+                    continue;
+                }
                 match s {
                     SyntaxClass::Close => {
                         depth += 1;
@@ -2350,6 +2505,12 @@ fn effective_syntax_entry_for_abs_char(
 
 pub(crate) fn parse_sexp_lookup_properties_enabled(ctx: &super::eval::Context) -> bool {
     ctx.eval_symbol("parse-sexp-lookup-properties")
+        .unwrap_or(Value::NIL)
+        .is_truthy()
+}
+
+fn parse_sexp_ignore_comments_enabled(ctx: &super::eval::Context) -> bool {
+    ctx.eval_symbol("parse-sexp-ignore-comments")
         .unwrap_or(Value::NIL)
         .is_truthy()
 }
@@ -3248,7 +3409,7 @@ fn forward_comment_backward(
                         let flags2 = entry2.flags;
                         if flags2.contains(SyntaxFlags::COMMENT_END_FIRST) {
                             code = SyntaxClass::EndComment;
-                            comstyle_b = flags.contains(SyntaxFlags::COMMENT_STYLE_B);
+                            comstyle_b = flags2.contains(SyntaxFlags::COMMENT_STYLE_B);
                             nested = nested || flags2.contains(SyntaxFlags::COMMENT_NESTABLE);
                             two_char_end_restore_pos = Some(unit2.end);
                             // Move past both chars of the two-char end.
@@ -3398,7 +3559,7 @@ fn scan_backward_comment_body(
                     );
                     let flags2 = entry2.flags;
                     if flags2.contains(SyntaxFlags::COMMENT_END_FIRST) {
-                        let se_b = flags.contains(SyntaxFlags::COMMENT_STYLE_B);
+                        let se_b = flags2.contains(SyntaxFlags::COMMENT_STYLE_B);
                         if se_b == style_b {
                             if nested {
                                 nesting += 1;
@@ -3797,8 +3958,16 @@ pub(crate) fn builtin_forward_sexp(
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let table = SyntaxTable::for_buffer(buf);
     let from = buf.point_emacs_byte_pos();
-    let new_pos = match scan_sexps_with_options(buf, &table, from.get(), count, honor_properties)
-        .map_err(|err| signal("scan-error", err.signal_data()))?
+    let ignore_comments = parse_sexp_ignore_comments_enabled(eval);
+    let new_pos = match scan_sexps_with_options(
+        buf,
+        &table,
+        from.get(),
+        count,
+        honor_properties,
+        ignore_comments,
+    )
+    .map_err(|err| signal("scan-error", err.signal_data()))?
     {
         Some(pos) => EmacsBytePos::new(pos),
         None if count < 0 => buf.accessible_emacs_byte_region().start(),
@@ -3849,8 +4018,16 @@ pub(crate) fn builtin_backward_sexp(
     let table = SyntaxTable::for_buffer(buf);
     let from = buf.point_emacs_byte_pos();
     // backward-sexp with positive count => scan_sexps with negative count
-    let new_pos = match scan_sexps_with_options(buf, &table, from.get(), -count, honor_properties)
-        .map_err(|err| signal("scan-error", err.signal_data()))?
+    let ignore_comments = parse_sexp_ignore_comments_enabled(eval);
+    let new_pos = match scan_sexps_with_options(
+        buf,
+        &table,
+        from.get(),
+        -count,
+        honor_properties,
+        ignore_comments,
+    )
+    .map_err(|err| signal("scan-error", err.signal_data()))?
     {
         Some(pos) => EmacsBytePos::new(pos),
         None if count < 0 => buf.accessible_emacs_byte_region().end(),
@@ -3929,7 +4106,16 @@ pub(crate) fn builtin_scan_lists(ctx: &mut super::eval::Context, args: Vec<Value
     let clipped_from = from.clamp(point_min, point_max);
     let from_char = LispCharPos1::new(clipped_from).to_char_pos().get();
 
-    match scan_lists_with_options(buf, &table, from_char, count, depth, honor_properties) {
+    let ignore_comments = parse_sexp_ignore_comments_enabled(ctx);
+    match scan_lists_with_options(
+        buf,
+        &table,
+        from_char,
+        count,
+        depth,
+        honor_properties,
+        ignore_comments,
+    ) {
         Ok(Some(new_char)) => Ok(Value::fixnum(char_pos_to_lisp_i64(new_char))),
         Ok(None) => Ok(Value::NIL),
         Err(err) => Err(signal("scan-error", err.signal_data())),
@@ -3988,7 +4174,15 @@ pub(crate) fn builtin_scan_sexps(ctx: &mut super::eval::Context, args: Vec<Value
         .min(buf.total_char_end_pos());
     let from_byte = buffer_char_to_emacs_byte_pos(buf, from_char);
 
-    match scan_sexps_with_options(buf, &table, from_byte.get(), count, honor_properties) {
+    let ignore_comments = parse_sexp_ignore_comments_enabled(ctx);
+    match scan_sexps_with_options(
+        buf,
+        &table,
+        from_byte.get(),
+        count,
+        honor_properties,
+        ignore_comments,
+    ) {
         Ok(Some(new_byte)) => Ok(Value::fixnum(buffer_byte_to_lisp_pos(
             buf,
             EmacsBytePos::new(new_byte),

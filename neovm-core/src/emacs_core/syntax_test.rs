@@ -17,6 +17,57 @@ fn char_pos_to_byte(buf: &Buffer, char_pos: usize) -> usize {
         .get()
 }
 
+fn current_point_lisp_pos(eval: &crate::emacs_core::eval::Context) -> i64 {
+    eval.buffers
+        .current_buffer()
+        .expect("current buffer")
+        .point_char_pos()
+        .get() as i64
+        + 1
+}
+
+fn replace_current_buffer_text(eval: &mut crate::emacs_core::eval::Context, text: &str) {
+    let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+    buf.delete_emacs_byte_range(crate::buffer::EmacsByteRange::from_usize(
+        buf.point_min_emacs_byte_pos().get(),
+        buf.point_max_emacs_byte_pos().get(),
+    ));
+    buf.insert(text);
+    buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(
+        buf.point_min_emacs_byte_pos().get(),
+    ));
+}
+
+fn install_line_comment_syntax(eval: &mut crate::emacs_core::eval::Context) {
+    builtin_modify_syntax_entry(eval, vec![Value::fixnum(';' as i64), Value::string("<")])
+        .expect("install semicolon comment start syntax");
+    builtin_modify_syntax_entry(eval, vec![Value::fixnum('\n' as i64), Value::string(">")])
+        .expect("install newline comment end syntax");
+}
+
+fn install_c_block_comment_syntax(eval: &mut crate::emacs_core::eval::Context) {
+    builtin_modify_syntax_entry(
+        eval,
+        vec![Value::fixnum('/' as i64), Value::string(". 124b")],
+    )
+    .expect("install C slash comment syntax");
+    builtin_modify_syntax_entry(eval, vec![Value::fixnum('*' as i64), Value::string(". 23")])
+        .expect("install C star comment syntax");
+}
+
+fn install_nestable_c_block_comment_syntax(eval: &mut crate::emacs_core::eval::Context) {
+    builtin_modify_syntax_entry(
+        eval,
+        vec![Value::fixnum('/' as i64), Value::string(". 124bn")],
+    )
+    .expect("install nestable C slash comment syntax");
+    builtin_modify_syntax_entry(
+        eval,
+        vec![Value::fixnum('*' as i64), Value::string(". 23n")],
+    )
+    .expect("install nestable C star comment syntax");
+}
+
 // -----------------------------------------------------------------------
 // SyntaxClass parsing
 // -----------------------------------------------------------------------
@@ -700,6 +751,304 @@ fn scan_sexps_string_with_escape() {
     assert_eq!(pos, 9); // past the closing quote
 }
 
+#[test]
+fn sexp_motion_respects_parse_sexp_ignore_comments_for_line_comments() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "(a ; comment with )\n b)");
+    install_line_comment_syntax(&mut eval);
+
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
+        Value::fixnum(20)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(20)
+    );
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(
+            buf.point_min_emacs_byte_pos().get(),
+        ));
+    }
+    builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    assert_eq!(current_point_lisp_pos(&eval), 20);
+
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
+        Value::fixnum(24)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(24)
+    );
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(
+            buf.point_min_emacs_byte_pos().get(),
+        ));
+    }
+    builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    assert_eq!(current_point_lisp_pos(&eval), 24);
+}
+
+#[test]
+fn sexp_motion_ignores_unmatched_open_paren_inside_line_comment() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "(a ; unmatched (\n b)");
+    install_line_comment_syntax(&mut eval);
+
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
+        Value::fixnum(21)
+    );
+
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
+    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]) {
+        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "scan-error");
+            assert_eq!(sig.data[0], Value::string("Unbalanced parentheses"));
+        }
+        other => panic!("expected scan-error signal, got {other:?}"),
+    }
+}
+
+#[test]
+fn sexp_scanners_treat_eof_comments_as_one_forward_sexp() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, ";foo");
+    install_line_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
+        Value::fixnum(5)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(5)
+    );
+    builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    assert_eq!(current_point_lisp_pos(&eval), 5);
+
+    replace_current_buffer_text(&mut eval, "/*x");
+    install_c_block_comment_syntax(&mut eval);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
+        Value::fixnum(4)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(4)
+    );
+    builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    assert_eq!(current_point_lisp_pos(&eval), 4);
+}
+
+#[test]
+fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "(a ; comment with )\n b)");
+    install_line_comment_syntax(&mut eval);
+
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(24), Value::fixnum(-1)]).unwrap(),
+        Value::fixnum(1)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(24), Value::fixnum(-1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(1)
+    );
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(
+            buf.point_max_emacs_byte_pos().get(),
+        ));
+    }
+    builtin_backward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    assert_eq!(current_point_lisp_pos(&eval), 1);
+
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
+    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(24), Value::fixnum(-1)]) {
+        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "scan-error");
+            assert_eq!(sig.data[0], Value::string("Unbalanced parentheses"));
+        }
+        other => panic!("expected scan-error signal, got {other:?}"),
+    }
+    match builtin_scan_lists(
+        &mut eval,
+        vec![Value::fixnum(24), Value::fixnum(-1), Value::fixnum(0)],
+    ) {
+        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "scan-error");
+            assert_eq!(sig.data[0], Value::string("Unbalanced parentheses"));
+        }
+        other => panic!("expected scan-error signal, got {other:?}"),
+    }
+
+    replace_current_buffer_text(&mut eval, "(a /* comment with ( */ b)");
+    install_c_block_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(27), Value::fixnum(-1)]).unwrap(),
+        Value::fixnum(1)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(27), Value::fixnum(-1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(1)
+    );
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(27), Value::fixnum(-1)]).unwrap(),
+        Value::fixnum(20)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(27), Value::fixnum(-1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(20)
+    );
+}
+
+#[test]
+fn backward_sexp_motion_skips_nested_block_comments() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let text = "(a /* outer ( /* inner */ after */ b)";
+    let end = text.len() as i64 + 1;
+    replace_current_buffer_text(&mut eval, text);
+    install_nestable_c_block_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(end), Value::fixnum(-1)]).unwrap(),
+        Value::fixnum(1)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(end), Value::fixnum(-1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(1)
+    );
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(
+            buf.point_max_emacs_byte_pos().get(),
+        ));
+    }
+    builtin_backward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    assert_eq!(current_point_lisp_pos(&eval), 1);
+}
+
+#[test]
+fn sexp_motion_respects_parse_sexp_ignore_comments_for_block_comments() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "(a /* comment with ) */ b)");
+    install_c_block_comment_syntax(&mut eval);
+
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
+        Value::fixnum(21)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(21)
+    );
+
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+    assert_eq!(
+        builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
+        Value::fixnum(27)
+    );
+    assert_eq!(
+        builtin_scan_lists(
+            &mut eval,
+            vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(0)]
+        )
+        .unwrap(),
+        Value::fixnum(27)
+    );
+
+    replace_current_buffer_text(&mut eval, "(a /* comment with ) b)");
+    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]) {
+        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "scan-error");
+            assert_eq!(sig.data[0], Value::string("Unbalanced parentheses"));
+        }
+        other => panic!("expected scan-error signal, got {other:?}"),
+    }
+}
+
+#[test]
+fn doom_cli_style_struct_comment_does_not_break_forward_sexp() {
+    crate::test_utils::init_test_tracing();
+    let text = "(cl-defstruct doom-cli-context\n  ;; A session-specific ID of the current context (defaults to number\n  (pid (if-let* ((pid (getenv \"__DOOMPID\")))\n           (string-to-number pid)\n         (emacs-pid))))\n(setq after t)";
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, text);
+    install_line_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+
+    builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    let expected_point = text.find("\n(setq after t)").expect("marker") as i64 + 1;
+    assert_eq!(current_point_lisp_pos(&eval), expected_point);
+}
+
 // -----------------------------------------------------------------------
 // syntax_entry_to_value
 // -----------------------------------------------------------------------
@@ -1137,6 +1486,23 @@ fn forward_comment_two_char_end_style_uses_first_ender_char() {
         .get() as i64
         + 1;
     assert_eq!(point_1, 25);
+}
+
+#[test]
+fn backward_comment_two_char_end_style_uses_first_ender_char() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "code /* block comment */ more");
+    install_c_block_comment_syntax(&mut eval);
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        // Position immediately after the two-character comment end.
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 24)));
+    }
+
+    let out = builtin_forward_comment(&mut eval, vec![Value::fixnum(-1)]).unwrap();
+    assert_eq!(out, Value::T);
+    assert_eq!(current_point_lisp_pos(&eval), 6);
 }
 
 #[test]
