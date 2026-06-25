@@ -167,7 +167,7 @@
                 echo "missing final pdump image: $final_pdump" >&2
                 exit 1
               fi
-              fingerprint="$($out/bin/neomacs --fingerprint | tr -d '[:space:]')"
+              fingerprint="$(${pkgs.stdenv.hostPlatform.emulator pkgs.buildPackages} $out/bin/neomacs --fingerprint | tr -d '[:space:]')"
               if ! [[ "$fingerprint" =~ ^[[:xdigit:]]{64}$ ]]; then
                 echo "invalid final pdump fingerprint: $fingerprint" >&2
                 exit 1
