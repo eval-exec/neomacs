@@ -2064,13 +2064,15 @@ impl Obarray {
     }
 
     /// A specific function `id` was redefined (cell write / fmakunbound): bump the
-    /// epoch (the coarse "any binding may have changed" signal + JIT backstop) AND
-    /// precisely evict the JIT cache entries of callers that INLINED `id`, so an
-    /// unrelated redefinition no longer re-JITs every inlined function. Pure
-    /// optimization layered on the epoch backstop — see jit::cache::evict_inline_dependents.
-    fn note_function_redefined(&mut self, id: SymId) {
+    /// epoch (the coarse "any binding may have changed" signal + JIT backstop).
+    /// When JIT is enabled, also precisely evict the JIT cache entries of callers
+    /// that INLINED `id`, so an unrelated redefinition no longer re-JITs every
+    /// inlined function. Pure optimization layered on the epoch backstop — see
+    /// jit::cache::evict_inline_dependents.
+    fn note_function_redefined(&mut self, _id: SymId) {
         self.function_epoch = self.function_epoch.wrapping_add(1);
-        crate::emacs_core::jit::cache::evict_inline_dependents(id);
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::cache::evict_inline_dependents(_id);
     }
 
     /// Set the function cell of a symbol by identity.
