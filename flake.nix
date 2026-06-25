@@ -126,7 +126,7 @@
               let
                 base = builtins.baseNameOf path;
               in
-              !(builtins.elem base [ ".git" ".direnv" "target" "result" ]);
+              !(builtins.elem base [ ".git" ".direnv" ".github" "target" "result" "flake.nix" "flake.lock" ]);
           };
           pname = "neomacs";
           version = self.shortRev or self.dirtyShortRev or self.lastModifiedDate or "0.0.1";
@@ -140,7 +140,18 @@
             buildInputs = runtimeLibs;
             doCheck = false;
           };
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          depsArgs = commonArgs // {
+            # Keep the dependency-artifact derivation stable across commits.
+            # The final package still uses the git-derived version, but Rust
+            # dependency compilation should only change when Cargo metadata or
+            # build inputs change.
+            version = "0.0.0";
+            dummySrc = craneLib.mkDummySrc {
+              src = cargoSrc;
+              cleanCargoTomlFilter = craneLib.filters.cargoTomlAggressive;
+            };
+          };
+          cargoArtifacts = craneLib.buildDepsOnly depsArgs;
           hostEmulator = pkgs.stdenv.hostPlatform.emulator pkgs.buildPackages;
           fingerprintRunner = lib.optionalString (hostEmulator != null) "${hostEmulator} ";
           linuxWrapArgs = lib.optionals pkgs.stdenv.isLinux [
