@@ -18,7 +18,7 @@ jobs:
   nix-smoke:
     name: nix build and startup smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -26,16 +26,17 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
-          enable_kvm: false
           extra_nix_config: |
             accept-flake-config = true
-            substituters = https://nix-wpe-webkit.cachix.org https://cache.nixos.org/
-            trusted-public-keys = nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzcox4EqcXqKvOygxpwYHE= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+            substituters = https://eval-exec.cachix.org https://nix-wpe-webkit.cachix.org https://cache.nixos.org/
+            trusted-public-keys = eval-exec.cachix.org-1:xvopUI7X7+Vt1gaSsWJ0PQFPP66vs8v5iIaz6boxf64= nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzcox4EqcXqKvOygxpwYHE= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
       - name: Build Neomacs with Nix
+        timeout-minutes: 120
         run: nix build --print-build-logs --accept-flake-config .#neomacs
 
       - name: Smoke test Nix-built Neomacs
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           fingerprint="$(./result/bin/neomacs --fingerprint | tr -d '[:space:]')"

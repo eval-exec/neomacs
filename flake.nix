@@ -2,8 +2,14 @@
   description = "Neomacs - GPU-accelerated Emacs written in Rust with a modern, multithreaded architecture";
 
   nixConfig = {
-    extra-substituters = [ "https://nix-wpe-webkit.cachix.org" ];
-    extra-trusted-public-keys = [ "nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzcox4EqcXqKvOygxpwYHE=" ];
+    extra-substituters = [
+      "https://eval-exec.cachix.org"
+      "https://nix-wpe-webkit.cachix.org"
+    ];
+    extra-trusted-public-keys = [
+      "eval-exec.cachix.org-1:xvopUI7X7+Vt1gaSsWJ0PQFPP66vs8v5iIaz6boxf64="
+      "nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzcox4EqcXqKvOygxpwYHE="
+    ];
   };
 
   inputs = {
@@ -135,6 +141,8 @@
             doCheck = false;
           };
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          hostEmulator = pkgs.stdenv.hostPlatform.emulator pkgs.buildPackages;
+          fingerprintRunner = lib.optionalString (hostEmulator != null) "${hostEmulator} ";
           linuxWrapArgs = lib.optionals pkgs.stdenv.isLinux [
             "--set-default" "VK_DRIVER_FILES" "$(echo ${pkgs.mesa}/share/vulkan/icd.d/*.json | tr ' ' ':')"
             "--set-default" "WPE_BACKEND_LIBRARY" "${pkgs.libwpe-fdo}/lib/libWPEBackend-fdo-1.0.so"
@@ -167,7 +175,7 @@
                 echo "missing final pdump image: $final_pdump" >&2
                 exit 1
               fi
-              fingerprint="$(${pkgs.stdenv.hostPlatform.emulator pkgs.buildPackages} $out/bin/neomacs --fingerprint | tr -d '[:space:]')"
+              fingerprint="$(${fingerprintRunner}$out/bin/neomacs --fingerprint | tr -d '[:space:]')"
               if ! [[ "$fingerprint" =~ ^[[:xdigit:]]{64}$ ]]; then
                 echo "invalid final pdump fingerprint: $fingerprint" >&2
                 exit 1
