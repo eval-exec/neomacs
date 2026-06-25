@@ -161,6 +161,20 @@
               cp -r lisp "$out/share/neomacs/"
               cp -r etc "$out/share/neomacs/"
               chmod -R u+w "$out/share/neomacs"
+
+              final_pdump="target/release/neomacs.pdump"
+              if [ ! -f "$final_pdump" ]; then
+                echo "missing final pdump image: $final_pdump" >&2
+                exit 1
+              fi
+              fingerprint="$($out/bin/neomacs --fingerprint | tr -d '[:space:]')"
+              if ! [[ "$fingerprint" =~ ^[[:xdigit:]]{64}$ ]]; then
+                echo "invalid final pdump fingerprint: $fingerprint" >&2
+                exit 1
+              fi
+              install -m 0644 "$final_pdump" "$out/bin/neomacs.pdump"
+              install -m 0644 "$final_pdump" "$out/bin/neomacs-$fingerprint.pdump"
+
               wrapProgram "$out/bin/neomacs" \
                 --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeLibs}" \
                 --set-default RUST_LOG info \

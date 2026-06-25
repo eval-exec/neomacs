@@ -1,0 +1,53 @@
+name: nix smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nix-smoke:
+    name: nix build and startup smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          enable_kvm: false
+          extra_nix_config: |
+            accept-flake-config = true
+            substituters = https://nix-wpe-webkit.cachix.org https://cache.nixos.org/
+            trusted-public-keys = nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzcox4EqcXqKvOygxpwYHE= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+
+      - name: Build Neomacs with Nix
+        run: nix build --print-build-logs --accept-flake-config .#neomacs
+
+      - name: Smoke test Nix-built Neomacs
+        run: |
+          set -euo pipefail
+          fingerprint="$(./result/bin/neomacs --fingerprint | tr -d '[:space:]')"
+          if ! [[ "$fingerprint" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+            echo "invalid Neomacs pdump fingerprint: $fingerprint" >&2
+            exit 1
+          fi
+
+          test -f ./result/bin/neomacs.pdump
+          test -f "./result/bin/neomacs-${fingerprint}.pdump"
+
+          # This exercises the installed wrapper from the Nix output and would
+          # fail with the issue #133 panic if the final pdump image was absent.
+          timeout 60s ./result/bin/neomacs --batch --quick --eval \
+            '(progn (princ "nix smoke ok\n") (kill-emacs 0))'
