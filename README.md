@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/eval-exec/neomacs/actions/workflows/ci.yml"><img src="https://github.com/eval-exec/neomacs/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <a href="#features"><img src="https://img.shields.io/badge/status-alpha-blueviolet?style=for-the-badge" alt="Status: Alpha"/></a>
-  <a href="#building"><img src="https://img.shields.io/badge/rust-1.93.1-orange?style=for-the-badge&logo=rust" alt="Rust 1.93.1"/></a>
+  <a href="#building"><img src="https://img.shields.io/badge/rust-1.95.0-orange?style=for-the-badge&logo=rust" alt="Rust 1.95.0"/></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=for-the-badge" alt="License: GPL-3.0"/></a>
 </p>
 
@@ -346,7 +346,7 @@ and why Elisp is slow, see [docs/elisp-core-analysis.md](docs/elisp-core-analysi
 
 ### Prerequisites
 
-- **Rust** (stable, 1.93+)
+- **Rust** (stable, 1.95+)
 - **GStreamer** (optional, for video playback)
 - **WPE WebKit** (optional, for inline browser, Linux only)
 - **VA-API** (optional, for hardware video decode on Linux)
