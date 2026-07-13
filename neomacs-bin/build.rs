@@ -28,6 +28,33 @@ fn export_jit_shims_for_aot(target_os: &str) {
     }
 }
 
+/// Add RUNPATH entries for Linux libraries that the windowing/rendering stack
+/// opens with `dlopen` rather than linking into the executable.  Guix and Nix
+/// keep these libraries outside the system loader's default search path, so a
+/// successful build is otherwise liable to fail only when the GUI starts.
+fn emit_linux_runtime_dlopen_rpaths(target_os: &str) {
+    if target_os != "linux" {
+        return;
+    }
+
+    let mut emitted_paths = Vec::new();
+    for name in ["wayland-client", "xkbcommon", "vulkan", "egl"] {
+        let Ok(library) = pkg_config::Config::new().cargo_metadata(false).probe(name) else {
+            continue;
+        };
+        for path in library.link_paths {
+            if emitted_paths.contains(&path) {
+                continue;
+            }
+            println!(
+                "cargo:rustc-link-arg-bin=neomacs=-Wl,-rpath,{}",
+                path.display()
+            );
+            emitted_paths.push(path);
+        }
+    }
+}
+
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     println!("cargo:rerun-if-changed=../neovm-core/src/emacs_core/jit/shim_names.rs");
@@ -41,6 +68,8 @@ fn main() {
         }
         return;
     }
+
+    emit_linux_runtime_dlopen_rpaths(&target_os);
 
     let candidates: &[&str] = match target_os.as_str() {
         "linux" => &["ncursesw", "ncurses"],
