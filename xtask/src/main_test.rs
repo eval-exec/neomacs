@@ -1285,6 +1285,29 @@ fn outer_cargo_env_filter_strips_package_build_vars_only() {
 }
 
 #[test]
+fn build_time_emacs_env_filter_covers_lisp_and_native_load_paths() {
+    assert_eq!(
+        BUILD_TIME_EMACS_ENV_VARS,
+        ["EMACSLOADPATH", "EMACSNATIVELOADPATH"]
+    );
+
+    let mut command = Command::new("neomacs");
+    for key in BUILD_TIME_EMACS_ENV_VARS {
+        command.env(key, "/user/profile");
+    }
+    remove_build_time_emacs_env(&mut command);
+
+    for key in BUILD_TIME_EMACS_ENV_VARS {
+        assert!(
+            command
+                .get_envs()
+                .any(|(candidate, value)| candidate == key && value.is_none()),
+            "{key} should be explicitly removed from build subprocesses"
+        );
+    }
+}
+
+#[test]
 fn unidata_generated_lisp_file_names_match_gnu_makefile_shape() {
     let contents = r#"
 (defconst unidata-file-alist

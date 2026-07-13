@@ -734,7 +734,8 @@ fn run_aot_preload_dry_run_gate(
         )
         .into());
     }
-    let status = Command::new(&paths.temacs)
+    let mut command = Command::new(&paths.temacs);
+    command
         .current_dir(&options.repo_root)
         .args([
             OsStr::new("--batch"),
@@ -742,8 +743,9 @@ fn run_aot_preload_dry_run_gate(
             OsStr::new("loadup"),
             OsStr::new("--temacs=pdump"),
         ])
-        .envs(envs.iter().map(|(k, v)| (k, v)))
-        .status()?;
+        .envs(envs.iter().map(|(k, v)| (k, v)));
+    remove_build_time_emacs_env(&mut command);
+    let status = command.status()?;
     if !status.success() {
         return Err(format!(
             "aot-preload dry-run: --temacs=pdump exited with {}",
@@ -2630,6 +2632,7 @@ fn run_command(
     command.current_dir(cwd);
     command.args(args.iter().map(OsString::as_os_str));
     command.envs(envs.iter().map(|(key, value)| (key, value)));
+    remove_build_time_emacs_env(&mut command);
     if program.file_name() == Some(OsStr::new("cargo")) {
         remove_outer_cargo_env(&mut command);
     }
@@ -2651,6 +2654,17 @@ fn run_command(
         return Err(command_failure(program, args, status).into());
     }
     Ok(())
+}
+
+const BUILD_TIME_EMACS_ENV_VARS: [&str; 2] = ["EMACSLOADPATH", "EMACSNATIVELOADPATH"];
+
+/// Keep xtask's bootstrap, generation, compilation, and dump subprocesses
+/// isolated from the invoking user's installed Emacs packages.  GNU Emacs's
+/// build makefiles likewise unexport these variables before invoking Emacs.
+fn remove_build_time_emacs_env(command: &mut Command) {
+    for key in BUILD_TIME_EMACS_ENV_VARS {
+        command.env_remove(key);
+    }
 }
 
 fn remove_outer_cargo_env(command: &mut Command) {

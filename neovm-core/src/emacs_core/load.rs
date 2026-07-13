@@ -4201,7 +4201,7 @@ fn finalize_cached_bootstrap_eval(
     let lisp_dir = project_root.join("lisp");
     eval.set_variable(
         "load-path",
-        Value::list(bootstrap_load_path_entries(&lisp_dir)),
+        Value::list(runtime_load_path_entries(&lisp_dir)),
     );
 
     let etc_dir = project_root.join("etc");
@@ -4301,6 +4301,44 @@ pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
         }
     }
     load_path_entries
+}
+
+/// Build the runtime `load-path` from `EMACSLOADPATH` and Neomacs' bundled
+/// Lisp directories.  As in GNU `init_lread` (`src/lread.c`), an empty path
+/// element stands for the entire default load path rather than the current
+/// directory.  If there is no empty element, keep the defaults at the end:
+/// unlike an installed GNU Emacs, Neomacs currently has no launcher wrapper
+/// that appends its versioned Lisp directory to `EMACSLOADPATH`.
+fn runtime_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
+    runtime_load_path_entries_from_os(lisp_dir, std::env::var_os("EMACSLOADPATH"))
+}
+
+/// Testable core of [`runtime_load_path_entries`].
+pub(crate) fn runtime_load_path_entries_from_os(
+    lisp_dir: &Path,
+    emacs_load_path: Option<std::ffi::OsString>,
+) -> Vec<Value> {
+    let default_load_path = bootstrap_load_path_entries(lisp_dir);
+    let Some(emacs_load_path) = emacs_load_path else {
+        return default_load_path;
+    };
+
+    let mut load_path = Vec::new();
+    let mut included_defaults = false;
+    for dir in std::env::split_paths(&emacs_load_path) {
+        if dir.as_os_str().is_empty() {
+            load_path.extend(default_load_path.iter().cloned());
+            included_defaults = true;
+        } else {
+            load_path.push(Value::string(
+                crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&dir),
+            ));
+        }
+    }
+    if !included_defaults {
+        load_path.extend(default_load_path);
+    }
+    load_path
 }
 
 fn lisp_directory_name_from_host_path(path: &Path) -> String {

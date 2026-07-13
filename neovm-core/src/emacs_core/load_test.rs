@@ -70,6 +70,74 @@ fn bootstrap_load_path_entries_use_gnu_windows_file_name_syntax() {
     assert!(first.ends_with("/lisp"));
 }
 
+fn load_path_entry_strings(entries: &[Value]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
+            entry
+                .as_lisp_string()
+                .map(|name| crate::emacs_core::emacs_char::to_utf8_lossy(name.as_bytes()))
+                .expect("load-path entry should be a string")
+        })
+        .collect()
+}
+
+#[test]
+fn runtime_load_path_uses_defaults_when_emacsloadpath_is_unset() {
+    let temp = tempdir().expect("tempdir");
+    let lisp_dir = temp.path().join("lisp");
+    std::fs::create_dir_all(&lisp_dir).expect("create lisp dir");
+
+    let entries = runtime_load_path_entries_from_os(&lisp_dir, None);
+    assert_eq!(
+        load_path_entry_strings(&entries),
+        vec![crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&lisp_dir)]
+    );
+}
+
+#[test]
+fn runtime_load_path_splices_defaults_at_empty_emacsloadpath_elements() {
+    let temp = tempdir().expect("tempdir");
+    let lisp_dir = temp.path().join("lisp");
+    let before = temp.path().join("before");
+    let after = temp.path().join("after");
+    std::fs::create_dir_all(&lisp_dir).expect("create lisp dir");
+
+    let emacs_load_path =
+        std::env::join_paths([before.as_path(), std::path::Path::new(""), after.as_path()])
+            .expect("join EMACSLOADPATH");
+    let entries = runtime_load_path_entries_from_os(&lisp_dir, Some(emacs_load_path));
+
+    assert_eq!(
+        load_path_entry_strings(&entries),
+        vec![
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&before),
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&lisp_dir),
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&after),
+        ]
+    );
+}
+
+#[test]
+fn runtime_load_path_without_empty_element_appends_defaults() {
+    let temp = tempdir().expect("tempdir");
+    let lisp_dir = temp.path().join("lisp");
+    let custom = temp.path().join("custom");
+    std::fs::create_dir_all(&lisp_dir).expect("create lisp dir");
+
+    let entries = runtime_load_path_entries_from_os(
+        &lisp_dir,
+        Some(std::env::join_paths([custom.as_path()]).expect("join EMACSLOADPATH")),
+    );
+    assert_eq!(
+        load_path_entry_strings(&entries),
+        vec![
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&custom),
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&lisp_dir),
+        ]
+    );
+}
+
 #[test]
 fn stale_preloaded_face_doc_ref_restore_is_idempotent() {
     let mut eval = Context::new();
