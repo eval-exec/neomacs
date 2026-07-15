@@ -122,7 +122,7 @@ encoding_rs = "0.8"
 flate2 = "1"
 
 # Parsing
-quick-xml = "0.37"
+quick-xml = "0.41"
 tl = "0.7"
 
 # Database
