@@ -116,7 +116,7 @@ bytemuck = { version = "1.18", features = ["derive"] }
 memmap2 = "0.9"
 image = "0.25"
 imagesize = "0.14"
-allsorts = "0.16.1"
+allsorts = "0.17.0"
 encoding_rs = "0.8"
 
 # Compression
