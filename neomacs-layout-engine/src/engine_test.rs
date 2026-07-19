@@ -15483,9 +15483,11 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
     }
 
     let mut engine = LayoutEngine::new();
+    #[cfg(debug_assertions)]
     neomacs_display_protocol::glyph_matrix::reset_materialize_call_count_for_current_thread();
     engine.layout_frame_rust(&mut eval, frame_id);
     activate_last_engine_presentation(&mut eval, &engine, frame_id);
+    #[cfg(debug_assertions)]
     assert_eq!(
         neomacs_display_protocol::glyph_matrix::materialize_call_count_for_current_thread(),
         0,
@@ -15548,6 +15550,7 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
     assert!(semantics.iter().any(|item| item.get(2) == Some(&Value::T)));
 
     let materialized_pointer = state.materialize();
+    #[cfg(debug_assertions)]
     assert_eq!(
         neomacs_display_protocol::glyph_matrix::materialize_call_count_for_current_thread(),
         1,
