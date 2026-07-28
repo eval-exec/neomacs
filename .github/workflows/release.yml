@@ -85,7 +85,7 @@ jobs:
           cache_key: continuous
 
       - name: Build release binaries
-        run: cargo xtask fresh-build --release
+        run: cargo xtask fresh-build --release --all-features
 
       - name: Set version env
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -176,7 +176,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build release binaries
-        run: cargo xtask fresh-build --release
+        run: cargo xtask fresh-build --release --all-features
 
       - name: Set version env
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -245,7 +245,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Build release binaries
-        run: cargo xtask fresh-build --release
+        run: cargo xtask fresh-build --release --all-features
 
       - name: Package tarball (aarch64-apple-darwin)
         run: |
@@ -351,7 +351,7 @@ jobs:
           # it HOME explicitly (a real Windows session always has one; GNU's
           # w32.c init_environment likewise guarantees HOME is set).
           export HOME="${USERPROFILE:-$GITHUB_WORKSPACE}"
-          cargo xtask fresh-build --release
+          cargo xtask fresh-build --release --all-features
 
       - name: Set version env (bash)
         shell: bash
