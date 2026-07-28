@@ -10,6 +10,7 @@ description = "Rust layout engine crate for Neomacs"
 [features]
 default = []
 neo-term = ["neomacs-display-protocol/neo-term"]
+bundled = ["freetype-rs/bundled"]
 
 [dependencies]
 rustc-hash.workspace = true
@@ -33,7 +34,7 @@ x11-dl.workspace = true
 # driver. Gated to `cfg(unix)`, so it is compiled and used on BOTH Linux and
 # macOS. Only Windows (`cfg(not(unix))`) gets the
 # `None`/empty stubs in `font_probe` and falls back to fontdb selection.
-freetype-rs = { version = "0.38.0", features = ["bundled"] }
+freetype-rs = { version = "0.38.0" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true
