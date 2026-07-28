@@ -1,7 +1,12 @@
 name: ci
 
 on:
-  push: {}
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
   schedule:
     - cron: "17 5 * * 0"
@@ -26,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-22.04
+          - runner: ubuntu-24.04
             label: linux-x86_64
           - runner: macos-latest
             label: macos-aarch64
@@ -49,7 +54,7 @@ jobs:
   cargo-deny:
     name: cargo deny
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - *checkout
@@ -71,7 +76,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-22.04
+          - runner: ubuntu-24.04
             label: linux-x86_64
           - runner: macos-latest
             label: macos-aarch64
@@ -187,7 +192,7 @@ jobs:
 
   neomacs-workspace-test-archive:
     name: workspace test archive (linux x86_64)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
@@ -209,7 +214,7 @@ jobs:
         name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-ubuntu-22.04-x86_64
+          prefix-key: ci-ubuntu-24.04-x86_64
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -239,7 +244,7 @@ jobs:
     name: neovm-core tests shard ${{ matrix.partition }}/20 (linux x86_64)
     if: github.event_name != 'schedule'
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
@@ -291,7 +296,7 @@ jobs:
 
   neomacs-test-runtime:
     name: shared test runtime (linux x86_64)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
       CARGO_TERM_COLOR: always
@@ -335,7 +340,7 @@ jobs:
     name: neovm-oracle-tests shard ${{ matrix.partition }}/20 (linux x86_64)
     if: github.event_name != 'schedule'
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
@@ -400,7 +405,7 @@ jobs:
     name: MELPA offline compatibility and GNU parity (linux x86_64)
     if: ${{ false }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
@@ -435,7 +440,7 @@ jobs:
     name: MELPA live ecosystem canary (linux x86_64)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
@@ -471,7 +476,7 @@ jobs:
     name: doom install compatibility (linux x86_64)
     if: github.event_name != 'schedule'
     needs: neomacs-test-runtime
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       TMPDIR: ${{ github.workspace }}/tmp

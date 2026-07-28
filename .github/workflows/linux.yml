@@ -10,7 +10,7 @@ concurrency:
 jobs:
   build-and-test:
     name: build & test (linux)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
@@ -96,7 +96,7 @@ jobs:
 
   lint:
     name: lint & clippy (frontend, linux)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always

@@ -20,7 +20,7 @@ jobs:
   # ── Linux x86_64 ──────────────────────────────────────────────────────
   build-linux-x86_64:
     name: build Linux x86_64
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
@@ -130,7 +130,7 @@ jobs:
   # ── Linux aarch64 ─────────────────────────────────────────────────────
   build-linux-aarch64:
     name: build Linux aarch64
-    runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
@@ -410,7 +410,7 @@ jobs:
       - build-linux-aarch64
       - build-macos-aarch64
       - build-windows-x86_64
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
