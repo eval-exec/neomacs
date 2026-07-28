@@ -64,7 +64,7 @@ jobs:
       - name: Install Rust toolchain (from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.96.1"
+          toolchain-file: rust-toolchain.toml
           components: rustfmt, clippy
 
       - name: Cache cargo registry & target
@@ -145,7 +145,7 @@ jobs:
       - name: Install Rust toolchain (from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.96.1"
+          toolchain-file: rust-toolchain.toml
           components: rustfmt, clippy
 
       - name: Cache cargo registry & target
