@@ -10,7 +10,7 @@ description = "Rust layout engine crate for Neomacs"
 [features]
 default = []
 neo-term = ["neomacs-display-protocol/neo-term"]
-bundled = ["freetype-rs/bundled"]
+freetype-bundled = ["freetype-rs/bundled"]
 
 [dependencies]
 rustc-hash.workspace = true
