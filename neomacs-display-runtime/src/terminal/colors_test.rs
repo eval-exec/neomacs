@@ -345,7 +345,7 @@ fn test_named_white() {
 fn test_named_bright_black() {
     let fg = Color::WHITE;
     let bg = Color::BLACK;
-    let c = ansi_to_color(&AnsiColor::Named(NamedColor::BrightBlack), &fg, &bg);
+    let c = ansi_to_color(&AnsiColor::Named(NamedColor::LightBlack), &fg, &bg);
     assert_color_rgb(&c, 127, 127, 127);
 }
 
@@ -353,7 +353,7 @@ fn test_named_bright_black() {
 fn test_named_bright_white() {
     let fg = Color::WHITE;
     let bg = Color::BLACK;
-    let c = ansi_to_color(&AnsiColor::Named(NamedColor::BrightWhite), &fg, &bg);
+    let c = ansi_to_color(&AnsiColor::Named(NamedColor::LightWhite), &fg, &bg);
     assert_color_rgb(&c, 255, 255, 255);
 }
 
@@ -479,7 +479,7 @@ fn test_spec_color_conversion() {
     let fg = Color::WHITE;
     let bg = Color::BLACK;
     let c = ansi_to_color(
-        &AnsiColor::Spec(alacritty_terminal::vte::ansi::Rgb {
+        &AnsiColor::Spec(rio_vt::config::colors::ColorRgb {
             r: 128,
             g: 64,
             b: 32,
@@ -497,14 +497,14 @@ fn test_spec_color_extremes() {
     let bg = Color::BLACK;
 
     let black = ansi_to_color(
-        &AnsiColor::Spec(alacritty_terminal::vte::ansi::Rgb { r: 0, g: 0, b: 0 }),
+        &AnsiColor::Spec(rio_vt::config::colors::ColorRgb { r: 0, g: 0, b: 0 }),
         &fg,
         &bg,
     );
     assert_color_eq(&black, 0.0, 0.0, 0.0);
 
     let white = ansi_to_color(
-        &AnsiColor::Spec(alacritty_terminal::vte::ansi::Rgb {
+        &AnsiColor::Spec(rio_vt::config::colors::ColorRgb {
             r: 255,
             g: 255,
             b: 255,

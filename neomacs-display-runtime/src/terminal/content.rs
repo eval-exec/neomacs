@@ -1,14 +1,17 @@
 //! Terminal content extraction — snapshot of terminal state for rendering.
 //!
 //! Each frame, the render thread extracts a `TerminalContent` from the
-//! `alacritty_terminal::Term` and converts cells to rendering primitives.
+//! `rio_vt::crosswords::Crosswords` and converts cells to rendering
+//! primitives.
 
 use super::colors::ansi_to_color;
 use crate::core::types::Color;
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::term::Term;
-use alacritty_terminal::term::cell::Flags as CellFlags;
+use rio_vt::config::colors::{AnsiColor, ColorRgb, NamedColor};
+use rio_vt::crosswords::pos::{Column, Line};
+use rio_vt::crosswords::square::{ContentTag, Square, Wide};
+use rio_vt::crosswords::style::{Style, StyleFlags as CellFlags};
+use rio_vt::crosswords::{Crosswords, Mode};
+use rio_vt::event::EventListener;
 
 /// A single cell ready for GPU rendering.
 #[derive(Debug, Clone)]
@@ -51,12 +54,40 @@ pub struct TerminalContent {
     pub default_fg: Color,
 }
 
+/// Resolve a square's fg color, bg color, and style flags. Squares store a
+/// packed style id (or a bg-only fast path) rather than inline colors, so
+/// the per-grid style table is consulted for full styling.
+fn square_style(square: &Square, styles: &[Style]) -> (AnsiColor, AnsiColor, CellFlags) {
+    match square.content_tag() {
+        ContentTag::Codepoint => {
+            let style = styles
+                .get(square.style_id() as usize)
+                .copied()
+                .unwrap_or_default();
+            (style.fg, style.bg, style.flags)
+        }
+        ContentTag::BgPalette => (
+            AnsiColor::Named(NamedColor::Foreground),
+            AnsiColor::Indexed(square.bg_palette_index()),
+            CellFlags::empty(),
+        ),
+        ContentTag::BgRgb => {
+            let (r, g, b) = square.bg_rgb();
+            (
+                AnsiColor::Named(NamedColor::Foreground),
+                AnsiColor::Spec(ColorRgb { r, g, b }),
+                CellFlags::empty(),
+            )
+        }
+    }
+}
+
 impl TerminalContent {
-    /// Extract renderable content from an alacritty Term.
-    pub fn from_term<T: alacritty_terminal::event::EventListener>(term: &Term<T>) -> Self {
-        let grid = term.grid();
-        let num_cols = grid.columns();
-        let num_lines = grid.screen_lines();
+    /// Extract renderable content from a rio-vt terminal.
+    pub fn from_term<T: EventListener>(term: &Crosswords<T>) -> Self {
+        let num_cols = term.columns();
+        let num_lines = term.screen_lines();
+        let styles = term.grid.style_set.styles();
 
         let default_fg = Color::WHITE;
         let default_bg = Color::BLACK;
@@ -64,19 +95,23 @@ impl TerminalContent {
         let mut cells = Vec::with_capacity(num_cols * num_lines);
 
         for row_idx in 0..num_lines {
-            let line = Line(row_idx as i32);
+            let row = &term.grid[Line(row_idx as i32)];
             for col_idx in 0..num_cols {
-                let point = Point::new(line, Column(col_idx));
-                let cell = &grid[point];
+                let square = &row[Column(col_idx)];
 
-                let c = cell.c;
                 // Skip wide char spacers (second cell of double-width character)
-                if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
                     continue;
                 }
 
-                let fg = ansi_to_color(&cell.fg, &default_fg, &default_bg);
-                let bg = ansi_to_color(&cell.bg, &default_fg, &default_bg);
+                let c = match square.c() {
+                    '\0' => ' ',
+                    c => c,
+                };
+
+                let (sq_fg, sq_bg, flags) = square_style(square, styles);
+                let fg = ansi_to_color(&sq_fg, &default_fg, &default_bg);
+                let bg = ansi_to_color(&sq_bg, &default_fg, &default_bg);
 
                 cells.push(RenderCell {
                     col: col_idx,
@@ -84,18 +119,16 @@ impl TerminalContent {
                     c,
                     fg,
                     bg,
-                    flags: cell.flags,
+                    flags,
                 });
             }
         }
 
-        let cursor_point = term.grid().cursor.point;
+        let cursor_pos = term.cursor().pos;
         let cursor = RenderCursor {
-            col: cursor_point.column.0,
-            row: cursor_point.line.0 as usize,
-            visible: term
-                .mode()
-                .contains(alacritty_terminal::term::TermMode::SHOW_CURSOR),
+            col: cursor_pos.col.0,
+            row: cursor_pos.row.0.max(0) as usize,
+            visible: term.mode().contains(Mode::SHOW_CURSOR),
         };
 
         TerminalContent {
@@ -110,19 +143,18 @@ impl TerminalContent {
 }
 
 /// Extract text from a terminal grid region as a String.
-pub fn extract_text<T: alacritty_terminal::event::EventListener>(
-    term: &Term<T>,
+pub fn extract_text<T: EventListener>(
+    term: &Crosswords<T>,
     start_row: usize,
     start_col: usize,
     end_row: usize,
     end_col: usize,
 ) -> String {
-    let grid = term.grid();
-    let num_cols = grid.columns();
+    let num_cols = term.columns();
+    let num_lines = term.screen_lines();
     let mut text = String::new();
 
     for row in start_row..=end_row {
-        let line = Line(row as i32);
         let col_start = if row == start_row { start_col } else { 0 };
         let col_end = if row == end_row {
             end_col
@@ -130,12 +162,17 @@ pub fn extract_text<T: alacritty_terminal::event::EventListener>(
             num_cols.saturating_sub(1)
         };
 
-        for col in col_start..=col_end {
-            let point = Point::new(line, Column(col));
-            if line.0 < grid.screen_lines() as i32 && col < num_cols {
-                let cell = &grid[point];
-                if !cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
-                    text.push(cell.c);
+        if row < num_lines {
+            let line = &term.grid[Line(row as i32)];
+            for col in col_start..=col_end {
+                if col < num_cols {
+                    let square = &line[Column(col)];
+                    if !matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
+                        text.push(match square.c() {
+                            '\0' => ' ',
+                            c => c,
+                        });
+                    }
                 }
             }
         }

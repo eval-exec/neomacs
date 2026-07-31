@@ -62,7 +62,7 @@ neomacs-layout-engine.workspace = true
 neomacs-renderer-wgpu.workspace = true
 
 # Terminal emulation (neo-term)
-alacritty_terminal = { workspace = true, optional = true }
+rio-vt = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 portable-pty = { workspace = true, optional = true }
 
@@ -94,7 +94,7 @@ wpe-webkit = [
 ]
 # GPU-accelerated terminal emulator
 neo-term = [
-    "alacritty_terminal",
+    "dep:rio-vt",
     "parking_lot",
     "portable-pty",
     "neomacs-display-protocol/neo-term",

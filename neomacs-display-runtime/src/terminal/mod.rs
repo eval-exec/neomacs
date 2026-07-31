@@ -1,6 +1,6 @@
 //! Neo-term: GPU-accelerated terminal emulator for Neomacs.
 //!
-//! Uses `alacritty_terminal` for VT parsing and terminal state,
+//! Uses `rio-vt` for VT parsing and terminal state,
 //! renders cells directly via the wgpu pipeline.
 
 pub mod colors;
@@ -20,7 +20,7 @@ pub type SharedTerminals = std::sync::Arc<
         std::collections::HashMap<
             TerminalId,
             std::sync::Arc<
-                parking_lot::FairMutex<alacritty_terminal::term::Term<view::NeomacsEventProxy>>,
+                parking_lot::FairMutex<rio_vt::crosswords::Crosswords<view::NeomacsEventProxy>>,
             >,
         >,
     >,

@@ -676,7 +676,7 @@ impl RenderApp {
         out: &mut Vec<FrameGlyph>,
         faces: &mut HashMap<FaceId, Face>,
     ) {
-        use alacritty_terminal::term::cell::Flags as CellFlags;
+        use rio_vt::crosswords::style::StyleFlags as CellFlags;
         let row_role = if is_overlay {
             GlyphRowRole::ModeLine
         } else {
@@ -866,7 +866,7 @@ mod tests {
     use crate::core::frame_glyphs::FrameGlyphBuffer;
     use crate::core::types::Color;
     use crate::terminal::content::{RenderCell, RenderCursor, TerminalContent};
-    use alacritty_terminal::term::cell::Flags as CellFlags;
+    use rio_vt::crosswords::style::StyleFlags as CellFlags;
 
     #[test]
     fn terminal_glyph_expansion_uses_frame_metrics() {

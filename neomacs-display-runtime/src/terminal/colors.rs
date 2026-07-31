@@ -1,7 +1,7 @@
-//! Color conversion from alacritty_terminal colors to neomacs Color.
+//! Color conversion from rio-vt colors to neomacs Color.
 
 use crate::core::types::Color;
-use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
+use rio_vt::config::colors::{AnsiColor, NamedColor};
 
 /// Default 256-color palette (standard ANSI + extended colors).
 /// First 16 are the standard terminal colors, 16-231 are the 6x6x6 color cube,
@@ -71,7 +71,7 @@ static COLOR_256: once_cell::sync::Lazy<[Color; 256]> = once_cell::sync::Lazy::n
     colors
 });
 
-/// Convert an alacritty AnsiColor to a neomacs Color.
+/// Convert a rio-vt AnsiColor to a neomacs Color.
 ///
 /// `default_fg` and `default_bg` are used when the color is `Named(Foreground)`
 /// or `Named(Background)`.
@@ -102,14 +102,14 @@ fn named_to_color(named: NamedColor, default_fg: &Color, default_bg: &Color) -> 
         NamedColor::Magenta => COLOR_256[5],
         NamedColor::Cyan => COLOR_256[6],
         NamedColor::White => COLOR_256[7],
-        NamedColor::BrightBlack => COLOR_256[8],
-        NamedColor::BrightRed => COLOR_256[9],
-        NamedColor::BrightGreen => COLOR_256[10],
-        NamedColor::BrightYellow => COLOR_256[11],
-        NamedColor::BrightBlue => COLOR_256[12],
-        NamedColor::BrightMagenta => COLOR_256[13],
-        NamedColor::BrightCyan => COLOR_256[14],
-        NamedColor::BrightWhite => COLOR_256[15],
+        NamedColor::LightBlack => COLOR_256[8],
+        NamedColor::LightRed => COLOR_256[9],
+        NamedColor::LightGreen => COLOR_256[10],
+        NamedColor::LightYellow => COLOR_256[11],
+        NamedColor::LightBlue => COLOR_256[12],
+        NamedColor::LightMagenta => COLOR_256[13],
+        NamedColor::LightCyan => COLOR_256[14],
+        NamedColor::LightWhite => COLOR_256[15],
         _ => *default_fg,
     }
 }
