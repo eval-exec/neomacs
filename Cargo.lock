@@ -1484,7 +1484,7 @@ dependencies = [
  "cranelift-control 0.131.3",
  "cranelift-entity 0.131.3",
  "cranelift-module",
- "cranelift-native",
+ "cranelift-native 0.131.3",
  "libc",
  "log",
  "region",
@@ -1511,6 +1511,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b1290d6193b171172d5fe9a6e42326edf487a79f211fbf1e76f912a4aed035"
 dependencies = [
  "cranelift-codegen 0.131.3",
+ "libc",
+ "target-lexicon 0.13.5",
+]
+
+[[package]]
+name = "cranelift-native"
+version = "0.134.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31d9e4f6d9a3777b1ffa818000b4a6d7afd1b8787af71a9c58d94baef9076ced"
+dependencies = [
+ "cranelift-codegen 0.134.3",
  "libc",
  "target-lexicon 0.13.5",
 ]
@@ -3787,7 +3798,7 @@ dependencies = [
  "cranelift-frontend",
  "cranelift-jit",
  "cranelift-module",
- "cranelift-native",
+ "cranelift-native 0.134.2",
  "cranelift-object",
  "criterion",
  "crossbeam-channel",
