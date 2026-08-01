@@ -83,7 +83,7 @@ object = { version = "0.37", optional = true }
 cranelift-native = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-whoami = "1.6.1"
+whoami = "2.1.2"
 windows-sys.workspace = true
 
 [features]
