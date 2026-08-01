@@ -108,7 +108,7 @@ native-regex = { package = "regex", version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["std", "perf-literal"] }
 memchr = "2"
 rustc-hash = "2"
-hashbrown = "0.16"
+hashbrown = "0.17"
 num_enum = "0.7.6"
 strum = { version = "0.28", features = ["derive"] }
 unicode_names2 = "3.1.0"
