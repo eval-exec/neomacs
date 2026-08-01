@@ -168,7 +168,7 @@ winit = "0.30"
 wgpu = { version = "29", features = ["glsl"] }
 wgpu-hal = { version = "29", features = ["vulkan"] }
 # Shader-surface WGSL/GLSL validation on the Lisp thread (same version wgpu embeds)
-naga = { version = "29", features = ["wgsl-in", "glsl-in"] }
+naga = { version = "30", features = ["wgsl-in", "glsl-in"] }
 raw-window-handle = "0.6"
 ash = "0.38"
 pollster = "0.4"
