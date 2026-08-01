@@ -171,7 +171,7 @@ wgpu-hal = { version = "29", features = ["vulkan"] }
 naga = { version = "29", features = ["wgsl-in", "glsl-in"] }
 raw-window-handle = "0.6"
 ash = "0.38"
-pollster = "0.4"
+pollster = "1.0"
 resvg = "0.47"
 svgtypes = "0.16.1"
 simplecss = "0.2.2"
