@@ -166,7 +166,7 @@ dependencies = [
  "num-traits",
  "ouroboros",
  "pathfinder_geometry",
- "rustc-hash 2.1.2",
+ "rustc-hash 2.1.3",
  "tinyvec",
  "ucd-trie",
  "unicode-canonical-combining-class",
@@ -516,7 +516,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "rustc-hash 2.1.2",
+ "rustc-hash 2.1.3",
  "shlex",
  "syn",
 ]
@@ -1089,7 +1089,7 @@ dependencies = [
  "linebender_resource_handle",
  "log",
  "rangemap",
- "rustc-hash 2.1.2",
+ "rustc-hash 2.1.3",
  "self_cell",
  "skrifa",
  "smol_str 0.3.6",
@@ -1196,7 +1196,7 @@ dependencies = [
  "libm",
  "log",
  "regalloc2",
- "rustc-hash 2.1.2",
+ "rustc-hash 2.1.3",
  "serde",
  "smallvec",
  "target-lexicon 0.13.5",
@@ -3484,7 +3484,7 @@ dependencies = [
  "neovm-core",
  "num_enum",
  "once_cell",
- "rustc-hash 2.1.2",
+ "rustc-hash 2.1.3",
  "strum",
  "sys-locale",
  "tracing",
@@ -3528,7 +3528,7 @@ dependencies = [
  "neomacs-layout-engine",
  "pollster",
  "resvg",
- "rustc-hash 2.1.2",
+ "rustc-hash 2.1.3",
  "simplecss",
  "svgtypes",
  "swash",
@@ -3598,7 +3598,7 @@ dependencies = [
  "regex-automata",
  "rodio",
  "rusqlite",
- "rustc-hash 2.1.2",
+ "rustc-hash 2.1.3",
  "rustix 1.1.4",
  "rustls",
  "rustls-pki-types",
@@ -5074,7 +5074,7 @@ dependencies = [
  "bumpalo",
  "hashbrown 0.17.0",
  "log",
- "rustc-hash 2.1.2",
+ "rustc-hash 2.1.3",
  "smallvec",
 ]
 
@@ -5221,9 +5221,9 @@ checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
-version = "2.1.2"
+version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustc_version"
