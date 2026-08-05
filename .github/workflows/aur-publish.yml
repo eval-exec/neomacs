@@ -1,0 +1,90 @@
+name: Zero-Touch AUR Release Publisher
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. 0.0.14)'
+        required: true
+        default: '0.0.14'
+
+jobs:
+  aur-publish:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm git openssh curl sudo base-devel
+
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+
+      - name: Extract version and prepare SSH
+        env:
+          AUR_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          # 1. Parse version
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG="${{ github.event.inputs.version }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+          # 2. Setup SSH Key for AUR
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "$AUR_PRIVATE_KEY" > ~/.ssh/id_aur
+          chmod 600 ~/.ssh/id_aur
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
+
+          # Configure Git SSH
+          echo "GIT_SSH_COMMAND=ssh -i ~/.ssh/id_aur -o StrictHostKeyChecking=accept-new" >> $GITHUB_ENV
+
+      - name: Update PKGBUILD and publish to AUR
+        run: |
+          # Create non-root user for makepkg
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder .
+
+          # Clone AUR repository
+          su builder -c "$GIT_SSH_COMMAND git clone ssh://aur@aur.archlinux.org/neomacs-bin.git /tmp/aur-repo"
+
+          # Download target release tarball and compute SHA256
+          TARBALL_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/neomacs-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "Downloading $TARBALL_URL ..."
+          curl -sL --fail "$TARBALL_URL" -o /tmp/neomacs.tar.gz
+          SHA256=$(sha256sum /tmp/neomacs.tar.gz | awk '{print $1}')
+          echo "SHA256: $SHA256"
+
+          # Copy base PKGBUILD to AUR repo dir
+          cp PKGBUILD /tmp/aur-repo/PKGBUILD
+          cd /tmp/aur-repo
+
+          # Update version and sha256 checksums
+          sed -i -E "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+          sed -i -E "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          sed -i -E "0,/sha256sums=\('[a-f0-9]{64}'/s//sha256sums=\('${SHA256}'/" PKGBUILD
+
+          # Generate .SRCINFO natively using makepkg
+          chown -R builder:builder /tmp/aur-repo
+          su builder -c "makepkg --printsrcinfo > .SRCINFO"
+
+          # Git commit & push as non-root user
+          su builder -c "git config --global user.name '${{ github.actor }}'"
+          su builder -c "git config --global user.email '${{ github.actor }}@users.noreply.github.com'"
+          
+          if su builder -c "git status --porcelain" | grep -q .; then
+            su builder -c "git add PKGBUILD .SRCINFO"
+            su builder -c "git commit -m 'neomacs-bin ${VERSION}-1'"
+            su builder -c "$GIT_SSH_COMMAND git push origin master"
+            echo "Successfully deployed neomacs-bin ${VERSION}-1 to AUR!"
+          else
+            echo "No changes detected. AUR is already up to date."
+          fi
