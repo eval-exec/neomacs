@@ -155,7 +155,7 @@ tl = "0.7"
 htmlize = { version = "1.1", default-features = false, features = ["unescape"] }
 
 # Database
-rusqlite = { version = "0.35", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Arbitrary precision integers (bignum support).
 # Uses malachite, a pure-Rust bignum library derived from GMP/FLINT
