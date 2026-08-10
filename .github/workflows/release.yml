@@ -222,7 +222,7 @@ jobs:
   build-windows-x86_64:
     name: build Windows x86_64
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 210
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
@@ -238,27 +238,9 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: windows-gstreamer-msvc-x86_64-${{ env.GSTREAMER_VERSION }}-v1
-
-      - name: Install GStreamer SDK
-        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1 -Install
-
-      - name: Save GStreamer SDK cache
-        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: ${{ steps.cache-gstreamer.outputs.cache-primary-key }}
-
-      - name: Configure GStreamer SDK
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1
+            ${{ github.workspace }}\PFiles64
+            ${{ github.workspace }}\gstreamer-msi-cache
+          key: windows-gstreamer-msvc-x86_64-${{ env.GSTREAMER_VERSION }}-v3
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
@@ -273,47 +255,26 @@ jobs:
         shell: powershell
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
 
-      - name: Verify GStreamer pkg-config
-        shell: bash
-        run: source scripts/windows-gstreamer-env.sh --verify
-
-      - name: Build release binaries
-        shell: bash
-        timeout-minutes: 150
-        run: |
-          source scripts/windows-gstreamer-env.sh
-          # The pdump generation runs neomacs, whose startup expands `~`. The
-          # minimal CI build environment sets USERPROFILE/APPDATA but not HOME,
-          # so `~` would stay literal and `directory-files "~"` would fail. Give
-          # it HOME explicitly (a real Windows session always has one; GNU's
-          # w32.c init_environment likewise guarantees HOME is set).
-          export HOME="${USERPROFILE:-$GITHUB_WORKSPACE}"
-          cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled
-
       - name: Set version env (bash)
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Install zip
-        run: choco install zip -y --no-progress
-
-      - name: Package zip (x86_64-pc-windows-msvc)
-        shell: bash
+      - name: Build and package zip (x86_64-pc-windows-msvc)
+        shell: pwsh
+        timeout-minutes: 160
         run: |
-          TARGET=x86_64-pc-windows-msvc
-          STAGING="neomacs-${VERSION}-${TARGET}"
-          mkdir -p "$STAGING"
-          cp target/release/neomacs.exe "$STAGING/"
-          cp target/release/neomacsclient.exe "$STAGING/"
-          cp target/release/neomacs.pdump "$STAGING/"
-          cp -r lisp "$STAGING/"
-          cp -r etc "$STAGING/"
-          cp COPYING "$STAGING/"
-          ./scripts/vendor-windows-gstreamer-runtime.sh \
-            --package-root "$STAGING" \
-            --bin-dir "$STAGING"
-          mkdir -p dist
-          zip -r "dist/${STAGING}.zip" "$STAGING"
+          # pdump startup expands "~"; hosted Windows jobs may not define HOME.
+          $env:HOME = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:GITHUB_WORKSPACE }
+          ./scripts/emacs-build.ps1 -Version $env:VERSION
+
+      - name: Save GStreamer SDK cache
+        if: ${{ !cancelled() && steps.cache-gstreamer.outputs.cache-hit != 'true' && hashFiles('PFiles64/gstreamer/1.0/msvc_x86_64/bin/pkg-config.exe') != '' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ github.workspace }}\PFiles64
+            ${{ github.workspace }}\gstreamer-msi-cache
+          key: ${{ steps.cache-gstreamer.outputs.cache-primary-key }}
 
       - name: Package .exe installer
         shell: bash

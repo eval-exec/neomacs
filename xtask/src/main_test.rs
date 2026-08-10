@@ -760,6 +760,30 @@ fn parse_release_uses_release_bin_dir() {
 }
 
 #[test]
+fn parse_dev_skips_byte_compile_by_default() {
+    let options = parse_options(&["--profile", "dev"]);
+    assert_eq!(options.profile, BuildProfile::Dev);
+    assert_eq!(options.bin_dir, PathBuf::from("/repo/target/debug"));
+    assert!(options.no_byte_compile);
+}
+
+#[test]
+fn parse_dev_release_skips_byte_compile_by_default() {
+    let options = parse_options(&["--profile", "dev-release"]);
+    assert_eq!(options.profile, BuildProfile::DevRelease);
+    assert_eq!(options.bin_dir, PathBuf::from("/repo/target/dev-release"));
+    assert!(options.no_byte_compile);
+}
+
+#[test]
+fn parse_dev_preserves_no_byte_compile_flag() {
+    let options = parse_options(&["--profile", "dev", "--no-byte-compile"]);
+    assert_eq!(options.profile, BuildProfile::Dev);
+    assert_eq!(options.bin_dir, PathBuf::from("/repo/target/debug"));
+    assert!(options.no_byte_compile);
+}
+
+#[test]
 fn explicit_bin_dir_overrides_release_default() {
     let options = parse_options(&["--release", "--bin-dir", "out/neomacs-bin"]);
     assert_eq!(options.profile, BuildProfile::Release);
@@ -1554,6 +1578,17 @@ fn validate_primary_loaddefs_rejects_crlf_output_as_a_gnu_mismatch() {
         err.to_string().contains("missing GNU end boundary"),
         "CRLF output must remain a surfaced GNU mismatch: {err}"
     );
+}
+
+#[test]
+fn normalize_lisp_line_endings_rewrites_crlf() {
+    let tempdir = tempdir();
+    let path = tempdir.join("loaddefs.el");
+    fs::write(&path, b"first\r\nsecond\r\n").unwrap();
+
+    normalize_lisp_line_endings(&path).unwrap();
+
+    assert_eq!(fs::read(&path).unwrap(), b"first\nsecond\n");
 }
 
 #[test]

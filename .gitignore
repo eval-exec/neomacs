@@ -436,3 +436,10 @@ result
 /drafts
 lisp/org/org-loaddefs.el
 neovm-oracle-tests/proptest-regressions/
+/PFiles64/
+/VC/
+/gstreamer-*.msi
+/gstreamer/
+/gstreamer-msi-cache/
+/gstreamer.tmp-*/
+/.superpowers/

@@ -29,16 +29,42 @@ pub fn process_is_alive(pid: i64) -> bool {
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-/// Non-Unix fallback.
-///
-/// Windows would probe this with `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
-/// ...)` (alive iff the handle opens, or the open fails with
-/// `ERROR_ACCESS_DENIED`); that native probe is left for a Windows build. The
-/// `/proc` heuristic is retained meanwhile (always false off Linux).
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn process_is_alive(pid: i64) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, GetLastError};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    let Ok(pid) = u32::try_from(pid) else {
+        return false;
+    };
+    if pid == 0 {
+        return false;
+    }
+
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return unsafe { GetLastError() } == ERROR_ACCESS_DENIED;
+    }
+    unsafe {
+        CloseHandle(process);
+    }
+    true
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn process_is_alive(pid: i64) -> bool {
     if pid <= 0 {
         return false;
     }
     std::fs::metadata(format!("/proc/{pid}")).is_ok()
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_process_is_alive() {
+        assert!(process_is_alive(i64::from(std::process::id())));
+    }
 }

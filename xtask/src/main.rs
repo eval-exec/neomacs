@@ -363,27 +363,18 @@ impl FreshBuildOptions {
                 return Err(
                     "fresh-build must be used with --release or --profile NAME.\n\n\
                  fresh-build builds the runnable GNU-shaped runtime pipeline \
-                 (cargo build, temacs bootstrap, byte-compilation, pdump) and is an \
-                 optimized-build operation. Re-run with:\n    cargo xtask fresh-build --release\n\
-                 or, for a symbol-preserving profiling build that leaves target/release \
-                 alone:\n    cargo xtask fresh-build --profile profiling"
+                 (cargo build, temacs bootstrap, byte-compilation, pdump). Re-run with:\n\
+                     cargo xtask fresh-build --release\n\
+                 or choose any explicit Cargo profile, for example:\n\
+                     cargo xtask fresh-build --profile dev"
                         .to_string()
                         .into(),
                 );
             }
         };
-        // The pipeline byte-compiles the whole Lisp tree with the binary it
-        // just built; an unoptimized profile makes that take hours, which is
-        // what the original --release requirement existed to prevent.
-        if !profile.is_optimized() {
-            return Err(format!(
-                "fresh-build cannot use the `{}` profile: the pipeline \
-                 byte-compiles the Lisp tree with the binary it builds, so it \
-                 needs an optimized profile (`release`, or `profiling` which \
-                 inherits it).",
-                profile.as_name()
-            )
-            .into());
+
+        if matches!(profile, BuildProfile::Dev | BuildProfile::DevRelease) {
+            no_byte_compile = true;
         }
 
         let bin_dir = bin_dir.unwrap_or_else(|| default_bin_dir(&repo_root, &profile));
@@ -452,9 +443,8 @@ enum BuildProfile {
     ReleasePgoProfiling,
     /// The instrumented pass that PRODUCES a profile. Never a PGO consumer.
     ReleasePgoGen,
-    /// Unoptimized; rejected, since the pipeline byte-compiles the Lisp tree
-    /// with the binary it just built.
     Dev,
+    DevRelease,
     Debug,
     Test,
     #[strum(disabled)]
@@ -482,11 +472,6 @@ impl BuildProfile {
     /// string inequality, so the recursion is impossible rather than guarded.
     fn consumes_pgo(&self) -> bool {
         matches!(self, Self::ReleasePgo | Self::ReleasePgoProfiling)
-    }
-
-    /// Optimized enough to byte-compile the Lisp tree with.
-    fn is_optimized(&self) -> bool {
-        !matches!(self, Self::Dev | Self::Debug | Self::Test)
     }
 
     /// Directory name cargo writes this profile's artifacts into.
@@ -805,6 +790,20 @@ fn run_fresh_build_inner(
         &loaddefs_args,
         &envs,
     )?;
+
+    if !options.dry_run {
+        let mut generated_loaddefs = generated_secondary_loaddefs_files(&paths.lisp_root)?;
+        generated_loaddefs.extend([
+            loaddefs_el.clone(),
+            theme_loaddefs_el.clone(),
+            paths.lisp_root.join("emacs-lisp/cl-loaddefs.el"),
+        ]);
+        for path in generated_loaddefs {
+            if path.is_file() {
+                normalize_lisp_line_endings(&path)?;
+            }
+        }
+    }
 
     print_synthetic_step(&format!(
         "generate {} from {}",
@@ -4084,6 +4083,14 @@ fn write_ldefs_boot(loaddefs_el: &Path, ldefs_boot: &Path) -> Result<()> {
     Ok(())
 }
 
+fn normalize_lisp_line_endings(path: &Path) -> Result<()> {
+    let contents = fs::read_to_string(path)?;
+    if contents.contains("\r\n") {
+        fs::write(path, contents.replace("\r\n", "\n"))?;
+    }
+    Ok(())
+}
+
 const LOADDEFS_END_BOUNDARY: &str = "\n\x0c\n;;; End of scraped data";
 // GNU Emacs 31.0.90's `loaddefs-generate` prints the autoload docstring on its
 // own line (verified against the system emacs-31.0.90 binary), not the older
@@ -4161,7 +4168,8 @@ Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [-
        cargo xtask perf profile SCENARIO [--profiler perf] [--editor PATH] [--iterations N]
 
 --release (or --profile NAME) is required: fresh-build produces the runnable runtime
-binary by byte-compiling the Lisp tree with it, so it needs an optimized profile.
+pipeline. Any explicit Cargo profile is accepted. Dev skips Lisp
+byte-compilation for a faster inner loop.
 
 Build the GNU-shaped Neomacs runtime pipeline:
   1. cargo build --verbose -p neomacs [--features wpe-webkit on Linux] [--release]
@@ -4175,6 +4183,8 @@ Build the GNU-shaped Neomacs runtime pipeline:
   9. bootstrap-neomacs byte-compiles the GNU src/lisp.mk preloaded Lisp set
  10. neomacs-temacs --temacs=pdump
  11. neomacs byte-compiles the GNU compile-main Lisp set into .elc files
+
+ For dev builds, stages 5, 9, and 11 are skipped.
 
 Options:
   --bin-dir DIR       Directory containing neomacs and generated role copies
@@ -4207,8 +4217,9 @@ Options:
   --profile NAME      Build with cargo profile NAME, using target/<dir> for it.
                       `profiling` inherits release but keeps debug symbols, and
                       lives in target/profiling -- so it does NOT disturb an
-                      existing target/release build or its pdump. Unoptimized
-                      profiles (dev/debug/test) are rejected.
+                      existing target/release build or its pdump. Any explicit
+                      profile is accepted; dev skips Lisp byte-compilation for
+                      a faster inner loop.
   --dry-run           Print planned commands without running them
   --native-comp       Include native-comp-only COMPILE_FIRST entries
   --no-native-comp    Exclude native-comp-only COMPILE_FIRST entries

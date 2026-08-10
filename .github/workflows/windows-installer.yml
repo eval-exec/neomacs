@@ -12,10 +12,12 @@ on:
       - scripts/package-windows-installer-upgrade-fixtures.sh
       - scripts/run-windows-installer-contract.ps1
       - scripts/setup-windows-gstreamer.ps1
+      - scripts/test-windows-gstreamer-setup.ps1
       - scripts/test-windows-installer.ps1
       - scripts/test-windows-installer-upgrade.ps1
       - scripts/vendor-windows-gstreamer-runtime.sh
       - scripts/windows-gstreamer-env.sh
+      - scripts/windows-msi-arguments.ps1
       - xtask/**
   pull_request:
     paths:
@@ -28,10 +30,12 @@ on:
       - scripts/package-windows-installer-upgrade-fixtures.sh
       - scripts/run-windows-installer-contract.ps1
       - scripts/setup-windows-gstreamer.ps1
+      - scripts/test-windows-gstreamer-setup.ps1
       - scripts/test-windows-installer.ps1
       - scripts/test-windows-installer-upgrade.ps1
       - scripts/vendor-windows-gstreamer-runtime.sh
       - scripts/windows-gstreamer-env.sh
+      - scripts/windows-msi-arguments.ps1
       - xtask/**
   workflow_dispatch:
 
@@ -59,27 +63,22 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: windows-gstreamer-msvc-x86_64-${{ env.GSTREAMER_VERSION }}-v1
+            ${{ github.workspace }}\PFiles64
+            ${{ github.workspace }}\gstreamer-msi-cache
+          key: windows-gstreamer-msvc-x86_64-${{ env.GSTREAMER_VERSION }}-v3
 
-      - name: Install GStreamer SDK
-        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
-        shell: powershell
+      - name: Install and configure GStreamer SDK
+        shell: pwsh
         run: ./scripts/setup-windows-gstreamer.ps1 -Install
 
       - name: Save GStreamer SDK cache
-        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.cache-gstreamer.outputs.cache-hit != 'true' && hashFiles('PFiles64/gstreamer/1.0/msvc_x86_64/bin/pkg-config.exe') != '' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
+            ${{ github.workspace }}\PFiles64
+            ${{ github.workspace }}\gstreamer-msi-cache
           key: ${{ steps.cache-gstreamer.outputs.cache-primary-key }}
-
-      - name: Configure GStreamer SDK
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust

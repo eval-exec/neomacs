@@ -276,6 +276,10 @@ overflow-checks = false
 codegen-units = 16
 incremental = false
 
+[profile.dev-release]
+inherits = "dev"
+opt-level = 2
+
 # Optimized build driven by a PGO profile. Same codegen settings as release,
 # but cargo gives it its own target/release-pgo directory, so a PGO build never
 # replaces an ordinary release binary (or invalidates its pdump fingerprint).
