@@ -531,7 +531,7 @@ jobs:
         run: cargo install cargo-fuzz --version 0.13.2 --locked
 
       - name: Restore evolving fuzz corpora
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: neovm-core/fuzz/corpus
           key: regex-fuzz-corpus-${{ github.run_id }}
