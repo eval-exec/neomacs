@@ -277,9 +277,17 @@ fn points_to_pixels_rounds_like_gnu_point_to_pixel() {
 
 #[test]
 fn frame_res_fallback_uses_display_height_and_mm() {
+    // A plausible real monitor: 1080px over 274mm ≈ 100 DPI, used as-is.
     let dpi = fallback_frame_res_y(1080, 274);
     assert!((dpi - 100.14).abs() < 0.1);
-    assert_eq!(fallback_frame_res_y(1080, 0), 100.0);
+    // No usable physical size (mm == 0) falls back to the 96 DPI neutral.
+    assert_eq!(fallback_frame_res_y(1080, 0), 96.0);
+    // Bogus nested/remote-Xwayland report: a huge mm makes the geometric DPI
+    // ~34, which would render the font microscopic. Reject it and use 96 so
+    // launching neomacs-in-neomacs / over mosh doesn't shrink the text.
+    assert_eq!(fallback_frame_res_y(1080, 800), 96.0);
+    // An implausibly high DPI from a tiny mm reading is likewise rejected.
+    assert_eq!(fallback_frame_res_y(2160, 100), 96.0);
 }
 
 #[test]

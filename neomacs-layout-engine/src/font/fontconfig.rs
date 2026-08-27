@@ -525,10 +525,23 @@ pub fn points_to_pixels_for_dpi(points: f32, dpi: f32) -> f32 {
 }
 
 fn fallback_frame_res_y(display_height_px: i32, display_height_mm: i32) -> f32 {
+    // GNU falls back to 100 DPI when the X server reports no usable physical
+    // size. Nested/remote Xwayland sessions (neomacs-in-neomacs, mosh, an
+    // Xwayland rootful server) frequently report a *bogus* mm height — either
+    // absurdly large (making DPI ~30 and the font microscopic) or an odd
+    // reading that yields an implausible value. Compute the geometric DPI but
+    // reject anything outside the range a real monitor can produce; a
+    // physical display is essentially never below ~50 or above ~400 DPI, so
+    // an out-of-range reading is a broken report, not a real one — fall back
+    // to 96 DPI (the modern desktop neutral) rather than let it shrink text.
     if display_height_mm < 1 {
-        100.0
+        return 96.0;
+    }
+    let dpi = display_height_px as f32 * 25.4 / display_height_mm as f32;
+    if dpi.is_finite() && (50.0..=400.0).contains(&dpi) {
+        dpi
     } else {
-        display_height_px as f32 * 25.4 / display_height_mm as f32
+        96.0
     }
 }
 
