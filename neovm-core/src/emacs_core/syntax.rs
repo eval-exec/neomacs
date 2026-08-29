@@ -2882,6 +2882,12 @@ impl<'a> SyntaxPropByteRun<'a> {
         }
     }
 
+    /// The property source this cache reads from, for scanners that have to
+    /// hand it on to a char-addressed parse (see `back_comment_reparse`).
+    fn props(&self) -> SyntaxProperties<'a> {
+        self.props
+    }
+
     /// See [`SyntaxPropRange::ascii_entry`] — identical memo, byte-side.
     #[inline]
     fn ascii_entry(&self, table: &SyntaxTable, ch: char) -> Option<SyntaxEntry> {
@@ -4468,11 +4474,129 @@ fn forward_comment_backward(
     true
 }
 
+/// The delimiter of a string the backward comment walk is currently inside.
+///
+/// GNU keeps this as a single `int` (`string_style`), overloading it with the
+/// `ST_STRING_STYLE` / `ST_COMMENT_STYLE` sentinels for the two fence classes;
+/// naming the three cases keeps the sentinels from having to be reserved out of
+/// the character range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackCommentStringStyle {
+    /// An ordinary string quote (`Sstring`), identified by its character:
+    /// two *different* quote characters cannot be told apart scanning backward.
+    Delim(char),
+    /// A generic string fence (`Sstring_fence`).
+    StringFence,
+    /// A generic comment fence (`Scomment_fence`), which GNU counts as a
+    /// string delimiter for parity purposes.
+    CommentFence,
+}
+
+/// GNU `char_quoted`, addressed by Emacs byte position: is the character
+/// starting at `pos` preceded by an odd number of escape / character-quote
+/// characters?
+fn char_quoted_at_byte(
+    buf: &Buffer,
+    pos: EmacsBytePos,
+    min: EmacsBytePos,
+    prop_cache: &SyntaxPropByteRun<'_>,
+) -> bool {
+    let table = SyntaxTable::for_buffer(buf);
+    let mut cursor = pos;
+    let mut quoted = false;
+    while cursor > min {
+        let Some(unit) = buffer_syntax_char_before(buf, cursor) else {
+            break;
+        };
+        let class =
+            effective_syntax_entry_for_char_at_byte(buf, &table, unit.ch, unit.start, prop_cache)
+                .class;
+        if !matches!(class, SyntaxClass::Escape | SyntaxClass::CharQuote) {
+            break;
+        }
+        quoted = !quoted;
+        cursor = unit.start;
+    }
+    quoted
+}
+
+/// GNU `back_comment`'s `lossage` fallback: re-parse *forward* and take the
+/// comment start from the resulting parse state.
+///
+/// Backward scanning cannot resolve which of two readings of a mixed
+/// string/comment run is the real one -- GNU's own examples are `" { " a { " }`
+/// and `{ a (* " *)` -- so once the walk knows it is guessing it throws the
+/// guess away and parses forward from a position that is known not to be inside
+/// a string or a comment.
+///
+/// GNU picks that position with `find_defun_start`, which by default (with
+/// `comment-use-syntax-ppss` non-nil) asks `syntax-ppss` for the start of the
+/// construct containing `comment_end` -- itself a `parse-partial-sexp` from
+/// `BEGV`.  Parsing straight from `BEGV` reaches the same answer without a Lisp
+/// call and without GNU's retry loop, whose only purpose is to recover when the
+/// heuristic start point turns out to be inside another comment.  `BEGV` is
+/// always outside every string and comment, so one parse settles it.
+///
+/// Returns the comment's start position, or `None` when the forward parse says
+/// `comment_end` does not end a comment of this style after all.
+///
+/// Cost: one forward parse of everything before `comment_end`, with no cache
+/// across calls.  GNU pays the same parse but gets it from `syntax-ppss`, whose
+/// cache is incremental and shared with the rest of the editor.  Reaching that
+/// cache from here needs the evaluator, which the byte-addressed comment
+/// scanners do not carry; until they do, this is the slow-but-correct half of
+/// the trade, and it only runs on the rare buffers that reach lossage at all.
+fn back_comment_reparse(
+    buf: &ForwardCommentCursor<'_>,
+    comment_end: EmacsBytePos,
+    style: CommentStyle,
+    nested: bool,
+    prop_cache: &SyntaxPropByteRun<'_>,
+) -> Option<EmacsBytePos> {
+    let begv = buf.accessible_char_region().start();
+    let from = char_pos_to_lisp_i64(begv.get());
+    let to = buffer_byte_to_lisp_pos(buf, comment_end);
+    if to <= from {
+        return None;
+    }
+
+    let table = SyntaxTable::for_buffer(buf);
+    let (state, _) = parse_state_from_range_core(
+        buf,
+        &table,
+        from,
+        to,
+        None,
+        false,
+        None,
+        CommentStopMode::None,
+        prop_cache.props(),
+    );
+
+    // GNU's acceptance test is `state.incomment == (comnested ? 1 : -1) &&
+    // state.comstyle == comstyle`: the parse has to end inside a comment of
+    // exactly this style, at exactly this nesting depth.
+    let ParseCommentState::Syntax {
+        depth,
+        style: parsed_style,
+        nestable,
+    } = state.in_comment?
+    else {
+        return None;
+    };
+    if parsed_style != style || nestable != nested || (nested && depth != 1) {
+        return None;
+    }
+
+    let start = lisp_pos_to_byte(buf, LispCharPos1::new(state.comment_or_string_start?));
+    (start != comment_end).then_some(start)
+}
+
 /// Scan backward through comment body to find matching comment start.
 ///
-/// This is a simplified version of GNU Emacs's `back_comment()`.  Point
-/// should be positioned right after the comment-end delimiter has been
-/// consumed (i.e. just before the comment body).
+/// This is GNU Emacs's `back_comment()`.  Point should be positioned right
+/// after the comment-end delimiter has been consumed (i.e. just before the
+/// comment body).
 ///
 /// For **nested** comments the function returns as soon as the nesting
 /// count drops to zero.
@@ -4482,18 +4606,42 @@ fn forward_comment_backward(
 /// finds.  A same-style comment-ender encountered during the scan means
 /// "anything before this belongs to a different comment" and stops the
 /// search.  At the end, point is set to the recorded position.
+///
+/// Scanning backward cannot tell whether a comment starter it walks over is
+/// real or merely sitting inside a string, so the walk also tracks
+/// string-quote parity.  A comment starter reached while inside a string --
+/// or after any other sign that the walk is guessing -- is *not* accepted;
+/// the whole question is handed to [`back_comment_reparse`] instead.
+///
+/// One GNU safeguard is still missing: the `goto lossage` for two-char comment
+/// markers that partly overlap (snmp-mode's `-- c --`, C's `|*|`).  This
+/// scanner instead resolves the ambiguous-`--` case by giving the delimiter
+/// nearest the ender opener precedence, in the two-char branches below.
 fn scan_backward_comment_body(
     buf: &mut ForwardCommentCursor<'_>,
     style: CommentStyle,
     nested: bool,
     prop_cache: &SyntaxPropByteRun<'_>,
 ) -> bool {
+    let comment_end = buf.point_emacs_byte_pos();
     let mut nesting = 1i32;
     let min = buf.accessible_emacs_byte_region().start();
 
     // For non-nested comments: record the earliest matching comment-start
     // seen so far.
     let mut comstart_pos: Option<EmacsBytePos> = None;
+
+    // GNU `string_style`: the string the walk is currently inside, presumed
+    // to be none at the point the walk starts.
+    let mut string_style: Option<BackCommentStringStyle> = None;
+    // GNU `string_lossage`: two different kinds of string delimiter were seen,
+    // which backward scanning cannot untangle.
+    let mut string_lossage = false;
+    // GNU `comment_lossage`: a comment-ender of *another* style was crossed, so
+    // a comment starter found further back may belong to that other comment.
+    let mut comment_lossage = false;
+    // GNU's `goto lossage`: the walk knows its answer would be a guess.
+    let mut lossage = false;
 
     loop {
         let pt = buf.point_emacs_byte_pos();
@@ -4515,6 +4663,19 @@ fn scan_backward_comment_body(
         let class = entry.class;
         let flags = entry.flags;
 
+        // GNU: "Ignore escaped characters, except comment-enders which cannot
+        // be escaped."  (`comment-end-can-be-escaped' is not yet threaded into
+        // the scanners; this is its default, nil, behaviour.)  Without this an
+        // escaped string quote flips the parity and the guard below stops
+        // seeing the string it is inside.
+        if class != SyntaxClass::EndComment
+            && !flags.contains(SyntaxFlags::COMMENT_END_SECOND)
+            && char_quoted_at_byte(buf, unit.start, min, prop_cache)
+        {
+            buf.goto_emacs_byte_pos(unit.start);
+            continue;
+        }
+
         // ── Comment-end (same style) ──────────────────────────────
         // For nested: increases nesting.
         // For non-nested: means our comment can't extend past this,
@@ -4532,6 +4693,15 @@ fn scan_backward_comment_body(
             }
         }
 
+        // GNU `case Sendcomment`, else branch: an ender of a *different* style.
+        // We are mixing comment styles, so any comment starter found further
+        // back might belong to that other comment rather than to ours.  GNU
+        // exempts a bare newline before the first comment starter, because
+        // otherwise every multi-line C comment would take the slow path.
+        if class == SyntaxClass::EndComment && (comstart_pos.is_some() || unit.ch != '\n') {
+            comment_lossage = true;
+        }
+
         // Two-char comment end backward.
         if flags.contains(SyntaxFlags::COMMENT_END_SECOND) {
             let prev_pos = unit.start;
@@ -4547,37 +4717,72 @@ fn scan_backward_comment_body(
                     prop_cache,
                 );
                 let flags2 = entry2.flags;
-                if flags2.contains(SyntaxFlags::COMMENT_END_FIRST)
-                    && CommentStyle::from_end_flags(flags2, flags) == style
-                {
-                    // GNU `back_comment` gives the first ambiguous two-char
-                    // delimiter opener precedence.  This matters for `--`,
-                    // whose two characters can carry both start and end flags:
-                    // the delimiter nearest the terminating newline starts the
-                    // comment; only an earlier occurrence can end the backward
-                    // search for that opener.
-                    let first_ambiguous_opener = comstart_pos.is_none()
-                        && flags2.contains(SyntaxFlags::COMMENT_START_FIRST)
-                        && flags.contains(SyntaxFlags::COMMENT_START_SECOND)
-                        && CommentStyle::from_start_flags(flags2, flags) == style
-                        && (flags2.contains(SyntaxFlags::COMMENT_NESTABLE)
-                            || flags.contains(SyntaxFlags::COMMENT_NESTABLE))
-                            == nested;
-                    if !first_ambiguous_opener {
-                        if nested {
-                            nesting += 1;
-                            buf.goto_emacs_byte_pos(unit2.start);
-                            continue;
-                        } else {
-                            break;
+                if flags2.contains(SyntaxFlags::COMMENT_END_FIRST) {
+                    if CommentStyle::from_end_flags(flags2, flags) == style {
+                        // GNU `back_comment` gives the first ambiguous two-char
+                        // delimiter opener precedence.  This matters for `--`,
+                        // whose two characters can carry both start and end flags:
+                        // the delimiter nearest the terminating newline starts the
+                        // comment; only an earlier occurrence can end the backward
+                        // search for that opener.
+                        let first_ambiguous_opener = comstart_pos.is_none()
+                            && flags2.contains(SyntaxFlags::COMMENT_START_FIRST)
+                            && flags.contains(SyntaxFlags::COMMENT_START_SECOND)
+                            && CommentStyle::from_start_flags(flags2, flags) == style
+                            && (flags2.contains(SyntaxFlags::COMMENT_NESTABLE)
+                                || flags.contains(SyntaxFlags::COMMENT_NESTABLE))
+                                == nested;
+                        if !first_ambiguous_opener {
+                            if nested {
+                                nesting += 1;
+                                buf.goto_emacs_byte_pos(unit2.start);
+                                continue;
+                            } else {
+                                break;
+                            }
                         }
+                    } else if comstart_pos.is_some() || unit2.ch != '\n' {
+                        // Same mixed-style caution as for one-char enders.
+                        comment_lossage = true;
                     }
                 }
             }
         }
 
+        // ── String quotes and fences ─────────────────────────────
+        // GNU tracks the parity of string delimiters across the whole walk so
+        // that a comment starter *inside* a string is never mistaken for a real
+        // one.  Both fence classes count as delimiters here; a generic comment
+        // fence is opened and closed by `scan_backward_comment_fence`, never by
+        // this function, so it only contributes parity.
+        let quote_style = match class {
+            SyntaxClass::StringDelim => Some(BackCommentStringStyle::Delim(unit.ch)),
+            SyntaxClass::StringFence => Some(BackCommentStringStyle::StringFence),
+            SyntaxClass::CommentFence => Some(BackCommentStringStyle::CommentFence),
+            _ => None,
+        };
+        if let Some(quote_style) = quote_style {
+            match string_style {
+                // Entering a string, walking backward out of it.
+                None => string_style = Some(quote_style),
+                // Leaving it again.
+                Some(open) if open == quote_style => string_style = None,
+                // Two kinds of string delimiter: there is no way to grok this
+                // scanning backward.
+                Some(_) => string_lossage = true,
+            }
+            buf.goto_emacs_byte_pos(unit.start);
+            continue;
+        }
+
         // ── Single-char comment start (class `<`) ────────────────
         if class == SyntaxClass::Comment && CommentStyle::from_main_flags(flags) == style {
+            if string_style.is_some() || comment_lossage || string_lossage {
+                // GNU: "There are odd string quotes involved, so let's be
+                // careful.  Test case in Pascal: " { " a { " }"
+                lossage = true;
+                break;
+            }
             let new_pos = unit.start;
             if nested {
                 buf.goto_emacs_byte_pos(new_pos);
@@ -4593,21 +4798,6 @@ fn scan_backward_comment_body(
                 buf.goto_emacs_byte_pos(new_pos);
                 continue;
             }
-        }
-
-        // ── Comment fence ────────────────────────────────────────
-        if class == SyntaxClass::CommentFence {
-            let new_pos = unit.start;
-            buf.goto_emacs_byte_pos(new_pos);
-            if nested {
-                nesting -= 1;
-                if nesting <= 0 {
-                    return true;
-                }
-            } else {
-                comstart_pos = Some(new_pos);
-            }
-            continue;
         }
 
         // ── Two-char comment start backward ──────────────────────
@@ -4630,6 +4820,10 @@ fn scan_backward_comment_body(
                 if flags2.contains(SyntaxFlags::COMMENT_START_FIRST)
                     && CommentStyle::from_start_flags(flags2, flags) == style
                 {
+                    if string_style.is_some() || comment_lossage || string_lossage {
+                        lossage = true;
+                        break;
+                    }
                     let new_pos = unit2.start;
                     if nested {
                         buf.goto_emacs_byte_pos(new_pos);
@@ -4649,6 +4843,16 @@ fn scan_backward_comment_body(
 
         // Default: skip this character and continue scanning.
         buf.goto_emacs_byte_pos(unit.start);
+    }
+
+    if lossage {
+        // The backward walk cannot be trusted; decide it going forwards.
+        if let Some(start) = back_comment_reparse(buf, comment_end, style, nested, prop_cache) {
+            buf.goto_emacs_byte_pos(start);
+            return true;
+        }
+        buf.goto_emacs_byte_pos(comment_end);
+        return false;
     }
 
     // For non-nested comments, check if we recorded any comment-start.
@@ -5622,6 +5826,35 @@ fn parse_state_from_range_with_options(
     commentstop: CommentStopMode,
     props: SyntaxProperties<'_>,
 ) -> (Value, i64) {
+    let (state, stopped_at) = parse_state_from_range_core(
+        buf,
+        table,
+        from,
+        to,
+        target_depth,
+        stop_before,
+        oldstate,
+        commentstop,
+        props,
+    );
+    (state.into_value(), stopped_at)
+}
+
+/// GNU `scan_sexps_forward`.  The parse state is returned unencoded so that
+/// in-tree callers -- `parse-partial-sexp` and `back_comment`'s forward
+/// re-parse -- can read it without going through the Lisp representation.
+#[allow(clippy::too_many_arguments)] // mirrors GNU `scan_sexps_forward`'s parameters
+fn parse_state_from_range_core(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    from: i64,
+    to: i64,
+    target_depth: Option<i64>,
+    stop_before: bool,
+    oldstate: Option<&Value>,
+    commentstop: CommentStopMode,
+    props: SyntaxProperties<'_>,
+) -> (PartialParseState, i64) {
     let accessible_chars = buf.accessible_char_region();
     let point_min = accessible_chars.start().get();
     let point_max = accessible_chars.end().get();
@@ -5995,7 +6228,7 @@ fn parse_state_from_range_with_options(
 
     finish_atom(&mut state, &mut atom_start);
 
-    (state.into_value(), char_pos_to_lisp_i64(from_char + idx))
+    (state, char_pos_to_lisp_i64(from_char + idx))
 }
 
 /// `(parse-partial-sexp FROM TO &optional TARGETDEPTH STOPBEFORE STATE COMMENTSTOP)`

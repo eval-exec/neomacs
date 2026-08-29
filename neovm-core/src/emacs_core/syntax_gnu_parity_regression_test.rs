@@ -1000,3 +1000,25 @@ fn a_strings_interval_takes_syntax_from_default_text_properties() {
     );
     assert_eq!(result, "OK 0");
 }
+
+/// The upstream report's headline case: backward sexp motion in `emacs-lisp-mode`
+/// over a form whose string contains a `;`.  The closing paren sits on a later
+/// line, so the backward scan crosses the newline that ends line 2, and
+/// `back_comment` has to decide whether that `;` starts a comment.  It does not
+/// -- it is inside a string -- and `backward-list` must reach the `(` at 2.
+#[test]
+fn backward_list_crosses_an_elisp_string_holding_a_comment_char() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (with-temp-buffer
+          (emacs-lisp-mode)
+          (insert " (progn\n  (setq a \";\")\n  nil)\n")
+          (goto-char (point-max))
+          (skip-chars-backward "\n")
+          (backward-list)
+          (point))
+        "#,
+    );
+    assert_eq!(result, "OK 2");
+}

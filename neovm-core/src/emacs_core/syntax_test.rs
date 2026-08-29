@@ -1704,6 +1704,161 @@ fn backward_comment_treats_first_ambiguous_two_char_delimiter_as_opener() {
     assert_eq!(current_point_lisp_pos(&eval), 3);
 }
 
+/// `#` starts a comment, `\n` ends one; `"` and `\` keep their standard
+/// string-quote and escape syntax.  This is the three-entry table from the
+/// upstream reproducer for backward sexp motion across a comment character
+/// that only *appears* inside a string.
+fn install_hash_line_comment_syntax(eval: &mut crate::emacs_core::eval::Context) {
+    builtin_modify_syntax_entry(eval, vec![Value::fixnum('#' as i64), Value::string("<")])
+        .expect("install hash comment start syntax");
+    builtin_modify_syntax_entry(eval, vec![Value::fixnum('\n' as i64), Value::string(">")])
+        .expect("install newline comment end syntax");
+}
+
+fn scan_lists_backward_from(eval: &mut crate::emacs_core::eval::Context, from: i64) -> Value {
+    builtin_scan_lists(
+        eval,
+        vec![Value::fixnum(from), Value::fixnum(-1), Value::fixnum(0)],
+    )
+    .expect("scan-lists backward")
+}
+
+/// GNU `back_comment` tracks string-quote parity across its backward walk and
+/// refuses a comment starter found while inside a string (`src/syntax.c`,
+/// `case Scomment`).  Without that, the `#` inside `"#"` is taken for a real
+/// comment start, the closing quote is swallowed, and the scan runs off the
+/// beginning of the buffer.
+#[test]
+fn scan_lists_backward_ignores_comment_char_inside_string() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    //           1234 5 6  789012345 6 78 9
+    //           x = { \n   a = "#"; \n }  \n
+    replace_current_buffer_text(&mut eval, "x = {\n  a = \"#\";\n}\n");
+    install_hash_line_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+
+    assert_eq!(scan_lists_backward_from(&mut eval, 19), Value::fixnum(5));
+}
+
+/// An escaped string quote must not flip the parity: GNU skips characters that
+/// `char_quoted` reports as escaped before classifying them.
+#[test]
+fn scan_lists_backward_ignores_escaped_string_quote_before_comment_char() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "x = {\n  a = \"y\\\"#\\\"z\";\n}\n");
+    install_hash_line_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+
+    assert_eq!(scan_lists_backward_from(&mut eval, 25), Value::fixnum(5));
+}
+
+/// The parity guard must not cost us genuine comments: the same motion over a
+/// real `# hi` line still has to reach the opening brace.
+#[test]
+fn scan_lists_backward_still_crosses_a_genuine_comment() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "x = {\n  # hi\n  a = 1;\n}\n");
+    install_hash_line_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+
+    assert_eq!(scan_lists_backward_from(&mut eval, 24), Value::fixnum(5));
+}
+
+/// A lone string quote *inside* a real comment makes the backward walk
+/// untrustworthy, so GNU falls back to re-parsing forward from a known-safe
+/// point and takes the comment start from that parse.  Refusing the comment
+/// outright would leave the unbalanced `"` to be scanned as a string.
+#[test]
+fn scan_lists_backward_reparses_forward_when_the_comment_body_holds_a_string_quote() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "x = {\n  # a \" b\n}\n");
+    install_hash_line_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+
+    assert_eq!(scan_lists_backward_from(&mut eval, 18), Value::fixnum(5));
+}
+
+/// Two string quotes inside the comment body leave the parity even again, so
+/// the backward walk reaches the `#` outside any string and never needs the
+/// forward re-parse.  Pins that the parity guard is a parity guard and not a
+/// blanket "a quote appeared" refusal.
+#[test]
+fn scan_lists_backward_accepts_a_comment_whose_body_holds_balanced_string_quotes() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "x = {\n  # a \" b \" c\n}\n");
+    install_hash_line_comment_syntax(&mut eval);
+    eval.obarray
+        .set_symbol_value("parse-sexp-ignore-comments", Value::T);
+
+    assert_eq!(scan_lists_backward_from(&mut eval, 22), Value::fixnum(5));
+}
+
+/// `(forward-comment -1)` over a newline whose line holds a comment character
+/// inside a string finds no comment: it stops just before the newline.
+#[test]
+fn backward_comment_rejects_comment_start_inside_string() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "a = \"#\";\nb\n");
+    install_hash_line_comment_syntax(&mut eval);
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 9)));
+    }
+
+    let moved = builtin_forward_comment(&mut eval, vec![Value::fixnum(-1)]).unwrap();
+
+    assert_eq!(moved, Value::NIL);
+    assert_eq!(current_point_lisp_pos(&eval), 9);
+}
+
+/// The escaped-quote variant of the same rejection: the `#` is still inside the
+/// string, because `\"` does not close it.
+#[test]
+fn backward_comment_rejects_comment_start_inside_string_with_escaped_quotes() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "a = \"y\\\"#\\\"z\";\nb\n");
+    install_hash_line_comment_syntax(&mut eval);
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 15)));
+    }
+
+    let moved = builtin_forward_comment(&mut eval, vec![Value::fixnum(-1)]).unwrap();
+
+    assert_eq!(moved, Value::NIL);
+    assert_eq!(current_point_lisp_pos(&eval), 15);
+}
+
+/// A string quote inside the comment body sends the backward walk to the
+/// forward re-parse, which still reports the comment: point lands on `#`.
+#[test]
+fn backward_comment_finds_comment_start_through_forward_reparse() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    replace_current_buffer_text(&mut eval, "a\n# x \" y\nb\n");
+    install_hash_line_comment_syntax(&mut eval);
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 10)));
+    }
+
+    let moved = builtin_forward_comment(&mut eval, vec![Value::fixnum(-1)]).unwrap();
+
+    assert_eq!(moved, Value::T);
+    assert_eq!(current_point_lisp_pos(&eval), 3);
+}
+
 #[test]
 fn forward_comment_validates_arity_and_type() {
     crate::test_utils::init_test_tracing();
