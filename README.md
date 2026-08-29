@@ -107,7 +107,31 @@ https://github.com/user-attachments/assets/275c6d9a-fced-44f6-8f43-3bbd2984d672
 
 ## Install
 
-Download the latest release for your platform from
+Install the latest release into your user account (no root):
+
+```bash
+curl -fsSL https://neomacs.org/install.sh | bash
+```
+
+The installer downloads a release tarball, verifies its SHA256 against the
+release manifest, and installs a versioned tree with a rollback copy:
+
+```
+~/.local/bin/neomacs -> ../share/neomacs/current/bin/neomacs
+~/.local/share/neomacs/current -> versions/0.0.15
+~/.local/share/neomacs/versions/0.0.15/{bin, lisp, etc, ...}
+```
+
+Re-running the command upgrades (flipping `current` atomically and keeping
+the previous version); `install.sh --tag vX.Y.Z` installs or rolls back to a
+specific release. On macOS it installs the `neomacs.app` bundle into
+`~/Applications` and links the CLI into `~/.local/bin`.
+Windows is not covered by the shell installer — use the release `.exe`
+below. The installer itself lives at
+[install.sh](install.sh) in this repository and is published as a release
+asset.
+
+Prefer system packages? Download them from
 **[Releases](https://github.com/eval-exec/neomacs/releases/latest)**:
 
 | Platform | Packages |
