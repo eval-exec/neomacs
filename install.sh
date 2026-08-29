@@ -319,6 +319,32 @@ if [ "$os" = linux ]; then
   [ -d "$staged/share/neomacs/etc" ] \
     || die "staged tree lost the etc/ runtime directory"
 
+  # Pre-flight the dynamic-loader requirements of the release binary (built
+  # against distro ncurses + GStreamer) and fail with the exact fix instead
+  # of a loader error at first launch. Skipped where ldd cannot run.
+  missing_libs=$(ldd "$staged/bin/neomacs" 2>/dev/null | sed -n 's/^[[:space:]]*\([^[:space:]]*\).*not found.*/\1/p' | sort -u)
+  if [ -n "$missing_libs" ]; then
+    say ""
+    say "this system is missing runtime libraries neomacs needs:"
+    for lib in $missing_libs; do
+      say "  $lib"
+    done
+    say ""
+    say "install them, then re-run this installer. For example:"
+    if command -v apt-get >/dev/null 2>&1; then
+      say "  apt install libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libtinfo6"
+    elif command -v dnf >/dev/null 2>&1; then
+      say "  dnf install gstreamer1 gstreamer1-plugins-base ncurses-libs"
+    elif command -v pacman >/dev/null 2>&1; then
+      say "  pacman -S gstreamer gst-plugins-base ncurses"
+    elif command -v zypper >/dev/null 2>&1; then
+      say "  zypper install gstreamer gstreamer-plugins-base libncurses6"
+    else
+      say "  your distribution's ncurses and GStreamer 1.0 runtime packages"
+    fi
+    die "system dependencies missing (nothing was installed)"
+  fi
+
   # Swap the version directory through a same-volume rename, then flip
   # `current'. Installing over an tag that is already active first moves the
   # existing directory aside, so a failure mid-swap leaves the old tree
