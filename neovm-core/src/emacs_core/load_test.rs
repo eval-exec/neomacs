@@ -15047,3 +15047,69 @@ fn runtime_loader_state_reset_matches_gnu_init_lread() {
     assert!(eval.loads_in_progress.is_empty());
     assert!(eval.require_stack.is_empty());
 }
+
+/// Each shipped layout must resolve to its own tree through
+/// `runtime_root_candidates` + `is_runtime_root`, nearest-first, mirroring
+/// GNU `init_cmdargs`' walk-up from the (symlink-resolved) executable.
+#[test]
+fn runtime_root_candidates_cover_every_shipped_layout() {
+    let make_tree = |root: &std::path::Path| {
+        fs::create_dir_all(root.join("lisp")).unwrap();
+        fs::create_dir_all(root.join("etc")).unwrap();
+    };
+
+    // Release tarball, flat: the executable sits beside lisp/ and etc/.
+    let flat = tempdir().unwrap();
+    make_tree(flat.path());
+    let exe = flat.path().join("neomacs");
+    let picked = runtime_root_candidates(&exe)
+        .into_iter()
+        .find(|c| is_runtime_root(c));
+    assert_eq!(picked.as_deref(), Some(flat.path()), "flat tarball layout");
+
+    // Versioned user install: ~/.local/bin/neomacs is a symlink into
+    // ~/.local/share/neomacs/versions/<ver>/bin/; the canonical executable's
+    // grandparent carries lisp/ and etc/.
+    let versioned = tempdir().unwrap();
+    let version = versioned.path().join("versions/0.0.15");
+    make_tree(&version);
+    fs::create_dir_all(version.join("bin")).unwrap();
+    let exe = version.join("bin/neomacs");
+    let picked = runtime_root_candidates(&exe)
+        .into_iter()
+        .find(|c| is_runtime_root(c));
+    assert_eq!(
+        picked.as_deref(),
+        Some(version.as_path()),
+        "versioned layout"
+    );
+
+    // Installed prefix (deb/rpm/AppImage): <prefix>/bin + <prefix>/share/neomacs.
+    let fhs = tempdir().unwrap();
+    fs::create_dir_all(fhs.path().join("bin")).unwrap();
+    make_tree(&fhs.path().join("share/neomacs"));
+    let exe = fhs.path().join("bin/neomacs");
+    let picked = runtime_root_candidates(&exe)
+        .into_iter()
+        .find(|c| is_runtime_root(c));
+    assert_eq!(
+        picked.as_deref(),
+        Some(fhs.path().join("share/neomacs").as_path()),
+        "installed share/neomacs layout"
+    );
+
+    // macOS app bundle: Contents/MacOS + Contents/Resources/neomacs.
+    let bundle = tempdir().unwrap();
+    let contents = bundle.path().join("neomacs.app/Contents");
+    fs::create_dir_all(contents.join("MacOS")).unwrap();
+    make_tree(&contents.join("Resources/neomacs"));
+    let exe = contents.join("MacOS/neomacs");
+    let picked = runtime_root_candidates(&exe)
+        .into_iter()
+        .find(|c| is_runtime_root(c));
+    assert_eq!(
+        picked.as_deref(),
+        Some(contents.join("Resources/neomacs").as_path()),
+        "app bundle Resources layout"
+    );
+}

@@ -3052,6 +3052,41 @@ fn is_runtime_root(path: &Path) -> bool {
     path.join("lisp").is_dir() && path.join("etc").is_dir()
 }
 
+/// Runtime-root candidates for a running executable, nearest first.
+///
+/// Ports GNU's dual layout support:
+///
+/// * The dynamic half is `init_cmdargs` (src/emacs.c): starting from the
+///   invocation directory -- following symlinks, which
+///   `current_exe().canonicalize()` does for us in one step -- Emacs checks
+///   the executable's own directory and then its parent for the tree
+///   signature, and records the hit as `installation-directory`;
+///   `load_path_default` (src/lread.c) then resets the load-path to
+///   `installation-directory/lisp`. GNU's signature is `lib-src` + `etc`;
+///   ours is `lisp` + `etc` ([`is_runtime_root`]). This covers the release
+///   tarball's flat layout (executable beside `lisp`/`etc`) and the
+///   versioned user install (`~/.local/share/neomacs/versions/<ver>/bin/`
+///   with `lisp`/`etc` siblings), reached through the
+///   `~/.local/bin/neomacs` symlink.
+/// * The configured half is GNU's compile-time `PATH_LOADSEARCH`
+///   (`<prefix>/share/emacs/<version>/lisp`); we probe instead of baking a
+///   prefix at build time: `<grandparent>/share/neomacs` (deb/rpm/AppImage:
+///   `<prefix>/bin/neomacs` + `<prefix>/share/neomacs`) and
+///   `<grandparent>/Resources/neomacs` (macOS app bundle:
+///   `Contents/MacOS/neomacs` + `Contents/Resources/neomacs`).
+fn runtime_root_candidates(exe: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::with_capacity(4);
+    if let Some(dir) = exe.parent() {
+        candidates.push(dir.to_path_buf());
+        if let Some(parent) = dir.parent() {
+            candidates.push(parent.to_path_buf());
+            candidates.push(parent.join("share/neomacs"));
+            candidates.push(parent.join("Resources/neomacs"));
+        }
+    }
+    candidates
+}
+
 fn runtime_project_root() -> PathBuf {
     if let Ok(root) = std::env::var(RUNTIME_ROOT_ENV) {
         let path = PathBuf::from(root);
@@ -3070,12 +3105,9 @@ fn runtime_project_root() -> PathBuf {
     }
 
     if let Ok(exe) = std::env::current_exe()
-        && let Some(prefix) = exe.parent().and_then(Path::parent)
+        && let Ok(resolved) = exe.canonicalize()
     {
-        for candidate in [
-            prefix.join("share/neomacs"),
-            prefix.join("Resources/neomacs"),
-        ] {
+        for candidate in runtime_root_candidates(&resolved) {
             if is_runtime_root(&candidate) {
                 return candidate;
             }
