@@ -66,17 +66,14 @@ jobs:
 
       - name: Package tarball (x86_64-unknown-linux-gnu)
         run: |
-          TARGET=x86_64-unknown-linux-gnu
-          STAGING="neomacs-${VERSION}-${TARGET}"
-          mkdir -p "$STAGING"
-          cp target/release/neomacs "$STAGING/"
-          cp target/release/neomacsclient "$STAGING/"
-          cp target/release/neomacs.pdump "$STAGING/"
-          cp -r lisp "$STAGING/"
-          cp -r etc "$STAGING/"
-          cp COPYING "$STAGING/"
-          mkdir -p dist
-          tar czf "dist/${STAGING}.tar.gz" "$STAGING"
+          # package-release.sh builds the canonical release tree
+          # (bin/ + share/neomacs/) and its tarball: the archive is runnable
+          # in place and install.sh consumes the same layout. The inline
+          # flat staging this replaces produced a tree the binary could not
+          # resolve without NEOMACS_RUNTIME_ROOT.
+          ./scripts/package-release.sh \
+            --target x86_64-unknown-linux-gnu \
+            --skip-build --no-smoke
 
       - name: Package AppImage
         run: ./scripts/package-appimage.sh --skip-build --no-smoke
@@ -136,17 +133,11 @@ jobs:
 
       - name: Package tarball (aarch64-unknown-linux-gnu)
         run: |
-          TARGET=aarch64-unknown-linux-gnu
-          STAGING="neomacs-${VERSION}-${TARGET}"
-          mkdir -p "$STAGING"
-          cp target/release/neomacs "$STAGING/"
-          cp target/release/neomacsclient "$STAGING/"
-          cp target/release/neomacs.pdump "$STAGING/"
-          cp -r lisp "$STAGING/"
-          cp -r etc "$STAGING/"
-          cp COPYING "$STAGING/"
-          mkdir -p dist
-          tar czf "dist/${STAGING}.tar.gz" "$STAGING"
+          # Same canonical release tree as the x86_64 tarball; see the
+          # note on the x86_64 packaging step.
+          ./scripts/package-release.sh \
+            --target aarch64-unknown-linux-gnu \
+            --skip-build --no-smoke
 
       - name: Verify packaged artifact and GLIBC baseline
         run: |
@@ -275,6 +266,20 @@ jobs:
             dist/*.dmg \
             dist/*.zip \
             dist/*.tar.gz
+
+      - name: Verify install.sh from the published release
+        run: |
+          # Same user path as the Linux verify-install-script job: fetch the
+          # installer asset from the just-published release and let its own
+          # post-install check batch-start the app bundle's binary through
+          # the ~/.local/bin symlink (no environment variables).
+          curl -fsSL \
+            "https://github.com/eval-exec/neomacs/releases/download/${GITHUB_REF_NAME}/install.sh" \
+            -o install.sh
+          sh install.sh --tag "${GITHUB_REF_NAME}"
+          test -x "$HOME/.local/bin/neomacs"
+          env -u NEOMACS_RUNTIME_ROOT \
+            "$HOME/.local/bin/neomacs" --batch --eval '(princ (emacs-version))'
 
   # ── Windows x86_64 ────────────────────────────────────────────────────
   build-windows-x86_64:
@@ -408,11 +413,26 @@ jobs:
       - build-windows-x86_64
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true
+
+      - name: Stage the installer and its checksum manifest
+        run: |
+          # install.sh ships as a release asset so that
+          # https://github.com/eval-exec/neomacs/releases/latest/download/install.sh
+          # always serves the installer that matches the assets it downloads
+          # (the neomacs.org entry point fetches exactly that URL).
+          install -m 0644 install.sh dist/install.sh
+          # The glob expands before SHA256SUMS exists, so the manifest covers
+          # every asset (and the installer) but never itself.
+          cd dist
+          sha256sum ./* > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -423,3 +443,35 @@ jobs:
           discussion_category_name: Announcements
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Install script verification ───────────────────────────────────────
+  # Installs through the public curl|bash entry exactly as a user would:
+  # the installer asset is downloaded from the just-published release, and
+  # its own post-install check batch-starts the binary with no environment
+  # variables, exercising the runtime-root resolution through the
+  # ~/.local/bin symlink chain.
+  verify-install-script:
+    name: verify install.sh from the published release
+    needs: create-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      prefix: ${{ github.workspace }}/tmp/prefix
+    steps:
+      - name: Run the published installer
+        run: |
+          curl -fsSL \
+            "https://github.com/eval-exec/neomacs/releases/download/${GITHUB_REF_NAME}/install.sh" \
+            -o install.sh
+          sh install.sh --tag "${GITHUB_REF_NAME}" --prefix "$prefix"
+
+      - name: Assert the installed layout
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test -x "$prefix/bin/neomacs"
+          test "$(readlink "$prefix/share/neomacs/current")" = "versions/$version"
+          test "$(readlink "$prefix/bin/neomacs")" = "../share/neomacs/current/bin/neomacs"
+          exe="$(readlink -f "$prefix/bin/neomacs")"
+          test -f "$(dirname "$exe")/neomacs.pdump"
+          env -u NEOMACS_RUNTIME_ROOT \
+            "$prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'
