@@ -110,7 +110,7 @@ https://github.com/user-attachments/assets/275c6d9a-fced-44f6-8f43-3bbd2984d672
 Install the latest release into your user account (no root):
 
 ```bash
-curl -fsSL https://neomacs.org/install.sh | bash
+curl -fsSL https://neomacs.org/install.sh | sh
 ```
 
 The installer downloads a release tarball, verifies its SHA256 against the
@@ -119,7 +119,8 @@ release manifest, and installs a versioned tree with a rollback copy:
 ```
 ~/.local/bin/neomacs -> ../share/neomacs/current/bin/neomacs
 ~/.local/share/neomacs/current -> versions/0.0.15
-~/.local/share/neomacs/versions/0.0.15/{bin, lisp, etc, ...}
+~/.local/share/neomacs/versions/0.0.15/bin/{neomacs, neomacs.pdump}
+~/.local/share/neomacs/versions/0.0.15/share/neomacs/{lisp, etc, ...}
 ```
 
 Re-running the command upgrades (flipping `current` atomically and keeping

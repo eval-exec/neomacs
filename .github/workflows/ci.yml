@@ -287,7 +287,8 @@ jobs:
       # from THIS commit (file:// download base), so the curl|bash path --
       # download, checksum, versioned install, symlink chain, runtime-root
       # resolution with no environment variables -- is proven before any
-      # release publishes it.
+      # release publishes it. The staged tree uses the canonical bin/ +
+      # share/neomacs/ layout that package-release.sh ships.
       - name: Verify install.sh against a staged release tree
         run: |
           version=citest
@@ -296,10 +297,10 @@ jobs:
           staged="$stage_root/v$version"
           pkg_parent="$stage_root/pkg"
           pkg="$pkg_parent/neomacs-$version-$triple"
-          mkdir -p "$staged" "$pkg"
+          mkdir -p "$staged" "$pkg/bin" "$pkg/share/neomacs"
           cp target/release/neomacs target/release/neomacsclient \
-            target/release/neomacs.pdump "$pkg/"
-          cp -r lisp etc "$pkg/"
+            target/release/neomacs.pdump "$pkg/bin/"
+          cp -r lisp etc "$pkg/share/neomacs/"
           tar czf "$staged/neomacs-$version-$triple.tar.gz" \
             -C "$pkg_parent" "neomacs-$version-$triple"
           (
@@ -314,6 +315,7 @@ jobs:
           test "$(readlink "$prefix/bin/neomacs")" = "../share/neomacs/current/bin/neomacs"
           exe="$(readlink -f "$prefix/bin/neomacs")"
           test -f "$(dirname "$exe")/neomacs.pdump"
+          test -d "$(dirname "$exe")/../share/neomacs/lisp"
           env -u NEOMACS_RUNTIME_ROOT \
             "$prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'
 

@@ -473,5 +473,6 @@ jobs:
           test "$(readlink "$prefix/bin/neomacs")" = "../share/neomacs/current/bin/neomacs"
           exe="$(readlink -f "$prefix/bin/neomacs")"
           test -f "$(dirname "$exe")/neomacs.pdump"
+          test -d "$(dirname "$exe")/../share/neomacs/lisp"
           env -u NEOMACS_RUNTIME_ROOT \
             "$prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'

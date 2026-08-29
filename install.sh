@@ -6,11 +6,16 @@
 # Downloads a release tarball from GitHub Releases and installs it without
 # root privileges:
 #
-#   Linux   ~/.local/share/neomacs/versions/<ver>/{bin,lisp,etc,...}
+#   Linux   ~/.local/share/neomacs/versions/<ver>/{bin, share/neomacs/...}
 #           ~/.local/share/neomacs/current -> versions/<ver>
 #           ~/.local/bin/neomacs -> ../share/neomacs/current/bin/neomacs
 #   macOS   ~/Applications/neomacs.app (full bundle, vendored GStreamer)
 #           ~/.local/bin/neomacs -> .../neomacs.app/Contents/MacOS/neomacs
+#
+# The version directory mirrors the release tarball's own bin/ + share/
+# layout, which every shipped resolver generation locates relative to the
+# executable -- including the v0.0.15 binaries, so installing old --tag
+# releases works without NEOMACS_RUNTIME_ROOT.
 #
 # Upgrades flip the `current' symlink, so they never disturb a running
 # instance, and the previous version is kept for rollback (re-run with
@@ -60,7 +65,8 @@ Examples:
 Linux layout (previous version kept for rollback):
   ~/.local/bin/neomacs -> ../share/neomacs/current/bin/neomacs
   ~/.local/share/neomacs/current -> versions/0.0.15
-  ~/.local/share/neomacs/versions/0.0.15/{bin/neomacs,bin/neomacs.pdump,lisp,etc,...}
+  ~/.local/share/neomacs/versions/0.0.15/bin/{neomacs,neomacs.pdump}
+  ~/.local/share/neomacs/versions/0.0.15/share/neomacs/{lisp,etc,...}
 
 Linux also ships AppImage/.deb/.rpm release assets, and macOS a .dmg, for
 those who prefer system packages:
@@ -216,18 +222,22 @@ say "-> downloading $asset"
 download "$asset_url" "$archive" || die "download failed: $asset_url"
 [ -s "$archive" ] || die "download produced an empty file: $asset_url"
 
-# Verify against the release checksum manifest when the release provides one
-# (releases before SHA256SUMS existed only warn).
+# Verify against the release checksum manifest. A published manifest that
+# does not list this asset is an error, not a skip; only releases that
+# predate SHA256SUMS entirely downgrade to a notice. The name comparison
+# tolerates the "./<asset>" form `sha256sum ./*` produces.
 sums=$(fetch "$release_base/$tag/SHA256SUMS" || true)
 if [ -n "$sums" ]; then
-  expected=$(printf '%s\n' "$sums" | awk -v f="$asset" '$2 == f {print $1}')
-  if [ -n "$expected" ]; then
-    actual=$(sha256_of "$archive") \
-      || die "neither sha256sum nor shasum is available to verify the download"
-    [ "$actual" = "$expected" ] \
-      || die "checksum mismatch for $asset (expected $expected, got $actual)"
-    say "-> checksum verified"
+  expected=$(printf '%s\n' "$sums" \
+    | awk -v f="$asset" '{ name = $2; sub(/^\.\//, "", name); if (name == f) print $1 }')
+  if [ -z "$expected" ]; then
+    die "release $tag publishes SHA256SUMS but it does not list $asset"
   fi
+  actual=$(sha256_of "$archive") \
+    || die "neither sha256sum nor shasum is available to verify the download"
+  [ "$actual" = "$expected" ] \
+    || die "checksum mismatch for $asset (expected $expected, got $actual)"
+  say "-> checksum verified"
 else
   say "note: release $tag publishes no SHA256SUMS; skipping checksum verification"
 fi
@@ -249,13 +259,14 @@ if [ "$os" = linux ]; then
     src_bin=$pkg_dir/bin
     src_data=$pkg_dir/share/neomacs
     [ -f "$src_bin/neomacs.pdump" ] || die "package is missing neomacs.pdump"
-    [ -d "$src_data/lisp" ] && [ -d "$src_data/etc" ] \
-      || die "package is missing the lisp/ or etc/ runtime tree"
+    [ -d "$src_data/lisp" ] || die "package is missing the lisp/ runtime tree"
+    [ -d "$src_data/etc" ] || die "package is missing the etc/ runtime tree"
   else
     src_bin=$pkg_dir
     [ -x "$pkg_dir/neomacs" ] || die "package is missing the neomacs binary"
     [ -f "$pkg_dir/neomacs.pdump" ] || die "package is missing neomacs.pdump"
     [ -d "$pkg_dir/lisp" ] || die "package is missing the lisp/ runtime tree"
+    [ -d "$pkg_dir/etc" ] || die "package is missing the etc/ runtime tree"
   fi
 
   [ -z "$prefix" ] && prefix=${HOME}/.local
@@ -264,13 +275,17 @@ if [ "$os" = linux ]; then
   ver_dir=$root/versions/$version
   staged=$root/versions/.staged.$version
 
-  mkdir -p "$staged/bin" "$bin_dir" \
+  # A crashed previous run may have left staging behind; start clean so no
+  # stale file can ride into the installed tree.
+  rm -rf "$staged"
+  mkdir -p "$staged/bin" "$staged/share/neomacs" "$bin_dir" \
     || die "cannot create directories under $prefix (writable?)"
 
   if [ -n "${src_data:-}" ]; then
-    # Canonical layout: runtime data is already gathered under share/neomacs
-    # (lisp, etc, leim, and anything added later); add the top-level docs.
-    cp -a "$src_data/." "$staged/" || die "could not stage the runtime tree"
+    # Canonical layout: the runtime tree is already gathered; take it as is
+    # and add the top-level docs.
+    cp -a "$src_data/." "$staged/share/neomacs/" \
+      || die "could not stage the runtime tree"
     for doc in COPYING VERSION README.md; do
       if [ -f "$pkg_dir/$doc" ]; then
         cp -a "$pkg_dir/$doc" "$staged/$doc" || die "could not stage $doc"
@@ -281,7 +296,7 @@ if [ "$os" = linux ]; then
     # data (lisp, etc, COPYING, and anything else the release carries).
     find "$pkg_dir" -mindepth 1 -maxdepth 1 \
       ! -name neomacs ! -name neomacsclient ! -name 'neomacs.pdump' \
-      ! -name 'neomacs-*.pdump' -exec cp -a {} "$staged/" \; \
+      ! -name 'neomacs-*.pdump' -exec cp -a {} "$staged/share/neomacs/" \; \
       || die "could not stage the runtime tree"
   fi
 
@@ -299,15 +314,29 @@ if [ "$os" = linux ]; then
   # Validate the staged tree before anything installed changes.
   [ -x "$staged/bin/neomacs" ] || die "staged tree lost the neomacs binary"
   [ -f "$staged/bin/neomacs.pdump" ] || die "staged tree lost neomacs.pdump"
-  [ -d "$staged/lisp" ] && [ -d "$staged/etc" ] \
-    || die "staged tree lost the lisp/ or etc/ runtime directories"
+  [ -d "$staged/share/neomacs/lisp" ] \
+    || die "staged tree lost the lisp/ runtime directory"
+  [ -d "$staged/share/neomacs/etc" ] \
+    || die "staged tree lost the etc/ runtime directory"
 
-  # Swap the version directory in whole (a rename), then flip `current' --
-  # a running instance keeps its old tree, and a crash between the two
-  # leaves the previous release active.
+  # Swap the version directory through a same-volume rename, then flip
+  # `current'. Installing over an tag that is already active first moves the
+  # existing directory aside, so a failure mid-swap leaves the old tree
+  # recoverable on disk rather than deleted, and a running instance is never
+  # pointing at a half-replaced tree (the smoke test below would also catch
+  # one).
   old_current=$(cat "$root/current-version" 2>/dev/null || true)
-  rm -rf "$ver_dir"
-  mv "$staged" "$ver_dir" || die "could not move the new version into place"
+  aside="$ver_dir.old.$$"
+  if [ -d "$ver_dir" ]; then
+    mv "$ver_dir" "$aside" || die "could not move the existing version aside"
+  fi
+  if ! mv "$staged" "$ver_dir"; then
+    if [ -d "$aside" ]; then
+      mv "$aside" "$ver_dir" || true
+    fi
+    die "could not move the new version into place"
+  fi
+  rm -rf "$aside"
   ln -sfn "versions/$version" "$root/current" \
     || die "could not update the current symlink"
   printf '%s\n' "$version" > "$root/current-version" \
@@ -383,8 +412,11 @@ fi
 # the runtime-root resolution is exercised exactly as a user launch would.
 if [ "$skip_smoke" = no ]; then
   say "-> verifying the installed binary starts"
-  env -u NEOMACS_RUNTIME_ROOT "$installed_bin" --batch --eval '(kill-emacs 0)' \
-    || die "installed neomacs failed to start; report this at https://github.com/$repo/issues (files are in place; see --skip-smoke to bypass)"
+  # Subshell + unset instead of `env -u`: strictly POSIX.
+  (
+    unset NEOMACS_RUNTIME_ROOT
+    exec "$installed_bin" --batch --eval '(kill-emacs 0)'
+  ) || die "installed neomacs failed to start. If the error names a missing shared library (libtinfo, libgst*), install your distribution's ncurses and GStreamer runtime packages and re-run; otherwise report it at https://github.com/$repo/issues (files are in place; --skip-smoke bypasses this check)"
 fi
 
 # ----------------------------------------------------------------- PATH ----

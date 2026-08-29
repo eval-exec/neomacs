@@ -3065,9 +3065,12 @@ fn is_runtime_root(path: &Path) -> bool {
 ///   `installation-directory/lisp`. GNU's signature is `lib-src` + `etc`;
 ///   ours is `lisp` + `etc` ([`is_runtime_root`]). This covers the release
 ///   tarball's flat layout (executable beside `lisp`/`etc`) and the
-///   versioned user install (`~/.local/share/neomacs/versions/<ver>/bin/`
-///   with `lisp`/`etc` siblings), reached through the
-///   `~/.local/bin/neomacs` symlink.
+///   direct-sibling versioned shape (`<root>/bin/neomacs` with
+///   `<root>/lisp`), reached through the `~/.local/bin/neomacs` symlink.
+///   install.sh stages the versioned tree as `<ver>/bin` +
+///   `<ver>/share/neomacs` so that resolver generations before this
+///   walk-up existed (v0.0.15 and earlier, which only probe
+///   `<grandparent>/share/neomacs`) locate it too.
 /// * The configured half is GNU's compile-time `PATH_LOADSEARCH`
 ///   (`<prefix>/share/emacs/<version>/lisp`); we probe instead of baking a
 ///   prefix at build time: `<grandparent>/share/neomacs` (deb/rpm/AppImage:
