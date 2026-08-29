@@ -4190,6 +4190,7 @@ mod literal_search_linear_equivalence {
 /// many are ever read back by Lisp? Run explicitly:
 ///   cargo nextest run -p neovm-core -E 'test(match_publish_read_stats_probe)' --run-ignored all --no-capture
 #[test]
+#[cfg(debug_assertions)]
 #[ignore = "measurement probe, not a correctness test"]
 fn match_publish_read_stats_probe() {
     use std::sync::atomic::Ordering;

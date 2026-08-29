@@ -12459,8 +12459,11 @@ mod ownership_tests {
     /// this failure". It is wired into `complete_collection` now, behind a
     /// gate. This is the pin that it RUNS and that a healthy heap reports zero
     /// problems: without the wiring the gate function does not exist and this
-    /// does not compile (DIVERGENCES.md 162).
+    /// does not compile (DIVERGENCES.md 162). The helpers are
+    /// debug-only, so the pin compiles in debug builds only — a release
+    /// test build must not see this function at all.
     #[test]
+    #[cfg(debug_assertions)]
     fn post_mark_ownership_verification_runs_and_finds_nothing() {
         crate::test_utils::init_test_tracing();
         let mut heap = TaggedHeap::new();
