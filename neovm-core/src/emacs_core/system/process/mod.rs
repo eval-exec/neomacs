@@ -7648,7 +7648,6 @@ impl ProcessManager {
                 coding_encode,
                 inherit_coding_system_flag,
                 server_thread,
-                query_on_exit_flag,
             ) = {
                 let Some(server) = self.processes.get(&id) else {
                     return accepted;
@@ -7665,7 +7664,6 @@ impl ProcessManager {
                     server.coding_encode,
                     server.inherit_coding_system_flag,
                     server.thread,
-                    server.query_on_exit_flag,
                 )
             };
 
@@ -7861,7 +7859,8 @@ impl ProcessManager {
                 client.plist = server_plist;
                 client.inherit_coding_system_flag = inherit_coding_system_flag;
                 client.thread = server_thread;
-                client.query_on_exit_flag = query_on_exit_flag;
+                // GNU `server_accept_connection` keeps `make_process`'s default:
+                // accepted clients do not inherit the listening server's `:noquery`.
                 client.adaptive_read_buffering = 0;
                 client.read_output_delay = Duration::ZERO;
                 client.read_output_skip = false;

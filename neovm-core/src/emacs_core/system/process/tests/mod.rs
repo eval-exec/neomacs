@@ -8879,18 +8879,20 @@ fn make_network_process_local_stream_server_accepts_client_like_gnu() {
              (unwind-protect
                  (condition-case err
                      (let* ((srv (make-network-process
-                                  :name "srv" :server t :family 'local :service path
+                                  :name "srv" :server t :family 'local :service path :noquery t
                                   :log (lambda (server client msg)
                                          (push (list (process-name client)
                                                      msg
                                                      (process-contact client :remote)
-                                                     (process-contact client :local))
+                                                     (process-contact client :local)
+                                                     (process-query-on-exit-flag client))
                                                events))))
                             (cli (make-network-process
                                   :name "cli" :family 'local :service path)))
                        (accept-process-output nil 0.2)
                        (prog1
                            (list (process-status srv)
+                                 (not (process-query-on-exit-flag srv))
                                  (equal (process-contact srv :local) path)
                                  (equal (process-contact srv :service) path)
                                  (process-status cli)
@@ -8902,14 +8904,15 @@ fn make_network_process_local_stream_server_accepts_client_like_gnu() {
                                                                  (caar events)))))
                                  (and events (equal (cadar events) "accept from -\n"))
                                  (and events (equal (nth 2 (car events)) ""))
-                                 (and events (equal (nth 3 (car events)) path)))
+                                 (and events (equal (nth 3 (car events)) path))
+                                 (and events (nth 4 (car events))))
                          (delete-process cli)
                          (delete-process srv)))
                    (error err))
                (ignore-errors (delete-file path))))"#,
     );
 
-    assert_eq!(results[0], "OK (listen t t open t t 1 t t t t)");
+    assert_eq!(results[0], "OK (listen t t t open t t 1 t t t t t)");
 }
 
 #[cfg(unix)]
