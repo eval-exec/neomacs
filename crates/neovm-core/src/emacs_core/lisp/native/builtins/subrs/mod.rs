@@ -5296,6 +5296,25 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| builtin_inotify_valid_p(args)),
         SubrArity::new(1, Some(1)),
     ));
+    // GNU builds exactly one of src/inotify.c and src/kqueue.c
+    // (`configure.ac' --with-file-notification); like the inotify subrs
+    // above, these are registered unconditionally and only the c_features
+    // table decides which platform advertises which feature.
+    ctx.register_subr(SubrSpec::new(
+        "kqueue-add-watch",
+        NativeFn::ContextVec(builtin_kqueue_add_watch),
+        SubrArity::new(3, Some(3)),
+    ));
+    ctx.register_subr(SubrSpec::new(
+        "kqueue-rm-watch",
+        NativeFn::ContextVec(|_ctx, args| builtin_kqueue_rm_watch(args)),
+        SubrArity::new(1, Some(1)),
+    ));
+    ctx.register_subr(SubrSpec::new(
+        "kqueue-valid-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_kqueue_valid_p(args)),
+        SubrArity::new(1, Some(1)),
+    ));
     ctx.register_subr(SubrSpec::new(
         "lock-buffer",
         NativeFn::ContextVec(crate::emacs_core::filelock::builtin_lock_buffer),

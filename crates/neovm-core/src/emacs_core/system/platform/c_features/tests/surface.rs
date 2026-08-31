@@ -243,6 +243,12 @@ fn the_derived_list_keeps_gnus_relative_order() {
         // xwidget-internal immediately after threads.
         expected.push("xwidget-internal");
     }
+    // GNU calls `syms_of_inotify` then `syms_of_kqueue` (src/emacs.c:2465,
+    // :2469), and `features` reads newest-provided first, so kqueue's slot is
+    // immediately before inotify's; a build provides at most one of the two.
+    if cfg!(target_os = "macos") {
+        expected.push("kqueue");
+    }
     if cfg!(target_os = "linux") {
         expected.push("inotify");
     }
@@ -315,15 +321,37 @@ fn without_a_dbus_transport_the_whole_dbusbind_surface_is_absent() {
 #[test]
 fn the_features_this_build_really_has_still_answer_t() {
     crate::test_utils::init_test_tracing();
-    let result = runtime_startup_eval_one(
+    // The file-notification feature is the platform's: `inotify` on
+    // GNU/Linux, `kqueue` on macOS, exactly one of the two per build.
+    let file_notification_probe = if cfg!(target_os = "macos") {
+        "(and (featurep 'kqueue) (fboundp 'kqueue-add-watch))"
+    } else {
+        "(and (featurep 'inotify) (fboundp 'inotify-add-watch))"
+    };
+    let result = runtime_startup_eval_one(&format!(
         "(list (featurep 'emacs)
                (featurep 'multi-tty)
                (featurep 'make-network-process)
                (featurep 'tty-child-frames)
                (and (featurep 'threads) (fboundp 'make-thread))
-               (and (featurep 'inotify) (fboundp 'inotify-add-watch)))",
-    );
+               {file_notification_probe})",
+    ));
     assert_eq!(result, "OK (t t t t t t)");
+}
+
+/// The Lisp-visible consequence of the kqueue row: `filenotify.el` picks its
+/// backend from `featurep` alone (lisp/filenotify.el:36-41), and with no
+/// backend `file-notify-add-watch` signals `("No file notification package
+/// available")` (lisp/filenotify.el:456-457) -- which is what every
+/// `workspace/didChangeWatchedFiles` registration (nixd through lsp-mode or
+/// eglot) hit on macOS while this build advertised no file-notification
+/// feature there.
+#[cfg(target_os = "macos")]
+#[test]
+fn filenotify_selects_kqueue_on_macos() {
+    crate::test_utils::init_test_tracing();
+    let result = runtime_startup_eval_one("(progn (require 'filenotify) file-notify--library)");
+    assert_eq!(result, "OK kqueue");
 }
 
 /// **The table is the only thing that decides a C-level feature.**

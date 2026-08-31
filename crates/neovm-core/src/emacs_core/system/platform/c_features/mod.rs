@@ -185,9 +185,19 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             name: "kqueue",
             gnu_site: "src/kqueue.c:545",
             gnu_guard: BuildOption("HAVE_KQUEUE"),
-            here: NotBuilt {
-                because: "the BSD/macOS file-notification backend; this build's \
-                          `inotify' row is the one that answers here",
+            here: if cfg!(target_os = "macos") {
+                Implemented {
+                    by: "neovm-core/src/emacs_core/lisp/native/builtins/file_notify/mod.rs -- \
+                         kqueue-add-watch/-rm-watch/-valid-p over the `notify' crate, which \
+                         is FSEvents on macOS; GNU's macOS default is \
+                         --with-file-notification=kqueue, so this is the feature \
+                         `filenotify.el' expects to find there",
+                }
+            } else {
+                NotBuilt {
+                    because: "GNU's BSD/macOS file-notification backend; on GNU/Linux \
+                              the `inotify' row is the one that answers here",
+                }
             },
         },
         GnuCFeature {

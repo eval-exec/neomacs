@@ -33,6 +33,22 @@ impl FileNotifyWatchDescriptor {
     }
 }
 
+/// Which GNU file-notification surface a watch was created through.
+///
+/// GNU builds exactly one of `src/inotify.c` and `src/kqueue.c`
+/// (`configure.ac' --with-file-notification), so no GNU image ever holds
+/// both kinds at once; this port's single `notify`-crate backend serves
+/// whichever surface the platform advertises, and the dialect decides the
+/// Lisp shape of everything the watch produces: inotify descriptors are
+/// conses and events carry a trailing cookie, kqueue descriptors are bare
+/// fixnums (the fd in GNU) and events are `(DESCRIPTOR ACTIONS FILE
+/// [FILE1])` with kqueue's own action vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WatchDialect {
+    Inotify,
+    Kqueue,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct FileWatch {
     pub(super) id: i64,
@@ -41,6 +57,7 @@ pub(super) struct FileWatch {
     pub(super) is_directory: bool,
     pub(super) aspects: Vec<String>,
     pub(super) callback: Value,
+    pub(super) dialect: WatchDialect,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +67,9 @@ pub(super) struct FileNotifyEvent {
     pub(super) path: PathBuf,
     pub(super) cookie: usize,
     pub(super) callback: Value,
+    pub(super) dialect: WatchDialect,
+    /// kqueue only: FILE1 of a `rename' event (src/kqueue.c:171-172).
+    pub(super) file1: Option<PathBuf>,
 }
 
 pub(super) trait FileNotifyBackend {
@@ -63,9 +83,14 @@ pub(super) trait FileNotifyBackend {
         aspects: Vec<String>,
         callback: Value,
         notifier: Option<crate::emacs_core::process::WaitNotifier>,
+        dialect: WatchDialect,
     ) -> Result<FileNotifyWatchDescriptor, Flow>;
-    fn remove_watch(&mut self, descriptor: &FileNotifyWatchDescriptor) -> Result<bool, Flow>;
-    fn valid_p(&self, descriptor: &FileNotifyWatchDescriptor) -> bool;
+    fn remove_watch(
+        &mut self,
+        descriptor: &FileNotifyWatchDescriptor,
+        dialect: WatchDialect,
+    ) -> Result<bool, Flow>;
+    fn valid_p(&self, descriptor: &FileNotifyWatchDescriptor, dialect: WatchDialect) -> bool;
     fn drain_events(&mut self) -> Result<Vec<FileNotifyEvent>, Flow>;
     fn has_watches(&self) -> bool;
 }
@@ -229,12 +254,29 @@ pub(crate) fn drain_file_notify_events(
     let count = events.len();
 
     for event in events {
-        let raw_event = Value::list(vec![
-            event.descriptor.to_lisp(),
-            Value::list(event.aspects.into_iter().map(Value::symbol).collect()),
-            Value::string(event.path.display().to_string()),
-            Value::fixnum(i64::try_from(event.cookie).unwrap_or(i64::MAX)),
-        ]);
+        let raw_event = match event.dialect {
+            // GNU inotify events are `(DESCRIPTOR ASPECTS NAME COOKIE)`.
+            WatchDialect::Inotify => Value::list(vec![
+                event.descriptor.to_lisp(),
+                Value::list(event.aspects.into_iter().map(Value::symbol).collect()),
+                Value::string(event.path.display().to_string()),
+                Value::fixnum(i64::try_from(event.cookie).unwrap_or(i64::MAX)),
+            ]),
+            // GNU kqueue events are `(DESCRIPTOR ACTIONS FILE [FILE1])` with
+            // a bare-fixnum descriptor and no cookie (`kqueue_generate_event`,
+            // src/kqueue.c:94-104).
+            WatchDialect::Kqueue => {
+                let mut fields = vec![
+                    Value::fixnum(event.descriptor.id()),
+                    Value::list(event.aspects.into_iter().map(Value::symbol).collect()),
+                    Value::string(event.path.display().to_string()),
+                ];
+                if let Some(file1) = event.file1 {
+                    fields.push(Value::string(file1.display().to_string()));
+                }
+                Value::list(fields)
+            }
+        };
         ctx.queue_special_event(Value::list(vec![
             Value::symbol("file-notify"),
             raw_event,
@@ -252,7 +294,9 @@ pub(crate) fn builtin_inotify_valid_p(args: Vec<Value>) -> EvalResult {
     };
     FILE_NOTIFY_STATE.with(|slot| {
         let state = slot.borrow();
-        Ok(Value::bool_val(state.backend.valid_p(&descriptor)))
+        Ok(Value::bool_val(
+            state.backend.valid_p(&descriptor, WatchDialect::Inotify),
+        ))
     })
 }
 
@@ -270,9 +314,10 @@ pub(crate) fn builtin_inotify_add_watch(
 
     FILE_NOTIFY_STATE.with(|slot| {
         let mut state = slot.borrow_mut();
-        let descriptor = state
-            .backend
-            .add_watch(&path, aspects, callback, notifier)?;
+        let descriptor =
+            state
+                .backend
+                .add_watch(&path, aspects, callback, notifier, WatchDialect::Inotify)?;
         Ok(descriptor.to_lisp())
     })
 }
@@ -291,8 +336,111 @@ pub(crate) fn builtin_inotify_rm_watch(args: Vec<Value>) -> EvalResult {
 
     FILE_NOTIFY_STATE.with(|slot| {
         let mut state = slot.borrow_mut();
-        let _ = state.backend.remove_watch(&descriptor)?;
+        let _ = state
+            .backend
+            .remove_watch(&descriptor, WatchDialect::Inotify)?;
         Ok(Value::T)
+    })
+}
+
+/// The kqueue descriptor a Lisp value names, if it could name one.
+///
+/// GNU kqueue descriptors are bare fixnums -- the open fd
+/// (`Fkqueue_add_watch`, src/kqueue.c:460) -- unlike inotify's conses.  This
+/// port has no fd, so the fixnum is the watch id, paired with generation 0.
+fn extract_kqueue_watch_descriptor(value: Value) -> Option<FileNotifyWatchDescriptor> {
+    let id = value.as_fixnum()?;
+    (id >= 0).then(|| FileNotifyWatchDescriptor::new(id, 0))
+}
+
+/// GNU `Fkqueue_add_watch` (src/kqueue.c:338): watch FILE for the kqueue
+/// actions listed in FLAGS, reporting each through CALLBACK as
+/// `(DESCRIPTOR ACTIONS FILE [FILE1])`.
+///
+/// The checks are GNU's, in GNU's order (:380-389): FILE must be a string
+/// naming an existing file (`report_file_error ("File does not exist", ...)`,
+/// ENOENT -> `file-missing`); FLAGS must satisfy `CHECK_LIST`; CALLBACK must
+/// satisfy `FUNCTIONP` or it is `(wrong-type-argument invalid-function ...)`.
+/// A flag symbol kqueue does not know is silently ignored -- the flag
+/// assembly is eight `Fmember` probes (:440-446), not a validation pass.
+pub(crate) fn builtin_kqueue_add_watch(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("kqueue-add-watch", &args, 3)?;
+    let path =
+        crate::emacs_core::fileio::lisp_file_name_to_path_buf(ctx.expect_lisp_string(args[0])?);
+    if !path.exists() {
+        return Err(crate::emacs_core::error::signal(
+            "file-missing",
+            vec![
+                Value::string("File does not exist"),
+                Value::string("No such file or directory"),
+                args[0],
+            ],
+        ));
+    }
+    if !(args[1].is_nil() || args[1].is_cons()) {
+        return Err(crate::emacs_core::error::signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), args[1]],
+        ));
+    }
+    if !crate::emacs_core::builtins::value_is_function(ctx, args[2]) {
+        return Err(crate::emacs_core::error::signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("invalid-function"), args[2]],
+        ));
+    }
+    let flags = inotify_aspect_names(args[1]);
+    let callback = args[2];
+    let notifier = ctx.wait_notifier();
+
+    FILE_NOTIFY_STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let descriptor =
+            state
+                .backend
+                .add_watch(&path, flags, callback, notifier, WatchDialect::Kqueue)?;
+        Ok(Value::fixnum(descriptor.id()))
+    })
+}
+
+/// GNU `Fkqueue_rm_watch` (src/kqueue.c:475): unregister the watch and answer
+/// t; a descriptor not in the watch list is `(file-notify-error "Not a watch
+/// descriptor" WATCH-DESCRIPTOR)`.
+pub(crate) fn builtin_kqueue_rm_watch(args: Vec<Value>) -> EvalResult {
+    expect_args("kqueue-rm-watch", &args, 1)?;
+    let not_a_watch_descriptor =
+        || file_notify_error("Not a watch descriptor", None, Some(args[0]));
+    let Some(descriptor) = extract_kqueue_watch_descriptor(args[0]) else {
+        return Err(not_a_watch_descriptor());
+    };
+    FILE_NOTIFY_STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if state
+            .backend
+            .remove_watch(&descriptor, WatchDialect::Kqueue)?
+        {
+            Ok(Value::T)
+        } else {
+            Err(not_a_watch_descriptor())
+        }
+    })
+}
+
+/// GNU `Fkqueue_valid_p` (src/kqueue.c:505): t while the descriptor is in the
+/// watch list, nil otherwise; never signals.
+pub(crate) fn builtin_kqueue_valid_p(args: Vec<Value>) -> EvalResult {
+    expect_args("kqueue-valid-p", &args, 1)?;
+    let Some(descriptor) = extract_kqueue_watch_descriptor(args[0]) else {
+        return Ok(Value::NIL);
+    };
+    FILE_NOTIFY_STATE.with(|slot| {
+        let state = slot.borrow();
+        Ok(Value::bool_val(
+            state.backend.valid_p(&descriptor, WatchDialect::Kqueue),
+        ))
     })
 }
 
