@@ -4300,6 +4300,24 @@ impl Frame {
         }
     }
 
+    /// Whether the active presentation published WINDOW's rows as live window
+    /// output rather than as geometry only.
+    ///
+    /// [`WindowPresentationSnapshot`] states the rule those two publication
+    /// domains encode: inactive echo-area rows "must remain available to
+    /// rendering and hit testing, but must never become evidence about the
+    /// live minibuffer". Hit testing resolves rectangles, which is geometry;
+    /// resolving a hit to a BUFFER POSITION is evidence, and GNU's
+    /// `buffer_posn_from_coords` can only ever produce one for `w->contents`
+    /// (`Fset_buffer (w->contents)`, src/dispnew.c). A consumer that wants a
+    /// position out of a presented hit therefore has to ask this first.
+    pub fn active_presentation_publishes_live_window_output(&self, window: WindowId) -> bool {
+        self.presentation_state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.live_output_windows.contains(&window))
+    }
+
     pub fn active_presentation_snapshot(&self, window: WindowId) -> Option<&WindowDisplaySnapshot> {
         self.presentation_state
             .active

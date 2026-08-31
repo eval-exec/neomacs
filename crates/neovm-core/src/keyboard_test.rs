@@ -1349,3 +1349,128 @@ fn fresh_character_events_go_through_keyboard_translate_table_like_gnu() {
         Value::symbol("f1")
     );
 }
+
+/// GNU's `buffer_posn_from_coords` opens with `Fset_buffer (w->contents)` and
+/// walks from `w->start` (src/dispnew.c), so a mouse posn's buffer position is
+/// always a position in the window's *own* buffer.
+///
+/// An inactive mini-window is the one place where those can come apart here:
+/// GNU displays the echo area by temporarily swapping `w->contents` for
+/// ` *Echo Area 0*` inside `with_echo_area_buffer` (src/xdisp.c) and restoring
+/// it on unwind, while this port renders the echo buffer through the live
+/// mini-window and publishes the resulting rows as geometry only -- "its
+/// geometry must remain available to rendering and hit testing, but it must
+/// never become evidence about the live minibuffer"
+/// ([`crate::window::WindowPresentationSnapshot`]).  The renderer's hit index
+/// is built from that geometry, so the text position it reports for a hover
+/// over a displayed message is a position in the echo buffer, and the window
+/// it names is still bound to the empty ` *Minibuf-0*`.
+#[test]
+fn presented_mouse_position_over_the_inactive_echo_area_reports_the_mini_windows_own_point() {
+    use crate::window::{
+        PresentedWindowRegions, WindowDisplaySnapshot, WindowPresentationSnapshot,
+    };
+    use neomacs_display_protocol::{
+        DisplayWindowId, FrameRect, PresentationId, PresentedHitIndex, PresentedHitQuery,
+        PresentedHitRegion, PresentedRegionKind, PresentedTextPosition, Rect,
+    };
+
+    let mut eval = crate::emacs_core::Context::new();
+    let buffer = eval.buffer_manager_mut().create_buffer("echo-area-posn");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("echo-area-posn", 2560, 600, buffer);
+    let minibuffer_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .minibuffer_window
+        .expect("frame minibuffer window");
+    // The inactive mini-window stays bound to the empty ` *Minibuf-0*`.
+    let minibuffer_buffer = eval.buffer_manager_mut().create_buffer(" *Minibuf-0*");
+    let minibuffer_point_max = eval
+        .buffer_manager()
+        .get(minibuffer_buffer)
+        .expect("minibuffer buffer")
+        .point_max_lisp_char_pos()
+        .as_i64();
+    assert_eq!(
+        minibuffer_point_max, 1,
+        "an inactive minibuffer holds no text"
+    );
+
+    let presentation = PresentationId::new(3);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame
+            .find_window_mut(minibuffer_window)
+            .expect("minibuffer window")
+            .set_buffer(minibuffer_buffer);
+        frame.set_window_system(Some(Value::symbol("neo")));
+        // The echo-area walk publishes its rows as geometry only, exactly as
+        // `mark_inactive_echo_snapshot_geometry_only` does in redisplay.
+        frame
+            .prepare_display_presentation(
+                crate::window::geometry::PresentationId::new(3),
+                vec![WindowPresentationSnapshot::GeometryOnly(
+                    WindowDisplaySnapshot {
+                        window_id: minibuffer_window,
+                        regions: PresentedWindowRegions {
+                            outer: Rect::new(0.0, 584.0, 2560.0, 16.0),
+                            text_body: Rect::new(0.0, 584.0, 2560.0, 16.0),
+                            ..Default::default()
+                        },
+                        regions_materialized: true,
+                        ..Default::default()
+                    },
+                )],
+            )
+            .expect("prepare echo-area geometry");
+        frame
+            .activate_display_presentation(crate::window::geometry::PresentationId::new(3))
+            .expect("activate echo-area geometry");
+    }
+
+    // The renderer's hit for the end of a 120-column echo-area message.
+    let protocol_window = DisplayWindowId::new(minibuffer_window.0 as i64);
+    let hit = PresentedHitIndex::from_parts(
+        presentation,
+        vec![PresentedHitRegion::new(
+            Some(protocol_window),
+            PresentedRegionKind::TextBody,
+            FrameRect::new(0.0, 584.0, 2560.0, 16.0).unwrap(),
+            0,
+        )],
+        vec![PresentedTextPosition::new(
+            protocol_window,
+            FrameRect::new(1230.0, 586.0, 2524.0, 22.0).unwrap(),
+            121,
+            0,
+            120,
+        )],
+    )
+    .unwrap()
+    .resolve(PresentedHitQuery::new(presentation, 1230.0, 586.0))
+    .unwrap();
+    eval.command_loop
+        .keyboard
+        .kboard
+        .presented_mouse_observation = Some(PresentedMouseObservation {
+        presentation: 3,
+        hit,
+        x: 1230.0,
+        y: 586.0,
+        frame_id: frame_id.0,
+    });
+
+    let position =
+        crate::emacs_core::Context::make_mouse_position(1230.0, 586.0, frame_id.0, &eval);
+    let parts = crate::emacs_core::value::list_to_vec(&position).expect("position");
+
+    assert_eq!(parts[0], Value::make_window(minibuffer_window.0));
+    assert_eq!(
+        parts[5],
+        Value::fixnum(1),
+        "the posn must name a position in the mini-window's own buffer"
+    );
+}

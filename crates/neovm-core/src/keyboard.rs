@@ -6571,7 +6571,19 @@ impl crate::emacs_core::eval::Context {
                 outer.origin()
             };
         let fallback_point = frame.find_window(window_id).and_then(Self::window_point);
-        let metrics = if let Some(point) = hit.text_position() {
+        // A presented text position is only a position in the window's own
+        // buffer when the presentation published that window's rows as live
+        // output. An inactive mini-window's rows describe the echo-area buffer
+        // it is drawing, not the ` *Minibuf-N*` it is bound to, so they answer
+        // rectangles but not positions; GNU's own answer for this window comes
+        // from an iterator run inside `w->contents` (src/dispnew.c
+        // `buffer_posn_from_coords`), which is what the window's point is here.
+        let hit_position_is_window_evidence =
+            frame.active_presentation_publishes_live_window_output(window_id);
+        let metrics = if let Some(point) = hit
+            .text_position()
+            .filter(|_| hit_position_is_window_evidence)
+        {
             let bounds = point.bounds();
             MousePosnMetrics {
                 point: Some(point.buffer_position()),
