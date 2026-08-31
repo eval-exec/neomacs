@@ -2467,16 +2467,31 @@ fn active_map_position(
         let Some(target_buffer) = buffers.get(buffer_id) else {
             continue;
         };
-        if let Some(char_pos) = char_pos {
+        // GNU never signals for an event position.  `click_position`
+        // (src/keymap.c:1639-1646) range-checks only a fixnum or a marker;
+        // a cons falls back to `PT`, so its `args_out_of_range` cannot be
+        // reached from a posn.  The posn branch (:1727-1740) instead uses its
+        // range test only to decide whether to consult the `local-map` and
+        // `keymap` text properties at that position:
+        //
+        //   if (FIXNUMP (buffer_posn)
+        //       && XFIXNUM (buffer_posn) >= BEG && XFIXNUM (buffer_posn) <= Z)
+        //     { ... get_local_map ... }
+        //   if (NILP (local_map))
+        //     local_map = BVAR (current_buffer, keymap);
+        //
+        // Dropping the position is that fallback: `position_map_layers` reads
+        // `char_pos: None` as "no property lookup, use the buffer's own local
+        // map".  An inactive mini-window draws the echo area's text while it
+        // stays bound to the empty ` *Minibuf-0*`, so every mouse posn over a
+        // displayed message names a position past that buffer's end; signalling
+        // escaped `read_key_sequence` and reached the command loop once per
+        // mouse event.
+        let char_pos = char_pos.filter(|char_pos| {
             let point_min = target_buffer.point_min_lisp_char_pos().as_i64();
             let point_max = target_buffer.point_max_lisp_char_pos().as_i64();
-            if char_pos < point_min || char_pos > point_max {
-                return Err(signal(
-                    LispCondition::ArgsOutOfRange,
-                    vec![Value::make_buffer(buffer_id), *position],
-                ));
-            }
-        }
+            (point_min..=point_max).contains(char_pos)
+        });
 
         return Ok(Some(ActiveMapPosition {
             buffer_id,

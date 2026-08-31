@@ -1210,3 +1210,66 @@ fn composed_keymap_nil_member_does_not_shadow_later_member() {
         Some(Some("right"))
     );
 }
+
+/// GNU never signals for an event position that names a buffer position
+/// outside the accessible portion.
+///
+/// `click_position` (src/keymap.c:1639-1646) range-checks only a fixnum or a
+/// marker; a cons -- an event posn -- falls back to `PT`, which cannot be out
+/// of range, so its `args_out_of_range (Fcurrent_buffer (), position)` is
+/// unreachable from a posn.  The posn branch of `Fcurrent_active_maps`
+/// (:1727-1740) then uses `BEG <= posn-point <= Z` only to decide whether to
+/// consult the `local-map`/`keymap` text properties at that position; an
+/// out-of-range position simply skips them and falls back to the buffer's own
+/// local map.
+///
+/// An inactive mini-window draws the echo area's text while it stays bound to
+/// the empty ` *Minibuf-0*`, so a mouse posn over a displayed message names a
+/// position past that buffer's `point-max`.  Signalling here escapes
+/// `read_key_sequence` and reaches the command loop once per mouse event.
+#[test]
+fn event_position_past_point_max_falls_back_to_the_buffer_local_map() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let point_max = eval
+        .buffers
+        .get(buffer_id)
+        .expect("current buffer")
+        .point_max_lisp_char_pos()
+        .as_i64();
+    assert!(
+        point_max < 121,
+        "the posn below must name a position past point-max, got point-max {point_max}"
+    );
+    let buffer_local_map = make_sparse_list_keymap();
+    eval.buffers
+        .set_current_local_map(buffer_local_map)
+        .expect("set buffer local map");
+    let frame_id = eval
+        .frames
+        .create_frame("event-position-past-point-max", 800, 600, buffer_id);
+    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+
+    // The posn an echo-area message produces: text position 121 at column 120.
+    let position = Value::list(vec![
+        Value::make_window(window_id.0),
+        Value::fixnum(121),
+        Value::cons(Value::fixnum(1230), Value::fixnum(2)),
+        Value::fixnum(0),
+        Value::NIL,
+        Value::fixnum(121),
+        Value::cons(Value::fixnum(120), Value::fixnum(0)),
+        Value::NIL,
+        Value::cons(Value::fixnum(0), Value::fixnum(0)),
+        Value::cons(Value::fixnum(2524), Value::fixnum(22)),
+    ]);
+
+    let maps = current_active_maps_for_position(&mut eval, true, Some(&position))
+        .expect("an out-of-range event position must not signal");
+
+    assert!(
+        maps.contains(&buffer_local_map),
+        "GNU falls back to the buffer's local map"
+    );
+}
