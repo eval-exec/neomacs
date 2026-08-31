@@ -1218,7 +1218,7 @@ impl super::eval::Context {
         // :7892.
         let _stamped = self.processes.record_child_status_changes(site);
         // GNU `status_notify (NULL, wait_proc)` (:5554, :5854), over the
-        // processes whose own tick moved -- from ANY of GNU's nine sites, not
+        // processes whose own tick moved -- from ANY of GNU's eight sites, not
         // just the walk above.
         self.notify_processes_with_unnotified_status_change(target)
     }

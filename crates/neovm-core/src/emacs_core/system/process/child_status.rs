@@ -479,7 +479,7 @@ impl ProcessManager {
     /// `status_notify` then visits is not this walk's answer to give**: it is
     /// GNU's per-process tick pair, read by
     /// [`ProcessManager::processes_with_unnotified_status_change`], because
-    /// eight of GNU's nine `p->tick = ++process_tick;` sites are not this walk
+    /// seven of GNU's eight `p->tick = ++process_tick;` sites are not this walk
     /// (see [`StatusChangeSite`]).  Returning the stamped ids is what made the
     /// visit set the SIGCHLD record's, which is the defect this shape closes.
     pub(crate) fn record_child_status_changes(
@@ -600,8 +600,8 @@ impl ProcessManager {
 /// into `status_notify`'s visit set -- with **one variant per line in
 /// `src/process.c` that spells it**.
 ///
-/// `grep -n 'tick = ++process_tick' src/process.c` returns exactly nine lines
-/// and they are the nine below.  **Eight of them have nothing to do with
+/// `grep -n 'tick = ++process_tick' src/process.c` returns exactly eight lines
+/// and they are the eight below.  **Seven of them have nothing to do with
 /// SIGCHLD**, which is the fact this type exists to keep in front of the next
 /// reader: the record that decides whom `status_notify` visits is not the
 /// child-signal record.  GNU declares the counter and the reason for it at
@@ -629,8 +629,8 @@ pub(crate) enum StatusChangeSite {
     /// (:6058), which becomes `Qfailed`.
     ///
     /// **Never constructed outside the table, and the compiler is right about
-    /// that.**  It is GNU's line all the same, and the table is the nine lines
-    /// rather than the eight this port reaches; `Self::recorder`'s `NoAnalogue`
+    /// that.**  It is GNU's line all the same, and the table is the eight lines
+    /// rather than the seven this port reaches; `Self::recorder`'s `NoAnalogue`
     /// arm says why there is nothing to record here, and deleting the `allow`
     /// is how a future entry that grows the window announces itself.
     #[allow(dead_code)]
@@ -643,18 +643,16 @@ pub(crate) enum StatusChangeSite {
     /// `connect_network_socket`'s failed non-blocking connect (:6141), which
     /// becomes `(failed . ERRNO)`.
     NonBlockingConnectFailed,
-    /// `send_process` got `EPIPE` (:6927), which becomes `(exit . 256)`.
-    SendProcessEpipe,
     /// `process_send_signal` sent `SIGCONT` (:7178), which becomes `Qrun`.
     ProcessSendSignalSigcont,
     /// `handle_child_signal`'s `child_status_changed` (:7746) -- the only one
-    /// of the nine that is the SIGCHLD record.
+    /// of the eight that is the SIGCHLD record.
     HandleChildSignal,
 }
 
 /// Who runs the sentinel for a change recorded at a [`StatusChangeSite`].
 ///
-/// GNU's nine bump sites are not one mechanism.  Four of them call
+/// GNU's eight bump sites are not one mechanism.  Four of them call
 /// `status_notify` on the very next lines, so the tick they just moved is
 /// consumed immediately and no later walk ever sees it; the rest leave the
 /// tick standing for the wait's own `status_notify` (:5554, :5854) to find.
@@ -711,7 +709,6 @@ impl StatusChangeSite {
         Self::PipeConnectionReadEof,
         Self::SubprocessReadFailure,
         Self::NonBlockingConnectFailed,
-        Self::SendProcessEpipe,
         Self::ProcessSendSignalSigcont,
         Self::HandleChildSignal,
     ];
@@ -725,7 +722,6 @@ impl StatusChangeSite {
             Self::PipeConnectionReadEof => "src/process.c:6075",
             Self::SubprocessReadFailure => "src/process.c:6084",
             Self::NonBlockingConnectFailed => "src/process.c:6141",
-            Self::SendProcessEpipe => "src/process.c:6927",
             Self::ProcessSendSignalSigcont => "src/process.c:7178",
             Self::HandleChildSignal => "src/process.c:7746",
         }
@@ -740,7 +736,6 @@ impl StatusChangeSite {
             Self::PipeConnectionReadEof => "(exit . 0) on a pipe connection's EOF",
             Self::SubprocessReadFailure => "(exit . 256) on a subprocess read failure",
             Self::NonBlockingConnectFailed => "(failed . ERRNO) on a failed connect",
-            Self::SendProcessEpipe => "(exit . 256) on EPIPE while writing",
             Self::ProcessSendSignalSigcont => "run, on SIGCONT",
             Self::HandleChildSignal => "the raw wait status of a changed child",
         }
@@ -761,9 +756,6 @@ impl StatusChangeSite {
             }
             Self::NonBlockingConnectFailed => {
                 StatusChangeRecorder::Here("ProcessManager::complete_pending_network_connect")
-            }
-            Self::SendProcessEpipe => {
-                StatusChangeRecorder::Here("ProcessManager::write_process_input_once")
             }
             Self::ProcessSendSignalSigcont => {
                 StatusChangeRecorder::Here("builtin_continue_process_impl")
@@ -814,7 +806,6 @@ impl StatusChangeSite {
             Self::PtyEioBeforeFork
             | Self::PipeConnectionReadEof
             | Self::SubprocessReadFailure
-            | Self::SendProcessEpipe
             | Self::HandleChildSignal => StatusChangeNotifier::TheWaitsStatusNotify,
         }
     }
@@ -868,7 +859,7 @@ impl ProcessManager {
     /// GNU `p->tick = ++process_tick;` at `site`.
     ///
     /// The `site` argument is not used at run time; it exists so the call
-    /// cannot be written without naming which of GNU's nine lines it is.
+    /// cannot be written without naming which of GNU's eight lines it is.
     pub(crate) fn record_status_change(&mut self, site: StatusChangeSite, id: ProcessId) {
         // GNU's `++process_tick` is a plain `EMACS_INT` increment.  `u64`
         // saturates rather than wraps so that a wrap could never make a

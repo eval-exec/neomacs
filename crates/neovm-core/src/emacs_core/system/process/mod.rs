@@ -7332,14 +7332,31 @@ impl ProcessManager {
                 Ok(ProcessWriteAttempt::WouldBlock)
             }
             Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => {
-                proc.status = process_status_exit_value(256);
+                // GNU `send_process`'s EPIPE arm (src/process.c:6941-6947):
+                //
+                //   close_process_fd (&p->open_fd[WRITE_TO_SUBPROCESS]);
+                //   p->outfd = -1;
+                //   error ("Process %s no longer connected to pipe; closed it", ...);
+                //
+                // and NOTHING else -- the status is not touched, so the child
+                // stays sweepable and the next wait's `status_notify` hands
+                // the sentinel the child's REAL exit status.  Writing
+                // `(exit . 256)` here (Emacs 24 behavior, removed by GNU
+                // commit 4d7e6e51dd4, 2013) made the status terminal before
+                // the reap, which no later sweep may overwrite
+                // (`SweepableChild::of` admits only `run`/`stop`) and which
+                // set no `status_notify_pending` -- so the sentinel never
+                // ran.  Measured with lsp-mode against a crashing nixd:
+                // `lsp--handle-process-exit` never fired, the dead
+                // workspace stayed in the session, and every later send
+                // reported "not running: exited abnormally with code 256".
+                if let (Some(poller), Some(stdin)) =
+                    (self.wait_backend.poller(), proc.live_io.child.stdin())
+                {
+                    Self::unregister_child_stdin_writable_from_poller(poller, stdin);
+                }
+                let _ = proc.live_io.child.close_stdin();
                 let name = process_name_runtime(proc.name);
-                // GNU's `p->tick = ++process_tick;` at src/process.c:6927,
-                // between the `pset_status` above and the `error` below.  GNU
-                // runs no `status_notify` here, so the sentinel for this
-                // `(exit . 256)` is the next wait's -- which is exactly what
-                // the tick is for.
-                self.record_status_change(StatusChangeSite::SendProcessEpipe, id);
                 Err(signal(
                     "error",
                     vec![Value::string(format!(
@@ -8985,10 +9002,12 @@ impl super::eval::Context {
     /// set is *"every process whose status changed since it was last
     /// notified"* -- and NOT *"every process the child-status sweep just
     /// stamped"*, which is what this function used to take.  The difference is
-    /// the eight of GNU's nine `p->tick = ++process_tick;` sites that are not
+    /// the seven of GNU's eight `p->tick = ++process_tick;` sites that are not
     /// `handle_child_signal`'s (see [`StatusChangeSite`]): a status this port
-    /// publishes from the pipe-EOF branch, a read failure or a write `EPIPE`
-    /// left nothing behind that a later walk could pick up.
+    /// publishes from the pipe-EOF branch or a read failure left nothing
+    /// behind that a later walk could pick up.  (A write `EPIPE` is NOT such
+    /// a site: GNU's arm closes the write fd and touches no status, so the
+    /// child's death reaches the walk as the SIGCHLD record.)
     ///
     /// `p->update_tick = p->tick` is set for the whole visit set FIRST, which
     /// is GNU's :7885-7894 and its stated reason -- *"Set this now, so that if
