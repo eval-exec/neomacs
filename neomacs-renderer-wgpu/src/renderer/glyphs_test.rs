@@ -592,6 +592,8 @@ fn vertical_bar_cursor_aligned_to_its_glyph_cell_is_not_a_mismatch() {
         glyph_h: 13.0,
         left_overhang: 0.0,
         right_overhang: 0.0,
+        top_overhang: 0.0,
+        bottom_overhang: 0.0,
     }];
 
     log_cursor_glyph_alignment(4_294_967_296, "text", &frame, &chars);
@@ -783,6 +785,8 @@ fn char_bounds(label: &str, x: f32, y: f32, width: f32, height: f32) -> Rendered
         glyph_h: height,
         left_overhang: 0.0,
         right_overhang: 0.0,
+        top_overhang: 0.0,
+        bottom_overhang: 0.0,
     }
 }
 
@@ -839,6 +843,57 @@ fn char_overlap_classifies_subpixel_boundary_overhang_separately() {
     m.left_overhang = (m.cell_x - m.glyph_x).max(0.0);
 
     let overlap = char_overlap(&slash, &m).expect("subpixel boundary overhang");
+    assert!(overlap.expected_by_overhang);
+}
+
+#[test]
+fn char_overlap_classifies_adjacent_vertical_overhang_separately() {
+    let mut upper = char_bounds("│", 861.0, 76.0, 9.0, 19.0);
+    upper.glyph_x = 865.0;
+    upper.glyph_y = 75.0;
+    upper.glyph_w = 2.0;
+    upper.glyph_h = 23.0;
+    upper.top_overhang = 1.0;
+    upper.bottom_overhang = 3.0;
+
+    let mut lower = char_bounds("│", 861.0, 95.0, 9.0, 19.0);
+    lower.glyph_x = 865.0;
+    lower.glyph_y = 94.0;
+    lower.glyph_w = 2.0;
+    lower.glyph_h = 23.0;
+    lower.top_overhang = 1.0;
+    lower.bottom_overhang = 3.0;
+
+    let overlap = char_overlap(&upper, &lower).expect("vertical overhang overlap");
+    assert_eq!(overlap.y, 94.0);
+    assert_eq!(overlap.height, 4.0);
+    assert!(overlap.expected_by_overhang);
+}
+
+#[test]
+fn char_overlap_classifies_box_drawing_corner_join_separately() {
+    let mut corner = char_bounds("╮", 1734.0, 95.0, 9.0, 19.0);
+    corner.slot_id.row = 5;
+    corner.slot_id.col = 2;
+    corner.glyph_x = 1733.0;
+    corner.glyph_y = 103.0;
+    corner.glyph_w = 7.0;
+    corner.glyph_h = 14.0;
+    corner.left_overhang = 1.0;
+
+    let mut stem = char_bounds("│", 1734.0, 114.0, 9.0, 19.0);
+    stem.slot_id.row = 6;
+    stem.slot_id.col = 2;
+    stem.glyph_x = 1738.0;
+    stem.glyph_y = 113.0;
+    stem.glyph_w = 2.0;
+    stem.glyph_h = 23.0;
+
+    let overlap = char_overlap(&corner, &stem).expect("box-drawing join overlap");
+    assert_eq!(overlap.x, 1738.0);
+    assert_eq!(overlap.y, 113.0);
+    assert_eq!(overlap.width, 2.0);
+    assert_eq!(overlap.height, 4.0);
     assert!(overlap.expected_by_overhang);
 }
 

@@ -49,6 +49,8 @@ pub(super) struct RenderedCharBounds {
     pub(super) glyph_h: f32,
     pub(super) left_overhang: f32,
     pub(super) right_overhang: f32,
+    pub(super) top_overhang: f32,
+    pub(super) bottom_overhang: f32,
 }
 
 impl RenderedCharBounds {
@@ -83,7 +85,7 @@ fn char_overlap(a: &RenderedCharBounds, b: &RenderedCharBounds) -> Option<CharOv
     {
         return None;
     }
-    let expected_by_overhang = overlap_is_expected_by_overhang(a, b, x0, x1);
+    let expected_by_overhang = overlap_is_expected_by_overhang(a, b, x0, x1, y0, y1);
     Some(CharOverlap {
         x: x0,
         y: y0,
@@ -98,6 +100,8 @@ fn overlap_is_expected_by_overhang(
     b: &RenderedCharBounds,
     overlap_left: f32,
     overlap_right: f32,
+    overlap_top: f32,
+    overlap_bottom: f32,
 ) -> bool {
     let a_cell_right = a.cell_x + a.cell_w;
     let b_cell_right = b.cell_x + b.cell_w;
@@ -131,12 +135,73 @@ fn overlap_is_expected_by_overhang(
         && overlap_left <= b_cell_right + CHAR_OVERLAP_MIN_AXIS
         && overlap_right >= b_cell_right - CHAR_OVERLAP_MIN_AXIS;
 
+    let a_cell_bottom = a.cell_y + a.cell_h;
+    let b_cell_bottom = b.cell_y + b.cell_h;
+
+    let a_bottom_explains = a.bottom_overhang > 0.0
+        && overlap_top >= a_cell_bottom - CHAR_OVERLAP_MIN_AXIS
+        && overlap_bottom <= a.bottom() + CHAR_OVERLAP_MIN_AXIS;
+    let b_top_explains = b.top_overhang > 0.0
+        && overlap_bottom <= b.cell_y + CHAR_OVERLAP_MIN_AXIS
+        && overlap_top >= b.glyph_y - CHAR_OVERLAP_MIN_AXIS;
+
+    let b_bottom_explains = b.bottom_overhang > 0.0
+        && overlap_top >= b_cell_bottom - CHAR_OVERLAP_MIN_AXIS
+        && overlap_bottom <= b.bottom() + CHAR_OVERLAP_MIN_AXIS;
+    let a_top_explains = a.top_overhang > 0.0
+        && overlap_bottom <= a.cell_y + CHAR_OVERLAP_MIN_AXIS
+        && overlap_top >= a.glyph_y - CHAR_OVERLAP_MIN_AXIS;
+
+    let a_bottom_b_top_explain = a.bottom_overhang > 0.0
+        && b.top_overhang > 0.0
+        && (a_cell_bottom - b.cell_y).abs() <= CHAR_OVERLAP_MIN_AXIS
+        && overlap_top >= b.glyph_y - CHAR_OVERLAP_MIN_AXIS
+        && overlap_bottom <= a.bottom() + CHAR_OVERLAP_MIN_AXIS
+        && overlap_top <= a_cell_bottom + CHAR_OVERLAP_MIN_AXIS
+        && overlap_bottom >= a_cell_bottom - CHAR_OVERLAP_MIN_AXIS;
+    let b_bottom_a_top_explain = b.bottom_overhang > 0.0
+        && a.top_overhang > 0.0
+        && (b_cell_bottom - a.cell_y).abs() <= CHAR_OVERLAP_MIN_AXIS
+        && overlap_top >= a.glyph_y - CHAR_OVERLAP_MIN_AXIS
+        && overlap_bottom <= b.bottom() + CHAR_OVERLAP_MIN_AXIS
+        && overlap_top <= b_cell_bottom + CHAR_OVERLAP_MIN_AXIS
+        && overlap_bottom >= b_cell_bottom - CHAR_OVERLAP_MIN_AXIS;
+
+    // Adjacent cells in the same grid column may use deliberately intersecting
+    // bitmaps. Box-drawing corners are a common case: the corner reaches below
+    // its cell while the following vertical stroke reaches above its cell.
+    // Classify the actual bitmap intersection as overhang even when rasterizer
+    // rounding makes one of the independently calculated overhangs vanish.
+    let same_vertical_grid_run = a.window_id == b.window_id
+        && a.row_role == b.row_role
+        && a.slot_id.col == b.slot_id.col
+        && a.slot_id.row.abs_diff(b.slot_id.row) == 1;
+    let adjacent_cell_boundary = if (a_cell_bottom - b.cell_y).abs() <= CHAR_OVERLAP_MIN_AXIS {
+        Some(a_cell_bottom)
+    } else if (b_cell_bottom - a.cell_y).abs() <= CHAR_OVERLAP_MIN_AXIS {
+        Some(b_cell_bottom)
+    } else {
+        None
+    };
+    let adjacent_vertical_overhang = same_vertical_grid_run
+        && adjacent_cell_boundary.is_some_and(|boundary| {
+            overlap_top <= boundary + CHAR_OVERLAP_MIN_AXIS
+                && overlap_bottom >= boundary - CHAR_OVERLAP_MIN_AXIS
+        });
+
     a_explains
         || b_explains
         || b_right_explains
         || a_left_explains
         || a_right_b_left_explain
         || b_right_a_left_explain
+        || a_bottom_explains
+        || b_top_explains
+        || b_bottom_explains
+        || a_top_explains
+        || a_bottom_b_top_explain
+        || b_bottom_a_top_explain
+        || adjacent_vertical_overhang
 }
 
 pub(super) fn log_rendered_char_overlaps(
@@ -167,9 +232,9 @@ pub(super) fn log_rendered_char_overlaps(
                 tracing::debug!(
                     "char_overhang frame_id={} pass={} overlap=({:.1},{:.1},{:.1}x{:.1}) \
                      a[glyph={} label={:?} face={} cell=({:.1},{:.1},{:.1}x{:.1}) \
-                     bitmap=({:.1},{:.1},{:.1}x{:.1}) overhang=({:.1},{:.1})] \
+                     bitmap=({:.1},{:.1},{:.1}x{:.1}) overhang=({:.1},{:.1},{:.1},{:.1})] \
                      b[glyph={} label={:?} face={} cell=({:.1},{:.1},{:.1}x{:.1}) \
-                     bitmap=({:.1},{:.1},{:.1}x{:.1}) overhang=({:.1},{:.1})]",
+                     bitmap=({:.1},{:.1},{:.1}x{:.1}) overhang=({:.1},{:.1},{:.1},{:.1})]",
                     frame_id,
                     pass_name,
                     overlap.x,
@@ -189,6 +254,8 @@ pub(super) fn log_rendered_char_overlaps(
                     a.glyph_h,
                     a.left_overhang,
                     a.right_overhang,
+                    a.top_overhang,
+                    a.bottom_overhang,
                     b.glyph_index,
                     b.label,
                     b.face_id,
@@ -202,6 +269,8 @@ pub(super) fn log_rendered_char_overlaps(
                     b.glyph_h,
                     b.left_overhang,
                     b.right_overhang,
+                    b.top_overhang,
+                    b.bottom_overhang,
                 );
                 continue;
             }

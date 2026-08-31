@@ -460,6 +460,8 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                                 glyph_h,
                                 left_overhang: (*x - glyph_x).max(0.0),
                                 right_overhang: (glyph_right - cell_right).max(0.0),
+                                top_overhang: (*y - glyph_y).max(0.0),
+                                bottom_overhang: (glyph_y + glyph_h - (*y + *height)).max(0.0),
                             });
                         }
 

@@ -277,6 +277,8 @@ impl RowTessellator for FakeTessellator<'_> {
                 glyph_h: 12.0,
                 left_overhang: 0.0,
                 right_overhang: 0.0,
+                top_overhang: 0.0,
+                bottom_overhang: 0.0,
             });
         }
         tessellation
