@@ -7,6 +7,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod cursor;
+pub mod display_scale;
 pub mod effect_command;
 pub mod effect_config;
 pub mod face;
@@ -34,6 +35,7 @@ pub mod visual_config;
 pub use glyph_matrix::*;
 pub mod tty_capabilities;
 
+pub use display_scale::*;
 pub use effect_command::*;
 pub use effect_config::*;
 pub use face::*;

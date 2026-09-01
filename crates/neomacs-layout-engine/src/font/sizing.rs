@@ -5,6 +5,7 @@
 //! pixels. Keeping this module independent prevents X11 policy from leaking
 //! into the CoreText and DirectWrite catalogs.
 
+use neomacs_display_protocol::{DeviceScale, DisplayObservation, Dpi, XServerKind};
 use neovm_core::emacs_core::display_host::FrameFontSize;
 use neovm_core::face::{Face, FaceHeight};
 use std::sync::OnceLock;
@@ -62,6 +63,128 @@ impl LogicalFontScale {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FontSizing {
     scale: LogicalFontScale,
+}
+
+/// Policy for converting native display observations into frame scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ScalePolicy {
+    /// Preserve GNU X11 behavior except for reliably identified Xwayland,
+    /// whose physical-size report is not a stable logical-DPI authority.
+    Automatic,
+    /// Follow GNU's X11 resource/geometry fallback for every X server.
+    StrictGnu,
+    /// Ignore display-reported font DPI while retaining its device scale.
+    Explicit(Dpi),
+}
+
+/// Provenance of the logical font DPI in a resolved frame profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum FrameScaleSource {
+    ExplicitPolicy,
+    XftResource,
+    X11Geometry,
+    GnuX11Fallback,
+    XwaylandLogicalFallback,
+    PlatformLogical,
+}
+
+/// One atomic answer for logical font sizing and logical-to-device scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameScaleProfile {
+    font_sizing: FontSizing,
+    device_scale: DeviceScale,
+    source: FrameScaleSource,
+}
+
+impl FrameScaleProfile {
+    #[must_use]
+    pub const fn font_sizing(self) -> FontSizing {
+        self.font_sizing
+    }
+
+    #[must_use]
+    pub const fn device_scale(self) -> DeviceScale {
+        self.device_scale
+    }
+
+    #[must_use]
+    pub const fn source(self) -> FrameScaleSource {
+        self.source
+    }
+}
+
+/// Resolve native display facts without performing platform I/O.
+///
+/// An explicit Xft resource remains authoritative, matching GNU Emacs. In
+/// automatic mode only a positively identified Xwayland server receives the
+/// 96-DPI logical fallback; native and unknown X servers retain GNU's raw
+/// geometry calculation, including unusual values used by remote displays.
+#[must_use]
+pub fn resolve_frame_scale(
+    observation: DisplayObservation,
+    policy: ScalePolicy,
+) -> FrameScaleProfile {
+    let device_scale = match observation {
+        DisplayObservation::X11(observation) => observation.device_scale(),
+        DisplayObservation::Wayland { device_scale }
+        | DisplayObservation::Cocoa { device_scale }
+        | DisplayObservation::Windows { device_scale } => device_scale,
+        _ => DeviceScale::ONE,
+    };
+
+    if let ScalePolicy::Explicit(dpi) = policy {
+        return FrameScaleProfile {
+            font_sizing: FontSizing::for_layout_dpi(dpi.get()),
+            device_scale,
+            source: FrameScaleSource::ExplicitPolicy,
+        };
+    }
+
+    match observation {
+        DisplayObservation::X11(observation) => {
+            let (dpi, source) = if let Some(dpi) = observation.xft_dpi() {
+                (dpi.get(), FrameScaleSource::XftResource)
+            } else if matches!(policy, ScalePolicy::Automatic)
+                && matches!(observation.server(), XServerKind::Xwayland)
+            {
+                (96.0, FrameScaleSource::XwaylandLogicalFallback)
+            } else if let Some(geometry) = observation.geometry() {
+                (
+                    geometry.height_px() as f32 * 25.4 / geometry.height_mm() as f32,
+                    FrameScaleSource::X11Geometry,
+                )
+            } else {
+                (100.0, FrameScaleSource::GnuX11Fallback)
+            };
+            FrameScaleProfile {
+                font_sizing: FontSizing::for_layout_dpi(dpi),
+                device_scale,
+                source,
+            }
+        }
+        DisplayObservation::Wayland { .. } => FrameScaleProfile {
+            font_sizing: FontSizing::wayland(),
+            device_scale,
+            source: FrameScaleSource::PlatformLogical,
+        },
+        DisplayObservation::Cocoa { .. } => FrameScaleProfile {
+            font_sizing: FontSizing::gnu_cocoa(),
+            device_scale,
+            source: FrameScaleSource::PlatformLogical,
+        },
+        DisplayObservation::Windows { .. } => FrameScaleProfile {
+            font_sizing: FontSizing::windows_dip(),
+            device_scale,
+            source: FrameScaleSource::PlatformLogical,
+        },
+        _ => FrameScaleProfile {
+            font_sizing: FontSizing::logical(),
+            device_scale,
+            source: FrameScaleSource::PlatformLogical,
+        },
+    }
 }
 
 impl FontSizing {
