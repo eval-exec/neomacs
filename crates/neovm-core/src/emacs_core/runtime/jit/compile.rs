@@ -6026,10 +6026,16 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                 }
                 MirTerm::Goto { target, args } => {
                     // Cross-block args are tagged (block params are tagged).
+                    // Force-tag (write-back) rather than plain retag: the
+                    // block ends here, and a value repeated in the arg list
+                    // then retags ONCE instead of per mention.
                     let mut a: Vec<BlockArg> = Vec::with_capacity(args.len());
                     for v in args {
-                        a.push(BlockArg::Value(mir_as_tagged(
-                            &mut fb, &cval, &cval_raw, *v,
+                        a.push(BlockArg::Value(mir_force_tagged(
+                            &mut fb,
+                            &mut cval,
+                            &mut cval_raw,
+                            *v,
                         )?));
                     }
                     fb.ins().jump(clif_blocks[target.0 as usize], &a);
@@ -6043,20 +6049,34 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                     fallthrough_args,
                     ..
                 } => {
-                    let c = mir_as_tagged(&mut fb, &cval, &cval_raw, *cond)?;
+                    // Force-tag (write-back): both edges' arg sequences are
+                    // emitted straight-line before the brif, so a raw value
+                    // present on BOTH edges (the common shape — a loop
+                    // accumulator) used to be retagged TWICE per boundary
+                    // (mir_as_tagged has no memo). The attack pass measured
+                    // ~2 duplicate shl+or pairs per branch chunk on the
+                    // big-body bench. The block ends at the terminator, so
+                    // clearing the raw mask costs nothing.
+                    let c = mir_force_tagged(&mut fb, &mut cval, &mut cval_raw, *cond)?;
                     let is_nil = fb
                         .ins()
                         .icmp_imm_u(IntCC::Equal, c, Value::NIL.bits() as i64);
                     let mut ta: Vec<BlockArg> = Vec::with_capacity(taken_args.len());
                     for v in taken_args {
-                        ta.push(BlockArg::Value(mir_as_tagged(
-                            &mut fb, &cval, &cval_raw, *v,
+                        ta.push(BlockArg::Value(mir_force_tagged(
+                            &mut fb,
+                            &mut cval,
+                            &mut cval_raw,
+                            *v,
                         )?));
                     }
                     let mut fa: Vec<BlockArg> = Vec::with_capacity(fallthrough_args.len());
                     for v in fallthrough_args {
-                        fa.push(BlockArg::Value(mir_as_tagged(
-                            &mut fb, &cval, &cval_raw, *v,
+                        fa.push(BlockArg::Value(mir_force_tagged(
+                            &mut fb,
+                            &mut cval,
+                            &mut cval_raw,
+                            *v,
                         )?));
                     }
                     let tb = clif_blocks[taken.0 as usize];

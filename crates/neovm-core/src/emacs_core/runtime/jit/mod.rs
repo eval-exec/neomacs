@@ -486,13 +486,18 @@ impl RuntimeState {
     /// guard. Re-measured 2026-08-31: compile cost is now effectively linear
     /// (~3.5 µs/op on loop-shaped bodies, 20 µs/op on branch/deopt-heavy
     /// matchers; that matcher compiles in 7.15 ms, whole type-sim compile
-    /// total 12.6 ms), and a pinned wall A/B of the editing sim with
-    /// `NEOVM_JIT_MAX_OPS=0` is identical to the capped run on every phase.
-    /// The cap therefore no longer guards a stall — but lifting it also buys
-    /// nothing, because the BASELINE tier's code for these bodies still runs
-    /// break-even with the (now much cheaper) interpreter. Keep the cap as a
-    /// code-quality boundary: raise it only when a measurement shows the
-    /// tier's output beating the interpreter on a >256-op body.
+    /// total 12.6 ms).
+    ///
+    /// CORRECTED 2026-09-01: the old "break-even with the interpreter"
+    /// finding was an artifact — the "interpreted" halves of those A/Bs ran
+    /// ~99.99% NATIVE, because OSR ignores the cap (this gate covers only
+    /// entry dispatch) and, in benches, ignored `force_interpret` (fixed:
+    /// `is_hot` now honors it). With an honest Tier-0 baseline the
+    /// >256-op fixture (`jit_bench_big_body_matcher_shape`) runs 12.6x
+    /// FASTER native. The cap's practical effect is therefore only to delay
+    /// the ENTRY tier for big bodies whose loops OSR anyway; lifting it is
+    /// pending a real-workload A/B (byte-compile watch per the GATE_RELAX
+    /// precedent) — see the mid-end campaign notes.
     pub const MAX_TIER_OPS: u32 = 256;
 
     /// [`dispatch`](Self::dispatch) with the tier-up budget scaled by the body
@@ -592,6 +597,14 @@ impl RuntimeState {
     /// True once this function has crossed the tier-up threshold.
     #[inline]
     pub fn is_hot(&self) -> bool {
+        // A forced-cold function must never read as hot — the OSR gate
+        // consults is_hot() directly, and OSR ignoring force_interpret is
+        // how a benchmark's "interpreter" half silently ran ~99.99% native
+        // (the Phase-0 big-body baseline was really the baseline-OSR leaf).
+        #[cfg(test)]
+        if self.force_interpret.load(Ordering::Relaxed) {
+            return false;
+        }
         self.heat.load(Ordering::Relaxed) >= hot_threshold()
     }
 
@@ -798,6 +811,12 @@ mod tests {
             return; // loop heat disabled in this env — nothing to assert
         }
         let threshold = hot_threshold();
+        if threshold <= 5 {
+            // NEOVM_JIT_THRESHOLD=1 (the every-function soak) makes the
+            // "5 calls stay cold" premise false by construction — skip,
+            // like the loop-heat/kill-switch env guards above.
+            return;
+        }
         let rt = Runtime::new();
         // Called a handful of times: nowhere near hot on call count alone.
         for _ in 0..5 {
