@@ -13,7 +13,7 @@ CTX = re.compile(r'&\s*mut\s+(?:[A-Za-z_:]*::)?Context\b')
 STR = re.compile(r'&\s*(?:\'\w+\s+)?(?:crate::heap_types::|heap_types::)?LispString\b')
 
 hits = []
-for crate in ('neovm-core/src', 'neomacs-bin/src', 'neomacs-layout-engine/src'):
+for crate in ('crates/neovm-core/src', 'crates/neomacs/src', 'crates/neomacs-layout-engine/src'):
     for dp, _d, fs in os.walk(os.path.join(ROOT, crate)):
         for f in sorted(fs):
             if not f.endswith('.rs'):

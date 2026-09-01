@@ -17,10 +17,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Linux x86_64 ──────────────────────────────────────────────────────
-  build-linux-x86_64:
-    name: build Linux x86_64
-    runs-on: ubuntu-22.04
+  # ── Linux ─────────────────────────────────────────────────────────────
+  build-linux:
+    name: build Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
@@ -28,7 +38,7 @@ jobs:
       TMPDIR: ${{ github.workspace }}/tmp
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -41,59 +51,95 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
-          cache-key: release-linux-x86_64
-          install-nextest: true
+          cache-key: release-linux-${{ matrix.arch }}
+          target: ${{ matrix.target }}
 
       - name: Install linuxdeploy
         uses: AnimMouse/setup-appimage@c8debfb91e47b03bf4bdc78a4b22fe14ebfaf7f5 # v2
         with:
           filename: linuxdeploy
-          url: https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          cache_key: continuous
+          url: https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch }}.AppImage
+          cache_key: continuous-${{ matrix.arch }}
 
       - name: Install appimagetool
         uses: AnimMouse/setup-appimage@c8debfb91e47b03bf4bdc78a4b22fe14ebfaf7f5 # v2
         with:
           filename: appimagetool
-          url: https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-          cache_key: continuous
+          url: https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage
+          cache_key: continuous-${{ matrix.arch }}
 
-      - name: Build release binaries
-        run: cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled
+      # Split so a compile failure is distinguishable from a bootstrap failure,
+      # and so the expensive half is a step of its own.  The args must match
+      # xtask's initial_cargo_build_args EXACTLY - it builds `-p neomacs` with
+      # these features under this profile, and crates/neomacs/build.rs declares
+      # rerun-if-env-changed=NEOMACS_BUILD_PROFILE - or the second step would
+      # refingerprint and rebuild instead of reusing this.  `-p neomacs` covers
+      # neomacs, neomacsclient and mock-display; they are bins of one package.
+      - name: Compile release binaries
+        env:
+          NEOMACS_BUILD_PROFILE: release
+        run: >-
+          cargo build -p neomacs
+          --features video,neomacs-layout-engine/freetype-bundled
+          --profile release
+
+      - name: Bootstrap and dump
+        run: cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled --skip-build
 
       - name: Set version env
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Package tarball (x86_64-unknown-linux-gnu)
+      - name: Package tarball
         run: |
-          TARGET=x86_64-unknown-linux-gnu
-          STAGING="neomacs-${VERSION}-${TARGET}"
-          mkdir -p "$STAGING"
-          cp target/release/neomacs "$STAGING/"
-          cp target/release/neomacsclient "$STAGING/"
-          cp target/release/neomacs.pdump "$STAGING/"
-          cp -r lisp "$STAGING/"
-          cp -r etc "$STAGING/"
-          cp COPYING "$STAGING/"
-          mkdir -p dist
-          tar czf "dist/${STAGING}.tar.gz" "$STAGING"
-
-      - name: Package AppImage
-        run: ./scripts/package-appimage.sh --skip-build --no-smoke
+          # package-release.sh builds the canonical release tree
+          # (bin/ + share/neomacs/) and its tarball: the archive is runnable
+          # in place and install.sh consumes the same layout.
+          ./scripts/package-release.sh \
+            --target "${{ matrix.target }}" \
+            --skip-build --no-smoke
 
       - name: Package .deb
-        run: ./scripts/package-deb.sh --skip-build --no-smoke
+        run: |
+          ./scripts/package-deb.sh \
+            --target "${{ matrix.target }}" \
+            --skip-build --no-smoke
 
       - name: Package .rpm
-        run: ./scripts/package-rpm.sh --skip-build --no-smoke
+        run: |
+          ./scripts/package-rpm.sh \
+            --target "${{ matrix.target }}" \
+            --skip-build --no-smoke
+
+      - name: Build minimal product
+        run: >-
+          cargo xtask fresh-build --release --minimal
+          --features neomacs-layout-engine/freetype-bundled
+
+      - name: Package minimal tarball
+        run: >-
+          ./scripts/package-release.sh --minimal
+          --target "${{ matrix.target }}"
+          --skip-build --no-smoke
+
+      # A portable AppImage cannot rely on host codec plugin families. Publish
+      # the explicit minimal product here; full video builds are the tar/deb/rpm
+      # artifacts whose GStreamer closure is declared or audited separately.
+      - name: Package minimal AppImage
+        run: |
+          ./scripts/package-appimage.sh \
+            --target "${{ matrix.target }}" \
+            --skip-build --no-smoke
 
       - name: Verify packaged artifacts and GLIBC baseline
-        run: ./scripts/test-linux-release-artifacts.sh --tar-version "$VERSION"
+        run: |
+          ./scripts/test-linux-release-artifacts.sh \
+            --target "${{ matrix.target }}" \
+            --tar-version "$VERSION"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: linux-x86_64
+          name: linux-${{ matrix.arch }}
           path: |
             dist/*.tar.gz
             dist/*.AppImage
@@ -101,84 +147,32 @@ jobs:
             dist/*.rpm
           if-no-files-found: error
 
-  # ── Linux aarch64 ─────────────────────────────────────────────────────
-  build-linux-aarch64:
-    name: build Linux aarch64
-    runs-on: ubuntu-22.04-arm
-    timeout-minutes: 120
-    env:
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: 1
-      TMPDIR: ${{ github.workspace }}/tmp
-    steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-
-      - name: Install system dependencies (apt)
-        run: scripts/ci/setup-linux.sh release
-
-      - name: Prepare workspace temp directory
-        run: mkdir -p "$TMPDIR"
-
-      - name: Set up Rust tooling
-        uses: ./.github/actions/setup-rust
-        with:
-          cache-key: release-linux-aarch64
-          target: aarch64-unknown-linux-gnu
-
-      - name: Build release binaries
-        run: cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled
-
-      - name: Set version env
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-
-      - name: Package tarball (aarch64-unknown-linux-gnu)
-        run: |
-          TARGET=aarch64-unknown-linux-gnu
-          STAGING="neomacs-${VERSION}-${TARGET}"
-          mkdir -p "$STAGING"
-          cp target/release/neomacs "$STAGING/"
-          cp target/release/neomacsclient "$STAGING/"
-          cp target/release/neomacs.pdump "$STAGING/"
-          cp -r lisp "$STAGING/"
-          cp -r etc "$STAGING/"
-          cp COPYING "$STAGING/"
-          mkdir -p dist
-          tar czf "dist/${STAGING}.tar.gz" "$STAGING"
-
-      - name: Verify packaged artifact and GLIBC baseline
-        run: |
-          ./scripts/test-linux-release-artifacts.sh \
-            --target aarch64-unknown-linux-gnu \
-            --tar-version "$VERSION" \
-            --formats tar
-
-      - name: Upload Linux aarch64 artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: linux-aarch64
-          path: dist/*.tar.gz
-          if-no-files-found: error
-
   # ── macOS aarch64 (Apple Silicon) ─────────────────────────────────────
   build-macos-aarch64:
     name: build macOS aarch64
-    runs-on: macos-latest
-    timeout-minutes: 120
+    # Pin the image so a release does not change underneath us when GitHub
+    # advances `macos-latest`.  GitHub's standard macos-15 image is arm64.
+    runs-on: macos-15
+    timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      GSTREAMER_VERSION: 1.26.9
+      # vendor-macos-runtime.sh rewrites every non-system load command to
+      # @executable_path/../Frameworks/..., which is LONGER than the original
+      # install name.  Mach-O has no room to grow those load commands unless
+      # the linker reserved it, so install_name_tool failed on mock-display
+      # with "larger updated load commands do not fit (the program must be
+      # relinked, and you may need to use -headerpad_max_install_names)".
+      # Reserve the space for every binary that goes into the bundle -- the
+      # others only fit by accident of their existing padding.
+      RUSTFLAGS: "-C link-arg=-Wl,-headerpad_max_install_names"
+    outputs:
+      distribution_mode: ${{ steps.macos-signing.outputs.distribution_mode }}
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Install system dependencies (brew)
-        run: brew install pkg-config gstreamer
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
@@ -189,82 +183,86 @@ jobs:
       - name: Set version env
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Build release binaries
-        run: cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled
+      # Split so a compile failure is distinguishable from a bootstrap failure,
+      # and so the expensive half is a step of its own.  The args must match
+      # xtask's initial_cargo_build_args EXACTLY - it builds `-p neomacs` with
+      # these features under this profile, and crates/neomacs/build.rs declares
+      # rerun-if-env-changed=NEOMACS_BUILD_PROFILE - or the second step would
+      # refingerprint and rebuild instead of reusing this.  `-p neomacs` covers
+      # neomacs, neomacsclient and mock-display; they are bins of one package.
+      - name: Compile release binaries
+        env:
+          NEOMACS_BUILD_PROFILE: release
+        run: cargo build -p neomacs --features neomacs-layout-engine/freetype-bundled --profile release
 
-      - name: Package tarball (aarch64-apple-darwin)
-        run: |
-          TARGET=aarch64-apple-darwin
-          STAGING="neomacs-${VERSION}-${TARGET}"
-          mkdir -p "$STAGING"
-          cp target/release/neomacs "$STAGING/"
-          cp target/release/neomacsclient "$STAGING/"
-          cp target/release/neomacs.pdump "$STAGING/"
-          cp -r lisp "$STAGING/"
-          cp -r etc "$STAGING/"
-          cp COPYING "$STAGING/"
-          mkdir -p dist
-          tar czf "dist/${STAGING}.tar.gz" "$STAGING"
+      - name: Bootstrap and dump
+        run: cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled --skip-build
 
-      - name: Build and package .app + .dmg
-        run: ./scripts/package-macos-app.sh --no-smoke
+      - name: Configure Developer ID signing and notarization
+        id: macos-signing
+        env:
+          # Developer ID is an optional trust upgrade. Set this repository
+          # variable to 1 only after all five secrets below are configured.
+          MACOS_REQUIRE_SIGNING: ${{ vars.MACOS_REQUIRE_SIGNING || '0' }}
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: ./scripts/configure-macos-signing-ci.sh
+
+      - name: Build and package complete macOS application
+        run: ./scripts/package-macos-app.sh --skip-build
+
+      - name: Upload notarization diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-notarization-diagnostics
+          path: dist/notary/*.json
+          if-no-files-found: ignore
 
       - name: Upload macOS aarch64 artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-aarch64
           path: |
-            dist/*.tar.gz
             dist/*.dmg
+            dist/*.zip
+            dist/*.tar.gz
           if-no-files-found: error
 
-  # ── Windows x86_64 ────────────────────────────────────────────────────
-  build-windows-x86_64:
-    name: build Windows x86_64
-    runs-on: windows-latest
+  # Test on a second, clean machine so the SDK installed by the build cannot
+  # satisfy an accidentally external dependency or runtime resource lookup.
+  build-windows:
+    name: build Windows ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: aarch64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      GSTREAMER_VERSION: 1.26.9
+      NEOMACS_RELEASE_TARGET: ${{ matrix.target }}
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Restore GStreamer SDK cache
-        id: cache-gstreamer
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: windows-gstreamer-msvc-x86_64-${{ env.GSTREAMER_VERSION }}-v1
-
-      - name: Install GStreamer SDK
-        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1 -Install
-
-      - name: Save GStreamer SDK cache
-        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: ${{ steps.cache-gstreamer.outputs.cache-primary-key }}
-
-      - name: Configure GStreamer SDK
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
-          cache-key: release-windows-msvc-x86_64
-          target: x86_64-pc-windows-msvc
+          cache-key: release-windows-msvc-${{ matrix.arch }}
+          target: ${{ matrix.target }}
 
       - name: Install NSIS
         run: choco install nsis -y
@@ -273,34 +271,39 @@ jobs:
         shell: powershell
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
 
-      - name: Verify GStreamer pkg-config
-        shell: bash
-        run: source scripts/windows-gstreamer-env.sh --verify
-
-      - name: Build release binaries
+      # Split so a compile failure is distinguishable from a bootstrap failure.
+      # The args must match xtask's initial_cargo_build_args EXACTLY, including
+      # NEOMACS_BUILD_PROFILE, which crates/neomacs/build.rs declares
+      # rerun-if-env-changed on - otherwise the bootstrap step refingerprints
+      # and rebuilds instead of reusing this.
+      - name: Compile release binaries
         shell: bash
         timeout-minutes: 150
+        env:
+          NEOMACS_BUILD_PROFILE: release
         run: |
-          source scripts/windows-gstreamer-env.sh
+          cargo build -p neomacs --features neomacs-layout-engine/freetype-bundled --profile release
+
+      - name: Bootstrap and dump
+        shell: bash
+        timeout-minutes: 60
+        run: |
           # The pdump generation runs neomacs, whose startup expands `~`. The
           # minimal CI build environment sets USERPROFILE/APPDATA but not HOME,
           # so `~` would stay literal and `directory-files "~"` would fail. Give
           # it HOME explicitly (a real Windows session always has one; GNU's
           # w32.c init_environment likewise guarantees HOME is set).
           export HOME="${USERPROFILE:-$GITHUB_WORKSPACE}"
-          cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled
+          cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled --skip-build
 
       - name: Set version env (bash)
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Install zip
-        run: choco install zip -y --no-progress
-
-      - name: Package zip (x86_64-pc-windows-msvc)
+      - name: Package zip
         shell: bash
         run: |
-          TARGET=x86_64-pc-windows-msvc
+          TARGET="$NEOMACS_RELEASE_TARGET"
           STAGING="neomacs-${VERSION}-${TARGET}"
           mkdir -p "$STAGING"
           cp target/release/neomacs.exe "$STAGING/"
@@ -309,28 +312,29 @@ jobs:
           cp -r lisp "$STAGING/"
           cp -r etc "$STAGING/"
           cp COPYING "$STAGING/"
-          ./scripts/vendor-windows-gstreamer-runtime.sh \
-            --package-root "$STAGING" \
-            --bin-dir "$STAGING"
           mkdir -p dist
-          zip -r "dist/${STAGING}.zip" "$STAGING"
+          7z a -tzip "dist/${STAGING}.zip" "$STAGING"
 
       - name: Package .exe installer
         shell: bash
         timeout-minutes: 20
         run: |
-          source scripts/windows-gstreamer-env.sh
-          ./scripts/package-windows-installer.sh --skip-build --no-smoke
+          ./scripts/package-windows-installer.sh \
+            --target "$NEOMACS_RELEASE_TARGET" \
+            --skip-build --no-smoke
 
       - name: Verify Windows installer ownership contract
         shell: powershell
         timeout-minutes: 10
-        run: ./scripts/run-windows-installer-contract.ps1 -ConfirmEphemeralRunner
+        run: |
+          ./scripts/run-windows-installer-contract.ps1 `
+            -Architecture "${{ matrix.arch }}" `
+            -ConfirmEphemeralRunner
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-x86_64
+          name: windows-${{ matrix.arch }}
           path: |
             dist/*.zip
             dist/*.exe
@@ -343,24 +347,176 @@ jobs:
       contents: write
       discussions: write
     needs:
-      - build-linux-x86_64
-      - build-linux-aarch64
+      - build-linux
       - build-macos-aarch64
-      - build-windows-x86_64
+      - build-windows
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Download all artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true
+
+      - name: Stage the installer and its checksum manifest
+        run: |
+          # install.sh ships as a release asset so that
+          # https://github.com/eval-exec/neomacs/releases/latest/download/install.sh
+          # always serves the installer that matches the assets it downloads
+          # (the neomacs.org entry point fetches exactly that URL).
+          install -m 0644 install.sh dist/install.sh
+          # The glob expands before SHA256SUMS exists, so the manifest covers
+          # every asset (and the installer) but never itself.
+          cd dist
+          sha256sum ./* > SHA256SUMS
+
+      - name: Generate GitHub changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" \
+            -f target_commitish="$GITHUB_SHA" \
+            --jq .body > generated-release-notes.md
+
+      - name: Generate release body
+        run: |
+          ./scripts/generate-release-notes.sh \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --dist-dir dist \
+            --generated-notes generated-release-notes.md \
+            --output release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: NEO Emacs ${{ github.ref_name }}
+          body_path: release-notes.md
           files: dist/*
-          generate_release_notes: true
           discussion_category_name: Announcements
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Notify the independently owned AUR publisher only after every native asset
+  # and SHA256SUMS have become public. The downstream repository retains its
+  # own AUR SSH credential and publishing policy; this job can only send the
+  # versioned release fact. Its six-hour reconciliation schedule recovers a
+  # missed dispatch without coupling AUR availability to release creation.
+  notify-aur-publisher:
+    name: notify AUR publisher
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: create-release
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dispatch exact stable release
+        env:
+          # Fine-grained token or GitHub App token scoped to repository
+          # Irfrit/neomacs-aur. It needs only the target permission required by
+          # the repository-dispatch endpoint; never store the AUR SSH key here.
+          GH_TOKEN: ${{ secrets.NEOMACS_AUR_DISPATCH_TOKEN }}
+        run: |
+          ./scripts/dispatch-release-event.sh \
+            --target-repository Irfrit/neomacs-aur \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA"
+
+  # Package Docker images only after the native GitHub release and checksum
+  # manifest exist. The reusable workflow also supports manual backfills of
+  # an already-published release such as v0.0.15.
+  publish-docker:
+    name: publish Docker release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: create-release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-release.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+    secrets:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # ── Install script verification ───────────────────────────────────────
+  # Installs through the public curl|bash entry exactly as a user would:
+  # the installer asset is downloaded from the just-published release, and
+  # its own post-install check batch-starts the binary with no environment
+  # variables, exercising the runtime-root resolution through the
+  # ~/.local/bin symlink chain.
+  verify-macos-install-script:
+    name: verify install.sh on macOS from the published release
+    # This MUST depend on create-release: it reads an asset OF the release.
+    # It previously ran inside a job that create-release itself depended on, so
+    # the release could not be made until a step passed that could only pass
+    # once the release existed - a cycle that can never be satisfied.
+    needs: create-release
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run the published installer
+        run: |
+          # Same user path as the Linux verify-install-script job: fetch the
+          # installer asset from the just-published release and let its own
+          # post-install check batch-start the app bundle's binary through
+          # the ~/.local/bin symlink (no environment variables).
+          curl -fsSL \
+            "https://github.com/eval-exec/neomacs/releases/download/${GITHUB_REF_NAME}/install.sh" \
+            -o install.sh
+          sh install.sh --tag "${GITHUB_REF_NAME}"
+          test -x "$HOME/.local/bin/neomacs"
+          env -u NEOMACS_RUNTIME_ROOT \
+            "$HOME/.local/bin/neomacs" --batch --eval '(princ (emacs-version))'
+
+  verify-install-script:
+    name: verify install.sh from the published release
+    needs: create-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      prefix: ${{ github.workspace }}/tmp/prefix
+    steps:
+      - name: Run the published installer
+        run: |
+          curl -fsSL \
+            "https://github.com/eval-exec/neomacs/releases/download/${GITHUB_REF_NAME}/install.sh" \
+            -o install.sh
+          sh install.sh --tag "${GITHUB_REF_NAME}" --prefix "$prefix"
+
+      - name: Assert the installed layout
+        run: |
+          set -eux
+          version="${GITHUB_REF_NAME#v}"
+          test -x "$prefix/bin/neomacs"
+          test "$(readlink "$prefix/share/neomacs/current")" = "versions/$version"
+          test "$(readlink "$prefix/bin/neomacs")" = "../share/neomacs/current/bin/neomacs"
+          exe="$(readlink -f "$prefix/bin/neomacs")"
+          ver_dir="$(dirname "$(dirname "$exe")")"
+          test -d "$ver_dir/share/neomacs/lisp"
+          # The dump lives in the archlib -- GNU's
+          # ${libexecdir}/emacs/${version}/${configuration} (configure.ac:290)
+          # -- and `exec-directory' has to name that same directory
+          # (src/callproc.c:1961).  Ask the installed binary rather than
+          # rebuilding the path here, so this asserts what it resolved.
+          archlib="$(
+            env -u NEOMACS_RUNTIME_ROOT -u EMACSPATH \
+              "$prefix/bin/neomacs" --batch --eval '(princ exec-directory)'
+          )"
+          case "$archlib" in
+            "$ver_dir"/libexec/neomacs/*/*/) ;;
+            *) echo "exec-directory is not the installed archlib: $archlib" >&2; exit 1 ;;
+          esac
+          test -f "$archlib/neomacs.pdump"
+          env -u NEOMACS_RUNTIME_ROOT \
+            "$prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'

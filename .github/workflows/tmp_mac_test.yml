@@ -17,12 +17,12 @@ jobs:
       RUST_LOG: info
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install system dependencies (brew)
-        run: brew install pkg-config gstreamer
+        run: brew install pkg-config
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
@@ -40,8 +40,11 @@ jobs:
           # so `load' must both FIND and dlopen a module built as `NAME.so'
           # (emacs-libvterm writes exactly that). Assert the Lisp-visible
           # contract, then prove a `.so' is actually located through
-          # `get-load-suffixes'.
-          ./target/release/neomacs -Q --batch --eval '
+          # `get-load-suffixes'. The Elisp goes through a quoted heredoc and
+          # `-l': its backquote-quote apostrophes (`require', `locate-file')
+          # would close a single-quoted `--eval' argument mid-script.
+          script="$(mktemp)"
+          cat >"$script" <<'ELISP'
             (let* ((dir (make-temp-file "neomacs-module-suffix" t))
                    (built (expand-file-name "fake-module.so" dir)))
               (with-temp-file built (insert "not a real module"))
@@ -66,7 +69,9 @@ jobs:
                   (error (setq found t)))
                 (princ (format "require-reached-the-file=%S\n" found))
                 (unless found
-                  (error "`require' must find a module built as NAME.so on darwin"))))'
+                  (error "`require' must find a module built as NAME.so on darwin"))))
+          ELISP
+          ./target/release/neomacs -Q --batch -l "$script"
 
       - name: GUI smoke (launch, frame snapshot, PNG readback)
         run: |
@@ -81,7 +86,7 @@ jobs:
           export RUST_BACKTRACE=1
           # The fixture self-terminates after ~2s (run-at-time kill-emacs);
           # background + watchdog guards against a wgpu-init hang.
-          ./target/release/neomacs -Q -l neomacs-gui-tests/fixtures/startup-smoke.el \
+          ./target/release/neomacs -Q -l crates/neomacs-gui-tests/fixtures/startup-smoke.el \
             > gui-artifacts/neomacs.log 2>&1 &
           PID=$!
           for _ in $(seq 1 60); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done

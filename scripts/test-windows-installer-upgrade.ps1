@@ -151,7 +151,23 @@ try {
 
   Set-Content -Path $unrelated -Value "not installer owned" -NoNewline
 
+  # Version A's uninstaller is run IN PLACE during the upgrade, and an in-place
+  # uninstaller cannot delete itself, so A's uninstall.exe is still on disk when
+  # B installs over it.  B must overwrite it via WriteUninstaller; if that write
+  # is lost, every later uninstall runs A's file list, which deletes the shared
+  # payload and leaves anything only B owns behind - exactly what aarch64 shows.
+  # Hash it either side of the upgrade so a lost overwrite is reported HERE,
+  # naming the cause, rather than surfacing later as a stray file.
+  $uninstallerHashBefore = (Get-FileHash -Path $uninstaller -Algorithm SHA256).Hash
+
   Invoke-Installer -Path $installerB
+
+  $uninstallerHashAfter = (Get-FileHash -Path $uninstaller -Algorithm SHA256).Hash
+  if ($uninstallerHashBefore -eq $uninstallerHashAfter) {
+    throw ("version B did not replace the uninstaller: it is still byte-identical " +
+      "to version A's ($uninstallerHashAfter), so an uninstall would run A's " +
+      "file list and leave B's own files behind")
+  }
 
   if (Test-Path $aOnly) {
     throw "version B left a file owned only by version A"
@@ -166,24 +182,127 @@ try {
     throw "upgrade deleted a file not owned by either installer"
   }
 
-  $process = Start-Process -FilePath $uninstaller -ArgumentList "/S" -PassThru -Wait
+  # `_?=' is NSIS's documented switch for running an uninstaller IN PLACE.
+  # Without it a silent uninstaller copies itself to %TEMP% and relaunches, so
+  # -Wait returns before any deletion happens and the caller is left polling a
+  # guessed budget.  That guess is what failed here: on windows-11-arm the
+  # relaunched copy is a 32-bit x86 image under emulation, a wholly different
+  # cost from the native aarch64 build, and 5s then 10s both expired with the
+  # file still present.  Running in place removes the race instead of pricing
+  # it -- the process we wait on is the one that deletes.
+  # ONE argument string, not two.  NSIS reads `_?=' as the raw remainder of the
+  # command line, and the install directory contains a space ("NEO Emacs"), so
+  # passing it as its own -ArgumentList element makes PowerShell quote it and
+  # NSIS then takes the quote as part of the path.  It fails the way this whole
+  # bug already looks -- exit 0, nothing deleted -- so the quoting must not
+  # happen in the first place.
+  # ProcessStartInfo.Arguments reaches CreateProcess VERBATIM.  Start-Process
+  # builds its command line from -ArgumentList and can quote an element that
+  # contains a space, and the install directory has one ("NEO Emacs"); NSIS
+  # reads _?= as the raw remainder of the command line, so a quote lands inside
+  # the path and the switch is silently ignored.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $uninstaller
+  $psi.Arguments = "/S _?=$installDir"
+  $psi.UseShellExecute = $false
+  $process = [System.Diagnostics.Process]::Start($psi)
+  $process.WaitForExit()
   if ($process.ExitCode -ne 0) {
     throw "version B uninstaller exited with code $($process.ExitCode)"
   }
   $installed = $false
 
-  for ($attempt = 0; $attempt -lt 50 -and (Test-Path $bOnly); $attempt++) {
+  # ATTEST that _?= was honoured rather than assuming it.  An in-place
+  # uninstaller cannot delete itself - its own image is open - while one that
+  # self-copied to %TEMP% and relaunched deletes the original.  So the
+  # uninstaller still being here IS the evidence the switch took effect, and
+  # its absence is the precise failure that looks like "deleted nothing":
+  # without _?= the work happens in a relaunched copy, which on windows-11-arm
+  # is an emulated x86 image that does not carry out the deletions.
+  $uninstallerLeftBehind = Join-Path $installDir "uninstall.exe"
+  if (-not (Test-Path $uninstallerLeftBehind)) {
+    throw ("the uninstaller removed itself, so _?= was not honoured and it " +
+      "self-copied and relaunched instead of running in place")
+  }
+  # The image of the just-exited uninstaller can still be held for a moment,
+  # which is the same effect that loses WriteUninstaller during the upgrade, so
+  # a single removal here fails silently.  Retry while it is released.
+  for ($i = 0; $i -lt 50 -and (Test-Path $uninstallerLeftBehind); $i++) {
+    Remove-Item $uninstallerLeftBehind -Force -ErrorAction SilentlyContinue
+    if (Test-Path $uninstallerLeftBehind) { Start-Sleep -Milliseconds 100 }
+  }
+
+  # An NSIS uninstaller launched with /S copies itself to %TEMP% and relaunches,
+  # so -Wait above returns before the deletion happens: this poll IS the wait.
+  # Give it the same 10s budget the process waits in this file already use
+  # (WaitForExit(10000), and the 100-attempt loops above) rather than half of
+  # it -- 5s passed on windows-latest and failed on windows-11-arm.
+  #
+  # Report the elapsed wait on failure. Without it a repeat failure cannot be
+  # told apart from a budget that is merely still too small, which is exactly
+  # the ambiguity that made the first one expensive to diagnose.
+  $uninstallTimeout = [TimeSpan]::FromSeconds(10)
+  $waited = [Diagnostics.Stopwatch]::StartNew()
+  while ((Test-Path $bOnly) -and $waited.Elapsed -lt $uninstallTimeout) {
     Start-Sleep -Milliseconds 100
   }
+  $waited.Stop()
   if (Test-Path $bOnly) {
-    throw "version B uninstaller left an installer-owned file"
+    # Two guesses have already been spent on this (a wait budget, then argument
+    # quoting), each costing a CI round.  Report what the uninstaller actually
+    # did instead of inferring it: whether it deleted nothing, or everything
+    # except this file, distinguishes "the uninstaller did not run its deletes"
+    # from "this path was never in its uninstall list", and no amount of
+    # re-reading the script can tell those apart.
+    Write-Host "=== uninstall diagnostics ==="
+    Write-Host "install dir exists: $(Test-Path $installDir)"
+    if (Test-Path $installDir) {
+      Write-Host "--- surviving files under $installDir ---"
+      Get-ChildItem -Path $installDir -Recurse -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "  $($_.FullName)" }
+    }
+    foreach ($probe in @($aOnly, $bOnly, $common, $unrelated, $uninstaller)) {
+      Write-Host "  exists=$(Test-Path $probe)  $probe"
+    }
+    Write-Host "=== end diagnostics ==="
+    throw ("version B uninstaller left an installer-owned file " +
+      "after waiting $([int]$waited.Elapsed.TotalMilliseconds)ms " +
+      "(budget $([int]$uninstallTimeout.TotalMilliseconds)ms): $bOnly")
   }
   if (-not (Test-Path $unrelated -PathType Leaf)) {
     throw "version B uninstaller deleted an unrelated file"
   }
 
   Remove-Item $unrelated -Force
-  Remove-Item $installDir -Force
+
+  # Remove-Item without -Recurse only succeeds on an EMPTY directory, so this
+  # line was an assertion pretending to be cleanup - and it reports a non-empty
+  # directory as "Object reference not set to an instance of an object", which
+  # says nothing about what survived.  Assert it properly, then clean up.
+  # uninstall.exe is excluded by construction, not by convenience: this test
+  # runs the uninstaller IN PLACE with _?=, and an in-place uninstaller cannot
+  # delete its own open image.  A real user's uninstall self-copies and does
+  # remove it.  Everything else here is a file the uninstaller owned and should
+  # have deleted.
+  $survivingFiles = @(
+    Get-ChildItem -Path $installDir -Recurse -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -ne $uninstaller }
+  )
+  if ($survivingFiles.Count -gt 0) {
+    throw ("the uninstaller left files behind: " +
+      (($survivingFiles | ForEach-Object { $_.FullName }) -join ", "))
+  }
+  # Empty directories are reported, not fatal: NSIS RMDir without /r
+  # deliberately preserves a directory that still holds anything, so leftover
+  # empty ones are untidy rather than a broken uninstall.
+  $survivingDirs = @(
+    Get-ChildItem -Path $installDir -Recurse -Directory -ErrorAction SilentlyContinue
+  )
+  if ($survivingDirs.Count -gt 0) {
+    Write-Host ("note: uninstall left empty directories: " +
+      (($survivingDirs | ForEach-Object { $_.FullName }) -join ", "))
+  }
+  Remove-Item $installDir -Recurse -Force
 } finally {
   if ($installed -and (Test-Path $uninstaller -PathType Leaf)) {
     Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait | Out-Null

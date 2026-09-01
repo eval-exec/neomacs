@@ -11,10 +11,13 @@ body:
 
         Before submitting, please collect build/runtime diagnostics.
 
-        1. Run build info:
+        1. Run the exact Neomacs executable that showed the bug with `--version`:
            ```bash
-           ./target/release/neomacs --help
+           neomacs --version
            ```
+           If it is not on `PATH`, use its full path, for example
+           `./target/release/neomacs --version`. Paste **every line** of the
+           output into **Neomacs --version output** below.
         2. Reproduce with verbose logs:
            ```bash
            RUST_LOG=debug NEOMACS_LOG=info ./target/release/neomacs 2>&1 | tee neomacs-debug.log
@@ -53,17 +56,18 @@ body:
   - type: textarea
     id: build_info
     attributes:
-      label: Runtime diagnostics
-      description: Paste the full output.
+      label: Neomacs --version output
+      description: Paste every line printed by the exact Neomacs executable that showed the bug.
+      placeholder: Paste the complete output of `neomacs --version` here.
       render: shell
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: extra
     attributes:
       label: Extra context
       description: |
-        Screenshots, videos, bisect results, related issues, and upload DEBUG level logs file: (get verbose logs by `RUST_LOG=debug` envirnment .
+        Add screenshots, videos, bisect results, related issues, and the DEBUG log collected above.
     validations:
       required: false

@@ -87,11 +87,11 @@
 ;; Surface handles are GC-managed: dropping the last reference frees the
 ;; GPU texture at the next garbage collection.  Overlay properties DO
 ;; root their values in NeoMacs — `BufferManager::trace_roots'
-;; (neovm-core/src/buffer/buffer.rs) walks `buffer.overlays.trace_roots',
-;; `OverlayList::trace_roots' (neovm-core/src/buffer/overlay.rs) pushes
+;; (crates/neovm-core/src/buffer/buffer.rs) walks `buffer.overlays.trace_roots',
+;; `OverlayList::trace_roots' (crates/neovm-core/src/buffer/overlay.rs) pushes
 ;; every overlay object, and the mark phase traces each overlay's
 ;; property list (the `VecLikeType::Overlay' arm in
-;; neovm-core/src/tagged/gc.rs, "overlay-plist") — so the handle stored
+;; crates/neovm-core/src/tagged/gc.rs, "overlay-plist") — so the handle stored
 ;; in the overlay's `display' spec and `ob-wgsl-surface' property cannot
 ;; be reaped while the overlay is displayed.  A buffer-local registry
 ;; (`ob-wgsl--overlays') additionally keeps handles of overlays that

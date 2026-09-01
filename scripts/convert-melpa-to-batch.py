@@ -12,7 +12,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1] / "neomacs-melpa-tests" / "src" / "parity_tests"
+ROOT = Path(__file__).resolve().parents[1] / "crates" / "neomacs-melpa-tests" / "src" / "parity_tests"
 SKIP_PACKAGES = {
     "a",
     "aa_edit_mode",

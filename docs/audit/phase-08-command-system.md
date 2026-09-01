@@ -19,11 +19,11 @@ handling as one semantic subsystem.
 
 VM/core side:
 
-- `neovm-core/src/emacs_core/interactive.rs`
-- `neovm-core/src/emacs_core/keymap.rs`
-- `neovm-core/src/emacs_core/kbd.rs`
-- `neovm-core/src/emacs_core/keyboard/`
-- `neovm-core/src/emacs_core/kmacro.rs`
+- `neovm-core/src/emacs_core/commands/interactive/mod.rs`
+- `neovm-core/src/emacs_core/commands/keymap/mod.rs`
+- `neovm-core/src/emacs_core/commands/kbd/mod.rs`
+- `neovm-core/src/emacs_core/commands/keyboard/`
+- `neovm-core/src/emacs_core/commands/kmacro/mod.rs`
 
 Frontend/runtime side:
 

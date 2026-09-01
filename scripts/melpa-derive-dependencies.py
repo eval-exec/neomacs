@@ -43,7 +43,7 @@ import re
 import sys
 
 WORKSPACE = pathlib.Path(__file__).resolve().parent.parent
-DEFAULT_MANIFEST = WORKSPACE / "neomacs-melpa-test-support/melpa-package-lock.tsv"
+DEFAULT_MANIFEST = WORKSPACE / "crates/neomacs-melpa-test-support/melpa-package-lock.tsv"
 DEFAULT_CACHES = (
     WORKSPACE / "tmp/melpa/source-install-cache",
     WORKSPACE / "tmp/melpa/package-cache",

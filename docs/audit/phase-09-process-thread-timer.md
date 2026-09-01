@@ -20,12 +20,12 @@ treating them as isolated utility modules.
 
 VM/core side:
 
-- `neovm-core/src/emacs_core/process.rs`
-- `neovm-core/src/emacs_core/callproc/mod.rs`
-- `neovm-core/src/emacs_core/network.rs`
-- `neovm-core/src/emacs_core/threads.rs`
-- `neovm-core/src/emacs_core/timer.rs`
-- `neovm-core/src/emacs_core/timefns.rs`
+- `neovm-core/src/emacs_core/system/process/mod.rs`
+- `neovm-core/src/emacs_core/system/callproc/mod.rs`
+- `neovm-core/src/emacs_core/system/network/mod.rs`
+- `neovm-core/src/emacs_core/runtime/threads/mod.rs`
+- `neovm-core/src/emacs_core/system/timer/mod.rs`
+- `neovm-core/src/emacs_core/system/timefns/mod.rs`
 
 Host/runtime side:
 
@@ -48,13 +48,13 @@ Bad:
 
 - GNU couples process/timer behavior tightly to its event loop.
 - Neomacs uses a more distributed runtime/worker/host architecture.
-- `neovm-core/src/emacs_core/threads.rs` explicitly implements a simulated
+- `neovm-core/src/emacs_core/runtime/threads/mod.rs` explicitly implements a simulated
   thread model where `make-thread` is an API shim rather than GNU-equal thread
   semantics.
-- `neovm-core/src/emacs_core/timer.rs` currently owns a standalone
+- `neovm-core/src/emacs_core/system/timer/mod.rs` currently owns a standalone
   `Instant`-based vector scheduler rather than a GNU-shaped timer/event-loop
   integration.
-- `neovm-core/src/emacs_core/process.rs` uses a Rust `polling::Poller` and
+- `neovm-core/src/emacs_core/system/process/mod.rs` uses a Rust `polling::Poller` and
   direct OS child/network management, while `neovm-host-abi` and
   `neovm-worker` add a separate task/affinity/runtime layer.
 - That makes Lisp-visible ordering and state transitions a real source-level
@@ -64,7 +64,7 @@ Bad:
   now shows a better ownership story than when this audit started:
   `accept-process-output` and `sleep-for` both route through a shared
   wait/service path, sync subprocess ownership lives primarily in
-  `callproc/mod.rs`, process callbacks use one shared runtime envelope, timer
+  `system/callproc/mod.rs`, process callbacks use one shared runtime envelope, timer
   callbacks now preserve GNU-visible state like `deactivate-mark`, and
   short-lived children now deliver filter+sentinel in the same wait cycle.
   `read_char` also now gives ready input priority over timer/process callbacks

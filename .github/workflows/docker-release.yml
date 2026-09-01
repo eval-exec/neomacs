@@ -1,0 +1,583 @@
+name: publish Docker release
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Published GitHub release tag to package
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published GitHub release tag to package (for example v0.0.15)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+# Serialize every release, not merely identical Git refs. The manifest job also
+# compares semantic versions before moving aliases, so a manual older backfill
+# cannot race or regress latest/minor/major tags.
+concurrency:
+  group: container-release
+  cancel-in-progress: false
+
+env:
+  DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/neomacs
+  GHCR_IMAGE: ghcr.io/${{ github.repository }}
+  RELEASE_TAG: ${{ inputs.release_tag }}
+
+jobs:
+  publish-platform:
+    name: publish Docker ${{ matrix.platform }} digest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux/amd64
+            digest_artifact: docker-digest-amd64
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux/arm64
+            digest_artifact: docker-digest-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - name: Checkout container packaging code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download and verify canonical Linux release archive
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          # Docker tags cannot represent SemVer's '+' build-metadata separator
+          # without a lossy rewrite, so release tags with build metadata are
+          # intentionally unsupported rather than allowed to collide.
+          semver_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+          valid_semver=true
+          if [[ "$RELEASE_TAG" =~ $semver_pattern ]]; then
+            prerelease="${BASH_REMATCH[5]:-}"
+            if [[ -n "$prerelease" ]]; then
+              IFS=. read -r -a prerelease_identifiers <<<"$prerelease"
+              for identifier in "${prerelease_identifiers[@]}"; do
+                if [[ "$identifier" =~ ^[0-9]+$ \
+                  && "$identifier" != 0 \
+                  && "$identifier" == 0* ]]; then
+                  valid_semver=false
+                fi
+              done
+            fi
+          else
+            valid_semver=false
+          fi
+          if [[ "$valid_semver" != true ]]; then
+            echo "release_tag is not a supported semantic version tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          test -n "${DOCKERHUB_IMAGE%/neomacs}"
+
+          version="${RELEASE_TAG#v}"
+          archive_name="neomacs-$version-$TARGET_TRIPLE.tar.gz"
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$archive_name" \
+            --pattern SHA256SUMS \
+            --dir dist
+          test -f "dist/$archive_name"
+          test -f dist/SHA256SUMS
+
+          # Older releases wrote bare basenames while current packaging uses
+          # sha256sum's "./name" spelling. Accept only those two equivalent,
+          # unambiguous manifest entries.
+          expected="$(awk -v name="$archive_name" \
+            '$2 == name || $2 == "./" name { print $1 }' \
+            dist/SHA256SUMS)"
+          if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "SHA256SUMS has no unique digest for $archive_name" >&2
+            exit 1
+          fi
+          actual="$(sha256sum "dist/$archive_name" | cut -d ' ' -f 1)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "release archive checksum mismatch for $archive_name" >&2
+            exit 1
+          fi
+
+          release_git="$(gh api \
+            "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" \
+            --jq .sha)"
+          if [[ ! "$release_git" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release tag did not resolve to a commit: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          {
+            echo "archive=dist/$archive_name"
+            echo "release_git=$release_git"
+            echo "version=$version"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Prepare canonical runtime context
+        id: prepare
+        env:
+          RELEASE_ARCHIVE: ${{ steps.release.outputs.archive }}
+          RELEASE_GIT: ${{ steps.release.outputs.release_git }}
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          ./scripts/prepare-docker-runtime-context.sh \
+            --archive "$RELEASE_ARCHIVE" \
+            --target "$TARGET_TRIPLE" \
+            --release-git "$RELEASE_GIT" \
+            --output "$TMPDIR/docker-context"
+
+          echo "release_git=$RELEASE_GIT" >>"$GITHUB_OUTPUT"
+
+      - name: Derive OCI metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.release_tag }}
+          labels: |
+            org.opencontainers.image.title=NEO Emacs
+            org.opencontainers.image.description=Emacs rewritten in Rust with a GPU display engine
+            org.opencontainers.image.documentation=https://github.com/eval-exec/neomacs/blob/main/docs/docker.md
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+            org.opencontainers.image.revision=${{ steps.prepare.outputs.release_git }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          version: v0.36.1
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Build and push content-addressed platform image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ./tmp/docker-context
+          file: ./docker/Dockerfile.runtime
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.DOCKERHUB_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=neomacs-runtime-${{ matrix.arch }}
+          # Cache service pressure must not cancel an otherwise valid registry
+          # push; the image digest remains the release-critical output.
+          cache-to: type=gha,mode=max,ignore-error=true,scope=neomacs-runtime-${{ matrix.arch }}
+          pull: true
+          provenance: mode=max
+          sbom: true
+
+      - name: Verify the pushed platform image
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          RELEASE_GIT: ${{ steps.prepare.outputs.release_git }}
+        run: |
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "invalid image digest: $IMAGE_DIGEST" >&2
+            exit 1
+          fi
+          image_ref="$DOCKERHUB_IMAGE@$IMAGE_DIGEST"
+          docker buildx imagetools inspect "$image_ref"
+          docker pull "$image_ref"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image_ref")" = neomacs
+          test "$(docker run --rm --entrypoint /usr/bin/id "$image_ref" -u)" = 1000
+
+          config_volume="neomacs-config-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.arch }}"
+          docker volume create "$config_volume" >/dev/null
+          trap 'docker volume rm "$config_volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm \
+            --volume "$config_volume:/home/neomacs/.emacs.d" \
+            --entrypoint /usr/bin/touch \
+            "$image_ref" /home/neomacs/.emacs.d/write-test
+          timeout 30s docker run --rm "$image_ref" \
+            --batch --eval '(kill-emacs 0)'
+
+          mkdir -p "$TMPDIR/digests"
+          printf '%s %s %s\n' \
+            "$IMAGE_DIGEST" "${{ matrix.platform }}" "$RELEASE_GIT" \
+            >"$TMPDIR/digests/${IMAGE_DIGEST#sha256:}"
+
+      - name: Upload verified platform digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.digest_artifact }}
+          path: tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-manifest:
+    name: publish multi-registry Docker image
+    needs: publish-platform
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment:
+      name: container-release
+      url: https://github.com/${{ github.repository }}/pkgs/container/neomacs
+    steps:
+      - name: Download verified platform digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: docker-digest-*
+          path: tmp/digests
+          merge-multiple: true
+
+      - name: Validate digest artifacts
+        id: release
+        run: |
+          mapfile -t digest_files < <(find tmp/digests -maxdepth 1 -type f -printf '%f\n' | sort)
+          if ((${#digest_files[@]} != 2)); then
+            echo "expected two verified platform digests; found ${#digest_files[@]}" >&2
+            printf '  %s\n' "${digest_files[@]}" >&2
+            exit 1
+          fi
+
+          release_git=""
+          declare -A seen_platforms=()
+          for digest_file in "${digest_files[@]}"; do
+            read -r digest platform artifact_git extra <"tmp/digests/$digest_file"
+            if [[ -n "${extra:-}" \
+              || "$digest" != "sha256:$digest_file" \
+              || ! "$digest" =~ ^sha256:[0-9a-f]{64}$ \
+              || ! "$platform" =~ ^linux/(amd64|arm64)$ \
+              || ! "$artifact_git" =~ ^[0-9a-f]{7,40}$ ]]; then
+              echo "invalid digest artifact: $digest_file" >&2
+              exit 1
+            fi
+            if [[ -n "${seen_platforms[$platform]:-}" ]]; then
+              echo "duplicate digest artifact for $platform" >&2
+              exit 1
+            fi
+            seen_platforms[$platform]=1
+            if [[ -n "$release_git" && "$artifact_git" != "$release_git" ]]; then
+              echo "platform images came from different release commits" >&2
+              exit 1
+            fi
+            release_git="$artifact_git"
+          done
+          if ((${#seen_platforms[@]} != 2)); then
+            echo "digest artifacts do not cover linux/amd64 and linux/arm64" >&2
+            exit 1
+          fi
+          echo "release_git=$release_git" >>"$GITHUB_OUTPUT"
+
+      - name: Derive release metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.release_tag }}
+          labels: |
+            org.opencontainers.image.title=NEO Emacs
+            org.opencontainers.image.description=Emacs rewritten in Rust with a GPU display engine
+            org.opencontainers.image.documentation=https://github.com/eval-exec/neomacs/blob/main/docs/docker.md
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+            org.opencontainers.image.revision=${{ steps.release.outputs.release_git }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          version: v0.36.1
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Verify composition, publish exact tag, and advance newer aliases
+        env:
+          DOCKER_LABELS: ${{ steps.meta.outputs.labels }}
+          DOCKER_TAGS: ${{ steps.meta.outputs.tags }}
+          RELEASE_GIT: ${{ steps.release.outputs.release_git }}
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          assert_platforms() {
+            local manifest_file="$1"
+            jq -e '
+              [
+                .manifests[].platform
+                | select(.os != "unknown")
+                | "\(.os)/\(.architecture)"
+              ]
+              | unique
+              | sort
+              == ["linux/amd64", "linux/arm64"]
+            ' "$manifest_file"
+          }
+
+          image_label() {
+            local image_repository="$1"
+            local image_ref="$2"
+            local platform="$3"
+            local label_key="$4"
+            local os="${platform%/*}"
+            local architecture="${platform#*/}"
+            local manifest_digest
+            manifest_digest="$(
+              docker buildx imagetools inspect --raw "$image_ref" \
+                | jq -er --arg os "$os" --arg architecture "$architecture" '
+                    [
+                      .manifests[]
+                      | select(
+                          .platform.os == $os
+                          and .platform.architecture == $architecture
+                        )
+                    ]
+                    | if length == 1 then .[0].digest
+                      else error("expected exactly one platform manifest")
+                      end
+                  '
+            )"
+            docker buildx imagetools inspect \
+              --format '{{json .Image}}' \
+              "$image_repository@$manifest_digest" \
+              | jq -er --arg key "$label_key" \
+                '.config.Labels[$key] // empty'
+          }
+
+          assert_platform_image_label() {
+            local image_repository="$1"
+            local image_ref="$2"
+            local platform="$3"
+            local label="$4"
+            local expected="$5"
+            local actual
+            actual="$(image_label \
+              "$image_repository" "$image_ref" "$platform" "$label")"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "$image_ref $platform has $label=$actual; expected $expected" >&2
+              return 1
+            fi
+          }
+
+          assert_image_label() {
+            local image_repository="$1"
+            local image_ref="$2"
+            local label="$3"
+            local expected="$4"
+            local platform
+            for platform in linux/amd64 linux/arm64; do
+              assert_platform_image_label \
+                "$image_repository" "$image_ref" \
+                "$platform" "$label" "$expected"
+            done
+          }
+
+          reference_state() {
+            local image_ref="$1"
+            local inspect_output="$2"
+            local inspect_error="$3"
+            if docker buildx imagetools inspect "$image_ref" \
+              >"$inspect_output" 2>"$inspect_error"; then
+              printf 'present\n'
+              return
+            fi
+            if grep -Eq '^ERROR: .*: (manifest unknown|not found)$' "$inspect_error"; then
+              printf 'absent\n'
+              return
+            fi
+            echo "could not determine whether $image_ref exists" >&2
+            cat "$inspect_error" >&2
+            return 1
+          }
+
+          ensure_exact_image() {
+            local image_repository="$1"
+            local registry_slug="$2"
+            shift 2
+            local exact_ref="$image_repository:$RELEASE_VERSION"
+            local manifest_file="tmp/$registry_slug-exact-manifest.json"
+            local exact_state
+            exact_state="$(reference_state \
+              "$exact_ref" \
+              "tmp/$registry_slug-exact-inspect.txt" \
+              "tmp/$registry_slug-exact-inspect.err")"
+            if [[ "$exact_state" == present ]]; then
+              # Exact version tags are immutable. A retry may reuse a
+              # previously verified tag, but never replace it with a rebuild.
+              docker buildx imagetools inspect --raw "$exact_ref" \
+                >"$manifest_file"
+              assert_platforms "$manifest_file"
+            else
+              docker buildx imagetools create --tag "$exact_ref" "$@"
+              docker buildx imagetools inspect --raw "$exact_ref" \
+                >"$manifest_file"
+              assert_platforms "$manifest_file"
+            fi
+            assert_image_label \
+              "$image_repository" "$exact_ref" \
+              org.opencontainers.image.version "$RELEASE_VERSION"
+            assert_image_label \
+              "$image_repository" "$exact_ref" \
+              org.opencontainers.image.revision "$RELEASE_GIT"
+          }
+
+          advance_stable_aliases() {
+            local image_repository="$1"
+            local registry_slug="$2"
+            local exact_ref="$image_repository:$RELEASE_VERSION"
+            local exact_manifest_file="tmp/$registry_slug-exact-manifest.json"
+            local -a alias_tags=()
+
+            # Pre-releases intentionally advance no stable aliases. For stable
+            # releases, move an alias only when absent or semantically older.
+            if [[ "$RELEASE_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              local major="${BASH_REMATCH[1]}"
+              local minor="${BASH_REMATCH[2]}"
+              local -a candidates=(latest "$major.$minor")
+              [[ "$major" != 0 ]] && candidates+=("$major")
+              local candidate
+              for candidate in "${candidates[@]}"; do
+                local alias_ref="$image_repository:$candidate"
+                local alias_state
+                alias_state="$(reference_state \
+                  "$alias_ref" \
+                  "tmp/$registry_slug-alias-$candidate-inspect.txt" \
+                  "tmp/$registry_slug-alias-$candidate-inspect.err")"
+                if [[ "$alias_state" == present ]]; then
+                  local current_version
+                  current_version="$(image_label \
+                    "$image_repository" "$alias_ref" linux/amd64 \
+                    org.opencontainers.image.version)"
+                  if [[ ! "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    echo "$alias_ref has no comparable stable version label" >&2
+                    return 1
+                  fi
+                  assert_image_label \
+                    "$image_repository" "$alias_ref" \
+                    org.opencontainers.image.version "$current_version"
+                  local newest
+                  newest="$(printf '%s\n%s\n' \
+                    "$current_version" "$RELEASE_VERSION" | sort -V | tail -n 1)"
+                  if [[ "$current_version" == "$RELEASE_VERSION" ]]; then
+                    docker buildx imagetools inspect --raw "$alias_ref" \
+                      >"tmp/$registry_slug-alias-manifest.json"
+                    if ! cmp -s \
+                      "tmp/$registry_slug-alias-manifest.json" \
+                      "$exact_manifest_file"; then
+                      echo "$alias_ref claims $current_version but differs from $exact_ref" >&2
+                      return 1
+                    fi
+                    echo "leaving $alias_ref at $current_version"
+                    continue
+                  fi
+                  if [[ "$newest" != "$RELEASE_VERSION" ]]; then
+                    echo "leaving $alias_ref at newer version $current_version"
+                    continue
+                  fi
+                fi
+                alias_tags+=(--tag "$alias_ref")
+              done
+            fi
+
+            if ((${#alias_tags[@]})); then
+              docker buildx imagetools create "${alias_tags[@]}" "$exact_ref"
+            fi
+          }
+
+          mapfile -t digest_files < <(find tmp/digests -maxdepth 1 -type f -printf '%f\n' | sort)
+          dockerhub_digest_refs=()
+          for digest_file in "${digest_files[@]}"; do
+            read -r digest platform _ <"tmp/digests/$digest_file"
+            digest_ref="$DOCKERHUB_IMAGE@$digest"
+            docker buildx imagetools inspect "$digest_ref"
+            assert_platform_image_label \
+              "$DOCKERHUB_IMAGE" "$digest_ref" "$platform" \
+              org.opencontainers.image.version "$RELEASE_VERSION"
+            assert_platform_image_label \
+              "$DOCKERHUB_IMAGE" "$digest_ref" "$platform" \
+              org.opencontainers.image.revision "$RELEASE_GIT"
+            dockerhub_digest_refs+=("$digest_ref")
+          done
+
+          mapfile -t exact_tags < <(printf '%s\n' "$DOCKER_TAGS" | sed '/^$/d')
+          if ((${#exact_tags[@]} != 1)); then
+            echo "Docker metadata did not produce exactly one immutable version tag" >&2
+            exit 1
+          fi
+          dockerhub_exact_ref="$DOCKERHUB_IMAGE:$RELEASE_VERSION"
+          if [[ "${exact_tags[0]}" != "$dockerhub_exact_ref" ]]; then
+            echo "Docker metadata produced unexpected exact tag: ${exact_tags[0]}" >&2
+            exit 1
+          fi
+
+          annotation_args=()
+          while IFS= read -r label; do
+            [[ -n "$label" ]] && annotation_args+=(--annotation "index:$label")
+          done <<<"$DOCKER_LABELS"
+
+          # Dry-run resolves and merges the two registry descriptors without
+          # moving a public tag. Reject a malformed index before publication.
+          docker buildx imagetools create --dry-run \
+            "${annotation_args[@]}" \
+            "${dockerhub_digest_refs[@]}" >tmp/dockerhub-candidate-manifest.json
+          assert_platforms tmp/dockerhub-candidate-manifest.json
+
+          ensure_exact_image \
+            "$DOCKERHUB_IMAGE" dockerhub \
+            "${annotation_args[@]}" \
+            "${dockerhub_digest_refs[@]}"
+
+          # Copy the already-verified multi-platform index to GHCR. This keeps
+          # both registries on the same image bytes and avoids a second build.
+          ghcr_exact_ref="$GHCR_IMAGE:$RELEASE_VERSION"
+          ensure_exact_image \
+            "$GHCR_IMAGE" ghcr \
+            "$dockerhub_exact_ref"
+          if ! cmp -s \
+            tmp/dockerhub-exact-manifest.json \
+            tmp/ghcr-exact-manifest.json; then
+            echo "$ghcr_exact_ref differs from $dockerhub_exact_ref" >&2
+            exit 1
+          fi
+
+          advance_stable_aliases \
+            "$DOCKERHUB_IMAGE" dockerhub
+          advance_stable_aliases \
+            "$GHCR_IMAGE" ghcr
+
+          docker buildx imagetools inspect "$dockerhub_exact_ref"
+          docker buildx imagetools inspect "$ghcr_exact_ref"
+
+          # Public source releases must remain anonymously consumable. Drop
+          # the workflow credential and verify the exact GHCR tag once more.
+          docker logout ghcr.io
+          docker buildx imagetools inspect "$ghcr_exact_ref"

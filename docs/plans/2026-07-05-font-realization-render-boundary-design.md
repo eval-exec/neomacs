@@ -8,6 +8,133 @@ Fontconfig/CoreText/DirectWrite candidate backends); Phase 6 seam in place
 output where GNU composes beyond `Composite` clusters and a rustybuzz
 `TextShaper`.
 
+### Automatic native-catalog refresh (2026-09-01)
+
+- Native change detection stays inside the existing platform adapter layout:
+  Fontconfig freshness polling in `font_backend/linux/catalog.rs`, CoreText
+  local and distributed registration notifications in
+  `font_backend/macos/catalog.rs`, and rate-limited DirectWrite
+  `GetSystemFontCollection(TRUE)` polling in
+  `font_backend/windows/catalog.rs`. No platform framework object escapes its
+  adapter and no additional runtime crate owns a second font lifecycle.
+- Polling adapters share one typed rate-limit/fan-out state machine in
+  `font/catalog.rs`; only their native snapshot operation varies. Linux holds a
+  referenced Fontconfig configuration while testing freshness and, after a
+  proven stale result, forces `FcInitReinitialize` rather than delegating to
+  Fontconfig's independent rescan-interval scheduler. Windows snapshots the
+  DirectWrite collection identity and family count together, and rebases each
+  consumer's snapshot when it observes a peer-published edge so that one native
+  replacement cannot be published twice.
+- Native callbacks publish only to a process-wide atomic change counter. Every
+  `FontMetricsService` owns an independent cursor into that counter, so the
+  display host cannot consume an event before the layout engine observes it.
+  Bursts coalesce to one change per service and cache mutation remains on the
+  evaluator thread at a redisplay safe point. Fontconfig and DirectWrite also
+  publish detected polling edges into the shared counter, covering every
+  service even when the first poll refreshes process-global native state.
+- `FontMetricsService` is the exhaustive layout-side invalidation owner. It
+  advances a typed `FontCatalogGeneration`, replaces cosmic-text's append-only
+  `FontSystem`, resets exact-file materialization state, advances the native
+  backend, and clears resolver, metrics, shaping, fallback, and platform-query
+  caches. `LayoutEngine` then rejects all retained visual history, face arenas,
+  matrices, chrome metrics, and speculative output derived from old font
+  geometry.
+- Every immutable frame snapshot carries its nonzero
+  `FontCatalogGeneration`. Frame materialization preserves it, child frames
+  from another generation are not composited with a root, and the WGPU atlas
+  treats a generation transition as a complete raster/fontdb/materializer
+  boundary. This makes stale cross-thread font reuse structurally visible
+  instead of relying on every cache author to remember an ad-hoc clear hook.
+- In-memory consumers borrow those fields through one typed
+  `FrameFontBindings` view. Render installation and retained mini-frame cloning
+  therefore move the catalog generation, faces, exact fonts, per-character
+  fallback, and shaped clusters as one compile-checked unit. The renderer starts
+  with an empty font database and performs its first system scan only when that
+  first frame binding arrives, closing the construction race without scanning
+  the catalog twice.
+- The design follows GNU Emacs' macOS lifecycle: the CoreText callback in
+  `src/macfont.m` invalidates catalog-derived family caches and later font
+  lookup reconstructs them. Neomacs makes the callback boundary stricter by
+  publishing only an atomic edge and mutating caches at a redisplay safe point.
+  Linux and Windows add platform-supported missed-event polling because GNU
+  does not provide equivalent automatic refresh there.
+
+### Shared exact-font materialization (2026-08-27)
+
+- `neomacs-font-materializer` is the single file/container/opening boundary
+  used by layout and WGPU rendering. It owns WOFF/WOFF2 decoding, exact
+  file-face pinning, FreeType fixed-strike selection, metrics, glyph lookup,
+  raster normalization, and renderer replay. Its typed exact-face cache owns
+  the synthetic cosmic-text family, generation-local fontdb id, and retryable
+  failure state; layout and rendering no longer maintain parallel pin caches.
+  Neither consumer opens or independently classifies a raw source.
+- Materialization is capability-driven, not suffix-driven at the public API.
+  The implementation sniffs WOFF/WOFF2, BDF, PCF, gzip-wrapped PCF, and SFNT
+  table content before considering a suffix hint; renaming a font cannot
+  silently change which adapter owns it.
+  `FontReplay::Swash { asset }` owns either an exact file face or immutable
+  standalone SFNT bytes; `FontReplay::FreeTypeBitmap { asset, strike,
+  sampling, spacing }` owns the exact file face, fixed strike, texture
+  sampling rule, and GNU spacing policy. An outline replay without a source,
+  or a bitmap replay without a file, is therefore unrepresentable. PCF, compressed
+  PCF, BDF, and OTB all use the same FreeType bitmap adapter on Unix and
+  Windows (bundled FreeType on Windows).
+  Process-local font handles never enter frame state.
+- Platform discovery and replayable realization are separate types.
+  `PlatformFontCandidate` may carry a cheap native locator while shared GNU
+  policy scores candidates. Only the winning candidate is finalized into a
+  `PlatformFontMatch`, which must own a `FontOutlineAsset`. A URL-less native
+  winner is copied into immutable OpenType bytes only after selection: CoreText
+  reconstructs a standalone SFNT from its tables, while DirectWrite reads a
+  selected one-file TrueType/OpenType outline through the loader stream exposed
+  by `dwrote`. DirectWrite's typed format gate follows Microsoft's
+  [`DWRITE_FONT_FACE_TYPE`](https://learn.microsoft.com/en-us/windows/win32/api/dwrite/ne-dwrite-dwrite_font_face_type)
+  contract; URL-less bitmap, vector-FON, raw-CFF, and Type 1 streams are rejected
+  until the shared materializer has typed replay plans for them. Layout
+  and rendering then pin the same reference-counted bytes in their independent
+  fontdb instances; no CoreText or DirectWrite object crosses a thread or
+  display boundary, and publishing a frame clones an `Arc` rather than copying
+  the font. Multi-file DirectWrite faces remain explicitly unsupported.
+- CoreText and DirectWrite each own a bounded, weak native-byte interner for
+  their current catalog generation. Concurrent finalization converges on one
+  allocation, but cache metadata never keeps font data alive. Advancing the
+  resolver's catalog generation clears the interner, so a replaced process
+  font cannot alias live bytes from an older catalog; old frame snapshots keep
+  their own immutable `Arc` alive until rendering releases it.
+- `ResolvedFontId` interns the complete metrics-bearing instance: durable
+  source identity, replay plan/strike, and the **effective opened logical
+  size**, not merely the request. One source file realized at different sizes
+  or strikes cannot alias one protocol table entry. Native candidate discovery
+  and resolver caches include requested logical size and device scale, so a
+  fixed 13px entity cannot win a request for the same family's 26px entity.
+  Fixed-size eligibility and scoring mirror GNU `font.c`: reject requests more
+  than two times from an available entity, compare integer pixels, and cap the
+  doubled distance at 127.
+- Bitmap glyph ids use the full FreeType `u32` domain. Layout publishes exact
+  `(font, glyph, advance)` bindings for visible scalars and simple-copy
+  composition clusters; rendering consumes those bindings without another
+  charmap lookup or semantic font selection. The actual binding also enters
+  atlas and row-reuse cache identity.
+- Fixed strikes are selected in device pixels and reported back in logical
+  pixels. Their normalized masks retain physical strike dimensions and use a
+  dedicated nearest-neighbor WGPU sampler; outline/color glyphs retain linear
+  sampling, including when one logical composition contains both source kinds.
+  CPU scaling is not used to disguise a wrong strike choice. The
+  default fixed-font line height is occupied ascent + descent, matching GNU's
+  default `:minspace` policy; the request type explicitly represents the
+  native-height alternative.
+- Fontdb source outcomes distinguish loaded-with-family,
+  loaded-without-family, intentionally unsupported bitmap containers, and
+  actual I/O/decode/rejection failures. Supported bitmap fonts bypass fontdb;
+  real failures remain warnings. WOFF decoding preserves the requested face
+  index and the pinned in-memory face id, so renderer and layout replay the
+  same decoded source rather than substituting a sibling SFNT file.
+- Binary test fonts are not tracked. The dev-only `neomacs-test-fonts` crate
+  downloads release/commit-pinned sources during tests, verifies archive and
+  per-font SHA-256 digests, serializes concurrent setup with a file lock, and
+  caches them only under ignored `./tmp/font-fixtures`. A failed download or
+  integrity check fails the test instead of silently skipping coverage.
+
 ## 0. Amendments from implementation (2026-07-05)
 
 Decisions made while shipping Phases 0–2 and 3a:
@@ -19,20 +146,20 @@ Decisions made while shipping Phases 0–2 and 3a:
   resolved identity nor the C-FFI `font_file_path` bridge — not whenever
   per-char fallback engages. Per-char fallback is traced separately under
   the `font_boundary` target.
-- **`ResolvedFontId` scoping (answers §15).** Ids are interned by the
+- **`ResolvedFontId` scoping (answers §15).** Ids are interned from the complete
+  realized instance by the
   layout-side `FontMetricsService` and are stable for the service's
   lifetime (the interner survives `clear_caches`, append-only). Frame
   snapshots carry the subset used. Renderer caches must key on the
   *identity* (or a resolver-lifetime id whose incoming mapping is validated
   and whose reuse invalidates renderer caches), never an unchecked raw id.
-- **Phase 3a shipped as a fontset projection.** Instead of per-glyph
-  fields, frames carry `char_fonts: face_id → representative char →
-  ResolvedFontId` for the non-ASCII characters actually on screen —
-  GNU-shaped (fontset lookup is (face, char) → font) and it avoids
-  touching every glyph constructor. The representative-char policy
-  (`composition::representative_char_for_cluster`) is shared by layout
-  and renderer so both threads make the same decision. Glyph cache keys
-  need no change: charcode is already in `GlyphKey`.
+- **Phase 3a evolved into an exact fontset projection.** Frames carry
+  `char_fonts: face_id → visible scalar → (ResolvedFontId, ResolvedGlyphId,
+  advance)`. This is GNU-shaped—fontset lookup is `(face, char) → opened
+  font`—but makes the result renderable without repeating lookup. Cache keys
+  include the exact binding because a character code alone cannot distinguish
+  two changed fontset answers. Composition clusters additionally carry their
+  layout-produced glyph stream.
 - **Realization seam.** Face- and char-level realization run as one pass
   (`realize_frame_fonts`) at `LayoutEngine::finish_frame_output`, after
   all install paths have filled the frame state — no per-call-site
@@ -71,13 +198,12 @@ Decisions made while shipping Phases 0–2 and 3a:
   accept an arbitrary variation tuple. An encoded named-instance selector is
   never treated as a collection index.
 - A materializable platform selection is authoritative. Layout first proves
-  that the shared fontdb/cosmic stack can open the exact file face, then
-  preserves the platform's named-instance identity and PostScript name; the
-  renderer reopens that same file face and replays its resolved attributes.
-  Platform formats outside that capability boundary (for example PCF bitmap
-  fonts) take an explicit semantic fallback which is itself realized and
-  transported. Neither side silently substitutes the first face in a
-  collection or publishes an identity the renderer cannot open.
+  that a shared materializer can open the exact file face, then preserves the
+  platform identity, replay plan, and PostScript name; the renderer reopens
+  that same face and exact fixed strike or decoded outline source. Unsupported
+  capabilities take an explicit semantic fallback. Neither side silently
+  substitutes the first face in a collection or publishes an identity the
+  renderer cannot open.
 - Semantic family, weight, and slant remain useful request/reporting metadata,
   but they are not permitted to reconstruct drawable truth after realization.
 
@@ -265,6 +391,7 @@ when reliably available.
 pub struct ResolvedFont {
     pub id: ResolvedFontId,
     pub identity: ResolvedFontIdentity,
+    pub replay: FontReplay,
     pub family: String,
     pub full_name: Option<String>,
     pub postscript_name: Option<String>,

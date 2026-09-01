@@ -44,7 +44,7 @@ def build():
     defs = collections.defaultdict(list)   # name -> [(file, start, end)]
     calls = collections.defaultdict(set)   # name -> {callee names}
     fn_count = 0
-    for crate in ('neovm-core/src', 'neomacs-bin/src', 'neomacs-layout-engine/src'):
+    for crate in ('crates/neovm-core/src', 'crates/neomacs/src', 'crates/neomacs-layout-engine/src'):
         for dirpath, _dirs, files in os.walk(os.path.join(ROOT, crate)):
             for fname in sorted(files):
                 if not fname.endswith('.rs'):

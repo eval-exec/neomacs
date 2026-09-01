@@ -1,5 +1,16 @@
 # Ubuntu 22.04 build environment
 
+This directory contains two deliberately separate images:
+
+- `Dockerfile.ubuntu-22.04` is a compiler-equipped source-build environment.
+- `Dockerfile.runtime` is the non-root application image published from an
+  already-built, verified release tarball.
+
+See [the Docker user guide](../docs/docker.md) for the published image, tags,
+runtime examples, and the local runtime-image build procedure.
+
+## Source-build environment
+
 `Dockerfile.ubuntu-22.04` reproduces the oldest supported Linux build baseline:
 Ubuntu 22.04 with glibc 2.35 and the Rust toolchain pinned by the release workflow.
 

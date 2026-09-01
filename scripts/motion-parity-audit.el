@@ -11,9 +11,33 @@
 ;; Environment:
 ;;   L195_OUT               output file (default ./tmp/l195/audit-out.txt)
 ;;   L195_REDISPLAY=0       COLD protocol: never redisplay between probes
-;;   L195_FORCE_INTERACTIVE=1   bind `noninteractive' to nil for the whole sweep,
-;;                          which under --batch selects GNU's DISPLAY-ITERATOR
-;;                          engine for every motion
+;;   L195_FORCE_INTERACTIVE=1   bind `noninteractive' to nil for the whole sweep.
+;;                          DO NOT USE IT FOR A PARITY SWEEP (ledger 210).  The
+;;                          text that stood here said it "selects GNU's
+;;                          DISPLAY-ITERATOR engine for every motion"; measured,
+;;                          it selects nothing: GNU's --batch answers are
+;;                          byte-identical with and without it.  GNU's Lisp
+;;                          `noninteractive' is a COPY -- DEFVAR_BOOL
+;;                          ("noninteractive", noninteractive1) at
+;;                          src/emacs.c:3535, assigned once from the C flag at
+;;                          src/emacs.c:1953 -- and `Fvertical_motion'
+;;                          (src/indent.c:2280) branches on the C flag, which
+;;                          Lisp cannot write.  This port has ONE variable, so
+;;                          the binding DOES change behaviour here, which makes
+;;                          this mode put DIFFERENT questions to the two
+;;                          editors.  Use the pty driver instead.
+;;   L195_COLS / L195_ROWS  read by scripts/motion-parity-pty.py, default 160x50
+;;
+;; THE GEOMETRY IS PART OF THE ANSWER, so this sweep records it (ledger 210).
+;; Every probe here is a question about a window of a particular width and
+;; height: the same tree answers COLD 130 / WARM 352 at 160 columns and COLD 160
+;; / WARM 444 at 80, because only at 80 does this text's longest line reach the
+;; window edge where the truncation marker lives.  Ledger 205 published the
+;; first pair and ledger 209 the second, and the difference was read as a
+;; 30-cold / 92-warm motion regression that never existed.  The first line of
+;; the output is therefore a GEOMETRY stamp and every CONFIG line carries its
+;; window's height as well as its width; scripts/motion-parity-compare.py
+;; REFUSES to diff two files that disagree about either.
 ;;
 ;; TWO PROTOCOLS, AND THE CHOICE IS NOT COSMETIC.  WARM (the default) redisplays
 ;; before every probe, which is closest to a real command loop; COLD never does.
@@ -118,6 +142,16 @@
   (let ((lines '())
         (buffer (generate-new-buffer " *l195-probe*")))
     (delete-other-windows)
+    ;; Stamp the frame first: a count published without it is not comparable
+    ;; with any other run of this script (ledger 210).
+    ;; `probes' is what makes a TRUNCATED or EMPTY output self-detecting: the
+    ;; comparator refuses a file that does not carry the number of probes it
+    ;; says it has (ledger 210).
+    (push (format "GEOMETRY frame-width=%s frame-height=%s probes=%s"
+                  (frame-width) (frame-height)
+                  (* (length l195-configs) (length l195-positions)
+                     (length l195-motions)))
+          lines)
     (dolist (config l195-configs)
       (let* ((name (car config))
              (setup (cdr config))
@@ -133,8 +167,10 @@
           (select-window (split-window-right -24))
           (switch-to-buffer buffer))
         (with-current-buffer buffer (funcall setup))
-        (push (format "CONFIG %s width=%s tl=%s ww=%s tpww=%s vlm=%s"
-                      name (window-body-width)
+        ;; `height' is here because `move-to-window-line' with nil asks for the
+        ;; MIDDLE row: a taller window is a different question (ledger 210).
+        (push (format "CONFIG %s width=%s height=%s tl=%s ww=%s tpww=%s vlm=%s"
+                      name (window-body-width) (window-body-height)
                       (buffer-local-value 'truncate-lines buffer)
                       (buffer-local-value 'word-wrap buffer)
                       (buffer-local-value 'truncate-partial-width-windows buffer)
@@ -156,8 +192,10 @@
       (insert (mapconcat #'identity (nreverse lines) "\n") "\n"))))
 
 ;; L195_FORCE_INTERACTIVE=1 runs the whole sweep with `noninteractive' bound to
-;; nil, which under --batch selects GNU's DISPLAY-ITERATOR engine for every
-;; motion -- i.e. exactly what ledger 191's code did unconditionally.
+;; nil.  Kept because ledger 191's code did exactly this, and because the
+;; asymmetry it exposes is worth being able to reproduce -- but see the header:
+;; in GNU the binding is INERT and in this port it is not, so it is not a way to
+;; reach GNU's display-iterator engine under --batch.
 (if (equal (getenv "L195_FORCE_INTERACTIVE") "1")
     (let ((noninteractive nil)) (l195-run))
   (l195-run))

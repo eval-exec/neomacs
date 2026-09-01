@@ -48,17 +48,17 @@ Relevant GNU references:
 The equivalent Neomacs ownership is substantially more unified now:
 
 - the shared wait/service owner lives in
-  [process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L896)
+  [process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L896)
 - `accept-process-output` routes through it in
-  [process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L5462)
+  [process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L5462)
 - `sleep-for` routes through it in
-  [timer.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/timer.rs#L608)
+  [timer module](../../crates/neovm-core/src/emacs_core/system/timer/mod.rs#L608)
 - keyboard/input waits already share its timer and process service helpers in
-  [keyboard.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/keyboard.rs#L3231)
+  [keyboard.rs](../../crates/neovm-core/src/keyboard.rs#L3231)
   and
-  [keyboard.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/keyboard.rs#L3235)
+  [keyboard.rs](../../crates/neovm-core/src/keyboard.rs#L3235)
   and `read_char` now stages ready input ahead of that service path in
-  [keyboard.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/keyboard.rs#L2344)
+  [keyboard.rs](../../crates/neovm-core/src/keyboard.rs#L2344)
 
 The remaining design difference is narrower: Neomacs still has both GNU-shaped
 Lisp timers and a Rust `TimerManager`, but the Rust timer surface is currently
@@ -81,9 +81,9 @@ and [atimer.c](/home/exec/Projects/github.com/emacs-mirror/emacs/src/atimer.c#L4
 Neomacs no longer has the earlier split where `accept-process-output` and
 `sleep-for` each owned a separate polling loop. Both now route through the
 shared wait/service path in
-[process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L1120)
+[process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L1120)
 and
-[timer.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/timer.rs#L611).
+[timer module](../../crates/neovm-core/src/emacs_core/system/timer/mod.rs#L611).
 That closed the earlier starvation bug and the older `PROCESS` /
 `JUST-THIS-ONE` mismatch.
 
@@ -152,9 +152,9 @@ later explicit keyboard read or a direct frame-size query. The shared
 wait/service owner now services wait-path-safe host input before timers and
 process callbacks, which closes that starvation case for `accept-process-output`
 and `sleep-for`. The current ownership lives in
-[keyboard.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/keyboard.rs#L2179)
+[keyboard.rs](../../crates/neovm-core/src/keyboard.rs#L2179)
 and
-[process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L1144).
+[process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L1144).
 Neomacs now also re-checks that same special-input path immediately after each
 blocking process wait, so a resize arriving during the wait itself is still
 applied before `accept-process-output` or `sleep-for` returns on timeout.
@@ -181,9 +181,9 @@ passes, which could invert GNU order whenever an idle timer was more overdue
 than an ordinary timer. The shared wait path now recomputes the next due GNU
 timer one callback at a time and merges ordinary vs idle order using the same
 “more overdue wins” rule in
-[keyboard.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/keyboard.rs#L3300)
+[keyboard.rs](../../crates/neovm-core/src/keyboard.rs#L3300)
 and
-[process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L896).
+[process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L896).
 
 ### Process callbacks now share one async callback envelope, but it is still a translated design
 
@@ -203,7 +203,7 @@ and [process.c](/home/exec/Projects/github.com/emacs-mirror/emacs/src/process.c#
 
 Neomacs now routes process filters, sentinels, and client network `"open\n"`
 sentinel delivery through one shared helper in
-[process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L950).
+[process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L950).
 That helper now preserves current buffer, match data, `waiting-for-user-input-p`,
 `inhibit-quit`, `last-nonmenu-event`, and `deactivate-mark` across both
 `accept-process-output` and other process callback entry points.
@@ -225,7 +225,7 @@ and
 
 Neomacs now routes both GNU-shaped timer callbacks and Rust timer callbacks
 through a shared helper in
-[process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L982)
+[process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L982)
 that preserves current buffer, `deactivate-mark`, and `inhibit-quit` while the
 callback runs. That closes the earlier observable mismatch where a timer fired
 from `accept-process-output` or `sleep-for` could leave `deactivate-mark`
@@ -241,7 +241,7 @@ and
 [process.c](/home/exec/Projects/github.com/emacs-mirror/emacs/src/process.c#L7863).
 
 Neomacs now re-checks child exit after reading process output in
-[process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L1117),
+[process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L1117),
 which closes the earlier gap where the sentinel for a short-lived child could
 be deferred to a second `accept-process-output` call.
 
@@ -259,7 +259,7 @@ host input event had already arrived. `read_char` now stages immediately ready
 input from the host queue/channel before the shared wait-path service and no
 longer runs timer/process callbacks after receiving a real input event but
 before returning it. The current ownership lives in
-[keyboard.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/keyboard.rs#L2344).
+[keyboard.rs](../../crates/neovm-core/src/keyboard.rs#L2344).
 That closes the concrete mismatch where a due timer or process filter could run
 ahead of a ready keypress.
 
@@ -275,10 +275,10 @@ through to the runtime input path, which meant GNU `sit-for` could not time
 out correctly in interactive mode. `read-event`, `read-char`, and
 `read-char-exclusive` now route timeout values through the shared keyboard wait
 path in
-[lread.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/lread.rs#L435),
-[reader.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/reader.rs#L2120),
+[lread module](../../crates/neovm-core/src/emacs_core/lisp/lread/mod.rs#L435),
+[reader module](../../crates/neovm-core/src/emacs_core/lisp/reader/mod.rs#L2120),
 and
-[keyboard.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/keyboard.rs#L2570).
+[keyboard.rs](../../crates/neovm-core/src/keyboard.rs#L2570).
 Neomacs also no longer treats "top-level command loop not currently running"
 as an automatic `quit` for these direct Lisp readers; only an actual shutdown
 request now aborts the wait. That matches GNU more closely, because
@@ -302,7 +302,7 @@ Neomacs previously called `fire_pending_timers` at the start of
 due timer run even though GNU `sit-for` would have returned `nil` immediately
 because input was already pending. `input-pending-p` now checks pending input
 first, and only fires timers if no input is already available, in
-[reader.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/reader.rs#L1697).
+[reader module](../../crates/neovm-core/src/emacs_core/lisp/reader/mod.rs#L1697).
 That closes the remaining Phase 9 bug where `sit-for` could run timers ahead
 of queued input.
 
@@ -319,9 +319,9 @@ Neomacs previously called `fire_pending_timers()` directly from
 meant `(sit-for 0 t)` could redisplay even though GNU would not. Neomacs now
 services timers from `input-pending-p` without forcing redisplay, which
 restores GNU `NODISP` behavior for this path. The current ownership lives in
-[reader.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/reader.rs#L1728),
+[reader module](../../crates/neovm-core/src/emacs_core/lisp/reader/mod.rs#L1728),
 with regression coverage in
-[timer_test.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/timer_test.rs#L389).
+[timer tests](../../crates/neovm-core/src/emacs_core/system/timer/tests/mod.rs#L389).
 
 ### Timer ownership is still split between GNU-shaped Lisp timers and a Rust timer manager
 
@@ -329,17 +329,17 @@ GNU’s ordinary and idle timers are part of the keyboard/event-loop contract.
 Neomacs currently has two timer worlds:
 
 - GNU Lisp timer vectors handled by `timer-event-handler` in
-  [keyboard.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/keyboard.rs#L3143)
+  [keyboard.rs](../../crates/neovm-core/src/keyboard.rs#L3143)
 - Rust `TimerManager` entries in
-  [timer.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/timer.rs#L20)
+  [timer module](../../crates/neovm-core/src/emacs_core/system/timer/mod.rs#L20)
 
 This split is acceptable as migration scaffolding because the Rust timer
 surface is not currently published as a GNU-visible Lisp API: the
 `run-at-time` / `run-with-timer` / `run-with-idle-timer` helpers in
-[timer.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/timer.rs#L467)
+[timer module](../../crates/neovm-core/src/emacs_core/system/timer/mod.rs#L467)
 exist for compatibility and tests, but are intentionally not registered as
 builtins in
-[builtins/mod.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/builtins/mod.rs#L1434)
+[native builtins](../../crates/neovm-core/src/emacs_core/lisp/native/builtins/mod.rs#L1434)
 so that GNU `timer.el` remains the public timer owner.
 
 So the remaining GNU risk is narrower than a full “two public timer APIs”
@@ -358,11 +358,11 @@ and
 
 Neomacs now has a real synchronous subprocess owner in:
 
-- [callproc/mod.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/callproc/mod.rs#L1)
+- [callproc module](../../crates/neovm-core/src/emacs_core/system/callproc/mod.rs#L1)
 
 `call-process`, `process-file`, `process-lines`, `call-process-region`, and the
 shell-command variants now execute through that module, while
-[process.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/process.rs#L4002)
+[process module](../../crates/neovm-core/src/emacs_core/system/process/mod.rs#L4002)
 has been reduced to builtin delegation plus asynchronous-process ownership.
 GNU-style `DISPLAY` redisplay is now also requested after synchronous output is
 routed into a buffer destination.

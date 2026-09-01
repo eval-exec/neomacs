@@ -193,7 +193,8 @@ activity path).
   waits. S4b removed that coupling.
 
 **State at handoff (2026-07-02, S4b+S6 in tree, uncommitted —
-`neovm-core/src/emacs_core/process.rs` + `wait.rs` dirty):**
+`neovm-core/src/emacs_core/system/process/mod.rs` +
+`neovm-core/src/emacs_core/system/wait/mod.rs` dirty):**
 
 Verified green so far (release binary built from the in-tree state):
 - All S4b probes byte-identical with GNU: listen-wait `(nil t)` immediate;

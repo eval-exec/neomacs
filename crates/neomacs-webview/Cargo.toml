@@ -1,0 +1,55 @@
+[package]
+name = "neomacs-webview"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cross-platform embedded web content for Neomacs"
+
+[features]
+default = []
+webview = ["dep:bindgen", "dep:glib", "dep:pkg-config"]
+
+[dependencies]
+bitflags.workspace = true
+libc.workspace = true
+neomacs-display-protocol.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
+winit.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
+objc2-web-kit.workspace = true
+raw-window-handle.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+glib = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle.workspace = true
+webview2-com.workspace = true
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_DirectComposition",
+    "Win32_System_Com",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core.workspace = true
+
+[build-dependencies]
+bindgen = { workspace = true, optional = true }
+pkg-config = { workspace = true, optional = true }
+
+[dev-dependencies]
+static_assertions.workspace = true
+
+[lints]
+workspace = true

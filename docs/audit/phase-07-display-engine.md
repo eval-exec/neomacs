@@ -18,10 +18,10 @@ GNU has one semantic redisplay core, even though backends differ.
 
 Core-facing display semantics:
 
-- `neovm-core/src/emacs_core/display.rs`
-- `neovm-core/src/emacs_core/dispnew/`
-- `neovm-core/src/emacs_core/xdisp.rs`
-- `neovm-core/src/emacs_core/xfaces.rs`
+- `neovm-core/src/emacs_core/display/display/mod.rs`
+- `neovm-core/src/emacs_core/display/dispnew/`
+- `neovm-core/src/emacs_core/display/xdisp/mod.rs`
+- `neovm-core/src/emacs_core/display/xfaces/mod.rs`
 
 Layout:
 

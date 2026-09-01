@@ -36,9 +36,9 @@ Primary Neomacs semantic files:
 - `neovm-core/src/buffer/overlay.rs`
 - `neovm-core/src/buffer/text_props.rs`
 - `neovm-core/src/buffer/undo.rs`
-- `neovm-core/src/emacs_core/buffer_vars.rs`
-- `neovm-core/src/emacs_core/marker.rs`
-- `neovm-core/src/emacs_core/builtins/buffers.rs`
+- `neovm-core/src/emacs_core/editing/buffer_vars/mod.rs`
+- `neovm-core/src/emacs_core/editing/marker/mod.rs`
+- `neovm-core/src/emacs_core/editing/buffer/mod.rs`
 
 Recent cleanup removed the old duplicate text/runtime core from
 `neomacs-display-runtime/src/core/`.  That crate now consumes protocol/layout

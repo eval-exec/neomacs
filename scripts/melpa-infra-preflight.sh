@@ -62,6 +62,18 @@ if [[ -z "$oracle_candidate" ]]; then
   fi
 fi
 oracle_bin=$(resolve_executable "GNU Emacs oracle" "$oracle_candidate")
+
+# WHICH GNU (ledger 214).  This preflight is the melpa suite's gate and the
+# first thing in it that launches GNU, and the resolution above is FIVE rules
+# deep -- three environment variables, a hard-coded checkout and PATH -- so it
+# is exactly the place a different GNU could enter a published parity number
+# unnoticed.  It runs once per suite, so it takes the exhaustive check.
+if ! parity_reference=$(bash "$(dirname "$0")/parity-reference-attest.sh" "$oracle_bin" exhaustive); then
+  echo "MELPA infrastructure preflight refused: the GNU reference did not attest" >&2
+  exit 1
+fi
+echo "MELPA infrastructure preflight reference: $parity_reference"
+
 git_bin=$(resolve_executable Git git)
 "$git_bin" --version >/dev/null
 

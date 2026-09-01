@@ -1,0 +1,15 @@
+[package]
+name = "neomacs-video-model"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend-neutral playback model shared by Neomacs video adapters"
+
+[dependencies]
+neomacs-display-protocol.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -107,7 +107,7 @@ test harness with a reduced public function namespace.
 
 ### Normal startup path
 
-`Context::new()` in `neovm-core/src/emacs_core/eval.rs` does:
+`Context::new()` in `neovm-core/src/emacs_core/runtime/eval/mod.rs` does:
 
 1. `Self::new_inner(true)`
 2. `builtins::init_builtins(&mut ctx)`
@@ -119,7 +119,7 @@ That gives normal runtime both of the things GNU relies on:
 
 ### VM harness path before the refactor
 
-`Context::new_vm_harness()` in `neovm-core/src/emacs_core/eval.rs` does not
+`Context::new_vm_harness()` in `neovm-core/src/emacs_core/runtime/eval/mod.rs` does not
 match that shape:
 
 1. `Self::new_inner(true)`

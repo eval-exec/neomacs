@@ -31,9 +31,10 @@ positional setters:
 (neomacs-effect-set 'cursor-color-cycle :enabled t :fps 24)
 (neomacs-effect-set 'cursor-blink :enabled t :interval 0.5)
 (neomacs-effect-set 'cursor-size-transition :enabled t :duration 0.15)
-(neomacs-effect-set 'crossfade-transition
+(neomacs-effect-set 'buffer-transition
                     :enabled t :duration 0.2
-                    :effect 'crossfade :easing 'ease-out-quad)
+                    :effect 'slide :easing 'ease-out-quad
+                    :axis 'auto :direction 'forward)
 (neomacs-effect-set 'scroll-transition
                     :enabled t :duration 0.15
                     :effect 'page-curl :easing 'spring)

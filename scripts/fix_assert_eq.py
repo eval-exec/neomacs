@@ -24,7 +24,7 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-SRC_ROOT = Path("neovm-core/src")
+SRC_ROOT = Path("crates/neovm-core/src")
 
 # ---------------------------------------------------------------------------
 # File discovery
@@ -34,11 +34,11 @@ def find_target_files() -> list[Path]:
     """Return the list of files to process, sorted."""
     files: list[Path] = []
 
-    # All *_test.rs files under neovm-core/src/
+    # All *_test.rs files under crates/neovm-core/src/
     for p in SRC_ROOT.rglob("*_test.rs"):
         files.append(p)
 
-    # All */tests.rs files under neovm-core/src/
+    # All */tests.rs files under crates/neovm-core/src/
     for p in SRC_ROOT.rglob("tests.rs"):
         files.append(p)
 

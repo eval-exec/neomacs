@@ -32,7 +32,7 @@
 !.github/
 !.github/workflows/
 !.github/workflows/*.yml
-!neovm-core/fuzz/.gitignore
+!crates/neovm-core/fuzz/.gitignore
 
 # Built by 'autogen.sh'.
 /aclocal.m4
@@ -205,7 +205,7 @@ src/*.map
 vgcore.*[0-9]
 
 # Tests.
-neovm-oracle-tests/proptest-regressions/*.txt
+crates/neovm-oracle-tests/proptest-regressions/*.txt
 test/manual/biditest.txt
 test/manual/etags/srclist
 test/manual/etags/regexfile
@@ -413,18 +413,17 @@ src/macuvs.h
 /dist/
 rust/target/
 neomacs-display/target/
-neomacs-bin/target/
-neovm-*/target/
+/crates/*/target/
 *.rlib
 
 # NeoVM runtime artifacts
-neovm-core/dump.pdmp
-neovm-core/x
+crates/neovm-core/dump.pdmp
+crates/neovm-core/x
 *.pdmp
 
 # Neomacs exceptions
 !neomacs-display/Makefile
-!neomacs-display-runtime/src/core/
+!crates/neomacs-display-runtime/src/core/
 
 # Neomacs build-test runtime artifacts
 /neomacs-build-test/windows/storage/
@@ -432,7 +431,7 @@ neovm-core/x
 /neomacs-build-test/macos/artifacts/
 /neomacs-build-test/macos/.known_hosts
 result
-/neovm-core/proptest-regressions/emacs_core/oracle_test/
+/crates/neovm-core/proptest-regressions/emacs_core/oracle_test/
 /drafts
 lisp/org/org-loaddefs.el
-neovm-oracle-tests/proptest-regressions/
+crates/neovm-oracle-tests/proptest-regressions/

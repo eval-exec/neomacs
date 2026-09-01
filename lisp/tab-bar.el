@@ -1671,6 +1671,10 @@ in the buffer even when the buffer was modified."
 (defvar tab-bar-minibuffer-restore-tab nil
   "Tab number for `tab-bar-minibuffer-restore-tab'.")
 
+(defvar tab-bar--neomacs-navigation-direction nil
+  "Semantic direction supplied by a relative tab navigation command.
+When nil, `tab-bar-select-tab' derives direction from physical tab position.")
+
 (defun tab-bar-minibuffer-restore-tab ()
   "Switch back to the tab where the minibuffer was activated.
 This is necessary to prepare the same window configuration where
@@ -1702,6 +1706,9 @@ Negative TAB-NUMBER counts tabs from the end of the tab bar."
                           ((zerop tab-number) (1+ from-index))
                           (t tab-number)))
          (to-index (1- (max 1 (min to-number (length tabs)))))
+         (navigation-direction
+          (or tab-bar--neomacs-navigation-direction
+              (if (> to-index from-index) 'forward 'backward)))
          (minibuffer-was-active (minibuffer-window-active-p (selected-window))))
 
     (when (and read-minibuffer-restore-windows minibuffer-was-active
@@ -1795,7 +1802,9 @@ Negative TAB-NUMBER counts tabs from the end of the tab bar."
           (message "Selected tab '%s'" (alist-get 'name to-tab)))
 
         (run-hook-with-args 'tab-bar-tab-post-select-functions
-                            from-tab to-tab))
+                            from-tab to-tab)
+
+        (neomacs--record-frame-navigation-intent navigation-direction))
 
       (force-mode-line-update))))
 
@@ -1807,7 +1816,9 @@ Interactively, ARG is the prefix numeric argument and defaults to 1."
     (setq arg 1))
   (let* ((tabs (funcall tab-bar-tabs-function))
          (from-index (or (tab-bar--current-tab-index tabs) 0))
-         (to-index (mod (+ from-index arg) (length tabs))))
+         (to-index (mod (+ from-index arg) (length tabs)))
+         (tab-bar--neomacs-navigation-direction
+          (if (< arg 0) 'backward 'forward)))
     (tab-bar-select-tab (1+ to-index))))
 
 (defun tab-bar-switch-to-prev-tab (&optional arg)

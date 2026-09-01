@@ -53,7 +53,7 @@ this port's DOC stream against GNU's compiled binary byte for byte.
 Usage:
     scripts/extract_gnu_defun_docs.py \\
         --gnu-src /path/to/emacs-mirror/emacs/src \\
-        --output  neovm-core/src/emacs_core/subr_docs/gnu_table.rs
+        --output  crates/neovm-core/src/emacs_core/lisp/docs/subr_docs/gnu_table.rs
 """
 
 import argparse

@@ -24,7 +24,7 @@ port already declares those through `defvar_bool.rs',
 Usage:
     scripts/extract_gnu_defvar_object_names.py \\
         --gnu-src /path/to/emacs-mirror/emacs/src \\
-        --output  neovm-core/src/emacs_core/defvar_object/gnu_table.rs
+        --output  crates/neovm-core/src/emacs_core/runtime/defvar_object/gnu_table.rs
 """
 
 import argparse

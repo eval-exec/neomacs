@@ -211,7 +211,7 @@ in vec2)'), `:shader' (WGSL) otherwise."
 ;; then the user source — as `surface.wgsl:N:C' (WGSL) or
 ;; `surface.frag:N:C' (GLSL) references.  The prelude length is
 ;; deterministic; the constants below mirror `compose_surface_wgsl' and
-;; `compose_surface_glsl' in neomacs-renderer-wgpu/src/shader_surface.rs
+;; `compose_surface_glsl' in crates/neomacs-renderer-wgpu/src/shader_surface.rs
 ;; and must be updated in lockstep when the generated prelude changes.
 
 (defconst neomacs-shader-playground--wgsl-prelude-fixed-lines (+ 20 12)
@@ -219,19 +219,19 @@ in vec2)'), `:shader' (WGSL) otherwise."
 18 lines of NeoUniforms/channel declarations before the accessors, plus
 12 lines of vertex/fragment entry points ending at the
 `// ---- user source ----' marker.  Mirrors `compose_surface_wgsl' in
-neomacs-renderer-wgpu/src/shader_surface.rs.")
+crates/neomacs-renderer-wgpu/src/shader_surface.rs.")
 
 (defconst neomacs-shader-playground--glsl-prelude-fixed-lines (+ 20 2)
   "Fixed GLSL prelude lines around the per-uniform accessors.
 20 lines of #version/uniform-block/#define declarations before the
 accessors, plus 2 lines (the output declaration and the
 `// ---- user source ----' marker).  Mirrors `compose_surface_glsl' in
-neomacs-renderer-wgpu/src/shader_surface.rs.")
+crates/neomacs-renderer-wgpu/src/shader_surface.rs.")
 
 (defconst neomacs-shader-playground--uniform-slots 8
   "User uniform slots; one accessor line is generated per slot used.
 Mirrors SURFACE_USER_UNIFORM_SLOTS in
-neomacs-renderer-wgpu/src/shader_surface.rs.")
+crates/neomacs-renderer-wgpu/src/shader_surface.rs.")
 
 (defun neomacs-shader-playground--prelude-lines (uniforms language)
   "Lines the generated prelude occupies before the user source.

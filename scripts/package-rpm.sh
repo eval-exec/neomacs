@@ -68,6 +68,9 @@ arch_from_triple() {
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# shellcheck source=./scripts/lib/archlib.sh
+source "$repo_root/scripts/lib/archlib.sh"
+
 dist_dir="$repo_root/dist"
 version="$(get_version)"
 rpm_arch="$(arch_from_triple "$target_triple")"
@@ -104,15 +107,17 @@ install -d "$payload/usr/share/doc/neomacs"
 
 install -m 0755 "$release_tree/bin/neomacs" "$payload/usr/bin/neomacs"
 extra_bin_files=""
-for bin in neomacsclient neomacs-temacs bootstrap-neomacs mock-display; do
-  if [[ -x "$release_tree/bin/$bin" ]]; then
-    install -m 0755 "$release_tree/bin/$bin" "$payload/usr/bin/$bin"
-    extra_bin_files="${extra_bin_files}/usr/bin/${bin}
+if [[ -x "$release_tree/bin/neomacsclient" ]]; then
+  install -m 0755 "$release_tree/bin/neomacsclient" "$payload/usr/bin/neomacsclient"
+  extra_bin_files="/usr/bin/neomacsclient
 "
-  fi
-done
+fi
 
-install -m 0644 "$release_tree/bin/neomacs.pdump" "$payload/usr/bin/neomacs.pdump"
+# GNU's archlibdir under /usr: the dump and the private helpers.  Owned as a
+# directory in %files so every file below it is packaged without listing them.
+archlib_rel="$(neomacs_archlib_relpath "$repo_root/Cargo.toml" "$target_triple")"
+install -d "$payload/usr/$archlib_rel"
+cp -a "$release_tree/$archlib_rel/." "$payload/usr/$archlib_rel/"
 
 cp -a "$release_tree/share/neomacs/." "$payload/usr/share/neomacs/"
 
@@ -120,6 +125,12 @@ install -m 0644 README.md "$payload/usr/share/doc/neomacs/README.md"
 install -m 0644 COPYING "$payload/usr/share/doc/neomacs/COPYING"
 
 scripts/install-linux-desktop-assets.sh "$payload/usr"
+
+neomacs_verify_archlib \
+  "$payload/usr/bin/neomacs" \
+  "$payload/usr/$archlib_rel/neomacs.pdump" \
+  "$payload/usr/$archlib_rel" \
+  "$payload/usr/share/neomacs"
 
 cat >"$rpm_topdir/SPECS/neomacs.spec" <<SPEC
 Name:           neomacs
@@ -134,6 +145,11 @@ Requires:       fontconfig
 Requires:       glib2
 Requires:       cairo
 Requires:       pango
+Recommends:     gstreamer1-plugins-base
+Recommends:     gstreamer1-plugins-good
+Recommends:     gstreamer1-plugins-bad-free
+Recommends:     gstreamer1-plugins-ugly-free
+Recommends:     gstreamer1-libav
 
 %description
 NEO Emacs is an extensible, programmable text editor based on
@@ -147,8 +163,8 @@ cp -a %{_sourcedir}/neomacs-payload/. %{buildroot}/
 %doc /usr/share/doc/neomacs/README.md
 %license /usr/share/doc/neomacs/COPYING
 /usr/bin/neomacs
-/usr/bin/neomacs.pdump
-${extra_bin_files}/usr/share/neomacs/
+${extra_bin_files}/usr/libexec/neomacs/
+/usr/share/neomacs/
 /usr/share/applications/neomacs.desktop
 /usr/share/icons/hicolor/scalable/apps/neomacs.svg
 

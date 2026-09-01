@@ -25,7 +25,7 @@ cargo xtask perf profile rust-lsp-typing \
 Every attempt writes a structured bundle below `./tmp/perf`. Measurements are
 published only when the fixture's correctness invariants pass; mismatches and
 infrastructure failures are retained as failed artifacts and make the command
-exit nonzero. See [`neomacs-perf/README.md`](../neomacs-perf/README.md) for the
+exit nonzero. See [`neomacs-perf/README.md`](../crates/neomacs-perf/README.md) for the
 workload contract, collected files, and metric definitions.
 
 Use `perf profile` when timings show a regression but do not explain it. The
@@ -230,7 +230,7 @@ cargo nextest run -p neovm-core --features vm-profile --release \
 ```
 
 The full in-tree performance panel is available at
-`neovm-core/scripts/run-perf-suite.sh`. It collates every bench into one
+`crates/neovm-core/scripts/run-perf-suite.sh`. It collates every bench into one
 timestamped report — JIT micro-benches (interp-vs-JIT, hot-vs-cold in one
 process), GC drain-kind profiles (plain-vs-pdump A/B), allocation
 round-trip probes, per-builtin VM call rankings, and real-boot AOT A/B

@@ -8,11 +8,20 @@ if ([string]::IsNullOrWhiteSpace($env:GSTREAMER_VERSION)) {
   throw "GSTREAMER_VERSION is not set"
 }
 
+$gstreamerArch = if ([string]::IsNullOrWhiteSpace($env:GSTREAMER_ARCH)) {
+  "x86_64"
+} else {
+  $env:GSTREAMER_ARCH
+}
+if ($gstreamerArch -notin @("x86_64", "arm64")) {
+  throw "unsupported GSTREAMER_ARCH: $gstreamerArch"
+}
+
 $installRoot = "C:\gstreamer"
-$msiCacheRoot = "C:\gstreamer-msi-cache"
+$installerCacheRoot = "C:\gstreamer-installer-cache"
 $baseUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
-$runtimeMsi = Join-Path $msiCacheRoot "gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.msi"
-$develMsi = Join-Path $msiCacheRoot "gstreamer-1.0-devel-msvc-x86_64-$env:GSTREAMER_VERSION.msi"
+$installerName = "gstreamer-1.0-msvc-$gstreamerArch-$env:GSTREAMER_VERSION.exe"
+$installerPath = Join-Path $installerCacheRoot $installerName
 
 function Download-IfMissing($uri, $path) {
   if (Test-Path $path) {
@@ -22,12 +31,16 @@ function Download-IfMissing($uri, $path) {
   Invoke-WebRequest -Uri $uri -OutFile $path
 }
 
-function Install-Msi($path) {
-  $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-    "/i", $path, "/qn", "INSTALLLEVEL=1000", "INSTALLDIR=$installRoot"
+function Install-GStreamer($path) {
+  $process = Start-Process $path -Wait -PassThru -ArgumentList @(
+    "/VERYSILENT",
+    "/NORESTART",
+    "/ALLUSERS",
+    "/TYPE=devel",
+    "/DIR=$installRoot"
   )
   if ($process.ExitCode -ne 0) {
-    throw "msiexec failed with exit code $($process.ExitCode): $path"
+    throw "GStreamer installer failed with exit code $($process.ExitCode): $path"
   }
 }
 
@@ -48,10 +61,8 @@ function Export-CiPath($value) {
 }
 
 if ($Install) {
-  Download-IfMissing "$baseUrl/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.msi" $runtimeMsi
-  Download-IfMissing "$baseUrl/gstreamer-1.0-devel-msvc-x86_64-$env:GSTREAMER_VERSION.msi" $develMsi
-  Install-Msi $runtimeMsi
-  Install-Msi $develMsi
+  Download-IfMissing "$baseUrl/$installerName" $installerPath
+  Install-GStreamer $installerPath
 }
 
 $searchRoots = @($installRoot, "${env:ProgramFiles}\gstreamer", "${env:ProgramFiles(x86)}\gstreamer") |
@@ -62,7 +73,7 @@ $glibPc = $searchRoots |
 
 if (-not $glibPc) {
   $searchRoots | ForEach-Object { Get-ChildItem -Path $_ -Depth 4 -ErrorAction SilentlyContinue }
-  throw "glib-2.0.pc not found; restore or install the GStreamer devel MSI first"
+  throw "glib-2.0.pc not found; restore or install the GStreamer development files first"
 }
 
 $pkgConfigDir = Split-Path -Parent $glibPc.FullName
@@ -80,13 +91,15 @@ if (-not (Test-Path $pkgConfig)) {
   }
 }
 
-if (-not (Test-Path $runtimeMsi)) {
-  Download-IfMissing "$baseUrl/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.msi" $runtimeMsi
-}
-
 Export-CiPath (Split-Path -Parent $pkgConfig)
 Export-CiPath "$gstRoot\bin"
-Export-CiEnv "GSTREAMER_ROOT_X86_64" "$gstRoot\"
+Export-CiEnv "GSTREAMER_ARCH" $gstreamerArch
+Export-CiEnv "GSTREAMER_ROOT" "$gstRoot\"
+if ($gstreamerArch -eq "x86_64") {
+  Export-CiEnv "GSTREAMER_ROOT_X86_64" "$gstRoot\"
+} else {
+  Export-CiEnv "GSTREAMER_ROOT_ARM64" "$gstRoot\"
+}
 Export-CiEnv "PKG_CONFIG" $pkgConfig
 Export-CiEnv "PKG_CONFIG_PATH" "$gstRoot\lib\pkgconfig"
-Export-CiEnv "GSTREAMER_RUNTIME_MSI" $runtimeMsi
+Export-CiEnv "GSTREAMER_INSTALLER" $installerPath

@@ -1263,7 +1263,7 @@ Recommended order (dependencies flow downward):
 
 6. **`gc/mod.rs`** -- Re-export from `tagged/` instead of `gc/`.
 
-7. **`emacs_core/value.rs`** -- The big one:
+7. **`emacs_core/runtime/value/mod.rs`** -- The big one:
    - Replace `pub enum Value { ... }` with `pub type Value = TaggedValue;`
    - Move convenience constructors to `TaggedValue` impl.
    - Remove `with_heap`, `with_heap_mut`, `set_current_heap`, etc.
@@ -1274,7 +1274,7 @@ Recommended order (dependencies flow downward):
 
 ### Phase 2: Evaluator
 
-8. **`emacs_core/eval.rs`** -- (~236 Value constructor matches, ~91 temp_roots)
+8. **`emacs_core/runtime/eval/mod.rs`** -- (~236 Value constructor matches, ~91 temp_roots)
    - Convert all `Value::Cons(id)` matches.
    - Convert all `read_cons()` calls.
    - Update `with_heap` / `with_heap_mut` calls.
@@ -1284,40 +1284,40 @@ Recommended order (dependencies flow downward):
 
 These files have the highest match counts and can be converted independently:
 
-9. **`emacs_core/builtins/symbols.rs`** (~131 matches)
-10. **`emacs_core/builtins/cons_list.rs`** (~93 matches)
-11. **`emacs_core/builtins/buffers.rs`** (~127 matches)
-12. **`emacs_core/builtins/stubs.rs`** (~77 matches)
-13. **`emacs_core/builtins/arithmetic.rs`** (~66 matches)
-14. **`emacs_core/builtins/collections.rs`** (~49 matches)
-15. **`emacs_core/builtins/strings.rs`** (~59 matches)
-16. **`emacs_core/builtins/types.rs`** (~61 matches)
-17. **`emacs_core/builtins/misc_eval.rs`** (~59 matches)
-18. **`emacs_core/builtins/search.rs`** (~43 matches)
-19. **`emacs_core/builtins/misc_pure.rs`** (~18 matches)
-20. **`emacs_core/builtins/higher_order.rs`** (~22 matches)
-21. **`emacs_core/builtins/keymaps.rs`** (~20 matches)
-22. **`emacs_core/builtins/hooks.rs`** (~4 matches)
-23. **`emacs_core/builtins/mod.rs`** (~35 matches)
+9. **`emacs_core/lisp/native/builtins/symbols.rs`** (~131 matches)
+10. **`emacs_core/lisp/native/builtins/cons_list.rs`** (~93 matches)
+11. **`emacs_core/editing/buffer/mod.rs`** (~127 matches)
+12. **`emacs_core/lisp/native/builtins/stubs.rs`** (~77 matches)
+13. **`emacs_core/lisp/native/builtins/arithmetic.rs`** (~66 matches)
+14. **`emacs_core/lisp/native/builtins/collections.rs`** (~49 matches)
+15. **`emacs_core/lisp/native/builtins/strings.rs`** (~59 matches)
+16. **`emacs_core/lisp/native/builtins/types.rs`** (~61 matches)
+17. **`emacs_core/lisp/native/builtins/misc_eval.rs`** (~59 matches)
+18. **`emacs_core/lisp/native/builtins/search.rs`** (~43 matches)
+19. **`emacs_core/lisp/native/builtins/misc_pure.rs`** (~18 matches)
+20. **`emacs_core/lisp/native/builtins/higher_order.rs`** (~22 matches)
+21. **`emacs_core/lisp/native/builtins/keymaps.rs`** (~20 matches)
+22. **`emacs_core/lisp/native/builtins/hooks.rs`** (~4 matches)
+23. **`emacs_core/lisp/native/builtins/mod.rs`** (~35 matches)
 
 ### Phase 4: Subsystems
 
-24. **`emacs_core/bytecode/vm.rs`** (~123 matches) -- critical path
-25. **`emacs_core/print.rs`** (~84 matches)
-26. **`emacs_core/reader.rs`** (~52 matches)
-27. **`emacs_core/keymap.rs`** (~87 matches)
-28. **`emacs_core/xdisp.rs`** (~102 matches)
-29. **`emacs_core/syntax.rs`** (~89 matches)
-30. **`emacs_core/chartable.rs`** (~76 matches)
-31. **`emacs_core/interactive.rs`** (~64 matches)
-32. **`emacs_core/font.rs`** (~160 matches)
-33. **`emacs_core/fileio.rs`** (~64 matches)
-34. **`emacs_core/cl_lib.rs`** (~62 matches)
-35. **`emacs_core/hashtab.rs`** (~66 matches)
-36. **`emacs_core/display.rs`** (~58 matches)
-37. **`emacs_core/process.rs`** (~175 matches)
-38. **`emacs_core/textprop.rs`** (~56 matches)
-39. **`emacs_core/fns.rs`** (~35 matches)
+24. **`emacs_core/runtime/bytecode/vm.rs`** (~123 matches) -- critical path
+25. **`emacs_core/lisp/print/mod.rs`** (~84 matches)
+26. **`emacs_core/lisp/reader/mod.rs`** (~52 matches)
+27. **`emacs_core/commands/keymap/mod.rs`** (~87 matches)
+28. **`emacs_core/display/xdisp/mod.rs`** (~102 matches)
+29. **`emacs_core/text/syntax/mod.rs`** (~89 matches)
+30. **`emacs_core/text/chartable/mod.rs`** (~76 matches)
+31. **`emacs_core/commands/interactive/mod.rs`** (~64 matches)
+32. **`emacs_core/display/font/mod.rs`** (~160 matches)
+33. **`emacs_core/system/fileio/mod.rs`** (~64 matches)
+34. **`emacs_core/lisp/cl_lib/mod.rs`** (~62 matches)
+35. **`emacs_core/runtime/hashtab/mod.rs`** (~66 matches)
+36. **`emacs_core/display/display/mod.rs`** (~58 matches)
+37. **`emacs_core/system/process/mod.rs`** (~175 matches)
+38. **`emacs_core/text/textprop/mod.rs`** (~56 matches)
+39. **`emacs_core/lisp/native/fns/mod.rs`** (~35 matches)
 
 ### Phase 5: Remaining files
 
@@ -1325,14 +1325,14 @@ These files have the highest match counts and can be converted independently:
 
 ### Phase 6: Tests
 
-41. **`emacs_core/builtins/tests.rs`** (~734 matches -- the largest file)
-42. All `*_test.rs` files -- update patterns to match new API.
+41. **`emacs_core/lisp/native/builtins/tests/mod.rs`** (~734 matches -- the largest file)
+42. All subsystem `tests/` files -- update patterns to match new API.
 
 ### Phase 7: pdump
 
-43. **`emacs_core/pdump/convert.rs`** -- serialize/deserialize TaggedValue
+43. **`emacs_core/runtime/pdump/convert.rs`** -- serialize/deserialize TaggedValue
     instead of Value enum + ObjId.
-44. **`emacs_core/pdump/types.rs`** -- update pdump type definitions.
+44. **`emacs_core/runtime/pdump/types.rs`** -- update pdump type definitions.
 
 ---
 

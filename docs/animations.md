@@ -35,19 +35,19 @@ configurable from Elisp — see [Configuration](#configuration).
 The spring style also supports a **4-corner trail effect** where leading corners snap
 ahead and trailing corners stretch behind, controlled by a `trail-size` parameter (0.0-1.0).
 
-## Buffer Switch (Crossfade/Transition)
+## Buffer Switch
 
-**10 buffer-switch effects** triggered when the visible buffer changes:
+Buffer switches use the shared transition catalog described below. Effect,
+orientation, and direction are independent typed settings:
 
-| Effect | Description |
-|--------|-------------|
-| `none` | Instant switch |
-| `crossfade` | Alpha blend between old and new (default) |
-| `slide-left/right/up/down` | Directional slide transitions |
-| `scale-fade` | Scale and fade |
-| `push` | New buffer pushes old buffer out |
-| `blur` | Blur transition |
-| `page-curl` | 3D page-turning effect |
+- `crossfade` and `scale-zoom` have no direction.
+- `slide`, `parallax`, and `card-flip` support either axis. `auto` chooses the
+  horizontal axis for buffer switches.
+- `page-curl` resolves the selected axis and direction to a concrete edge.
+- Effects whose geometry is intrinsically vertical or horizontal ignore an
+  incompatible axis instead of receiving an invalid renderer state.
+
+`forward` moves outgoing content left or up; `backward` reverses that motion.
 
 ## Scroll
 
@@ -95,15 +95,18 @@ ahead and trailing corners stretch behind, controlled by a `trail-size` paramete
  '((cursor-motion :enabled t :speed 15.0
                   :style critically-damped-spring :duration 0.15
                   :trail-size 0.7)
-   (crossfade-transition :enabled t :duration 0.2
-                         :effect crossfade :easing ease-out-quad)
+   (buffer-transition :enabled t :duration 0.2
+                      :effect slide :easing ease-out-quad
+                      :axis auto :direction forward)
    (scroll-transition :enabled t :duration 0.15
                       :effect page-curl :easing spring)))
 
 ;; Incremental changes use the same names and properties.
 (neomacs-effect-set 'cursor-motion
                     :speed 20.0 :style 'linear :duration 0.1)
-(neomacs-effect-set 'crossfade-transition :enabled nil)
+(neomacs-effect-set 'buffer-transition
+                    :effect 'page-curl
+                    :axis 'vertical :direction 'backward)
 (neomacs-effect-set 'scroll-transition
                     :effect 'wobbly :easing 'ease-out-quad)
 ```

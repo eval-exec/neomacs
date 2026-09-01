@@ -25,7 +25,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1] / "neomacs-melpa-tests" / "src" / "parity_tests"
+ROOT = Path(__file__).resolve().parents[1] / "crates" / "neomacs-melpa-tests" / "src" / "parity_tests"
 SKIP_PKGS = {"aa_edit_mode"}  # already on case-constructor style
 
 

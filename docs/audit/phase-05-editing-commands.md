@@ -17,18 +17,17 @@ tree rather than C-owned.
 
 ## Neomacs source ownership
 
-- `neovm-core/src/emacs_core/editfns.rs`
-- `neovm-core/src/emacs_core/indent.rs`
-- `neovm-core/src/emacs_core/minibuffer.rs`
-- `neovm-core/src/emacs_core/interactive.rs`
-- `neovm-core/src/emacs_core/kmacro.rs`
-- `neovm-core/src/emacs_core/navigation.rs`
-- `neovm-core/src/emacs_core/rect.rs`
-- `neovm-core/src/emacs_core/register.rs`
-- `neovm-core/src/emacs_core/isearch.rs`
-- `neovm-core/src/emacs_core/builtins/`
+- `neovm-core/src/emacs_core/editing/editfns/mod.rs`
+- `neovm-core/src/emacs_core/editing/indent/mod.rs`
+- `neovm-core/src/emacs_core/commands/minibuffer/mod.rs`
+- `neovm-core/src/emacs_core/commands/interactive/mod.rs`
+- `neovm-core/src/emacs_core/commands/kmacro/mod.rs`
+- `neovm-core/src/emacs_core/editing/navigation/mod.rs`
+- `neovm-core/src/emacs_core/editing/rect/mod.rs`
+- `neovm-core/src/emacs_core/commands/register/mod.rs`
+- `neovm-core/src/emacs_core/lisp/native/builtins/`
 - editing-adjacent motion/window commands in
-  `neovm-core/src/emacs_core/window_cmds/mod.rs`
+  `neovm-core/src/emacs_core/display/window_cmds/mod.rs`
 
 ## Audit result
 

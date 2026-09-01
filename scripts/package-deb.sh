@@ -66,6 +66,9 @@ arch_from_triple() {
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# shellcheck source=./scripts/lib/archlib.sh
+source "$repo_root/scripts/lib/archlib.sh"
+
 dist_dir="$repo_root/dist"
 version="$(get_version)"
 deb_arch="$(arch_from_triple "$target_triple")"
@@ -96,13 +99,17 @@ mkdir -p "$pkg_dir/usr/share/neomacs"
 mkdir -p "$pkg_dir/usr/share/doc/neomacs"
 
 install -m 0755 "$release_tree/bin/neomacs" "$pkg_dir/usr/bin/neomacs"
-for bin in neomacsclient neomacs-temacs bootstrap-neomacs mock-display; do
-  if [[ -x "$release_tree/bin/$bin" ]]; then
-    install -m 0755 "$release_tree/bin/$bin" "$pkg_dir/usr/bin/$bin"
-  fi
-done
+if [[ -x "$release_tree/bin/neomacsclient" ]]; then
+  install -m 0755 "$release_tree/bin/neomacsclient" "$pkg_dir/usr/bin/neomacsclient"
+fi
 
-install -m 0644 "$release_tree/bin/neomacs.pdump" "$pkg_dir/usr/bin/neomacs.pdump"
+# GNU's archlibdir under the /usr prefix -- the dump and the private helpers,
+# which is what keeps a 20 MB memory image and three build-internal binaries
+# out of /usr/bin.  `exec-directory' names this directory at runtime; the
+# check below proves the binary agrees.
+archlib_rel="$(neomacs_archlib_relpath "$repo_root/Cargo.toml" "$target_triple")"
+mkdir -p "$pkg_dir/usr/$archlib_rel"
+cp -a "$release_tree/$archlib_rel/." "$pkg_dir/usr/$archlib_rel/"
 
 cp -a "$release_tree/share/neomacs/." "$pkg_dir/usr/share/neomacs/"
 
@@ -112,6 +119,37 @@ install -m 0644 COPYING "$pkg_dir/usr/share/doc/neomacs/copyright"
 scripts/install-linux-desktop-assets.sh "$pkg_dir/usr"
 
 installed_size="$(du -sk "$pkg_dir" | cut -f1)"
+
+# Let Debian's shlibs/symbols database derive the complete ELF dependency
+# closure. This includes GStreamer for the full product and automatically
+# follows SONAME/package transitions instead of duplicating them here.
+mkdir -p "$pkg_dir/debian"
+cat >"$pkg_dir/debian/control" <<CONTROL
+Source: neomacs
+Section: editors
+Priority: optional
+Maintainer: eval-exec <noreply@github.com>
+
+Package: neomacs
+Architecture: ${deb_arch}
+Description: NEO Emacs
+CONTROL
+mapfile -d '' -t packaged_executables < <(
+  find "$pkg_dir/usr" -type f -perm /111 -print0
+)
+shlib_args=()
+for executable in "${packaged_executables[@]}"; do
+  shlib_args+=("-e${executable#"$pkg_dir/"}")
+done
+shlibs="$({
+  cd "$pkg_dir"
+  dpkg-shlibdeps -O "${shlib_args[@]}"
+} | sed -n 's/^shlibs:Depends=//p')"
+rm -rf "$pkg_dir/debian"
+if [[ -z "$shlibs" ]]; then
+  echo "dpkg-shlibdeps did not resolve the Neomacs runtime closure" >&2
+  exit 1
+fi
 
 cat >"$pkg_dir/DEBIAN/control" <<CONTROL
 Package: neomacs
@@ -125,7 +163,8 @@ Homepage: https://github.com/eval-exec/neomacs
 Description: NEO Emacs
  Extensible, programmable text editor based on Emacs Lisp
  and the Neovim virtual machine, built with Rust.
-Depends: libcairo2, libfontconfig1, libglib2.0-0, libpango-1.0-0
+Depends: ${shlibs}
+Recommends: gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav
 CONTROL
 
 cat >"$pkg_dir/DEBIAN/postinst" <<'POSTINST'
@@ -151,6 +190,15 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 POSTRM
 chmod 0755 "$pkg_dir/DEBIAN/postrm"
+
+# The staged tree is the /usr the package will unpack to, so the archlib
+# check runs against it directly -- before dpkg-deb turns a wrong layout into
+# a published artifact.
+neomacs_verify_archlib \
+  "$pkg_dir/usr/bin/neomacs" \
+  "$pkg_dir/usr/$archlib_rel/neomacs.pdump" \
+  "$pkg_dir/usr/$archlib_rel" \
+  "$pkg_dir/usr/share/neomacs"
 
 dpkg-deb --build "$pkg_dir" "$deb_path"
 rm -rf "$pkg_dir"

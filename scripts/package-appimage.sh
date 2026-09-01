@@ -5,7 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/package-appimage.sh [--target TRIPLE] [--skip-build] [--no-smoke]
 
-Build and package a NEO Emacs Linux AppImage.
+Build and package the GStreamer-free minimal NEO Emacs Linux AppImage.
 
 Options:
   --target TRIPLE Rust target triple. Defaults to x86_64-unknown-linux-gnu.
@@ -13,11 +13,11 @@ Options:
   --no-smoke      Do not smoke-test the AppImage.
 
 Environment:
-  LINUXDEPLOY_APPIMAGE   Path to linuxdeploy-x86_64.AppImage or linuxdeploy.
-  APPIMAGETOOL_APPIMAGE  Path to appimagetool-x86_64.AppImage or appimagetool.
+  LINUXDEPLOY_APPIMAGE   Path to a target-native linuxdeploy AppImage or binary.
+  APPIMAGETOOL_APPIMAGE  Path to a target-native appimagetool AppImage or binary.
 
 Output:
-  dist/neomacs-{version}-{target}.AppImage
+  dist/neomacs-minimal-{version}-{target}.AppImage
 USAGE
 }
 
@@ -58,12 +58,24 @@ while (($#)); do
   esac
 done
 
+case "$target_triple" in
+  x86_64-*)  appimage_arch="x86_64" ;;
+  aarch64-*) appimage_arch="aarch64" ;;
+  *)
+    echo "unsupported Linux AppImage target: $target_triple" >&2
+    exit 1
+    ;;
+esac
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# shellcheck source=./scripts/lib/archlib.sh
+source "$repo_root/scripts/lib/archlib.sh"
+
 dist_dir="$repo_root/dist"
 version="$(get_version)"
-package_name="neomacs-${version}-${target_triple}"
+package_name="neomacs-minimal-${version}-${target_triple}"
 package_dir="$dist_dir/$package_name"
 appdir="$dist_dir/$package_name.AppDir"
 appimage="$dist_dir/$package_name.AppImage"
@@ -81,23 +93,36 @@ if [[ -z "$appimagetool" || ! -x "$appimagetool" ]]; then
 fi
 
 if [[ ! -x "$package_dir/bin/neomacs" || ! -d "$package_dir/share/neomacs/lisp" ]]; then
-  package_args=(--target "$target_triple")
+  package_args=(--minimal --target "$target_triple")
   if ((skip_build)); then
     package_args+=(--skip-build)
   fi
   package_args+=(--no-smoke)
   scripts/package-release.sh "${package_args[@]}"
 elif ((skip_build == 0)); then
-  scripts/package-release.sh --target "$target_triple" --no-smoke
+  scripts/package-release.sh --minimal --target "$target_triple" --no-smoke
 fi
 
+# The AppImage's /usr is the install prefix, so the release tree's three
+# top-level directories map straight across -- including libexec, which is
+# GNU's archlibdir and holds the dump image.  Copying bin/ without it ships a
+# binary that cannot start.
+archlib_rel="$(neomacs_archlib_relpath "$repo_root/Cargo.toml" "$target_triple")"
+
 rm -rf "$appdir" "$appimage"
-mkdir -p "$appdir/usr/bin" "$appdir/usr/share/neomacs"
+mkdir -p "$appdir/usr/bin" "$appdir/usr/share/neomacs" "$appdir/usr/$archlib_rel"
 
 cp -a "$package_dir/bin/." "$appdir/usr/bin/"
+cp -a "$package_dir/$archlib_rel/." "$appdir/usr/$archlib_rel/"
 cp -a "$package_dir/share/neomacs/." "$appdir/usr/share/neomacs/"
 install -m 0644 "$package_dir/README.md" "$appdir/usr/share/neomacs/README.md"
 install -m 0644 "$package_dir/COPYING" "$appdir/usr/share/neomacs/COPYING"
+
+neomacs_verify_archlib \
+  "$appdir/usr/bin/neomacs" \
+  "$appdir/usr/$archlib_rel/neomacs.pdump" \
+  "$appdir/usr/$archlib_rel" \
+  "$appdir/usr/share/neomacs"
 
 scripts/install-linux-desktop-assets.sh "$appdir/usr"
 desktop_file="$appdir/usr/share/applications/neomacs.desktop"
@@ -117,7 +142,7 @@ chmod 0755 "$appdir/AppRun"
   --desktop-file "$desktop_file" \
   --icon-file "$icon_file"
 
-env -u SOURCE_DATE_EPOCH ARCH=x86_64 "$appimagetool" "$appdir" "$appimage"
+env -u SOURCE_DATE_EPOCH ARCH="$appimage_arch" "$appimagetool" "$appdir" "$appimage"
 chmod 0755 "$appimage"
 
 if ((smoke)); then

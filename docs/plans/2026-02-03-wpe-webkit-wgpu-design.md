@@ -148,7 +148,7 @@ ash = { version = "0.38", optional = true }
 [features]
 default = ["winit-backend"]
 winit-backend = ["winit", "wgpu", "raw-window-handle", "arboard", "bytemuck", "pollster"]
-wpe-webkit = ["winit-backend", "ash"]
+webview = ["winit-backend", "ash"]
 video = ["gstreamer", "gstreamer-video"]
 # DELETE gtk4-backend feature
 ```

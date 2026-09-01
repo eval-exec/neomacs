@@ -31,7 +31,7 @@ So the right conclusion is:
 6. `(dump-emacs-portable "emacs.pdmp")` serializes state
 7. `kill-emacs` terminates temacs
 
-### Neomacs (`neomacs-bin/src/main.rs` + `neovm-core/src/emacs_core/load.rs`)
+### Neomacs (`neomacs-bin/src/main.rs` + `neovm-core/src/emacs_core/lisp/load/mod.rs`)
 
 1. Rust `main()` calls `create_bootstrap_evaluator_cached_with_features(&["neomacs"])`
    (`load.rs:2673`)

@@ -48,7 +48,7 @@ names, same text, zero differences.
 Usage:
     scripts/extract_gnu_defvar_docs.py \\
         --gnu-src /path/to/emacs-mirror/emacs/src \\
-        --output  neovm-core/src/emacs_core/var_docs/gnu_table.rs
+        --output  crates/neovm-core/src/emacs_core/lisp/docs/var_docs/gnu_table.rs
 """
 
 import argparse

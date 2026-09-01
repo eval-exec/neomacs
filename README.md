@@ -88,8 +88,9 @@ https://github.com/user-attachments/assets/275c6d9a-fced-44f6-8f43-3bbd2984d672
 
 - **GPU display engine** — text, images, and effects rendered via wgpu
   (Vulkan · Metal · DX12 · GL); ~4,000 lines of Rust replace ~50,000 lines of `xdisp.c`
-- **Rich media in buffers** — inline 4K video (GStreamer + VA-API), GPU-decoded
-  images, a WPE WebKit browser, and a GPU terminal — all zero-copy via DMA-BUF
+- **Rich media in buffers** — inline 4K video (typed Rust GStreamer + VA-API
+  integration on Linux), GPU-decoded images, a WPE WebKit browser, and a GPU terminal;
+  DMA-BUF paths stay on the GPU, with typed fallbacks where native interop is unavailable
 - **Animations everywhere** — 8 cursor modes, 21 scroll effects, 10 buffer
   transitions at display refresh rate, all configurable from Elisp
   ([full catalog](docs/animations.md))
@@ -107,14 +108,24 @@ https://github.com/user-attachments/assets/275c6d9a-fced-44f6-8f43-3bbd2984d672
 
 ## Install
 
-Download the latest release for your platform from
+Prefer system packages? Download them from
 **[Releases](https://github.com/eval-exec/neomacs/releases/latest)**:
 
 | Platform | Packages |
 |----------|----------|
-| **Linux** | AppImage · `.deb` · `.rpm` · tarball (x86_64, aarch64) |
-| **macOS** *(experimental)* | `.dmg` (Apple Silicon) |
-| **Windows** *(experimental)* | installer `.exe` · portable `.zip` |
+| **Linux** | full `.deb` · `.rpm` · tarball; minimal AppImage · tarball (x86_64, aarch64) |
+| **macOS** *(experimental)* | `.dmg` · `.zip` · `.tar.gz` (Apple Silicon) |
+| **Windows** *(experimental)* | installer `.exe` · portable `.zip` (x86_64, aarch64) |
+
+For terminal, batch, and Linux container deployments, the complete application
+is also published for amd64 and arm64 on
+[`evalexec/neomacs`](https://hub.docker.com/r/evalexec/neomacs) and
+[`ghcr.io/eval-exec/neomacs`](https://github.com/eval-exec/neomacs/pkgs/container/neomacs).
+See the [Docker guide](docs/docker.md).
+
+The full Linux product links the system GStreamer runtime and provides video.
+The `neomacs-minimal-*` artifacts omit video and all GStreamer loader
+dependencies; the portable AppImage intentionally uses this minimal product.
 
 <details>
 <summary><b>Build from source</b></summary>
@@ -130,6 +141,10 @@ cargo xtask fresh-build --release
 
 ./target/release/neomacs
 ```
+
+Run Cargo commands from within the checkout (normally its root). Cargo discovers
+`.cargo/config.toml` from the invocation directory; Neomacs uses that config to
+provide member crates with the repository root for shared Lisp and test assets.
 
 Platform dependencies (Arch, macOS, Nix/Cachix) and the test suites:
 [docs/building.md](docs/building.md).

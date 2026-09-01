@@ -1,0 +1,60 @@
+[package]
+name = "neomacs-video"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cross-platform GPU-resident video playback for Neomacs"
+
+[features]
+default = []
+
+[dependencies]
+bytemuck.workspace = true
+neomacs-display-protocol.workspace = true
+neomacs-video-model.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+wgpu.workspace = true
+wgpu-hal.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ash.workspace = true
+libc.workspace = true
+crossbeam-channel.workspace = true
+gstreamer = { workspace = true, features = ["v1_20"] }
+gstreamer-allocators = { workspace = true, features = ["v1_20"] }
+gstreamer-app = { workspace = true, features = ["v1_20"] }
+gstreamer-pbutils = { workspace = true, features = ["v1_20"] }
+gstreamer-video = { workspace = true, features = ["v1_20"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-av-foundation = { workspace = true, features = ["objc2-core-media", "objc2-core-video"] }
+objc2-core-foundation.workspace = true
+objc2-core-media.workspace = true
+objc2-core-video.workspace = true
+objc2-foundation.workspace = true
+objc2-metal.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D11on12",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Threading",
+] }
+windows-core.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

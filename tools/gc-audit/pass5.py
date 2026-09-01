@@ -5,7 +5,8 @@ Refines pass 4 with two corrections the earlier passes got wrong:
 
   * `expect_lisp_string` is SIX different functions. Five of them
     (bookmark/dired/lread/minibuffer/reader, plus fileio's `_strict`) return an
-    OWNED `LispString`; only `builtins/mod.rs`'s and `emacs_core/search.rs`'s
+    OWNED `LispString`; only `lisp/native/builtins/mod.rs`'s and
+    `emacs_core/text/search/mod.rs`'s
     return a borrow. A call that reaches an owned one is not a borrow site.
   * `let x = <borrow>;` immediately followed by `let x = x.clone();` — the
     codebase's dominant idiom at any boundary that runs Lisp — leaves an owned
@@ -20,11 +21,11 @@ sites = json.load(open(os.path.join(ROOT, 'tmp/sites2.json')))['sites']
 ctxstr = {l.strip() for l in open(os.path.join(ROOT, 'tmp/ctxstr-names.txt')) if l.strip()}
 
 OWNED_DEFS = {
-    'neovm-core/src/emacs_core/bookmark.rs',
-    'neovm-core/src/emacs_core/dired.rs',
-    'neovm-core/src/emacs_core/lread.rs',
-    'neovm-core/src/emacs_core/minibuffer.rs',
-    'neovm-core/src/emacs_core/reader.rs',
+    'crates/neovm-core/src/emacs_core/editing/bookmark/mod.rs',
+    'crates/neovm-core/src/emacs_core/editing/dired/mod.rs',
+    'crates/neovm-core/src/emacs_core/lisp/lread/mod.rs',
+    'crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs',
+    'crates/neovm-core/src/emacs_core/lisp/reader/mod.rs',
 }
 CTX_CALL = re.compile(
     r'\b[A-Za-z_]\w*\s*\(\s*(?:&mut\s+)?(ctx|eval|evaluator|context)\b'

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1] / "neomacs-melpa-tests" / "src" / "parity_tests"
+ROOT = Path(__file__).resolve().parents[1] / "crates" / "neomacs-melpa-tests" / "src" / "parity_tests"
 GENERATED_START = "// BEGIN generated package batch tests"
 GENERATED_END = "// END generated package batch tests"
 

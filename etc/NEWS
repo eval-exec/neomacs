@@ -82,6 +82,16 @@ other directory on your system.  You can also invoke the
 
 * Changes in Emacs 31.1
 
+---
+** NeoMacs can composite native bi-planar video without a CPU upload.
+On supported GPUs, Linux imports NV12 or P010 DMA-BUF surfaces, macOS
+selects CoreVideo NV12/P010 and limited/full-range planes from source
+metadata, and Windows keeps Media Foundation NV12 output in GPU memory.
+The renderer samples the luma and chroma planes
+directly and applies the frame's range, matrix, primaries, transfer
+function, and chroma location.  Packed GPU surfaces and CPU upload remain
+available as explicit fallbacks when native import is unavailable.
+
 +++
 ** 'line-spacing' now supports specifying spacing above the line.
 Previously, only spacing below the line could be specified.  The variable

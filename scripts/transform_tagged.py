@@ -2,7 +2,7 @@
 """
 Mechanically transform old Value enum usage to new TaggedValue-based API.
 
-Processes all .rs files under neovm-core/src/ (except neovm-core/src/tagged/).
+Processes all .rs files under crates/neovm-core/src/ (except crates/neovm-core/src/tagged/).
 Run from the project root directory.
 
 Usage:
@@ -925,7 +925,7 @@ def main():
 
     script_dir = Path(__file__).resolve().parent
     project_root = script_dir.parent
-    src_dir = project_root / 'neovm-core' / 'src'
+    src_dir = project_root / 'crates' / 'neovm-core' / 'src'
 
     if not src_dir.exists():
         print(f"Error: source directory not found: {src_dir}", file=sys.stderr)

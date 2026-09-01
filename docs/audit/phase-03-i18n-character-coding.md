@@ -24,15 +24,15 @@ display, file I/O, and editing.
 
 VM/core side:
 
-- `neovm-core/src/emacs_core/character/`
-- `neovm-core/src/emacs_core/charset.rs`
-- `neovm-core/src/emacs_core/chartable.rs`
-- `neovm-core/src/emacs_core/coding.rs`
-- `neovm-core/src/emacs_core/ccl.rs`
-- `neovm-core/src/emacs_core/composite.rs`
-- `neovm-core/src/emacs_core/category.rs`
-- `neovm-core/src/emacs_core/casetab.rs`
-- `neovm-core/src/emacs_core/casefiddle.rs`
+- `neovm-core/src/emacs_core/text/character/mod.rs`
+- `neovm-core/src/emacs_core/text/charset/mod.rs`
+- `neovm-core/src/emacs_core/text/chartable/mod.rs`
+- `neovm-core/src/emacs_core/text/coding/mod.rs`
+- `neovm-core/src/emacs_core/text/ccl/mod.rs`
+- `neovm-core/src/emacs_core/text/composite/mod.rs`
+- `neovm-core/src/emacs_core/text/category/mod.rs`
+- `neovm-core/src/emacs_core/text/casetab/mod.rs`
+- `neovm-core/src/emacs_core/text/casefiddle/mod.rs`
 
 Layout side:
 

@@ -6,7 +6,7 @@ real terminal so `noninteractive' is nil and GNU's DISPLAY-ITERATOR arm of
 `Fvertical_motion' (src/indent.c:2287) is the one under test.
 
   L195_COLS / L195_ROWS   pty size, default 160x50 (the neomacs-tui-tests
-                          geometry, neomacs-tui-tests/src/lib.rs:38-39)
+                          geometry, crates/neomacs-tui-tests/src/lib.rs:38-39)
   L195_TIMEOUT            seconds before SIGKILL, default 180
 """
 import os, pty, sys, select, signal, time, struct, fcntl, termios
@@ -21,11 +21,18 @@ def main():
         os.environ["COLUMNS"] = os.environ.get("L195_COLS", "160")
         os.environ["LINES"] = os.environ.get("L195_ROWS", "50")
         os.environ.pop("RUST_LOG", None)
-        os.execvp(prog, args)
+        try:
+            os.execvp(prog, args)
+        except OSError:
+            pass
+        # execvp RAISES on failure rather than returning, so this line was
+        # unreachable and a missing editor surfaced as a Python traceback with
+        # exit 1 (ledger 210).  127 is the shell's answer and the useful one.
         os._exit(127)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", int(os.environ.get("L195_ROWS","50")), int(os.environ.get("L195_COLS","160")), 0, 0))
     start = time.time()
     out = bytearray()
+    reaped = None
     while True:
         if time.time() - start > timeout:
             os.kill(pid, signal.SIGKILL)
@@ -43,6 +50,7 @@ def main():
             out.extend(data)
         wpid, status = os.waitpid(pid, os.WNOHANG)
         if wpid == pid:
+            reaped = status
             # drain
             while True:
                 r, _, _ = select.select([fd], [], [], 0.2)
@@ -56,7 +64,17 @@ def main():
                     break
                 out.extend(data)
             break
+    if reaped is None:
+        # The pty closed before the child was reaped -- wait for it, so the
+        # status below is the EDITOR's and not this driver's optimism.
+        _, reaped = os.waitpid(pid, 0)
     sys.stdout.buffer.write(bytes(out))
-    sys.exit(0)
+    # Ledger 210: this used to be `sys.exit(0)' unconditionally, so an editor
+    # that crashed, refused its arguments or died on a signal was reported as a
+    # successful sweep and only `lines=MISSING' downstream said otherwise.  A
+    # driver that cannot fail is a false-green generator.
+    code = os.waitstatus_to_exitcode(reaped)
+    # A signal comes back negative; report it the way a shell does.
+    sys.exit(128 - code if code < 0 else code)
 
 main()

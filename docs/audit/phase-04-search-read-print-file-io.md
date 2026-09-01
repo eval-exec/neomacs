@@ -21,24 +21,21 @@ boundary between Lisp semantics and startup/bootstrap behavior.
 
 ## Neomacs source ownership
 
-- `neovm-core/src/emacs_core/search.rs`
-- `neovm-core/src/emacs_core/regex.rs`
-- `neovm-core/src/emacs_core/syntax.rs`
-- `neovm-core/src/emacs_core/reader.rs`
-- `neovm-core/src/emacs_core/parser.rs`
-- `neovm-core/src/emacs_core/lread.rs`
-- `neovm-core/src/emacs_core/load.rs`
-- `neovm-core/src/emacs_core/autoload.rs`
-- `neovm-core/src/emacs_core/print.rs`
-- `neovm-core/src/emacs_core/doc.rs`
-- `neovm-core/src/emacs_core/fileio.rs`
-- `neovm-core/src/emacs_core/dired.rs`
+- `neovm-core/src/emacs_core/text/search/mod.rs`
+- `neovm-core/src/emacs_core/text/regex/mod.rs`
+- `neovm-core/src/emacs_core/text/syntax/mod.rs`
+- `neovm-core/src/emacs_core/lisp/reader/mod.rs`
+- `neovm-core/src/emacs_core/lisp/lread/mod.rs`
+- `neovm-core/src/emacs_core/lisp/load/mod.rs`
+- `neovm-core/src/emacs_core/lisp/autoload/mod.rs`
+- `neovm-core/src/emacs_core/lisp/print/mod.rs`
+- `neovm-core/src/emacs_core/lisp/doc/mod.rs`
+- `neovm-core/src/emacs_core/system/fileio/mod.rs`
+- `neovm-core/src/emacs_core/editing/dired/mod.rs`
 
 Related support:
 
-- `neovm-core/src/emacs_core/file_compile.rs`
-- `neovm-core/src/emacs_core/file_compile_format.rs`
-- `neovm-core/src/emacs_core/builtins/search.rs`
+- `neovm-core/src/emacs_core/lisp/native/builtins/search.rs`
 
 Duplicated runtime-side logic:
 
@@ -58,7 +55,8 @@ Good:
 
 Bad:
 
-- `load.rs` still remains one of the highest-risk files in the entire project.
+- `lisp/load/mod.rs` still remains one of the highest-risk files in the entire
+  project.
 - GNU and Neomacs still do not construct runtime state the same way during
   bootstrap.
 - Search/regex/syntax-related logic also still exists in the display runtime,
@@ -72,11 +70,12 @@ Bad:
 
 The ideal design is:
 
-- `neovm-core/src/emacs_core/reader.rs`, `parser.rs`, `lread.rs`, `autoload.rs`,
-  and `load.rs` together behave as a GNU-compatible reader/loader boundary,
-  even if the internal implementation is Rust-native.
-- `fileio.rs`, `dired.rs`, and `doc.rs` match GNU error shape, side effects,
-  and handler behavior.
+- `neovm-core/src/emacs_core/lisp/reader/mod.rs`, `lisp/lread/mod.rs`,
+  `lisp/autoload/mod.rs`, and `lisp/load/mod.rs` together behave as a
+  GNU-compatible reader/loader boundary, even if the internal implementation
+  is Rust-native.
+- `system/fileio/mod.rs`, `editing/dired/mod.rs`, and `lisp/doc/mod.rs` match
+  GNU error shape, side effects, and handler behavior.
 - Search, regex, and syntax semantics are owned in `neovm-core`, not in GUI
   runtime code.
 

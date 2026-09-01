@@ -75,11 +75,11 @@ memory-full style errors.
 After the unification refactor, neomacs now matches GNU's structure much more
 closely:
 
-- [eval.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/eval.rs)
+- [eval module](../../crates/neovm-core/src/emacs_core/runtime/eval/mod.rs)
   owns the shared condition runtime and signal dispatch
-- [vm.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/bytecode/vm.rs)
+- [bytecode VM](../../crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs)
   consumes already-selected resume targets instead of deciding winners again
-- [debug.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/debug.rs)
+- [debug module](../../crates/neovm-core/src/emacs_core/runtime/debug/mod.rs)
   no longer owns signal/debugger semantics
 - VM unwind cleanup is separate from condition selection, matching GNU's
   "unified search, separate unwind" split
@@ -111,8 +111,8 @@ the same in shared dispatch:
 
 This behavior is now covered in:
 
-- [eval_test.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/eval_test.rs)
-- [vm_test.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/bytecode/vm_test.rs)
+- [evaluator tests](../../crates/neovm-core/src/emacs_core/runtime/eval/tests/mod.rs)
+- [bytecode VM tests](../../crates/neovm-core/src/emacs_core/runtime/bytecode/tests/vm.rs)
 
 ### Public `signal nil ...` behavior now matches GNU
 

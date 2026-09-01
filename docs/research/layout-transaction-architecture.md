@@ -137,29 +137,32 @@ fields are source facts, estimates, derived geometry, or cache keys.
 
 `LayoutEngine::layout_frame_rust` runs on the evaluator thread. It currently:
 
-1. realizes default metrics;
-2. begins a presentation identity;
-3. collects frame/window parameters;
-4. fontifies estimated visible ranges;
-5. resets mutable output builders;
-6. renders frame chrome;
-7. classifies retained-window fast paths;
-8. lays out each leaf sequentially;
+1. evaluates menu, tab-bar, then tool-bar semantics once in GNU
+   `prepare_menu_bars` order before any display line is filled;
+2. realizes default metrics;
+3. begins a presentation identity;
+4. collects frame/window parameters;
+5. snapshots pre-fontification damage and resets mutable output builders;
+6. renders frame chrome and classifies retained-window fast paths;
+7. processes each leaf sequentially in GNU order: resolve and publish its
+   candidate start, run any scroll hook, fontify its visible range, revalidate
+   canonical inputs, then produce body and chrome rows;
+8. discards and recollects the speculative frame if leaf-local Lisp changed
+   layout inputs;
 9. checks minibuffer resize;
-10. seals display/spatial output;
+10. positions the already-evaluated GUI chrome and seals display/spatial output;
 11. commits retained matrices and prepares evaluator geometry.
 
-There is already an outer retry loop, but it is an ad hoc coordinator:
+`FrameLayoutCoordinator` now owns this bounded convergence policy. Relayout
+requests are typed by cause (frame chrome, leaf chrome, minibuffer allocation,
+logical-input invalidation, or window-topology invalidation), and every
+accepted request discards the complete speculative frame before recollection.
+The remaining boundary is deliberately narrow: the coordinator decides retry
+eligibility, while the specialized frame/window machinery still performs the
+requested geometry mutation.
 
-- one boolean allows one frame tab-bar height retry;
-- one boolean allows one minibuffer resize retry;
-- per-window tab/header/mode-line height changes do not participate;
-- there is no typed collection of reasons or general convergence policy.
-
-The accepted-loop boundary is nevertheless valuable: retained matrices and
-buffer unchanged-region acknowledgements are committed only after an accepted
-iteration. The target design should preserve that behavior and make acceptance
-explicit.
+Retained matrices and buffer unchanged-region acknowledgements are committed
+only after an iteration reaches the explicit accepted boundary.
 
 ### 4. Per-window layout
 
@@ -554,6 +557,27 @@ can have observable side effects. Pure, already-computed invalidations may be
 coalesced, but compatibility must not change evaluation order for a
 micro-optimization.
 
+GNU's frame-menu preparation is the deliberate preflight exception:
+`update_tool_bar` evaluates its captions and menu properties before
+`redisplay_windows` fills any leaf rows, and physical convergence retries reuse
+that one logical result. Window callbacks remain leaf-local: a window's scroll
+hook, body, and chrome Lisp run before redisplay advances to its sibling. Do not
+hoist those callbacks into a frame-wide preflight; that changes cross-window
+observable order. Display
+queries invoked by those callbacks use a disjoint, renderer-inert query engine
+owned by the evaluator-thread redisplay runtime. That engine runs the canonical
+target-only row producer but cannot prepare or mutate a renderer presentation,
+so `window-end` is reentrant without aliasing the borrowed presentation engine.
+This models GNU's stack-local display iterator as an ownership boundary rather
+than a `RefCell` exception.
+
+Inactive echo-area display is also a separate publication domain. Its
+minibuffer-shaped snapshot remains part of sealed renderer and interaction
+geometry, but a typed `GeometryOnly` publication prevents the temporary echo
+source from replacing the live minibuffer's output, `window-end`, or retained
+redisplay cache. This mirrors GNU's temporary `with_echo_area_buffer` swap
+without making pointer input lose the minibuffer window.
+
 Retries must be bounded. Oscillation should return a diagnostic
 `LayoutConvergenceError` containing presentation identity, attempt number,
 window, old/new metrics, relevant formats/faces, and logical revisions. An
@@ -561,10 +585,15 @@ unstable attempt must never be prepared for presentation.
 
 “Transaction” here means speculative build followed by validation and commit;
 it does not mean freezing all Emacs state. Fontification and status-line Lisp
-can mutate redisplay inputs while an attempt runs. The coordinator must capture
-the relevant logical revision before and after the attempt and retry when it
-drifts, just as GNU abandons optimized desired output when Lisp makes the frame
-dirty.
+can mutate redisplay inputs while a leaf runs. The coordinator captures the
+complete live-window and semantic-source projection before that leaf's Lisp and
+after its body/chrome production, and retries when that leaf-local identity
+drifts. A later sibling may invalidate an already completed sibling; matching
+GNU's observable traversal order, redisplay does not revisit the earlier leaf
+in the same frame walk. The mutation remains live and is consumed by the next
+redisplay. Structural topology changes are different because they invalidate
+the remaining traversal routes, so they reject the whole physical attempt
+immediately.
 
 ### 2. One canonical per-leaf partition
 

@@ -2,7 +2,7 @@
 """
 Fourth-pass mechanical fixes for the NeoVM tagged pointer migration.
 
-Processes all .rs files under neovm-core/src/ (except neovm-core/src/tagged/).
+Processes all .rs files under crates/neovm-core/src/ (except crates/neovm-core/src/tagged/).
 Run from the project root directory.
 
 Fixes applied:
@@ -39,7 +39,7 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-SRC_ROOT = Path("neovm-core/src")
+SRC_ROOT = Path("crates/neovm-core/src")
 EXCLUDED_DIR = SRC_ROOT / "tagged"
 
 

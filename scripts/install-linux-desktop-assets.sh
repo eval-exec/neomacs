@@ -8,7 +8,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 destination_root="$1"
-asset_root="$repo_root/neomacs-display-runtime/assets"
+asset_root="$repo_root/crates/neomacs-display-runtime/assets"
 desktop_source="$asset_root/neomacs.desktop"
 desktop_file_id="$(basename "$desktop_source")"
 icon_name="$(sed -n 's/^Icon=//p' "$desktop_source")"

@@ -172,11 +172,13 @@ the blink interval and alpha animation.
 
 ### Buffer Switch Transitions
 
-**File:** `core/buffer_transition.rs`
+**Files:** `crates/neomacs-display-protocol/src/transition_policy.rs`,
+`crates/neomacs-display-runtime/src/render_thread/transitions.rs`, and
+`crates/neomacs-renderer-wgpu/src/renderer/transitions.rs`
 
 When the visible buffer in a window changes, the render thread detects the change
 by comparing buffer IDs between frames. It snapshots the old frame to a texture and
-crossfades/transitions to the new frame.
+applies the configured `buffer-transition` plan to the new frame.
 
 #### Detection (`render_thread.rs:detect_transitions()`)
 
@@ -184,20 +186,14 @@ Each frame, the render thread receives per-window metadata (buffer ID, window-st
 position). If buffer ID changes → buffer transition. If window-start changes →
 scroll transition.
 
-#### Effects (`BufferTransitionEffect`)
+#### Typed transition plans
 
-| Effect | Description |
-|--------|-------------|
-| None | Instant switch |
-| Crossfade | Alpha blend old→new (default) |
-| SlideLeft | New slides in from right |
-| SlideRight | New slides in from left |
-| SlideUp | New slides in from bottom |
-| SlideDown | New slides in from top |
-| ScaleFade | Scale down + fade out old, scale up new |
-| Push | New pushes old off screen |
-| Blur | Blur transition between old and new |
-| PageCurl | 3D page-turning deformation |
+The control plane selects a `TransitionEffect`, `TransitionAxisPreference`, and
+`TransitionDirection`. `TransitionPolicy` resolves those values with the window
+bounds into a `ResolvedTransitionEffect`. That enum makes unsupported states
+unrepresentable: directionless effects carry no direction, axis-aligned effects
+carry a resolved axis and distance, page curls carry an edge, and intrinsic
+vertical/horizontal effects cannot be dispatched on the wrong axis.
 
 #### Rendering
 
@@ -207,13 +203,15 @@ Transitions use double-buffered offscreen textures (`offscreen_a`/`offscreen_b`)
 
 ### Scroll Animations
 
-**Files:** `core/scroll_animation.rs`, `backend/wgpu/renderer.rs`
+**Files:** `crates/neomacs-display-protocol/src/transition_policy.rs`,
+`crates/neomacs-display-runtime/src/render_thread/transitions.rs`, and
+`crates/neomacs-renderer-wgpu/src/renderer/transitions.rs`
 
 When the window-start position changes within the same buffer, a scroll transition
 is triggered. The old frame is snapshotted and the new frame is rendered to the
 current offscreen texture. Both are composited with the selected scroll effect.
 
-#### Scroll Effects (`ScrollEffect` — 21 variants)
+#### Transition Effects (`TransitionEffect` — 21 variants)
 
 **2D Transitions:**
 
@@ -261,7 +259,7 @@ current offscreen texture. Both are composited with the selected scroll effect.
 |---|--------|-------------|
 | 20 | TypewriterReveal | Lines appear left-to-right with stagger |
 
-#### Scroll Easing (`ScrollEasing` — 5 variants)
+#### Transition Easing (`TransitionEasing` — 5 variants)
 
 | # | Easing | Formula |
 |---|--------|---------|
@@ -306,63 +304,24 @@ surface, ownership rules, and extension contract.
 
 ## Crate Structure
 
+The display engine is split by ownership instead of living in one renderer
+crate:
+
 ```
-rust/neomacs-display/
-├── Cargo.toml
-├── include/
-│   └── neomacs_display.h           # C header (canonical copy)
-├── src/
-│   ├── lib.rs                      # Crate root, feature gates
-│   ├── ffi.rs                      # C FFI (extern "C" functions, ~109KB)
-│   ├── render_thread.rs            # winit event loop, animation state (~79KB)
-│   ├── thread_comm.rs              # RenderCommand / InputEvent enums
-│   │
-│   ├── core/                       # Platform-independent types
-│   │   ├── mod.rs
-│   │   ├── types.rs                # Color, Rect, CursorAnimStyle
-│   │   ├── scene.rs                # Scene graph (DirtyRegion, etc.)
-│   │   ├── glyph.rs                # Glyph, GlyphRow types
-│   │   ├── face.rs                 # Face attributes, Pango font desc
-│   │   ├── grid.rs                 # Character grid abstraction
-│   │   ├── frame_glyphs.rs         # FrameGlyphBuffer from Emacs
-│   │   ├── error.rs                # Error types
-│   │   ├── animation.rs            # Base Animation struct + easing
-│   │   ├── animation_config.rs     # Unified AnimationConfig (string-based)
-│   │   ├── cursor_animation.rs     # 8 cursor modes, particle system
-│   │   ├── scroll_animation.rs     # ScrollEffect(21), ScrollEasing(5), physics
-│   │   └── buffer_transition.rs    # BufferTransitionEffect(10)
-│   │
-│   ├── backend/
-│   │   ├── mod.rs                  # Backend trait
-│   │   ├── tty/                    # Terminal backend
-│   │   ├── wgpu/                   # GPU backend (primary)
-│   │   │   ├── mod.rs
-│   │   │   ├── renderer.rs         # Main render pipeline (~145KB)
-│   │   │   ├── backend.rs          # wgpu device/surface setup
-│   │   │   ├── glyph_atlas.rs      # cosmic-text → GPU texture atlas
-│   │   │   ├── image_cache.rs      # Image texture management
-│   │   │   ├── video_cache.rs      # GStreamer video pipeline
-│   │   │   ├── webkit_cache.rs     # WPE WebKit offscreen views
-│   │   │   ├── vulkan_dmabuf.rs    # DMA-BUF zero-copy import (ash)
-│   │   │   ├── va_dmabuf_export.rs # VA-API DMA-BUF export
-│   │   │   ├── drm_device.rs       # DRM device discovery
-│   │   │   ├── external_buffer.rs  # External buffer management
-│   │   │   ├── vertex.rs           # Vertex types for shaders
-│   │   │   ├── animation.rs        # wgpu-specific animation rendering
-│   │   │   ├── transition.rs       # Transition texture management
-│   │   │   ├── media_budget.rs     # GPU memory budgeting
-│   │   │   ├── window_state.rs     # Per-window render state
-│   │   │   └── shaders/
-│   │   │       ├── glyph.wgsl      # Glyph rendering (textured quad + tint)
-│   │   │       ├── image.wgsl      # Image rendering (textured quad)
-│   │   │       ├── rect.wgsl       # Solid color rectangles
-│   │   │       └── texture.wgsl    # Texture blit (for transitions)
-│   │   ├── webkit/                 # WPE WebKit integration
-│   │   └── wpe/                    # WPE backend support
-│   │
-│   └── shaders/                    # (legacy shader location)
-│
-└── target/                         # Build output
+crates/
+├── neomacs-display-protocol/        # Shared wire types and transition policy
+│   ├── src/visual_config.rs         # User-facing buffer-transition settings
+│   ├── src/frame_glyphs.rs          # Semantic window transition hints
+│   └── src/transition_policy.rs     # Renderer-ready typed transition plans
+
+├── neomacs-layout-engine/           # Redisplay/layout and semantic hint emission
+├── neomacs-display-runtime/         # Window/event loop and transition lifetimes
+│   └── src/render_thread/transitions.rs # Snapshot ownership and active plans
+
+└── neomacs-renderer-wgpu/           # GPU resources and rendering
+    ├── src/renderer/transitions.rs  # Typed effect dispatch and geometry
+    ├── src/glyph_atlas/             # Glyph rasterization and atlas pages
+    └── src/shaders/                  # WGPU shaders
 ```
 
 ---
@@ -470,10 +429,16 @@ let ndc_y = 1.0 - (pos.y / uniforms.screen_size.y) * 2.0;
 
 ---
 
-## Video Pipeline (DMA-BUF Zero-Copy)
+## Video Pipeline
 
 ```
-GStreamer pipeline
+first media command
+  └─► initialize platform decoder once
+       ├─► Linux: typed Rust GStreamer backend
+       ├─► macOS: AVFoundation
+       └─► Windows: Media Foundation
+
+Linux GStreamer backend
   ├─► VA-API hardware decode
   ├─► DMA-BUF file descriptor
   │
@@ -485,11 +450,37 @@ GStreamer pipeline
   │     (hal::vulkan → wgpu::Texture)
   │
   └─► Rendered as textured quad
-       No CPU readback at any point
 ```
 
-This gives true zero-copy video: the GPU decodes the video frame, and the same GPU
-memory is used directly as a texture for rendering. No pixels ever touch the CPU.
+On Linux, the full product implements its GStreamer platform backend directly
+inside `neomacs-video` through the official Rust bindings. Owned frames and
+exhaustive enums cross only private Rust module seams; there is no private C
+ABI, runtime loader, second adapter crate, or Neomacs-owned shared object.
+Cargo and rustc therefore check every command, event, format, and lifetime
+boundary together. GStreamer initialization remains lazy at the first media
+command, and the dedicated missing-plugin message protocol becomes a typed,
+session-scoped video failure.
+
+The Linux product targets the GStreamer 1.20 API/ABI shipped by the oldest
+supported release environment. On that baseline it negotiates legacy linear
+DMA-BUF video caps; on newer runtimes it can additionally negotiate `DMA_DRM`
+caps with explicit DRM modifiers. The newer caps are parsed into Neomacs-owned
+Rust types, so supporting them does not introduce references to GStreamer
+1.24-only symbols or raise the executable's loader requirement.
+
+Runtime optionality is represented by a separate compile-time product. The
+default full build includes video and declares GStreamer in its loader/package
+closure. `cargo xtask fresh-build --release --minimal` and the Nix
+`neomacs-minimal` output omit the `video` feature, so the resulting executable
+starts without GStreamer installed. GitHub releases publish both Linux
+tarballs; the AppImage is deliberately the minimal product because a portable
+image must not silently depend on codec plugins from the host.
+
+DMA-BUF import keeps decoded pixels on the GPU where the decoder and compositor
+topology is compatible. The typed transfer policy distinguishes direct external
+surfaces, GPU interop copies, and packed CPU upload; the default renderer policy
+permits the CPU path as a correctness fallback instead of claiming every pipeline
+is zero-copy.
 
 ---
 
@@ -518,7 +509,7 @@ make -j$(nproc)
 
 Feature flags in Cargo.toml:
 - `winit-backend` — wgpu + winit GPU rendering (default)
-- `video` — GStreamer video playback
+- `video` — cross-platform video playback (direct GStreamer linkage on Linux)
 - `webkit` — WPE WebKit browser embedding
 
 ---

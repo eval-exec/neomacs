@@ -1,9 +1,31 @@
 name: nix smoke
 
 on:
-  # Manual-only: this Nix build + startup smoke is slow (up to ~2h), so it does
-  # not run automatically on push/PR. Trigger it on demand from the Actions tab
-  # ("Run workflow") or via `gh workflow run "nix smoke"`.
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "crates/xtask/**"
+      - ".github/actions/setup-nix/**"
+      - ".github/workflows/nix-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "crates/xtask/**"
+      - ".github/actions/setup-nix/**"
+      - ".github/workflows/nix-smoke.yml"
+  schedule:
+    - cron: "23 5 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -14,40 +36,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  nix-eval:
+    name: flake contract evaluation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Nix
+        uses: ./.github/actions/setup-nix
+
+      - name: Evaluate every advertised flake contract
+        run: >-
+          nix flake check --all-systems --no-build --accept-flake-config
+          --option allow-import-from-derivation false
+
   nix-smoke:
-    name: nix build and startup smoke
+    name: installed package and Home Manager contracts
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
-        with:
-          extra_nix_config: |
-            accept-flake-config = true
-            substituters = https://eval-exec.cachix.org https://nix-wpe-webkit.cachix.org https://cache.nixos.org/
-            trusted-public-keys = eval-exec.cachix.org-1:xvopUI7X7+Vt1gaSsWJ0PQFPP66vs8v5iIaz6boxf64= nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzcox4EqcXqKvOygxpwYHE= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+      - name: Set up Nix
+        uses: ./.github/actions/setup-nix
 
-      - name: Build Neomacs with Nix
+      - name: Build and run installed-package contracts
         timeout-minutes: 120
-        run: nix build --print-build-logs --accept-flake-config .#neomacs
-
-      - name: Smoke test Nix-built Neomacs
-        timeout-minutes: 5
-        run: |
-          set -euo pipefail
-          fingerprint="$(./result/bin/neomacs --fingerprint | tr -d '[:space:]')"
-          if ! [[ "$fingerprint" =~ ^[0-9A-Fa-f]{64}$ ]]; then
-            echo "invalid Neomacs pdump fingerprint: $fingerprint" >&2
-            exit 1
-          fi
-
-          test -f ./result/bin/neomacs.pdump
-          test -f "./result/bin/neomacs-${fingerprint}.pdump"
-
-          # This exercises the installed wrapper from the Nix output and would
-          # fail with the issue #133 panic if the final pdump image was absent.
-          timeout 60s ./result/bin/neomacs --batch --quick --eval \
-            '(progn (princ "nix smoke ok\n") (kill-emacs 0))'
+        run: >-
+          nix build --print-build-logs --accept-flake-config
+          .#checks.x86_64-linux.installed-package-contract
+          .#checks.x86_64-linux.minimal-installed-package-contract
+          .#checks.x86_64-linux.home-manager-contract

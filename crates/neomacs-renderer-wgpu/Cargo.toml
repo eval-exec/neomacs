@@ -1,0 +1,45 @@
+[package]
+name = "neomacs-renderer-wgpu"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WGPU text renderer primitives for Neomacs"
+
+[features]
+default = []
+video = ["dep:neomacs-video"]
+video-dmabuf = ["video"]
+webview = []
+
+[dependencies]
+rustc-hash.workspace = true
+cosmic-text.workspace = true
+swash.workspace = true
+fontdb.workspace = true
+wgpu.workspace = true
+wgpu-hal.workspace = true
+naga.workspace = true
+tracing.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+ash.workspace = true
+image.workspace = true
+imagesize.workspace = true
+flate2.workspace = true
+libc.workspace = true
+resvg.workspace = true
+svgtypes.workspace = true
+simplecss.workspace = true
+neomacs-display-protocol.workspace = true
+neomacs-font-materializer.workspace = true
+neomacs-layout-engine.workspace = true
+neomacs-video = { workspace = true, optional = true }
+
+[dev-dependencies]
+neomacs-test-fonts.workspace = true
+tracing-test.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,34 @@
+[package]
+name = "neomacs-font-materializer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Exact font opening, replay, metrics, and rasterization for Neomacs"
+
+[features]
+default = []
+freetype-bundled = ["freetype-rs/bundled"]
+
+[dependencies]
+allsorts.workspace = true
+cosmic-text.workspace = true
+flate2.workspace = true
+fontdb.workspace = true
+neomacs-display-protocol.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ttf-parser.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+freetype-rs = { version = "0.38.0" }
+
+[target.'cfg(windows)'.dependencies]
+freetype-rs = { version = "0.38.0", features = ["bundled"] }
+
+[dev-dependencies]
+neomacs-test-fonts.workspace = true
+
+[lints]
+workspace = true

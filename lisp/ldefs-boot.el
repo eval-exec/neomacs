@@ -23042,7 +23042,7 @@ recompiling; signals an error if no frame shader is installed
 
 ;;; Generated autoloads from neomacs-surface.el
 
-(register-definition-prefixes "neomacs-surface" '("neomacs-surface-"))
+(register-definition-prefixes "neomacs-surface" '("neomacs-"))
 
 
 ;;; Generated autoloads from neomacs-video.el

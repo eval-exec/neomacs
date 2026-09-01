@@ -27,10 +27,56 @@ jobs:
     steps:
       - &checkout
         name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+
+      - name: Lint release shell contracts
+        run: |
+          shellcheck \
+            install.sh \
+            scripts/dispatch-release-event.sh \
+            scripts/generate-release-notes.sh \
+            scripts/prepare-docker-runtime-context.sh \
+            scripts/test-dispatch-release-event.sh \
+            scripts/test-docker-runtime-context.sh \
+            scripts/test-generate-release-notes.sh \
+            scripts/check-native-font-boundaries.sh \
+            scripts/lib/macos-macho.sh \
+            scripts/vendor-macos-runtime.sh \
+            scripts/test-macos-dependency-closure.sh
+          sh -n install.sh
+          bash -n \
+            scripts/dispatch-release-event.sh \
+            scripts/generate-release-notes.sh \
+            scripts/prepare-docker-runtime-context.sh \
+            scripts/test-dispatch-release-event.sh \
+            scripts/test-docker-runtime-context.sh \
+            scripts/test-generate-release-notes.sh \
+            scripts/check-native-font-boundaries.sh \
+            scripts/lib/macos-macho.sh \
+            scripts/vendor-macos-runtime.sh \
+            scripts/test-macos-dependency-closure.sh
+
+      - name: Test Docker runtime context contract
+        run: ./scripts/test-docker-runtime-context.sh
+
+      - name: Test release dispatch contract
+        run: ./scripts/test-dispatch-release-event.sh
+
+      - name: Test release-note generation contract
+        run: ./scripts/test-generate-release-notes.sh
+
+      - name: Check native font dependency boundaries
+        run: ./scripts/check-native-font-boundaries.sh
+
+      # The dependency closure is pure path logic over otool output, so it is
+      # testable with stub tools on Linux.  Running it here means a regression
+      # is caught in seconds on every push instead of by a macOS release job
+      # forty minutes in.
+      - name: Test macOS dependency closure contract
+        run: ./scripts/test-macos-dependency-closure.sh
 
   fmt:
     name: cargo fmt (${{ matrix.label }})
@@ -56,13 +102,15 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          # cargo fmt does not compile: a build cache here is ~180 MiB per
+          # platform for no reuse, against a shared 10 GiB repo limit.
+          cache: "false"
           cache-key: ci-fmt-${{ matrix.label }}
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo fmt
         run: |
           cargo fmt --all --check
-          cargo fmt --manifest-path neovm-core/fuzz/Cargo.toml --check
+          cargo fmt --manifest-path crates/neovm-core/fuzz/Cargo.toml --check
 
   cargo-deny:
     name: cargo deny
@@ -90,14 +138,17 @@ jobs:
         include:
           - runner: ubuntu-24.04
             label: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            label: linux-aarch64
           - runner: macos-latest
             label: macos-aarch64
           - runner: windows-latest
             label: windows-msvc-x86_64
+          - runner: windows-11-arm
+            label: windows-msvc-aarch64
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      GSTREAMER_VERSION: 1.26.9
     steps:
       - *checkout
 
@@ -108,47 +159,15 @@ jobs:
 
       - name: Install macOS system dependencies
         if: runner.os == 'macOS'
-        run: brew install pkg-config gstreamer
-
-      - name: Restore GStreamer SDK cache
-        if: runner.os == 'Windows'
-        id: cache-gstreamer
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: windows-gstreamer-msvc-x86_64-${{ env.GSTREAMER_VERSION }}-v1
-
-      - name: Install GStreamer SDK
-        if: runner.os == 'Windows' && steps.cache-gstreamer.outputs.cache-hit != 'true'
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1 -Install
-
-      - name: Save GStreamer SDK cache
-        if: runner.os == 'Windows' && steps.cache-gstreamer.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: ${{ steps.cache-gstreamer.outputs.cache-primary-key }}
-
-      - name: Configure GStreamer SDK
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1
+        run: brew install pkg-config
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-check-${{ matrix.label }}
+          cache-shared-key: ${{ matrix.label }}-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Verify GStreamer pkg-config
-        if: runner.os == 'Windows'
-        shell: bash
-        run: source scripts/windows-gstreamer-env.sh --verify
+          install-nextest: ${{ matrix.label == 'linux-x86_64' || matrix.label == 'windows-msvc-x86_64' }}
 
       - name: cargo check workspace (Unix)
         if: runner.os != 'Windows'
@@ -158,8 +177,80 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          source scripts/windows-gstreamer-env.sh
           cargo check --workspace
+
+      - name: Test DirectWrite native font replay
+        if: matrix.label == 'windows-msvc-x86_64'
+        shell: bash
+        run: >-
+          cargo nextest run -p neomacs-layout-engine
+          font_backend::windows::tests
+
+      - name: cargo check minimal capability build
+        if: matrix.label == 'linux-x86_64'
+        run: cargo check -p neomacs --no-default-features
+
+      - name: Test SQLite-disabled capability surface
+        if: matrix.label == 'linux-x86_64'
+        run: >-
+          cargo nextest run -p neovm-core --no-default-features
+          -E 'test(disabled_build_exposes_only_gnu_capability_probes)'
+
+  linux-no-gstreamer-startup:
+    name: startup without GStreamer (linux x86_64)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - name: Prepare workspace temp directory
+        run: mkdir -p "$TMPDIR"
+
+      - name: Install dependencies without GStreamer
+        run: scripts/ci/setup-linux.sh build-no-gstreamer
+
+      - name: Prove GStreamer development files are absent
+        run: '! pkg-config --exists gstreamer-1.0'
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+          cache-key: ci-no-gstreamer-linux-x86_64
+
+      - name: Build the minimal product without video
+        run: cargo xtask fresh-build --release --minimal
+
+      - name: Audit startup closure
+        run: |
+          if readelf --dynamic target/release/neomacs | grep -Eq 'Shared library: \[libgst'; then
+            echo "minimal executable unexpectedly links GStreamer" >&2
+            exit 1
+          fi
+
+      - name: Smoke the pdump relocating fallback (NEOVM_PDUMP_NO_FIXED_MAP)
+        run: |
+          # The planned-base hit path skips relocation validation wholesale;
+          # this keeps the delta-apply fallback (and its bounds checks) green
+          # forever. A green lane on purpose — the standing-red display jobs
+          # would hide a fallback regression.
+          NEOVM_PDUMP_NO_FIXED_MAP=1 target/release/neomacs --batch -Q --eval '(kill-emacs 0)'
+
+      - name: Smoke batch and real TUI in a GStreamer-free container
+        run: |
+          docker run --rm --volume "$PWD:/workspace:ro" ubuntu:24.04 \
+            bash -euxo pipefail -c "
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+                libncursesw6 libstdc++6 libfontconfig1 libfreetype6 zlib1g util-linux
+              ! ldconfig -p | grep -Eq 'libgst(video|base|app|allocators|reamer)'
+              /workspace/target/release/neomacs --batch --eval '(kill-emacs 0)'
+              TERM=xterm timeout 30s script -qec \"/workspace/target/release/neomacs -Q -nw --eval '(kill-emacs 0)'\" /dev/null
+            "
 
   neomacs-workspace-test-archive:
     name: workspace test archive (linux x86_64)
@@ -184,6 +275,7 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-workspace-archive-linux-x86_64
+          cache-shared-key: linux-x86_64-release
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 
@@ -260,13 +352,18 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-shared-runtime-linux-x86_64
+          cache-shared-key: linux-x86_64-release
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: cargo build --release
-        run: cargo build --release
 
       - name: Build fresh release runtime
         run: cargo xtask fresh-build --release
+
+      - name: Run upstream GNU SQLite ERT suite
+        run: >-
+          target/release/neomacs
+          --batch -Q
+          -l test/src/sqlite-tests.el
+          -f ert-run-tests-batch-and-exit
 
       # The standing detector for the missing-GC-root class (DIVERGENCES.md
       # 161/162). This collector is precise, so a Lisp value that rides Rust
@@ -277,6 +374,76 @@ jobs:
       # safe point, which turns "sometimes" into "always".
       - name: GC-stress the shipped runtime
         run: cargo xtask gc-stress
+
+      # Exercise install.sh end-to-end against a release-shaped tree built
+      # from THIS commit (file:// download base), so the curl|bash path --
+      # download, checksum, versioned install, symlink chain, runtime-root
+      # resolution with no environment variables -- is proven before any
+      # release publishes it.
+      #
+      # BOTH tarball shapes are staged, because install.sh has a branch for
+      # each and a release that only exercises one of them ships the other
+      # untested: the current layout, whose dump sits in the archlib
+      # (libexec/neomacs/<version>/<triple>, GNU's archlibdir), and the
+      # pre-0.0.16 layout, whose dump sits in bin/ -- which --tag still has to
+      # be able to install.
+      - name: Verify install.sh against a staged release tree
+        run: |
+          set -eux
+          triple=x86_64-unknown-linux-gnu
+          crate_version="$(
+            awk '/^\[workspace\.package\]/{s=1;next} /^\[/{s=0}
+                 s && /^version[[:space:]]*=/{gsub(/^version[[:space:]]*=[[:space:]]*"/,"");gsub(/".*$/,"");print;exit}' \
+              Cargo.toml
+          )"
+          archlib="libexec/neomacs/$crate_version/$triple"
+
+          stage_release() {
+            local version="$1" layout="$2"
+            local stage_root="$TMPDIR/install-release-$layout"
+            local staged="$stage_root/v$version"
+            local pkg_parent="$stage_root/pkg"
+            local pkg="$pkg_parent/neomacs-$version-$triple"
+            rm -rf "$stage_root"
+            mkdir -p "$staged" "$pkg/bin" "$pkg/share/neomacs"
+            cp target/release/neomacs target/release/neomacsclient "$pkg/bin/"
+            if [ "$layout" = archlib ]; then
+              mkdir -p "$pkg/$archlib"
+              cp target/release/neomacs.pdump "$pkg/$archlib/neomacs.pdump"
+            else
+              cp target/release/neomacs.pdump "$pkg/bin/neomacs.pdump"
+            fi
+            cp -r lisp etc "$pkg/share/neomacs/"
+            tar czf "$staged/neomacs-$version-$triple.tar.gz" \
+              -C "$pkg_parent" "neomacs-$version-$triple"
+            ( cd "$staged" && sha256sum "neomacs-$version-$triple.tar.gz" > SHA256SUMS )
+            local prefix="$stage_root/prefix"
+            NEOMACS_DOWNLOAD_BASE="file://$stage_root" \
+              sh install.sh --tag "v$version" --prefix "$prefix"
+            test -x "$prefix/bin/neomacs"
+            test "$(readlink "$prefix/share/neomacs/current")" = "versions/$version"
+            test "$(readlink "$prefix/bin/neomacs")" = "../share/neomacs/current/bin/neomacs"
+            local exe ver_dir
+            exe="$(readlink -f "$prefix/bin/neomacs")"
+            ver_dir="$(dirname "$(dirname "$exe")")"
+            if [ "$layout" = archlib ]; then
+              test -f "$ver_dir/$archlib/neomacs.pdump"
+              test ! -f "$(dirname "$exe")/neomacs.pdump"
+              # exec-directory is PATH_EXEC (GNU src/callproc.c:1961), so the
+              # installed tree has to answer with its own archlib.
+              env -u NEOMACS_RUNTIME_ROOT -u EMACSPATH \
+                "$prefix/bin/neomacs" --batch \
+                --eval "(princ exec-directory)" | grep -Fx "$ver_dir/$archlib/"
+            else
+              test -f "$(dirname "$exe")/neomacs.pdump"
+            fi
+            test -d "$ver_dir/share/neomacs/lisp"
+            env -u NEOMACS_RUNTIME_ROOT \
+              "$prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'
+          }
+
+          stage_release citest archlib
+          stage_release citestlegacy legacy
 
       - name: Package shared test runtime
         run: |
@@ -342,11 +509,17 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-melpa-${{ matrix.suite }}
+          # Runs prebuilt binaries out of the downloaded nextest archive and
+          # never invokes rustc, so a Cargo build cache here can never be read
+          # back.  Measured: these entries were ~246 MiB each and carried the
+          # SAME content hash as each other, in a 10 GiB store whose overflow
+          # was evicting the release caches.
+          cache: "false"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
       - &download_test_runtime
         name: Download shared test runtime
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: neomacs-test-runtime-linux-x86_64
           path: .
@@ -361,7 +534,7 @@ jobs:
 
       - &download_workspace_test_archive
         name: Download workspace test archive
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: neomacs-workspace-tests-nextest-archive-linux-x86_64
           path: .
@@ -371,6 +544,10 @@ jobs:
 
       - name: Run deterministic package ecosystem compatibility tests
         run: |
+          # LIBTEST_ARGS is a space-separated libtest argument list from the
+          # matrix; split it once into an array so the words reach libtest
+          # verbatim without unquoted expansion.
+          read -r -a libtest_args <<<"$LIBTEST_ARGS"
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
@@ -378,7 +555,7 @@ jobs:
             --workspace-remap "$GITHUB_WORKSPACE" \
             --success-output immediate \
             --no-fail-fast \
-            -- $LIBTEST_ARGS
+            -- "${libtest_args[@]}"
 
   neomacs-display-tests:
     name: display stack tests (linux x86_64)
@@ -399,6 +576,12 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-display-tests
+          # Runs prebuilt binaries out of the downloaded nextest archive and
+          # never invokes rustc, so a Cargo build cache here can never be read
+          # back.  Measured: these entries were ~246 MiB each and carried the
+          # SAME content hash as each other, in a 10 GiB store whose overflow
+          # was evicting the release caches.
+          cache: "false"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
       - *download_workspace_test_archive
@@ -409,6 +592,43 @@ jobs:
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
             -E "$NEXTEST_FILTER" \
+            --workspace-remap "$GITHUB_WORKSPACE" \
+            --no-fail-fast
+
+  neomacs-prefix-face-tui-parity:
+    name: GNU prefix face TUI parity (linux x86_64)
+    if: github.event_name != 'schedule'
+    needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+      NEOMACS_TUI_NEOMACS_BIN: ${{ github.workspace }}/target/release/neomacs
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - name: Install GNU Emacs oracle dependencies
+        run: scripts/ci/setup-linux.sh oracle
+      - name: Set up test runner
+        uses: ./.github/actions/setup-rust
+        with:
+          # This job executes the archived test binary against the shared
+          # fresh-build runtime and never invokes rustc.
+          cache: "false"
+          cache-key: ci-prefix-face-tui-parity
+          install-nextest: true
+      - *download_test_runtime
+      - *unpack_test_runtime
+      - *download_workspace_test_archive
+
+      - name: Compare buffer-remapped prefix faces with GNU Emacs
+        run: |
+          cargo nextest run \
+            --archive-file neomacs-workspace-tests.tar.zst \
+            --extract-to "$TMPDIR/nextest" \
+            -E 'package(neomacs-tui-tests) and test(=line_and_wrap_prefix_named_face_remapping_match_gnu)' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --no-fail-fast
 
@@ -434,6 +654,12 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-real-gui-tests
+          # Runs prebuilt binaries out of the downloaded nextest archive and
+          # never invokes rustc, so a Cargo build cache here can never be read
+          # back.  Measured: these entries were ~246 MiB each and carried the
+          # SAME content hash as each other, in a 10 GiB store whose overflow
+          # was evicting the release caches.
+          cache: "false"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
       - *download_test_runtime
@@ -480,6 +706,12 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-melpa-live-canary
+          # Runs prebuilt binaries out of the downloaded nextest archive and
+          # never invokes rustc, so a Cargo build cache here can never be read
+          # back.  Measured: these entries were ~246 MiB each and carried the
+          # SAME content hash as each other, in a 10 GiB store whose overflow
+          # was evicting the release caches.
+          cache: "false"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
       - *download_test_runtime
@@ -541,9 +773,9 @@ jobs:
         run: cargo install cargo-fuzz --version 0.13.2 --locked
 
       - name: Restore evolving fuzz corpora
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: neovm-core/fuzz/corpus
+          path: crates/neovm-core/fuzz/corpus
           key: regex-fuzz-corpus-${{ github.run_id }}
           restore-keys: |
             regex-fuzz-corpus-
@@ -551,13 +783,13 @@ jobs:
       - name: Fuzz Pike VM against the backtracker
         run: |
           cargo +nightly fuzz run regex_pike_vm \
-            --fuzz-dir neovm-core/fuzz -- \
+            --fuzz-dir crates/neovm-core/fuzz -- \
             -max_total_time=300 -max_len=512 -timeout=10
 
       - name: Fuzz search optimizations against exhaustive scanning
         run: |
           cargo +nightly fuzz run regex_search_optimizations \
-            --fuzz-dir neovm-core/fuzz -- \
+            --fuzz-dir crates/neovm-core/fuzz -- \
             -max_total_time=300 -max_len=512 -timeout=10
 
       - name: Upload crash artifacts
@@ -565,6 +797,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: regex-fuzz-crashes-${{ github.run_id }}
-          path: neovm-core/fuzz/artifacts
+          path: crates/neovm-core/fuzz/artifacts
           if-no-files-found: ignore
           retention-days: 30

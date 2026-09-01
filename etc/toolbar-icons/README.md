@@ -7,7 +7,7 @@ fall back to the `neomacs` theme and then to GNU's original image lookup.
 
 Sources and licenses:
 
-- `neomacs`: Neomacs SVG toolbar icons from `neomacs-display-runtime/icons/toolbar`.
+- `neomacs`: Neomacs SVG toolbar icons from `crates/neomacs-display-runtime/icons/toolbar`.
 - `vscode-like`: Microsoft VS Code Codicons SVGs from <https://github.com/microsoft/vscode-codicons>, licensed under CC-BY-4.0.
 - `jetbrains-like`: JetBrains IntelliJ Platform SVGs from <https://github.com/JetBrains/intellij-community/tree/master/platform/icons/src/actions>, licensed under Apache-2.0.
 - `atom-like`: GitHub Primer Octicons SVGs from <https://github.com/primer/octicons>, licensed under MIT.

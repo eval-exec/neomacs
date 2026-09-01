@@ -463,51 +463,6 @@ the backend menu accelerator is used if present; otherwise fall back to
                    (mouse-menu-bar-map))
                   (posn-at-x-y x 0 frame t) nil t)))))
 
-;; Window snapping
-(defun neomacs--workarea ()
-  "Return the workarea (x y width height) of the current monitor."
-  (let* ((attrs (car (display-monitor-attributes-list)))
-         (wa (alist-get 'workarea attrs)))
-    (or wa (list 0 0 (display-pixel-width) (display-pixel-height)))))
-
-(defun neomacs-snap-left (&optional frame)
-  "Snap FRAME to the left half of the screen."
-  (interactive)
-  (let* ((f (or frame (selected-frame)))
-         (wa (neomacs--workarea))
-         (x (nth 0 wa)) (y (nth 1 wa))
-         (w (nth 2 wa)) (h (nth 3 wa)))
-    (set-frame-parameter f 'fullscreen nil)
-    (set-frame-position f x y)
-    (set-frame-size f (/ w 2) h t)))
-
-(defun neomacs-snap-right (&optional frame)
-  "Snap FRAME to the right half of the screen."
-  (interactive)
-  (let* ((f (or frame (selected-frame)))
-         (wa (neomacs--workarea))
-         (x (nth 0 wa)) (y (nth 1 wa))
-         (w (nth 2 wa)) (h (nth 3 wa)))
-    (set-frame-parameter f 'fullscreen nil)
-    (set-frame-position f (+ x (/ w 2)) y)
-    (set-frame-size f (/ w 2) h t)))
-
-(defun neomacs-maximize (&optional frame)
-  "Maximize FRAME."
-  (interactive)
-  (set-frame-parameter (or frame (selected-frame)) 'fullscreen 'maximized))
-
-(defun neomacs-restore (&optional frame)
-  "Restore FRAME from maximized/fullscreen state."
-  (interactive)
-  (set-frame-parameter (or frame (selected-frame)) 'fullscreen nil))
-
-;; Window snap key bindings (Super+arrow)
-(global-set-key (kbd "s-<left>")  #'neomacs-snap-left)
-(global-set-key (kbd "s-<right>") #'neomacs-snap-right)
-(global-set-key (kbd "s-<up>")    #'neomacs-maximize)
-(global-set-key (kbd "s-<down>")  #'neomacs-restore)
-
 ;; Font size adjustment (Super +/-/0)
 (global-set-key (kbd "s-=") #'global-text-scale-adjust)
 (global-set-key (kbd "s-+") #'global-text-scale-adjust)

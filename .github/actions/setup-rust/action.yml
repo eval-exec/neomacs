@@ -9,6 +9,38 @@ inputs:
     description: Expression result controlling whether the cache is saved.
     required: false
     default: "true"
+  cache-workspace-crates:
+    description: >-
+      Cache this workspace's OWN crates, not just its dependencies.  rust-cache
+      excludes them by default because they change on every commit, which is
+      right for branch CI.  It is wrong for a release tag that gets re-cut: the
+      tag's content barely moves between attempts, and without this every
+      attempt recompiles neovm-core and the whole display stack from scratch -
+      the dependency cache only ever saved third-party compilation.  Costs
+      cache storage, so enable it where a rebuild is expensive and the inputs
+      are stable, not everywhere.
+    required: false
+    default: "false"
+  cache-shared-key:
+    description: >-
+      Share ONE cache entry across several jobs.  rust-cache normally appends
+      the job's own identity to the key, so two jobs passing the same cache-key
+      still get separate entries; a shared key replaces that segment.  Use it
+      only for jobs that compile the same workspace in the same PROFILE for the
+      same target, since the profile decides which target/ subdirectory the
+      artifacts land in - a check job and a release job share nothing but
+      ~/.cargo.
+    required: false
+    default: ""
+  cache:
+    description: >-
+      Restore and save the Cargo build cache.  Set false for jobs that do not
+      compile - `cargo fmt` only needs rustfmt, so caching one costs a
+      ~180 MiB entry per platform and returns nothing.  The repo shares a
+      10 GiB store across every workflow, and exceeding it makes the whole
+      store read-only, so a cache that buys nothing is not free.
+    required: false
+    default: "true"
   install-nextest:
     description: Install the cargo-nextest binary.
     required: false
@@ -25,7 +57,16 @@ runs:
       uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
       with:
         target: ${{ inputs.target }}
+        cache: ${{ inputs.cache }}
         cache-key: ${{ inputs.cache-key }}-${{ hashFiles('scripts/ci/setup-linux.sh', '.github/actions/setup-rust/action.yml') }}
+        # rust-cache treats shared-key as an ALTERNATIVE to key, not an
+        # addition (config.ts: `if (sharedKey) ... else ... key/job`), so the
+        # cache-key above - and with it the hashFiles invalidation - is
+        # discarded whenever a shared key is set.  Fold the same hash in here,
+        # or a change to setup-linux.sh would silently keep serving a cache
+        # built before it.
+        cache-shared-key: ${{ inputs.cache-shared-key != '' && format('{0}-{1}', inputs.cache-shared-key, hashFiles('scripts/ci/setup-linux.sh', '.github/actions/setup-rust/action.yml')) || '' }}
+        cache-workspace-crates: ${{ inputs.cache-workspace-crates }}
         cache-bin: false
         cache-on-failure: true
         cache-save-if: ${{ inputs.cache-save-if }}

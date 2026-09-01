@@ -130,7 +130,7 @@ def bound_names(line, lines, idx, fn_end):
 def main():
     results = []
     total_grep_lines = 0
-    for crate in ('neovm-core/src', 'neomacs-bin/src', 'neomacs-layout-engine/src'):
+    for crate in ('crates/neovm-core/src', 'crates/neomacs/src', 'crates/neomacs-layout-engine/src'):
         for dirpath, _dirs, files in os.walk(os.path.join(ROOT, crate)):
             for fname in sorted(files):
                 if not fname.endswith('.rs'):

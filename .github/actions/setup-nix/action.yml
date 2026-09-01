@@ -1,0 +1,13 @@
+name: Set up Neomacs Nix tooling
+description: Install Nix and configure the binary caches trusted by the flake.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Nix
+      uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      with:
+        extra_nix_config: |
+          accept-flake-config = true
+          substituters = https://eval-exec.cachix.org https://nix-wpe-webkit.cachix.org https://cache.nixos.org/
+          trusted-public-keys = eval-exec.cachix.org-1:xvopUI7X7+Vt1gaSsWJ0PQFPP66vs8v5iIaz6boxf64= nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzcox4EqcXqKvOygxpwYHE= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=

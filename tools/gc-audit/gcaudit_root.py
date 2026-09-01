@@ -19,7 +19,7 @@ refuse to report an empty measurement.
 
 import os
 
-MARKERS = ('Cargo.toml', 'neovm-core', 'neomacs-melpa-tests')
+MARKERS = ('Cargo.toml', 'crates/neovm-core', 'crates/neomacs-melpa-tests')
 
 
 def repo_root():

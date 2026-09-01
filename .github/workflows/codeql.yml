@@ -40,7 +40,7 @@ jobs:
           - python
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Prepare workspace temp directory
         run: mkdir -p "$TMPDIR"
@@ -48,6 +48,9 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
+          # CodeQL 2.26.4 regresses Rust analysis enough to terminate the hosted runner.
+          # Remove this pin after https://github.com/github/codeql/issues/22463 is fixed.
+          tools: https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.26.3/codeql-bundle-linux64.tar.zst
           languages: ${{ matrix.language }}
           build-mode: none
 

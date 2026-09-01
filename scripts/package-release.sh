@@ -3,20 +3,27 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-release.sh [--target TRIPLE] [--skip-build] [--no-smoke]
+Usage: scripts/package-release.sh [--target TRIPLE] [--minimal] [--skip-build] [--no-smoke]
 
 Build and package a Neomacs binary release archive.
 
 Options:
   --target TRIPLE Rust target triple, e.g. x86_64-unknown-linux-gnu.
                   Defaults to x86_64-unknown-linux-gnu on Linux,
-                  aarch64-apple-darwin on macOS, x86_64-pc-windows-msvc on Windows.
+                  aarch64-apple-darwin on macOS, x86_64-pc-windows-msvc or
+                  aarch64-pc-windows-msvc on Windows.
   --skip-build    Package existing target/release artifacts without running
                   cargo xtask fresh-build --release.
+  --minimal       Build/package the GStreamer-free minimal product.
   --no-smoke      Do not smoke-test the extracted archive.
 
 Output:
-  dist/neomacs-{version}-{target}.tar.gz
+  dist/neomacs[-minimal]-{version}-{target}.tar.gz
+
+Layout (GNU's, with the archive root as the install prefix):
+  bin/{neomacs,neomacsclient}
+  libexec/neomacs/{version}/{target}/   PATH_EXEC: dump and private helpers
+  share/neomacs/{lisp,etc,leim,info}
 USAGE
 }
 
@@ -49,15 +56,16 @@ binary_ext_for_target() {
 install_binary_if_present() {
   local name="$1"
   local ext="$2"
+  local dest_dir="$3"
   local source="$release_dir/$name$ext"
-  local dest="$package_dir/bin/$name$ext"
   if [[ -f "$source" ]]; then
-    install -m 0755 "$source" "$dest"
+    install -m 0755 "$source" "$dest_dir/$name$ext"
   fi
 }
 
 target_triple="$(detect_target)"
 skip_build=0
+minimal=0
 smoke=1
 
 while (($#)); do
@@ -68,6 +76,10 @@ while (($#)); do
       ;;
     --skip-build)
       skip_build=1
+      shift
+      ;;
+    --minimal)
+      minimal=1
       shift
       ;;
     --no-smoke)
@@ -89,14 +101,25 @@ done
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# shellcheck source=./scripts/lib/archlib.sh
+source "$repo_root/scripts/lib/archlib.sh"
+
 if ((skip_build == 0)); then
-  cargo xtask fresh-build --release
+  build_args=(fresh-build --release)
+  if ((minimal)); then
+    build_args+=(--minimal)
+  fi
+  cargo xtask "${build_args[@]}"
 fi
 
 release_dir="$repo_root/target/release"
 dist_dir="$repo_root/dist"
 version="$(get_version)"
-package_name="neomacs-${version}-${target_triple}"
+product_name="neomacs"
+if ((minimal)); then
+  product_name="neomacs-minimal"
+fi
+package_name="${product_name}-${version}-${target_triple}"
 package_dir="$dist_dir/$package_name"
 archive="$dist_dir/$package_name.tar.gz"
 binary_ext="$(binary_ext_for_target "$target_triple")"
@@ -113,14 +136,47 @@ do
   fi
 done
 
-rm -rf "$package_dir" "$archive"
-mkdir -p "$package_dir/bin" "$package_dir/share/neomacs"
+# A skipped build is safe only when the artifact itself proves the requested
+# product boundary. Direct linkage makes this an authoritative ELF property:
+# full Linux binaries must link GStreamer and minimal binaries must not.
+if [[ "$target_triple" == *-linux-* ]]; then
+  if ((minimal)); then
+    if readelf --dynamic "$release_dir/neomacs$binary_ext" 2>/dev/null \
+      | grep -Eq 'Shared library: \[libgst[^]]*[.]so'; then
+      echo "minimal executable unexpectedly links GStreamer" >&2
+      exit 1
+    fi
+  elif ! readelf --dynamic "$release_dir/neomacs$binary_ext" 2>/dev/null \
+    | grep -Eq 'Shared library: \[libgstreamer-1[.]0[.]so'; then
+    echo "full executable does not link GStreamer" >&2
+    exit 1
+  fi
+fi
 
-for binary in neomacs neomacsclient neomacs-temacs bootstrap-neomacs mock-display; do
-  install_binary_if_present "$binary" "$binary_ext"
+# GNU's archlibdir, `${libexecdir}/emacs/${version}/${configuration}'
+# (configure.ac:290), with the package directory as the prefix.  This is what
+# the binary probes for (crates/neovm-core/src/emacs_core/system/path_exec/mod.rs) and what
+# `exec-directory' names once the tree is installed.
+archlib_rel="$(neomacs_archlib_relpath "$repo_root/Cargo.toml" "$target_triple")"
+archlib_dir="$package_dir/$archlib_rel"
+
+rm -rf "$package_dir" "$archive"
+mkdir -p "$package_dir/bin" "$package_dir/share/neomacs" "$archlib_dir"
+
+# GNU's lib-src split (lib-src/Makefile.in): user-facing INSTALLABLES to
+# bindir, private UTILITIES to archlibdir.  neomacsclient is our emacsclient
+# and belongs on $PATH; the dumper and harness builds are ours alone.
+for binary in neomacs neomacsclient; do
+  install_binary_if_present "$binary" "$binary_ext" "$package_dir/bin"
+done
+for binary in neomacs-temacs bootstrap-neomacs mock-display; do
+  install_binary_if_present "$binary" "$binary_ext" "$archlib_dir"
 done
 
-install -m 0644 "$release_dir/neomacs.pdump" "$package_dir/bin/neomacs.pdump"
+# GNU installs one dump into a self-contained archlib and lets `load_pdump'
+# find it on its fourth rung, `PATH_EXEC/basename(argv0).pdmp'
+# (src/emacs.c:1096-1120; Makefile.in:639 for the NS case).
+install -m 0644 "$release_dir/neomacs.pdump" "$archlib_dir/neomacs.pdump"
 
 cp -a lisp "$package_dir/share/neomacs/"
 cp -a etc "$package_dir/share/neomacs/"
@@ -135,7 +191,7 @@ install -m 0644 README.md "$package_dir/README.md"
 install -m 0644 COPYING "$package_dir/COPYING"
 
 cat >"$package_dir/VERSION" <<VERSION
-name: neomacs
+name: $product_name
 target: $target_triple
 git: $(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 built: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -148,8 +204,17 @@ if ((smoke)); then
   trap 'rm -rf "$smoke_dir"' EXIT
   tar -C "$dist_dir" -czf "$archive" "$package_name"
   tar -C "$smoke_dir" -xzf "$archive"
+  # Check the EXTRACTED tree, not the staging directory: the archive round
+  # trip is where a dropped directory or a lost mode would show up, and the
+  # archlib check is the one that proves the extracted binary can find its
+  # own dump.
+  neomacs_verify_archlib \
+    "$smoke_dir/$package_name/bin/neomacs$binary_ext" \
+    "$smoke_dir/$package_name/$archlib_rel/neomacs.pdump" \
+    "$smoke_dir/$package_name/$archlib_rel" \
+    "$smoke_dir/$package_name/share/neomacs"
   NEOMACS_RUNTIME_ROOT="$smoke_dir/$package_name/share/neomacs" \
-    timeout 30s "$smoke_dir/$package_name/bin/neomacs" \
+    timeout 30s "$smoke_dir/$package_name/bin/neomacs$binary_ext" \
       --batch --eval "(kill-emacs 0)"
 else
   tar -C "$dist_dir" -czf "$archive" "$package_name"

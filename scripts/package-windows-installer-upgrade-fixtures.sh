@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (($# != 1)); then
-  echo "usage: $0 OUTPUT_DIR" >&2
+if (($# < 1 || $# > 2)); then
+  echo "usage: $0 OUTPUT_DIR [PRODUCT_ARCH]" >&2
   exit 2
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 output_dir="$1"
+product_arch="${2:-}"
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd -P)"
 
@@ -32,8 +33,10 @@ printf 'owned only by version b\n' > "$payload_b/share/neomacs/added-in-b.txt"
 "$repo_root/scripts/compile-windows-installer.sh" \
   "$payload_a" \
   "0.0.0-contract-a" \
-  "$output_dir/neomacs-installer-contract-a.exe"
+  "$output_dir/neomacs-installer-contract-a.exe" \
+  "$product_arch"
 "$repo_root/scripts/compile-windows-installer.sh" \
   "$payload_b" \
   "0.0.0-contract-b" \
-  "$output_dir/neomacs-installer-contract-b.exe"
+  "$output_dir/neomacs-installer-contract-b.exe" \
+  "$product_arch"

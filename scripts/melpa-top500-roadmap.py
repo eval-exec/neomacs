@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate neomacs-melpa-tests/melpa-top500-roadmap.tsv.
+"""Regenerate crates/neomacs-melpa-tests/melpa-top500-roadmap.tsv.
 
 Package selection policy: parity corpora are added in descending MELPA
 download-count order (https://melpa.org/download_counts.json), not
@@ -20,7 +20,7 @@ import sys
 import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CRATE = os.path.join(REPO, "neomacs-melpa-tests")
+CRATE = os.path.join(REPO, "crates", "neomacs-melpa-tests")
 PARITY = os.path.join(CRATE, "src", "parity_tests")
 ROADMAP = os.path.join(CRATE, "melpa-top500-roadmap.tsv")
 COUNTS_URL = "https://melpa.org/download_counts.json"

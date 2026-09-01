@@ -1,0 +1,15 @@
+[package]
+name = "neomacs-parity-reference"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Identity of the pinned GNU Emacs every parity number is measured against"
+publish = false
+
+[dependencies]
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -22,7 +22,7 @@ import sys
 
 from gcaudit_root import ROOT  # noqa: E402  (validated workspace root)
 
-P = os.path.join(ROOT, 'neovm-core/src/emacs_core/value.rs')
+P = os.path.join(ROOT, 'crates/neovm-core/src/emacs_core/runtime/value/mod.rs')
 HONEST = "    pub fn as_lisp_string(&self) -> Option<&LispString> {"
 LOOSE = "    pub fn as_lisp_string(self) -> Option<&'static LispString> {"
 

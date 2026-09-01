@@ -22,7 +22,7 @@ jobs:
       NEOMACS_MELPA_ORACLE_EMACS: /usr/bin/emacs
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Prepare workspace temp directory
         run: mkdir -p "$TMPDIR"
@@ -64,7 +64,7 @@ jobs:
       RUST_BACKTRACE: 1
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install system dependencies (apt)
         run: scripts/ci/setup-linux.sh build
@@ -73,6 +73,7 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: linux-x86_64-lint
+          cache-shared-key: linux-x86_64-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # 5a: whole-workspace formatting (matches the repo owner's pre-push gate).
@@ -93,8 +94,8 @@ jobs:
             -p neomacs \
             --no-deps -- -D warnings
 
-      # wpe-webkit variant for the two crates that expose the feature. This is
-      # type-check only (no linking), but display-runtime's build.rs runs bindgen
+      # webview variant for the two crates that expose the feature. This is
+      # type-check only (no linking), but neomacs-webview's build.rs runs bindgen
       # and therefore needs the EGL/WPE dev headers; wpe-platform-2.0 is optional
       # (build.rs skips it when absent). Kept best-effort so a runner without
       # these packages does not block the hard gate above — the wpe gate is
@@ -108,10 +109,10 @@ jobs:
             libwpe-1.0-dev \
             libwpebackend-fdo-1.0-dev
 
-      - name: Clippy (renderer-wgpu + display-runtime, wpe-webkit feature)
+      - name: Clippy (renderer-wgpu + display-runtime, webview feature)
         continue-on-error: true
         run: |
           cargo clippy \
             -p neomacs-renderer-wgpu \
             -p neomacs-display-runtime \
-            --no-deps --features wpe-webkit -- -D warnings
+            --no-deps --features webview -- -D warnings

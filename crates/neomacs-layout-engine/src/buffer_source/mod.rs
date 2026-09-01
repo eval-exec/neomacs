@@ -1,0 +1,30 @@
+//! Buffer-source rendering pipeline (moved from flat display_buffer_* files).
+
+pub(crate) mod body_render;
+pub(crate) mod char_render;
+pub(crate) mod consumption;
+pub(crate) mod display_property_render;
+pub(crate) mod end_of_buffer_rows;
+pub(crate) mod face_resolution;
+pub(crate) mod fringe_arrows;
+pub(crate) mod item_append;
+pub(crate) mod item_render;
+pub(crate) mod loop_context;
+pub(crate) mod loop_render;
+pub(crate) mod loop_state;
+pub(crate) mod mouse_face;
+pub(crate) mod overflow;
+pub(crate) mod producer;
+pub(crate) mod render;
+pub(crate) mod render_attempt;
+pub(crate) mod render_plan;
+pub(crate) mod row_lifecycle;
+pub(crate) mod row_prelude;
+pub(crate) mod row_route;
+pub(crate) mod tail_render;
+pub(crate) mod text_run;
+pub(crate) mod text_source;
+pub(crate) mod walk;
+pub(crate) mod window_geometry;
+pub(crate) mod window_render;
+pub(crate) mod window_source;

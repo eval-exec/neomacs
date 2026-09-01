@@ -1,0 +1,62 @@
+name: Windows upgrade contract (fast)
+
+# The upgrade contract's fixtures are TEXT-file payloads compiled by makensis;
+# they do not need a neomacs build at all.  run-windows-installer-contract.ps1
+# reaches them only after requiring a real *-user-setup.exe, so probing the
+# aarch64 uninstall bug used to cost a full build - about 45 minutes - or a
+# release round.  This runs the fixture half alone, in minutes, on both
+# architectures.
+on:
+  push:
+    paths:
+      - .github/workflows/windows-upgrade-contract.yml
+      - assets/windows-installer.nsi
+      - scripts/compile-windows-installer.sh
+      - scripts/generate-nsis-uninstall-include.sh
+      - scripts/package-windows-installer-upgrade-fixtures.sh
+      - scripts/test-windows-installer-upgrade.ps1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade-contract:
+    name: upgrade contract (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+          - arch: aarch64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Add NSIS to PATH
+        shell: powershell
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
+
+      - name: Build fixture installers
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/neomacs-installer-upgrade-contract"
+          ./scripts/package-windows-installer-upgrade-fixtures.sh \
+            "$RUNNER_TEMP/neomacs-installer-upgrade-contract" \
+            "${{ matrix.arch }}"
+
+      - name: Run the upgrade contract
+        shell: powershell
+        run: |
+          $fixtures = Join-Path $env:RUNNER_TEMP "neomacs-installer-upgrade-contract"
+          ./scripts/test-windows-installer-upgrade.ps1 `
+            -InstallerAPath (Join-Path $fixtures "neomacs-installer-contract-a.exe") `
+            -InstallerBPath (Join-Path $fixtures "neomacs-installer-contract-b.exe") `
+            -ConfirmEphemeralRunner

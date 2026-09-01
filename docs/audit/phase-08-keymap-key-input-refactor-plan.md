@@ -48,10 +48,10 @@ Important GNU ownership facts:
 
 Current semantic ownership is split across:
 
-- `neovm-core/src/emacs_core/keymap.rs`
-- `neovm-core/src/emacs_core/builtins/keymaps.rs`
-- `neovm-core/src/emacs_core/interactive.rs`
-- `neovm-core/src/emacs_core/kbd.rs`
+- `neovm-core/src/emacs_core/commands/keymap/mod.rs`
+- `neovm-core/src/emacs_core/lisp/native/builtins/keymaps.rs`
+- `neovm-core/src/emacs_core/commands/interactive/mod.rs`
+- `neovm-core/src/emacs_core/commands/kbd/mod.rs`
 - `neovm-core/src/keyboard.rs`
 - `neomacs-bin/src/input_bridge.rs`
 - `neomacs-display-runtime/src/render_thread/input.rs`
@@ -157,18 +157,18 @@ Today the same semantic responsibilities are split across too many places:
 - `src/keyboard.rs`
   owns command-loop input blocking, but still delegates binding decisions back
   into higher layers
-- `src/emacs_core/reader.rs`
+- `src/emacs_core/lisp/reader/mod.rs`
   still carries thin `read-key-sequence` runtime behavior that belongs with the
   keyboard owner
-- `src/emacs_core/interactive.rs`
+- `src/emacs_core/commands/interactive/mod.rs`
   still owns `key-binding`, `minor-mode-key-binding`, remap walkers, and
   `where-is` helpers that should live with the keymap owner
-- `src/emacs_core/builtins/keymaps.rs`
+- `src/emacs_core/lisp/native/builtins/keymaps.rs`
   mixes Lisp builtin wrappers with real keymap semantics
-- `src/emacs_core/keymap.rs`
+- `src/emacs_core/commands/keymap/mod.rs`
   owns some true keymap semantics, but not yet the whole GNU `keymap.c`
   surface
-- `src/emacs_core/eval.rs`
+- `src/emacs_core/runtime/eval/mod.rs`
   still exposes terminal-local translation maps through Lisp variable cells,
   even though the keyboard owner now mirrors them as keyboard-local runtime
   state
@@ -637,8 +637,8 @@ representation inside `neovm-core`.
 That should absorb semantic duplication currently spread across:
 
 - `src/keyboard.rs`
-- `src/emacs_core/keymap.rs`
-- `src/emacs_core/kbd.rs`
+- `src/emacs_core/commands/keymap/mod.rs`
+- `src/emacs_core/commands/kbd/mod.rs`
 
 ### Slice 3: Move key-sequence reading to keyboard ownership
 

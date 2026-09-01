@@ -1,0 +1,86 @@
+# syntax=docker/dockerfile:1.26.0@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+
+# Pin the complete multi-architecture Ubuntu 22.04 manifest. Release binaries
+# are built against this glibc 2.35 baseline and the digest makes rebuilds
+# independent of mutable registry tags.
+FROM ubuntu:22.04@sha256:2edbbc5dc405e9612ba3584ce95480277e3eb374407b5505fe26f17df77c7dbc
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Runtime libraries only: the canonical release archive is built and verified
+# before this image exists, so no compiler, Cargo installation, or source tree
+# belongs in the shipped image. Keep GUI/media libraries available even though
+# the portable default command is the terminal frontend.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        fontconfig \
+        fonts-dejavu-core \
+        gstreamer1.0-libav \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-vaapi \
+        libasound2 \
+        libcairo2 \
+        libdbus-1-3 \
+        libfontconfig1 \
+        libfreetype6 \
+        libgl1 \
+        libglib2.0-0 \
+        libgnutls30 \
+        libgstreamer-plugins-base1.0-0 \
+        libgstreamer1.0-0 \
+        liblcms2-2 \
+        libncursesw6 \
+        libpango-1.0-0 \
+        libpulse0 \
+        libsqlite3-0 \
+        libssl3 \
+        libsystemd0 \
+        libunwind8 \
+        libvulkan1 \
+        libwayland-client0 \
+        libwayland-cursor0 \
+        libwayland-egl1 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb-render0 \
+        libxcb-shape0 \
+        libxcb-xfixes0 \
+        libxcb1 \
+        libxcursor1 \
+        libxi6 \
+        libxinerama1 \
+        libxkbcommon-x11-0 \
+        libxkbcommon0 \
+        libxml2 \
+        libxrandr2 \
+        mesa-va-drivers \
+        mesa-vulkan-drivers \
+        zlib1g \
+    && apt-get clean \
+    && find /var/lib/apt/lists -mindepth 1 -delete \
+    && groupadd --gid 1000 neomacs \
+    && useradd --uid 1000 --gid neomacs --create-home --shell /bin/bash neomacs \
+    && install -d -o neomacs -g neomacs \
+        /home/neomacs/.emacs.d \
+        /home/neomacs/.cache \
+        /home/neomacs/.config \
+        /home/neomacs/.local/share
+
+COPY --chown=root:root rootfs/ /opt/neomacs/
+
+ENV HOME=/home/neomacs \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    NEOMACS_RUNTIME_ROOT=/opt/neomacs/share/neomacs \
+    PATH=/opt/neomacs/bin:${PATH} \
+    XDG_CACHE_HOME=/home/neomacs/.cache \
+    XDG_CONFIG_HOME=/home/neomacs/.config \
+    XDG_DATA_HOME=/home/neomacs/.local/share
+
+WORKDIR /home/neomacs
+USER neomacs
+
+ENTRYPOINT ["/opt/neomacs/bin/neomacs"]
+CMD ["-nw"]

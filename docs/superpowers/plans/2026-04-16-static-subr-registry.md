@@ -22,7 +22,7 @@
 | `neovm-core/src/emacs_core/eval.rs` | New SubrEntry/SubrTable. Rewrite defsubr, dispatch, context methods. New ValueKind::Subr. |
 | `neovm-core/src/emacs_core/bytecode/vm.rs` | Update subr checks to use new API. |
 | `neovm-core/src/emacs_core/builtins_extra.rs` | Update subrp. |
-| `neovm-core/src/emacs_core/subr_info.rs` | Update subr metadata lookups. |
+| `neovm-core/src/emacs_core/subr/info.rs` | Update subr metadata lookups. |
 | `neovm-core/src/emacs_core/fns.rs` | Update dispatch_subr calls. |
 | `neovm-core/src/emacs_core/dired.rs` | Update dispatch_subr calls. |
 | `neovm-core/src/emacs_core/lread.rs` | Update dispatch_subr calls. |
@@ -361,7 +361,7 @@ git commit -m "Migrate eval.rs dispatch to static subr table"
 **Files:**
 - Modify: `neovm-core/src/emacs_core/bytecode/vm.rs`
 - Modify: `neovm-core/src/emacs_core/builtins_extra.rs`
-- Modify: `neovm-core/src/emacs_core/subr_info.rs`
+- Modify: `neovm-core/src/emacs_core/subr/info.rs`
 - Modify: `neovm-core/src/emacs_core/fns.rs`
 - Modify: `neovm-core/src/emacs_core/dired.rs`
 - Modify: `neovm-core/src/emacs_core/lread.rs`
@@ -376,7 +376,7 @@ In vm.rs, update `as_subr_id()` calls — these should work unchanged since we u
 
 `subrp` at line 339: `args[0].as_subr_id().is_some()` — should work with new encoding. Verify.
 
-- [ ] **Step 3: Update subr_info.rs**
+- [ ] **Step 3: Update subr/info.rs**
 
 Lines 343, 361, 529, 561: `args[0].as_subr_id().unwrap()` — should work. Arity computation at line 304 may need updating if it accessed SubrObj fields.
 

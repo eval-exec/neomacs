@@ -5134,11 +5134,14 @@ minibuffer window or is dedicated to its buffer."
    ((eq (window-dedicated-p) t)
     (user-error "Window is strongly dedicated to its buffer"))
    (t
-    (dotimes (_ (or arg 1))
-      (when (and (not (switch-to-next-buffer))
-                 interactive
-                 (not (or executing-kbd-macro noninteractive)))
-        (user-error "No next buffer"))))))
+    (let ((previous-buffer (window-buffer)))
+      (dotimes (_ (or arg 1))
+        (when (and (not (switch-to-next-buffer))
+                   interactive
+                   (not (or executing-kbd-macro noninteractive)))
+          (user-error "No next buffer")))
+      (unless (eq previous-buffer (window-buffer))
+        (neomacs--record-window-navigation-intent 'forward))))))
 
 (defun previous-buffer (&optional arg interactive)
   "In selected window switch to ARGth previous buffer.
@@ -5151,11 +5154,14 @@ minibuffer window or is dedicated to its buffer."
    ((eq (window-dedicated-p) t)
     (user-error "Window is strongly dedicated to its buffer"))
    (t
-    (dotimes (_ (or arg 1))
-      (when (and (not (switch-to-prev-buffer))
-                 interactive
-                 (not (or executing-kbd-macro noninteractive)))
-        (user-error "No previous buffer"))))))
+    (let ((previous-buffer (window-buffer)))
+      (dotimes (_ (or arg 1))
+        (when (and (not (switch-to-prev-buffer))
+                   interactive
+                   (not (or executing-kbd-macro noninteractive)))
+          (user-error "No previous buffer")))
+      (unless (eq previous-buffer (window-buffer))
+        (neomacs--record-window-navigation-intent 'backward))))))
 
 (defcustom kill-buffer-quit-windows nil
   "Non-nil means killing buffers shall quit windows.

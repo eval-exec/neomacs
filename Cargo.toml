@@ -1,32 +1,57 @@
 [workspace]
 members = [
-    "neomacs-allocator",
-    "neomacs-bin",
-    "neomacs-display-runtime",
-    "neomacs-display-protocol",
-    "neomacs-layout-engine",
-    "neomacs-renderer-wgpu",
-    "neomacs-diagnostics",
-    "neomacs-perf",
-    "neovm-core",
-    "neovm-host-abi",
-    "neovm-oracle-tests",
-    "neovm-worker",
-    "neomacs-tui-tests",
-    "neomacs-gui-tests",
-    "neomacs-melpa-test-support",
-    "neomacs-melpa-tests",
-    "neomacs-test-oracle",
-    "xtask",
+    "crates/neomacs",
+    "crates/neomacs-allocator",
+    "crates/neomacs-diagnostics",
+    "crates/neomacs-display-protocol",
+    "crates/neomacs-display-runtime",
+    "crates/neomacs-font-materializer",
+    "crates/neomacs-gui-tests",
+    "crates/neomacs-layout-engine",
+    "crates/neomacs-melpa-test-support",
+    "crates/neomacs-melpa-tests",
+    "crates/neomacs-parity-reference",
+    "crates/neomacs-perf",
+    "crates/neomacs-renderer-wgpu",
+    "crates/neomacs-test-fonts",
+    "crates/neomacs-test-oracle",
+    "crates/neomacs-tui-tests",
+    "crates/neomacs-video",
+    "crates/neomacs-video-model",
+    "crates/neomacs-webview",
+    "crates/neovm-core",
+    "crates/neovm-host-abi",
+    "crates/neovm-oracle-tests",
+    "crates/neovm-worker",
+    "crates/xtask",
 ]
 default-members = [
-    "neomacs-bin",
-    "xtask",
+    "crates/neomacs",
+    "crates/xtask",
 ]
 resolver = "2"
 
+# Distribution capability policy shared by `xtask` and `flake.nix`.  Rust
+# decodes these strings into closed enums before planning a build; Nix reads
+# the same TOML table to select Cargo features and native inputs. Do not
+# duplicate this policy in either caller.
+[workspace.metadata.neomacs-production-capabilities]
+schema-version = 1
+
+[workspace.metadata.neomacs-production-capabilities.linux]
+cargo-features = ["video"]
+video-backend = "linked-gstreamer"
+
+[workspace.metadata.neomacs-production-capabilities.darwin]
+cargo-features = []
+video-backend = "none"
+
+[workspace.metadata.neomacs-production-capabilities.windows]
+cargo-features = []
+video-backend = "none"
+
 [workspace.package]
-version = "0.0.15"
+version = "0.0.16"
 edition = "2024"
 authors = ["Eval Exec <execvy@gmail.com>"]
 license = "GPL-3.0-or-later"
@@ -34,7 +59,7 @@ repository = "https://github.com/eval-exec/neomacs"
 
 # Lint baseline shared by the frontend crates that opt in with `[lints]
 # workspace = true` (display-protocol, layout-engine, renderer-wgpu,
-# display-runtime, neomacs-bin). Deliberately modest: Rust defaults plus an
+# display-runtime, neomacs). Deliberately modest: Rust defaults plus an
 # explicit `unsafe_op_in_unsafe_fn` warn, with Clippy's default lints left at
 # warn. CI runs `clippy -- -D warnings`, which promotes them to hard errors.
 # The neovm-* crates do NOT opt in, so their lint behavior is unchanged.
@@ -49,20 +74,29 @@ unsafe_op_in_unsafe_fn = "warn"
 
 [workspace.dependencies]
 # Internal crates
-neomacs-allocator = { path = "neomacs-allocator" }
-neovm-core = { path = "neovm-core", default-features = false }
-neovm-host-abi = { path = "neovm-host-abi" }
-neovm-oracle-tests = { path = "neovm-oracle-tests" }
-neomacs-display-runtime = { path = "neomacs-display-runtime", default-features = false }
-neomacs-display-protocol = { path = "neomacs-display-protocol", default-features = false }
-neomacs-layout-engine = { path = "neomacs-layout-engine", default-features = false }
-neomacs-renderer-wgpu = { path = "neomacs-renderer-wgpu", default-features = false }
-neomacs-diagnostics = { path = "neomacs-diagnostics", default-features = false }
-neomacs-perf = { path = "neomacs-perf" }
-neomacs-test-oracle = { path = "neomacs-test-oracle" }
-neomacs-melpa-test-support = { path = "neomacs-melpa-test-support" }
-neomacs-tui-tests = { path = "neomacs-tui-tests" }
-neomacs-gui-tests = { path = "neomacs-gui-tests" }
+neomacs-allocator = { path = "crates/neomacs-allocator" }
+neovm-core = { path = "crates/neovm-core", default-features = false }
+neovm-host-abi = { path = "crates/neovm-host-abi" }
+neovm-oracle-tests = { path = "crates/neovm-oracle-tests" }
+neomacs-display-runtime = { path = "crates/neomacs-display-runtime", default-features = false }
+neomacs-display-protocol = { path = "crates/neomacs-display-protocol", default-features = false }
+neomacs-font-materializer = { path = "crates/neomacs-font-materializer" }
+neomacs-test-fonts = { path = "crates/neomacs-test-fonts" }
+neomacs-layout-engine = { path = "crates/neomacs-layout-engine", default-features = false }
+neomacs-video = { path = "crates/neomacs-video", default-features = false }
+neomacs-video-model = { path = "crates/neomacs-video-model" }
+neomacs-webview = { path = "crates/neomacs-webview", default-features = false }
+neomacs-renderer-wgpu = { path = "crates/neomacs-renderer-wgpu", default-features = false }
+neomacs-diagnostics = { path = "crates/neomacs-diagnostics", default-features = false }
+neomacs-perf = { path = "crates/neomacs-perf" }
+neomacs-test-oracle = { path = "crates/neomacs-test-oracle" }
+neomacs-melpa-test-support = { path = "crates/neomacs-melpa-test-support" }
+neomacs-parity-reference = { path = "crates/neomacs-parity-reference" }
+neomacs-tui-tests = { path = "crates/neomacs-tui-tests" }
+neomacs-gui-tests = { path = "crates/neomacs-gui-tests" }
+
+# Native build glue
+glib = "0.22"
 
 # Cranelift is one API-coupled release train: these crates exchange nominal IR
 # types and must move together. Dependabot groups the family, and xtask verifies
@@ -80,11 +114,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "regist
 tracing-log = "0.2"
 tracing-appender = "0.2"
 tracing-test = "0.2.6"
+vergen-gitcl = { version = "10.0.3", default-features = false, features = ["cargo", "rustc"] }
 
 # Concurrency & threading
 crossbeam-channel = "0.5"
 crossbeam-deque = "0.8"
 rayon = "1"
+signal-hook = "0.3"
 
 # FFI / system
 libc = "0.2"
@@ -135,9 +171,11 @@ core-foundation = "0.10.1"
 core-text = "22.0.0"
 dwrote = { version = "0.11.5", default-features = false }
 winapi = { version = "0.3", features = ["dwrite"] }
+wio = "0.2.2"
 sys-locale = "0.3.2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+toml = "1.1"
 clap = { version = "4.5", features = ["derive"] }
 command-group = "5.0"
 linux-perf-data = { version = "0.13", default-features = false }
@@ -155,6 +193,8 @@ encoding_rs = "0.8"
 
 # Compression
 flate2 = "1"
+tar = "0.4"
+ureq = "3"
 
 # Parsing
 quick-xml = "0.41"
@@ -162,7 +202,7 @@ tl = "0.7"
 htmlize = { version = "1.1", default-features = false, features = ["unescape"] }
 
 # Database
-rusqlite = { version = "0.35", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Arbitrary precision integers (bignum support).
 # Uses malachite, a pure-Rust bignum library derived from GMP/FLINT
@@ -183,6 +223,35 @@ wgpu-hal = { version = "30", features = ["vulkan"] }
 # Shader-surface WGSL/GLSL validation on the Lisp thread (same version wgpu embeds)
 naga = { version = "30", features = ["wgsl-in", "glsl-in"] }
 raw-window-handle = "0.6"
+
+# macOS-only: native WKWebView inline backend (`neomacs-webview`).
+# Versions track the objc2 0.6 generation winit already pulls in, so the
+# dependency graph keeps a single objc2 major.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSResponder", "NSWindow"] }
+objc2-foundation = { version = "0.3", features = [
+    "NSData",
+    "NSError",
+    "NSGeometry",
+    "NSJSONSerialization",
+    "NSObjCRuntime",
+    "NSUUID",
+    "NSString",
+    "NSURL",
+    "NSURLRequest",
+] }
+objc2-web-kit = { version = "0.3", features = [
+    "block2",
+    "WKContentWorld",
+    "WKFrameInfo",
+    "WKNavigation",
+    "WKNavigationDelegate",
+    "WKPreferences",
+    "WKWebView",
+    "WKWebViewConfiguration",
+    "WKWebsiteDataStore",
+] }
 wayland-backend = { version = "0.3.15", features = ["client_system", "dlopen"] }
 wayland-client = { version = "0.31.14", features = ["system", "dlopen"] }
 wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
@@ -208,15 +277,26 @@ gstreamer = "0.25"
 gstreamer-video = "0.25"
 gstreamer-app = "0.25"
 gstreamer-allocators = "0.25"
+gstreamer-pbutils = "0.25"
+objc2-av-foundation = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-text = "0.3.2"
+objc2-core-media = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-metal = "0.3.2"
+windows = "0.62.2"
+windows-core = "0.62.2"
+webview2-com = "0.39.1"
+url = "2"
 
 # Terminal emulation
 rio-vt = "0.5.3"
 parking_lot = "0.12"
 portable-pty = "0.9"
 smallvec = "1.13"
+static_assertions = "1.1"
 
 # Build dependencies
-cbindgen = "0.27"
 which = "7.0"
 bindgen = "0.72"
 pkg-config = "0.3"
@@ -306,3 +386,4 @@ strip = "none"
 
 [patch.crates-io]
 cosmic-text = { git = "https://github.com/eval-exec/cosmic-text", rev = "5dd3fec8572e771794e3f203ab6780d828e9ce09" }
+freetype-sys = { git = "https://github.com/eval-exec/freetype-sys", rev = "a4eb0a7cf08d9b503bda7d7261c97f8973d34bf1" }

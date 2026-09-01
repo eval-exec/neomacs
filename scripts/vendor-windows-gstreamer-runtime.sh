@@ -12,7 +12,7 @@ gstreamer-1.0-0.dll before neomacs.exe runs, so the DLLs are copied beside
 neomacs.exe.  GStreamer plugins and helper programs are copied under the
 package root using the upstream runtime layout.
 
-Requires GSTREAMER_ROOT_X86_64 to point at a GStreamer MSVC runtime root.
+Requires GSTREAMER_ROOT to point at a GStreamer MSVC runtime root.
 USAGE
 }
 
@@ -46,8 +46,8 @@ if [[ -z "$package_root" || -z "$bin_dir" ]]; then
   exit 2
 fi
 
-if [[ -z "${GSTREAMER_ROOT_X86_64:-}" ]]; then
-  echo "GSTREAMER_ROOT_X86_64 is not set; cannot vendor Windows GStreamer runtime" >&2
+if [[ -z "${GSTREAMER_ROOT:-}" ]]; then
+  echo "GSTREAMER_ROOT is not set; cannot vendor Windows GStreamer runtime" >&2
   exit 1
 fi
 
@@ -78,7 +78,7 @@ copy_runtime_dlls_to() {
 
 package_root="$(to_posix_path "$package_root")"
 bin_dir="$(to_posix_path "$bin_dir")"
-gst_root="$(to_posix_path "$GSTREAMER_ROOT_X86_64")"
+gst_root="$(to_posix_path "$GSTREAMER_ROOT")"
 gst_bin="$gst_root/bin"
 
 if [[ ! -d "$package_root" ]]; then

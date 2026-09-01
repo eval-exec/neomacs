@@ -11,12 +11,9 @@ on:
       - scripts/package-windows-installer.sh
       - scripts/package-windows-installer-upgrade-fixtures.sh
       - scripts/run-windows-installer-contract.ps1
-      - scripts/setup-windows-gstreamer.ps1
       - scripts/test-windows-installer.ps1
       - scripts/test-windows-installer-upgrade.ps1
-      - scripts/vendor-windows-gstreamer-runtime.sh
-      - scripts/windows-gstreamer-env.sh
-      - xtask/**
+      - crates/xtask/**
   pull_request:
     paths:
       - .github/workflows/windows-installer.yml
@@ -27,12 +24,9 @@ on:
       - scripts/package-windows-installer.sh
       - scripts/package-windows-installer-upgrade-fixtures.sh
       - scripts/run-windows-installer-contract.ps1
-      - scripts/setup-windows-gstreamer.ps1
       - scripts/test-windows-installer.ps1
       - scripts/test-windows-installer-upgrade.ps1
-      - scripts/vendor-windows-gstreamer-runtime.sh
-      - scripts/windows-gstreamer-env.sh
-      - xtask/**
+      - crates/xtask/**
   workflow_dispatch:
 
 permissions:
@@ -40,46 +34,30 @@ permissions:
 
 jobs:
   installer-contract:
-    name: install, upgrade, and uninstall
-    runs-on: windows-latest
+    name: install, upgrade, and uninstall (${{ matrix.arch }})
+    # Both architectures, so the aarch64 contract can be iterated on WITHOUT
+    # cutting a release tag.  It was previously exercised only by release.yml,
+    # which made every attempt at it cost a full release round and blocked the
+    # release when it failed.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+          - arch: aarch64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       RUST_LOG: info
-      GSTREAMER_VERSION: 1.26.9
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Restore GStreamer SDK cache
-        id: cache-gstreamer
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: windows-gstreamer-msvc-x86_64-${{ env.GSTREAMER_VERSION }}-v1
-
-      - name: Install GStreamer SDK
-        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1 -Install
-
-      - name: Save GStreamer SDK cache
-        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            C:\gstreamer
-            C:\gstreamer-msi-cache
-          key: ${{ steps.cache-gstreamer.outputs.cache-primary-key }}
-
-      - name: Configure GStreamer SDK
-        shell: powershell
-        run: ./scripts/setup-windows-gstreamer.ps1
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
@@ -93,15 +71,10 @@ jobs:
         shell: powershell
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
 
-      - name: Verify GStreamer pkg-config
-        shell: bash
-        run: source scripts/windows-gstreamer-env.sh --verify
-
       - name: Run fresh build
         shell: bash
         timeout-minutes: 150
         run: |
-          source scripts/windows-gstreamer-env.sh
           cargo xtask fresh-build --release
 
       - name: GUI smoke (launch, frame snapshot, PNG readback)
@@ -109,7 +82,6 @@ jobs:
         timeout-minutes: 10
         run: |
           set -x
-          source scripts/windows-gstreamer-env.sh
           mkdir -p gui-artifacts
           export NEOMACS_GUI_FRAME_SNAPSHOT_JSON="$PWD/gui-artifacts/snapshot.json"
           export NEOMACS_GUI_FRAME_SNAPSHOT_TXT="$PWD/gui-artifacts/snapshot.txt"
@@ -119,7 +91,7 @@ jobs:
           export NEOMACS_DEBUG_SURFACE_READBACK_PNG="$PWD/gui-artifacts/frame.png"
           export RUST_BACKTRACE=1
           # The fixture self-terminates after ~2s; watchdog guards a wgpu hang.
-          ./target/release/neomacs.exe -Q -l neomacs-gui-tests/fixtures/startup-smoke.el \
+          ./target/release/neomacs.exe -Q -l crates/neomacs-gui-tests/fixtures/startup-smoke.el \
             > gui-artifacts/neomacs.log 2>&1 &
           PID=$!
           for _ in $(seq 1 60); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
@@ -144,10 +116,12 @@ jobs:
         shell: bash
         timeout-minutes: 20
         run: |
-          source scripts/windows-gstreamer-env.sh
           ./scripts/package-windows-installer.sh --skip-build --no-smoke
 
       - name: Verify Windows installer ownership contract
         shell: powershell
         timeout-minutes: 10
-        run: ./scripts/run-windows-installer-contract.ps1 -ConfirmEphemeralRunner
+        run: >-
+          ./scripts/run-windows-installer-contract.ps1
+          -Architecture "${{ matrix.arch }}"
+          -ConfirmEphemeralRunner

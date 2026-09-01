@@ -36,10 +36,10 @@ Important GNU ownership facts:
 
 Current hook behavior is split across too many owners:
 
-- `neovm-core/src/emacs_core/builtins/hooks.rs`
-- `neovm-core/src/emacs_core/bytecode/vm.rs`
-- `neovm-core/src/emacs_core/editfns.rs`
-- `neovm-core/src/emacs_core/navigation.rs`
+- `neovm-core/src/emacs_core/lisp/native/builtins/hooks.rs`
+- `neovm-core/src/emacs_core/runtime/bytecode/vm.rs`
+- `neovm-core/src/emacs_core/editing/editfns/mod.rs`
+- `neovm-core/src/emacs_core/editing/navigation/mod.rs`
 - `neovm-core/src/hooks.rs`
 
 This is not GNU-shaped enough.

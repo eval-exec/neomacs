@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly usage="usage: $0 [--list] {build|oracle|ecosystem|release}"
+readonly usage="usage: $0 [--list] {build|build-no-gstreamer|oracle|ecosystem|release}"
 
 list_only=false
 if [[ ${1:-} == "--list" ]]; then
@@ -27,8 +27,6 @@ readonly -a build_packages=(
     libfreetype-dev
     libglib2.0-dev
     libunwind-dev
-    libgstreamer1.0-dev
-    libgstreamer-plugins-base1.0-dev
     libxkbcommon-dev
     libxkbcommon-x11-dev
     libwayland-dev
@@ -50,12 +48,21 @@ readonly -a build_packages=(
     zlib1g-dev
 )
 
+readonly -a video_backend_packages=(
+    libgstreamer1.0-dev
+    libgstreamer-plugins-base1.0-dev
+)
+
 declare -a profile_packages=()
 declare -a required_commands=()
 requires_emacs=false
 requires_libfaketime=false
+requires_gstreamer=true
 case "$profile" in
     build)
+        ;;
+    build-no-gstreamer)
+        requires_gstreamer=false
         ;;
     oracle)
         profile_packages=(emacs-nox libfaketime)
@@ -80,8 +87,8 @@ case "$profile" in
         requires_libfaketime=true
         ;;
     release)
-        profile_packages=(rpm binutils cpio file)
-        required_commands=(rpm objdump cpio file)
+        profile_packages=(rpm binutils cpio file dpkg-dev)
+        required_commands=(rpm objdump cpio file dpkg-shlibdeps)
         ;;
     *)
         echo "unknown profile: $profile" >&2
@@ -90,7 +97,10 @@ case "$profile" in
         ;;
 esac
 
-readonly -a packages=("${build_packages[@]}" "${profile_packages[@]}")
+declare -a packages=("${build_packages[@]}" "${profile_packages[@]}")
+if $requires_gstreamer; then
+    packages+=("${video_backend_packages[@]}")
+fi
 if $list_only; then
     printf '%s\n' "${packages[@]}"
     exit 0
@@ -107,7 +117,9 @@ sudo apt-get install -y --no-install-recommends "${packages[@]}"
 # Fail at the environment seam instead of silently compiling out optional
 # primitives and discovering the mismatch much later in an oracle test.
 pkg-config --modversion lcms2
-pkg-config --modversion gstreamer-1.0
+if $requires_gstreamer; then
+    pkg-config --modversion gstreamer-1.0
+fi
 
 if $requires_emacs; then
     emacs --batch --quick --eval '(kill-emacs 0)'

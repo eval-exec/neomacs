@@ -46,25 +46,26 @@ GNU uses these files together as one semantic core:
 
 Primary Neomacs source files:
 
-- `neovm-core/src/emacs_core/eval.rs`
-- `neovm-core/src/emacs_core/data/mod.rs`
-- `neovm-core/src/emacs_core/alloc.rs`
-- `neovm-core/src/emacs_core/fns.rs`
-- `neovm-core/src/emacs_core/floatfns.rs`
-- `neovm-core/src/emacs_core/hashtab.rs`
-- `neovm-core/src/emacs_core/value.rs`
-- `neovm-core/src/emacs_core/symbol.rs`
-- `neovm-core/src/emacs_core/intern.rs`
-- `neovm-core/src/emacs_core/builtins/`
-- `neovm-core/src/emacs_core/bytecode/`
+- `neovm-core/src/emacs_core/runtime/eval/mod.rs`
+- `neovm-core/src/emacs_core/runtime/data/mod.rs`
+- `neovm-core/src/emacs_core/runtime/alloc/mod.rs`
+- `neovm-core/src/emacs_core/lisp/native/fns/mod.rs`
+- `neovm-core/src/emacs_core/lisp/native/floatfns/mod.rs`
+- `neovm-core/src/emacs_core/runtime/hashtab/mod.rs`
+- `neovm-core/src/emacs_core/runtime/value/mod.rs`
+- `neovm-core/src/emacs_core/runtime/symbol/mod.rs`
+- `neovm-core/src/emacs_core/runtime/intern/mod.rs`
+- `neovm-core/src/emacs_core/lisp/native/builtins/`
+- `neovm-core/src/emacs_core/runtime/bytecode/`
 
 Current design shape:
 
-- `eval.rs` is the main semantic hub through `Context`.
-- `value.rs`, `symbol.rs`, and `intern.rs` together define the runtime object
-  boundary that Lisp code sees.
-- `builtins/` holds most primitive registrations and many core operations.
-- `bytecode/` contains a separate Rust compiler/decode/vm stack instead of
+- `runtime/eval/mod.rs` is the main semantic hub through `Context`.
+- `runtime/value`, `runtime/symbol`, and `runtime/intern` together define the
+  runtime object boundary that Lisp code sees.
+- `lisp/native/builtins` holds most primitive registrations and many core
+  operations.
+- `runtime/bytecode` contains a separate Rust compiler/decode/vm stack instead of
   copying GNU's `bytecode.c` structure.
 
 ## Audit result
@@ -73,8 +74,8 @@ Status is **partially compatible**.
 
 Good:
 
-- NeoVM already has broad oracle coverage under
-  `neovm-core/src/emacs_core/oracle_test/`.
+- NeoVM already has broad oracle coverage in subsystem-owned `tests/`
+  directories under `neovm-core/src/emacs_core/`.
 - The Rust VM is rich enough to run large amounts of GNU Lisp.
 - Bytecode, special forms, and core types exist as first-class runtime systems.
 

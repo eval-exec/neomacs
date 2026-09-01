@@ -2,6 +2,11 @@
 xtask = "run -p xtask --"
 
 [env]
+# Cargo does not expose the workspace root to member crates. Resolve this
+# workspace-owned variable relative to `.cargo/config.toml`, so package depth
+# never leaks into build scripts or test fixture paths.
+CARGO_WORKSPACE_DIR = { value = "", relative = true, force = true }
+
 # 128 MB stack for test threads.  Conservative GC scans the main thread
 # stack, so we avoid stacker::maybe_grow (which creates separate mmap
 # segments invisible to the scanner) and use a large stack instead.

@@ -1,11 +1,21 @@
 [CmdletBinding()]
 param(
   [string]$DistDirectory = "dist",
+  [ValidateSet("x86_64", "aarch64")]
+  [string]$Architecture,
   [switch]$ConfirmEphemeralRunner
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+if ([string]::IsNullOrWhiteSpace($Architecture)) {
+  $Architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
+    "AMD64" { "x86_64" }
+    "ARM64" { "aarch64" }
+    default { throw "unsupported Windows architecture: $env:PROCESSOR_ARCHITECTURE" }
+  }
+}
 
 if (
   -not $ConfirmEphemeralRunner -or
@@ -28,7 +38,8 @@ if ($installers.Count -ne 1) {
 
 $fixtureDir = Join-Path $env:RUNNER_TEMP "neomacs-installer-upgrade-contract"
 New-Item -ItemType Directory -Path $fixtureDir -Force | Out-Null
-& bash "$PSScriptRoot/package-windows-installer-upgrade-fixtures.sh" $fixtureDir
+& bash "$PSScriptRoot/package-windows-installer-upgrade-fixtures.sh" `
+  $fixtureDir $Architecture
 if ($LASTEXITCODE -ne 0) {
   throw "failed to build installer upgrade fixtures"
 }

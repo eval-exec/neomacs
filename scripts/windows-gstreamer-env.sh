@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${GSTREAMER_ROOT_X86_64:-}" ]]; then
-  echo "GSTREAMER_ROOT_X86_64 is not set" >&2
+if [[ -z "${GSTREAMER_ROOT:-}" ]]; then
+  echo "GSTREAMER_ROOT is not set" >&2
   return 1 2>/dev/null || exit 1
 fi
 
@@ -16,7 +16,7 @@ if ! command -v cygpath &>/dev/null; then
   return 1 2>/dev/null || exit 1
 fi
 
-gst_root_posix="$(cygpath -u "$GSTREAMER_ROOT_X86_64")"
+gst_root_posix="$(cygpath -u "$GSTREAMER_ROOT")"
 pkg_config_posix="$(cygpath -u "$PKG_CONFIG")"
 
 export PATH="$(dirname "$pkg_config_posix"):$gst_root_posix/bin:$PATH"

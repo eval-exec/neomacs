@@ -1,0 +1,54 @@
+# The GNU Emacs reference this project's parity numbers are measured against.
+#
+# WHY THIS FILE EXISTS (ledger 214).  Every parity number this project
+# publishes -- the oracle's expectations, ledger 195's motion sweep, ledger
+# 205's below-content audit, the TUI suite -- is a comparison against ONE GNU
+# Emacs build.  Until this file existed each harness only checked that *an*
+# emacs could be RUN (ledger 210 and 211 made that check honest), and none of
+# them checked *which* one.  A reference that VANISHED was caught; a reference
+# that CHANGED would have been scored in silence.
+#
+# WHAT IDENTIFIES THE BUILD.  `fingerprint' is GNU's own: lib/fingerprint.h
+# declares `unsigned char fingerprint[32]' and says it exists so that we "have
+# a unique value that we can use to pair data files (like a dump file) with a
+# specific build of Emacs".  lib-src/make-fingerprint.c computes it as a
+# SHA-256 over the temacs executable and patches it into the binary; pdumper.c
+# writes it into the dump header (offset 16, after the 16-byte magic
+# "DUMPEDGNUEMACS\0\0") and src/pdumper.c:5687 REFUSES to load a dump whose
+# fingerprint does not match the binary's.  So the fingerprint identifies the
+# binary and its dump as a PAIR, and reading it costs one 48-byte file read.
+# This binary carries no .note.gnu.build-id -- it is stripped and the link did
+# not emit one -- so the fingerprint is the only free identity available.
+#
+# The SHA-256 digests are the complete content identity and are what an
+# `exhaustive' attestation checks.  The fingerprint is a BUILD identity: it
+# catches every rebuild, which is the incident this file exists for, but it is
+# computed over temacs at build time and so does not cover a shipped file
+# edited afterwards.  See crates/neomacs-parity-reference/src/lib.rs for the two
+# depths and what each one is worth.
+#
+# RE-BASELINING.  A rebuild of the GNU mirror is its own change with its own
+# re-baselining, never a side effect of a session.  To re-pin, run
+#
+#     cargo run -p xtask -- pin-reference --emacs PATH --reason "..."
+#
+# which rewrites the keys below and appends to the log in this comment block.
+# Editing the keys by hand defeats the log; the command exists so that the
+# record cannot be forgotten.
+#
+# RE-BASELINING LOG
+#   2026-08-29  ledger 214  initial pin.  GNU Emacs 31.0.90 built 2026-06-10
+#               from emacs-mirror commit 0ee48ac4df2 with a clean tree.  This
+#               is the build every published parity number in ledgers 195
+#               through 213 was measured against; it is recorded here rather
+#               than chosen here.
+
+schema = "1"
+emacs_version = "31.0.90"
+mirror_commit = "0ee48ac4df205e0d915946b5db00e73a0cd21ae0"
+build_time = "2026-06-10T02:39:56-04:00"
+fingerprint = "a8cdeacea5d5826298f067ed089d81aada7e11f79f75602de37affc1135e506d"
+executable_sha256 = "c05b1293395c761ca31d9142a699d220a705389127c5be76f4c5b362e4166434"
+executable_size = "4761680"
+pdmp_sha256 = "dcfaef26ae5ad7040889aa3b53092ec08e071299c4af8833809e32a9ac851005"
+pdmp_size = "14065592"

@@ -30,9 +30,9 @@ shim. The visible API is backed by real scheduler-owned state.
 ## Neomacs Current Design
 
 Neomacs thread semantics currently live in
-[threads.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/threads.rs),
+[thread module](../../crates/neovm-core/src/emacs_core/runtime/threads/mod.rs),
 with builtin registration in
-[builtins/mod.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/builtins/mod.rs)
+[native builtins](../../crates/neovm-core/src/emacs_core/lisp/native/builtins/mod.rs)
 and some older gaps still surfaced through stubs.
 
 The key architectural mismatch is explicit in the file header:
@@ -57,7 +57,7 @@ Lisp callers for `main-thread`, but no runtime binding was set.
 
 `main-thread` is now synchronized from the thread manager into the evaluator in:
 
-- [eval.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/eval.rs)
+- [evaluator module](../../crates/neovm-core/src/emacs_core/runtime/eval/mod.rs)
 
 That is the right boundary: `main-thread` is runtime-owned thread state, not a
 Lisp helper.
@@ -70,8 +70,8 @@ GNU stores buffer disposition on each thread and exposes it directly through
 Neomacs previously exposed both entry points as stubs returning `nil`. They now
 use real thread state in:
 
-- [threads.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/threads.rs)
-- [builtins/mod.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/builtins/mod.rs)
+- [thread module](../../crates/neovm-core/src/emacs_core/runtime/threads/mod.rs)
+- [native builtins](../../crates/neovm-core/src/emacs_core/lisp/native/builtins/mod.rs)
 
 This includes the GNU constraint that non-`nil` disposition cannot be assigned
 to the main thread.
@@ -85,7 +85,7 @@ threads indefinitely.
 Neomacs now filters `all-threads` through live-thread status instead of joined
 status in:
 
-- [threads.rs](/home/exec/Projects/github.com/eval-exec/neomacs/neovm-core/src/emacs_core/threads.rs)
+- [thread module](../../crates/neovm-core/src/emacs_core/runtime/threads/mod.rs)
 
 This does not solve Neomacs's larger liveness mismatch, but it does make the
 API boundary more honest and closer to GNU.

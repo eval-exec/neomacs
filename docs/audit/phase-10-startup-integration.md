@@ -22,9 +22,9 @@ Startup and CLI:
 
 Bootstrap/load/runtime state:
 
-- `neovm-core/src/emacs_core/load.rs`
-- `neovm-core/src/emacs_core/lread.rs`
-- `neovm-core/src/emacs_core/pdump/`
+- `neovm-core/src/emacs_core/lisp/load/mod.rs`
+- `neovm-core/src/emacs_core/lisp/lread/mod.rs`
+- `neovm-core/src/emacs_core/runtime/pdump/`
 
 GUI startup/runtime:
 
@@ -55,7 +55,7 @@ Bad:
   before entering `recursive_edit`: it disables GC, sets `dump-mode` to `nil`,
   bootstraps buffers/frames, starts the render thread, installs an input bridge,
   and forces variables such as `inhibit-startup-screen`.
-- `neovm-core/src/emacs_core/load.rs` still applies runtime repair/shim logic
+- `neovm-core/src/emacs_core/lisp/load/mod.rs` still applies runtime repair/shim logic
   through `apply_runtime_startup_state()` and post-`loadup.el`
   `term/common-win` / `term/neo-win` loading.
 - Real startup success is more than "batch bootstrap passes".
