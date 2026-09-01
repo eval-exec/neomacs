@@ -5559,11 +5559,13 @@ impl crate::emacs_core::eval::Context {
                 return None;
             }
             let window = hit.region().window()?;
+            let window_id = crate::window::WindowId(window.get() as u64);
+            match frame.active_window_presentation(window_id)? {
+                crate::window::WindowPresentationSnapshot::LiveWindow(_) => {}
+                crate::window::WindowPresentationSnapshot::GeometryOnly(_) => return None,
+            }
             let position = hit.text_position()?;
-            (
-                crate::window::WindowId(window.get() as u64),
-                position.buffer_position(),
-            )
+            (window_id, position.buffer_position())
         } else if frame.effective_window_system().is_some() && frame.active_presentation().is_some()
         {
             // GUI pointer observations are delivered from the renderer's exact
@@ -6572,30 +6574,28 @@ impl crate::emacs_core::eval::Context {
             };
         let fallback_point = frame.find_window(window_id).and_then(Self::window_point);
         // A presented text position is only a position in the window's own
-        // buffer when the presentation published that window's rows as live
-        // output. An inactive mini-window's rows describe the echo-area buffer
-        // it is drawing, not the ` *Minibuf-N*` it is bound to, so they answer
-        // rectangles but not positions; GNU's own answer for this window comes
-        // from an iterator run inside `w->contents` (src/dispnew.c
-        // `buffer_posn_from_coords`), which is what the window's point is here.
-        let hit_position_is_window_evidence =
-            frame.active_presentation_publishes_live_window_output(window_id);
-        let metrics = if let Some(point) = hit
-            .text_position()
-            .filter(|_| hit_position_is_window_evidence)
-        {
-            let bounds = point.bounds();
-            MousePosnMetrics {
-                point: Some(point.buffer_position()),
-                col: Some(point.column()),
-                row: Some(point.row()),
-                width: Some(bounds.width().round().max(1.0) as i64),
-                height: Some(bounds.height().round().max(1.0) as i64),
-                anchor_x: None,
-                anchor_y: None,
+        // buffer for the `LiveWindow` variant. An inactive mini-window's
+        // geometry describes an echo buffer, not `w->contents`; matching the
+        // publication enum keeps that semantic permission attached to the
+        // snapshot instead of reconstructing it with a separate boolean.
+        let metrics = match (
+            frame.active_window_presentation(window_id)?,
+            hit.text_position(),
+        ) {
+            (crate::window::WindowPresentationSnapshot::LiveWindow(_), Some(point)) => {
+                let bounds = point.bounds();
+                MousePosnMetrics {
+                    point: Some(point.buffer_position()),
+                    col: Some(point.column()),
+                    row: Some(point.row()),
+                    width: Some(bounds.width().round().max(1.0) as i64),
+                    height: Some(bounds.height().round().max(1.0) as i64),
+                    anchor_x: None,
+                    anchor_y: None,
+                }
             }
-        } else {
-            MousePosnMetrics {
+            (crate::window::WindowPresentationSnapshot::LiveWindow(_), None)
+            | (crate::window::WindowPresentationSnapshot::GeometryOnly(_), _) => MousePosnMetrics {
                 point: fallback_point,
                 col: None,
                 row: None,
@@ -6603,7 +6603,7 @@ impl crate::emacs_core::eval::Context {
                 height: None,
                 anchor_x: None,
                 anchor_y: None,
-            }
+            },
         };
         let position = Self::mouse_posn_descriptor_value(MousePosnDescriptor {
             window_or_frame: Value::make_window(window_id.0),
@@ -6629,7 +6629,7 @@ impl crate::emacs_core::eval::Context {
     ) -> Option<Value> {
         let position = hit.string_position()?;
         let area = position.area();
-        let snapshot = frame.active_presentation_snapshot(window)?;
+        let snapshot = frame.active_window_presentation(window)?.display_snapshot();
         let source = snapshot
             .chrome_strings
             .iter()

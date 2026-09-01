@@ -143,6 +143,112 @@ enum ProcessIoTeardown {
     Network,
 }
 
+/// What a Lisp send should do with bytes after the process's write side has
+/// changed state.
+///
+/// GNU represents this with `p->outfd`: a live descriptor accepts bytes,
+/// `process-send-eof` replaces it with `/dev/null`, and EPIPE sets it to -1.
+/// Neomacs keeps bidirectional sockets, TLS streams, and serial ports in one
+/// Rust owner, so dropping the owner to express a closed write side would also
+/// discard still-readable output. Naming the three states preserves GNU's
+/// half-connection semantics independently of resource ownership.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ProcessInputDisposition {
+    #[default]
+    Connected,
+    Discard,
+    Disconnected,
+}
+
+/// The concrete endpoint selected by GNU's `send_process` precedence.
+///
+/// Every variant must define both its write operation and its EPIPE cleanup.
+/// This makes adding another process transport a compile-time obligation
+/// instead of letting the shared error arm silently close an unrelated pipe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessInputEndpoint {
+    Pty,
+    ChildPipe,
+    Tls,
+    Network,
+    Serial,
+}
+
+impl ProcessInputEndpoint {
+    fn select(proc: &Process) -> Option<Self> {
+        if proc.live_io.pty_writer.is_some() {
+            Some(Self::Pty)
+        } else if proc.live_io.child.has_pipe_child() && proc.live_io.child.stdin().is_some() {
+            Some(Self::ChildPipe)
+        } else if proc.live_io.tls_stream.is_some() {
+            Some(Self::Tls)
+        } else if proc.live_io.network_socket.is_some() {
+            Some(Self::Network)
+        } else if proc.live_io.serial_port.is_some() {
+            Some(Self::Serial)
+        } else {
+            None
+        }
+    }
+
+    fn write_once(self, proc: &mut Process, bytes: &[u8]) -> Option<std::io::Result<usize>> {
+        match self {
+            Self::Pty => Some(proc.live_io.pty_writer.as_mut()?.write(bytes)),
+            Self::ChildPipe => {
+                let stdin = proc.live_io.child.stdin_mut()?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::io::AsRawFd;
+                    let fd = stdin.as_raw_fd();
+                    let _ = sys::set_fd_nonblocking(fd);
+                }
+                Some(stdin.write(bytes))
+            }
+            Self::Tls => Some(
+                proc.live_io
+                    .tls_stream
+                    .as_mut()?
+                    .write_process_input_once(bytes),
+            ),
+            Self::Network => {
+                let datagram_address = proc.datagram_socket_addr;
+                #[cfg(unix)]
+                let datagram_unix_path = proc.datagram_unix_path.clone();
+                proc.live_io.network_socket.as_mut()?.write_input_once(
+                    bytes,
+                    datagram_address,
+                    #[cfg(unix)]
+                    datagram_unix_path,
+                )
+            }
+            Self::Serial => Some(proc.live_io.serial_port.as_mut()?.write(bytes)),
+        }
+    }
+
+    /// Disable precisely the write capability that produced EPIPE.
+    ///
+    /// PTY and child-pipe writers have independent Rust owners and can be
+    /// dropped. The other variants share one owner with the readable side, so
+    /// [`ProcessInputDisposition::Disconnected`] disables future sends while
+    /// retaining the resource for remaining output, just like GNU leaves
+    /// `p->infd` alive after setting `p->outfd = -1`.
+    fn disconnect(self, poller: Option<&polling::Poller>, proc: &mut Process) {
+        match self {
+            Self::Pty => {
+                proc.live_io.pty_writer = None;
+            }
+            Self::ChildPipe => {
+                if let (Some(poller), Some(stdin)) = (poller, proc.live_io.child.stdin()) {
+                    ProcessManager::unregister_child_stdin_writable_from_poller(poller, stdin);
+                }
+                let _ = proc.live_io.child.close_stdin();
+            }
+            Self::Tls | Self::Network | Self::Serial => {}
+        }
+        proc.input_disposition = ProcessInputDisposition::Disconnected;
+    }
+}
+
 /// GNU-compatible GnuTLS process initialization stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive)]
 #[repr(i64)]
@@ -1211,9 +1317,9 @@ pub struct Process {
     /// for network/serial/pipe connections that have no OS child, and stays
     /// independent of the internal `ProcessId` used to key the manager.
     pub os_pid: Option<u32>,
-    /// GNU `process-send-eof' replaces a pipe subprocess's write fd with the
-    /// null device, so later `process-send-string' calls succeed and discard.
-    pub child_stdin_eof_sink: bool,
+    /// GNU's three write-side states, kept separate from bidirectional native
+    /// resource ownership. See [`ProcessInputDisposition`].
+    input_disposition: ProcessInputDisposition,
     /// True after Lisp explicitly called `process-send-eof' on this process.
     /// GNU can publish the ensuing pipe status in the same wait that reads
     /// output from that explicit EOF, while naturally exiting pipe children can
@@ -1711,6 +1817,19 @@ fn process_is_datagram_network(proc: &Process) -> bool {
             Some(NetworkSocket::UnixDatagram(_))
         );
     is_datagram
+}
+
+/// Durable GNU `DATAGRAM_CONN_P` semantics for cold control paths.
+///
+/// The live-resource check keeps low-level fixtures working; the contact type
+/// remains after native I/O teardown. Keeping the plist lookup out of
+/// [`process_is_datagram_network`] avoids adding a linear scan to the hot
+/// datagram read path.
+fn process_has_datagram_semantics(proc: &Process) -> bool {
+    process_is_datagram_network(proc)
+        || (proc.kind == ProcessKind::Network
+            && process_contact_plist_get(proc.childp, ProcessKeyword::Type.value())
+                == Value::symbol("datagram"))
 }
 
 fn process_type_value(kind: &ProcessKind) -> Value {
@@ -5477,8 +5596,8 @@ impl ProcessManager {
             }
             return;
         }
-        let wants_write =
-            proc.live_io.pending_network_connect.is_some() || !proc.write_queue.is_nil();
+        let wants_write = proc.input_disposition == ProcessInputDisposition::Connected
+            && (proc.live_io.pending_network_connect.is_some() || !proc.write_queue.is_nil());
         let event = match (enabled, wants_write) {
             (true, true) => Some(polling::Event::all(id as usize)),
             (true, false) => Some(polling::Event::readable(id as usize)),
@@ -5913,7 +6032,7 @@ impl ProcessManager {
             tty_stdout,
             tty_stderr,
             os_pid: None,
-            child_stdin_eof_sink: false,
+            input_disposition: ProcessInputDisposition::Connected,
             eof_sent_to_process: false,
             live_io: LiveProcessIo::default(),
             datagram_address: Value::NIL,
@@ -7248,7 +7367,21 @@ impl ProcessManager {
                 }
                 ProcessWriteAttempt::Written(_) => continue,
                 ProcessWriteAttempt::NoSource => {
-                    self.push_process_write_queue_entry(id, entry, true);
+                    // `Disconnected` is GNU's permanent `outfd == -1`, not a
+                    // transient would-block condition. Retaining this entry
+                    // (and every later send) can only grow an unreachable
+                    // queue before the Lisp layer reports the closed output
+                    // descriptor. Keep the legacy no-endpoint harness behavior
+                    // for `Connected`, whose source may be attached later.
+                    if self.processes.get(&id).is_some_and(|proc| {
+                        proc.input_disposition == ProcessInputDisposition::Disconnected
+                    }) {
+                        if let Some(proc) = self.processes.get_mut(&id) {
+                            proc.write_queue = Value::NIL;
+                        }
+                    } else {
+                        self.push_process_write_queue_entry(id, entry, true);
+                    }
                     return Ok(ProcessWriteFlush::NoSource);
                 }
             }
@@ -7282,42 +7415,17 @@ impl ProcessManager {
             return Ok(ProcessWriteAttempt::NoSource);
         };
 
-        let result = if let Some(ref mut pty_writer) = proc.live_io.pty_writer {
-            pty_writer.write(bytes)
-        } else if proc.live_io.child.has_pipe_child() {
-            let Some(stdin) = proc.live_io.child.stdin_mut() else {
-                if proc.child_stdin_eof_sink {
-                    return Ok(ProcessWriteAttempt::Written(bytes.len()));
-                }
-                return Ok(ProcessWriteAttempt::NoSource);
-            };
-            #[cfg(unix)]
-            {
-                use std::os::unix::io::AsRawFd;
-                let fd = stdin.as_raw_fd();
-                let _ = sys::set_fd_nonblocking(fd);
+        match proc.input_disposition {
+            ProcessInputDisposition::Discard => {
+                return Ok(ProcessWriteAttempt::Written(bytes.len()));
             }
-            stdin.write(bytes)
-        } else if let Some(ref mut tls) = proc.live_io.tls_stream {
-            tls.write_process_input_once(bytes)
-        } else if let Some(socket) = proc.live_io.network_socket.as_mut() {
-            let datagram_address = proc.datagram_socket_addr;
-            #[cfg(unix)]
-            let datagram_unix_path = proc.datagram_unix_path.clone();
-            match socket.write_input_once(
-                bytes,
-                datagram_address,
-                #[cfg(unix)]
-                datagram_unix_path,
-            ) {
-                Some(result) => result,
-                None => return Ok(ProcessWriteAttempt::NoSource),
-            }
-        } else if let Some(port) = proc.live_io.serial_port.as_mut() {
-            // GNU writes a serial process's input to `p->outfd`, which is the
-            // same descriptor it reads from (src/process.c:3216-3217).
-            port.write(bytes)
-        } else {
+            ProcessInputDisposition::Disconnected => return Ok(ProcessWriteAttempt::NoSource),
+            ProcessInputDisposition::Connected => {}
+        };
+        let Some(endpoint) = ProcessInputEndpoint::select(proc) else {
+            return Ok(ProcessWriteAttempt::NoSource);
+        };
+        let Some(result) = endpoint.write_once(proc, bytes) else {
             return Ok(ProcessWriteAttempt::NoSource);
         };
 
@@ -7341,28 +7449,26 @@ impl ProcessManager {
                 // and NOTHING else -- the status is not touched, so the child
                 // stays sweepable and the next wait's `status_notify` hands
                 // the sentinel the child's REAL exit status.  Writing
-                // `(exit . 256)` here (Emacs 24 behavior, removed by GNU
-                // commit 4d7e6e51dd4, 2013) made the status terminal before
-                // the reap, which no later sweep may overwrite
+                // `(exit . 256)` here (introduced by GNU commit
+                // 4d7e6e51dd4, 2012, and removed by e381cf1fc97, 2025) made
+                // the status terminal before the reap, which no later sweep
+                // may overwrite
                 // (`SweepableChild::of` admits only `run`/`stop`) and which
                 // set no `status_notify_pending` -- so the sentinel never
                 // ran.  Measured with lsp-mode against a crashing nixd:
                 // `lsp--handle-process-exit` never fired, the dead
                 // workspace stayed in the session, and every later send
                 // reported "not running: exited abnormally with code 256".
-                if let (Some(poller), Some(stdin)) =
-                    (self.wait_backend.poller(), proc.live_io.child.stdin())
-                {
-                    Self::unregister_child_stdin_writable_from_poller(poller, stdin);
-                }
-                let _ = proc.live_io.child.close_stdin();
                 let name = process_name_runtime(proc.name);
-                Err(signal(
+                endpoint.disconnect(self.wait_backend.poller(), proc);
+                let error = signal(
                     "error",
                     vec![Value::string(format!(
                         "Process {name} no longer connected to pipe; closed it"
                     ))],
-                ))
+                );
+                self.update_process_write_interest(id, ProcessWriteInterest::Readable);
+                Err(error)
             }
             Err(err) => Err(signal_process_io("Writing to process", None, err)),
         }
@@ -16324,7 +16430,7 @@ pub(crate) fn builtin_process_datagram_address_impl(
             vec![Value::symbol("processp"), args[0]],
         ));
     };
-    if process_is_datagram_network(proc) {
+    if process_has_datagram_semantics(proc) {
         Ok(proc.datagram_address)
     } else {
         Ok(Value::NIL)
@@ -16883,25 +16989,49 @@ pub(crate) fn builtin_process_send_eof(
 }
 
 fn send_eof_to_process(proc: &mut Process) -> EvalResult {
+    // GNU returns a datagram process untouched before both the liveness gate
+    // and every EOF state mutation (src/process.c:7444-7445).
+    if process_has_datagram_semantics(proc) {
+        return Ok(Value::NIL);
+    }
     proc.eof_sent_to_process = true;
+
+    // GNU's serial branch only drains the device; it neither closes the
+    // writer nor replaces it with /dev/null (src/process.c:7470-7478).
+    if proc.kind == ProcessKind::Serial {
+        return Ok(Value::NIL);
+    }
+
+    // EPIPE already changed GNU's `outfd` to -1. `process-send-eof` still
+    // enters the non-PTY/non-serial branch and installs /dev/null, but it does
+    // not try to shut down the old descriptor because it is negative. Mirror
+    // that semantic state transition without touching the retained readable
+    // owner of a bidirectional Rust transport.
+    if proc.input_disposition == ProcessInputDisposition::Disconnected {
+        proc.input_disposition = ProcessInputDisposition::Discard;
+        return Ok(Value::NIL);
+    }
 
     if let Some(tls) = proc.live_io.tls_stream.as_mut() {
         tls.send_close_notify(false)
             .map(|_| ())
             .map_err(|err| signal_process_io("Sending EOF to process", None, err))?;
+        proc.input_disposition = ProcessInputDisposition::Discard;
         return Ok(Value::NIL);
     }
 
     if let Some(socket) = proc.live_io.network_socket.as_ref() {
         if let Some(result) = socket.shutdown_write() {
             result.map_err(|err| signal_process_io("Sending EOF to process", None, err))?;
+            proc.input_disposition = ProcessInputDisposition::Discard;
         }
         return Ok(Value::NIL);
     }
 
-    if proc.live_io.child.close_stdin() {
-        proc.child_stdin_eof_sink = true;
-    }
+    let _ = proc.live_io.child.close_stdin();
+    // GNU opens the null output device even when there was no old descriptor
+    // to close. `Discard` models that sink without allocating an OS fd.
+    proc.input_disposition = ProcessInputDisposition::Discard;
     Ok(Value::NIL)
 }
 
@@ -16956,7 +17086,7 @@ fn process_send_eof_liveness_gate(
 ) -> Result<(), Flow> {
     if processes
         .get(id)
-        .is_some_and(|proc| proc.datagram_socket_addr.is_some())
+        .is_some_and(process_has_datagram_semantics)
     {
         return Ok(());
     }

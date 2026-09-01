@@ -1474,3 +1474,115 @@ fn presented_mouse_position_over_the_inactive_echo_area_reports_the_mini_windows
         "the posn must name a position in the mini-window's own buffer"
     );
 }
+
+/// Geometry-only echo-area rows describe a transient echo buffer, not the
+/// live buffer owned by the minibuffer window.  A renderer text hit therefore
+/// cannot be used to look up semantic help in that live buffer, even when the
+/// numeric position happens to be valid there.
+#[test]
+fn geometry_only_echo_area_hit_cannot_publish_live_minibuffer_help_echo() {
+    use crate::window::{
+        PresentedWindowRegions, WindowDisplaySnapshot, WindowPresentationSnapshot,
+    };
+    use neomacs_display_protocol::{
+        DisplayWindowId, FrameRect, PresentationId, PresentedHitIndex, PresentedHitQuery,
+        PresentedHitRegion, PresentedRegionKind, PresentedTextPosition, Rect,
+    };
+
+    let mut eval = crate::emacs_core::Context::new();
+    let buffer = eval.buffer_manager_mut().create_buffer("echo-help-frame");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("echo-help-frame", 400, 120, buffer);
+    let minibuffer_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .minibuffer_window
+        .expect("frame minibuffer window");
+    let minibuffer_buffer = eval
+        .buffer_manager_mut()
+        .create_buffer(" *Minibuf-help-evidence*");
+    eval.buffer_manager_mut().set_current(minibuffer_buffer);
+    eval.buffer_manager_mut()
+        .get_mut(minibuffer_buffer)
+        .expect("minibuffer buffer")
+        .insert("abcdefghij");
+    crate::emacs_core::textprop::builtin_put_text_property(
+        &mut eval,
+        vec![
+            Value::fixnum(7),
+            Value::fixnum(8),
+            Value::symbol("help-echo"),
+            Value::string("unrelated live minibuffer help"),
+        ],
+    )
+    .expect("seed unrelated live-buffer help");
+
+    let presentation = PresentationId::new(4);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame
+            .find_window_mut(minibuffer_window)
+            .expect("minibuffer window")
+            .set_buffer(minibuffer_buffer);
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame
+            .prepare_display_presentation(
+                crate::window::geometry::PresentationId::new(4),
+                vec![WindowPresentationSnapshot::GeometryOnly(
+                    WindowDisplaySnapshot {
+                        window_id: minibuffer_window,
+                        regions: PresentedWindowRegions {
+                            outer: Rect::new(0.0, 104.0, 400.0, 16.0),
+                            text_body: Rect::new(0.0, 104.0, 400.0, 16.0),
+                            ..Default::default()
+                        },
+                        regions_materialized: true,
+                        ..Default::default()
+                    },
+                )],
+            )
+            .expect("prepare echo-area geometry");
+        frame
+            .activate_display_presentation(crate::window::geometry::PresentationId::new(4))
+            .expect("activate echo-area geometry");
+    }
+
+    let protocol_window = DisplayWindowId::new(minibuffer_window.0 as i64);
+    let hit = PresentedHitIndex::from_parts(
+        presentation,
+        vec![PresentedHitRegion::new(
+            Some(protocol_window),
+            PresentedRegionKind::TextBody,
+            FrameRect::new(0.0, 104.0, 400.0, 16.0).unwrap(),
+            0,
+        )],
+        vec![PresentedTextPosition::new(
+            protocol_window,
+            FrameRect::new(48.0, 104.0, 8.0, 16.0).unwrap(),
+            7,
+            0,
+            6,
+        )],
+    )
+    .unwrap()
+    .resolve(PresentedHitQuery::new(presentation, 52.0, 112.0))
+    .unwrap();
+    eval.command_loop
+        .keyboard
+        .kboard
+        .presented_mouse_observation = Some(PresentedMouseObservation {
+        presentation: 4,
+        hit,
+        x: 52.0,
+        y: 112.0,
+        frame_id: frame_id.0,
+    });
+
+    assert!(
+        eval.resolve_text_area_help_echo_event(frame_id, 52, 112)
+            .is_none(),
+        "geometry-only positions must never become live-buffer help evidence"
+    );
+}

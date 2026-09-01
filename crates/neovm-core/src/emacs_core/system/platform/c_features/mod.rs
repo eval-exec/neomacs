@@ -187,9 +187,9 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             gnu_guard: BuildOption("HAVE_KQUEUE"),
             here: if cfg!(target_os = "macos") {
                 Implemented {
-                    by: "neovm-core/src/emacs_core/lisp/native/builtins/file_notify/mod.rs -- \
-                         kqueue-add-watch/-rm-watch/-valid-p over the `notify' crate, which \
-                         is FSEvents on macOS; GNU's macOS default is \
+                    by: "crates/neovm-core/src/emacs_core/lisp/native/builtins/file_notify -- \
+                         kqueue-add-watch/-rm-watch/-valid-p over `rustix' typed kqueue \
+                         vnode flags plus GNU-style directory snapshot diffs; GNU's macOS default is \
                          --with-file-notification=kqueue, so this is the feature \
                          `filenotify.el' expects to find there",
                 }

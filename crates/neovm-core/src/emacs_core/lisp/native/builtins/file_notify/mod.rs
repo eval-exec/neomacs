@@ -3,7 +3,18 @@ use crate::emacs_core::error::expect_args;
 use std::cell::RefCell;
 use std::path::PathBuf;
 
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+mod kqueue;
+#[cfg(not(target_os = "macos"))]
 mod notify_rs;
+mod subrs;
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod kqueue_test;
+
+#[cfg(test)]
+pub(crate) use subrs::SUBRS;
+pub(crate) use subrs::register_subrs;
 
 thread_local! {
     static FILE_NOTIFY_STATE: RefCell<FileNotifyState> = RefCell::new(FileNotifyState::default());
@@ -36,17 +47,114 @@ impl FileNotifyWatchDescriptor {
 /// Which GNU file-notification surface a watch was created through.
 ///
 /// GNU builds exactly one of `src/inotify.c` and `src/kqueue.c`
-/// (`configure.ac' --with-file-notification), so no GNU image ever holds
-/// both kinds at once; this port's single `notify`-crate backend serves
-/// whichever surface the platform advertises, and the dialect decides the
-/// Lisp shape of everything the watch produces: inotify descriptors are
-/// conses and events carry a trailing cookie, kqueue descriptors are bare
-/// fixnums (the fd in GNU) and events are `(DESCRIPTOR ACTIONS FILE
+/// (`configure.ac' --with-file-notification), so no image holds both kinds at
+/// once. Neomacs makes that platform choice at compile time as well: Linux
+/// uses the mature `notify` inotify adapter, while macOS retains raw kqueue
+/// vnode evidence through `rustix`. The dialect still fixes the Lisp shape:
+/// inotify descriptors are conses and events carry a cookie; kqueue
+/// descriptors are bare fixnums and events are `(DESCRIPTOR ACTIONS FILE
 /// [FILE1])` with kqueue's own action vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WatchDialect {
     Inotify,
+    #[cfg(target_os = "macos")]
     Kqueue,
+}
+
+/// GNU kqueue's complete Lisp action vocabulary.
+///
+/// Seven actions correspond to native vnode flags; `create` is synthesized by
+/// GNU's directory-list comparison.  Parsing unknown symbols yields `None`
+/// because GNU assembles flags with exact `Fmember` probes and ignores the
+/// rest.
+#[cfg(any(target_os = "macos", test))]
+#[enumflags2::bitflags]
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum KqueueAction {
+    Create = 1 << 0,
+    Delete = 1 << 1,
+    Write = 1 << 2,
+    Extend = 1 << 3,
+    Attrib = 1 << 4,
+    Link = 1 << 5,
+    Rename = 1 << 6,
+    Revoke = 1 << 7,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl KqueueAction {
+    #[cfg(target_os = "macos")]
+    fn from_lisp_name(name: &str) -> Option<Self> {
+        match name {
+            "create" => Some(Self::Create),
+            "delete" => Some(Self::Delete),
+            "write" => Some(Self::Write),
+            "extend" => Some(Self::Extend),
+            "attrib" => Some(Self::Attrib),
+            "link" => Some(Self::Link),
+            "rename" => Some(Self::Rename),
+            "revoke" => Some(Self::Revoke),
+            _ => None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) const fn as_lisp_name(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Delete => "delete",
+            Self::Write => "write",
+            Self::Extend => "extend",
+            Self::Attrib => "attrib",
+            Self::Link => "link",
+            Self::Rename => "rename",
+            Self::Revoke => "revoke",
+        }
+    }
+}
+
+/// Native vnode evidence, kept distinct from the Lisp action set because
+/// `create' has no NOTE_CREATE bit: GNU synthesizes it by diffing a watched
+/// directory after NOTE_WRITE.
+#[cfg(any(target_os = "macos", test))]
+#[enumflags2::bitflags]
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum KqueueVnodeAction {
+    Delete = 1 << 0,
+    Write = 1 << 1,
+    Extend = 1 << 2,
+    Attrib = 1 << 3,
+    Link = 1 << 4,
+    Rename = 1 << 5,
+    Revoke = 1 << 6,
+}
+
+/// Validated request owned by a watch.
+///
+/// The enum prevents kqueue actions from being interpreted with inotify's
+/// aliases and prevents a watch from carrying a dialect that disagrees with
+/// its request payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum WatchRequest {
+    Inotify {
+        aspects: Vec<String>,
+    },
+    #[cfg(target_os = "macos")]
+    Kqueue {
+        actions: enumflags2::BitFlags<KqueueAction>,
+    },
+}
+
+impl WatchRequest {
+    pub(super) const fn dialect(&self) -> WatchDialect {
+        match self {
+            Self::Inotify { .. } => WatchDialect::Inotify,
+            #[cfg(target_os = "macos")]
+            Self::Kqueue { .. } => WatchDialect::Kqueue,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -55,21 +163,28 @@ pub(super) struct FileWatch {
     pub(super) generation: i64,
     pub(super) path: PathBuf,
     pub(super) is_directory: bool,
-    pub(super) aspects: Vec<String>,
     pub(super) callback: Value,
-    pub(super) dialect: WatchDialect,
+    pub(super) request: WatchRequest,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct FileNotifyEvent {
-    pub(super) descriptor: FileNotifyWatchDescriptor,
-    pub(super) aspects: Vec<&'static str>,
-    pub(super) path: PathBuf,
-    pub(super) cookie: usize,
-    pub(super) callback: Value,
-    pub(super) dialect: WatchDialect,
-    /// kqueue only: FILE1 of a `rename' event (src/kqueue.c:171-172).
-    pub(super) file1: Option<PathBuf>,
+pub(super) enum FileNotifyEvent {
+    Inotify {
+        descriptor: FileNotifyWatchDescriptor,
+        aspects: Vec<&'static str>,
+        path: PathBuf,
+        cookie: usize,
+        callback: Value,
+    },
+    #[cfg(target_os = "macos")]
+    Kqueue {
+        descriptor: FileNotifyWatchDescriptor,
+        actions: Vec<KqueueAction>,
+        path: PathBuf,
+        callback: Value,
+        /// FILE1 of a `rename' event (src/kqueue.c:171-172).
+        file1: Option<PathBuf>,
+    },
 }
 
 pub(super) trait FileNotifyBackend {
@@ -80,10 +195,9 @@ pub(super) trait FileNotifyBackend {
     fn add_watch(
         &mut self,
         path: &std::path::Path,
-        aspects: Vec<String>,
+        request: WatchRequest,
         callback: Value,
         notifier: Option<crate::emacs_core::process::WaitNotifier>,
-        dialect: WatchDialect,
     ) -> Result<FileNotifyWatchDescriptor, Flow>;
     fn remove_watch(
         &mut self,
@@ -101,9 +215,11 @@ struct FileNotifyState {
 
 impl Default for FileNotifyState {
     fn default() -> Self {
-        Self {
-            backend: Box::<notify_rs::NotifyRsInotifyBackend>::default(),
-        }
+        #[cfg(target_os = "macos")]
+        let backend: Box<dyn FileNotifyBackend> = Box::<kqueue::KqueueBackend>::default();
+        #[cfg(not(target_os = "macos"))]
+        let backend: Box<dyn FileNotifyBackend> = Box::<notify_rs::NotifyRsBackend>::default();
+        Self { backend }
     }
 }
 
@@ -254,40 +370,61 @@ pub(crate) fn drain_file_notify_events(
     let count = events.len();
 
     for event in events {
-        let raw_event = match event.dialect {
+        let (raw_event, callback) = match event {
             // GNU inotify events are `(DESCRIPTOR ASPECTS NAME COOKIE)`.
-            WatchDialect::Inotify => Value::list(vec![
-                event.descriptor.to_lisp(),
-                Value::list(event.aspects.into_iter().map(Value::symbol).collect()),
-                Value::string(event.path.display().to_string()),
-                Value::fixnum(i64::try_from(event.cookie).unwrap_or(i64::MAX)),
-            ]),
+            FileNotifyEvent::Inotify {
+                descriptor,
+                aspects,
+                path,
+                cookie,
+                callback,
+            } => (
+                Value::list(vec![
+                    descriptor.to_lisp(),
+                    Value::list(aspects.into_iter().map(Value::symbol).collect()),
+                    Value::string(path.display().to_string()),
+                    Value::fixnum(i64::try_from(cookie).unwrap_or(i64::MAX)),
+                ]),
+                callback,
+            ),
             // GNU kqueue events are `(DESCRIPTOR ACTIONS FILE [FILE1])` with
             // a bare-fixnum descriptor and no cookie (`kqueue_generate_event`,
             // src/kqueue.c:94-104).
-            WatchDialect::Kqueue => {
+            #[cfg(target_os = "macos")]
+            FileNotifyEvent::Kqueue {
+                descriptor,
+                actions,
+                path,
+                callback,
+                file1,
+            } => {
                 let mut fields = vec![
-                    Value::fixnum(event.descriptor.id()),
-                    Value::list(event.aspects.into_iter().map(Value::symbol).collect()),
-                    Value::string(event.path.display().to_string()),
+                    Value::fixnum(descriptor.id()),
+                    Value::list(
+                        actions
+                            .into_iter()
+                            .map(|action| Value::symbol(action.as_lisp_name()))
+                            .collect(),
+                    ),
+                    Value::string(path.display().to_string()),
                 ];
-                if let Some(file1) = event.file1 {
+                if let Some(file1) = file1 {
                     fields.push(Value::string(file1.display().to_string()));
                 }
-                Value::list(fields)
+                (Value::list(fields), callback)
             }
         };
         ctx.queue_special_event(Value::list(vec![
             Value::symbol("file-notify"),
             raw_event,
-            event.callback,
+            callback,
         ]));
     }
 
     Ok(count)
 }
 
-pub(crate) fn builtin_inotify_valid_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn inotify_valid_p(args: Vec<Value>) -> EvalResult {
     expect_args("inotify-valid-p", &args, 1)?;
     let Some(descriptor) = extract_valid_watch_descriptor(args[0]) else {
         return Ok(Value::NIL);
@@ -300,7 +437,7 @@ pub(crate) fn builtin_inotify_valid_p(args: Vec<Value>) -> EvalResult {
     })
 }
 
-pub(crate) fn builtin_inotify_add_watch(
+pub(crate) fn inotify_add_watch(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -314,15 +451,17 @@ pub(crate) fn builtin_inotify_add_watch(
 
     FILE_NOTIFY_STATE.with(|slot| {
         let mut state = slot.borrow_mut();
-        let descriptor =
-            state
-                .backend
-                .add_watch(&path, aspects, callback, notifier, WatchDialect::Inotify)?;
+        let descriptor = state.backend.add_watch(
+            &path,
+            WatchRequest::Inotify { aspects },
+            callback,
+            notifier,
+        )?;
         Ok(descriptor.to_lisp())
     })
 }
 
-pub(crate) fn builtin_inotify_rm_watch(args: Vec<Value>) -> EvalResult {
+pub(crate) fn inotify_rm_watch(args: Vec<Value>) -> EvalResult {
     expect_args("inotify-rm-watch", &args, 1)?;
 
     let detail = if args[0].is_cons() {
@@ -347,7 +486,9 @@ pub(crate) fn builtin_inotify_rm_watch(args: Vec<Value>) -> EvalResult {
 ///
 /// GNU kqueue descriptors are bare fixnums -- the open fd
 /// (`Fkqueue_add_watch`, src/kqueue.c:460) -- unlike inotify's conses.  This
-/// port has no fd, so the fixnum is the watch id, paired with generation 0.
+/// macOS backend returns that owned vnode fd directly, paired internally with
+/// generation 0 because GNU's Lisp descriptor has no generation component.
+#[cfg(target_os = "macos")]
 fn extract_kqueue_watch_descriptor(value: Value) -> Option<FileNotifyWatchDescriptor> {
     let id = value.as_fixnum()?;
     (id >= 0).then(|| FileNotifyWatchDescriptor::new(id, 0))
@@ -362,37 +503,49 @@ fn extract_kqueue_watch_descriptor(value: Value) -> Option<FileNotifyWatchDescri
 /// ENOENT -> `file-missing`); FLAGS must satisfy `CHECK_LIST`; CALLBACK must
 /// satisfy `FUNCTIONP` or it is `(wrong-type-argument invalid-function ...)`.
 /// A flag symbol kqueue does not know is silently ignored -- the flag
-/// assembly is eight `Fmember` probes (:440-446), not a validation pass.
-pub(crate) fn builtin_kqueue_add_watch(
+/// assembly is seven native-vnode `Fmember` probes (:440-446), not a
+/// validation pass (`create` is generated by directory comparison).
+#[cfg(target_os = "macos")]
+pub(crate) fn kqueue_add_watch(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("kqueue-add-watch", &args, 3)?;
-    let path =
-        crate::emacs_core::fileio::lisp_file_name_to_path_buf(ctx.expect_lisp_string(args[0])?);
-    if !path.exists() {
+    ctx.expect_lisp_string(args[0])?;
+    let expanded =
+        crate::emacs_core::fileio::builtin_expand_file_name(ctx, vec![args[0], Value::NIL])?;
+    let normalized = crate::emacs_core::fileio::builtin_directory_file_name(ctx, vec![expanded])?;
+    if crate::emacs_core::fileio::builtin_file_exists_p(ctx, vec![normalized])?.is_nil() {
         return Err(crate::emacs_core::error::signal(
             "file-missing",
             vec![
                 Value::string("File does not exist"),
                 Value::string("No such file or directory"),
-                args[0],
+                normalized,
             ],
         ));
     }
-    if !(args[1].is_nil() || args[1].is_cons()) {
-        return Err(crate::emacs_core::error::signal(
+    let path =
+        crate::emacs_core::fileio::lisp_file_name_to_path_buf(ctx.expect_lisp_string(normalized)?);
+    let flags = list_to_vec(&args[1]).ok_or_else(|| {
+        crate::emacs_core::error::signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("listp"), args[1]],
-        ));
-    }
+        )
+    })?;
     if !crate::emacs_core::builtins::value_is_function(ctx, args[2]) {
         return Err(crate::emacs_core::error::signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("invalid-function"), args[2]],
         ));
     }
-    let flags = inotify_aspect_names(args[1]);
+    let actions = flags
+        .iter()
+        .filter_map(|flag| flag.as_symbol_name())
+        .filter_map(KqueueAction::from_lisp_name)
+        .fold(enumflags2::BitFlags::empty(), |actions, action| {
+            actions | action
+        });
     let callback = args[2];
     let notifier = ctx.wait_notifier();
 
@@ -401,7 +554,7 @@ pub(crate) fn builtin_kqueue_add_watch(
         let descriptor =
             state
                 .backend
-                .add_watch(&path, flags, callback, notifier, WatchDialect::Kqueue)?;
+                .add_watch(&path, WatchRequest::Kqueue { actions }, callback, notifier)?;
         Ok(Value::fixnum(descriptor.id()))
     })
 }
@@ -409,7 +562,8 @@ pub(crate) fn builtin_kqueue_add_watch(
 /// GNU `Fkqueue_rm_watch` (src/kqueue.c:475): unregister the watch and answer
 /// t; a descriptor not in the watch list is `(file-notify-error "Not a watch
 /// descriptor" WATCH-DESCRIPTOR)`.
-pub(crate) fn builtin_kqueue_rm_watch(args: Vec<Value>) -> EvalResult {
+#[cfg(target_os = "macos")]
+pub(crate) fn kqueue_rm_watch(args: Vec<Value>) -> EvalResult {
     expect_args("kqueue-rm-watch", &args, 1)?;
     let not_a_watch_descriptor =
         || file_notify_error("Not a watch descriptor", None, Some(args[0]));
@@ -431,7 +585,8 @@ pub(crate) fn builtin_kqueue_rm_watch(args: Vec<Value>) -> EvalResult {
 
 /// GNU `Fkqueue_valid_p` (src/kqueue.c:505): t while the descriptor is in the
 /// watch list, nil otherwise; never signals.
-pub(crate) fn builtin_kqueue_valid_p(args: Vec<Value>) -> EvalResult {
+#[cfg(target_os = "macos")]
+pub(crate) fn kqueue_valid_p(args: Vec<Value>) -> EvalResult {
     expect_args("kqueue-valid-p", &args, 1)?;
     let Some(descriptor) = extract_kqueue_watch_descriptor(args[0]) else {
         return Ok(Value::NIL);

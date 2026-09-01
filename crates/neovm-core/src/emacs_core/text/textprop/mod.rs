@@ -1913,6 +1913,258 @@ pub(crate) fn buffer_overlay_property_for_inserted_char_at_byte_pos(
     Some((value, overlay_id))
 }
 
+/// The direction from which GNU's `text_property_stickiness` inherits a
+/// property. Naming all three integer return values makes every caller handle
+/// the full decision at compile time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PropertyStickiness {
+    FromFollowing,
+    FromPreceding,
+    Neither,
+}
+
+/// The buffer bounds used by one internal property lookup.
+///
+/// Lisp-visible property primitives validate against `BEGV..ZV`. GNU's
+/// `get_local_map` is deliberately different: it clips while narrowed, then
+/// temporarily widens, so both validation and stickiness use full `BEG..Z`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BufferPropertyLookupDomain {
+    Accessible,
+    FullBuffer,
+}
+
+impl BufferPropertyLookupDomain {
+    fn beginning(self, buf: &Buffer) -> LispCharPos1 {
+        match self {
+            Self::Accessible => buf.point_min_lisp_char_pos(),
+            Self::FullBuffer => buf.full_lisp_char_region().beg(),
+        }
+    }
+
+    fn contains(self, buf: &Buffer, pos: LispCharPos1) -> bool {
+        match self {
+            Self::Accessible => {
+                buf.point_min_lisp_char_pos() <= pos && pos <= buf.point_max_lisp_char_pos()
+            }
+            Self::FullBuffer => buf.full_lisp_char_region().contains(pos),
+        }
+    }
+}
+
+pub(crate) fn buffer_pos_property_at_accessible_lisp_pos(
+    obarray: &Obarray,
+    buffers: &BufferManager,
+    buf: &Buffer,
+    pos: i64,
+    prop: Value,
+) -> Result<Value, Flow> {
+    buffer_pos_property_in_domain(
+        obarray,
+        buffers,
+        buf,
+        pos,
+        prop,
+        BufferPropertyLookupDomain::Accessible,
+    )
+}
+
+/// GNU `get_local_map` temporarily widens before calling
+/// `Fget_pos_property`. This entry point exposes only that internal policy;
+/// ordinary Lisp property primitives retain accessible-range validation.
+pub(crate) fn buffer_pos_property_at_full_lisp_pos(
+    obarray: &Obarray,
+    buffers: &BufferManager,
+    buf: &Buffer,
+    pos: LispCharPos1,
+    prop: Value,
+) -> Result<Value, Flow> {
+    debug_assert!(buf.full_lisp_char_region().contains(pos));
+    buffer_pos_property_in_domain(
+        obarray,
+        buffers,
+        buf,
+        pos.as_i64(),
+        prop,
+        BufferPropertyLookupDomain::FullBuffer,
+    )
+}
+
+fn buffer_pos_property_in_domain(
+    obarray: &Obarray,
+    buffers: &BufferManager,
+    buf: &Buffer,
+    pos: i64,
+    prop: Value,
+    domain: BufferPropertyLookupDomain,
+) -> Result<Value, Flow> {
+    let byte_pos = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(pos)).get();
+    if let Some((value, _overlay_id)) =
+        buffer_overlay_property_for_inserted_char_at_byte_pos(buf, byte_pos, prop)
+    {
+        return Ok(value);
+    }
+
+    // GNU src/editfns.c:339-349. The lower-bound guard must use the selected
+    // domain: after `get_local_map` widens, a value immediately before the old
+    // BEGV can be inherited at the clipped position.
+    match text_property_stickiness_in_domain(obarray, buffers, buf, pos, prop, domain)? {
+        PropertyStickiness::FromFollowing => Ok(text_property_value_at_char_pos(
+            obarray,
+            buffers,
+            buf,
+            LispCharPos1::new(pos),
+            prop,
+        )),
+        PropertyStickiness::FromPreceding if pos > domain.beginning(buf).as_i64() => {
+            Ok(text_property_value_at_char_pos(
+                obarray,
+                buffers,
+                buf,
+                LispCharPos1::new(pos - 1),
+                prop,
+            ))
+        }
+        PropertyStickiness::FromPreceding | PropertyStickiness::Neither => Ok(Value::NIL),
+    }
+}
+
+/// GNU's `text_property_stickiness` (src/textprop.c:1901) validates each
+/// delegated property read. The lookup domain makes the exceptional widened
+/// caller explicit instead of weakening the Lisp-visible primitive.
+fn text_property_stickiness_in_domain(
+    obarray: &Obarray,
+    buffers: &BufferManager,
+    buf: &Buffer,
+    pos: i64,
+    prop: Value,
+    domain: BufferPropertyLookupDomain,
+) -> Result<PropertyStickiness, Flow> {
+    let ignore_previous_character = pos <= domain.beginning(buf).as_i64();
+    let default_nonsticky =
+        TextPropertyControlVariable::TextPropertyDefaultNonsticky.value_for_buffer(obarray, buf);
+    let mut rear_sticky = !(ignore_previous_character
+        || default_nonsticky
+            .and_then(|value| assq_cdr_eq(&value, prop))
+            .is_some_and(|value| value.is_truthy()));
+
+    if rear_sticky && !ignore_previous_character {
+        let previous_props = get_text_property_at_validated_char_pos(
+            obarray,
+            buffers,
+            buf,
+            pos - 1,
+            StickinessProperty::RearNonsticky.value(),
+            domain,
+        )?;
+        if rear_nonsticky_matches(previous_props, prop) {
+            rear_sticky = false;
+        }
+    }
+
+    let front_sticky = front_sticky_matches(
+        get_text_property_at_validated_char_pos(
+            obarray,
+            buffers,
+            buf,
+            pos,
+            StickinessProperty::FrontSticky.value(),
+            domain,
+        )?,
+        prop,
+    );
+
+    match (rear_sticky, front_sticky) {
+        (true, false) => Ok(PropertyStickiness::FromPreceding),
+        (false, true) => Ok(PropertyStickiness::FromFollowing),
+        (false, false) => Ok(PropertyStickiness::Neither),
+        (true, true) => {
+            if ignore_previous_character
+                || get_text_property_at_validated_char_pos(
+                    obarray,
+                    buffers,
+                    buf,
+                    pos - 1,
+                    prop,
+                    domain,
+                )?
+                .is_nil()
+            {
+                Ok(PropertyStickiness::FromFollowing)
+            } else {
+                Ok(PropertyStickiness::FromPreceding)
+            }
+        }
+    }
+}
+
+fn get_text_property_at_validated_char_pos(
+    obarray: &Obarray,
+    buffers: &BufferManager,
+    buf: &Buffer,
+    pos: i64,
+    prop: Value,
+    domain: BufferPropertyLookupDomain,
+) -> Result<Value, Flow> {
+    let pos = LispCharPos1::new(pos);
+    if !domain.contains(buf, pos) {
+        return Err(signal(
+            LispCondition::ArgsOutOfRange,
+            vec![Value::fixnum(pos.as_i64()), Value::fixnum(pos.as_i64())],
+        ));
+    }
+    Ok(text_property_value_at_char_pos(
+        obarray, buffers, buf, pos, prop,
+    ))
+}
+
+fn text_property_value_at_char_pos(
+    obarray: &Obarray,
+    buffers: &BufferManager,
+    buf: &Buffer,
+    pos: LispCharPos1,
+    prop: Value,
+) -> Value {
+    lookup_buffer_text_property_at_char_pos(obarray, buffers, buf, pos.to_char_pos(), prop)
+}
+
+fn front_sticky_matches(value: Value, prop: Value) -> bool {
+    value.is_t() || eq_member(&value, prop)
+}
+
+fn rear_nonsticky_matches(value: Value, prop: Value) -> bool {
+    if value.is_nil() {
+        return false;
+    }
+    if value.is_cons() {
+        return eq_member(&value, prop);
+    }
+    true
+}
+
+fn assq_cdr_eq(list: &Value, prop: Value) -> Option<Value> {
+    let mut cursor = *list;
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        if entry.is_cons() && entry.cons_car().bits() == prop.bits() {
+            return Some(entry.cons_cdr());
+        }
+        cursor = cursor.cons_cdr();
+    }
+    None
+}
+
+fn eq_member(list: &Value, prop: Value) -> bool {
+    let mut cursor = *list;
+    while cursor.is_cons() {
+        if cursor.cons_car().bits() == prop.bits() {
+            return true;
+        }
+        cursor = cursor.cons_cdr();
+    }
+    false
+}
+
 /// (get-char-property POS PROP &optional OBJECT)
 /// For strings, same as get-text-property (no overlays).
 pub(crate) fn builtin_get_char_property(
@@ -1928,6 +2180,36 @@ pub(crate) fn builtin_get_char_property_in_state(
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_get_char_property_with_frames(obarray, buffers, None, args)
+}
+
+/// Read a character property at a position already proven to be in the
+/// buffer's full `BEG..Z` range, deliberately ignoring narrowing.
+///
+/// GNU's `get_local_map` temporarily widens the target buffer around its
+/// `Fget_char_property` call (`src/intervals.c`).  Keeping that policy behind
+/// a named internal entry point prevents ordinary Lisp property primitives
+/// from accidentally losing their `BEGV..ZV` validation.
+pub(crate) fn buffer_char_property_at_full_lisp_pos(
+    obarray: &Obarray,
+    buffers: &BufferManager,
+    buf: &crate::buffer::buffer::Buffer,
+    pos: LispCharPos1,
+    prop: Value,
+) -> Value {
+    debug_assert!(buf.full_lisp_char_region().contains(pos));
+    let char_pos = pos.to_char_pos();
+    if char_pos >= buf.total_char_end_pos() {
+        return Value::NIL;
+    }
+    if !buf.overlays.is_empty() {
+        let byte_pos = buf.lisp_pos_to_emacs_byte_pos(pos);
+        if let Some((value, _overlay_id)) =
+            buffer_overlay_property_at_byte_pos(obarray, buffers, buf, byte_pos.get(), prop, None)
+        {
+            return value;
+        }
+    }
+    lookup_buffer_text_property_at_char_pos(obarray, buffers, buf, char_pos, prop)
 }
 
 pub(crate) fn builtin_get_char_property_with_frames(
@@ -2675,7 +2957,7 @@ where
     let mut outcome: Option<SinglePropertyWalk> = None;
     // Compare the interval starting at `start` against `here_val`; `Some`
     // ends the walk.
-    let mut step = |start: CharPos0, plist: Value, here_val: Value| -> Option<SinglePropertyWalk> {
+    let step = |start: CharPos0, plist: Value, here_val: Value| -> Option<SinglePropertyWalk> {
         let lisp_pos = to_elisp(start);
         if limit.is_some_and(|lim| lisp_pos >= lim) || start >= object_end {
             return Some(SinglePropertyWalk::Exhausted);

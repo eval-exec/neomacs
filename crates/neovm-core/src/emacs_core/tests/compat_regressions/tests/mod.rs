@@ -812,34 +812,36 @@ fn dynamic_library_alist_is_gnu_bound_nil_variable() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn inotify_valid_p_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let out = crate::emacs_core::builtins::builtin_inotify_valid_p(vec![Value::fixnum(0)]).unwrap();
+    let out = crate::emacs_core::builtins::inotify_valid_p(vec![Value::fixnum(0)]).unwrap();
     assert_eq!(out, Value::NIL);
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn inotify_watch_lifecycle() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    let watch = crate::emacs_core::builtins::builtin_inotify_add_watch(
+    let watch = crate::emacs_core::builtins::inotify_add_watch(
         &mut eval,
         vec![Value::string("."), Value::NIL, Value::symbol("ignore")],
     )
     .unwrap();
-    let active = crate::emacs_core::builtins::builtin_inotify_valid_p(vec![watch]).unwrap();
+    let active = crate::emacs_core::builtins::inotify_valid_p(vec![watch]).unwrap();
     assert_eq!(active, Value::T);
-    let removed = crate::emacs_core::builtins::builtin_inotify_rm_watch(vec![watch]).unwrap();
+    let removed = crate::emacs_core::builtins::inotify_rm_watch(vec![watch]).unwrap();
     assert_eq!(removed, Value::T);
-    let inactive = crate::emacs_core::builtins::builtin_inotify_valid_p(vec![watch]).unwrap();
+    let inactive = crate::emacs_core::builtins::inotify_valid_p(vec![watch]).unwrap();
     assert_eq!(inactive, Value::NIL);
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn inotify_rm_watch_invalid_descriptor_signals() {
     crate::test_utils::init_test_tracing();
-    let err =
-        crate::emacs_core::builtins::builtin_inotify_rm_watch(vec![Value::fixnum(1)]).unwrap_err();
+    let err = crate::emacs_core::builtins::inotify_rm_watch(vec![Value::fixnum(1)]).unwrap_err();
     match err {
         Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-notify-error"),
         other => panic!("expected signal, got {other:?}"),
@@ -981,10 +983,11 @@ fn unlock_file_requires_string_argument() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn inotify_add_watch_requires_string_path_argument() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    let err = crate::emacs_core::builtins::builtin_inotify_add_watch(
+    let err = crate::emacs_core::builtins::inotify_add_watch(
         &mut eval,
         vec![Value::NIL, Value::NIL, Value::NIL],
     )

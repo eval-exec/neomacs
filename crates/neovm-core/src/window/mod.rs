@@ -2986,8 +2986,7 @@ pub struct GuiFrameGeometryHints {
 #[derive(Clone, Debug, PartialEq)]
 struct PreparedDisplayPresentation {
     geometry: geometry::PresentationGeometry,
-    snapshots: Vec<WindowDisplaySnapshot>,
-    live_output_windows: HashSet<WindowId>,
+    publications: Vec<WindowPresentationSnapshot>,
 }
 
 #[derive(Default)]
@@ -3012,6 +3011,10 @@ pub enum WindowPresentationSnapshot {
 }
 
 impl WindowPresentationSnapshot {
+    pub fn window_id(&self) -> WindowId {
+        self.display_snapshot().window_id
+    }
+
     pub fn display_snapshot(&self) -> &WindowDisplaySnapshot {
         match self {
             Self::LiveWindow(snapshot) | Self::GeometryOnly(snapshot) => snapshot,
@@ -3032,10 +3035,12 @@ impl WindowPresentationSnapshot {
         }
     }
 
-    fn into_parts(self) -> (WindowDisplaySnapshot, bool) {
+    /// Snapshot evidence that is valid for the window's live buffer.
+    /// Geometry-only publications deliberately cannot produce this value.
+    pub fn live_window_snapshot(&self) -> Option<&WindowDisplaySnapshot> {
         match self {
-            Self::LiveWindow(snapshot) => (snapshot, true),
-            Self::GeometryOnly(snapshot) => (snapshot, false),
+            Self::LiveWindow(snapshot) => Some(snapshot),
+            Self::GeometryOnly(_) => None,
         }
     }
 }
@@ -4110,11 +4115,12 @@ impl Frame {
             .presentation_state
             .last_identity
             .unwrap_or_else(|| geometry::PresentationId::new(1));
-        let live_output_windows = snapshots
+        let publications: Vec<_> = snapshots
             .iter()
-            .map(|snapshot| snapshot.window_id)
+            .cloned()
+            .map(WindowPresentationSnapshot::LiveWindow)
             .collect();
-        self.commit_completed_window_output(generation, &snapshots, &live_output_windows);
+        self.commit_completed_window_output(generation, &publications);
         self.replace_redisplay_cache_for_test(snapshots);
     }
 
@@ -4154,18 +4160,14 @@ impl Frame {
         presentation: geometry::PresentationId,
         publications: Vec<WindowPresentationSnapshot>,
     ) -> Result<(), geometry::PresentationPrepareError> {
-        let mut snapshots = Vec::with_capacity(publications.len());
-        let mut live_output_windows = HashSet::default();
-        for publication in publications {
-            let (snapshot, publishes_live_output) = publication.into_parts();
-            if self.find_window(snapshot.window_id).is_none() {
-                continue;
-            }
-            if publishes_live_output {
-                live_output_windows.insert(snapshot.window_id);
-            }
-            snapshots.push(snapshot);
-        }
+        let publications: Vec<_> = publications
+            .into_iter()
+            .filter(|publication| self.find_window(publication.window_id()).is_some())
+            .collect();
+        let snapshots: Vec<WindowDisplaySnapshot> = publications
+            .iter()
+            .map(|publication| publication.display_snapshot().clone())
+            .collect();
         let candidate = geometry::PresentationGeometry::new_with_frame_placement(
             self.id,
             presentation,
@@ -4180,8 +4182,7 @@ impl Frame {
         .map_err(geometry::PresentationPrepareError::InvalidGeometry)?;
         let prepared = PreparedDisplayPresentation {
             geometry: candidate,
-            snapshots,
-            live_output_windows,
+            publications,
         };
         if self
             .presentation_state
@@ -4197,24 +4198,20 @@ impl Frame {
                 presentation,
             ));
         }
-        self.commit_completed_window_output(
-            presentation,
-            &prepared.snapshots,
-            &prepared.live_output_windows,
-        );
+        self.commit_completed_window_output(presentation, &prepared.publications);
         let geometry_only_windows: HashSet<_> = prepared
-            .snapshots
+            .publications
             .iter()
-            .filter(|snapshot| !prepared.live_output_windows.contains(&snapshot.window_id))
-            .map(|snapshot| snapshot.window_id)
+            .filter(|publication| publication.live_window_snapshot().is_none())
+            .map(WindowPresentationSnapshot::window_id)
             .collect();
         self.redisplay_cache
             .retain(|window_id, _| geometry_only_windows.contains(window_id));
         self.redisplay_cache.extend(
             prepared
-                .snapshots
+                .publications
                 .iter()
-                .filter(|snapshot| prepared.live_output_windows.contains(&snapshot.window_id))
+                .filter_map(WindowPresentationSnapshot::live_window_snapshot)
                 .cloned()
                 .map(|snapshot| (snapshot.window_id, snapshot)),
         );
@@ -4300,31 +4297,23 @@ impl Frame {
         }
     }
 
-    /// Whether the active presentation published WINDOW's rows as live window
-    /// output rather than as geometry only.
+    /// Typed publication for WINDOW in the renderer-active presentation.
     ///
-    /// [`WindowPresentationSnapshot`] states the rule those two publication
-    /// domains encode: inactive echo-area rows "must remain available to
-    /// rendering and hit testing, but must never become evidence about the
-    /// live minibuffer". Hit testing resolves rectangles, which is geometry;
-    /// resolving a hit to a BUFFER POSITION is evidence, and GNU's
-    /// `buffer_posn_from_coords` can only ever produce one for `w->contents`
-    /// (`Fset_buffer (w->contents)`, src/dispnew.c). A consumer that wants a
-    /// position out of a presented hit therefore has to ask this first.
-    pub fn active_presentation_publishes_live_window_output(&self, window: WindowId) -> bool {
-        self.presentation_state
-            .active
-            .as_ref()
-            .is_some_and(|active| active.live_output_windows.contains(&window))
-    }
-
-    pub fn active_presentation_snapshot(&self, window: WindowId) -> Option<&WindowDisplaySnapshot> {
+    /// Rectangles are available through either variant, but callers that want
+    /// semantic evidence about the live buffer must explicitly match
+    /// [`WindowPresentationSnapshot::LiveWindow`]. Keeping the domain attached
+    /// to the snapshot prevents a hit and an unrelated boolean from drifting
+    /// apart as they pass through interaction code.
+    pub fn active_window_presentation(
+        &self,
+        window: WindowId,
+    ) -> Option<&WindowPresentationSnapshot> {
         self.presentation_state
             .active
             .as_ref()?
-            .snapshots
+            .publications
             .iter()
-            .find(|snapshot| snapshot.window_id == window)
+            .find(|publication| publication.window_id() == window)
     }
 
     /// Resolve an exact visual anchor only from renderer-active geometry.
@@ -4369,13 +4358,12 @@ impl Frame {
     fn commit_completed_window_output(
         &mut self,
         generation: geometry::PresentationId,
-        snapshots: &[WindowDisplaySnapshot],
-        live_output_windows: &HashSet<WindowId>,
+        publications: &[WindowPresentationSnapshot],
     ) {
         self.begin_display_output_pass();
-        for snapshot in snapshots
+        for snapshot in publications
             .iter()
-            .filter(|snapshot| live_output_windows.contains(&snapshot.window_id))
+            .filter_map(WindowPresentationSnapshot::live_window_snapshot)
         {
             self.replay_window_output_snapshot(snapshot);
             let Some(window_end) = snapshot.window_end_record else {
@@ -7427,12 +7415,14 @@ impl GcTrace for FrameManager {
                 roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
             }
             for prepared in frame.presentation_state.prepared.values() {
-                for snapshot in &prepared.snapshots {
+                for publication in &prepared.publications {
+                    let snapshot = publication.display_snapshot();
                     roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
                 }
             }
             if let Some(active) = &frame.presentation_state.active {
-                for snapshot in &active.snapshots {
+                for publication in &active.publications {
+                    let snapshot = publication.display_snapshot();
                     roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
                 }
             }

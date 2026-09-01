@@ -532,8 +532,9 @@ fn geometry_only_snapshot_is_interactive_but_not_live_redisplay_evidence() {
 
     assert_eq!(
         frame
-            .active_presentation_snapshot(window_id)
+            .active_window_presentation(window_id)
             .expect("interaction geometry keeps the temporary window")
+            .display_snapshot()
             .text_area_left_offset,
         24
     );

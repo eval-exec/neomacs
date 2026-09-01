@@ -47,6 +47,16 @@ pub struct CharRange {
 #[repr(transparent)]
 pub struct LispCharPos1(i64);
 
+/// Inclusive Lisp character-position range `[BEG, Z]` for a full buffer.
+///
+/// Unlike [`AccessibleCharRange`], this range deliberately ignores narrowing.
+/// It includes `Z`, because Lisp positions may name the insertion boundary
+/// immediately after the final character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FullBufferLispCharRange {
+    z: LispCharPos1,
+}
+
 /// 1-based Lisp byte position (first byte = 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -730,6 +740,24 @@ impl LispCharPos1 {
     /// The raw i64 value.
     pub fn as_i64(self) -> i64 {
         self.0
+    }
+}
+
+impl FullBufferLispCharRange {
+    pub const fn new(z: LispCharPos1) -> Self {
+        Self { z }
+    }
+
+    pub const fn beg(self) -> LispCharPos1 {
+        LispCharPos1::ONE
+    }
+
+    pub const fn z(self) -> LispCharPos1 {
+        self.z
+    }
+
+    pub fn contains(self, pos: LispCharPos1) -> bool {
+        self.beg() <= pos && pos <= self.z()
     }
 }
 

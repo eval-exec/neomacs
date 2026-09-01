@@ -14,8 +14,7 @@ enumflags2.workspace = true
 crossbeam-channel.workspace = true
 libc.workspace = true
 errno.workspace = true
-rustix = { workspace = true, features = ["pipe"] }
-notify.workspace = true
+rustix = { workspace = true, features = ["event", "pipe"] }
 fs4.workspace = true
 sysinfo.workspace = true
 native-regex.workspace = true
@@ -88,6 +87,9 @@ cranelift-native = { workspace = true, optional = true }
 [target.'cfg(windows)'.dependencies]
 whoami = "2.1.2"
 windows-sys.workspace = true
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify.workspace = true
 
 [features]
 default = ["jit", "sqlite"]

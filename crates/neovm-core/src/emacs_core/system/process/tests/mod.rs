@@ -618,6 +618,124 @@ fn async_shell_command_wrappers_use_dynamic_shell_variables_like_gnu() {
 
 // -- ProcessManager unit tests ------------------------------------------
 
+struct BrokenPipeWriter;
+
+impl std::io::Write for BrokenPipeWriter {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::ErrorKind::BrokenPipe.into())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn epipe_closes_the_exact_selected_pty_writer() {
+    crate::test_utils::init_test_tracing();
+    let mut pm = ProcessManager::new();
+    let id = pm.create_process(
+        "pty-epipe".into(),
+        Value::NIL,
+        "prog".into(),
+        vec![],
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    pm.processes
+        .get_mut(&id)
+        .expect("process")
+        .live_io
+        .pty_writer = Some(Box::new(BrokenPipeWriter));
+
+    assert!(pm.write_process_input_once(id, b"x").is_err());
+
+    let process = pm.processes.get(&id).expect("process remains live");
+    assert!(
+        process.live_io.pty_writer.is_none(),
+        "EPIPE must close the selected PTY endpoint, not an unrelated child stdin"
+    );
+    assert_eq!(
+        process.input_disposition,
+        ProcessInputDisposition::Disconnected,
+        "EPIPE must make later sends observe GNU's closed outfd"
+    );
+    assert_eq!(
+        process.status,
+        Value::symbol("run"),
+        "closing the failed writer must leave status settlement to the child reaper"
+    );
+    assert_eq!(
+        pm.write_process_input_once(id, b"again")
+            .expect("a disconnected writer is a stable state"),
+        ProcessWriteAttempt::NoSource,
+        "later writes must not probe a failed transport again"
+    );
+}
+
+#[test]
+fn send_eof_after_epipe_installs_discard_sink_and_clears_queued_input() {
+    crate::test_utils::init_test_tracing();
+    let mut pm = ProcessManager::new();
+    let id = pm.create_process(
+        "pipe-epipe-eof".into(),
+        Value::NIL,
+        "prog".into(),
+        vec![],
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    let proc = pm.processes.get_mut(&id).expect("process");
+    proc.input_disposition = ProcessInputDisposition::Disconnected;
+    proc.write_queue = write_queue_push(
+        Value::NIL,
+        Value::heap_string(LispString::from_utf8("stale")),
+        false,
+    );
+
+    send_eof_to_process(pm.processes.get_mut(&id).expect("process"))
+        .expect("GNU installs /dev/null even when the old outfd is already -1");
+
+    assert_eq!(
+        pm.get(id).map(|proc| proc.input_disposition),
+        Some(ProcessInputDisposition::Discard),
+        "explicit EOF must replace an EPIPE-disconnected write side with the discard sink"
+    );
+    pm.flush_process_write_queue(id)
+        .expect("discarding queued input cannot fail");
+    assert_eq!(
+        pm.get(id).map(|proc| proc.write_queue),
+        Some(Value::NIL),
+        "queued input must drain through the discard sink"
+    );
+}
+
+#[test]
+fn sends_after_epipe_do_not_accumulate_unsendable_input() {
+    crate::test_utils::init_test_tracing();
+    let mut pm = ProcessManager::new();
+    let id = pm.create_process(
+        "pipe-epipe-queue".into(),
+        Value::NIL,
+        "prog".into(),
+        vec![],
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    pm.processes
+        .get_mut(&id)
+        .expect("process")
+        .input_disposition = ProcessInputDisposition::Disconnected;
+
+    pm.send_input(id, &LispString::from_utf8("one"))
+        .expect("process still exists");
+    pm.send_input(id, &LispString::from_utf8("two"))
+        .expect("process still exists");
+
+    assert_eq!(
+        pm.get(id).map(|proc| proc.write_queue),
+        Some(Value::NIL),
+        "a permanently disconnected endpoint must not retain bytes that can never be written"
+    );
+}
+
 #[test]
 fn process_manager_create_and_query() {
     crate::test_utils::init_test_tracing();
@@ -7355,7 +7473,8 @@ fn pipe_process_send_after_eof_discards_input_like_gnu() {
         Value::make_process(id)
     );
     assert!(
-        pm.get(id).is_some_and(|proc| proc.child_stdin_eof_sink),
+        pm.get(id)
+            .is_some_and(|proc| proc.input_disposition == ProcessInputDisposition::Discard),
         "pipe EOF should install the GNU-style discard sink"
     );
     assert!(
@@ -14217,9 +14336,9 @@ fn gnus_eight_update_status_sites_are_enumerated_and_four_are_the_asynchronous_o
 /// 1189, 6075, 6092, 6101, 6158, 7193, 7752), and **seven of them are
 /// not `handle_child_signal`'s** -- which is the whole point of
 /// [`StatusChangeSite`].  The table used to carry a NINTH row for an EPIPE
-/// tick in `send_process` at ":6927"; that bump is Emacs 24 behavior, removed
-/// by GNU commit 4d7e6e51dd4 (2013) -- GNU 31's EPIPE arm closes the write fd
-/// and touches neither status nor tick.  The citations are spelled out here
+/// tick in `send_process` at ":6927"; GNU commit 4d7e6e51dd4 introduced that
+/// behavior in 2012, and e381cf1fc97 removed it in 2025 -- GNU 31's EPIPE arm
+/// closes the write fd and touches neither status nor tick.  The citations are spelled out here
 /// so a renumbered line is a failing test rather than a stale comment, and
 /// the count is asserted so a ninth site cannot appear without one.
 #[test]
@@ -14869,7 +14988,7 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     // `ErrorKind::Interrupted` and re-enters (polling-3.11.0/src/lib.rs:
     // 751-764), so even a delivery that DID interrupt the syscall would not
     // shorten the block.
-    let mut eval = Context::new();
+    let eval = Context::new();
     assert_no_sigchld_handler_is_installed();
     let waker = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));

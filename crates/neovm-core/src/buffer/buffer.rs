@@ -16,7 +16,7 @@ use super::buffer_text::BufferText;
 use super::marker_data::{marker_data_anchor, positioned_marker_data, set_marker_data_anchor};
 use super::position::{
     AccessibleCharRange, AccessibleEmacsByteRange, CharLen, CharPos0, CharRange, EmacsByteLen,
-    EmacsBytePos, EmacsByteRange, LispCharPos1, TextPositionAnchor,
+    EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispCharPos1, TextPositionAnchor,
 };
 #[cfg(test)]
 use super::text::BufferTextBytesSnapshot;
@@ -2814,6 +2814,11 @@ impl Buffer {
     /// GNU `Z` as a 1-based Lisp character position.
     pub fn z_lisp_char_pos(&self) -> LispCharPos1 {
         self.total_char_end_pos().to_lisp()
+    }
+
+    /// Full buffer bounds in Lisp character positions, ignoring narrowing.
+    pub fn full_lisp_char_region(&self) -> FullBufferLispCharRange {
+        FullBufferLispCharRange::new(self.z_lisp_char_pos())
     }
 
     /// Total number of Emacs bytes in the buffer text.

@@ -24,7 +24,8 @@ pub(crate) use buffer_text::BufferText;
 pub use overlay::{Overlay, OverlayList};
 pub use position::{
     AccessibleCharRange, AccessibleEmacsByteRange, CharLen, CharPos0, CharRange, DisplayColumn,
-    EmacsByteLen, EmacsBytePos, EmacsByteRange, LispBytePos1, LispCharPos1, TextPositionAnchor,
+    EmacsByteLen, EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispBytePos1,
+    LispCharPos1, TextPositionAnchor,
 };
 pub use shared::{SavedPointBeforeCommand, SharedUndoState};
 pub use text::{

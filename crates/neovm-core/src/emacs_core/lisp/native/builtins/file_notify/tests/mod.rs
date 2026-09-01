@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(target_os = "macos")]
 use crate::emacs_core::intern::intern;
 
 fn workspace_temp_dir() -> tempfile::TempDir {
@@ -12,9 +13,27 @@ fn workspace_temp_dir() -> tempfile::TempDir {
         .expect("create file notification fixture")
 }
 
+#[test]
+fn compiled_file_notification_subrs_match_the_target_backend() {
+    let names: Vec<_> = SUBRS.specs().iter().map(|spec| spec.name()).collect();
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        names,
+        ["inotify-add-watch", "inotify-rm-watch", "inotify-valid-p"]
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        names,
+        ["kqueue-add-watch", "kqueue-rm-watch", "kqueue-valid-p"]
+    );
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    assert!(names.is_empty());
+}
+
 /// Destructure a `Flow` into its signal payload; Debug-printing a `SymId`
 /// resolves the name best-effort and is not stable under parallel tests, so
 /// error assertions compare interned symbols structurally.
+#[cfg(target_os = "macos")]
 fn expect_signal(err: crate::emacs_core::error::Flow) -> Box<crate::emacs_core::error::SignalData> {
     let crate::emacs_core::error::Flow::Signal(signal) = err else {
         panic!("expected a signal, got {err:?}");
@@ -23,6 +42,7 @@ fn expect_signal(err: crate::emacs_core::error::Flow) -> Box<crate::emacs_core::
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn filesystem_changes_reach_the_lisp_callback_through_the_special_event_queue() {
     crate::test_utils::init_test_tracing();
     let directory = workspace_temp_dir();
@@ -40,7 +60,7 @@ fn filesystem_changes_reach_the_lisp_callback_through_the_special_event_queue() 
     )
     .expect("install callback");
 
-    let descriptor = builtin_inotify_add_watch(
+    let descriptor = inotify_add_watch(
         &mut eval,
         vec![
             Value::string(directory.path().display().to_string()),
@@ -66,7 +86,7 @@ fn filesystem_changes_reach_the_lisp_callback_through_the_special_event_queue() 
     assert_eq!(fields[2], Value::string("watched.txt"));
     assert!(fields[3].as_fixnum().is_some());
 
-    builtin_inotify_rm_watch(vec![descriptor]).expect("remove watch");
+    inotify_rm_watch(vec![descriptor]).expect("remove watch");
 }
 
 /// GNU `Fkqueue_add_watch` (src/kqueue.c:338) returns a bare fixnum
@@ -76,6 +96,7 @@ fn filesystem_changes_reach_the_lisp_callback_through_the_special_event_queue() 
 /// watch the reported FILE is the watched file's own name, and ACTIONS is
 /// filtered to the requested flags by exact `Fmember` (:84-90).
 #[test]
+#[cfg(target_os = "macos")]
 fn kqueue_file_watch_reports_a_write_action_with_gnus_event_shape() {
     crate::test_utils::init_test_tracing();
     let directory = workspace_temp_dir();
@@ -95,7 +116,7 @@ fn kqueue_file_watch_reports_a_write_action_with_gnus_event_shape() {
 
     // The flags filenotify.el's kqueue adapter sends for `(change)'
     // (lisp/filenotify.el:361-372).
-    let descriptor = builtin_kqueue_add_watch(
+    let descriptor = kqueue_add_watch(
         &mut eval,
         vec![
             Value::string(watched_file.display().to_string()),
@@ -145,17 +166,17 @@ fn kqueue_file_watch_reports_a_write_action_with_gnus_event_shape() {
         "a file watch reports the watched file's own name"
     );
 
-    builtin_kqueue_rm_watch(vec![descriptor]).expect("remove watch");
+    kqueue_rm_watch(vec![descriptor]).expect("remove watch");
 }
 
 /// GNU generates directory events by diffing directory listings
 /// (`kqueue_compare_dir_list`, src/kqueue.c:110-273): a new file inside the
 /// watched directory is a `create' with the file's RELATIVE name, and
-/// `kqueue_generate_event' (:84-90) drops any action the caller did not list
-/// in FLAGS -- so a plain write to an existing file is silent for a watch
-/// that only asked for `create'.
+/// kqueue has no NOTE_CREATE, so GNU observes NOTE_WRITE on the directory and
+/// reconstructs a child `create' with its relative name from two snapshots.
 #[test]
-fn kqueue_directory_watch_reports_relative_names_and_filters_unrequested_actions() {
+#[cfg(target_os = "macos")]
+fn kqueue_directory_watch_reports_relative_names_from_snapshot_diffs() {
     crate::test_utils::init_test_tracing();
     let directory = workspace_temp_dir();
     let existing = directory.path().join("existing.txt");
@@ -172,18 +193,16 @@ fn kqueue_directory_watch_reports_relative_names_and_filters_unrequested_actions
     )
     .expect("install callback");
 
-    let descriptor = builtin_kqueue_add_watch(
+    let descriptor = kqueue_add_watch(
         &mut eval,
         vec![
             Value::string(directory.path().display().to_string()),
-            Value::list(vec![Value::symbol("create")]),
+            Value::list(vec![Value::symbol("create"), Value::symbol("write")]),
             Value::symbol("neovm-test-kqueue-callback"),
         ],
     )
     .expect("add kqueue directory watch");
 
-    // The unrequested action first, so its delivery (a bug) would be visible
-    // by the time the requested one arrives.
     std::fs::write(&existing, "rewritten").expect("write existing file");
     std::fs::write(directory.path().join("created.txt"), "new").expect("create new file");
     eval.eval_str("(read-event nil nil 1)")
@@ -206,19 +225,7 @@ fn kqueue_directory_watch_reports_relative_names_and_filters_unrequested_actions
         }),
         "a directory watch reports the created file's relative name: {events:?}"
     );
-    // The write to existing.txt would deliver a `write' action if the
-    // `Fmember' filter (src/kqueue.c:84-90) were not applied.  (Asserting on
-    // the file NAME instead would be unsound: FSEvents coalesces per-path
-    // flags, so existing.txt may legitimately surface a stale `create'.)
-    for fields in &events {
-        assert_eq!(
-            crate::emacs_core::value::list_to_vec(&fields[1]),
-            Some(vec![Value::symbol("create")]),
-            "an action absent from FLAGS is never delivered: {events:?}"
-        );
-    }
-
-    builtin_kqueue_rm_watch(vec![descriptor]).expect("remove watch");
+    kqueue_rm_watch(vec![descriptor]).expect("remove watch");
 }
 
 /// `Fkqueue_rm_watch` (src/kqueue.c:475) answers t and unregisters; a
@@ -228,6 +235,7 @@ fn kqueue_directory_watch_reports_relative_names_and_filters_unrequested_actions
 /// (:330-333) removes the watch itself when the watched file is deleted, so
 /// validity dies with the file.
 #[test]
+#[cfg(target_os = "macos")]
 fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_watch() {
     crate::test_utils::init_test_tracing();
     let directory = workspace_temp_dir();
@@ -245,7 +253,7 @@ fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_wat
     )
     .expect("install callback");
 
-    let descriptor = builtin_kqueue_add_watch(
+    let descriptor = kqueue_add_watch(
         &mut eval,
         vec![
             Value::string(removable.display().to_string()),
@@ -255,15 +263,11 @@ fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_wat
     )
     .expect("add kqueue watch");
 
-    assert_eq!(builtin_kqueue_valid_p(vec![descriptor]).unwrap(), Value::T);
-    assert_eq!(builtin_kqueue_rm_watch(vec![descriptor]).unwrap(), Value::T);
-    assert_eq!(
-        builtin_kqueue_valid_p(vec![descriptor]).unwrap(),
-        Value::NIL
-    );
+    assert_eq!(kqueue_valid_p(vec![descriptor]).unwrap(), Value::T);
+    assert_eq!(kqueue_rm_watch(vec![descriptor]).unwrap(), Value::T);
+    assert_eq!(kqueue_valid_p(vec![descriptor]).unwrap(), Value::NIL);
 
-    let signal =
-        expect_signal(builtin_kqueue_rm_watch(vec![descriptor]).expect_err("stale descriptor"));
+    let signal = expect_signal(kqueue_rm_watch(vec![descriptor]).expect_err("stale descriptor"));
     assert_eq!(signal.symbol, intern("file-notify-error"), "{signal:?}");
     assert_eq!(
         signal.data[0]
@@ -274,7 +278,7 @@ fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_wat
     );
     assert_eq!(signal.data[1], descriptor, "GNU's data is the descriptor");
 
-    let descriptor = builtin_kqueue_add_watch(
+    let descriptor = kqueue_add_watch(
         &mut eval,
         vec![
             Value::string(removable.display().to_string()),
@@ -302,7 +306,7 @@ fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_wat
         "deleting the watched file reports a delete action: {events:?}"
     );
     assert_eq!(
-        builtin_kqueue_valid_p(vec![descriptor]).unwrap(),
+        kqueue_valid_p(vec![descriptor]).unwrap(),
         Value::NIL,
         "GNU cancels the monitor when the watched file is deleted (src/kqueue.c:330-333)"
     );
@@ -312,10 +316,12 @@ fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_wat
 /// a missing FILE is a file error (`report_file_error', ENOENT ->
 /// `file-missing'); FLAGS must satisfy `CHECK_LIST'; CALLBACK must satisfy
 /// `FUNCTIONP' or it is `(wrong-type-argument invalid-function ...)'.  A
-/// symbol in FLAGS that kqueue does not know is simply ignored -- the flag
-/// assembly is eight `Fmember' probes (:440-446), not a validation pass --
+/// symbol in FLAGS that kqueue does not know is simply ignored -- the native
+/// flag assembly is seven `Fmember' probes (:440-446), while `create' is
+/// synthesized from a directory diff; neither path is a validation pass --
 /// unlike inotify's `Unknown aspect' error.
 #[test]
+#[cfg(target_os = "macos")]
 fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
     crate::test_utils::init_test_tracing();
     let directory = workspace_temp_dir();
@@ -326,7 +332,7 @@ fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
     eval.eval_str("(defun neovm-test-kqueue-callback (_event) nil)")
         .expect("install callback");
 
-    let err = builtin_kqueue_add_watch(
+    let err = kqueue_add_watch(
         &mut eval,
         vec![
             Value::string(directory.path().join("missing.txt").display().to_string()),
@@ -338,7 +344,7 @@ fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
     let signal = expect_signal(err);
     assert_eq!(signal.symbol, intern("file-missing"), "{signal:?}");
 
-    let err = builtin_kqueue_add_watch(
+    let err = kqueue_add_watch(
         &mut eval,
         vec![
             Value::string(watched_file.display().to_string()),
@@ -351,7 +357,20 @@ fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
     assert_eq!(signal.symbol, intern("wrong-type-argument"), "{signal:?}");
     assert_eq!(signal.data[0], Value::symbol("listp"), "{signal:?}");
 
-    let err = builtin_kqueue_add_watch(
+    let err = kqueue_add_watch(
+        &mut eval,
+        vec![
+            Value::string(watched_file.display().to_string()),
+            Value::cons(Value::symbol("write"), Value::symbol("dotted-tail")),
+            Value::symbol("neovm-test-kqueue-callback"),
+        ],
+    )
+    .expect_err("GNU CHECK_LIST rejects an improper flags list");
+    let signal = expect_signal(err);
+    assert_eq!(signal.symbol, intern("wrong-type-argument"), "{signal:?}");
+    assert_eq!(signal.data[0], Value::symbol("listp"), "{signal:?}");
+
+    let err = kqueue_add_watch(
         &mut eval,
         vec![
             Value::string(watched_file.display().to_string()),
@@ -368,7 +387,7 @@ fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
         "{signal:?}"
     );
 
-    let descriptor = builtin_kqueue_add_watch(
+    let descriptor = kqueue_add_watch(
         &mut eval,
         vec![
             Value::string(watched_file.display().to_string()),
@@ -377,5 +396,69 @@ fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
         ],
     )
     .expect("an unknown flag symbol is ignored, not an error");
-    builtin_kqueue_rm_watch(vec![descriptor]).expect("remove watch");
+    kqueue_rm_watch(vec![descriptor]).expect("remove watch");
+}
+
+/// GNU normalizes kqueue FILE before checking or storing it:
+/// `Fdirectory_file_name (Fexpand_file_name (file, Qnil))`
+/// (`src/kqueue.c:380-381`). Relative names therefore resolve against the
+/// current buffer's `default-directory`, and file events report the stored
+/// absolute name.
+#[test]
+#[cfg(target_os = "macos")]
+fn kqueue_watch_expands_relative_file_against_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let directory = workspace_temp_dir();
+    let watched_file = directory.path().join("relative.txt");
+    std::fs::write(&watched_file, "before").expect("seed watched file");
+
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let current_buffer = eval.buffers.current_buffer().expect("current buffer").id;
+    eval.buffers
+        .get_mut(current_buffer)
+        .expect("current buffer")
+        .set_buffer_local(
+            "default-directory",
+            Value::string(format!(
+                "{}{}",
+                directory.path().display(),
+                std::path::MAIN_SEPARATOR
+            )),
+        );
+    eval.eval_str(
+        r#"(progn
+             (setq neovm-test-relative-kqueue-events nil)
+             (defun neovm-test-relative-kqueue-callback (event)
+               (push event neovm-test-relative-kqueue-events)))"#,
+    )
+    .expect("install relative watch environment");
+
+    let descriptor = kqueue_add_watch(
+        &mut eval,
+        vec![
+            Value::string("relative.txt"),
+            Value::list(vec![Value::symbol("write")]),
+            Value::symbol("neovm-test-relative-kqueue-callback"),
+        ],
+    )
+    .expect("relative kqueue watch resolves through default-directory");
+
+    std::fs::write(&watched_file, "after").expect("modify watched file");
+    eval.eval_str("(read-event nil nil 1)")
+        .expect("service relative file notification");
+    let events = eval
+        .eval_str("neovm-test-relative-kqueue-events")
+        .expect("read callback events");
+    let events = crate::emacs_core::value::list_to_vec(&events).expect("events list");
+    assert!(
+        events.iter().any(|event| {
+            crate::emacs_core::value::list_to_vec(event).is_some_and(|fields| {
+                fields[0] == descriptor
+                    && fields[2] == Value::string(watched_file.display().to_string())
+            })
+        }),
+        "kqueue stores and reports GNU's normalized absolute FILE: {events:?}"
+    );
+
+    kqueue_rm_watch(vec![descriptor]).expect("remove watch");
 }

@@ -9,7 +9,7 @@
 use crate::emacs_core::error::LispCondition;
 use std::collections::HashSet;
 
-use super::builtins::{builtin_get_pos_property_impl, expect_integer_or_marker_in_buffers};
+use super::builtins::expect_integer_or_marker_in_buffers;
 use super::chartable::{
     builtin_char_table_range, builtin_set_char_table_range, char_table_ascii_cache_range,
     char_table_data_start, is_char_table, make_char_table_value,
@@ -2270,7 +2270,6 @@ pub(crate) fn collect_minor_mode_map_entries_in_state(
 #[derive(Clone, Copy, Debug)]
 struct ActiveMapPosition {
     buffer_id: crate::buffer::BufferId,
-    buffer_object: Value,
     buffer_local_map: Value,
     char_pos: Option<i64>,
     displayed_string: Option<DisplayedStringPosition>,
@@ -2382,7 +2381,6 @@ fn active_map_position(
 
     let default_position = ActiveMapPosition {
         buffer_id: buffer.id,
-        buffer_object: Value::make_buffer(buffer.id),
         buffer_local_map: buffer.local_map(),
         char_pos: Some(buffer.point_lisp_char_pos().as_i64()),
         displayed_string: None,
@@ -2410,7 +2408,6 @@ fn active_map_position(
 
             return Ok(Some(ActiveMapPosition {
                 buffer_id,
-                buffer_object: Value::make_buffer(buffer_id),
                 buffer_local_map: target_buffer.local_map(),
                 char_pos: Some(target_buffer.point_lisp_char_pos().as_i64()),
                 displayed_string: None,
@@ -2433,7 +2430,6 @@ fn active_map_position(
 
         return Ok(Some(ActiveMapPosition {
             buffer_id: buffer.id,
-            buffer_object: Value::make_buffer(buffer.id),
             buffer_local_map: buffer.local_map(),
             char_pos: Some(char_pos),
             displayed_string: None,
@@ -2488,14 +2484,13 @@ fn active_map_position(
         // escaped `read_key_sequence` and reached the command loop once per
         // mouse event.
         let char_pos = char_pos.filter(|char_pos| {
-            let point_min = target_buffer.point_min_lisp_char_pos().as_i64();
-            let point_max = target_buffer.point_max_lisp_char_pos().as_i64();
-            (point_min..=point_max).contains(char_pos)
+            target_buffer
+                .full_lisp_char_region()
+                .contains(crate::buffer::LispCharPos1::new(*char_pos))
         });
 
         return Ok(Some(ActiveMapPosition {
             buffer_id,
-            buffer_object: Value::make_buffer(buffer_id),
             buffer_local_map: target_buffer.local_map(),
             char_pos,
             displayed_string,
@@ -2508,26 +2503,42 @@ fn active_map_position(
 fn keymap_property_at_position(
     obarray: &Obarray,
     buffers: &crate::buffer::BufferManager,
-    buffer_object: Value,
+    buffer_id: crate::buffer::BufferId,
     char_pos: i64,
     property: LocalMapProperty,
 ) -> Result<Value, Flow> {
     let prop_symbol = Value::from_sym_id(property.symbol_id());
-    let char_property = super::builtins::textprop::builtin_get_char_property_in_state(
+    let buffer = buffers
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+
+    // GNU `get_local_map` clips before temporarily widening
+    // (`src/intervals.c:2176-2208`).  The order matters: the full-buffer
+    // range check in `current-active-maps` admits a renderer event outside a
+    // narrowing, but its property evidence comes from the nearest accessible
+    // boundary, never from inaccessible text and never from a signalling
+    // Lisp property primitive.
+    let position = crate::buffer::LispCharPos1::new(char_pos).clamp(
+        buffer.point_min_lisp_char_pos(),
+        buffer.point_max_lisp_char_pos(),
+    );
+    let char_property = super::textprop::buffer_char_property_at_full_lisp_pos(
         obarray,
         buffers,
-        vec![Value::fixnum(char_pos), prop_symbol, buffer_object],
-    )?;
+        buffer,
+        position,
+        prop_symbol,
+    );
     if !char_property.is_nil() {
         return Ok(char_property);
     }
 
-    builtin_get_pos_property_impl(
+    super::textprop::buffer_pos_property_at_full_lisp_pos(
         obarray,
-        &[],
-        None,
         buffers,
-        vec![Value::fixnum(char_pos), prop_symbol, buffer_object],
+        buffer,
+        position,
+        prop_symbol,
     )
 }
 
@@ -2577,8 +2588,10 @@ pub(crate) fn local_map_property_at_buffer_point(
         LocalMapProperty::Keymap => Value::NIL,
         LocalMapProperty::LocalMap => buffer_keymap,
     };
-    let found =
-        keymap_property_at_position(obarray, buffers, buffer_object, buffer_point, property)?;
+    let buffer_id = buffer_object
+        .as_buffer_id()
+        .ok_or_else(|| signal(LispCondition::WrongTypeArgument, vec![buffer_object]))?;
+    let found = keymap_property_at_position(obarray, buffers, buffer_id, buffer_point, property)?;
     Ok(maybe_keymap_in_obarray(obarray, &found).unwrap_or(fallback))
 }
 
@@ -2629,14 +2642,14 @@ fn position_map_layers(
         let local_property = keymap_property_at_position(
             obarray,
             buffers,
-            active_position.buffer_object,
+            active_position.buffer_id,
             char_pos,
             LocalMapProperty::LocalMap,
         )?;
         let keymap_property = keymap_property_at_position(
             obarray,
             buffers,
-            active_position.buffer_object,
+            active_position.buffer_id,
             char_pos,
             LocalMapProperty::Keymap,
         )?;

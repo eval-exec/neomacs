@@ -52,34 +52,8 @@ pub(crate) fn builtin_get_pos_property_impl(
     let buf = buffers
         .get(buf_id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
-    let byte_pos = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(pos)).get();
 
-    if let Some((value, _overlay_id)) =
-        super::textprop::buffer_overlay_property_for_inserted_char_at_byte_pos(buf, byte_pos, prop)
-    {
-        return Ok(value);
-    }
-
-    // GNU src/editfns.c:339-349.
-    match text_property_stickiness_in_state(obarray, buffers, buf, pos, prop)? {
-        Stickiness::FromFollowing => Ok(text_property_value_at_char_pos(
-            obarray,
-            buffers,
-            buf,
-            LispCharPos1::new(pos),
-            prop,
-        )),
-        Stickiness::FromPreceding if pos > buf.point_min_lisp_char_pos().as_i64() => {
-            Ok(text_property_value_at_char_pos(
-                obarray,
-                buffers,
-                buf,
-                LispCharPos1::new(pos - 1),
-                prop,
-            ))
-        }
-        Stickiness::FromPreceding | Stickiness::Neither => Ok(Value::NIL),
-    }
+    super::textprop::buffer_pos_property_at_accessible_lisp_pos(obarray, buffers, buf, pos, prop)
 }
 
 pub(crate) fn builtin_next_char_property_change(
@@ -793,118 +767,6 @@ pub(super) fn dynamic_or_global_symbol_value_in_state(
     obarray.symbol_value(name).cloned()
 }
 
-/// The direction a text property would be inherited from, GNU's
-/// `text_property_stickiness` return value (src/textprop.c:1894-1898) with its
-/// three C integers named.  A bare 1 / -1 / 0 left the caller free to test only
-/// some of them; a total match cannot forget one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Stickiness {
-    /// GNU 1: inherited from the character AFTER POS.
-    FromFollowing,
-    /// GNU -1: inherited from the character BEFORE POS.
-    FromPreceding,
-    /// GNU 0: inherited from neither side.
-    Neither,
-}
-
-/// GNU's `text_property_stickiness` (src/textprop.c:1901) reads text properties
-/// through `Fget_text_property`, at POS-1 (:1919) and at POS (:1931), and GNU's
-/// own comment at :1929-1930 records the consequence: "This signals an
-/// arg-out-of-range error if pos is outside the buffer's accessible range."
-/// That is where `get-pos-property''s range checking comes from -- it has none
-/// of its own (src/editfns.c:285-349) -- so these reads must validate, and
-/// which position a caller sees in the signal follows the branch structure
-/// below.  Reading through a clamping accessor instead made every out-of-range
-/// `get-pos-property' quietly answer nil.
-fn text_property_stickiness_in_state(
-    obarray: &crate::emacs_core::symbol::Obarray,
-    buffers: &crate::buffer::BufferManager,
-    buf: &crate::buffer::Buffer,
-    pos: i64,
-    prop: Value,
-) -> Result<Stickiness, Flow> {
-    let ignore_previous_character = pos <= buf.point_min_lisp_char_pos().as_i64();
-
-    let default_nonsticky =
-        TextPropertyControlVariable::TextPropertyDefaultNonsticky.value_for_buffer(obarray, buf);
-
-    let mut rear_sticky = !(ignore_previous_character
-        || default_nonsticky
-            .and_then(|value| assq_cdr(&value, prop))
-            .is_some_and(|value| value.is_truthy()));
-
-    // GNU skips the POS-1 read entirely when POS is at or below BEGV or when
-    // PROP is default-nonsticky (src/textprop.c:1912-1926), so an out-of-range
-    // POS-1 is only reported in the branch that actually reads it.
-    if rear_sticky && !ignore_previous_character {
-        let previous_props = get_text_property_at_validated_char_pos(
-            obarray,
-            buffers,
-            buf,
-            pos - 1,
-            StickinessProperty::RearNonsticky.value(),
-        )?;
-        if matches_rear_nonsticky(previous_props, prop) {
-            rear_sticky = false;
-        }
-    }
-
-    let front_sticky = matches_front_sticky(
-        get_text_property_at_validated_char_pos(
-            obarray,
-            buffers,
-            buf,
-            pos,
-            StickinessProperty::FrontSticky.value(),
-        )?,
-        prop,
-    );
-
-    if rear_sticky && !front_sticky {
-        return Ok(Stickiness::FromPreceding);
-    }
-    if !rear_sticky && front_sticky {
-        return Ok(Stickiness::FromFollowing);
-    }
-    if !rear_sticky && !front_sticky {
-        return Ok(Stickiness::Neither);
-    }
-
-    // Inconsistent stickiness: rear wins unless the value it would inherit is
-    // nil, in which case front wins (src/textprop.c:1947-1955).
-    if ignore_previous_character
-        || get_text_property_at_validated_char_pos(obarray, buffers, buf, pos - 1, prop)?.is_nil()
-    {
-        Ok(Stickiness::FromFollowing)
-    } else {
-        Ok(Stickiness::FromPreceding)
-    }
-}
-
-/// One `Fget_text_property` call on a buffer: validate POS as GNU's point call
-/// through `validate_interval_range` (src/textprop.c:128-186), then read.  GNU
-/// gets both halves by delegating; we reimplemented the read and lost the
-/// validation with it.
-fn get_text_property_at_validated_char_pos(
-    obarray: &crate::emacs_core::symbol::Obarray,
-    buffers: &crate::buffer::BufferManager,
-    buf: &crate::buffer::Buffer,
-    pos: i64,
-    prop: Value,
-) -> Result<Value, Flow> {
-    // GNU reaches these reads with a position already coerced past
-    // CHECK_FIXNUM_COERCE_MARKER (src/editfns.c:285), and builds the POS-1 one
-    // with `make_fixnum' (src/textprop.c:1904), so the payload is the number.
-    textprop::validate_buffer_property_point_raw(buf, pos, Value::fixnum(pos))?;
-    Ok(text_property_value_at_char_pos(
-        obarray,
-        buffers,
-        buf,
-        LispCharPos1::new(pos),
-        prop,
-    ))
-}
-
 pub(crate) fn inherited_text_properties_for_inserted_range_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     _dynamic: &[OrderedRuntimeBindingMap],
@@ -1100,17 +962,6 @@ pub(crate) fn inherited_text_properties_for_inserted_range_in_state(
     }
 
     merged_props
-}
-
-fn text_property_value_at_char_pos(
-    obarray: &crate::emacs_core::symbol::Obarray,
-    buffers: &crate::buffer::BufferManager,
-    buf: &crate::buffer::Buffer,
-    pos: LispCharPos1,
-    prop: Value,
-) -> Value {
-    let byte_pos = buf.lisp_pos_to_emacs_byte_pos(pos).get();
-    super::textprop::lookup_buffer_text_property(obarray, buffers, buf, byte_pos, prop)
 }
 
 fn matches_front_sticky(value: Value, prop: Value) -> bool {

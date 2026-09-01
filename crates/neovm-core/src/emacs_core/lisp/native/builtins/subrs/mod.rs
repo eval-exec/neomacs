@@ -27,6 +27,7 @@ const LOCALIZED_SUBR_CATALOG: &[SubrBatch] = &[
     crate::emacs_core::shader_surface::SUBRS,
     crate::emacs_core::xwidget::SUBRS,
     crate::emacs_core::indent::SUBRS,
+    file_notify::SUBRS,
     crate::emacs_core::sqlite::SUBRS,
     crate::emacs_core::font::SUBRS,
     crate::emacs_core::neo::effects::SUBRS,
@@ -5281,40 +5282,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         )
         .placeholder(NoEvalPlaceholder::Nil),
     );
-    ctx.register_subr(SubrSpec::new(
-        "inotify-add-watch",
-        NativeFn::ContextVec(builtin_inotify_add_watch),
-        SubrArity::new(3, Some(3)),
-    ));
-    ctx.register_subr(SubrSpec::new(
-        "inotify-rm-watch",
-        NativeFn::ContextVec(|_ctx, args| builtin_inotify_rm_watch(args)),
-        SubrArity::new(1, Some(1)),
-    ));
-    ctx.register_subr(SubrSpec::new(
-        "inotify-valid-p",
-        NativeFn::ContextVec(|_ctx, args| builtin_inotify_valid_p(args)),
-        SubrArity::new(1, Some(1)),
-    ));
-    // GNU builds exactly one of src/inotify.c and src/kqueue.c
-    // (`configure.ac' --with-file-notification); like the inotify subrs
-    // above, these are registered unconditionally and only the c_features
-    // table decides which platform advertises which feature.
-    ctx.register_subr(SubrSpec::new(
-        "kqueue-add-watch",
-        NativeFn::ContextVec(builtin_kqueue_add_watch),
-        SubrArity::new(3, Some(3)),
-    ));
-    ctx.register_subr(SubrSpec::new(
-        "kqueue-rm-watch",
-        NativeFn::ContextVec(|_ctx, args| builtin_kqueue_rm_watch(args)),
-        SubrArity::new(1, Some(1)),
-    ));
-    ctx.register_subr(SubrSpec::new(
-        "kqueue-valid-p",
-        NativeFn::ContextVec(|_ctx, args| builtin_kqueue_valid_p(args)),
-        SubrArity::new(1, Some(1)),
-    ));
+    file_notify::register_subrs(ctx);
     ctx.register_subr(SubrSpec::new(
         "lock-buffer",
         NativeFn::ContextVec(crate::emacs_core::filelock::builtin_lock_buffer),
