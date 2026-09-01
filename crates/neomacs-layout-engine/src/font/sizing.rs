@@ -5,7 +5,7 @@
 //! pixels. Keeping this module independent prevents X11 policy from leaking
 //! into the CoreText and DirectWrite catalogs.
 
-use neomacs_display_protocol::{DeviceScale, DisplayObservation, Dpi, XServerKind};
+use neomacs_display_protocol::{DisplayObservation, Dpi, XServerKind};
 use neovm_core::emacs_core::display_host::FrameFontSize;
 use neovm_core::face::{Face, FaceHeight};
 
@@ -60,23 +60,23 @@ pub struct FontSizing {
     scale: LogicalFontScale,
 }
 
-/// Policy for converting native display observations into frame scale.
+/// Policy for converting native display observations into logical font scale.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum ScalePolicy {
+pub enum FrameFontScalePolicy {
     /// Preserve GNU X11 behavior except for reliably identified Xwayland,
     /// whose physical-size report is not a stable logical-DPI authority.
     Automatic,
     /// Follow GNU's X11 resource/geometry fallback for every X server.
     StrictGnu,
-    /// Ignore display-reported font DPI while retaining its device scale.
+    /// Ignore display-reported font DPI.
     Explicit(Dpi),
 }
 
-/// Provenance of the logical font DPI in a resolved frame profile.
+/// Provenance of the logical font DPI in a resolved frame font rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum FrameScaleSource {
+pub enum FrameFontScaleSource {
     ExplicitPolicy,
     XftResource,
     X11Geometry,
@@ -85,27 +85,24 @@ pub enum FrameScaleSource {
     PlatformLogical,
 }
 
-/// One atomic answer for logical font sizing and logical-to-device scale.
+/// A frame's logical font rule resolved before its native window exists.
+///
+/// Device/backing scale is intentionally absent. It becomes a known fact only
+/// after winit realizes a particular window and remains frame-local.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FrameScaleProfile {
+pub struct ResolvedFrameFontScale {
     font_sizing: FontSizing,
-    device_scale: DeviceScale,
-    source: FrameScaleSource,
+    source: FrameFontScaleSource,
 }
 
-impl FrameScaleProfile {
+impl ResolvedFrameFontScale {
     #[must_use]
     pub const fn font_sizing(self) -> FontSizing {
         self.font_sizing
     }
 
     #[must_use]
-    pub const fn device_scale(self) -> DeviceScale {
-        self.device_scale
-    }
-
-    #[must_use]
-    pub const fn source(self) -> FrameScaleSource {
+    pub const fn source(self) -> FrameFontScaleSource {
         self.source
     }
 }
@@ -117,67 +114,53 @@ impl FrameScaleProfile {
 /// 96-DPI logical fallback; native and unknown X servers retain GNU's raw
 /// geometry calculation, including unusual values used by remote displays.
 #[must_use]
-pub fn resolve_frame_scale(
+pub fn resolve_frame_font_scale(
     observation: DisplayObservation,
-    policy: ScalePolicy,
-) -> FrameScaleProfile {
-    let device_scale = match observation {
-        DisplayObservation::X11(observation) => observation.device_scale(),
-        DisplayObservation::Wayland { device_scale }
-        | DisplayObservation::Cocoa { device_scale }
-        | DisplayObservation::Windows { device_scale } => device_scale,
-        _ => DeviceScale::ONE,
-    };
-
-    if let ScalePolicy::Explicit(dpi) = policy {
-        return FrameScaleProfile {
+    policy: FrameFontScalePolicy,
+) -> ResolvedFrameFontScale {
+    if let FrameFontScalePolicy::Explicit(dpi) = policy {
+        return ResolvedFrameFontScale {
             font_sizing: FontSizing::for_layout_dpi(dpi.get()),
-            device_scale,
-            source: FrameScaleSource::ExplicitPolicy,
+            source: FrameFontScaleSource::ExplicitPolicy,
         };
     }
 
     match observation {
         DisplayObservation::X11(observation) => {
             let (dpi, source) = if let Some(dpi) = observation.xft_dpi() {
-                (dpi.get(), FrameScaleSource::XftResource)
-            } else if matches!(policy, ScalePolicy::Automatic)
+                (dpi.get(), FrameFontScaleSource::XftResource)
+            } else if matches!(policy, FrameFontScalePolicy::Automatic)
                 && matches!(observation.server(), XServerKind::Xwayland)
             {
-                (96.0, FrameScaleSource::XwaylandLogicalFallback)
+                (96.0, FrameFontScaleSource::XwaylandLogicalFallback)
             } else if let Some(geometry) = observation.geometry() {
                 (
                     geometry.height_px() as f32 * 25.4 / geometry.height_mm() as f32,
-                    FrameScaleSource::X11Geometry,
+                    FrameFontScaleSource::X11Geometry,
                 )
             } else {
-                (GNU_X11_FALLBACK_DPI, FrameScaleSource::GnuX11Fallback)
+                (GNU_X11_FALLBACK_DPI, FrameFontScaleSource::GnuX11Fallback)
             };
-            FrameScaleProfile {
+            ResolvedFrameFontScale {
                 font_sizing: FontSizing::for_layout_dpi(dpi),
-                device_scale,
                 source,
             }
         }
-        DisplayObservation::Wayland { .. } => FrameScaleProfile {
+        DisplayObservation::Wayland => ResolvedFrameFontScale {
             font_sizing: FontSizing::wayland(),
-            device_scale,
-            source: FrameScaleSource::PlatformLogical,
+            source: FrameFontScaleSource::PlatformLogical,
         },
-        DisplayObservation::Cocoa { .. } => FrameScaleProfile {
+        DisplayObservation::Cocoa => ResolvedFrameFontScale {
             font_sizing: FontSizing::gnu_cocoa(),
-            device_scale,
-            source: FrameScaleSource::PlatformLogical,
+            source: FrameFontScaleSource::PlatformLogical,
         },
-        DisplayObservation::Windows { .. } => FrameScaleProfile {
+        DisplayObservation::Windows => ResolvedFrameFontScale {
             font_sizing: FontSizing::windows_dip(),
-            device_scale,
-            source: FrameScaleSource::PlatformLogical,
+            source: FrameFontScaleSource::PlatformLogical,
         },
-        _ => FrameScaleProfile {
+        _ => ResolvedFrameFontScale {
             font_sizing: FontSizing::logical(),
-            device_scale,
-            source: FrameScaleSource::PlatformLogical,
+            source: FrameFontScaleSource::PlatformLogical,
         },
     }
 }
@@ -188,9 +171,9 @@ impl FontSizing {
     }
 
     /// Compatibility constructor for X11 call sites. New GUI code should
-    /// resolve a typed display observation through [`resolve_frame_scale`].
+    /// resolve a typed display observation through [`resolve_frame_font_scale`].
     /// This pure fallback deliberately performs no native display I/O.
-    pub const fn xft() -> Self {
+    pub const fn gnu_x11_fallback() -> Self {
         Self::new(LogicalFontScale::X11 {
             effective_dpi: GNU_X11_FALLBACK_DPI,
         })
@@ -221,7 +204,7 @@ impl FontSizing {
         std::cfg_select! {
             target_os = "macos" => Self::gnu_cocoa(),
             windows => Self::windows_dip(),
-            target_os = "linux" => Self::xft(),
+            target_os = "linux" => Self::gnu_x11_fallback(),
             _ => Self::logical(),
         }
     }
@@ -274,16 +257,16 @@ pub fn points_to_layout_pixels(points: f32, dpi: f32) -> f32 {
 }
 
 /// Compatibility helper for GNU X11 callers.
-pub fn points_to_pixels(points: f32) -> f32 {
-    points_to_layout_pixels(points, xft_dpi())
+pub fn points_to_gnu_x11_fallback_pixels(points: f32) -> f32 {
+    points_to_layout_pixels(points, gnu_x11_fallback_dpi())
 }
 
 /// Compatibility helper for a face height in tenths of a point.
-pub fn face_height_to_pixels(tenths: i32) -> f32 {
-    points_to_pixels(tenths as f32 / 10.0)
+pub fn face_height_to_gnu_x11_fallback_pixels(tenths: i32) -> f32 {
+    points_to_gnu_x11_fallback_pixels(tenths as f32 / 10.0)
 }
 
-pub const fn xft_dpi() -> f32 {
+pub const fn gnu_x11_fallback_dpi() -> f32 {
     GNU_X11_FALLBACK_DPI
 }
 

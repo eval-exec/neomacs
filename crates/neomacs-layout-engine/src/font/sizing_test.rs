@@ -1,9 +1,9 @@
 use super::{
-    FontSizing, FrameScaleSource, LogicalFontScale, ScalePolicy, points_to_layout_pixels,
-    resolve_frame_scale,
+    FontSizing, FrameFontScalePolicy, FrameFontScaleSource, LogicalFontScale,
+    points_to_layout_pixels, resolve_frame_font_scale,
 };
 use neomacs_display_protocol::{
-    DeviceScale, DisplayHeightGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
+    DisplayHeightGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
 };
 use neovm_core::emacs_core::display_host::FrameFontSize;
 
@@ -18,7 +18,6 @@ fn x11_observation(
         geometry.map(|(height_px, height_mm)| {
             DisplayHeightGeometry::new(height_px, height_mm).expect("valid test geometry")
         }),
-        DeviceScale::ONE,
     ))
 }
 
@@ -128,80 +127,79 @@ fn realized_pixels_round_trip_through_frame_specific_face_heights() {
 
 #[test]
 fn automatic_xorg_resolution_preserves_gnu_geometry_without_a_plausibility_clamp() {
-    let profile = resolve_frame_scale(
+    let profile = resolve_frame_font_scale(
         x11_observation(XServerKind::Xorg, None, Some((1080, 800))),
-        ScalePolicy::Automatic,
+        FrameFontScalePolicy::Automatic,
     );
 
     assert!((profile.font_sizing().layout_dpi() - 34.29).abs() < 0.01);
-    assert_eq!(profile.source(), FrameScaleSource::X11Geometry);
+    assert_eq!(profile.source(), FrameFontScaleSource::X11Geometry);
 }
 
 #[test]
 fn automatic_xwayland_resolution_uses_logical_dpi_instead_of_physical_geometry() {
-    let profile = resolve_frame_scale(
+    let profile = resolve_frame_font_scale(
         x11_observation(XServerKind::Xwayland, None, Some((1080, 800))),
-        ScalePolicy::Automatic,
+        FrameFontScalePolicy::Automatic,
     );
 
     assert_eq!(profile.font_sizing().layout_dpi(), 96.0);
-    assert_eq!(profile.source(), FrameScaleSource::XwaylandLogicalFallback);
+    assert_eq!(
+        profile.source(),
+        FrameFontScaleSource::XwaylandLogicalFallback
+    );
 }
 
 #[test]
 fn explicit_xft_resource_remains_authoritative_on_xwayland() {
-    let profile = resolve_frame_scale(
+    let profile = resolve_frame_font_scale(
         x11_observation(XServerKind::Xwayland, Some(144.0), Some((1080, 800))),
-        ScalePolicy::Automatic,
+        FrameFontScalePolicy::Automatic,
     );
 
     assert_eq!(profile.font_sizing().layout_dpi(), 144.0);
-    assert_eq!(profile.source(), FrameScaleSource::XftResource);
+    assert_eq!(profile.source(), FrameFontScaleSource::XftResource);
 }
 
 #[test]
 fn strict_gnu_policy_can_retain_xwayland_geometry_semantics() {
-    let profile = resolve_frame_scale(
+    let profile = resolve_frame_font_scale(
         x11_observation(XServerKind::Xwayland, None, Some((1080, 800))),
-        ScalePolicy::StrictGnu,
+        FrameFontScalePolicy::StrictGnu,
     );
 
     assert!((profile.font_sizing().layout_dpi() - 34.29).abs() < 0.01);
-    assert_eq!(profile.source(), FrameScaleSource::X11Geometry);
+    assert_eq!(profile.source(), FrameFontScaleSource::X11Geometry);
 }
 
 #[test]
 fn explicit_policy_is_validated_and_overrides_display_observations() {
     let explicit = Dpi::new(120.0).expect("valid explicit DPI");
-    let profile = resolve_frame_scale(
+    let profile = resolve_frame_font_scale(
         x11_observation(XServerKind::Xwayland, Some(144.0), Some((1080, 800))),
-        ScalePolicy::Explicit(explicit),
+        FrameFontScalePolicy::Explicit(explicit),
     );
 
     assert_eq!(profile.font_sizing().layout_dpi(), 120.0);
-    assert_eq!(profile.source(), FrameScaleSource::ExplicitPolicy);
+    assert_eq!(profile.source(), FrameFontScaleSource::ExplicitPolicy);
 }
 
 #[test]
 fn missing_x11_geometry_preserves_gnu_100_dpi_fallback() {
-    let profile = resolve_frame_scale(
+    let profile = resolve_frame_font_scale(
         x11_observation(XServerKind::Xorg, None, None),
-        ScalePolicy::Automatic,
+        FrameFontScalePolicy::Automatic,
     );
 
     assert_eq!(profile.font_sizing().layout_dpi(), 100.0);
-    assert_eq!(profile.source(), FrameScaleSource::GnuX11Fallback);
+    assert_eq!(profile.source(), FrameFontScaleSource::GnuX11Fallback);
 }
 
 #[test]
-fn non_x11_frontends_keep_their_native_logical_rules_and_device_scale() {
-    let device_scale = DeviceScale::new(2.0).expect("valid device scale");
-    let profile = resolve_frame_scale(
-        DisplayObservation::Wayland { device_scale },
-        ScalePolicy::Automatic,
-    );
+fn pre_window_observations_resolve_only_logical_font_scale() {
+    let profile =
+        resolve_frame_font_scale(DisplayObservation::Wayland, FrameFontScalePolicy::Automatic);
 
     assert_eq!(profile.font_sizing().layout_dpi(), 96.0);
-    assert_eq!(profile.device_scale(), device_scale);
-    assert_eq!(profile.source(), FrameScaleSource::PlatformLogical);
+    assert_eq!(profile.source(), FrameFontScaleSource::PlatformLogical);
 }

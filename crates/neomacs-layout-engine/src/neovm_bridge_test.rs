@@ -3226,7 +3226,7 @@ fn test_realize_face_height_absolute() {
     let mut face = NeoFace::new("tall");
     face.height = Some(FaceHeight::Absolute(240)); // 24pt
     let realized = resolver.realize_face(&face);
-    let expected = crate::font::sizing::face_height_to_pixels(240);
+    let expected = crate::font::sizing::face_height_to_gnu_x11_fallback_pixels(240);
     assert!((realized.font_size - expected).abs() < 0.1);
 }
 

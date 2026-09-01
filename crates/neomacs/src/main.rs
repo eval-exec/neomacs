@@ -144,7 +144,7 @@ use neomacs_display_runtime::{
 };
 use neomacs_layout_engine::font::metrics::{FontMetricsService, SelectedFontInfo};
 use neomacs_layout_engine::font::sizing::{
-    FontSizing, FrameScaleProfile, ScalePolicy, resolve_frame_scale,
+    FontSizing, FrameFontScalePolicy, ResolvedFrameFontScale, resolve_frame_font_scale,
 };
 use neomacs_layout_engine::gui_chrome::{
     collect_gui_menu_bar_items_for_frame, collect_gui_tool_bar_items, compact_bar_mode_enabled,
@@ -311,37 +311,46 @@ impl Interactivity {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct BootstrapDisplayConfig {
-    frontend: FrontendKind,
-    scale: BootstrapScale,
+    kind: BootstrapDisplayKind,
     color_cells: i64,
     background_mode: &'static str,
     interactivity: Interactivity,
 }
 
-/// Scale state available before the first native window exists.
+/// Display kind and its scale facts available before a native window exists.
 ///
-/// GUI startup retains the complete policy result. The render runtime later
-/// replaces its provisional device scale with each realized window's winit
-/// scale factor; TTY startup has no native frame/device-scale observation.
+/// GUI startup retains only the resolved logical font rule. Device scale is
+/// deliberately absent until winit realizes each particular window.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum BootstrapScale {
-    Gui(FrameScaleProfile),
-    Tty(FontSizing),
+enum BootstrapDisplayKind {
+    Gui {
+        frame_font_scale: ResolvedFrameFontScale,
+    },
+    Tty {
+        font_sizing: FontSizing,
+    },
 }
 
 impl BootstrapDisplayConfig {
+    fn frontend(self) -> FrontendKind {
+        match self.kind {
+            BootstrapDisplayKind::Gui { .. } => FrontendKind::Gui,
+            BootstrapDisplayKind::Tty { .. } => FrontendKind::Tty,
+        }
+    }
+
     fn font_sizing(self) -> FontSizing {
-        match self.scale {
-            BootstrapScale::Gui(profile) => profile.font_sizing(),
-            BootstrapScale::Tty(font_sizing) => font_sizing,
+        match self.kind {
+            BootstrapDisplayKind::Gui { frame_font_scale } => frame_font_scale.font_sizing(),
+            BootstrapDisplayKind::Tty { font_sizing } => font_sizing,
         }
     }
 
     #[cfg(test)]
-    fn frame_scale_profile(self) -> Option<FrameScaleProfile> {
-        match self.scale {
-            BootstrapScale::Gui(profile) => Some(profile),
-            BootstrapScale::Tty(_) => None,
+    fn frame_font_scale(self) -> Option<ResolvedFrameFontScale> {
+        match self.kind {
+            BootstrapDisplayKind::Gui { frame_font_scale } => Some(frame_font_scale),
+            BootstrapDisplayKind::Tty { .. } => None,
         }
     }
 }
@@ -867,8 +876,9 @@ fn parse_temacs_mode(value: &str) -> Result<LoadupDumpMode, String> {
 
 fn bootstrap_tty_display_config(interactivity: Interactivity) -> BootstrapDisplayConfig {
     BootstrapDisplayConfig {
-        frontend: FrontendKind::Tty,
-        scale: BootstrapScale::Tty(FontSizing::xft()),
+        kind: BootstrapDisplayKind::Tty {
+            font_sizing: FontSizing::gnu_x11_fallback(),
+        },
         color_cells: tty_init::detect_tty_color_cells(),
         background_mode: tty_init::detect_tty_background_mode(),
         interactivity,
@@ -877,11 +887,10 @@ fn bootstrap_tty_display_config(interactivity: Interactivity) -> BootstrapDispla
 
 fn bootstrap_gui_display_config(
     interactivity: Interactivity,
-    scale_profile: FrameScaleProfile,
+    frame_font_scale: ResolvedFrameFontScale,
 ) -> BootstrapDisplayConfig {
     BootstrapDisplayConfig {
-        frontend: FrontendKind::Gui,
-        scale: BootstrapScale::Gui(scale_profile),
+        kind: BootstrapDisplayKind::Gui { frame_font_scale },
         color_cells: 16777216,
         // GNU `frame--current-background-mode` defaults GUI frames to
         // `light` unless a real background color or terminal default says
@@ -893,7 +902,7 @@ fn bootstrap_gui_display_config(
 
 impl BootstrapDisplayConfig {
     fn window_system_symbol(self) -> Option<&'static str> {
-        match self.frontend {
+        match self.frontend() {
             FrontendKind::Gui => Some(gui_window_system_symbol()),
             FrontendKind::Tty => None,
         }
@@ -2768,16 +2777,15 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
     }
 }
 
-fn gui_frame_scale_from_observation(
+fn gui_frame_font_scale_from_observation(
     observation: neomacs_display_protocol::DisplayObservation,
-) -> FrameScaleProfile {
-    let profile = resolve_frame_scale(observation, ScalePolicy::Automatic);
+) -> ResolvedFrameFontScale {
+    let profile = resolve_frame_font_scale(observation, FrameFontScalePolicy::Automatic);
     tracing::info!(
         ?observation,
         source = ?profile.source(),
         logical_dpi = profile.font_sizing().layout_dpi(),
-        device_scale = profile.device_scale().get(),
-        "resolved GUI frame scale"
+        "resolved GUI frame font scale"
     );
     profile
 }
@@ -3730,7 +3738,10 @@ pub fn run(mode: RuntimeMode) {
     let interactivity = Interactivity::from_noninteractive(startup.noninteractive);
     let bootstrap_display = if let Some(event_loop) = gui_event_loop.as_ref() {
         let observation = observe_event_loop_display(event_loop);
-        bootstrap_gui_display_config(interactivity, gui_frame_scale_from_observation(observation))
+        bootstrap_gui_display_config(
+            interactivity,
+            gui_frame_font_scale_from_observation(observation),
+        )
     } else {
         debug_assert_eq!(startup.frontend, FrontendKind::Tty);
         bootstrap_tty_display_config(interactivity)
@@ -4234,7 +4245,7 @@ fn bootstrap_frame_metrics_for_frontend(frontend: FrontendKind) -> BootstrapFram
 }
 
 fn bootstrap_frame_metrics_for_display(display: BootstrapDisplayConfig) -> BootstrapFrameMetrics {
-    if display.frontend == FrontendKind::Tty {
+    if display.frontend() == FrontendKind::Tty {
         bootstrap_frame_metrics_for_frontend(FrontendKind::Tty)
     } else {
         bootstrap_frame_metrics_for_font_sizing(display.font_sizing())
@@ -4249,7 +4260,7 @@ fn bootstrap_buffers(
 ) -> BootstrapResult {
     let frame_metrics = bootstrap_frame_metrics_for_display(display);
     let gui_display_identity =
-        (display.frontend == FrontendKind::Gui).then(host_gui_display_identity);
+        (display.frontend() == FrontendKind::Gui).then(host_gui_display_identity);
     let find_or_create_buffer = |eval: &mut Context, name: &str| {
         eval.buffer_manager()
             .find_buffer_by_name(name)
@@ -4362,12 +4373,12 @@ fn bootstrap_buffers(
     // `frame-initial-p' return t and `debug' (debug.el) take its
     // non-interactive `message'-only branch instead of displaying *Backtrace*.
     let initial_tty_frame =
-        display.frontend == FrontendKind::Tty && display.interactivity.is_batch();
+        display.frontend() == FrontendKind::Tty && display.interactivity.is_batch();
     // Preserve the host-selected bootstrap font across GNU face
     // finalization.  That Lisp pass may update live frame font state while it
     // computes specifications, but the opening host frame's font and geometry
     // remain the startup policy inputs until normal user configuration runs.
-    let (bootstrap_font, bootstrap_font_name) = if display.frontend == FrontendKind::Tty {
+    let (bootstrap_font, bootstrap_font_name) = if display.frontend() == FrontendKind::Tty {
         (Value::NIL, Value::string("fixed"))
     } else {
         (
@@ -4382,7 +4393,7 @@ fn bootstrap_buffers(
     let bootstrap_root_scope = neovm_core::emacs_core::eval::save_scratch_gc_roots();
     neovm_core::emacs_core::eval::push_scratch_gc_root(bootstrap_font_snapshot);
     neovm_core::emacs_core::eval::push_scratch_gc_root(bootstrap_font_name);
-    if display.frontend == FrontendKind::Tty {
+    if display.frontend() == FrontendKind::Tty {
         // GNU `make_initial_frame` resets its dedicated `tty_frame_count` and
         // assigns F1.  The reused pdump surrogate's internal FrameId is not a
         // presentation ordinal.
@@ -4397,7 +4408,7 @@ fn bootstrap_buffers(
         // font parameters are unused — TTY uses 1x1 character cells.
         // Reused startup frames must be normalized back to GNU's initial-frame
         // surface: generated name (e.g. "F1"), nil title, nil icon-name.
-        if display.frontend != FrontendKind::Tty {
+        if display.frontend() != FrontendKind::Tty {
             // This is likewise the one initial GUI frame, whose existing
             // bootstrap contract is F1. Terminal F<n> allocation is owned by
             // FrameManager's GNU-shaped tty_frame_count analogue above.
@@ -4415,7 +4426,7 @@ fn bootstrap_buffers(
         } else {
             frame.set_window_system(None);
         }
-        if display.frontend == FrontendKind::Gui {
+        if display.frontend() == FrontendKind::Gui {
             frame.set_display_identity(gui_display_identity.clone().unwrap_or_default());
             frame.set_parameter(
                 Value::symbol("display-type"),
@@ -4438,7 +4449,7 @@ fn bootstrap_buffers(
         // frame name, matching GNU behaviour.
 
         frame.font_pixel_size = frame_metrics.font_pixel_size;
-        if display.frontend == FrontendKind::Tty {
+        if display.frontend() == FrontendKind::Tty {
             // TTY frames use 1x1 character cell metrics
             // (GNU Emacs frame.c:1184-1185: column_width=1, line_height=1).
             frame.char_width = 1.0;
@@ -4462,7 +4473,7 @@ fn bootstrap_buffers(
         // The GUI path has its own menu bar pipeline (see
         // `neomacs-display-runtime`) and never goes through this code,
         // so we only need to set the parameter for `FrontendKind::Tty`.
-        if display.frontend == FrontendKind::Tty {
+        if display.frontend() == FrontendKind::Tty {
             frame.set_parameter(
                 FrameParam::MenuBarLines.symbol(),
                 neovm_core::emacs_core::Value::fixnum(1),
@@ -4483,7 +4494,7 @@ fn bootstrap_buffers(
         }
     }
     eval.create_window_markers_for_root(frame_id, scratch_id);
-    if display.frontend == FrontendKind::Gui {
+    if display.frontend() == FrontendKind::Gui {
         initialize_reused_gui_startup_frame(eval, frame_id);
     } else {
         eval.set_face_attribute(

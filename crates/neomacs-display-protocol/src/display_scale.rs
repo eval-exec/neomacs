@@ -6,8 +6,6 @@
 
 use std::num::NonZeroU32;
 
-use crate::DeviceScale;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidDpi;
 
@@ -80,7 +78,6 @@ pub struct X11DisplayObservation {
     server: XServerKind,
     xft_dpi: Option<Dpi>,
     geometry: Option<DisplayHeightGeometry>,
-    device_scale: DeviceScale,
 }
 
 impl X11DisplayObservation {
@@ -89,13 +86,11 @@ impl X11DisplayObservation {
         server: XServerKind,
         xft_dpi: Option<Dpi>,
         geometry: Option<DisplayHeightGeometry>,
-        device_scale: DeviceScale,
     ) -> Self {
         Self {
             server,
             xft_dpi,
             geometry,
-            device_scale,
         }
     }
 
@@ -113,19 +108,14 @@ impl X11DisplayObservation {
     pub const fn geometry(self) -> Option<DisplayHeightGeometry> {
         self.geometry
     }
-
-    #[must_use]
-    pub const fn device_scale(self) -> DeviceScale {
-        self.device_scale
-    }
 }
 
-/// Backend facts used to resolve one frame's font and device scale.
+/// Backend facts available before a native window and its device scale exist.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum DisplayObservation {
     X11(X11DisplayObservation),
-    Wayland { device_scale: DeviceScale },
-    Cocoa { device_scale: DeviceScale },
-    Windows { device_scale: DeviceScale },
+    Wayland,
+    Cocoa,
+    Windows,
 }

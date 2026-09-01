@@ -131,7 +131,7 @@ fn run_gui(demo: &str) {
     let backend = neomacs_layout_engine::font_backend::default_font_backend();
     let family = backend.resolve_family("monospace");
     // Use the same physical pixel size that layout_mock_frame will
-    // derive from the default face's point size via points_to_pixels.
+    // derive from the default face's point-size conversion.
     // Otherwise window pixel_bounds won't match the font metrics used
     // during layout, causing mode-lines and the minibuffer to be
     // misplaced or clipped.

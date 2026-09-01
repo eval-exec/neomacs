@@ -1,7 +1,7 @@
 //! Native display observation adapter for frame-scale policy.
 
 use neomacs_display_protocol::{
-    DeviceScale, DisplayHeightGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
+    DisplayHeightGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
 };
 use std::sync::OnceLock;
 use winit::event_loop::EventLoop;
@@ -65,7 +65,7 @@ struct RawX11DisplayObservation {
 
 #[cfg(target_os = "linux")]
 impl RawX11DisplayObservation {
-    fn validate(self, device_scale: DeviceScale) -> X11DisplayObservation {
+    fn validate(self) -> X11DisplayObservation {
         let xft_dpi = self.xft_dpi.and_then(|dpi| Dpi::new(dpi).ok());
         let geometry = u32::try_from(self.display_height_px)
             .ok()
@@ -77,7 +77,6 @@ impl RawX11DisplayObservation {
             classify_x_server(self.has_xwayland_extension, self.vendor.as_deref()),
             xft_dpi,
             geometry,
-            device_scale,
         )
     }
 }
@@ -95,7 +94,7 @@ fn classify_x_server(has_xwayland_extension: bool, vendor: Option<&str>) -> XSer
 
 #[cfg(target_os = "linux")]
 fn fallback_x11_observation() -> X11DisplayObservation {
-    RawX11DisplayObservation::default().validate(DeviceScale::ONE)
+    RawX11DisplayObservation::default().validate()
 }
 
 #[cfg(target_os = "linux")]
@@ -104,9 +103,7 @@ fn observe_linux_backend(
     x11_probe: impl FnOnce() -> X11DisplayObservation,
 ) -> DisplayObservation {
     match backend {
-        SelectedLinuxBackend::Wayland => DisplayObservation::Wayland {
-            device_scale: DeviceScale::ONE,
-        },
+        SelectedLinuxBackend::Wayland => DisplayObservation::Wayland,
         SelectedLinuxBackend::X11 => DisplayObservation::X11(x11_probe()),
     }
 }
@@ -128,25 +125,19 @@ pub fn observe_event_loop_display<T: 'static>(event_loop: &EventLoop<T>) -> Disp
     #[cfg(target_os = "macos")]
     let observation = {
         let _ = event_loop;
-        DisplayObservation::Cocoa {
-            device_scale: DeviceScale::ONE,
-        }
+        DisplayObservation::Cocoa
     };
 
     #[cfg(windows)]
     let observation = {
         let _ = event_loop;
-        DisplayObservation::Windows {
-            device_scale: DeviceScale::ONE,
-        }
+        DisplayObservation::Windows
     };
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     let observation = {
         let _ = event_loop;
-        DisplayObservation::Wayland {
-            device_scale: DeviceScale::ONE,
-        }
+        DisplayObservation::Wayland
     };
 
     publish_window_coordinate_system(coordinate_system_for_observation(observation));
@@ -235,7 +226,7 @@ fn query_x11_display() -> X11DisplayObservation {
     };
     unsafe { (xlib.XCloseDisplay)(display) };
 
-    raw.validate(DeviceScale::ONE)
+    raw.validate()
 }
 
 #[cfg(test)]
