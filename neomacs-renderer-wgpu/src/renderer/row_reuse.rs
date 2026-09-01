@@ -269,8 +269,7 @@ impl RowStreams {
         }
         for bounds in &row.bounds {
             let mut shifted = bounds.clone();
-            shifted.cell_y += dy;
-            shifted.glyph_y += dy;
+            shifted.geometry = shifted.geometry.translated_y(dy);
             self.bounds.push(shifted);
         }
     }

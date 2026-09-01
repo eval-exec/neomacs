@@ -1,7 +1,8 @@
 use super::{
-    CursorCellAlignment, CursorCellContract, CursorInlineDirection, GlyphCellRect,
-    RenderedCharBounds, ResolvedCursorRect, char_overlap, cursor_cell_alignment,
-    cursor_glyph_slot_rect, frame_default_glyph_metrics, log_cursor_glyph_alignment,
+    CharOverlapClassification, CursorCellAlignment, CursorCellContract, CursorInlineDirection,
+    ExpectedCharOverlap, GlyphCellRect, RenderedCharBounds, RenderedGlyphGeometry,
+    ResolvedCursorRect, char_overlap, cursor_cell_alignment, cursor_glyph_slot_rect,
+    frame_default_glyph_metrics, log_cursor_glyph_alignment,
 };
 use neomacs_display_protocol::face::BoxVerticalEdges;
 use neomacs_display_protocol::frame_glyphs::{
@@ -576,24 +577,15 @@ fn vertical_bar_cursor_aligned_to_its_glyph_cell_is_not_a_mismatch() {
 
     let chars = [RenderedCharBounds {
         glyph_index: 0,
-        window_id: window_id.get(),
         row_role: GlyphRowRole::Text,
         slot_id,
         label: "葭".to_owned(),
         face_id: FaceId::new(25),
         font_size: 13.0,
-        cell_x: 233.0,
-        cell_y: 123.0,
-        cell_w: 13.0,
-        cell_h: 18.0,
-        glyph_x: 233.5,
-        glyph_y: 125.5,
-        glyph_w: 12.5,
-        glyph_h: 13.0,
-        left_overhang: 0.0,
-        right_overhang: 0.0,
-        top_overhang: 0.0,
-        bottom_overhang: 0.0,
+        geometry: RenderedGlyphGeometry::new(
+            Rect::new(233.0, 123.0, 13.0, 18.0),
+            Rect::new(233.5, 125.5, 12.5, 13.0),
+        ),
     }];
 
     log_cursor_glyph_alignment(4_294_967_296, "text", &frame, &chars);
@@ -765,7 +757,6 @@ fn frame_default_glyph_metrics_derive_line_height_from_font_size() {
 fn char_bounds(label: &str, x: f32, y: f32, width: f32, height: f32) -> RenderedCharBounds {
     RenderedCharBounds {
         glyph_index: 0,
-        window_id: 1,
         row_role: GlyphRowRole::Text,
         slot_id: DisplaySlotId {
             window_id: neomacs_display_protocol::types::DisplayWindowId::new(1),
@@ -775,19 +766,16 @@ fn char_bounds(label: &str, x: f32, y: f32, width: f32, height: f32) -> Rendered
         label: label.to_string(),
         face_id: FaceId::new(0),
         font_size: 14.0,
-        cell_x: x,
-        cell_y: y,
-        cell_w: width,
-        cell_h: height,
-        glyph_x: x,
-        glyph_y: y,
-        glyph_w: width,
-        glyph_h: height,
-        left_overhang: 0.0,
-        right_overhang: 0.0,
-        top_overhang: 0.0,
-        bottom_overhang: 0.0,
+        geometry: RenderedGlyphGeometry::new(
+            Rect::new(x, y, width, height),
+            Rect::new(x, y, width, height),
+        ),
     }
+}
+
+fn with_bitmap(mut bounds: RenderedCharBounds, bitmap: Rect) -> RenderedCharBounds {
+    bounds.geometry = RenderedGlyphGeometry::new(bounds.geometry.cell, bitmap);
+    bounds
 }
 
 #[test]
@@ -796,11 +784,11 @@ fn char_overlap_detects_intersecting_rendered_bitmaps() {
     let b = char_bounds("B", 9.0, 4.0, 10.0, 12.0);
 
     let overlap = char_overlap(&a, &b).expect("overlap");
-    assert_eq!(overlap.x, 9.0);
-    assert_eq!(overlap.y, 4.0);
-    assert_eq!(overlap.width, 1.0);
-    assert_eq!(overlap.height, 8.0);
-    assert!(!overlap.expected_by_overhang);
+    assert_eq!(overlap.bounds, Rect::new(9.0, 4.0, 1.0, 8.0));
+    assert_eq!(
+        overlap.classification,
+        CharOverlapClassification::Unexpected
+    );
 }
 
 #[test]
@@ -815,107 +803,189 @@ fn char_overlap_ignores_touching_edges_and_subpixel_noise() {
 
 #[test]
 fn char_overlap_classifies_font_overhang_separately() {
-    let mut f = char_bounds("f", 0.0, 0.0, 9.0, 12.0);
-    f.glyph_w = 11.0;
-    f.right_overhang = 2.0;
+    let f = with_bitmap(
+        char_bounds("f", 0.0, 0.0, 9.0, 12.0),
+        Rect::new(0.0, 0.0, 11.0, 12.0),
+    );
     let next = char_bounds("a", 9.0, 0.0, 12.0, 12.0);
 
     let overlap = char_overlap(&f, &next).expect("overhang overlap");
-    assert_eq!(overlap.x, 9.0);
-    assert_eq!(overlap.width, 2.0);
-    assert!(overlap.expected_by_overhang);
+    assert_eq!(overlap.bounds.x, 9.0);
+    assert_eq!(overlap.bounds.width, 2.0);
+    assert_eq!(
+        overlap.classification,
+        CharOverlapClassification::Expected(ExpectedCharOverlap::HorizontalOverhang)
+    );
+}
+
+#[test]
+fn char_overlap_horizontal_overhang_requires_one_logical_row() {
+    let first = with_bitmap(
+        char_bounds("f", 0.0, 0.0, 9.0, 12.0),
+        Rect::new(0.0, 0.0, 11.0, 12.0),
+    );
+    let next = char_bounds("a", 9.0, 0.0, 12.0, 12.0);
+    let mut other_window = next.clone();
+    other_window.slot_id.window_id = DisplayWindowId::new(2);
+    let mut other_role = next.clone();
+    other_role.row_role = GlyphRowRole::ModeLine;
+    let mut other_row = next;
+    other_row.slot_id.row = 1;
+
+    for (case, next) in [
+        ("different window", other_window),
+        ("different row role", other_role),
+        ("different row", other_row),
+    ] {
+        let overlap = char_overlap(&first, &next).expect("horizontal bitmap collision");
+        assert_eq!(
+            overlap.classification,
+            CharOverlapClassification::Unexpected,
+            "{case} must not suppress a genuine collision"
+        );
+    }
 }
 
 #[test]
 fn char_overlap_classifies_subpixel_boundary_overhang_separately() {
-    let mut slash = char_bounds("/", 775.8, 698.0, 14.0, 31.0);
-    slash.glyph_x = 776.0;
-    slash.glyph_y = 701.7;
-    slash.glyph_w = 14.3;
-    slash.glyph_h = 22.3;
-    slash.right_overhang = (slash.glyph_x + slash.glyph_w - (slash.cell_x + slash.cell_w)).max(0.0);
-
-    let mut m = char_bounds("m", 789.8, 698.0, 14.0, 31.0);
-    m.glyph_x = 789.7;
-    m.glyph_y = 708.0;
-    m.glyph_w = 13.7;
-    m.glyph_h = 13.7;
-    m.left_overhang = (m.cell_x - m.glyph_x).max(0.0);
+    let slash = with_bitmap(
+        char_bounds("/", 775.8, 698.0, 14.0, 31.0),
+        Rect::new(776.0, 701.7, 14.3, 22.3),
+    );
+    let m = with_bitmap(
+        char_bounds("m", 789.8, 698.0, 14.0, 31.0),
+        Rect::new(789.7, 708.0, 13.7, 13.7),
+    );
 
     let overlap = char_overlap(&slash, &m).expect("subpixel boundary overhang");
-    assert!(overlap.expected_by_overhang);
+    assert_eq!(
+        overlap.classification,
+        CharOverlapClassification::Expected(ExpectedCharOverlap::HorizontalOverhang)
+    );
 }
 
 #[test]
 fn char_overlap_classifies_adjacent_vertical_overhang_separately() {
-    let mut upper = char_bounds("│", 861.0, 76.0, 9.0, 19.0);
-    upper.glyph_x = 865.0;
-    upper.glyph_y = 75.0;
-    upper.glyph_w = 2.0;
-    upper.glyph_h = 23.0;
-    upper.top_overhang = 1.0;
-    upper.bottom_overhang = 3.0;
-
-    let mut lower = char_bounds("│", 861.0, 95.0, 9.0, 19.0);
-    lower.glyph_x = 865.0;
-    lower.glyph_y = 94.0;
-    lower.glyph_w = 2.0;
-    lower.glyph_h = 23.0;
-    lower.top_overhang = 1.0;
-    lower.bottom_overhang = 3.0;
+    let (upper, lower) = adjacent_vertical_overhang_bounds();
 
     let overlap = char_overlap(&upper, &lower).expect("vertical overhang overlap");
-    assert_eq!(overlap.y, 94.0);
-    assert_eq!(overlap.height, 4.0);
-    assert!(overlap.expected_by_overhang);
+    assert_eq!(overlap.bounds.y, 94.0);
+    assert_eq!(overlap.bounds.height, 4.0);
+    assert_eq!(
+        overlap.classification,
+        CharOverlapClassification::Expected(ExpectedCharOverlap::VerticalOverhang)
+    );
+}
+
+fn adjacent_vertical_overhang_bounds() -> (RenderedCharBounds, RenderedCharBounds) {
+    let mut upper = with_bitmap(
+        char_bounds("│", 861.0, 76.0, 9.0, 19.0),
+        Rect::new(865.0, 75.0, 2.0, 23.0),
+    );
+    upper.slot_id.row = 5;
+    upper.slot_id.col = 2;
+
+    let mut lower = with_bitmap(
+        char_bounds("│", 861.0, 95.0, 9.0, 19.0),
+        Rect::new(865.0, 94.0, 2.0, 23.0),
+    );
+    lower.slot_id.row = 6;
+    lower.slot_id.col = 2;
+    (upper, lower)
+}
+
+#[test]
+fn char_overlap_vertical_overhang_requires_one_logical_grid_run() {
+    let (upper, lower) = adjacent_vertical_overhang_bounds();
+    let mut other_window = lower.clone();
+    other_window.slot_id.window_id = DisplayWindowId::new(2);
+    let mut other_role = lower.clone();
+    other_role.row_role = GlyphRowRole::ModeLine;
+    let mut other_column = lower.clone();
+    other_column.slot_id.col = 3;
+    let mut nonadjacent_row = lower;
+    nonadjacent_row.slot_id.row = 7;
+
+    for (case, lower) in [
+        ("different window", other_window),
+        ("different row role", other_role),
+        ("different column", other_column),
+        ("nonadjacent row", nonadjacent_row),
+    ] {
+        let overlap = char_overlap(&upper, &lower).expect("vertical bitmap collision");
+        assert_eq!(
+            overlap.classification,
+            CharOverlapClassification::Unexpected,
+            "{case} must not suppress a genuine collision"
+        );
+    }
+}
+
+#[test]
+fn char_overlap_vertical_overhang_must_intersect_the_shared_row_boundary() {
+    let mut upper = with_bitmap(
+        char_bounds("upper", 0.0, 0.0, 10.0, 10.0),
+        Rect::new(4.0, 0.0, 2.0, 18.0),
+    );
+    upper.slot_id.row = 5;
+    upper.slot_id.col = 2;
+
+    let mut lower = with_bitmap(
+        char_bounds("lower", 0.0, 10.0, 10.0, 10.0),
+        Rect::new(4.0, 14.0, 2.0, 4.0),
+    );
+    lower.slot_id.row = 6;
+    lower.slot_id.col = 2;
+
+    let overlap = char_overlap(&upper, &lower).expect("deep vertical bitmap collision");
+    assert_eq!(overlap.bounds, Rect::new(4.0, 14.0, 2.0, 4.0));
+    assert_eq!(
+        overlap.classification,
+        CharOverlapClassification::Unexpected,
+        "vertical ink that collides away from the shared row boundary is not a joining overhang"
+    );
 }
 
 #[test]
 fn char_overlap_classifies_box_drawing_corner_join_separately() {
-    let mut corner = char_bounds("╮", 1734.0, 95.0, 9.0, 19.0);
+    let mut corner = with_bitmap(
+        char_bounds("╮", 1734.0, 95.0, 9.0, 19.0),
+        Rect::new(1733.0, 103.0, 7.0, 14.0),
+    );
     corner.slot_id.row = 5;
     corner.slot_id.col = 2;
-    corner.glyph_x = 1733.0;
-    corner.glyph_y = 103.0;
-    corner.glyph_w = 7.0;
-    corner.glyph_h = 14.0;
-    corner.left_overhang = 1.0;
 
-    let mut stem = char_bounds("│", 1734.0, 114.0, 9.0, 19.0);
+    let mut stem = with_bitmap(
+        char_bounds("│", 1734.0, 114.0, 9.0, 19.0),
+        Rect::new(1738.0, 113.0, 2.0, 23.0),
+    );
     stem.slot_id.row = 6;
     stem.slot_id.col = 2;
-    stem.glyph_x = 1738.0;
-    stem.glyph_y = 113.0;
-    stem.glyph_w = 2.0;
-    stem.glyph_h = 23.0;
 
     let overlap = char_overlap(&corner, &stem).expect("box-drawing join overlap");
-    assert_eq!(overlap.x, 1738.0);
-    assert_eq!(overlap.y, 113.0);
-    assert_eq!(overlap.width, 2.0);
-    assert_eq!(overlap.height, 4.0);
-    assert!(overlap.expected_by_overhang);
+    assert_eq!(overlap.bounds, Rect::new(1738.0, 113.0, 2.0, 4.0));
+    assert_eq!(
+        overlap.classification,
+        CharOverlapClassification::Expected(ExpectedCharOverlap::VerticalOverhang)
+    );
 }
 
 #[test]
 fn char_overlap_classifies_adjacent_dual_bearing_overhang_separately() {
-    let mut w = char_bounds("w", 888.0, 384.0, 16.0, 33.0);
-    w.glyph_x = 889.0;
-    w.glyph_y = 395.0;
-    w.glyph_w = 17.0;
-    w.glyph_h = 15.0;
-    w.right_overhang = 2.0;
-
-    let mut x = char_bounds("x", 904.0, 384.0, 16.0, 33.0);
-    x.glyph_x = 903.0;
-    x.glyph_y = 395.0;
-    x.glyph_w = 18.0;
-    x.glyph_h = 15.0;
-    x.left_overhang = 1.0;
-    x.right_overhang = 1.0;
+    let w = with_bitmap(
+        char_bounds("w", 888.0, 384.0, 16.0, 33.0),
+        Rect::new(889.0, 395.0, 17.0, 15.0),
+    );
+    let x = with_bitmap(
+        char_bounds("x", 904.0, 384.0, 16.0, 33.0),
+        Rect::new(903.0, 395.0, 18.0, 15.0),
+    );
 
     let overlap = char_overlap(&w, &x).expect("dual-bearing overhang overlap");
-    assert_eq!(overlap.x, 903.0);
-    assert_eq!(overlap.width, 3.0);
-    assert!(overlap.expected_by_overhang);
+    assert_eq!(overlap.bounds.x, 903.0);
+    assert_eq!(overlap.bounds.width, 3.0);
+    assert_eq!(
+        overlap.classification,
+        CharOverlapClassification::Expected(ExpectedCharOverlap::HorizontalOverhang)
+    );
 }

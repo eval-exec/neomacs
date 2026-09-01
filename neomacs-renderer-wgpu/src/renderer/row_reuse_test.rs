@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 
 use neomacs_display_protocol::frame_glyphs::{DisplaySlotId, FrameGlyph, GlyphRowRole};
 use neomacs_display_protocol::glyph_matrix::RowDamage;
-use neomacs_display_protocol::types::DisplayWindowId;
+use neomacs_display_protocol::types::{DisplayWindowId, Rect};
 
 use super::super::super::glyph_atlas::FrameFontBindingsIdentity;
 use super::super::super::glyph_atlas::types::{
@@ -23,7 +23,7 @@ use super::super::super::glyph_atlas::types::{
     GlyphMetrics, PageId, SubpixelMask, UvRect,
 };
 use super::super::super::vertex::{GlyphVertex, SubpixelGlyphVertex};
-use super::super::glyphs::RenderedCharBounds;
+use super::super::glyphs::{RenderedCharBounds, RenderedGlyphGeometry};
 use super::*;
 
 const FRAME: u64 = 7;
@@ -214,7 +214,6 @@ impl RowTessellator for FakeTessellator<'_> {
         let mut tessellation = RowTessellation::default();
         for glyph_index in chunk.glyphs.clone() {
             let FrameGlyph::Char {
-                window_id,
                 row_role,
                 slot_id,
                 char: c,
@@ -261,24 +260,15 @@ impl RowTessellator for FakeTessellator<'_> {
             }
             out.bounds.push(RenderedCharBounds {
                 glyph_index,
-                window_id: window_id.get(),
                 row_role: *row_role,
                 slot_id: *slot_id,
                 label: c.to_string(),
                 face_id: *face_id,
                 font_size: 14.0,
-                cell_x: *x,
-                cell_y: *y,
-                cell_w: *width,
-                cell_h: *height,
-                glyph_x: *x,
-                glyph_y: *y,
-                glyph_w: 8.0,
-                glyph_h: 12.0,
-                left_overhang: 0.0,
-                right_overhang: 0.0,
-                top_overhang: 0.0,
-                bottom_overhang: 0.0,
+                geometry: RenderedGlyphGeometry::new(
+                    Rect::new(*x, *y, *width, *height),
+                    Rect::new(*x, *y, 8.0, 12.0),
+                ),
             });
         }
         tessellation
@@ -538,7 +528,13 @@ fn fingerprint(streams: &RowStreams) -> Fingerprint {
     let bounds = streams
         .bounds
         .iter()
-        .map(|b| (b.glyph_index, b.cell_y.to_bits(), b.glyph_y.to_bits()))
+        .map(|b| {
+            (
+                b.glyph_index,
+                b.geometry.cell().y.to_bits(),
+                b.geometry.bitmap().y.to_bits(),
+            )
+        })
         .collect();
     (mask, subpixel, color, entries, bounds)
 }

@@ -33,50 +33,111 @@ const CHAR_OVERLAP_LOG_LIMIT: usize = 32;
 #[derive(Debug, Clone)]
 pub(super) struct RenderedCharBounds {
     pub(super) glyph_index: usize,
-    pub(super) window_id: i64,
     pub(super) row_role: GlyphRowRole,
     pub(super) slot_id: DisplaySlotId,
     pub(super) label: String,
     pub(super) face_id: FaceId,
     pub(super) font_size: f32,
-    pub(super) cell_x: f32,
-    pub(super) cell_y: f32,
-    pub(super) cell_w: f32,
-    pub(super) cell_h: f32,
-    pub(super) glyph_x: f32,
-    pub(super) glyph_y: f32,
-    pub(super) glyph_w: f32,
-    pub(super) glyph_h: f32,
-    pub(super) left_overhang: f32,
-    pub(super) right_overhang: f32,
-    pub(super) top_overhang: f32,
-    pub(super) bottom_overhang: f32,
+    pub(super) geometry: RenderedGlyphGeometry,
 }
 
-impl RenderedCharBounds {
-    fn right(&self) -> f32 {
-        self.glyph_x + self.glyph_w
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct RenderedGlyphGeometry {
+    /// The layout-owned advance cell.
+    cell: Rect,
+    /// The clipped bitmap rectangle actually submitted for rendering.
+    bitmap: Rect,
+}
+
+impl RenderedGlyphGeometry {
+    pub(super) const fn new(cell: Rect, bitmap: Rect) -> Self {
+        Self { cell, bitmap }
     }
 
-    fn bottom(&self) -> f32 {
-        self.glyph_y + self.glyph_h
+    #[cfg(test)]
+    pub(super) const fn cell(self) -> Rect {
+        self.cell
+    }
+
+    #[cfg(test)]
+    pub(super) const fn bitmap(self) -> Rect {
+        self.bitmap
+    }
+
+    pub(super) fn translated_y(mut self, dy: f32) -> Self {
+        self.cell.y += dy;
+        self.bitmap.y += dy;
+        self
+    }
+
+    fn overhang(self) -> GlyphOverhang {
+        GlyphOverhang {
+            left: (self.cell.x - self.bitmap.x).max(0.0),
+            right: (self.bitmap.right() - self.cell.right()).max(0.0),
+            top: (self.cell.y - self.bitmap.y).max(0.0),
+            bottom: (self.bitmap.bottom() - self.cell.bottom()).max(0.0),
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct GlyphOverhang {
+    left: f32,
+    right: f32,
+    top: f32,
+    bottom: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverlapAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AxisSpan {
+    start: f32,
+    end: f32,
+}
+
+impl OverlapAxis {
+    fn project(self, rect: Rect) -> AxisSpan {
+        match self {
+            Self::Horizontal => AxisSpan {
+                start: rect.x,
+                end: rect.right(),
+            },
+            Self::Vertical => AxisSpan {
+                start: rect.y,
+                end: rect.bottom(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedCharOverlap {
+    HorizontalOverhang,
+    VerticalOverhang,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CharOverlapClassification {
+    Expected(ExpectedCharOverlap),
+    Unexpected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct CharOverlap {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    expected_by_overhang: bool,
+    bounds: Rect,
+    classification: CharOverlapClassification,
 }
 
 fn char_overlap(a: &RenderedCharBounds, b: &RenderedCharBounds) -> Option<CharOverlap> {
-    let x0 = a.glyph_x.max(b.glyph_x);
-    let y0 = a.glyph_y.max(b.glyph_y);
-    let x1 = a.right().min(b.right());
-    let y1 = a.bottom().min(b.bottom());
+    let x0 = a.geometry.bitmap.x.max(b.geometry.bitmap.x);
+    let y0 = a.geometry.bitmap.y.max(b.geometry.bitmap.y);
+    let x1 = a.geometry.bitmap.right().min(b.geometry.bitmap.right());
+    let y1 = a.geometry.bitmap.bottom().min(b.geometry.bitmap.bottom());
     let width = x1 - x0;
     let height = y1 - y0;
     if width <= CHAR_OVERLAP_MIN_AXIS
@@ -85,123 +146,93 @@ fn char_overlap(a: &RenderedCharBounds, b: &RenderedCharBounds) -> Option<CharOv
     {
         return None;
     }
-    let expected_by_overhang = overlap_is_expected_by_overhang(a, b, x0, x1, y0, y1);
+    let bounds = Rect::new(x0, y0, width, height);
+    let classification = classify_char_overlap(a, b, bounds);
     Some(CharOverlap {
-        x: x0,
-        y: y0,
-        width,
-        height,
-        expected_by_overhang,
+        bounds,
+        classification,
     })
 }
 
-fn overlap_is_expected_by_overhang(
+fn classify_char_overlap(
     a: &RenderedCharBounds,
     b: &RenderedCharBounds,
-    overlap_left: f32,
-    overlap_right: f32,
-    overlap_top: f32,
-    overlap_bottom: f32,
-) -> bool {
-    let a_cell_right = a.cell_x + a.cell_w;
-    let b_cell_right = b.cell_x + b.cell_w;
-
-    let a_explains = a.right_overhang > 0.0
-        && overlap_left >= a_cell_right - CHAR_OVERLAP_MIN_AXIS
-        && overlap_right <= a.right() + CHAR_OVERLAP_MIN_AXIS;
-    let b_explains = b.left_overhang > 0.0
-        && overlap_right <= b.cell_x + CHAR_OVERLAP_MIN_AXIS
-        && overlap_left >= b.glyph_x - CHAR_OVERLAP_MIN_AXIS;
-
-    let b_right_explains = b.right_overhang > 0.0
-        && overlap_left >= b_cell_right - CHAR_OVERLAP_MIN_AXIS
-        && overlap_right <= b.right() + CHAR_OVERLAP_MIN_AXIS;
-    let a_left_explains = a.left_overhang > 0.0
-        && overlap_right <= a.cell_x + CHAR_OVERLAP_MIN_AXIS
-        && overlap_left >= a.glyph_x - CHAR_OVERLAP_MIN_AXIS;
-
-    let a_right_b_left_explain = a.right_overhang > 0.0
-        && b.left_overhang > 0.0
-        && (a_cell_right - b.cell_x).abs() <= CHAR_OVERLAP_MIN_AXIS
-        && overlap_left >= b.glyph_x - CHAR_OVERLAP_MIN_AXIS
-        && overlap_right <= a.right() + CHAR_OVERLAP_MIN_AXIS
-        && overlap_left <= a_cell_right + CHAR_OVERLAP_MIN_AXIS
-        && overlap_right >= a_cell_right - CHAR_OVERLAP_MIN_AXIS;
-    let b_right_a_left_explain = b.right_overhang > 0.0
-        && a.left_overhang > 0.0
-        && (b_cell_right - a.cell_x).abs() <= CHAR_OVERLAP_MIN_AXIS
-        && overlap_left >= a.glyph_x - CHAR_OVERLAP_MIN_AXIS
-        && overlap_right <= b.right() + CHAR_OVERLAP_MIN_AXIS
-        && overlap_left <= b_cell_right + CHAR_OVERLAP_MIN_AXIS
-        && overlap_right >= b_cell_right - CHAR_OVERLAP_MIN_AXIS;
-
-    let a_cell_bottom = a.cell_y + a.cell_h;
-    let b_cell_bottom = b.cell_y + b.cell_h;
-
-    let a_bottom_explains = a.bottom_overhang > 0.0
-        && overlap_top >= a_cell_bottom - CHAR_OVERLAP_MIN_AXIS
-        && overlap_bottom <= a.bottom() + CHAR_OVERLAP_MIN_AXIS;
-    let b_top_explains = b.top_overhang > 0.0
-        && overlap_bottom <= b.cell_y + CHAR_OVERLAP_MIN_AXIS
-        && overlap_top >= b.glyph_y - CHAR_OVERLAP_MIN_AXIS;
-
-    let b_bottom_explains = b.bottom_overhang > 0.0
-        && overlap_top >= b_cell_bottom - CHAR_OVERLAP_MIN_AXIS
-        && overlap_bottom <= b.bottom() + CHAR_OVERLAP_MIN_AXIS;
-    let a_top_explains = a.top_overhang > 0.0
-        && overlap_bottom <= a.cell_y + CHAR_OVERLAP_MIN_AXIS
-        && overlap_top >= a.glyph_y - CHAR_OVERLAP_MIN_AXIS;
-
-    let a_bottom_b_top_explain = a.bottom_overhang > 0.0
-        && b.top_overhang > 0.0
-        && (a_cell_bottom - b.cell_y).abs() <= CHAR_OVERLAP_MIN_AXIS
-        && overlap_top >= b.glyph_y - CHAR_OVERLAP_MIN_AXIS
-        && overlap_bottom <= a.bottom() + CHAR_OVERLAP_MIN_AXIS
-        && overlap_top <= a_cell_bottom + CHAR_OVERLAP_MIN_AXIS
-        && overlap_bottom >= a_cell_bottom - CHAR_OVERLAP_MIN_AXIS;
-    let b_bottom_a_top_explain = b.bottom_overhang > 0.0
-        && a.top_overhang > 0.0
-        && (b_cell_bottom - a.cell_y).abs() <= CHAR_OVERLAP_MIN_AXIS
-        && overlap_top >= a.glyph_y - CHAR_OVERLAP_MIN_AXIS
-        && overlap_bottom <= b.bottom() + CHAR_OVERLAP_MIN_AXIS
-        && overlap_top <= b_cell_bottom + CHAR_OVERLAP_MIN_AXIS
-        && overlap_bottom >= b_cell_bottom - CHAR_OVERLAP_MIN_AXIS;
-
-    // Adjacent cells in the same grid column may use deliberately intersecting
-    // bitmaps. Box-drawing corners are a common case: the corner reaches below
-    // its cell while the following vertical stroke reaches above its cell.
-    // Classify the actual bitmap intersection as overhang even when rasterizer
-    // rounding makes one of the independently calculated overhangs vanish.
-    let same_vertical_grid_run = a.window_id == b.window_id
-        && a.row_role == b.row_role
-        && a.slot_id.col == b.slot_id.col
-        && a.slot_id.row.abs_diff(b.slot_id.row) == 1;
-    let adjacent_cell_boundary = if (a_cell_bottom - b.cell_y).abs() <= CHAR_OVERLAP_MIN_AXIS {
-        Some(a_cell_bottom)
-    } else if (b_cell_bottom - a.cell_y).abs() <= CHAR_OVERLAP_MIN_AXIS {
-        Some(b_cell_bottom)
+    overlap: Rect,
+) -> CharOverlapClassification {
+    if overlap_is_expected_on_axis(a, b, overlap, OverlapAxis::Horizontal) {
+        CharOverlapClassification::Expected(ExpectedCharOverlap::HorizontalOverhang)
+    } else if overlap_is_expected_on_axis(a, b, overlap, OverlapAxis::Vertical) {
+        CharOverlapClassification::Expected(ExpectedCharOverlap::VerticalOverhang)
     } else {
-        None
-    };
-    let adjacent_vertical_overhang = same_vertical_grid_run
-        && adjacent_cell_boundary.is_some_and(|boundary| {
-            overlap_top <= boundary + CHAR_OVERLAP_MIN_AXIS
-                && overlap_bottom >= boundary - CHAR_OVERLAP_MIN_AXIS
-        });
+        CharOverlapClassification::Unexpected
+    }
+}
 
-    a_explains
-        || b_explains
-        || b_right_explains
-        || a_left_explains
-        || a_right_b_left_explain
-        || b_right_a_left_explain
-        || a_bottom_explains
-        || b_top_explains
-        || b_bottom_explains
-        || a_top_explains
-        || a_bottom_b_top_explain
-        || b_bottom_a_top_explain
-        || adjacent_vertical_overhang
+fn overlap_is_expected_on_axis(
+    a: &RenderedCharBounds,
+    b: &RenderedCharBounds,
+    overlap: Rect,
+    axis: OverlapAxis,
+) -> bool {
+    // Match GNU redisplay's ownership discipline: horizontal bearings belong
+    // to one glyph row, while vertical overlap belongs to adjacent rows. A
+    // geometric intersection alone must never erase that logical boundary.
+    let same_render_run = a.slot_id.window_id == b.slot_id.window_id && a.row_role == b.row_role;
+    let grid_neighbors = same_render_run
+        && match axis {
+            OverlapAxis::Horizontal => a.slot_id.row == b.slot_id.row,
+            OverlapAxis::Vertical => {
+                a.slot_id.col == b.slot_id.col && a.slot_id.row.abs_diff(b.slot_id.row) == 1
+            }
+        };
+    if !grid_neighbors {
+        return false;
+    }
+
+    let a_cell = axis.project(a.geometry.cell);
+    let b_cell = axis.project(b.geometry.cell);
+    let a_bitmap = axis.project(a.geometry.bitmap);
+    let b_bitmap = axis.project(b.geometry.bitmap);
+    let overlap = axis.project(overlap);
+    let (before_cell, before_bitmap, after_cell, after_bitmap) =
+        if a_cell.start.total_cmp(&b_cell.start).is_le() {
+            (a_cell, a_bitmap, b_cell, b_bitmap)
+        } else {
+            (b_cell, b_bitmap, a_cell, a_bitmap)
+        };
+
+    if !approx_eq(before_cell.end, after_cell.start, CHAR_OVERLAP_MIN_AXIS) {
+        return false;
+    }
+    let shared_cell_boundary = before_cell.end;
+    if axis == OverlapAxis::Vertical
+        && (overlap.start > shared_cell_boundary + CHAR_OVERLAP_MIN_AXIS
+            || overlap.end < shared_cell_boundary - CHAR_OVERLAP_MIN_AXIS)
+    {
+        return false;
+    }
+
+    // Overhang is derived from the two rectangles. Keeping it out of stored
+    // state makes a bitmap/cell pair with contradictory overhang impossible.
+    let before_extends_after_cell = before_bitmap.end > before_cell.end;
+    let after_extends_before_cell = after_bitmap.start < after_cell.start;
+    if !before_extends_after_cell && !after_extends_before_cell {
+        return false;
+    }
+
+    let expected_start = if after_extends_before_cell {
+        after_bitmap.start
+    } else {
+        before_cell.end
+    };
+    let expected_end = if before_extends_after_cell {
+        before_bitmap.end
+    } else {
+        after_cell.start
+    };
+
+    overlap.start >= expected_start - CHAR_OVERLAP_MIN_AXIS
+        && overlap.end <= expected_end + CHAR_OVERLAP_MIN_AXIS
 }
 
 pub(super) fn log_rendered_char_overlaps(
@@ -211,9 +242,11 @@ pub(super) fn log_rendered_char_overlaps(
 ) -> usize {
     let mut sorted: Vec<&RenderedCharBounds> = chars.iter().collect();
     sorted.sort_by(|a, b| {
-        a.glyph_x
-            .total_cmp(&b.glyph_x)
-            .then(a.glyph_y.total_cmp(&b.glyph_y))
+        a.geometry
+            .bitmap
+            .x
+            .total_cmp(&b.geometry.bitmap.x)
+            .then(a.geometry.bitmap.y.total_cmp(&b.geometry.bitmap.y))
             .then(a.glyph_index.cmp(&b.glyph_index))
     });
 
@@ -221,106 +254,112 @@ pub(super) fn log_rendered_char_overlaps(
     let mut overhang_total = 0usize;
     for (i, a) in sorted.iter().enumerate() {
         for b in sorted.iter().skip(i + 1) {
-            if b.glyph_x >= a.right() {
+            if b.geometry.bitmap.x >= a.geometry.bitmap.right() {
                 break;
             }
             let Some(overlap) = char_overlap(a, b) else {
                 continue;
             };
-            if overlap.expected_by_overhang {
-                overhang_total += 1;
-                tracing::debug!(
-                    "char_overhang frame_id={} pass={} overlap=({:.1},{:.1},{:.1}x{:.1}) \
+            match overlap.classification {
+                CharOverlapClassification::Expected(reason) => {
+                    overhang_total += 1;
+                    let a_overhang = a.geometry.overhang();
+                    let b_overhang = b.geometry.overhang();
+                    tracing::debug!(
+                        "char_overhang frame_id={} pass={} reason={:?} overlap=({:.1},{:.1},{:.1}x{:.1}) \
                      a[glyph={} label={:?} face={} cell=({:.1},{:.1},{:.1}x{:.1}) \
                      bitmap=({:.1},{:.1},{:.1}x{:.1}) overhang=({:.1},{:.1},{:.1},{:.1})] \
                      b[glyph={} label={:?} face={} cell=({:.1},{:.1},{:.1}x{:.1}) \
                      bitmap=({:.1},{:.1},{:.1}x{:.1}) overhang=({:.1},{:.1},{:.1},{:.1})]",
-                    frame_id,
-                    pass_name,
-                    overlap.x,
-                    overlap.y,
-                    overlap.width,
-                    overlap.height,
-                    a.glyph_index,
-                    a.label,
-                    a.face_id,
-                    a.cell_x,
-                    a.cell_y,
-                    a.cell_w,
-                    a.cell_h,
-                    a.glyph_x,
-                    a.glyph_y,
-                    a.glyph_w,
-                    a.glyph_h,
-                    a.left_overhang,
-                    a.right_overhang,
-                    a.top_overhang,
-                    a.bottom_overhang,
-                    b.glyph_index,
-                    b.label,
-                    b.face_id,
-                    b.cell_x,
-                    b.cell_y,
-                    b.cell_w,
-                    b.cell_h,
-                    b.glyph_x,
-                    b.glyph_y,
-                    b.glyph_w,
-                    b.glyph_h,
-                    b.left_overhang,
-                    b.right_overhang,
-                    b.top_overhang,
-                    b.bottom_overhang,
-                );
-                continue;
-            }
-            unexpected_total += 1;
-            if unexpected_total <= CHAR_OVERLAP_LOG_LIMIT {
-                tracing::error!(
-                    "char_overlap frame_id={} pass={} overlap=({:.1},{:.1},{:.1}x{:.1}) \
+                        frame_id,
+                        pass_name,
+                        reason,
+                        overlap.bounds.x,
+                        overlap.bounds.y,
+                        overlap.bounds.width,
+                        overlap.bounds.height,
+                        a.glyph_index,
+                        a.label,
+                        a.face_id,
+                        a.geometry.cell.x,
+                        a.geometry.cell.y,
+                        a.geometry.cell.width,
+                        a.geometry.cell.height,
+                        a.geometry.bitmap.x,
+                        a.geometry.bitmap.y,
+                        a.geometry.bitmap.width,
+                        a.geometry.bitmap.height,
+                        a_overhang.left,
+                        a_overhang.right,
+                        a_overhang.top,
+                        a_overhang.bottom,
+                        b.glyph_index,
+                        b.label,
+                        b.face_id,
+                        b.geometry.cell.x,
+                        b.geometry.cell.y,
+                        b.geometry.cell.width,
+                        b.geometry.cell.height,
+                        b.geometry.bitmap.x,
+                        b.geometry.bitmap.y,
+                        b.geometry.bitmap.width,
+                        b.geometry.bitmap.height,
+                        b_overhang.left,
+                        b_overhang.right,
+                        b_overhang.top,
+                        b_overhang.bottom,
+                    );
+                }
+                CharOverlapClassification::Unexpected => {
+                    unexpected_total += 1;
+                    if unexpected_total <= CHAR_OVERLAP_LOG_LIMIT {
+                        tracing::error!(
+                            "char_overlap frame_id={} pass={} overlap=({:.1},{:.1},{:.1}x{:.1}) \
                      a[glyph={} window={} role={:?} slot=({}, {}) label={:?} face={} font={:.1} \
                      cell=({:.1},{:.1},{:.1}x{:.1}) bitmap=({:.1},{:.1},{:.1}x{:.1})] \
                      b[glyph={} window={} role={:?} slot=({}, {}) label={:?} face={} font={:.1} \
                      cell=({:.1},{:.1},{:.1}x{:.1}) bitmap=({:.1},{:.1},{:.1}x{:.1})]",
-                    frame_id,
-                    pass_name,
-                    overlap.x,
-                    overlap.y,
-                    overlap.width,
-                    overlap.height,
-                    a.glyph_index,
-                    a.window_id,
-                    a.row_role,
-                    a.slot_id.row,
-                    a.slot_id.col,
-                    a.label,
-                    a.face_id,
-                    a.font_size,
-                    a.cell_x,
-                    a.cell_y,
-                    a.cell_w,
-                    a.cell_h,
-                    a.glyph_x,
-                    a.glyph_y,
-                    a.glyph_w,
-                    a.glyph_h,
-                    b.glyph_index,
-                    b.window_id,
-                    b.row_role,
-                    b.slot_id.row,
-                    b.slot_id.col,
-                    b.label,
-                    b.face_id,
-                    b.font_size,
-                    b.cell_x,
-                    b.cell_y,
-                    b.cell_w,
-                    b.cell_h,
-                    b.glyph_x,
-                    b.glyph_y,
-                    b.glyph_w,
-                    b.glyph_h,
-                );
+                            frame_id,
+                            pass_name,
+                            overlap.bounds.x,
+                            overlap.bounds.y,
+                            overlap.bounds.width,
+                            overlap.bounds.height,
+                            a.glyph_index,
+                            a.slot_id.window_id.get(),
+                            a.row_role,
+                            a.slot_id.row,
+                            a.slot_id.col,
+                            a.label,
+                            a.face_id,
+                            a.font_size,
+                            a.geometry.cell.x,
+                            a.geometry.cell.y,
+                            a.geometry.cell.width,
+                            a.geometry.cell.height,
+                            a.geometry.bitmap.x,
+                            a.geometry.bitmap.y,
+                            a.geometry.bitmap.width,
+                            a.geometry.bitmap.height,
+                            b.glyph_index,
+                            b.slot_id.window_id.get(),
+                            b.row_role,
+                            b.slot_id.row,
+                            b.slot_id.col,
+                            b.label,
+                            b.face_id,
+                            b.font_size,
+                            b.geometry.cell.x,
+                            b.geometry.cell.y,
+                            b.geometry.cell.width,
+                            b.geometry.cell.height,
+                            b.geometry.bitmap.x,
+                            b.geometry.bitmap.y,
+                            b.geometry.bitmap.width,
+                            b.geometry.bitmap.height,
+                        );
+                    }
+                }
             }
         }
     }
@@ -478,12 +517,7 @@ pub(super) fn log_cursor_glyph_alignment(
     let (cx, cy, cw, ch) = cursor_glyph_slot_rect(frame_glyphs, cursor);
     let tol = 1.0_f32;
     let cursor_rect = ResolvedCursorRect(Rect::new(cx, cy, cw, ch));
-    let cell_rect = GlyphCellRect(Rect::new(
-        glyph.cell_x,
-        glyph.cell_y,
-        glyph.cell_w,
-        glyph.cell_h,
-    ));
+    let cell_rect = GlyphCellRect(glyph.geometry.cell);
     let direction = CursorInlineDirection::from_bidi_level(
         frame_glyphs
             .slot_glyph(cursor.slot_id)
@@ -511,14 +545,14 @@ pub(super) fn log_cursor_glyph_alignment(
         cy,
         cw,
         ch,
-        glyph.cell_x,
-        glyph.cell_y,
-        glyph.cell_w,
-        glyph.cell_h,
-        glyph.glyph_x,
-        glyph.glyph_y,
-        glyph.glyph_w,
-        glyph.glyph_h,
+        glyph.geometry.cell.x,
+        glyph.geometry.cell.y,
+        glyph.geometry.cell.width,
+        glyph.geometry.cell.height,
+        glyph.geometry.bitmap.x,
+        glyph.geometry.bitmap.y,
+        glyph.geometry.bitmap.width,
+        glyph.geometry.bitmap.height,
         glyph.label,
         glyph.face_id,
         glyph.font_size,

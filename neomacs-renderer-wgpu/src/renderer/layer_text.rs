@@ -15,9 +15,9 @@ use super::super::glyph_atlas::{
 use super::super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex};
 use super::frame_pass::{BoxSpanSet, FrameParams, FramePassCtx};
 use super::glyphs::{
-    CHAR_OVERLAP_MIN_AXIS, RenderedCharBounds, build_subpixel_vertices, color_is_grayscale,
-    log_cursor_glyph_alignment, log_rendered_char_overlaps, subpixel_background_color,
-    subpixel_foreground_color, trace_face_debug_enabled,
+    CHAR_OVERLAP_MIN_AXIS, RenderedCharBounds, RenderedGlyphGeometry, build_subpixel_vertices,
+    color_is_grayscale, log_cursor_glyph_alignment, log_rendered_char_overlaps,
+    subpixel_background_color, subpixel_foreground_color, trace_face_debug_enabled,
 };
 use super::row_reuse;
 use super::{GlyphRenderStats, WgpuRenderer};
@@ -214,7 +214,6 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
         for glyph_index in chunk.glyphs.clone() {
             let glyph = &frame_glyphs.glyphs[glyph_index];
             if let FrameGlyph::Char {
-                window_id,
                 slot_id,
                 char,
                 composed,
@@ -437,11 +436,8 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                             };
 
                         if glyph_w > CHAR_OVERLAP_MIN_AXIS && glyph_h > CHAR_OVERLAP_MIN_AXIS {
-                            let cell_right = *x + *width;
-                            let glyph_right = glyph_x + glyph_w;
                             out.bounds.push(RenderedCharBounds {
                                 glyph_index,
-                                window_id: window_id.get(),
                                 row_role: *row_role,
                                 slot_id: *slot_id,
                                 label: composed
@@ -450,18 +446,10 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                                     .unwrap_or_else(|| char.to_string()),
                                 face_id,
                                 font_size,
-                                cell_x: *x,
-                                cell_y: *y,
-                                cell_w: *width,
-                                cell_h: *height,
-                                glyph_x,
-                                glyph_y,
-                                glyph_w,
-                                glyph_h,
-                                left_overhang: (*x - glyph_x).max(0.0),
-                                right_overhang: (glyph_right - cell_right).max(0.0),
-                                top_overhang: (*y - glyph_y).max(0.0),
-                                bottom_overhang: (glyph_y + glyph_h - (*y + *height)).max(0.0),
+                                geometry: RenderedGlyphGeometry::new(
+                                    Rect::new(*x, *y, *width, *height),
+                                    Rect::new(glyph_x, glyph_y, glyph_w, glyph_h),
+                                ),
                             });
                         }
 
