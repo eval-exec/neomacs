@@ -55,5 +55,6 @@ pub enum RenderUserEvent {
 }
 
 pub type RenderEventLoopProxy = EventLoopProxy<RenderUserEvent>;
+pub type RenderEventLoop = winit::event_loop::EventLoop<RenderUserEvent>;
 
 // All GPU caches (image, video, webkit) are managed by WgpuRenderer

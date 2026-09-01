@@ -16,6 +16,7 @@
 pub mod backend;
 pub(crate) mod clipboard;
 pub mod core;
+pub mod display_scale;
 pub mod macos_bundle_runtime;
 pub mod redisplay;
 pub mod thread_comm;

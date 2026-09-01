@@ -176,7 +176,15 @@ pub type SharedMonitorInfo = Arc<(Mutex<Vec<MonitorInfo>>, std::sync::Condvar)>;
 pub(super) fn backend_uses_winit_logical_pixels() -> bool {
     #[cfg(target_os = "linux")]
     {
-        std::env::var_os("WAYLAND_DISPLAY").is_some()
+        crate::display_scale::active_window_coordinate_system().map_or_else(
+            || std::env::var_os("WAYLAND_DISPLAY").is_some(),
+            |system| {
+                matches!(
+                    system,
+                    crate::display_scale::WindowCoordinateSystem::WinitLogical
+                )
+            },
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {

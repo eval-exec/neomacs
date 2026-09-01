@@ -13,12 +13,12 @@ use super::{
     StartupOptions, adopt_existing_primary_gui_frame, bootstrap_buffers,
     bootstrap_default_font_name, bootstrap_display_config, bootstrap_frame_metrics,
     bootstrap_frame_metrics_for_font_sizing, bootstrap_frame_metrics_for_frontend,
-    classify_early_cli_action, configure_gnu_startup_state, gui_display_identity,
-    load_neomacs_gui_term_layer, parse_startup_options, publish_gui_frame,
-    raw_dump_loadup_invocation, raw_loadup_command_line, render_fingerprint_text, render_help_text,
-    render_startup_image_error, render_version_text, run_gnu_startup,
-    runtime_mode_from_program_name, source_bootstrap_loadup_invocation, startup_dimensions,
-    sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
+    bootstrap_gui_display_config, classify_early_cli_action, configure_gnu_startup_state,
+    gui_display_identity, gui_font_sizing_from_observation, load_neomacs_gui_term_layer,
+    parse_startup_options, publish_gui_frame, raw_dump_loadup_invocation, raw_loadup_command_line,
+    render_fingerprint_text, render_help_text, render_startup_image_error, render_version_text,
+    run_gnu_startup, runtime_mode_from_program_name, source_bootstrap_loadup_invocation,
+    startup_dimensions, sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
 };
 use neomacs_display_protocol::WebViewId;
 use neomacs_display_runtime::render_thread::{
@@ -4510,6 +4510,34 @@ fn wayland_font_policy_uses_logical_dpi_not_xft_dpi() {
 fn wayland_bootstrap_frame_metrics_use_logical_default_font_size() {
     let metrics = bootstrap_frame_metrics_for_font_sizing(FontSizing::logical());
     assert_eq!(metrics.font_pixel_size, 13.0);
+}
+
+#[test]
+fn gui_font_policy_uses_the_observed_xwayland_backend() {
+    let observation = neomacs_display_protocol::DisplayObservation::X11(
+        neomacs_display_protocol::X11DisplayObservation::new(
+            neomacs_display_protocol::XServerKind::Xwayland,
+            None,
+            Some(
+                neomacs_display_protocol::DisplayGeometry::new(1080, 800)
+                    .expect("valid test geometry"),
+            ),
+            neomacs_display_protocol::DeviceScale::ONE,
+        ),
+    );
+
+    assert_eq!(
+        gui_font_sizing_from_observation(observation).layout_dpi(),
+        96.0
+    );
+}
+
+#[test]
+fn bootstrap_display_uses_the_resolved_gui_font_policy() {
+    let resolved = FontSizing::for_layout_dpi(123.0);
+    let display = bootstrap_gui_display_config(Interactivity::Interactive, resolved);
+
+    assert_eq!(display.font_sizing, resolved);
 }
 
 #[test]

@@ -117,13 +117,14 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use neomacs_display_protocol::{VisualConfig, WebViewId};
+use neomacs_display_runtime::display_scale::observe_event_loop_display;
 #[cfg(not(feature = "neo-term"))]
 use neomacs_display_runtime::render_thread::run_render_loop_current_thread;
 #[cfg(feature = "neo-term")]
 use neomacs_display_runtime::render_thread::run_render_loop_current_thread_with_terminals;
 use neomacs_display_runtime::render_thread::{
-    RenderEventLoopProxy, RenderUserEvent, SharedImageRenderState, SharedMonitorInfo,
-    build_render_event_loop,
+    RenderEventLoop, RenderEventLoopProxy, RenderUserEvent, SharedImageRenderState,
+    SharedMonitorInfo, build_render_event_loop,
 };
 use neomacs_display_runtime::shader_surface::{
     SurfaceChannelSource as RendererChannelSource, SurfaceShaderLanguage as RendererShaderLanguage,
@@ -142,7 +143,7 @@ use neomacs_display_runtime::{
     thread_comm::TerminalCommand,
 };
 use neomacs_layout_engine::font::metrics::{FontMetricsService, SelectedFontInfo};
-use neomacs_layout_engine::font::sizing::FontSizing;
+use neomacs_layout_engine::font::sizing::{FontSizing, ScalePolicy, resolve_frame_scale};
 use neomacs_layout_engine::gui_chrome::{
     collect_gui_menu_bar_items_for_frame, collect_gui_tool_bar_items, compact_bar_mode_enabled,
 };
@@ -841,16 +842,7 @@ fn bootstrap_display_config(
     interactivity: Interactivity,
 ) -> BootstrapDisplayConfig {
     match frontend {
-        FrontendKind::Gui => BootstrapDisplayConfig {
-            frontend,
-            font_sizing: gui_font_sizing(),
-            color_cells: 16777216,
-            // GNU `frame--current-background-mode` defaults GUI frames to
-            // `light` unless a real background color or terminal default says
-            // otherwise.  Live frame-parameter updates recompute this later.
-            background_mode: "light",
-            interactivity,
-        },
+        FrontendKind::Gui => bootstrap_gui_display_config(interactivity, FontSizing::native_gui()),
         FrontendKind::Tty => BootstrapDisplayConfig {
             frontend,
             font_sizing: FontSizing::xft(),
@@ -858,6 +850,22 @@ fn bootstrap_display_config(
             background_mode: tty_init::detect_tty_background_mode(),
             interactivity,
         },
+    }
+}
+
+fn bootstrap_gui_display_config(
+    interactivity: Interactivity,
+    font_sizing: FontSizing,
+) -> BootstrapDisplayConfig {
+    BootstrapDisplayConfig {
+        frontend: FrontendKind::Gui,
+        font_sizing,
+        color_cells: 16777216,
+        // GNU `frame--current-background-mode` defaults GUI frames to
+        // `light` unless a real background color or terminal default says
+        // otherwise. Live frame-parameter updates recompute this later.
+        background_mode: "light",
+        interactivity,
     }
 }
 
@@ -2738,27 +2746,18 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
     }
 }
 
-fn gui_font_sizing() -> FontSizing {
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            FontSizing::wayland()
-        } else {
-            FontSizing::xft()
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        FontSizing::gnu_cocoa()
-    }
-    #[cfg(windows)]
-    {
-        FontSizing::windows_dip()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        FontSizing::native_gui()
-    }
+fn gui_font_sizing_from_observation(
+    observation: neomacs_display_protocol::DisplayObservation,
+) -> FontSizing {
+    let profile = resolve_frame_scale(observation, ScalePolicy::Automatic);
+    tracing::info!(
+        ?observation,
+        source = ?profile.source(),
+        logical_dpi = profile.font_sizing().layout_dpi(),
+        device_scale = profile.device_scale().get(),
+        "resolved GUI frame scale"
+    );
+    profile.font_sizing()
 }
 
 /// One-shot release of the dirty pages startup churned through, now that the
@@ -2948,16 +2947,13 @@ fn load_neomacs_gui_term_layer(evaluator: &mut Context) {
 }
 
 fn run_gui_main_thread(
+    event_loop: RenderEventLoop,
     mode: RuntimeMode,
     startup: StartupOptions,
     width: u32,
     height: u32,
     bootstrap_display: BootstrapDisplayConfig,
 ) {
-    let event_loop = build_render_event_loop().unwrap_or_else(|err| {
-        eprintln!("neomacs: failed to build GUI event loop: {err}");
-        std::process::exit(1);
-    });
     let render_waker = GuiEventLoopWaker::new(event_loop.create_proxy());
 
     let comms = ThreadComms::new();
@@ -3698,10 +3694,24 @@ pub fn run(mode: RuntimeMode) {
         );
     }
 
-    let bootstrap_display = bootstrap_display_config(
-        startup.frontend,
-        Interactivity::from_noninteractive(startup.noninteractive),
-    );
+    // Winit can fall back from the environment's preferred Linux backend.
+    // Construct it before font metrics so the bootstrap frame follows the
+    // backend that was actually selected, not a DISPLAY/WAYLAND_DISPLAY guess.
+    let gui_event_loop = if startup.frontend == FrontendKind::Gui {
+        Some(build_render_event_loop().unwrap_or_else(|err| {
+            eprintln!("neomacs: failed to build GUI event loop: {err}");
+            std::process::exit(1);
+        }))
+    } else {
+        None
+    };
+    let interactivity = Interactivity::from_noninteractive(startup.noninteractive);
+    let bootstrap_display = if let Some(event_loop) = gui_event_loop.as_ref() {
+        let observation = observe_event_loop_display(event_loop);
+        bootstrap_gui_display_config(interactivity, gui_font_sizing_from_observation(observation))
+    } else {
+        bootstrap_display_config(startup.frontend, interactivity)
+    };
     // For TTY, frame dimensions are in character cells (1x1), so we
     // don't need to scan the system font database for font metrics.
     // This avoids ~500ms of FontMetricsService initialization at
@@ -3722,7 +3732,14 @@ pub fn run(mode: RuntimeMode) {
     maybe_start_diagnostics(diag_task_tx);
 
     if startup.frontend == FrontendKind::Gui {
-        run_gui_main_thread(mode, startup, width, height, bootstrap_display);
+        run_gui_main_thread(
+            gui_event_loop.expect("GUI frontend constructed an event loop"),
+            mode,
+            startup,
+            width,
+            height,
+            bootstrap_display,
+        );
         log_clean_process_exit(process_started_at, &process_args);
         return;
     }
