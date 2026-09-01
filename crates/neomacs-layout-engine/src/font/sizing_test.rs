@@ -3,7 +3,7 @@ use super::{
     resolve_frame_scale,
 };
 use neomacs_display_protocol::{
-    DeviceScale, DisplayGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
+    DeviceScale, DisplayHeightGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
 };
 use neovm_core::emacs_core::display_host::FrameFontSize;
 
@@ -16,7 +16,7 @@ fn x11_observation(
         server,
         xft_dpi.map(|dpi| Dpi::new(dpi).expect("valid test DPI")),
         geometry.map(|(height_px, height_mm)| {
-            DisplayGeometry::new(height_px, height_mm).expect("valid test geometry")
+            DisplayHeightGeometry::new(height_px, height_mm).expect("valid test geometry")
         }),
         DeviceScale::ONE,
     ))

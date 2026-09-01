@@ -33,7 +33,6 @@ num_enum.workspace = true
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 fontconfig.workspace = true
 yeslogic-fontconfig-sys.workspace = true
-x11-dl.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # FreeType is a materializer/probe for legacy bitmap and exact file-backed

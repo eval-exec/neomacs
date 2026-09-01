@@ -32,7 +32,7 @@ impl Dpi {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct InvalidDisplayGeometry;
+pub struct InvalidDisplayHeightGeometry;
 
 /// One display's vertical pixel and physical extents.
 ///
@@ -40,15 +40,15 @@ pub struct InvalidDisplayGeometry;
 /// missing millimetres are represented by the absence of this type, so every
 /// value that reaches the resolver is safe to divide.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DisplayGeometry {
+pub struct DisplayHeightGeometry {
     height_px: NonZeroU32,
     height_mm: NonZeroU32,
 }
 
-impl DisplayGeometry {
-    pub fn new(height_px: u32, height_mm: u32) -> Result<Self, InvalidDisplayGeometry> {
-        let height_px = NonZeroU32::new(height_px).ok_or(InvalidDisplayGeometry)?;
-        let height_mm = NonZeroU32::new(height_mm).ok_or(InvalidDisplayGeometry)?;
+impl DisplayHeightGeometry {
+    pub fn new(height_px: u32, height_mm: u32) -> Result<Self, InvalidDisplayHeightGeometry> {
+        let height_px = NonZeroU32::new(height_px).ok_or(InvalidDisplayHeightGeometry)?;
+        let height_mm = NonZeroU32::new(height_mm).ok_or(InvalidDisplayHeightGeometry)?;
         Ok(Self {
             height_px,
             height_mm,
@@ -79,7 +79,7 @@ pub enum XServerKind {
 pub struct X11DisplayObservation {
     server: XServerKind,
     xft_dpi: Option<Dpi>,
-    geometry: Option<DisplayGeometry>,
+    geometry: Option<DisplayHeightGeometry>,
     device_scale: DeviceScale,
 }
 
@@ -88,7 +88,7 @@ impl X11DisplayObservation {
     pub const fn new(
         server: XServerKind,
         xft_dpi: Option<Dpi>,
-        geometry: Option<DisplayGeometry>,
+        geometry: Option<DisplayHeightGeometry>,
         device_scale: DeviceScale,
     ) -> Self {
         Self {
@@ -110,7 +110,7 @@ impl X11DisplayObservation {
     }
 
     #[must_use]
-    pub const fn geometry(self) -> Option<DisplayGeometry> {
+    pub const fn geometry(self) -> Option<DisplayHeightGeometry> {
         self.geometry
     }
 

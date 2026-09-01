@@ -1,9 +1,9 @@
 //! Native display observation adapter for frame-scale policy.
 
 use neomacs_display_protocol::{
-    DeviceScale, DisplayGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
+    DeviceScale, DisplayHeightGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
 };
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::OnceLock;
 use winit::event_loop::EventLoop;
 
 #[cfg(target_os = "linux")]
@@ -17,11 +17,11 @@ use x11_dl::xlib;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowCoordinateSystem {
-    WinitLogical = 1,
-    X11Physical = 2,
+    WinitLogical,
+    X11Physical,
 }
 
-static ACTIVE_WINDOW_COORDINATE_SYSTEM: AtomicU8 = AtomicU8::new(0);
+static ACTIVE_WINDOW_COORDINATE_SYSTEM: OnceLock<WindowCoordinateSystem> = OnceLock::new();
 
 fn coordinate_system_for_observation(observation: DisplayObservation) -> WindowCoordinateSystem {
     match observation {
@@ -31,15 +31,55 @@ fn coordinate_system_for_observation(observation: DisplayObservation) -> WindowC
 }
 
 pub(crate) fn active_window_coordinate_system() -> Option<WindowCoordinateSystem> {
-    match ACTIVE_WINDOW_COORDINATE_SYSTEM.load(Ordering::Acquire) {
-        1 => Some(WindowCoordinateSystem::WinitLogical),
-        2 => Some(WindowCoordinateSystem::X11Physical),
-        _ => None,
-    }
+    ACTIVE_WINDOW_COORDINATE_SYSTEM.get().copied()
 }
 
 fn publish_window_coordinate_system(system: WindowCoordinateSystem) {
-    ACTIVE_WINDOW_COORDINATE_SYSTEM.store(system as u8, Ordering::Release);
+    // The native event loop is constructed once per process. Keep that
+    // bootstrap invariant in the storage type instead of encoding it as
+    // mutable magic integers.
+    if let Err(system) = ACTIVE_WINDOW_COORDINATE_SYSTEM.set(system) {
+        debug_assert_eq!(ACTIVE_WINDOW_COORDINATE_SYSTEM.get().copied(), Some(system));
+    }
+}
+
+#[cfg(target_os = "linux")]
+const X11_DISPLAY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectedLinuxBackend {
+    Wayland,
+    X11,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Default)]
+struct RawX11DisplayObservation {
+    has_xwayland_extension: bool,
+    vendor: Option<String>,
+    xft_dpi: Option<f32>,
+    display_height_px: i32,
+    display_height_mm: i32,
+}
+
+#[cfg(target_os = "linux")]
+impl RawX11DisplayObservation {
+    fn validate(self, device_scale: DeviceScale) -> X11DisplayObservation {
+        let xft_dpi = self.xft_dpi.and_then(|dpi| Dpi::new(dpi).ok());
+        let geometry = u32::try_from(self.display_height_px)
+            .ok()
+            .zip(u32::try_from(self.display_height_mm).ok())
+            .and_then(|(height_px, height_mm)| {
+                DisplayHeightGeometry::new(height_px, height_mm).ok()
+            });
+        X11DisplayObservation::new(
+            classify_x_server(self.has_xwayland_extension, self.vendor.as_deref()),
+            xft_dpi,
+            geometry,
+            device_scale,
+        )
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -54,25 +94,21 @@ fn classify_x_server(has_xwayland_extension: bool, vendor: Option<&str>) -> XSer
 }
 
 #[cfg(target_os = "linux")]
-fn x11_observation_from_raw(
-    has_xwayland_extension: bool,
-    vendor: Option<&str>,
-    xft_dpi: Option<f32>,
-    display_height_px: i32,
-    display_height_mm: i32,
-    device_scale: DeviceScale,
-) -> X11DisplayObservation {
-    let xft_dpi = xft_dpi.and_then(|dpi| Dpi::new(dpi).ok());
-    let geometry = u32::try_from(display_height_px)
-        .ok()
-        .zip(u32::try_from(display_height_mm).ok())
-        .and_then(|(height_px, height_mm)| DisplayGeometry::new(height_px, height_mm).ok());
-    X11DisplayObservation::new(
-        classify_x_server(has_xwayland_extension, vendor),
-        xft_dpi,
-        geometry,
-        device_scale,
-    )
+fn fallback_x11_observation() -> X11DisplayObservation {
+    RawX11DisplayObservation::default().validate(DeviceScale::ONE)
+}
+
+#[cfg(target_os = "linux")]
+fn observe_linux_backend(
+    backend: SelectedLinuxBackend,
+    x11_probe: impl FnOnce() -> X11DisplayObservation,
+) -> DisplayObservation {
+    match backend {
+        SelectedLinuxBackend::Wayland => DisplayObservation::Wayland {
+            device_scale: DeviceScale::ONE,
+        },
+        SelectedLinuxBackend::X11 => DisplayObservation::X11(x11_probe()),
+    }
 }
 
 /// Observe the backend that winit actually selected, then gather native facts
@@ -81,13 +117,12 @@ fn x11_observation_from_raw(
 pub fn observe_event_loop_display<T: 'static>(event_loop: &EventLoop<T>) -> DisplayObservation {
     #[cfg(target_os = "linux")]
     let observation = {
-        if event_loop.is_wayland() {
-            DisplayObservation::Wayland {
-                device_scale: DeviceScale::ONE,
-            }
+        let backend = if event_loop.is_wayland() {
+            SelectedLinuxBackend::Wayland
         } else {
-            DisplayObservation::X11(query_x11_display())
-        }
+            SelectedLinuxBackend::X11
+        };
+        observe_linux_backend(backend, query_x11_display_bounded)
     };
 
     #[cfg(target_os = "macos")]
@@ -119,17 +154,51 @@ pub fn observe_event_loop_display<T: 'static>(event_loop: &EventLoop<T>) -> Disp
 }
 
 #[cfg(target_os = "linux")]
+fn query_x11_display_bounded() -> X11DisplayObservation {
+    if std::env::var_os("DISPLAY").is_none() {
+        return fallback_x11_observation();
+    }
+    query_x11_display_with_timeout(X11_DISPLAY_PROBE_TIMEOUT, query_x11_display)
+}
+
+#[cfg(target_os = "linux")]
+fn query_x11_display_with_timeout(
+    timeout: std::time::Duration,
+    probe: impl FnOnce() -> X11DisplayObservation + Send + 'static,
+) -> X11DisplayObservation {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("x11-display-probe".into())
+        .spawn(move || {
+            let _ = tx.send(probe());
+        });
+    if spawned.is_err() {
+        tracing::warn!("failed to spawn X11 display probe; using fallback DPI");
+        return fallback_x11_observation();
+    }
+    match rx.recv_timeout(timeout) {
+        Ok(observation) => observation,
+        Err(_) => {
+            tracing::warn!(
+                timeout_ms = timeout.as_millis(),
+                "X11 display probe timed out; using fallback DPI"
+            );
+            fallback_x11_observation()
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn query_x11_display() -> X11DisplayObservation {
-    let fallback = || x11_observation_from_raw(false, None, None, 0, 0, DeviceScale::ONE);
     let Ok(xlib) = xlib::Xlib::open() else {
-        return fallback();
+        return fallback_x11_observation();
     };
     let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
     if display.is_null() {
-        return fallback();
+        return fallback_x11_observation();
     }
 
-    let (has_xwayland_extension, vendor, xft_dpi, height_px, height_mm) = unsafe {
+    let raw = unsafe {
         let mut opcode = 0;
         let mut first_event = 0;
         let mut first_error = 0;
@@ -156,24 +225,17 @@ fn query_x11_display() -> X11DisplayObservation {
                 .and_then(|value| value.trim().parse::<f32>().ok())
         };
         let screen = (xlib.XDefaultScreen)(display);
-        (
+        RawX11DisplayObservation {
             has_xwayland_extension,
             vendor,
             xft_dpi,
-            (xlib.XDisplayHeight)(display, screen),
-            (xlib.XDisplayHeightMM)(display, screen),
-        )
+            display_height_px: (xlib.XDisplayHeight)(display, screen),
+            display_height_mm: (xlib.XDisplayHeightMM)(display, screen),
+        }
     };
     unsafe { (xlib.XCloseDisplay)(display) };
 
-    x11_observation_from_raw(
-        has_xwayland_extension,
-        vendor.as_deref(),
-        xft_dpi,
-        height_px,
-        height_mm,
-        DeviceScale::ONE,
-    )
+    raw.validate(DeviceScale::ONE)
 }
 
 #[cfg(test)]

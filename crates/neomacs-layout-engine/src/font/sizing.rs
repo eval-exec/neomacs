@@ -8,20 +8,15 @@
 use neomacs_display_protocol::{DeviceScale, DisplayObservation, Dpi, XServerKind};
 use neovm_core::emacs_core::display_host::FrameFontSize;
 use neovm_core::face::{Face, FaceHeight};
-use std::sync::OnceLock;
 
 pub use super::frame_metrics::GraphicFontSizePx;
-
-#[cfg(target_os = "linux")]
-use std::ffi::{CStr, CString};
-#[cfg(target_os = "linux")]
-use std::ptr;
-#[cfg(target_os = "linux")]
-use x11_dl::xlib;
 
 /// GNU uses the printer's point rather than the desktop-publishing 72 DPI
 /// point for its `POINT_TO_PIXEL` conversion (`src/font.h`).
 pub const GNU_POINTS_PER_INCH: f64 = 72.27;
+
+/// GNU's fallback when an X display provides no usable physical height.
+pub const GNU_X11_FALLBACK_DPI: f32 = 100.0;
 
 /// The logical-coordinate rule selected by the active display frontend.
 ///
@@ -156,7 +151,7 @@ pub fn resolve_frame_scale(
                     FrameScaleSource::X11Geometry,
                 )
             } else {
-                (100.0, FrameScaleSource::GnuX11Fallback)
+                (GNU_X11_FALLBACK_DPI, FrameScaleSource::GnuX11Fallback)
             };
             FrameScaleProfile {
                 font_sizing: FontSizing::for_layout_dpi(dpi),
@@ -193,10 +188,11 @@ impl FontSizing {
     }
 
     /// Compatibility constructor for X11 call sites. New GUI code should
-    /// select a frontend-specific rule through [`Self::native_gui`].
-    pub fn xft() -> Self {
+    /// resolve a typed display observation through [`resolve_frame_scale`].
+    /// This pure fallback deliberately performs no native display I/O.
+    pub const fn xft() -> Self {
         Self::new(LogicalFontScale::X11 {
-            effective_dpi: xft_dpi(),
+            effective_dpi: GNU_X11_FALLBACK_DPI,
         })
     }
 
@@ -287,90 +283,14 @@ pub fn face_height_to_pixels(tenths: i32) -> f32 {
     points_to_pixels(tenths as f32 / 10.0)
 }
 
-static XFT_DPI: OnceLock<f32> = OnceLock::new();
-static X_DPI_PROBE_DISABLED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub fn disable_x_dpi_probe() {
-    X_DPI_PROBE_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+pub const fn xft_dpi() -> f32 {
+    GNU_X11_FALLBACK_DPI
 }
 
-pub fn xft_dpi() -> f32 {
-    *XFT_DPI.get_or_init(|| {
-        let dpi = query_xft_dpi().unwrap_or(100.0);
-        tracing::info!("Xft.dpi: {}", dpi);
-        dpi
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn query_xft_dpi() -> Option<f32> {
-    if X_DPI_PROBE_DISABLED.load(std::sync::atomic::Ordering::Relaxed)
-        || std::env::var("DISPLAY").unwrap_or_default().is_empty()
-    {
-        return None;
-    }
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let _handle = std::thread::Builder::new()
-        .name("xft-dpi-probe".into())
-        .spawn(move || {
-            let result = query_xft_dpi_inner();
-            let _ = tx.send(result);
-        });
-    match rx.recv_timeout(std::time::Duration::from_millis(100)) {
-        Ok(result) => result,
-        Err(_) => {
-            tracing::warn!(
-                "query_xft_dpi: X11 connection timed out (broken display?), using fallback DPI"
-            );
-            None
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn query_xft_dpi_inner() -> Option<f32> {
-    let xlib = xlib::Xlib::open().ok()?;
-    let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
-    if display.is_null() {
-        return None;
-    }
-
-    let class = CString::new("Xft").ok()?;
-    let name = CString::new("dpi").ok()?;
-    let dpi = unsafe {
-        let resource = (xlib.XGetDefault)(display, class.as_ptr(), name.as_ptr());
-        let parsed = if resource.is_null() {
-            None
-        } else {
-            CStr::from_ptr(resource)
-                .to_str()
-                .ok()
-                .and_then(|value| value.trim().parse::<f32>().ok())
-        };
-        match parsed {
-            Some(dpi) if dpi.is_finite() && dpi > 0.0 => Some(dpi),
-            _ => {
-                let screen = (xlib.XDefaultScreen)(display);
-                let pixels = (xlib.XDisplayHeight)(display, screen);
-                let mm = (xlib.XDisplayHeightMM)(display, screen);
-                Some(fallback_frame_res_y(pixels, mm))
-            }
-        }
-    };
-    unsafe { (xlib.XCloseDisplay)(display) };
-    dpi
-}
-
-#[cfg(not(target_os = "linux"))]
-fn query_xft_dpi() -> Option<f32> {
-    None
-}
-
+#[cfg(test)]
 pub(crate) fn fallback_frame_res_y(display_height_px: i32, display_height_mm: i32) -> f32 {
     if display_height_mm < 1 {
-        100.0
+        GNU_X11_FALLBACK_DPI
     } else {
         display_height_px as f32 * 25.4 / display_height_mm as f32
     }

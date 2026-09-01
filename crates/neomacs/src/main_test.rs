@@ -11,10 +11,10 @@ use super::{
     BOOTSTRAP_CORE_FEATURES, BootstrapDisplayConfig, DumpImageKind, EarlyCliAction, FontSizing,
     FrontendKind, Interactivity, PrimaryWindowDisplayHost, PrimaryWindowSize, RuntimeMode,
     StartupOptions, adopt_existing_primary_gui_frame, bootstrap_buffers,
-    bootstrap_default_font_name, bootstrap_display_config, bootstrap_frame_metrics,
-    bootstrap_frame_metrics_for_font_sizing, bootstrap_frame_metrics_for_frontend,
-    bootstrap_gui_display_config, classify_early_cli_action, configure_gnu_startup_state,
-    gui_display_identity, gui_font_sizing_from_observation, load_neomacs_gui_term_layer,
+    bootstrap_default_font_name, bootstrap_frame_metrics, bootstrap_frame_metrics_for_font_sizing,
+    bootstrap_frame_metrics_for_frontend, bootstrap_gui_display_config,
+    bootstrap_tty_display_config, classify_early_cli_action, configure_gnu_startup_state,
+    gui_display_identity, gui_frame_scale_from_observation, load_neomacs_gui_term_layer,
     parse_startup_options, publish_gui_frame, raw_dump_loadup_invocation, raw_loadup_command_line,
     render_fingerprint_text, render_help_text, render_startup_image_error, render_version_text,
     run_gnu_startup, runtime_mode_from_program_name, source_bootstrap_loadup_invocation,
@@ -78,7 +78,18 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 fn gui_display() -> BootstrapDisplayConfig {
-    bootstrap_display_config(FrontendKind::Gui, Interactivity::Interactive)
+    let observation = neomacs_display_protocol::DisplayObservation::X11(
+        neomacs_display_protocol::X11DisplayObservation::new(
+            neomacs_display_protocol::XServerKind::Unknown,
+            None,
+            None,
+            neomacs_display_protocol::DeviceScale::ONE,
+        ),
+    );
+    bootstrap_gui_display_config(
+        Interactivity::Interactive,
+        gui_frame_scale_from_observation(observation),
+    )
 }
 
 fn test_image_load(image: u32, attempt: u64) -> ImageLoadToken {
@@ -4288,7 +4299,7 @@ fn live_tty_defface_keeps_dark_color_parent_attributes_through_inverse_video() {
             256,
         ),
     ));
-    let display = bootstrap_display_config(FrontendKind::Tty, Interactivity::Interactive);
+    let display = bootstrap_tty_display_config(Interactivity::Interactive);
     let _bootstrap = bootstrap_buffers(&mut eval, 160, 50, display);
     let frame_id = eval
         .frame_manager()
@@ -4519,7 +4530,7 @@ fn gui_font_policy_uses_the_observed_xwayland_backend() {
             neomacs_display_protocol::XServerKind::Xwayland,
             None,
             Some(
-                neomacs_display_protocol::DisplayGeometry::new(1080, 800)
+                neomacs_display_protocol::DisplayHeightGeometry::new(1080, 800)
                     .expect("valid test geometry"),
             ),
             neomacs_display_protocol::DeviceScale::ONE,
@@ -4527,17 +4538,29 @@ fn gui_font_policy_uses_the_observed_xwayland_backend() {
     );
 
     assert_eq!(
-        gui_font_sizing_from_observation(observation).layout_dpi(),
+        gui_frame_scale_from_observation(observation)
+            .font_sizing()
+            .layout_dpi(),
         96.0
     );
 }
 
 #[test]
-fn bootstrap_display_uses_the_resolved_gui_font_policy() {
-    let resolved = FontSizing::for_layout_dpi(123.0);
+fn bootstrap_display_keeps_the_resolved_gui_scale_profile_atomic() {
+    let device_scale = neomacs_display_protocol::DeviceScale::new(2.0).expect("valid scale");
+    let observation = neomacs_display_protocol::DisplayObservation::Wayland { device_scale };
+    let resolved = gui_frame_scale_from_observation(observation);
     let display = bootstrap_gui_display_config(Interactivity::Interactive, resolved);
 
-    assert_eq!(display.font_sizing, resolved);
+    assert_eq!(display.frame_scale_profile(), Some(resolved));
+    assert_eq!(display.font_sizing(), resolved.font_sizing());
+    assert_eq!(
+        display
+            .frame_scale_profile()
+            .expect("GUI scale profile")
+            .device_scale(),
+        device_scale
+    );
 }
 
 #[test]
@@ -4657,7 +4680,7 @@ fn bootstrap_buffers_names_reused_initial_tty_frame_f1_after_surrogate_allocatio
         &mut eval,
         160,
         50,
-        bootstrap_display_config(FrontendKind::Tty, Interactivity::Interactive),
+        bootstrap_tty_display_config(Interactivity::Interactive),
     );
 
     let selected = eval
@@ -5517,7 +5540,7 @@ fn bootstrap_batch_eval_exits_outer_command_loop_like_gnu() {
         &mut eval,
         80,
         24,
-        bootstrap_display_config(FrontendKind::Tty, Interactivity::Batch),
+        bootstrap_tty_display_config(Interactivity::Batch),
     );
     let frame_id = eval
         .frame_manager()
@@ -5558,7 +5581,7 @@ fn bootstrap_batch_kill_emacs_is_silent_shutdown() {
         &mut eval,
         80,
         24,
-        bootstrap_display_config(FrontendKind::Tty, Interactivity::Batch),
+        bootstrap_tty_display_config(Interactivity::Batch),
     );
     let frame_id = eval
         .frame_manager()
@@ -5592,7 +5615,7 @@ fn bootstrap_batch_startup_error_exits_nonzero_like_gnu() {
         &mut eval,
         80,
         24,
-        bootstrap_display_config(FrontendKind::Tty, Interactivity::Batch),
+        bootstrap_tty_display_config(Interactivity::Batch),
     );
     let frame_id = eval
         .frame_manager()
