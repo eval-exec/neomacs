@@ -3893,7 +3893,16 @@ pub(crate) fn zero_width_invisible_run_end_byte(
         super::textprop::byte_to_elisp_pos(buf, byte_pos)
     };
 
-    if invisible_status_for_value(eval, Value::fixnum(lisp_pos))? != 1 {
+    // `invisible-p` returns 1 for hidden text without an ellipsis and 2 for
+    // hidden text whose invisibility spec requests one.  Both values hide the
+    // underlying buffer run from display motion.  Treating only 1 as hidden
+    // made `vertical-motion` walk through org-fold drawers (`((SPEC . t))`
+    // yields 2), so ordinary up/down motion could land inside a folded drawer;
+    // Org then correctly revealed the drawer around point.  The display
+    // iterator must skip the hidden source run in both cases.  This helper
+    // intentionally reports zero width: its callers need the hidden source
+    // elision for row motion, while redisplay owns the synthetic ellipsis glyph.
+    if invisible_status_for_value(eval, Value::fixnum(lisp_pos))? == 0 {
         return Ok(None);
     }
 

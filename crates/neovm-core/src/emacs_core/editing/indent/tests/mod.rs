@@ -234,6 +234,25 @@ fn current_column_and_move_to_column_treat_invisible_text_as_zero_width() {
 }
 
 #[test]
+fn vertical_motion_skips_ellipsis_bearing_invisible_runs() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::runtime_startup_context();
+    let value = ev
+        .eval_str(
+            r#"(with-temp-buffer
+                 (insert "head\nhidden1\nhidden2\ntail\n")
+                 (setq buffer-invisibility-spec '((fold . t)))
+                 (let ((overlay (make-overlay 5 21)))
+                   (overlay-put overlay 'invisible 'fold))
+                 (list
+                  (progn (goto-char 1) (list (vertical-motion 1) (point)))
+                  (progn (goto-char 1) (list (vertical-motion 2) (point)))))"#,
+        )
+        .expect("ellipsis-bearing invisible vertical motion");
+    assert_eq!(super::super::print::print_value(&value), "((1 22) (2 27))");
+}
+
+#[test]
 fn current_column_and_indentation_handle_unibyte_raw_bytes() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
