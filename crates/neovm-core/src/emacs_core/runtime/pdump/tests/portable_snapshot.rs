@@ -40,3 +40,26 @@ fn portable_snapshot_rejects_unknown_schema_version() {
         Err(DumpError::UnsupportedVersion(u32::MAX))
     ));
 }
+
+#[test]
+fn portable_snapshot_file_publish_is_reloadable_and_replaces_atomically() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("neomacs.portable");
+    std::fs::write(&path, b"stale partial image").unwrap();
+    let mut source = Context::new();
+    source.set_variable("portable-file-value", Value::fixnum(91));
+
+    dump_portable_snapshot_to_file(&source, &path).expect("publish portable image");
+    let bytes = std::fs::read(&path).unwrap();
+    let loaded = load_from_portable_snapshot(&bytes).expect("reload portable image");
+
+    assert_eq!(
+        loaded.obarray().symbol_value("portable-file-value"),
+        Some(&Value::fixnum(91)),
+    );
+    assert_eq!(
+        std::fs::read_dir(directory.path()).unwrap().count(),
+        1,
+        "publishing must not leave temporary files behind",
+    );
+}

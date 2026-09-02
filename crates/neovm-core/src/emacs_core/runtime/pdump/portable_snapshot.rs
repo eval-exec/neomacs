@@ -6,7 +6,8 @@
 //! pointer-free [`DumpContextState`] mirror and reconstructs runtime objects
 //! through the same conversion path used by in-memory evaluator cloning.
 
-use std::io::Cursor;
+use std::io::{Cursor, Write};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
@@ -19,6 +20,12 @@ const MAGIC_END: usize = MAGIC.len();
 const VERSION_END: usize = MAGIC_END + size_of::<u32>();
 const PAYLOAD_LEN_END: usize = VERSION_END + size_of::<u64>();
 const CHECKSUM_END: usize = PAYLOAD_LEN_END + 32;
+
+/// Build-internal environment variable naming a companion portable image.
+///
+/// This is consumed only while the final `dump-emacs-portable` call runs; it
+/// is not a runtime configuration switch.
+pub const PORTABLE_RUNTIME_IMAGE_ENV: &str = "NEOVM_PORTABLE_RUNTIME_IMAGE";
 
 /// Encode an evaluator as a target-independent runtime image.
 ///
@@ -42,6 +49,30 @@ pub fn encode_portable_snapshot(eval: &Context) -> Result<Vec<u8>, DumpError> {
     image.extend_from_slice(&checksum);
     image.extend_from_slice(&payload);
     Ok(image)
+}
+
+/// Atomically publish a target-independent runtime image.
+///
+/// Release tooling calls this from the same dump-time evaluator state used by
+/// the native final pdump. Encoding and flushing complete before the rename,
+/// so an interrupted producer leaves the previous valid artifact in place.
+pub fn dump_portable_snapshot_to_file(eval: &Context, path: &Path) -> Result<(), DumpError> {
+    let image = encode_portable_snapshot(eval)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&image)?;
+    temporary.as_file().sync_all()?;
+    let published = temporary
+        .persist(path)
+        .map_err(|error| DumpError::Io(error.error))?;
+    published.sync_all()?;
+    #[cfg(unix)]
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 /// Restore an evaluator from a target-independent runtime image.
