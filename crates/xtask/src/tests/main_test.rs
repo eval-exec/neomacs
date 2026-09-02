@@ -3612,3 +3612,26 @@ fn motion_parity_delta_scores_a_fixed_probe_as_fixed() {
         "the delta must report the fix, the zero, and the frame:\n{combined}"
     );
 }
+
+#[test]
+fn android_ci_builds_and_verifies_the_complete_release_package() {
+    let workflow = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/workflows/test-suite.yml"
+    ));
+
+    for required in [
+        "android-package:",
+        "fresh-build --release --portable-seed",
+        "package-portable-assets",
+        "cargo build --release -p neomacs-android",
+        "assembleRelease",
+        "verify-android-apk",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "Android package CI is missing `{required}`"
+        );
+    }
+}
+
