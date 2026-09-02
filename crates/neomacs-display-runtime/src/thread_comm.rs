@@ -11,10 +11,6 @@ use std::time::Instant;
 
 mod frame_mailbox;
 pub use frame_mailbox::{FrameReceiver, FrameSender, QueuedPresentation, SupersededPresentation};
-use neomacs_app::frontend_event::{
-    FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendModifiers, FrontendViewport, InvalidFrontendScaleFactor,
-};
 use neomacs_display_protocol::{
     ImageColorContext, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization, ImageRotation,
     ImageSizeSpec, SelectionOwner, VideoId,
@@ -25,6 +21,10 @@ pub use neomacs_display_protocol::{
 };
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_core::window::GuiFrameGeometryHints;
+use neovm_host_abi::frontend_event::{
+    FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
+    FrontendModifiers, FrontendViewport, InvalidFrontendScaleFactor,
+};
 
 /// Selection addressed by a clipboard request.
 ///
