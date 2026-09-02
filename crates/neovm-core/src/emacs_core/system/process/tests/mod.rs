@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::environment::builtin_getenv_internal;
 use crate::emacs_core::wait::{CommandInputWaitOutcome, ProcessOutputWaitOutcome};
 use crate::emacs_core::{Context, builtins, format_eval_result};
 use crate::heap_types::LispString;
@@ -146,19 +147,6 @@ fn process_finite_domains_match_gnu_symbols() {
     assert_eq!(NetworkLookupHint::Numeric.name(), "numeric");
     assert_eq!(
         NetworkLookupHint::from_symbol_value(&Value::symbol("canonical")),
-        None
-    );
-    assert_eq!(
-        NumProcessorsQuery::from_symbol_value(&Value::symbol("all")),
-        Some(NumProcessorsQuery::All)
-    );
-    assert_eq!(
-        NumProcessorsQuery::from_symbol_value(&Value::symbol("current")),
-        Some(NumProcessorsQuery::Current)
-    );
-    assert_eq!(NumProcessorsQuery::All.name(), "all");
-    assert_eq!(
-        NumProcessorsQuery::from_symbol_value(&Value::symbol("default")),
         None
     );
     assert!(validate_network_socket_type(&Value::NIL).is_ok());
@@ -9286,38 +9274,6 @@ fn make_network_process_explicit_local_address_skips_family_like_gnu() {
     assert_eq!(
         results[0],
         "OK (listen t \"ignored\" 1 open t t \"bad.invalid\" 1)"
-    );
-}
-
-#[test]
-fn num_processors_openmp_parser_matches_gnu_rules() {
-    assert_eq!(parse_openmp_threads(b"3"), Some(3));
-    assert_eq!(parse_openmp_threads(b" 4,8"), Some(4));
-    assert_eq!(parse_openmp_threads(b"5 "), Some(5));
-    assert_eq!(parse_openmp_threads(b"0"), Some(0));
-    assert_eq!(parse_openmp_threads(b""), None);
-    assert_eq!(parse_openmp_threads(b"threads=4"), None);
-    assert_eq!(parse_openmp_threads(b"4x"), None);
-
-    assert_eq!(
-        current_processors_count_overridable_with_env(Some(b"3"), None, 32),
-        3
-    );
-    assert_eq!(
-        current_processors_count_overridable_with_env(Some(b"3"), Some(b"2"), 32),
-        2
-    );
-    assert_eq!(
-        current_processors_count_overridable_with_env(Some(b" 4,8"), Some(b"0"), 32),
-        4
-    );
-    assert_eq!(
-        current_processors_count_overridable_with_env(None, Some(b"1"), 32),
-        1
-    );
-    assert_eq!(
-        current_processors_count_overridable_with_env(Some(b"0"), Some(b"5"), 32),
-        5
     );
 }
 

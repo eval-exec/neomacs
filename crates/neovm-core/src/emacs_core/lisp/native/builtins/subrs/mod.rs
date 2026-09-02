@@ -294,7 +294,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "getenv-internal",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_getenv_internal),
+        NativeFn::ContextVec(crate::emacs_core::environment::builtin_getenv_internal),
         SubrArity::new(1, Some(2)),
     ));
     ctx.register_subr(SubrSpec::fixed1(
@@ -4109,7 +4109,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(SubrSpec::new(
         "set-binary-mode",
         NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::process::builtin_set_binary_mode(args)
+            crate::emacs_core::fileio::builtin_set_binary_mode(args)
         }),
         SubrArity::new(2, Some(2)),
     ));

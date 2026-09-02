@@ -6,7 +6,7 @@
 //! associated with the selected GUI frame and falls back to the immutable
 //! startup snapshot.
 
-use super::error::EvalResult;
+use super::error::{EvalResult, LispCondition, expect_min_args, signal};
 use super::eval::Context;
 use super::value::Value;
 use crate::heap_types::LispString;
@@ -329,6 +329,30 @@ fn selected_frame_display(eval: &mut Context, frame: Value) -> EvalResult {
     }
 
     super::frame::builtin_frame_parameter(eval, vec![frame, Value::symbol("display")])
+}
+
+/// (getenv-internal VARIABLE &optional ENV) -> string-or-nil
+///
+/// GNU `callproc.c` `Fgetenv_internal`. Defined for every host: the process
+/// environment is host state, not process control, so both process backends
+/// re-export this one implementation.
+pub(crate) fn builtin_getenv_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("getenv-internal", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("getenv-internal"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    // `getenv_internal` takes `&mut Context`, so a borrow of VARNAME's payload
+    // would span it. The name is short and this is not a hot path, so copy the
+    // bytes out rather than reason about whether the callee can reach a
+    // safepoint (DIVERGENCES.md 163).
+    let varname = eval.expect_lisp_string(args[0])?.clone();
+    getenv_internal(eval, &varname, args.get(1).copied().unwrap_or(Value::NIL))
 }
 
 /// Resolve `getenv-internal` through GNU's environment policy.

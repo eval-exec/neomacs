@@ -214,11 +214,10 @@ impl Context {
             }
         }
 
-        ev.provide_value(
-            Value::symbol("make-network-process"),
-            Some(super::super::process::make_network_process_subfeatures()),
-        )
-        .expect("startup make-network-process provide should succeed");
+        if let Some(subfeatures) = super::super::process::make_network_process_subfeatures() {
+            ev.provide_value(Value::symbol("make-network-process"), Some(subfeatures))
+                .expect("startup make-network-process provide should succeed");
+        }
 
         // The fringe-bitmap registry is reconstructed empty by `from_dump` (it
         // is not part of the dump image), so re-seed GNU's standard built-in

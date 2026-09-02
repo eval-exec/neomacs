@@ -3,6 +3,10 @@
 //! Provides path manipulation, file predicates, read/write operations,
 //! directory operations, and file attribute queries.
 
+mod binary_mode;
+
+pub(crate) use binary_mode::builtin_set_binary_mode;
+
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
 use std::collections::{HashMap, VecDeque};
