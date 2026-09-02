@@ -6119,7 +6119,6 @@ pub(crate) fn load_runtime_image_with_features_for_executable(
 ) -> Result<super::eval::Context, EvalError> {
     use super::pdump;
 
-    let project_root = runtime_project_root();
     let candidates = dump_path
         .map(|path| vec![path.to_path_buf()])
         .unwrap_or_else(|| runtime_image_candidate_paths_for_executable(executable, role));
@@ -6163,6 +6162,23 @@ pub(crate) fn load_runtime_image_with_features_for_executable(
         }
     };
 
+    finalize_restored_runtime_image(&mut eval, role, extra_features)?;
+
+    Ok(eval)
+}
+
+/// Rebuild the live Rust/host surface of one deserialized runtime image.
+///
+/// Native pdump files and target-independent portable snapshots share this
+/// transition. Deserialization restores Lisp-owned state but cannot itself
+/// preserve Rust function pointers, live host environment facts, or loader
+/// transients. Product adapters must call this exactly once before attaching
+/// the evaluator to an editor session.
+pub fn finalize_restored_runtime_image(
+    eval: &mut super::eval::Context,
+    role: RuntimeImageRole,
+    extra_features: &[&str],
+) -> Result<(), EvalError> {
     if !extra_features.is_empty() {
         let bootstrap_features = normalized_bootstrap_features(extra_features);
         for feature in &bootstrap_features {
@@ -6170,9 +6186,9 @@ pub(crate) fn load_runtime_image_with_features_for_executable(
         }
     }
 
-    activate_runtime_evaluator_at_root(&mut eval, &project_root, role)?;
-
-    Ok(eval)
+    let project_root = runtime_project_root();
+    activate_runtime_evaluator_at_root(eval, &project_root, role)?;
+    Ok(())
 }
 
 /// Cross the post-preload boundary for an evaluator that will be used as a
