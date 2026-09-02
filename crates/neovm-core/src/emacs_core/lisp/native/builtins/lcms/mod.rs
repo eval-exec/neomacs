@@ -8,8 +8,8 @@ use super::*;
 
 mod subrs;
 #[cfg(all(test, neomacs_have_lcms2))]
-pub(crate) use subrs::SUBRS;
-pub(crate) use subrs::register_subrs;
+pub(crate) use self::subrs::SUBRS;
+pub(crate) use self::subrs::register_subrs;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

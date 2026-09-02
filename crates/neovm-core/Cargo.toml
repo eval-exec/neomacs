@@ -17,9 +17,6 @@ neomacs-video-model.workspace = true
 enumflags2.workspace = true
 crossbeam-channel.workspace = true
 libc.workspace = true
-errno.workspace = true
-rustix = { workspace = true, features = ["event", "pipe"] }
-fs4.workspace = true
 native-regex.workspace = true
 regex-automata.workspace = true
 memchr.workspace = true
@@ -30,33 +27,16 @@ cbc.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 hmac.workspace = true
-getrandom.workspace = true
 base64.workspace = true
 num_enum.workspace = true
 strum.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-log.workspace = true
-tracing-appender.workspace = true
-stacker.workspace = true
-dns-lookup.workspace = true
-network-interface.workspace = true
-libloading.workspace = true
-tree-sitter.workspace = true
-tree-sitter-language.workspace = true
 serde.workspace = true
 bytemuck.workspace = true
-memmap2.workspace = true
 tempfile.workspace = true
-polling.workspace = true
-socket2.workspace = true
-portable-pty.workspace = true
-os_pipe.workspace = true
 smallvec.workspace = true
-rustls.workspace = true
-webpki-roots.workspace = true
-rustls-pki-types.workspace = true
-x509-parser.workspace = true
 parking_lot.workspace = true
 malachite.workspace = true
 itoa.workspace = true
@@ -93,12 +73,34 @@ windows-sys.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 inotify.workspace = true
 
-# Browser WebAssembly has no OS hostname or system inventory. Keep these
-# dependencies out of every WebAssembly build; the runtime selects its honest
-# portable fallbacks with `cfg(target_family = "wasm")`.
+# Browser WebAssembly has no native process, mmap, shared-library, TLS-socket,
+# file-watch, stack-growth, file-logging, hostname, or system-inventory APIs.
+# These are target facts rather than user-selectable Cargo features: native
+# targets always compile their real backends, while subsystem composition roots
+# select explicit portable backends for `target_family = "wasm"`.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+dns-lookup.workspace = true
+errno.workspace = true
+fs4.workspace = true
+getrandom.workspace = true
 hostname.workspace = true
+libloading.workspace = true
+memmap2.workspace = true
+network-interface.workspace = true
+os_pipe.workspace = true
+polling.workspace = true
+portable-pty.workspace = true
+rustix = { workspace = true, features = ["event", "pipe"] }
+rustls.workspace = true
+rustls-pki-types.workspace = true
+socket2.workspace = true
+stacker.workspace = true
 sysinfo.workspace = true
+tracing-appender.workspace = true
+tree-sitter.workspace = true
+tree-sitter-language.workspace = true
+webpki-roots.workspace = true
+x509-parser.workspace = true
 
 [features]
 default = ["jit", "sqlite"]

@@ -263,12 +263,28 @@ pub mod value_reader;
 // Host integration, files, processes, networking, and platform support.
 #[path = "system/platform/c_features/mod.rs"]
 pub mod c_features;
-#[path = "system/callproc/mod.rs"]
-pub mod callproc;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "system/callproc/portable.rs"]
+        pub mod callproc;
+    }
+    _ => {
+        #[path = "system/callproc/mod.rs"]
+        pub mod callproc;
+    }
+}
 #[path = "system/platform/cus_start_platform_vars/mod.rs"]
 pub mod cus_start_platform_vars;
-#[path = "system/dynamic_module/mod.rs"]
-pub mod dynamic_module;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "system/dynamic_module/portable.rs"]
+        pub mod dynamic_module;
+    }
+    _ => {
+        #[path = "system/dynamic_module/mod.rs"]
+        pub mod dynamic_module;
+    }
+}
 #[path = "system/environment/mod.rs"]
 pub(crate) mod environment;
 #[path = "system/fileio/mod.rs"]
@@ -287,8 +303,16 @@ pub mod path_exec;
 pub mod perf_trace;
 #[path = "system/post_image_init/mod.rs"]
 pub(crate) mod post_image_init;
-#[path = "system/process/mod.rs"]
-pub mod process;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "system/process/portable.rs"]
+        pub mod process;
+    }
+    _ => {
+        #[path = "system/process/mod.rs"]
+        pub mod process;
+    }
+}
 #[path = "system/profiler/mod.rs"]
 pub(crate) mod profiler;
 #[path = "system/shell_file_name/mod.rs"]
@@ -299,12 +323,28 @@ pub(crate) mod sqlite;
 pub mod timefns;
 #[path = "system/timer/mod.rs"]
 pub mod timer;
-#[path = "system/tls/mod.rs"]
-pub(crate) mod tls;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "system/tls/portable.rs"]
+        pub(crate) mod tls;
+    }
+    _ => {
+        #[path = "system/tls/mod.rs"]
+        pub(crate) mod tls;
+    }
+}
 #[path = "system/platform/w32/mod.rs"]
 pub(crate) mod w32;
-#[path = "system/wait/mod.rs"]
-pub(crate) mod wait;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "system/wait/portable.rs"]
+        pub(crate) mod wait;
+    }
+    _ => {
+        #[path = "system/wait/mod.rs"]
+        pub(crate) mod wait;
+    }
+}
 
 // Character representation, coding, syntax, search, and structured text.
 #[path = "text/casefiddle/mod.rs"]
@@ -343,8 +383,16 @@ pub(crate) mod string_escape;
 pub mod syntax;
 #[path = "text/textprop/mod.rs"]
 pub mod textprop;
-#[path = "text/treesit/mod.rs"]
-pub mod treesit;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "text/treesit/portable.rs"]
+        pub mod treesit;
+    }
+    _ => {
+        #[path = "text/treesit/mod.rs"]
+        pub mod treesit;
+    }
+}
 #[path = "text/xml/mod.rs"]
 pub mod xml;
 #[path = "text/zlib/mod.rs"]
