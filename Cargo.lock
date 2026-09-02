@@ -4090,6 +4090,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "neomacs-wgpu-runtime"
+version = "0.0.16"
+dependencies = [
+ "thiserror 2.0.20",
+ "tracing",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "neovm-core"
 version = "0.0.16"
 dependencies = [
