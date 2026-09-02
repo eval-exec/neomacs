@@ -28,6 +28,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
+pub mod frontend_event;
 mod host;
 
 pub use host::{

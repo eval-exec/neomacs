@@ -381,7 +381,7 @@ mod tests {
 
     fn key_parts(code: KeyCode, modifiers: KeyModifiers) -> (u32, u32) {
         match map_key_event(key_event(code, modifiers)).expect("key event") {
-            InputEvent::Frontend(neomacs_app::frontend_event::FrontendEvent::Key(key)) => {
+            InputEvent::Frontend(neovm_host_abi::frontend_event::FrontendEvent::Key(key)) => {
                 (key.symbol().get(), key.modifiers().bits())
             }
             _ => panic!("expected key event"),
