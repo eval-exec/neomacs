@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 neomacs-app.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
+neomacs-display-protocol.workspace = true
 neomacs-wgpu-runtime.workspace = true
 pollster.workspace = true
 winit = { workspace = true, features = ["android-game-activity"] }
