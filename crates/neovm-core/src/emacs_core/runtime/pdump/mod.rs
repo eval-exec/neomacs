@@ -24,7 +24,13 @@ pub(crate) use convert::{
 pub(crate) mod face_image;
 pub(crate) mod image_format;
 pub(crate) mod mapped_heap;
-pub(crate) mod mmap_image;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "mmap_image_portable.rs"]
+        pub(crate) mod mmap_image;
+    }
+    _ => { pub(crate) mod mmap_image; }
+}
 pub(crate) mod obarray_image;
 pub(crate) mod object_extra;
 pub(crate) mod object_starts;
