@@ -3753,6 +3753,8 @@ name = "neomacs-android"
 version = "0.0.16"
 dependencies = [
  "neomacs-app",
+ "neomacs-wgpu-runtime",
+ "pollster",
  "winit",
 ]
 
@@ -4105,7 +4107,9 @@ name = "neomacs-wasm"
 version = "0.0.16"
 dependencies = [
  "neomacs-app",
+ "neomacs-wgpu-runtime",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "winit",
 ]
 

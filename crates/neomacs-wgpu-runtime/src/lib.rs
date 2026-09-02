@@ -5,6 +5,6 @@
 mod surface;
 
 pub use surface::{
-    PresentationOutcome, PresentationSkipReason, SurfaceExtent, SurfaceInitError,
-    SurfacePresentError, SurfaceRuntime,
+    PresentationOutcome, PresentationSkipReason, SurfaceClearColor, SurfaceExtent,
+    SurfaceInitError, SurfacePresentError, SurfaceRuntime, SurfaceWindow,
 };
