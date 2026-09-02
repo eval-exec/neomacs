@@ -1514,7 +1514,7 @@ impl DisplayMediaReplacement {
     /// crop`, src/xdisp.c:32579, emacs-31.0.90).  The widget's own size in
     /// `DisplayMediaReplacementKind::Xwidget::content` is untouched: GNU sizes
     /// the native view from `xww->width` and clips it
-    /// (`x_draw_xwidget_glyph_string`, src/xwidget.c:2841-2847).
+    /// (`x_draw_xwidget_glyph_string`, src/xwidget.c:2841-2849).
     ///
     /// Only an xwidget has this rule; see `DisplayXwidgetOverflowAction`.
     pub(crate) fn xwidget_advance_cropped_to(mut self, visible_width_px: f32) -> Self {

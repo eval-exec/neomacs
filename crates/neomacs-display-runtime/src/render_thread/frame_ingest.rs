@@ -53,7 +53,7 @@ fn collect_frame_webviews(
         // have cropped the slot at the right edge (`produce_xwidget_glyph`,
         // src/xdisp.c:32577-32579, emacs-31.0.90) and GNU answers that by
         // clipping the view, not resizing it (`x_draw_xwidget_glyph_string`,
-        // src/xwidget.c:2841-2847).  The clip below is that text-area clip.
+        // src/xwidget.c:2841-2849).  The clip below is that text-area clip.
         let Ok(content) = neomacs_display_protocol::RootSurfaceRect::new(
             offset_x + *x,
             offset_y + *y,

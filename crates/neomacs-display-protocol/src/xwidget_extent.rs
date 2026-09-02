@@ -5,7 +5,7 @@
 //!
 //! - the widget's own size, `xw->width` / `xw->height`, which is what the
 //!   native view is sized to (`x_draw_xwidget_glyph_string` sizes the view
-//!   from `xww->width` and only clips it, src/xwidget.c:2841-2847 in
+//!   from `xww->width` and only clips it, src/xwidget.c:2841-2849 in
 //!   emacs-31.0.90);
 //! - the glyph's layout advance, `glyph->pixel_width`, which
 //!   `produce_xwidget_glyph` may crop at the right edge of the text area

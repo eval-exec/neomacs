@@ -66,9 +66,8 @@ fn the_quarter_width_rule_uses_the_windows_own_width_in_a_right_hand_split() {
         1360.0,
         1592.0,
     );
-    assert_eq!(right_window.current_x_px(), 560.0);
     assert_eq!(right_window.last_visible_x_px(), 792.0);
-    assert_eq!(right_window.remaining_px(), 232.0);
+    assert_eq!(right_window.remaining_px(), 232.0, "current_x is 560");
 
     assert_eq!(
         DisplayXwidgetOverflowAction::for_xwidget(300.0, right_window, false),

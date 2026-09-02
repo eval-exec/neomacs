@@ -102,10 +102,6 @@ impl WindowLocalRowExtent {
         }
     }
 
-    pub(crate) fn current_x_px(self) -> f32 {
-        self.current_x_px
-    }
-
     pub(crate) fn last_visible_x_px(self) -> f32 {
         self.last_visible_x_px
     }
@@ -134,13 +130,35 @@ impl WindowLocalRowExtent {
 /// visible width, has its layout advance cropped so it fits exactly and is
 /// shown partially rather than not at all -- `display_line` then keeps it
 /// and `x_draw_xwidget_glyph_string` clips the widget, whose own size is
-/// untouched (src/xwidget.c:2841-2847).  A narrower glyph in the middle of a
-/// row is left whole for `display_line`'s continuation or truncation
-/// handling.
+/// untouched (src/xwidget.c:2841-2849).
 ///
 /// This is the xwidget rule only.  `produce_image_glyph` has its own
 /// (src/xdisp.c:32457-32473), which also weighs word wrap, the line-number
 /// prefix and the frame's column width, and it is not ported here.
+///
+/// What this port does NOT do, relative to the GNU function:
+///
+/// - **`LeaveWhole` drops the glyph.** In GNU a narrow mid-row widget that
+///   does not fit is continued onto the next row or truncated by
+///   `display_line` (src/xdisp.c:26223-26310); this row builder has no
+///   remainder for a media replacement, so the row's
+///   `RejectOverflowingGlyph` policy consumes the covered text and emits
+///   nothing.  The pre-existing behavior, narrowed by this rule to widgets
+///   GNU would also leave whole.
+/// - **No room at all.** With `hpos == 0` GNU still crops when nothing of
+///   the row is left, producing a glyph of zero or negative width
+///   (`clip_to_bounds (-1, …)`, :32600); here `visible_width_px > 0.0`
+///   guards the crop and such a glyph is dropped instead.
+/// - **Box line widths.** GNU adds `box_vertical_line_width` to
+///   `it->pixel_width` before computing `crop` (:32556-32570); the width
+///   passed here is the widget's, so a boxed widget's threshold and advance
+///   are narrower than GNU's by the box.  Xwidgets have no positive-box
+///   expansion in this port yet (only images do).
+/// - **Horizontal scrolling.** GNU's `current_x` and `last_visible_x` both
+///   carry `first_visible_x` (src/xdisp.c:3507); this port scrolls by
+///   skipping columns, so [`WindowLocalRowExtent`] is hscroll-free.  The
+///   remaining width agrees; the quarter-width threshold is smaller than
+///   GNU's by a quarter of the scrolled-off pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DisplayXwidgetOverflowAction {
     Fits,

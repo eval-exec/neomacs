@@ -14129,6 +14129,7 @@ fn inline_xwidget_glyph_in_right_split(
     frame_width: u32,
     frame_height: u32,
     prefix: &str,
+    line_numbers: bool,
     width: i32,
     height: i32,
 ) -> Option<InlineXwidgetGlyph> {
@@ -14161,6 +14162,9 @@ fn inline_xwidget_glyph_in_right_split(
             .get_mut(right_buf_id)
             .expect("right buffer");
         buf.insert(&format!("{prefix}Xb"));
+        if line_numbers {
+            buf.set_buffer_local("display-line-numbers", Value::T);
+        }
         buf.goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(1));
         buf.put_text_property(
             prefix_chars + 1,
@@ -14225,15 +14229,15 @@ fn inline_xwidget_glyph_in_right_split(
         })
 }
 
-/// GNU `produce_xwidget_glyph` (src/xdisp.c:32534-32620, emacs-31.0.90)
+/// GNU `produce_xwidget_glyph` (src/xdisp.c:32534-32637, emacs-31.0.90)
 /// never declines to produce the glyph.  It crops a wide widget's advance at
-/// the right edge of the text area -- `crop = pixel_width - (last_visible_x
-/// - current_x)`, applied when the glyph starts the row or is wider than a
-/// quarter of the visible width (:32577-32579) -- so the widget is shown
-/// partially, which is what `x_draw_xwidget_glyph_string`'s `clip_*`
-/// machinery exists for (src/xwidget.c:2841-2847).  Issue 301: this port
-/// emitted nothing, and the window showed an empty background
-/// indistinguishable from a page that failed to load.
+/// the right edge of the text area, `crop = pixel_width - (last_visible_x -
+/// current_x)`, when the glyph starts the row or is wider than a quarter of
+/// the visible width (:32577-32579), so the widget is shown partially, which
+/// is what `x_draw_xwidget_glyph_string`'s `clip_*` machinery exists for
+/// (src/xwidget.c:2841-2849).  Issue 301: this port emitted nothing, and the
+/// window showed an empty background indistinguishable from a page that
+/// failed to load.
 #[test]
 fn layout_frame_rust_crops_an_xwidget_wider_than_its_window_like_gnu() {
     let fits = inline_xwidget_glyph_in_frame(320, 120, 96, 40).expect("fitting xwidget glyph");
@@ -14276,7 +14280,7 @@ fn layout_frame_rust_crops_an_xwidget_wider_than_its_window_like_gnu() {
 #[test]
 fn layout_frame_rust_crops_an_xwidget_in_a_right_hand_split_by_the_windows_width() {
     let prefix = "a".repeat(70);
-    let glyph = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, 300, 40)
+    let glyph = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, false, 300, 40)
         .expect("the right window's xwidget is cropped, not dropped");
     // Right window: 8 px cells, its text starts at frame x 808 (the column
     // at 800 is the vertical border) and one column is reserved at the
@@ -14295,9 +14299,49 @@ fn layout_frame_rust_crops_an_xwidget_in_a_right_hand_split_by_the_windows_width
     );
 }
 
-/// A widget taller than the window becomes a partially visible row in GNU
-/// (`display_line` keeps the row; drawing clips it, src/xdisp.c:32703 and
-/// `x_draw_xwidget_glyph_string`'s clip_top/clip_bottom).  The glyph keeps its
+/// The line-number prefix lies inside GNU's text area: `it->current_x`
+/// counts it and `it->last_visible_x` is still measured from the text
+/// area's left edge (`maybe_produce_line_number`, src/xdisp.c:25705-25706;
+/// src/dispextern.h:2785-2791).  So the window-local origin is the text
+/// area's edge, not the content edge after the prefix; measuring from the
+/// content edge would shrink `last_visible_x / 4` by a quarter of the prefix
+/// and crop a widget GNU leaves whole.
+#[test]
+fn layout_frame_rust_measures_the_quarter_width_rule_from_the_text_area_not_the_line_numbers() {
+    let prefix = "a".repeat(75);
+    // A 200 px widget after 75 cells overflows and is wider than a quarter
+    // of the window (784 / 4 = 196): cropped to what is left of the row,
+    // with the prefix's width showing in where the glyph starts.
+    let cropped = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 200, 40)
+        .expect("a wide xwidget after line numbers is cropped, not dropped");
+    assert!(
+        cropped.x > 808.0 + 600.0,
+        "the line-number prefix moves the glyph right: {cropped:?}"
+    );
+    // The layout pen reaches the widget at frame x 1456 (text area at 800,
+    // the border cell, four line-number cells, 75 cells of text), so GNU's
+    // crop is 200 - (1592 - 1456).
+    assert_eq!(
+        cropped.width,
+        136.0,
+        "GNU: pixel_width -= crop; {cropped:?}"
+    );
+    assert_eq!(cropped.content.width_px(), 200.0);
+
+    // 195 px is not wider than a quarter of the window measured from the
+    // text area (195 <= 196), so GNU leaves it whole and this port drops it.
+    // Measured from the content edge the quarter would be smaller than 195
+    // and the widget would have been cropped instead.
+    assert!(
+        inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 195, 40).is_none(),
+        "the quarter-width threshold is the text area's, prefix included"
+    );
+}
+
+/// A widget taller than the window becomes a partially visible row in GNU:
+/// `produce_xwidget_glyph` crops only the width (src/xdisp.c:32577-32579,
+/// emacs-31.0.90) and `x_draw_xwidget_glyph_string` clips the height
+/// (`clip_top`/`clip_bottom`, src/xwidget.c:2847-2849).  The glyph keeps its
 /// full height and the presentation carries the clip.
 #[test]
 fn layout_frame_rust_keeps_an_xwidget_taller_than_its_window_partially_visible() {
@@ -14313,7 +14357,7 @@ fn layout_frame_rust_keeps_an_xwidget_taller_than_its_window_partially_visible()
         .clip_rect
         .expect("a partially visible row carries its clip");
     assert!(
-        clip.height < 900.0 && clip.height <= 120.0,
+        clip.height <= 120.0,
         "the clip is bounded by the window: {clip:?}"
     );
 }

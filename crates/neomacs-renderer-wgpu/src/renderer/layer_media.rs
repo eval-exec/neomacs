@@ -512,66 +512,14 @@ impl WgpuRenderer {
                     // `xww->width` x `xww->height`); the glyph slot may have
                     // been cropped at the right edge, so draw the content
                     // extent and cut it to the text-area clip on all four
-                    // sides, the way the image path does.
+                    // sides through the helper the image path uses.
                     let width = content.width_px();
                     let height = content.height_px();
-                    let (draw_x, draw_y, clipped_width, clipped_height, u0, u1, v0, v1) =
-                        if let Some(clip) = clip_rect {
-                            let mut x0 = *x;
-                            let mut y0 = *y;
-                            let mut w0 = width;
-                            let mut h0 = height;
-                            let mut u0 = 0.0_f32;
-                            let mut u1 = 1.0_f32;
-                            let mut v0 = 0.0_f32;
-                            let mut v1 = 1.0_f32;
-                            let left = clip.x;
-                            let right = clip.x + clip.width;
-                            let top = clip.y;
-                            let bottom = clip.y + clip.height;
-                            if x0 < left {
-                                let cut = left - x0;
-                                if cut >= w0 {
-                                    continue;
-                                }
-                                x0 = left;
-                                w0 -= cut;
-                                u0 += cut / width;
-                            }
-                            if x0 + w0 > right {
-                                let cut = (x0 + w0) - right;
-                                if cut >= w0 {
-                                    continue;
-                                }
-                                w0 -= cut;
-                                u1 -= cut / width;
-                            }
-                            if y0 < top {
-                                let cut = top - y0;
-                                if cut >= h0 {
-                                    continue;
-                                }
-                                y0 = top;
-                                h0 -= cut;
-                                v0 += cut / height;
-                            }
-                            if y0 + h0 > bottom {
-                                let cut = (y0 + h0) - bottom;
-                                if cut >= h0 {
-                                    continue;
-                                }
-                                h0 -= cut;
-                                v1 -= cut / height;
-                            }
-                            (x0, y0, w0, h0, u0, u1, v0, v1)
-                        } else {
-                            (*x, *y, width, height, 0.0, 1.0, 0.0, 1.0)
-                        };
-
-                    // Skip if fully clipped
-                    if clipped_width <= 0.0 || clipped_height <= 0.0 {
+                    let Some(clipped) =
+                        clipped_media_rect(*x, *y, width, height, clip_rect.as_ref())
+                    else {
                         continue;
-                    }
+                    };
 
                     let view_id = inline_webview_id(glyph)
                         .expect("the glyph was exhaustively matched as an xwidget");
@@ -586,21 +534,21 @@ impl WgpuRenderer {
                             y,
                             width,
                             height,
-                            clipped_width,
-                            clipped_height
+                            clipped.draw_width,
+                            clipped.draw_height
                         );
                         // Create vertices for webkit quad (white color = no tinting)
                         quads.push(MediaQuad {
                             id: view_id,
                             vertices: textured_quad_vertices_uv(
-                                draw_x,
-                                draw_y,
-                                clipped_width,
-                                clipped_height,
-                                u0,
-                                u1,
-                                v0,
-                                v1,
+                                clipped.draw_x,
+                                clipped.draw_y,
+                                clipped.draw_width,
+                                clipped.draw_height,
+                                clipped.u_min,
+                                clipped.u_max,
+                                clipped.v_min,
+                                clipped.v_max,
                             ),
                         });
                     } else {

@@ -1716,10 +1716,13 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 // images have their own GNU rule (not ported), and margin
                 // lanes keep their own structural clip below.
                 let kind = match kind {
-                    DisplayItemKind::MediaReplacement(media)
-                        if matches!(media.kind, DisplayMediaReplacementKind::Xwidget { .. })
-                            && self.writer.overflow_policy()
-                                == DisplayRowOverflowPolicy::RejectOverflowingGlyph =>
+                    DisplayItemKind::MediaReplacement(
+                        media @ DisplayMediaReplacement {
+                            kind: DisplayMediaReplacementKind::Xwidget { .. },
+                            ..
+                        },
+                    ) if self.writer.overflow_policy()
+                        == DisplayRowOverflowPolicy::RejectOverflowingGlyph =>
                     {
                         let extent = WindowLocalRowExtent::from_frame_coordinates(
                             self.text_area_origin,

@@ -328,7 +328,7 @@ fn replacement_source_keeps_non_text_kinds_with_covered_span() {
 /// `produce_xwidget_glyph` crops the glyph's advance (`it->pixel_width -=
 /// crop`, src/xdisp.c:32579, emacs-31.0.90) and nothing else: the widget's
 /// own size still drives the native view, which
-/// `x_draw_xwidget_glyph_string` clips (src/xwidget.c:2841-2847).
+/// `x_draw_xwidget_glyph_string` clips (src/xwidget.c:2841-2849).
 #[test]
 fn cropping_an_xwidgets_advance_keeps_its_content_extent() {
     let xwidget = DisplayMediaReplacement::xwidget(DisplayXwidgetItem {

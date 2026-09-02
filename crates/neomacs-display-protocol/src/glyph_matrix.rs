@@ -3246,7 +3246,9 @@ impl FrameDisplayState {
                             x,
                             y: baseline - layout_ascent + glyph.vertical_offset_px,
                             width: materialized_width,
-                            height: layout_height,
+                            // The slot is as tall as the widget; the row's
+                            // vertical clip, not the glyph, bounds what shows.
+                            height: content.height_px(),
                             content: *content,
                             face_id: glyph.face_id,
                             box_vertical_edges: glyph.box_vertical_edges,

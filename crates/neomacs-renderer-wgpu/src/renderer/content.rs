@@ -1738,30 +1738,53 @@ impl WgpuRenderer {
                         x,
                         y,
                         content,
+                        clip_rect,
                         ..
                     } = glyph
                     {
                         // The texture is the widget at its own size; the
                         // glyph slot may be narrower after the right-edge
-                        // crop and must not squeeze it.
+                        // crop and must not squeeze it.  What the slot no
+                        // longer covers is cut away by the text-area clip,
+                        // through the same helper the image branch above
+                        // uses, so the widget cannot spill into the next
+                        // window of this child frame.
                         let width = content.width_px();
                         let height = content.height_px();
                         let view_id = *webview_id;
                         if self.caches.webview.get(view_id).is_some() {
-                            let wx = *x + offset_x;
-                            let wy = *y + offset_y;
+                            let Some(clipped) = super::layer_media::clipped_media_rect(
+                                *x,
+                                *y,
+                                width,
+                                height,
+                                clip_rect.as_ref(),
+                            ) else {
+                                continue;
+                            };
+                            let wx = clipped.draw_x + offset_x;
+                            let wy = clipped.draw_y + offset_y;
                             tracing::debug!(
-                                "render_frame_content: webkit {} at ({:.1},{:.1}) size {:.1}x{:.1}",
+                                "render_frame_content: webkit {} at ({:.1},{:.1}) size {:.1}x{:.1} (clipped to {:.1}x{:.1})",
                                 webview_id,
                                 wx,
                                 wy,
                                 width,
                                 height,
+                                clipped.draw_width,
+                                clipped.draw_height,
                             );
                             webkit_quads.push(MediaQuad {
                                 id: view_id,
-                                vertices: super::layer_media::textured_quad_vertices(
-                                    wx, wy, width, height, 0.0, 1.0,
+                                vertices: super::layer_media::textured_quad_vertices_uv(
+                                    wx,
+                                    wy,
+                                    clipped.draw_width,
+                                    clipped.draw_height,
+                                    clipped.u_min,
+                                    clipped.u_max,
+                                    clipped.v_min,
+                                    clipped.v_max,
                                 ),
                             });
                         }
