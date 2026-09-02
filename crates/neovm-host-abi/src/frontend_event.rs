@@ -21,6 +21,27 @@ impl FrontendFrameId {
     }
 }
 
+/// Opaque revision of one immutable frame presentation.
+///
+/// The evaluator issues this identity and the frontend only echoes it when
+/// reporting whether that exact revision became visible or was retired.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct FrontendPresentationId(u64);
+
+impl FrontendPresentationId {
+    /// Construct an identity from the evaluator's presentation revision.
+    #[must_use]
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Return the evaluator's raw presentation revision.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// Logical key symbol understood by Neomacs's keyboard adapter.
 ///
 /// Zero is a real value: terminal `Ctrl-2` produces the NUL character. Host
@@ -290,6 +311,25 @@ pub enum FrontendEvent {
     CloseRequested {
         /// Editor frame requested for closure.
         target: FrontendFrameId,
+    },
+    /// The renderer installed this immutable revision for drawing and input.
+    PresentationActivated {
+        /// Presentation revision installed by the renderer.
+        presentation: FrontendPresentationId,
+        /// Editor frame whose visible revision changed.
+        target: FrontendFrameId,
+    },
+    /// The renderer rejected or superseded this revision before activation.
+    PresentationDiscarded {
+        /// Presentation revision rejected by the renderer.
+        presentation: FrontendPresentationId,
+        /// Editor frame that owned the rejected revision.
+        target: FrontendFrameId,
+    },
+    /// A formerly visible presentation can no longer produce input hits.
+    PresentationRetired {
+        /// Presentation revision no longer retained by the renderer.
+        presentation: FrontendPresentationId,
     },
 }
 

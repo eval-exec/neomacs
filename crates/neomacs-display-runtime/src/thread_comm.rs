@@ -1081,6 +1081,9 @@ impl RenderComms {
                 FrontendEvent::ViewportChanged(_) => "viewport-changed",
                 FrontendEvent::CloseRequested { .. } => "close-requested",
                 FrontendEvent::FocusChanged { .. } => "focus-changed",
+                FrontendEvent::PresentationActivated { .. } => "presentation-activated",
+                FrontendEvent::PresentationDiscarded { .. } => "presentation-discarded",
+                FrontendEvent::PresentationRetired { .. } => "presentation-retired",
             },
             InputEvent::RawTtyBytes { .. } => "raw-tty-bytes",
             InputEvent::PositionedPointer(PositionedPointerInput { action, .. }) => match action {
