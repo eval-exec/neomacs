@@ -223,16 +223,17 @@ const X_SURFACE: &str = "ledger 189: the X C surface is pinned against GNU+X by 
 /// This port ships a real xwidget layer, so these variables are backed.
 ///
 /// The row is now platform-split, and `c_features.rs` is still the only thing
-/// that decides it.  On macOS `xwidget-internal` IS provided --
-/// `backend/wkwebview` places a native `WKWebView`, and `xwidget-webkit-browse-url`
-/// works on the primary frame -- so these three rows describe a build that has
-/// the feature, and binding the variables matches GNU exactly rather than
-/// excusing a gap.  That support is partial, not complete GNU compatibility;
-/// `c_features.rs` enumerates what is missing and issue 300 tracks it.  On
-/// Linux the WPE path still leaves ledger 190's missing subrs open, the
-/// feature is not provided, and the rows remain policy.
+/// that decides it.  On a macOS build with the `webview` feature
+/// `xwidget-internal` IS provided -- `crates/neomacs-webview/src/platform/macos`
+/// places a native `WKWebView`, and `xwidget-webkit-browse-url` works in every
+/// top-level frame -- so these three rows describe a build that has the
+/// feature, and binding the variables matches GNU exactly rather than
+/// excusing a gap.  Issue 300 tracks the remaining divergences.  On Linux the
+/// WPE path still leaves ledger 190's missing subrs open, the feature is not
+/// provided, and the rows remain policy.
 const XWIDGET_LAYER: &str = "ledger 190/192: xwidget.rs implements GNU's xwidget subrs over WPE/WebKit \
-     (Linux, xwidget-internal NotBuilt) or a native WKWebView (macOS, provided, partial)";
+     (Linux, xwidget-internal NotBuilt) or a native WKWebView (macOS with the `webview' \
+     feature, provided)";
 
 /// `font-use-system-font` is `(car byte-boolean-vars)` in both engines, pinned
 /// by `crates/neovm-oracle-tests/src/defvar_bool_byte_boolean_vars.rs:42`

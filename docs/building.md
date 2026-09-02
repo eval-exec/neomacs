@@ -103,25 +103,40 @@ macOS support is experimental — see
 than WPE: `WKWebView` has no offscreen render path, so the view is a native
 `NSView` placed over the GPU surface rather than a texture composited into it.
 This is what GNU Emacs does on macOS (`src/nsxwidget.m`), and the placement
-algorithm is ported from `src/xwidget.c`.
+algorithm is ported from `src/xwidget.c`.  The adapter lives in
+`crates/neomacs-webview/src/platform/macos` and is compiled by the `webview`
+Cargo feature, which the darwin production capability row in `Cargo.toml`
+requests, so `cargo xtask fresh-build --release` and the Nix package ship it.
+`xwidget-internal` is advertised only when that backend is compiled in.
 
-**This support is partial, not complete GNU Emacs xwidget compatibility.**
-`xwidget-webkit-browse-url` works end to end on the primary frame; the gaps are
-tracked in
+What works, as of the follow-ups to
 [issue #300](https://github.com/eval-exec/neomacs/issues/300):
 
-- **Primary frame only.** An xwidget displayed in a second top-level frame gets
-  no view at all.
-- **Load progress is approximate.** `xwidget-webkit-estimated-load-progress`
-  reports 0.0 before a navigation and 1.0 once one is dispatched — it is not
-  measured, because there are no `WKNavigationDelegate` or KVO events yet. A
-  script run immediately after opening a page can therefore run before the page
-  exists.
-- **No script result callbacks.** `xwidget-webkit-execute-script` signals if you
-  pass its optional `FUN`, rather than dropping it silently and leaving the
-  caller waiting for a call that never comes. `xwidget-webkit-get-selection` and
-  `xwidget-webkit-insert-string` use `FUN` and so do not work.
-- **Keyboard focus is not handed off** in either direction. Mouse input works.
+- `xwidget-webkit-browse-url` in any top-level frame: creation, navigation,
+  placement, clipping, hiding, resize, and a view moving between frames.
+- Measured load progress: `xwidget-webkit-estimated-load-progress` follows
+  `WKWebView`'s `estimatedProgress` through key-value observing, and the
+  `WKNavigationDelegate` reports the GNU load phases, delivered to Lisp as
+  `(xwidget-event load-changed XWIDGET "load-started" | "load-redirected" |
+  "load-committed" | "load-finished")`, exactly what `xwidget-webkit-callback`
+  in `lisp/xwidget.el` keys its progress timer and buffer title on.
+- Script results: `xwidget-webkit-execute-script` delivers its optional `FUN`
+  the JSON-converted result asynchronously, so `xwidget-webkit-get-selection`
+  and `xwidget-webkit-insert-string` work.  As in GNU, `FUN` is not called when
+  the script throws.
+- Keyboard focus, following `src/nsxwidget.m`: a key that reaches the web view
+  stays with Emacs unless the page reports an input element (INPUT or
+  TEXTAREA) focused, and `C-g` typed into such an element hands focus back to
+  Emacs without being relayed.  Mouse input goes through the responder chain.
+
+Known gaps:
+
+- GNU's `isearch-mode` special case (keys always go to Emacs while searching)
+  reads a buffer-local Lisp variable from the AppKit thread; the render thread
+  cannot ask Lisp synchronously, so while isearch is active a page input keeps
+  the keys.
+- Persistent browser profiles are isolated by the OS only on macOS 14 and
+  later; older systems fall back to WebKit's process-wide store.
 
 Two more limits come from the overlay technique itself, and GNU Emacs has
 shipped with all of them for years: Neomacs UI cannot paint over the web view

@@ -31,8 +31,9 @@ fn the_features_the_table_is_conditioned_on_are_all_absent() {
                (featurep 'xwidget-internal) (featurep 'dbusbind)
                (featurep 'native-compile) (featurep 'dynamic-setting))",
     );
-    // macOS provides `xwidget-internal': `backend/wkwebview' is a real
-    // inline web view, so the eleventh probe answers t there. The three
+    // A macOS build with the `webview' feature provides `xwidget-internal':
+    // `crates/neomacs-webview/src/platform/macos' is a real inline web view,
+    // so the eleventh probe answers t there. The three
     // xwidget rows below stop being policy exceptions on that platform and
     // become GNU-consistent -- the variables are bound because the feature is
     // present, which is exactly what GNU does.

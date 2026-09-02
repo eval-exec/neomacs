@@ -119,27 +119,26 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             name: "xwidget-internal",
             gnu_site: "src/xwidget.c:4003",
             gnu_guard: BuildOption("HAVE_XWIDGETS"),
-            // macOS has a native inline web view: `neomacs-display-runtime/
-            // src/backend/wkwebview' places a real WKWebView over the GPU
+            // macOS has a native inline web view: `crates/neomacs-webview/
+            // src/platform/macos' places a real WKWebView over the GPU
             // surface, using GNU's own placement algorithm from
             // `src/xwidget.c'.  What `xwidget-internal' advertises to
             // `lisp/xwidget.el' is that the xwidget layer is there to be used,
-            // and on macOS it now is: `xwidget-webkit-browse-url' works end to
-            // end on the primary frame.
+            // and on macOS it is: `xwidget-webkit-browse-url' works in every
+            // top-level frame; `xwidget-webkit-estimated-load-progress' is
+            // measured (KVO on `estimatedProgress'); the WKNavigationDelegate's
+            // phases reach Lisp as GNU's `(xwidget-event load-changed ...)';
+            // `xwidget-webkit-execute-script' delivers its FUN the result;
+            // and keyboard focus follows `src/nsxwidget.m'.  Issue 300 keeps
+            // the remaining divergences (docs/building.md lists them).
             //
-            // It is NOT complete GNU xwidget compatibility, and this row does
-            // not claim to be.  Tracked in issue 300: no views in secondary
-            // top-level frames; `xwidget-webkit-estimated-load-progress' is
-            // dispatched rather than measured, because nothing produces
-            // `InputEvent::WebKitLoadFinished' and there is no
-            // `WKNavigationDelegate' or KVO; `xwidget-webkit-execute-script'
-            // signals on its optional FUN, having no result channel back to
-            // the Lisp thread; and keyboard focus is not handed off in either
-            // direction.  The flag is advisory in any case -- `xwidget.el'
-            // does not `require' this feature, its
-            // `(require 'xwidget-internal)' being commented out at line 32 --
-            // so what it decides is whether a configuration reaches for the
-            // layer at all, which is the question macOS can now answer yes to.
+            // The row is `DetectedAtBuildTime' because the backend is behind
+            // the `webview' Cargo feature: a macOS build without it must not
+            // advertise a layer that fails at `make-xwidget'.  The flag is
+            // advisory in any case -- `xwidget.el' does not `require' this
+            // feature, its `(require 'xwidget-internal)' being commented out
+            // at line 32 -- so what it decides is whether a configuration
+            // reaches for the layer at all.
             //
             // Linux keeps the old answer: its WPE path renders through
             // dma-buf and ledger 190's 13 missing subrs are still open there.
