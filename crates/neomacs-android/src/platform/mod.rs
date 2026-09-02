@@ -1,6 +1,7 @@
 //! Android Activity and window lifecycle adapter.
 
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
+use neomacs_wgpu_runtime::{SurfaceClearColor, SurfaceRuntime, SurfaceWindow};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -10,14 +11,18 @@ use winit::window::{Window, WindowId};
 
 struct AndroidFrontend {
     lifecycle: FrontendLifecycle,
-    window: Option<Window>,
+    window: Option<SurfaceWindow>,
+    surface: Option<SurfaceRuntime>,
 }
+
+const INITIAL_CLEAR_COLOR: SurfaceClearColor = SurfaceClearColor::rgb(0.055, 0.067, 0.090);
 
 impl Default for AndroidFrontend {
     fn default() -> Self {
         Self {
             lifecycle: FrontendLifecycle::new(),
             window: None,
+            surface: None,
         }
     }
 }
@@ -29,10 +34,20 @@ impl ApplicationHandler for AndroidFrontend {
         }
 
         let attributes = Window::default_attributes().with_title("Neomacs");
-        let window = event_loop
-            .create_window(attributes)
-            .unwrap_or_else(|error| panic!("failed to create the Android window: {error}"));
+        let window = SurfaceWindow::new(
+            event_loop
+                .create_window(attributes)
+                .unwrap_or_else(|error| panic!("failed to create the Android window: {error}")),
+        );
+        let surface = pollster::block_on(SurfaceRuntime::new(
+            event_loop.owned_display_handle(),
+            window.clone(),
+        ))
+        .unwrap_or_else(|error| panic!("failed to initialize Android GPU presentation: {error}"));
+
+        window.request_redraw();
         self.window = Some(window);
+        self.surface = Some(surface);
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
@@ -41,6 +56,7 @@ impl ApplicationHandler for AndroidFrontend {
         // tracer bullet drops the window and recreates it on the next resume.
         if self.lifecycle.transition(LifecycleEvent::Suspended) == LifecycleAction::DestroyFrontend
         {
+            self.surface = None;
             self.window = None;
         }
     }
@@ -66,7 +82,27 @@ impl ApplicationHandler for AndroidFrontend {
                     event_loop.exit();
                 }
             }
-            WindowEvent::RedrawRequested => {}
+            WindowEvent::Resized(size) => {
+                if let Some(surface) = self.surface.as_mut() {
+                    surface.resize_physical(size.width, size.height);
+                }
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                let Some(surface) = self.surface.as_mut() else {
+                    return;
+                };
+                let outcome = surface
+                    .present_clear(INITIAL_CLEAR_COLOR)
+                    .unwrap_or_else(|error| panic!("Android GPU presentation failed: {error}"));
+                if outcome.should_request_redraw()
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+            }
             _ => {}
         }
     }
