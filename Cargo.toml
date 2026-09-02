@@ -244,6 +244,7 @@ objc2-foundation = { version = "0.3", features = [
     "NSString",
     "NSURL",
     "NSURLRequest",
+    "NSValue",
 ] }
 objc2-web-kit = { version = "0.3", features = [
     "block2",

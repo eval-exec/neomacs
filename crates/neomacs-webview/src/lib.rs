@@ -6,6 +6,9 @@
 #![cfg_attr(not(feature = "webview"), allow(dead_code))]
 
 mod backend;
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+mod load_state;
 mod model;
 mod platform;
 mod presentation;

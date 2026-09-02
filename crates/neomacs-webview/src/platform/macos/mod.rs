@@ -3,9 +3,6 @@
 mod focus;
 #[cfg(test)]
 mod focus_test;
-mod observed;
-#[cfg(test)]
-mod observed_test;
 mod view;
 
 use std::collections::HashMap;

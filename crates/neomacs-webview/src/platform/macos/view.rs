@@ -6,7 +6,7 @@
 //! the same native hierarchy, but receives already-resolved content and
 //! visible rectangles from `ResolvedWebViewPlacement`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr;
 use std::rc::Rc;
@@ -19,9 +19,9 @@ use objc2::{
 };
 use objc2_app_kit::{NSEvent, NSResponder, NSView};
 use objc2_foundation::{
-    NSError, NSJSONSerialization, NSJSONWritingOptions, NSKeyValueObservingOptions, NSObject,
-    NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
-    NSURL, NSURLRequest, NSUTF8StringEncoding, ns_string,
+    NSError, NSJSONSerialization, NSJSONWritingOptions, NSKeyValueObservingOptions, NSNumber,
+    NSObject, NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSPoint, NSRect, NSSize,
+    NSString, NSURL, NSURLRequest, NSUTF8StringEncoding, ns_string,
 };
 use objc2_web_kit::{
     WKContentWorld, WKNavigation, WKNavigationDelegate, WKScriptMessage, WKScriptMessageHandler,
@@ -30,11 +30,11 @@ use objc2_web_kit::{
 };
 
 use super::focus::{
-    FOCUS_PROBE, GIVE_UP_FOCUS_MESSAGE, GNU_XW_SCRIPT, KEY_DOWN_MESSAGE_HANDLER, KeyRoute,
-    focus_transition, route_key,
+    FOCUS_PROBE, FocusProbe, GNU_XW_SCRIPT, HostEpoch, KEY_DOWN_MESSAGE_HANDLER, KeyDownMessage,
+    KeyRoute, focus_transition, key_down_message, route_key,
 };
-use super::observed::ObservedWebState;
 use crate::backend::NavigationMilestone;
+use crate::load_state::PageLoadState;
 use crate::{
     FocusIntent, HistoryAction, HostWindowId, NavigationTarget, ResolvedWebViewPlacement,
     ScriptError, ScriptRequest, ScriptWorld, WebContentSize, WebProcessFailure, WebValue,
@@ -68,6 +68,10 @@ impl WebViewClipView {
 struct NavigationDelegateIvars {
     id: WebViewId,
     generation: WebViewGeneration,
+    /// The one owner of load state, shared with the KVO observer and the
+    /// per-turn sampler: milestones and readings are folded into one
+    /// progress sequence there.
+    state: Rc<RefCell<PageLoadState>>,
     events: Rc<RefCell<Vec<WebViewEvent>>>,
     wake: WebViewWake,
 }
@@ -164,15 +168,17 @@ define_class!(
 
 impl WebViewNavigationDelegate {
     fn publish_navigation(&self, milestone: NavigationMilestone) {
-        // Objective-C delegate entry points are an FFI boundary.  Publish only
-        // the backend-neutral milestone here; the Rust-owned view samples
-        // title, URI, and finer progress on the next event-loop turn.
+        // Objective-C delegate entry points are an FFI boundary.  Hand the
+        // backend-neutral milestone to the load state, which decides what it
+        // means next to the progress the observer already reported.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.ivars()
-                .events
+            let ivars = self.ivars();
+            let events = ivars
+                .state
                 .borrow_mut()
-                .extend(milestone.normalized_events(self.ivars().id, self.ivars().generation));
-            self.ivars().wake.notify();
+                .milestone(ivars.id, ivars.generation, milestone);
+            ivars.events.borrow_mut().extend(events);
+            ivars.wake.notify();
         }));
     }
 
@@ -180,12 +186,14 @@ impl WebViewNavigationDelegate {
         mtm: MainThreadMarker,
         id: WebViewId,
         generation: WebViewGeneration,
+        state: Rc<RefCell<PageLoadState>>,
         events: Rc<RefCell<Vec<WebViewEvent>>>,
         wake: WebViewWake,
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(NavigationDelegateIvars {
             id,
             generation,
+            state,
             events,
             wake,
         });
@@ -197,7 +205,7 @@ struct WebViewObserverIvars {
     id: WebViewId,
     generation: WebViewGeneration,
     web: Retained<WKWebView>,
-    state: Rc<RefCell<ObservedWebState>>,
+    state: Rc<RefCell<PageLoadState>>,
     events: Rc<RefCell<Vec<WebViewEvent>>>,
     wake: WebViewWake,
 }
@@ -245,7 +253,7 @@ impl WebViewObserver {
         id: WebViewId,
         generation: WebViewGeneration,
         web: Retained<WKWebView>,
-        state: Rc<RefCell<ObservedWebState>>,
+        state: Rc<RefCell<PageLoadState>>,
         events: Rc<RefCell<Vec<WebViewEvent>>>,
         wake: WebViewWake,
     ) -> Retained<Self> {
@@ -312,6 +320,9 @@ pub(crate) struct EmacsWebViewIvars {
     /// page does not keep are delivered to its `keyDown:`, exactly as GNU
     /// forwards to `emacswindow` (nsxwidget.m:250-275).
     emacs_view: RefCell<Option<Retained<NSView>>>,
+    /// Bumped on every change of `emacs_view`, so a key probe that completes
+    /// after the host changed can tell (see `HostEpoch`).
+    host_epoch: Cell<HostEpoch>,
 }
 
 define_class!(
@@ -328,30 +339,31 @@ define_class!(
     impl EmacsWebView {
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            let Some(emacs_view) = self.ivars().emacs_view.borrow().clone() else {
+            if self.ivars().emacs_view.borrow().is_none() {
                 // Not presented in any Emacs frame: nothing to forward to.
                 unsafe {
                     let _: () = msg_send![super(self), keyDown: event];
                 }
                 return;
-            };
+            }
+            let sent = self.ivars().host_epoch.get();
             let event = event.retain();
             let this = self.retain();
             let completion = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
-                let probe = if !error.is_null() {
-                    Err(())
-                } else if result.is_null() {
-                    Ok(false)
-                } else {
-                    // SAFETY: WebKit hands the JavaScript boolean back as an
-                    // NSNumber; `boolValue` is what GNU reads from it.
-                    Ok(unsafe { msg_send![result, boolValue] })
-                };
-                match route_key(probe) {
-                    KeyRoute::Emacs => emacs_view.keyDown(&event),
+                let probe = classify_focus_probe(result, error);
+                let now = this.ivars().host_epoch.get();
+                match route_key(probe, sent, now) {
+                    KeyRoute::Emacs => {
+                        // Re-read the host: the epoch proved it unchanged,
+                        // so this is the view the key was typed into.
+                        if let Some(emacs_view) = this.ivars().emacs_view.borrow().as_deref() {
+                            emacs_view.keyDown(&event);
+                        }
+                    }
                     KeyRoute::WebView => unsafe {
                         let _: () = msg_send![super(&*this), keyDown: &*event];
                     },
+                    KeyRoute::Dropped => {}
                 }
             });
             unsafe {
@@ -369,6 +381,26 @@ define_class!(
     }
 );
 
+/// Classify what `evaluateJavaScript:completionHandler:` handed back for
+/// `xwHasFocus()` without trusting its class: page JavaScript can redefine
+/// the function and return anything, and sending `boolValue` to a non-number
+/// raises an Objective-C exception that Rust cannot catch.
+fn classify_focus_probe(result: *mut AnyObject, error: *mut NSError) -> FocusProbe {
+    if !error.is_null() {
+        return FocusProbe::Failed;
+    }
+    // SAFETY: WebKit passes a live object (or nil) for the duration of the
+    // completion block; it is only borrowed here.
+    let Some(result) = (unsafe { result.as_ref() }) else {
+        return FocusProbe::Absent;
+    };
+    match result.downcast_ref::<NSNumber>() {
+        Some(number) if number.boolValue() => FocusProbe::Focused,
+        Some(_) => FocusProbe::Unfocused,
+        None => FocusProbe::NotABoolean,
+    }
+}
+
 impl EmacsWebView {
     fn new(
         mtm: MainThreadMarker,
@@ -377,14 +409,20 @@ impl EmacsWebView {
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(EmacsWebViewIvars {
             emacs_view: RefCell::new(None),
+            host_epoch: Cell::new(HostEpoch::first()),
         });
         // SAFETY: `initWithFrame:configuration:` is WKWebView's designated
         // initializer; the subclass adds only the ivars set above.
         unsafe { msg_send![super(this), initWithFrame: frame, configuration: configuration] }
     }
 
+    /// Change (or clear) the Emacs host view keys are forwarded to.  Every
+    /// change opens a new host epoch, so key probes issued against the old
+    /// host complete into nothing.
     fn set_emacs_view(&self, view: Option<Retained<NSView>>) {
-        *self.ivars().emacs_view.borrow_mut() = view;
+        let ivars = self.ivars();
+        *ivars.emacs_view.borrow_mut() = view;
+        ivars.host_epoch.set(ivars.host_epoch.get().next());
     }
 
     /// Hand first responder back to the Emacs view (GNU's answer to the
@@ -424,12 +462,16 @@ define_class!(
             message: &WKScriptMessage,
         ) {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // The body is whatever JSON value the page posted; only a
+                // string can be GNU's "C-g", so check the class before
+                // reading it rather than sending `isEqualToString:` blind.
                 let body = unsafe { message.body() };
-                let gives_up: bool = unsafe {
-                    msg_send![&*body, isEqualToString: ns_string!(GIVE_UP_FOCUS_MESSAGE)]
-                };
-                if gives_up {
-                    self.ivars().web.give_focus_back_to_emacs();
+                let text = body.downcast_ref::<NSString>().map(|text| text.to_string());
+                match key_down_message(text.as_deref()) {
+                    KeyDownMessage::GiveFocusBackToEmacs => {
+                        self.ivars().web.give_focus_back_to_emacs();
+                    }
+                    KeyDownMessage::Ignored => {}
                 }
             }));
         }
@@ -443,6 +485,25 @@ impl KeyDownMessageHandler {
     }
 }
 
+/// The host the clip view is a subview of: the logical host window AND the
+/// native view that stood for it when we attached.
+///
+/// `register_host` may replace the `NSView` behind an unchanged
+/// `HostWindowId` (winit recreates the window; the Emacs frame id is
+/// reused), and a clip view left in the old view would keep drawing into,
+/// and forwarding keys to, a window that is gone.  Attachment is therefore
+/// keyed on both, and re-done whenever either differs.
+struct AttachedHost {
+    id: HostWindowId,
+    view: Retained<NSView>,
+}
+
+impl AttachedHost {
+    fn is(&self, id: HostWindowId, view: &NSView) -> bool {
+        self.id == id && ptr::eq::<NSView>(&*self.view, view)
+    }
+}
+
 /// Native objects for one logical WebView generation.
 pub(crate) struct MacWebView {
     id: WebViewId,
@@ -453,9 +514,9 @@ pub(crate) struct MacWebView {
     _navigation_delegate: Retained<WebViewNavigationDelegate>,
     observer: Retained<WebViewObserver>,
     _key_down_handler: Retained<KeyDownMessageHandler>,
-    attached_host: Option<HostWindowId>,
+    attached: Option<AttachedHost>,
     hidden: bool,
-    observed: Rc<RefCell<ObservedWebState>>,
+    load_state: Rc<RefCell<PageLoadState>>,
     focused: bool,
     events: Rc<RefCell<Vec<WebViewEvent>>>,
     wake: WebViewWake,
@@ -512,18 +573,24 @@ impl MacWebView {
         }
         clip.addSubview(&web);
         let events = Rc::new(RefCell::new(Vec::new()));
-        let navigation_delegate =
-            WebViewNavigationDelegate::new(mtm, id, generation, events.clone(), wake.clone());
+        let load_state = Rc::new(RefCell::new(PageLoadState::new()));
+        let navigation_delegate = WebViewNavigationDelegate::new(
+            mtm,
+            id,
+            generation,
+            load_state.clone(),
+            events.clone(),
+            wake.clone(),
+        );
         unsafe {
             web.setNavigationDelegate(Some(ProtocolObject::from_ref(&*navigation_delegate)));
         }
-        let observed = Rc::new(RefCell::new(ObservedWebState::new()));
         let observer = WebViewObserver::new(
             mtm,
             id,
             generation,
             Retained::into_super(web.clone()),
-            observed.clone(),
+            load_state.clone(),
             events.clone(),
             wake.clone(),
         );
@@ -537,9 +604,9 @@ impl MacWebView {
             _navigation_delegate: navigation_delegate,
             observer,
             _key_down_handler: key_down_handler,
-            attached_host: None,
+            attached: None,
             hidden: true,
-            observed,
+            load_state,
             focused: false,
             events,
             wake,
@@ -696,7 +763,7 @@ impl MacWebView {
     pub(crate) fn service_events(&mut self) -> Vec<WebViewEvent> {
         let mut events = std::mem::take(&mut *self.events.borrow_mut());
         let (title, uri, progress) = sample_web_view(&self.web);
-        events.extend(self.observed.borrow_mut().observe(
+        events.extend(self.load_state.borrow_mut().observe(
             self.id,
             self.generation,
             title,
@@ -712,10 +779,17 @@ impl MacWebView {
         host: &NSView,
         placement: &ResolvedWebViewPlacement,
     ) {
-        if self.attached_host != Some(host_id) {
+        if !self
+            .attached
+            .as_ref()
+            .is_some_and(|attached| attached.is(host_id, host))
+        {
             self.clip.removeFromSuperview();
             host.addSubview(&self.clip);
-            self.attached_host = Some(host_id);
+            self.attached = Some(AttachedHost {
+                id: host_id,
+                view: host.retain(),
+            });
             self.web.set_emacs_view(Some(host.retain()));
         }
 

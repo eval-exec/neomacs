@@ -119,7 +119,11 @@ What works, as of the follow-ups to
   `WKNavigationDelegate` reports the GNU load phases, delivered to Lisp as
   `(xwidget-event load-changed XWIDGET "load-started" | "load-redirected" |
   "load-committed" | "load-finished")`, exactly what `xwidget-webkit-callback`
-  in `lisp/xwidget.el` keys its progress timer and buffer title on.
+  in `lisp/xwidget.el` keys its progress timer and buffer title on.  One load
+  state per view folds the delegate's milestones and the observed readings
+  together, so each progress value reaches Lisp once and nothing follows a
+  finished load's `1.0` until the next load starts; a title or URL the page
+  loses is reported as empty rather than kept.
 - Script results: `xwidget-webkit-execute-script` delivers its optional `FUN`
   the JSON-converted result asynchronously, so `xwidget-webkit-get-selection`
   and `xwidget-webkit-insert-string` work.  As in GNU, `FUN` is not called when
@@ -127,7 +131,11 @@ What works, as of the follow-ups to
 - Keyboard focus, following `src/nsxwidget.m`: a key that reaches the web view
   stays with Emacs unless the page reports an input element (INPUT or
   TEXTAREA) focused, and `C-g` typed into such an element hands focus back to
-  Emacs without being relayed.  Mouse input goes through the responder chain.
+  Emacs without being relayed.  The page's answers are checked at the native
+  boundary (a redefined `xwHasFocus` returning a non-boolean, or a non-string
+  message, is treated as "Emacs keeps the key"), and a probe that completes
+  after the view moved to another frame is dropped rather than delivered to
+  the old one.  Mouse input goes through the responder chain.
 
 Known gaps:
 

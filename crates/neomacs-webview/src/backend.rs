@@ -127,41 +127,56 @@ pub(crate) enum NavigationMilestone {
 
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
 impl NavigationMilestone {
+    /// The GNU `load-changed` phase this milestone is delivered as.
+    pub(crate) fn phase(self) -> LoadPhase {
+        match self {
+            Self::Started => LoadPhase::Started,
+            Self::Redirected => LoadPhase::Redirected,
+            Self::Committed => LoadPhase::Committed,
+            Self::Finished => LoadPhase::Finished,
+        }
+    }
+
+    /// The progress a milestone pins by itself: the two ends of a load.
+    /// The middle comes from the browser's own progress property.
+    pub(crate) fn progress_marker(self) -> Option<f64> {
+        match self {
+            Self::Started => Some(0.0),
+            Self::Redirected | Self::Committed => None,
+            Self::Finished => Some(1.0),
+        }
+    }
+
+    /// The events a milestone implies with no other progress source.  A
+    /// backend that also observes progress must not use this directly:
+    /// `crate::load_state::PageLoadState` owns the deduplication then.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn normalized_events(
         self,
         id: WebViewId,
         generation: WebViewGeneration,
     ) -> Vec<WebViewEvent> {
-        let phase = |phase| WebViewEvent::LoadChanged {
+        let mut events = Vec::new();
+        if let Some(progress) = self.progress_marker() {
+            events.push(WebViewEvent::LoadProgressChanged {
+                id,
+                generation,
+                progress,
+            });
+        }
+        events.push(WebViewEvent::LoadChanged {
             id,
             generation,
-            phase,
-        };
-        match self {
-            Self::Started => vec![
-                WebViewEvent::LoadProgressChanged {
-                    id,
-                    generation,
-                    progress: 0.0,
-                },
-                phase(LoadPhase::Started),
-            ],
-            Self::Redirected => vec![phase(LoadPhase::Redirected)],
-            Self::Committed => vec![phase(LoadPhase::Committed)],
-            Self::Finished => vec![
-                WebViewEvent::LoadProgressChanged {
-                    id,
-                    generation,
-                    progress: 1.0,
-                },
-                phase(LoadPhase::Finished),
-                WebViewEvent::LoadFinished {
-                    id,
-                    generation,
-                    navigation: None,
-                },
-            ],
+            phase: self.phase(),
+        });
+        if self == Self::Finished {
+            events.push(WebViewEvent::LoadFinished {
+                id,
+                generation,
+                navigation: None,
+            });
         }
+        events
     }
 }
 
