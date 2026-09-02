@@ -18,7 +18,10 @@ rustc-hash.workspace = true
 cosmic-text.workspace = true
 swash.workspace = true
 fontdb.workspace = true
-wgpu.workspace = true
+# `glsl` gates ShaderSource::Glsl for composed Shadertoy-dialect surfaces.
+# Keep it at the concrete renderer boundary so portable surface bootstrap does
+# not compile Naga's GLSL frontend on browser targets.
+wgpu = { workspace = true, features = ["glsl"] }
 naga.workspace = true
 tracing.workspace = true
 bytemuck.workspace = true

@@ -224,9 +224,7 @@ itoa = "1.0"
 
 # GPU / windowing
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
-# "glsl" gates ShaderSource::Glsl, which the render thread needs to compile
-# composed Shadertoy-dialect surface shaders (shader_surface.rs).
-wgpu = { version = "30", features = ["glsl"] }
+wgpu = "30"
 # Keep this on the same major version as wgpu: the DMA-BUF importer passes
 # wgpu-hal types through wgpu's public HAL interop API.
 # Its `gpu-allocator` collaborator also exchanges nominal `windows` COM types;
