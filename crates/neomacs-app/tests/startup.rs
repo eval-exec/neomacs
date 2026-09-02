@@ -66,6 +66,18 @@ fn interactive_gui_startup_materializes_host_identity_and_gnu_command_line_state
         evaluator.obarray().symbol_value("frame-initial-frame"),
         Some(&Value::make_frame(surface.frame().0)),
     );
+    let terminal_frame = evaluator
+        .obarray()
+        .symbol_value("terminal-frame")
+        .and_then(|value| value.as_frame_id())
+        .expect("interactive GUI startup has GNU's temporary terminal frame");
+    assert_ne!(terminal_frame, surface.frame().0);
+    let terminal_frame = evaluator
+        .frame_manager()
+        .get(neovm_core::window::FrameId(terminal_frame))
+        .unwrap();
+    assert!(!terminal_frame.visible);
+    assert!(terminal_frame.effective_window_system().is_none());
     assert_eq!(
         list_to_vec(&evaluator.eval_str("command-line-args").unwrap()).unwrap(),
         vec![
