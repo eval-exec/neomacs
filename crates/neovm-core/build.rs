@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 // `emacs_core/runtime/jit/shim_names.rs` below.
 #[path = "build_support/generated_lisp.rs"]
 mod generated_lisp;
+#[path = "build_support/native_library_probe.rs"]
+mod native_library_probe;
+
+use native_library_probe::{NativeLibraryProbe, native_library_probe};
 
 // Single source of truth (R2-C2): the `neovm_jit_*` shim names, shared with
 // runtime/jit/aot.rs (MIR_SHIM_NAMES) + crates/neomacs/build.rs via `include!` so the
@@ -82,6 +86,12 @@ fn main() {
     println!(
         "cargo:rerun-if-changed={}",
         manifest_dir
+            .join("build_support/native_library_probe.rs")
+            .display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir
             .join("src/emacs_core/runtime/jit/shim_names.rs")
             .display()
     );
@@ -145,11 +155,19 @@ fn detect_wkwebview() {
 
 fn detect_lcms2() {
     println!("cargo:rustc-check-cfg=cfg(neomacs_have_lcms2)");
+    println!("cargo:rerun-if-env-changed=HOST");
+    println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=LCMS2_NO_PKG_CONFIG");
 
     if std::env::var_os("LCMS2_NO_PKG_CONFIG").is_some() {
+        return;
+    }
+
+    let host = std::env::var("HOST").expect("cargo sets HOST for build scripts");
+    let target = std::env::var("TARGET").expect("cargo sets TARGET for build scripts");
+    if native_library_probe(&host, &target) == NativeLibraryProbe::DisabledForCrossCompilation {
         return;
     }
 
