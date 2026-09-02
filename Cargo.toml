@@ -228,7 +228,7 @@ imagesize = "0.15"
 # JPEG tests encode their own fixtures — baseline and progressive, at sizes
 # either side of `BANDING_MIN_PIXELS`.
 jpeg-encoder = "0.7"
-allsorts = "0.17.0"
+allsorts = { version = "0.17.0", default-features = false, features = ["flate2_rust"] }
 encoding_rs = "0.8"
 
 # Compression
