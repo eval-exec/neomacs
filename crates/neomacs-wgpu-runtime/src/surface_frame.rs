@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use neomacs_display_protocol::{
-    DeviceScale, FrameGlyphBuffer, GeometryError, GeometrySize, LogicalPixels, PresentMapping,
-    PresentationExtent, SurfaceState,
+    DeviceScale, DrawableSurface, FrameGlyphBuffer, GeometryError, GeometrySize, LogicalPixels,
+    PresentMapping, PresentationExtent, SurfaceState,
 };
 use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer};
 use thiserror::Error;
@@ -85,6 +85,12 @@ impl SurfaceFrameRenderer {
         self.surface.extent()
     }
 
+    /// Current drawable size in logical pixels, or `None` while suspended.
+    pub fn logical_size(&self) -> Result<Option<GeometrySize<LogicalPixels>>, GeometryError> {
+        Ok(drawable_surface(self.surface.extent(), self.device_scale)?
+            .map(DrawableSurface::logical_size))
+    }
+
     /// Apply a physical resize to both the surface and render targets.
     pub fn resize_physical(&mut self, width: u32, height: u32) {
         self.surface.resize_physical(width, height);
@@ -147,12 +153,7 @@ fn frame_mapping(
     device_scale: DeviceScale,
     frame: &FrameGlyphBuffer,
 ) -> Result<Option<PresentMapping>, GeometryError> {
-    let Some((width, height)) = extent.dimensions() else {
-        return Ok(None);
-    };
-    let SurfaceState::Drawable(surface) =
-        SurfaceState::from_device_size(width, height, device_scale)?
-    else {
+    let Some(surface) = drawable_surface(extent, device_scale)? else {
         return Ok(None);
     };
     let content = PresentationExtent::new(
@@ -160,6 +161,19 @@ fn frame_mapping(
         GeometrySize::<LogicalPixels>::from_px(frame.width, frame.height)?,
     );
     Ok(Some(PresentMapping::top_left_clip(surface, content)))
+}
+
+fn drawable_surface(
+    extent: SurfaceExtent,
+    device_scale: DeviceScale,
+) -> Result<Option<DrawableSurface>, GeometryError> {
+    let Some((width, height)) = extent.dimensions() else {
+        return Ok(None);
+    };
+    match SurfaceState::from_device_size(width, height, device_scale)? {
+        SurfaceState::Drawable(surface) => Ok(Some(surface)),
+        SurfaceState::Suspended => Ok(None),
+    }
 }
 
 #[cfg(test)]
