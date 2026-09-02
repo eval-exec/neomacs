@@ -1,5 +1,8 @@
 //! macOS native-overlay backend built on WKWebView.
 
+mod focus;
+#[cfg(test)]
+mod focus_test;
 mod observed;
 #[cfg(test)]
 mod observed_test;

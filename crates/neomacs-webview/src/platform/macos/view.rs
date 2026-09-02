@@ -14,18 +14,25 @@ use std::rc::Rc;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::NSView;
+use objc2::{
+    AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
+};
+use objc2_app_kit::{NSEvent, NSResponder, NSView};
 use objc2_foundation::{
     NSError, NSJSONSerialization, NSJSONWritingOptions, NSKeyValueObservingOptions, NSObject,
     NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
     NSURL, NSURLRequest, NSUTF8StringEncoding, ns_string,
 };
 use objc2_web_kit::{
-    WKContentWorld, WKNavigation, WKNavigationDelegate, WKWebView, WKWebViewConfiguration,
-    WKWebsiteDataStore,
+    WKContentWorld, WKNavigation, WKNavigationDelegate, WKScriptMessage, WKScriptMessageHandler,
+    WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKWebView,
+    WKWebViewConfiguration, WKWebsiteDataStore,
 };
 
+use super::focus::{
+    FOCUS_PROBE, GIVE_UP_FOCUS_MESSAGE, GNU_XW_SCRIPT, KEY_DOWN_MESSAGE_HANDLER, KeyRoute,
+    focus_transition, route_key,
+};
 use super::observed::ObservedWebState;
 use crate::backend::NavigationMilestone;
 use crate::{
@@ -300,15 +307,152 @@ fn sample_web_view(web: &WKWebView) -> (Option<String>, Option<String>, f64) {
     (title, uri, progress)
 }
 
+pub(crate) struct EmacsWebViewIvars {
+    /// The host view Emacs draws in and winit listens on; key events the
+    /// page does not keep are delivered to its `keyDown:`, exactly as GNU
+    /// forwards to `emacswindow` (nsxwidget.m:250-275).
+    emacs_view: RefCell<Option<Retained<NSView>>>,
+}
+
+define_class!(
+    /// WKWebView with GNU's keyboard model (nsxwidget.m:236-330): a key that
+    /// reaches the web view stays with Emacs unless the page answers
+    /// `xwHasFocus()` with true, and `interpretKeyEvents:` is a no-op so
+    /// Emacs alone collects key events.
+    #[unsafe(super(WKWebView))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = EmacsWebViewIvars]
+    #[name = "NeomacsWebView"]
+    pub(crate) struct EmacsWebView;
+
+    impl EmacsWebView {
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            let Some(emacs_view) = self.ivars().emacs_view.borrow().clone() else {
+                // Not presented in any Emacs frame: nothing to forward to.
+                unsafe {
+                    let _: () = msg_send![super(self), keyDown: event];
+                }
+                return;
+            };
+            let event = event.retain();
+            let this = self.retain();
+            let completion = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
+                let probe = if !error.is_null() {
+                    Err(())
+                } else if result.is_null() {
+                    Ok(false)
+                } else {
+                    // SAFETY: WebKit hands the JavaScript boolean back as an
+                    // NSNumber; `boolValue` is what GNU reads from it.
+                    Ok(unsafe { msg_send![result, boolValue] })
+                };
+                match route_key(probe) {
+                    KeyRoute::Emacs => emacs_view.keyDown(&event),
+                    KeyRoute::WebView => unsafe {
+                        let _: () = msg_send![super(&*this), keyDown: &*event];
+                    },
+                }
+            });
+            unsafe {
+                self.evaluateJavaScript_completionHandler(
+                    ns_string!(FOCUS_PROBE),
+                    Some(&completion),
+                );
+            }
+        }
+
+        /// GNU: "do nothing and do not forward ... to let emacs collect key
+        /// events and ask interpretKeyEvents to its superclass".
+        #[unsafe(method(interpretKeyEvents:))]
+        fn interpret_key_events(&self, _events: &AnyObject) {}
+    }
+);
+
+impl EmacsWebView {
+    fn new(
+        mtm: MainThreadMarker,
+        frame: NSRect,
+        configuration: &WKWebViewConfiguration,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(EmacsWebViewIvars {
+            emacs_view: RefCell::new(None),
+        });
+        // SAFETY: `initWithFrame:configuration:` is WKWebView's designated
+        // initializer; the subclass adds only the ivars set above.
+        unsafe { msg_send![super(this), initWithFrame: frame, configuration: configuration] }
+    }
+
+    fn set_emacs_view(&self, view: Option<Retained<NSView>>) {
+        *self.ivars().emacs_view.borrow_mut() = view;
+    }
+
+    /// Hand first responder back to the Emacs view (GNU's answer to the
+    /// page's "C-g", nsxwidget.m:318-322), if the view is in a window.
+    fn give_focus_back_to_emacs(&self) {
+        if let (Some(window), Some(emacs_view)) =
+            (self.window(), self.ivars().emacs_view.borrow().as_deref())
+        {
+            let responder: &NSResponder = emacs_view;
+            let _ = window.makeFirstResponder(Some(responder));
+        }
+    }
+}
+
+struct KeyDownMessageHandlerIvars {
+    web: Retained<EmacsWebView>,
+}
+
+define_class!(
+    /// The `keyDown` script-message handler GNU registers: the page posts
+    /// "C-g" from its keydown listener, and focus returns to Emacs without
+    /// relaying the key ("another C-g follows will be handled by emacs").
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = KeyDownMessageHandlerIvars]
+    #[name = "NeomacsWebViewKeyDownHandler"]
+    struct KeyDownMessageHandler;
+
+    unsafe impl NSObjectProtocol for KeyDownMessageHandler {}
+
+    unsafe impl WKScriptMessageHandler for KeyDownMessageHandler {
+        #[unsafe(method(userContentController:didReceiveScriptMessage:))]
+        #[allow(non_snake_case)]
+        unsafe fn userContentController_didReceiveScriptMessage(
+            &self,
+            _controller: &WKUserContentController,
+            message: &WKScriptMessage,
+        ) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let body = unsafe { message.body() };
+                let gives_up: bool = unsafe {
+                    msg_send![&*body, isEqualToString: ns_string!(GIVE_UP_FOCUS_MESSAGE)]
+                };
+                if gives_up {
+                    self.ivars().web.give_focus_back_to_emacs();
+                }
+            }));
+        }
+    }
+);
+
+impl KeyDownMessageHandler {
+    fn new(mtm: MainThreadMarker, web: Retained<EmacsWebView>) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(KeyDownMessageHandlerIvars { web });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
 /// Native objects for one logical WebView generation.
 pub(crate) struct MacWebView {
     id: WebViewId,
     generation: WebViewGeneration,
     mtm: MainThreadMarker,
     clip: Retained<WebViewClipView>,
-    web: Retained<WKWebView>,
+    web: Retained<EmacsWebView>,
     _navigation_delegate: Retained<WebViewNavigationDelegate>,
     observer: Retained<WebViewObserver>,
+    _key_down_handler: Retained<KeyDownMessageHandler>,
     attached_host: Option<HostWindowId>,
     hidden: bool,
     observed: Rc<RefCell<ObservedWebState>>,
@@ -345,11 +489,26 @@ impl MacWebView {
                 .preferences()
                 .setJavaScriptEnabled(policy.javascript());
         }
-        let web = unsafe {
-            WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &configuration)
-        };
+        let web = EmacsWebView::new(mtm, frame, &configuration);
         if policy.developer_tools() && objc2::available!(macos = 13.3) {
             unsafe { web.setInspectable(true) };
+        }
+        // GNU's keyboard model needs its script in every page and a handler
+        // for the page's "C-g" (nsxwidget.m:93-99).
+        let key_down_handler = KeyDownMessageHandler::new(mtm, web.clone());
+        unsafe {
+            let scriptor = configuration.userContentController();
+            scriptor.addScriptMessageHandler_name(
+                ProtocolObject::from_ref(&*key_down_handler),
+                ns_string!(KEY_DOWN_MESSAGE_HANDLER),
+            );
+            let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+                WKUserScript::alloc(mtm),
+                ns_string!(GNU_XW_SCRIPT),
+                WKUserScriptInjectionTime::AtDocumentStart,
+                false,
+            );
+            scriptor.addUserScript(&script);
         }
         clip.addSubview(&web);
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -363,7 +522,7 @@ impl MacWebView {
             mtm,
             id,
             generation,
-            web.clone(),
+            Retained::into_super(web.clone()),
             observed.clone(),
             events.clone(),
             wake.clone(),
@@ -377,6 +536,7 @@ impl MacWebView {
             web,
             _navigation_delegate: navigation_delegate,
             observer,
+            _key_down_handler: key_down_handler,
             attached_host: None,
             hidden: true,
             observed,
@@ -497,17 +657,30 @@ impl MacWebView {
         ));
     }
 
+    /// Move keyboard focus between Emacs and the page.
+    ///
+    /// Only `-[NSWindow makeFirstResponder:]` changes where AppKit sends key
+    /// events; calling `becomeFirstResponder` on the view itself does not.
+    /// GNU uses the same call in both directions (nsxwidget.m:250, :321).
+    /// A view that is not in a window cannot take focus, and a request the
+    /// window refuses is not a focus change.
     pub(crate) fn focus(&mut self, intent: FocusIntent) {
-        match intent {
-            FocusIntent::Focus => {
-                let _ = self.web.becomeFirstResponder();
+        let accepted = match (self.web.window(), intent) {
+            (None, _) => false,
+            (Some(window), FocusIntent::Focus) => {
+                let responder: &NSResponder = &self.web;
+                window.makeFirstResponder(Some(responder))
             }
-            FocusIntent::Blur => {
-                let _ = self.web.resignFirstResponder();
+            (Some(window), FocusIntent::Blur) => {
+                let emacs_view = self.web.ivars().emacs_view.borrow();
+                let responder = emacs_view.as_deref().map(|view| {
+                    let responder: &NSResponder = view;
+                    responder
+                });
+                window.makeFirstResponder(responder)
             }
-        }
-        let focused = intent == FocusIntent::Focus;
-        if self.focused != focused {
+        };
+        if let Some(focused) = focus_transition(self.focused, intent, accepted) {
             self.focused = focused;
             self.events.borrow_mut().push(WebViewEvent::FocusChanged {
                 id: self.id,
@@ -543,6 +716,7 @@ impl MacWebView {
             self.clip.removeFromSuperview();
             host.addSubview(&self.clip);
             self.attached_host = Some(host_id);
+            self.web.set_emacs_view(Some(host.retain()));
         }
 
         // Frame geometry is expressed in root-surface device pixels; AppKit
@@ -592,6 +766,14 @@ impl Drop for MacWebView {
     fn drop(&mut self) {
         // KVO registrations must not outlive the observer.
         self.observer.unregister();
+        // The content controller retains the message handler, which retains
+        // the view: break the cycle the way `nsxwidget_kill` does.
+        unsafe {
+            let scriptor = self.web.configuration().userContentController();
+            scriptor.removeAllUserScripts();
+            scriptor.removeScriptMessageHandlerForName(ns_string!(KEY_DOWN_MESSAGE_HANDLER));
+        }
+        self.web.set_emacs_view(None);
         self.web.removeFromSuperview();
         self.clip.removeFromSuperview();
     }

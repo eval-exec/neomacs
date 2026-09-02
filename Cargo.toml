@@ -232,7 +232,7 @@ raw-window-handle = "0.6"
 # dependency graph keeps a single objc2 major.
 objc2 = "0.6"
 block2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSView", "NSResponder", "NSWindow"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSView", "NSResponder", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = [
     "NSData",
     "NSError",
@@ -252,6 +252,10 @@ objc2-web-kit = { version = "0.3", features = [
     "WKNavigation",
     "WKNavigationDelegate",
     "WKPreferences",
+    "WKScriptMessage",
+    "WKScriptMessageHandler",
+    "WKUserContentController",
+    "WKUserScript",
     "WKWebView",
     "WKWebViewConfiguration",
     "WKWebsiteDataStore",
