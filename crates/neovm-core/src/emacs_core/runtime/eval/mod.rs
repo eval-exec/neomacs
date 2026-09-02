@@ -4369,6 +4369,54 @@ impl Context {
         Ok(false)
     }
 
+    /// Whether an uncaught command signal is something GNU would show the
+    /// user and forget, or something worth a diagnostic.
+    ///
+    /// GNU's command loop does not distinguish: `cmd_error_internal'
+    /// (src/keyboard.c:1030-1047, emacs-31.0.90) hands every signal to
+    /// `command-error-function' and never logs.  The one place GNU does rank
+    /// signals is the debugger gate, `skip_debugger' (src/eval.c:2146-2180):
+    /// a condition or message matched by `debug-ignored-errors' -- by default
+    /// `beginning-of-line', `end-of-line', `end-of-buffer', `buffer-read-only',
+    /// `user-error', ... (lisp/bindings.el:1038-1046), and whatever packages
+    /// push there, such as evil's `end-of-line' -- is routine and must not
+    /// interrupt the user.  A quit is routine by construction
+    /// (`signal_quit_p', src/eval.c:2181-2190).  This port's command-loop
+    /// log follows the same ranking, so `C-g` and "End of line" are not
+    /// errors in the log while a void function still is.
+    ///
+    /// Two departures from GNU, both deliberate.  GNU consults
+    /// `skip_debugger' only when the debugger is otherwise wanted
+    /// (`maybe_call_debugger', src/eval.c:2206-2213); the log has no such
+    /// gate, so the ignore list is evaluated on every uncaught command
+    /// signal.  And this runs inside `command_loop_2', GNU's sole recovery
+    /// owner (`internal_condition_case (command_loop_1, ..., cmd_error)'),
+    /// where nothing may signal: a string entry in `debug-ignored-errors'
+    /// that is not a valid regexp makes the matcher signal `invalid-regexp',
+    /// and that must classify the original error, not unwind the command
+    /// loop.  So this is infallible: a matcher failure is a `Diagnostic'.
+    fn command_error_severity(&mut self, sig: &SignalData) -> CommandErrorSeverity {
+        if crate::emacs_core::errors::signal_matches_condition_value_sym(
+            &self.obarray,
+            sig.symbol,
+            &Value::from_sym_id(quit_symbol()),
+        ) {
+            return CommandErrorSeverity::Routine;
+        }
+        let conditions = self.signal_conditions_value(sig);
+        match self.skip_debugger(sig, &conditions) {
+            Ok(true) => CommandErrorSeverity::Routine,
+            Ok(false) => CommandErrorSeverity::Diagnostic,
+            Err(flow) => {
+                tracing::debug!(
+                    "`debug-ignored-errors' could not be matched while ranking a command \
+                     loop signal; treating it as a diagnostic: {flow:?}"
+                );
+                CommandErrorSeverity::Diagnostic
+            }
+        }
+    }
+
     fn call_debugger_for_signal(&mut self, sig: &SignalData) -> Result<(), Flow> {
         let rendered = super::error::format_signal_data_with_eval(self, sig);
         tracing::error!(
@@ -7732,10 +7780,21 @@ impl Context {
                     let data = self.signal_error_data_value(&sig);
                     self.report_command_error(data, "")?;
 
-                    tracing::error!(
-                        condition = %sym_name,
-                        "Command loop error: {error_msg} [signal={rendered_signal}]{backtrace_suffix}"
-                    );
+                    // GNU only ever shows the message; the log is this port's
+                    // diagnostic, so it follows GNU's own ranking of signals
+                    // (see `command_error_severity'): a quit or a
+                    // `debug-ignored-errors' match is what the user just did,
+                    // not an error.
+                    match self.command_error_severity(&sig) {
+                        CommandErrorSeverity::Routine => tracing::debug!(
+                            condition = %sym_name,
+                            "Command loop signal: {error_msg} [signal={rendered_signal}]{backtrace_suffix}"
+                        ),
+                        CommandErrorSeverity::Diagnostic => tracing::error!(
+                            condition = %sym_name,
+                            "Command loop error: {error_msg} [signal={rendered_signal}]{backtrace_suffix}"
+                        ),
+                    }
 
                     // Restart the command loop.
                     continue;
@@ -19461,4 +19520,16 @@ mod jit_crash_repro_tests;
 fn next_context_instance_id() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// How the command loop's log treats an uncaught command signal; see
+/// `Context::command_error_severity'.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommandErrorSeverity {
+    /// What the user just did: a quit, or a condition GNU's debugger ignores
+    /// (`debug-ignored-errors').  Shown in the echo area, logged at debug.
+    Routine,
+    /// Anything else: shown the same way, logged as an error so a bug
+    /// report carries the condition and payload.
+    Diagnostic,
 }

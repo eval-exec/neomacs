@@ -414,6 +414,115 @@ fn skip_debugger_matches_raw_unibyte_ignored_error_regex() {
     );
 }
 
+/// The command loop's log ranks an uncaught signal the way GNU's debugger
+/// gate does (`skip_debugger', src/eval.c:2146-2180, over
+/// `debug-ignored-errors', lisp/bindings.el:1038-1046): a quit or an ignored
+/// condition is routine, anything else is a diagnostic.  Evil's
+/// `end-of-line' (evil-macros.el: `put' error-conditions, `cl-pushnew' onto
+/// `debug-ignored-errors') is the case that showed up as "ERROR ... End of
+/// line" on every arrow key at the end of a line.
+#[test]
+fn command_error_severity_follows_gnus_debug_ignored_errors() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    crate::emacs_core::errors::init_standard_errors(&mut ev.obarray);
+    let signal_of =
+        |name: &str, data: Vec<Value>| match crate::emacs_core::error::signal(name, data) {
+            Flow::Signal(sig) => sig,
+            other => panic!("expected signal flow, got {other:?}"),
+        };
+    ev.eval_str(
+        r#"(progn
+             (put 'end-of-line 'error-conditions '(end-of-line error))
+             (put 'end-of-line 'error-message "End of line")
+             (put 'probe-child-error 'error-conditions '(probe-child-error user-error error))
+             (put 'probe-child-error 'error-message "Child of user-error")
+             (setq debug-ignored-errors nil))"#,
+    )
+    .expect("define evil's end-of-line error and a child of user-error");
+
+    // With nothing ignored, evil's error ranks like any other.
+    let end_of_line = signal_of("end-of-line", vec![]);
+    assert_eq!(
+        ev.command_error_severity(&end_of_line),
+        CommandErrorSeverity::Diagnostic
+    );
+
+    // evil pushes the condition onto `debug-ignored-errors'; GNU's default
+    // list already has `end-of-buffer' and `user-error'.
+    ev.eval_str(
+        r#"(setq debug-ignored-errors '(end-of-line end-of-buffer user-error "^Nothing at"))"#,
+    )
+    .expect("install the ignored conditions");
+    assert_eq!(
+        ev.command_error_severity(&end_of_line),
+        CommandErrorSeverity::Routine
+    );
+    let user_error = signal_of("user-error", vec![Value::string("No recent files")]);
+    assert_eq!(
+        ev.command_error_severity(&user_error),
+        CommandErrorSeverity::Routine,
+        "user-error is GNU's main ignored condition"
+    );
+    // An entry matches through `error-conditions', not only the symbol.
+    let child = signal_of("probe-child-error", vec![]);
+    assert_eq!(
+        ev.command_error_severity(&child),
+        CommandErrorSeverity::Routine,
+        "a condition inherited from user-error is ignored too"
+    );
+    // A string entry is a regexp over the rendered message.
+    let by_message = signal_of("error", vec![Value::string("Nothing at point")]);
+    assert_eq!(
+        ev.command_error_severity(&by_message),
+        CommandErrorSeverity::Routine
+    );
+
+    // A quit is routine whatever the list says (`signal_quit_p'), by the
+    // symbol or by a `quit' condition such as `minibuffer-quit'.
+    assert_eq!(
+        ev.command_error_severity(&signal_of("quit", vec![])),
+        CommandErrorSeverity::Routine
+    );
+    assert_eq!(
+        ev.command_error_severity(&signal_of("minibuffer-quit", vec![])),
+        CommandErrorSeverity::Routine
+    );
+
+    // A real error stays a diagnostic.
+    let void = signal_of("void-function", vec![Value::symbol("no-such-command")]);
+    assert_eq!(
+        ev.command_error_severity(&void),
+        CommandErrorSeverity::Diagnostic
+    );
+}
+
+/// `command_loop_2' is GNU's sole recovery owner; nothing on its error path
+/// may signal.  A string in `debug-ignored-errors' that is not a valid
+/// regexp makes the matcher signal `invalid-regexp'; that ranks the original
+/// error as a diagnostic instead of unwinding the command loop.
+#[test]
+fn command_error_severity_never_signals_on_a_bad_ignore_list() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    crate::emacs_core::errors::init_standard_errors(&mut ev.obarray);
+    ev.eval_str(r#"(setq debug-ignored-errors '("[" end-of-buffer))"#)
+        .expect("install a broken regexp entry");
+    let sig = match crate::emacs_core::error::signal("end-of-buffer", vec![]) {
+        Flow::Signal(sig) => sig,
+        other => panic!("expected signal flow, got {other:?}"),
+    };
+    assert!(
+        ev.skip_debugger(&sig, &ev.signal_conditions_value(&sig))
+            .is_err(),
+        "the matcher itself signals on the broken entry"
+    );
+    assert_eq!(
+        ev.command_error_severity(&sig),
+        CommandErrorSeverity::Diagnostic
+    );
+}
+
 fn install_minimal_special_event_command_runtime(ev: &mut Context) {
     ev.eval_str(
         r#"
