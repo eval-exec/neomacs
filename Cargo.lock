@@ -9055,6 +9055,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2",
  "strum",
+ "tar",
  "tempfile",
  "toml",
 ]
