@@ -22,6 +22,7 @@ pub(crate) use convert::{
     materialize_and_publish_stub, stub_interactive_probe, stub_params_required_only,
 };
 pub(crate) mod face_image;
+pub(crate) mod image_format;
 pub(crate) mod mapped_heap;
 pub(crate) mod mmap_image;
 pub(crate) mod obarray_image;

@@ -15,6 +15,8 @@ use crate::emacs_core::value::{
 };
 use crate::heap_types::{LispMarker, LispString, OverlayData};
 
+mod image_format;
+
 #[test]
 fn test_pdump_round_trip_basic() {
     crate::test_utils::init_test_tracing();
