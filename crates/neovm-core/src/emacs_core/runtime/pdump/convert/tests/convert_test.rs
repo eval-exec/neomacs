@@ -210,3 +210,201 @@ fn load_hash_table_makes_all_dumped_entries_iterable() {
 fn write_raw_word(bytes: &mut [u8], offset: usize, word: usize) {
     bytes[offset..offset + std::mem::size_of::<usize>()].copy_from_slice(&word.to_ne_bytes());
 }
+
+#[test]
+fn serialized_hash_keys_follow_the_consumers_integer_representation() {
+    let (minimum, maximum) = crate::tagged::value::fixnum_bounds_for_word_bits(32);
+    assert_eq!(
+        load_integer_hash_key_for_word_bits(minimum, 32),
+        HashKey::Int(minimum)
+    );
+    assert_eq!(
+        load_integer_hash_key_for_word_bits(maximum, 32),
+        HashKey::Int(maximum)
+    );
+
+    let integer = Value::MOST_POSITIVE_FIXNUM + 1;
+    let serialized = DumpHashKey::Int(integer);
+    let restored_bignum = Value::bignum(malachite::Integer::from(integer));
+    assert!(matches!(
+        load_integer_hash_key_for_word_bits(integer, 32),
+        HashKey::Bignum(_)
+    ));
+    assert!(hash_key_requires_restored_identity(
+        &serialized,
+        HashTableTest::Eq,
+        32
+    ));
+    assert!(!hash_key_requires_restored_identity(
+        &serialized,
+        HashTableTest::Eql,
+        32
+    ));
+
+    assert!(matches!(
+        rebuild_target_hash_key(
+            &serialized,
+            restored_bignum,
+            HashTableTest::Eq,
+            32,
+        ),
+        Some(HashKey::Ptr(pointer)) if pointer == restored_bignum.bits()
+    ));
+    assert_eq!(
+        rebuild_target_hash_key(&serialized, restored_bignum, HashTableTest::Eql, 32,),
+        None,
+        "value-based tests are normalized directly from the serialized key"
+    );
+
+    let wasm32_bignum = maximum + 1;
+    let limbs = malachite::Integer::from(wasm32_bignum).to_twos_complement_limbs_asc();
+    let serialized_bignum = DumpHashKey::Bignum(limbs.clone());
+    assert_eq!(
+        load_bignum_hash_key_for_word_bits(&limbs, 64),
+        HashKey::Int(wasm32_bignum),
+        "a 32-bit producer bignum that fits a 64-bit fixnum must be normalized"
+    );
+    assert_eq!(
+        rebuild_target_hash_key(
+            &serialized_bignum,
+            Value::fixnum(wasm32_bignum),
+            HashTableTest::Eql,
+            64,
+        ),
+        None
+    );
+}
+
+
+#[test]
+fn cross_width_equal_key_does_not_depend_on_object_population_order() {
+    crate::test_utils::init_test_tracing();
+    let integer = Value::MOST_POSITIVE_FIXNUM + 1;
+    let key_ref = DumpHeapRef { index: 1 };
+    let heap = DumpTaggedHeap {
+        objects: vec![
+            DumpHeapObject::HashTable(DumpLispHashTable {
+                test: DumpHashTableTest::Equal,
+                test_name: None,
+                size: 1,
+                weakness: None,
+                rehash_size: 1.5,
+                rehash_threshold: 0.8125,
+                ordered_entries: vec![(
+                    DumpHashKey::EqualCons(
+                        Box::new(DumpHashKey::Int(integer)),
+                        Box::new(DumpHashKey::Nil),
+                    ),
+                    DumpValue::True,
+                    Some(DumpValue::Cons(key_ref.clone())),
+                )],
+            }),
+            DumpHeapObject::Cons {
+                car: DumpValue::Int(integer),
+                cdr: DumpValue::Nil,
+            },
+        ],
+        mapped_cons: Vec::new(),
+        mapped_floats: Vec::new(),
+        mapped_strings: Vec::new(),
+        mapped_veclikes: Vec::new(),
+        mapped_slots: Vec::new(),
+    };
+    let mut decoder = LoadDecoder::new(&heap);
+    decoder.preload_tagged_heap().unwrap();
+
+    let table = decoder.load_value(&DumpValue::HashTable(DumpHeapRef { index: 0 }));
+    let lookup =
+        Value::cons(Value::make_int(integer), Value::NIL).to_hash_key(&HashTableTest::Equal);
+    assert_eq!(
+        table
+            .as_hash_table()
+            .and_then(|table| table.data.get(&lookup))
+            .copied(),
+        Some(Value::T),
+        "the key index must be derived without traversing an unpopulated cons placeholder"
+    );
+}
+
+
+#[test]
+fn cross_width_eq_key_uses_entry_value_when_snapshot_is_elided() {
+    crate::test_utils::init_test_tracing();
+
+    let integer = Value::MOST_POSITIVE_FIXNUM + 1;
+    let heap = DumpTaggedHeap {
+        objects: Vec::new(),
+        mapped_cons: Vec::new(),
+        mapped_floats: Vec::new(),
+        mapped_strings: Vec::new(),
+        mapped_veclikes: Vec::new(),
+        mapped_slots: Vec::new(),
+    };
+    let mut decoder = LoadDecoder::new(&heap);
+    let table = load_hash_table(
+        &mut decoder,
+        &DumpLispHashTable {
+            test: DumpHashTableTest::Eq,
+            test_name: None,
+            size: 1,
+            weakness: None,
+            rehash_size: 1.5,
+            rehash_threshold: 0.8125,
+            ordered_entries: vec![(DumpHashKey::Int(integer), DumpValue::Int(integer), None)],
+        },
+    );
+
+    let entry = table
+        .entries_in_slot_order()
+        .next()
+        .expect("the restored entry must remain iterable");
+    assert_eq!(entry.key, entry.value);
+    assert_eq!(
+        table.data.get(&HashKey::Ptr(entry.key.bits())),
+        Some(&entry.value),
+        "None means the entry value is also the original Lisp key"
+    );
+}
+
+
+#[test]
+fn producer_shaped_eq_bignum_key_demotes_to_consumer_fixnum() {
+    crate::test_utils::init_test_tracing();
+
+    let (_, wasm32_maximum) = crate::tagged::value::fixnum_bounds_for_word_bits(32);
+    let integer = wasm32_maximum + 1;
+    let producer_key = Value::bignum(Integer::from(integer));
+    let mut encoder = DumpEncoder::new();
+    let serialized_key =
+        dump_hash_key(&mut encoder, &producer_key.to_hash_key(&HashTableTest::Eq));
+    assert!(
+        matches!(serialized_key, DumpHashKey::HeapRef(_)),
+        "an eq bignum is serialized from its pointer-identity key"
+    );
+
+    let heap = encoder.finalize();
+    let mut decoder = LoadDecoder::new(&heap);
+    let table = load_hash_table(
+        &mut decoder,
+        &DumpLispHashTable {
+            test: DumpHashTableTest::Eq,
+            test_name: None,
+            size: 1,
+            weakness: None,
+            rehash_size: 1.5,
+            rehash_threshold: 0.8125,
+            ordered_entries: vec![(
+                serialized_key,
+                DumpValue::True,
+                Some(DumpValue::Bignum(integer.to_string())),
+            )],
+        },
+    );
+
+    assert_eq!(
+        table.data.get(&HashKey::Int(integer)),
+        Some(&Value::T),
+        "the 64-bit consumer must use its immediate fixnum identity"
+    );
+}
+

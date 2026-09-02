@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use malachite::integer::Integer;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::DumpError;
@@ -2195,19 +2196,22 @@ impl<'a> LoadDecoder<'a> {
                     rehash_threshold,
                     ordered_entries,
                 } = ht;
+                let restored_test = load_hash_table_test(&test);
                 let entries: Vec<_> = ordered_entries
                     .into_iter()
                     .map(|(k, v, snap)| {
-                        (
-                            load_hash_key_owned(self, k),
-                            self.load_value_owned(v),
-                            snap.map(|s| self.load_value_owned(s)),
-                        )
+                        let value = self.load_value_owned(v);
+                        let snapshot = snap.map(|s| self.load_value_owned(s));
+                        let restored_key = snapshot.unwrap_or(value);
+                        let rebuilt =
+                            rebuild_target_hash_key(&k, restored_key, restored_test, usize::BITS);
+                        let key = rebuilt.unwrap_or_else(|| load_hash_key_owned(self, k));
+                        (key, value, snapshot)
                     })
                     .collect();
                 let weak = weakness.is_some();
                 let _ = value.with_hash_table_mut(|table| {
-                    table.test = load_hash_table_test(&test);
+                    table.test = restored_test;
                     table.test_name = test_name.map(|s| load_sym_id(&s));
                     table.size = size;
                     table.weakness = weakness.as_ref().map(load_hash_table_weakness);
@@ -4625,13 +4629,101 @@ fn load_bytecode_owned(
 
 // --- Hash tables ---
 
+fn load_integer_hash_key_for_word_bits(integer: i64, word_bits: u32) -> HashKey {
+    let (minimum, maximum) = crate::tagged::value::fixnum_bounds_for_word_bits(word_bits);
+    if (minimum..=maximum).contains(&integer) {
+        HashKey::Int(integer)
+    } else {
+        HashKey::Bignum(
+            Integer::from(integer)
+                .to_twos_complement_limbs_asc()
+                .into_boxed_slice(),
+        )
+    }
+}
+
+fn load_bignum_hash_key_for_word_bits(limbs: &[u64], word_bits: u32) -> HashKey {
+    let integer = Integer::from_twos_complement_limbs_asc(limbs);
+    let (minimum, maximum) = crate::tagged::value::fixnum_bounds_for_word_bits(word_bits);
+    if let Ok(integer) = i64::try_from(&integer)
+        && (minimum..=maximum).contains(&integer)
+    {
+        HashKey::Int(integer)
+    } else {
+        HashKey::Bignum(limbs.to_vec().into_boxed_slice())
+    }
+}
+
+/// Whether replaying this top-level producer key would lose target identity.
+///
+/// Value-based integer keys are normalized directly while decoding the
+/// serialized key graph, including nested `equal` keys. Only identity-bearing
+/// keys need the restored Lisp value: an `eq` integer whose immediate/boxed
+/// representation changes, an `eq` heap reference, or an opaque target-specific
+/// pointer encoding.
+fn hash_key_requires_restored_identity(
+    key: &DumpHashKey,
+    test: HashTableTest,
+    word_bits: u32,
+) -> bool {
+    let (minimum, maximum) = crate::tagged::value::fixnum_bounds_for_word_bits(word_bits);
+    match key {
+        DumpHashKey::Int(integer) => {
+            test == HashTableTest::Eq && !(minimum..=maximum).contains(integer)
+        }
+        DumpHashKey::Bignum(limbs) => {
+            let integer = Integer::from_twos_complement_limbs_asc(limbs);
+            test == HashTableTest::Eq
+                && i64::try_from(&integer)
+                    .is_ok_and(|integer| (minimum..=maximum).contains(&integer))
+        }
+        DumpHashKey::Ptr(_) => true,
+        DumpHashKey::HeapRef(_) => test == HashTableTest::Eq,
+        DumpHashKey::Nil
+        | DumpHashKey::True
+        | DumpHashKey::Float(_)
+        | DumpHashKey::FloatEq(_, _)
+        | DumpHashKey::Symbol(_)
+        | DumpHashKey::Keyword(_)
+        | DumpHashKey::Str(_)
+        | DumpHashKey::Char(_)
+        | DumpHashKey::Window(_)
+        | DumpHashKey::Frame(_)
+        | DumpHashKey::EqualCons(_, _)
+        | DumpHashKey::EqualVec(_)
+        | DumpHashKey::ByteCode(_)
+        | DumpHashKey::Marker(_, _)
+        | DumpHashKey::Overlay { .. }
+        | DumpHashKey::BoolVec { .. }
+        | DumpHashKey::SymbolWithPos(_, _)
+        | DumpHashKey::Cycle(_)
+        | DumpHashKey::Text(_) => false,
+    }
+}
+
+/// Recompute only keys whose identity cannot be decoded portably. Returning
+/// `None` preserves the serialized-key path and never traverses a potentially
+/// unpopulated restored object graph.
+fn rebuild_target_hash_key(
+    serialized: &DumpHashKey,
+    restored_key: Value,
+    test: HashTableTest,
+    word_bits: u32,
+) -> Option<HashKey> {
+    if hash_key_requires_restored_identity(serialized, test, word_bits) {
+        Some(restored_key.to_hash_key(&test))
+    } else {
+        None
+    }
+}
+
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashKey {
     match k {
         DumpHashKey::Nil => HashKey::Nil,
         DumpHashKey::True => HashKey::True,
-        DumpHashKey::Int(n) => HashKey::Int(*n),
-        DumpHashKey::Bignum(limbs) => HashKey::Bignum(limbs.clone().into_boxed_slice()),
+        DumpHashKey::Int(n) => load_integer_hash_key_for_word_bits(*n, usize::BITS),
+        DumpHashKey::Bignum(limbs) => load_bignum_hash_key_for_word_bits(limbs, usize::BITS),
         DumpHashKey::Float(bits) => HashKey::Float(*bits),
         DumpHashKey::FloatEq(bits, id) => HashKey::FloatEq(*bits, *id),
         DumpHashKey::Symbol(s) => HashKey::Symbol(load_sym_id(s)),
@@ -4725,8 +4817,8 @@ fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
     match k {
         DumpHashKey::Nil => HashKey::Nil,
         DumpHashKey::True => HashKey::True,
-        DumpHashKey::Int(n) => HashKey::Int(n),
-        DumpHashKey::Bignum(limbs) => HashKey::Bignum(limbs.into_boxed_slice()),
+        DumpHashKey::Int(n) => load_integer_hash_key_for_word_bits(n, usize::BITS),
+        DumpHashKey::Bignum(limbs) => load_bignum_hash_key_for_word_bits(&limbs, usize::BITS),
         DumpHashKey::Float(bits) => HashKey::Float(bits),
         DumpHashKey::FloatEq(bits, id) => HashKey::FloatEq(bits, id),
         DumpHashKey::Symbol(s) => HashKey::Symbol(load_sym_id(&s)),
@@ -4834,20 +4926,22 @@ pub(crate) fn load_hash_table_weakness(w: &DumpHashTableWeakness) -> HashTableWe
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn load_hash_table(decoder: &mut LoadDecoder, ht: &DumpLispHashTable) -> LispHashTable {
+    let restored_test = load_hash_table_test(&ht.test);
     let entries: Vec<_> = ht
         .ordered_entries
         .iter()
         .map(|(k, v, snap)| {
-            (
-                load_hash_key(decoder, k),
-                decoder.load_value(v),
-                snap.as_ref().map(|s| decoder.load_value(s)),
-            )
+            let value = decoder.load_value(v);
+            let snapshot = snap.as_ref().map(|s| decoder.load_value(s));
+            let restored_key = snapshot.unwrap_or(value);
+            let rebuilt = rebuild_target_hash_key(k, restored_key, restored_test, usize::BITS);
+            let key = rebuilt.unwrap_or_else(|| load_hash_key(decoder, k));
+            (key, value, snapshot)
         })
         .collect();
 
     let mut table = LispHashTable::new_unpopulated_with_options(
-        load_hash_table_test(&ht.test),
+        restored_test,
         ht.size,
         ht.weakness.as_ref().map(load_hash_table_weakness),
         ht.rehash_size,
