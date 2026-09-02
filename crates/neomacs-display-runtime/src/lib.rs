@@ -21,7 +21,6 @@ pub mod display_scale;
 pub mod macos_bundle_runtime;
 mod menus;
 mod presentation;
-pub mod redisplay;
 pub mod thread_comm;
 mod tooltips;
 pub mod tty_input;

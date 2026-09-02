@@ -8,8 +8,11 @@ repository.workspace = true
 description = "Host-neutral application contracts for Neomacs"
 
 [dependencies]
+neomacs-display-protocol.workspace = true
+neomacs-layout-engine.workspace = true
 neovm-host-abi.workspace = true
 neovm-core.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
