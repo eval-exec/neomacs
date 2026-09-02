@@ -50,7 +50,7 @@ crossterm = "0.29"
 libc.workspace = true
 
 # NeoVM Elisp evaluator
-neomacs-app.workspace = true
+neovm-host-abi.workspace = true
 neovm-core.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true

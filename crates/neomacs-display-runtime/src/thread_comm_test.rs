@@ -1,6 +1,5 @@
 use super::*;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
-use neomacs_app::frontend_event::{FrontendEvent, FrontendKeyState};
 use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 use neomacs_display_protocol::{
     ImageId, ImageLoadAttempt, ImageLoadToken, ImageStateEvent, VideoId,
@@ -8,6 +7,7 @@ use neomacs_display_protocol::{
 use neomacs_video_model::{
     InitialPlayback, LoopMode, PlaybackAction, VideoOpenRequest, VideoSource,
 };
+use neovm_host_abi::frontend_event::{FrontendEvent, FrontendKeyState};
 use std::path::PathBuf;
 
 fn test_image_load(image: u32, attempt: u64) -> ImageLoadToken {

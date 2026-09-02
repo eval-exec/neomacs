@@ -9,10 +9,6 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use neomacs_app::frontend_event::{
-    FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendModifiers, FrontendViewport, InvalidFrontendScaleFactor,
-};
 use neomacs_display_protocol::SealedFramePresentation;
 use neomacs_display_protocol::{
     ImageColorContext, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization, ImageRotation,
@@ -24,6 +20,10 @@ pub use neomacs_display_protocol::{
 };
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_core::window::GuiFrameGeometryHints;
+use neovm_host_abi::frontend_event::{
+    FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
+    FrontendModifiers, FrontendViewport, InvalidFrontendScaleFactor,
+};
 
 /// Native selection owned by the display server.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
