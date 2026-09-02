@@ -1,0 +1,21 @@
+[package]
+name = "neomacs-android"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Android application adapter for Neomacs"
+
+[lib]
+name = "neomacs_android"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+neomacs-app.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-game-activity"] }
+
+[lints]
+workspace = true

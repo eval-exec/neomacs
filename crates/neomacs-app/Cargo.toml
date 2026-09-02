@@ -1,0 +1,13 @@
+[package]
+name = "neomacs-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Host-neutral application contracts for Neomacs"
+
+[dependencies]
+
+[lints]
+workspace = true
