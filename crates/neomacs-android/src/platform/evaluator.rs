@@ -43,7 +43,7 @@ fn create_evaluator(
         .ok_or_else(|| "Android did not provide an internal data directory".to_owned())?;
     let runtime_root = app_data.join("neomacs-runtime");
     let asset_manager = app.asset_manager();
-    let image = ExtractedRuntimeImage::prepare_final(&runtime_root, |asset_name| {
+    let image = ExtractedRuntimeImage::prepare_final_from_portable(&runtime_root, |asset_name| {
         let asset_name = CString::new(asset_name).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -54,13 +54,13 @@ fn create_evaluator(
             io::Error::new(
                 io::ErrorKind::NotFound,
                 format!(
-                    "packaged Android runtime image {} was not found",
+                    "packaged Android portable runtime image {} was not found",
                     asset_name.to_string_lossy()
                 ),
             )
         })
     })
-    .map_err(|error| format!("failed to extract Android runtime image: {error}"))?;
+    .map_err(|error| format!("failed to provision Android runtime image: {error}"))?;
 
     let mut evaluator = RuntimeImageSource::ExtractedFile(image.path())
         .load_for_in_runtime_root(HostProfile::android(), &runtime_root)
