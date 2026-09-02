@@ -9,6 +9,8 @@ fn default_backend_matches_the_build_target() {
     assert_eq!(backend.kind(), FontBackendKind::CoreText);
     #[cfg(windows)]
     assert_eq!(backend.kind(), FontBackendKind::DirectWrite);
+    #[cfg(any(target_os = "android", target_family = "wasm"))]
+    assert_eq!(backend.kind(), FontBackendKind::Packaged);
 }
 
 #[cfg(target_os = "macos")]
