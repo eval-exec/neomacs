@@ -126,6 +126,11 @@ define_class!(
             self.publish_navigation(NavigationMilestone::Finished);
         }
 
+        // GNU's NS delegate has no failure methods (nsxwidget.m:104-133: a
+        // failed load reports nothing on macOS); its GTK build receives
+        // `load-changed FINISHED` after `load-failed`, and that is what
+        // `xwidget-webkit-callback`'s progress timer needs to stop, so a
+        // failure is delivered as the finished milestone here.
         #[unsafe(method(webView:didFailProvisionalNavigation:withError:))]
         #[allow(non_snake_case)]
         unsafe fn webView_didFailProvisionalNavigation_withError(
@@ -318,7 +323,7 @@ fn sample_web_view(web: &WKWebView) -> (Option<String>, Option<String>, f64) {
 pub(crate) struct EmacsWebViewIvars {
     /// The host view Emacs draws in and winit listens on; key events the
     /// page does not keep are delivered to its `keyDown:`, exactly as GNU
-    /// forwards to `emacswindow` (nsxwidget.m:250-275).
+    /// forwards to `emacswindow` (nsxwidget.m:244-278).
     emacs_view: RefCell<Option<Retained<NSView>>>,
     /// Bumped on every change of `emacs_view`, so a key probe that completes
     /// after the host changed can tell (see `HostEpoch`).
@@ -326,7 +331,7 @@ pub(crate) struct EmacsWebViewIvars {
 }
 
 define_class!(
-    /// WKWebView with GNU's keyboard model (nsxwidget.m:236-330): a key that
+    /// WKWebView with GNU's keyboard model (nsxwidget.m:239-325): a key that
     /// reaches the web view stays with Emacs unless the page answers
     /// `xwHasFocus()` with true, and `interpretKeyEvents:` is a no-op so
     /// Emacs alone collects key events.
@@ -356,7 +361,8 @@ define_class!(
                     KeyRoute::Emacs => {
                         // Re-read the host: the epoch proved it unchanged,
                         // so this is the view the key was typed into.
-                        if let Some(emacs_view) = this.ivars().emacs_view.borrow().as_deref() {
+                        let emacs_view = this.ivars().emacs_view.borrow().clone();
+                        if let Some(emacs_view) = emacs_view {
                             emacs_view.keyDown(&event);
                         }
                     }
@@ -425,8 +431,19 @@ impl EmacsWebView {
         ivars.host_epoch.set(ivars.host_epoch.get().next());
     }
 
+    /// Whether `view` is, by identity, the host keys are forwarded to.  A
+    /// retained view cannot be freed and its address reused, so pointer
+    /// equality is the identity.
+    fn hosted_by(&self, view: &NSView) -> bool {
+        self.ivars()
+            .emacs_view
+            .borrow()
+            .as_deref()
+            .is_some_and(|hosted| ptr::eq::<NSView>(hosted, view))
+    }
+
     /// Hand first responder back to the Emacs view (GNU's answer to the
-    /// page's "C-g", nsxwidget.m:318-322), if the view is in a window.
+    /// page's "C-g", nsxwidget.m:317-321), if the view is in a window.
     fn give_focus_back_to_emacs(&self) {
         if let (Some(window), Some(emacs_view)) =
             (self.window(), self.ivars().emacs_view.borrow().as_deref())
@@ -485,25 +502,6 @@ impl KeyDownMessageHandler {
     }
 }
 
-/// The host the clip view is a subview of: the logical host window AND the
-/// native view that stood for it when we attached.
-///
-/// `register_host` may replace the `NSView` behind an unchanged
-/// `HostWindowId` (winit recreates the window; the Emacs frame id is
-/// reused), and a clip view left in the old view would keep drawing into,
-/// and forwarding keys to, a window that is gone.  Attachment is therefore
-/// keyed on both, and re-done whenever either differs.
-struct AttachedHost {
-    id: HostWindowId,
-    view: Retained<NSView>,
-}
-
-impl AttachedHost {
-    fn is(&self, id: HostWindowId, view: &NSView) -> bool {
-        self.id == id && ptr::eq::<NSView>(&*self.view, view)
-    }
-}
-
 /// Native objects for one logical WebView generation.
 pub(crate) struct MacWebView {
     id: WebViewId,
@@ -514,7 +512,13 @@ pub(crate) struct MacWebView {
     _navigation_delegate: Retained<WebViewNavigationDelegate>,
     observer: Retained<WebViewObserver>,
     _key_down_handler: Retained<KeyDownMessageHandler>,
-    attached: Option<AttachedHost>,
+    /// The host window the clip view is a subview of.  The native view that
+    /// stands for it is held once, by `EmacsWebView`, and checked by identity
+    /// on every `present`: `register_host` may replace the `NSView` behind an
+    /// unchanged `HostWindowId` (winit recreates the window; the Emacs frame
+    /// id is reused), and a clip view left in the old view would keep drawing
+    /// into, and forwarding keys to, a window that is gone.
+    attached: Option<HostWindowId>,
     hidden: bool,
     load_state: Rc<RefCell<PageLoadState>>,
     focused: bool,
@@ -779,17 +783,10 @@ impl MacWebView {
         host: &NSView,
         placement: &ResolvedWebViewPlacement,
     ) {
-        if !self
-            .attached
-            .as_ref()
-            .is_some_and(|attached| attached.is(host_id, host))
-        {
+        if self.attached != Some(host_id) || !self.web.hosted_by(host) {
             self.clip.removeFromSuperview();
             host.addSubview(&self.clip);
-            self.attached = Some(AttachedHost {
-                id: host_id,
-                view: host.retain(),
-            });
+            self.attached = Some(host_id);
             self.web.set_emacs_view(Some(host.retain()));
         }
 
@@ -828,10 +825,23 @@ impl MacWebView {
         self.hidden = false;
     }
 
+    /// Take the view out of its host.
+    ///
+    /// The system sends `Hidden` both when the view leaves the scene and,
+    /// from `unregister_host`, when its host window is going away; GNU's
+    /// `nsxwidget_delete_view` (nsxwidget.m:586-596) removes the view in
+    /// the second case.  This contract has one hidden state, so hiding
+    /// always detaches: the clip leaves the host's hierarchy, the host is
+    /// released, and the host epoch advances so a key probe in flight
+    /// completes into nothing.  A later `present` attaches again.
     pub(crate) fn hide(&mut self) {
         if !self.hidden {
             self.clip.setHidden(true);
             self.hidden = true;
+        }
+        if self.attached.take().is_some() {
+            self.clip.removeFromSuperview();
+            self.web.set_emacs_view(None);
         }
     }
 }

@@ -31,7 +31,10 @@ fn keys_stay_with_emacs_unless_the_page_has_an_input_focused() {
 #[test]
 fn a_probe_answer_that_is_not_a_boolean_goes_to_emacs() {
     let now = HostEpoch::first();
-    assert_eq!(route_key(FocusProbe::NotABoolean, now, now), KeyRoute::Emacs);
+    assert_eq!(
+        route_key(FocusProbe::NotABoolean, now, now),
+        KeyRoute::Emacs
+    );
 }
 
 /// The probe completes asynchronously.  If the view moved to another host,
@@ -42,8 +45,16 @@ fn a_probe_that_completes_after_the_host_changed_is_dropped() {
     let sent = HostEpoch::first();
     let now = sent.next();
     assert_eq!(route_key(FocusProbe::Focused, sent, now), KeyRoute::Dropped);
-    assert_eq!(route_key(FocusProbe::Unfocused, sent, now), KeyRoute::Dropped);
+    assert_eq!(
+        route_key(FocusProbe::Unfocused, sent, now),
+        KeyRoute::Dropped
+    );
     assert_eq!(route_key(FocusProbe::Failed, sent, now), KeyRoute::Dropped);
+    assert_eq!(route_key(FocusProbe::Absent, sent, now), KeyRoute::Dropped);
+    assert_eq!(
+        route_key(FocusProbe::NotABoolean, sent, now),
+        KeyRoute::Dropped
+    );
     assert_ne!(sent, now);
     assert_eq!(sent.next(), now);
 }

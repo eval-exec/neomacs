@@ -8,6 +8,15 @@
 //! decisions, including the two this port adds at the native boundary (a
 //! probe answer that is not a boolean, and a probe that completes after the
 //! view's host changed).
+//!
+//! Not ported from GNU's `keyDown:` (nsxwidget.m:244-278): the
+//! `isearch-mode` branch (:247-253, a buffer-local Lisp read the AppKit
+//! thread cannot make; keys go to the page's focused input while searching)
+//! and the `urlScriptBlocked` branch (:255-260, a response whose
+//! `Content-Security-Policy: sandbox` lacks `allow-scripts` sends every key
+//! to Emacs without probing).  In such a document the probe itself fails and
+//! `Failed` routes to Emacs, which converges on GNU's answer by accident,
+//! not by port.
 
 use crate::FocusIntent;
 
@@ -68,7 +77,10 @@ pub(super) enum FocusProbe {
     /// An NSNumber that is false.
     Unfocused,
     /// A nil result with no error (GNU: `else if (result)` fails, nothing
-    /// is delivered).
+    /// is delivered).  This is the one answer a page can still use to eat
+    /// keys (`xwHasFocus = () => null`); it is kept because it is GNU's
+    /// behaviour, unlike the non-boolean case below, which GNU cannot
+    /// survive and this port has to decide for itself.
     Absent,
     /// A non-nil result that is not an NSNumber.  GNU would send it
     /// `boolValue` and raise; this port treats it as "no input focused".

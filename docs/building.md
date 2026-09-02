@@ -134,8 +134,8 @@ What works, as of the follow-ups to
   Emacs without being relayed.  The page's answers are checked at the native
   boundary (a redefined `xwHasFocus` returning a non-boolean, or a non-string
   message, is treated as "Emacs keeps the key"), and a probe that completes
-  after the view moved to another frame is dropped rather than delivered to
-  the old one.  Mouse input goes through the responder chain.
+  after the view moved to another frame, or after that frame closed, is
+  dropped rather than delivered to the old one.  Mouse input goes through the responder chain.
 
 Known gaps:
 
@@ -143,6 +143,10 @@ Known gaps:
   reads a buffer-local Lisp variable from the AppKit thread; the render thread
   cannot ask Lisp synchronously, so while isearch is active a page input keeps
   the keys.
+- GNU's script-blocked branch (a response whose `Content-Security-Policy:
+  sandbox` lacks `allow-scripts` sends every key to Emacs without asking the
+  page) is not ported; in such a document the focus probe fails and the key
+  goes to Emacs anyway.
 - Persistent browser profiles are isolated by the OS only on macOS 14 and
   later; older systems fall back to WebKit's process-wide store.
 

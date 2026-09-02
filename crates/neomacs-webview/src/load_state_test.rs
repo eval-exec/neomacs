@@ -104,6 +104,18 @@ fn a_title_or_uri_that_goes_away_is_reported_as_empty_not_kept() {
         ]
     );
     assert!(state.observe(id, generation, None, None, 0.5).is_empty());
+    assert!(
+        state
+            .observe(
+                id,
+                generation,
+                Some(String::new()),
+                Some(String::new()),
+                0.5
+            )
+            .is_empty(),
+        "nil and an empty string are the same reported value"
+    );
     assert_eq!(
         state.observe(id, generation, Some("T".into()), Some("u".into()), 0.5),
         vec![
@@ -217,6 +229,19 @@ fn progress_readings_count_only_while_a_load_is_in_flight() {
         state.observe(id, generation, Some("late".into()), None, 0.6),
         vec![progress(0.6)]
     );
+}
+
+/// A finish with no start (a load that began before the view was observed,
+/// or a failure reported first) still pins the terminal progress.
+#[test]
+fn a_finish_from_idle_publishes_the_terminal_progress() {
+    let (id, generation) = ids();
+    let mut state = PageLoadState::new();
+    assert_eq!(
+        state.milestone(id, generation, NavigationMilestone::Finished),
+        vec![progress(1.0), phase(LoadPhase::Finished), finished()]
+    );
+    assert!(state.observe(id, generation, None, None, 0.3).is_empty());
 }
 
 /// A redirect or commit without a start (the delegate can miss the start
