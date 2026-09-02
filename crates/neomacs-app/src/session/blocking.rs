@@ -5,13 +5,23 @@ use neovm_core::emacs_core::eval::ShutdownRequest;
 use super::EditorSession;
 
 impl EditorSession {
+    /// Complete the transition from an attached image to a running native
+    /// outer command loop.
+    ///
+    /// Runtime-image restoration deliberately defers
+    /// `after-pdump-load-hook` until the live frontend has been attached.
+    fn prepare_to_run(&mut self) {
+        self.publish_now();
+        neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut self.evaluator);
+    }
+
     /// Enter GNU's blocking outer command loop on the current worker thread.
     ///
     /// This API is absent on WASM targets. Browser Workers require a separate
     /// JSPI or Asyncify adapter which can suspend without unwinding the
     /// recursive Lisp stack.
     pub fn run(mut self) -> EditorSessionExit {
-        self.publish_now();
+        self.prepare_to_run();
         let command_loop_error = self.evaluator.recursive_edit().err();
         EditorSessionExit {
             command_loop_error,
