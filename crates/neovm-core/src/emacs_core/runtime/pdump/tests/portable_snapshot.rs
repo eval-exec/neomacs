@@ -29,6 +29,24 @@ fn portable_snapshot_round_trips_evaluator_state() {
 }
 
 #[test]
+fn portable_snapshot_preserves_an_integer_beyond_the_wasm32_fixnum_range() {
+    const WASM32_MOST_POSITIVE_FIXNUM: i64 = (1_i64 << 29) - 1;
+    const INTEGER: i64 = WASM32_MOST_POSITIVE_FIXNUM + 1;
+
+    let mut eval = Context::new();
+    eval.set_variable("portable-cross-width-integer", Value::fixnum(INTEGER));
+
+    let image = encode_portable_snapshot(&eval).expect("encode portable snapshot");
+    let loaded = load_from_portable_snapshot(&image).expect("load portable snapshot");
+    let value = *loaded
+        .obarray()
+        .symbol_value("portable-cross-width-integer")
+        .expect("restored integer");
+
+    assert_eq!(value.as_fixnum(), Some(INTEGER));
+}
+
+#[test]
 fn portable_snapshot_rejects_corrupted_payload() {
     let image = encode_portable_snapshot(&Context::new()).expect("encode portable snapshot");
     let mut corrupted = image;

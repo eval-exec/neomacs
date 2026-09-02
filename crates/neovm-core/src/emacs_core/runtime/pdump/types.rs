@@ -99,6 +99,8 @@ pub enum DumpValue {
     #[default]
     Nil,
     True,
+    /// Signed integer that was immediate on the producer. Consumers select
+    /// their own target-native fixnum or bignum representation when loading.
     Int(i64),
     Float(DumpHeapRef),
     Symbol(DumpSymId),
