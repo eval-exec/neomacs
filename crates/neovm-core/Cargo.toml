@@ -34,6 +34,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-log.workspace = true
 serde.workspace = true
+ciborium.workspace = true
 bytemuck.workspace = true
 tempfile.workspace = true
 smallvec.workspace = true
