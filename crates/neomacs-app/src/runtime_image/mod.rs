@@ -30,6 +30,9 @@ const WASM_RUNTIME_ROOT: &str = "/neomacs";
 /// linear memory.
 pub const PORTABLE_FINAL_RUNTIME_IMAGE_ASSET: &str = "neomacs.portable";
 
+/// SHA-256 content ID selecting the packaged portable final image.
+pub const PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET: &str = "neomacs.portable.sha256";
+
 /// Concrete storage supplied by a frontend for one runtime image.
 ///
 /// The variants intentionally mirror [`RuntimeImageModel`]. Keeping extracted

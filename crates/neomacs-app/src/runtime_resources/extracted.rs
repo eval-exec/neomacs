@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
+use crate::content_id::ContentId;
+
 use super::{RUNTIME_RESOURCE_ARCHIVE_ASSET, RUNTIME_RESOURCE_ID_ASSET};
 
 const READY_FILE_NAME: &str = ".neomacs-runtime-ready";
@@ -85,25 +87,7 @@ impl From<io::Error> for RuntimeResourceError {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RuntimeResourceBundleId(String);
-
-impl RuntimeResourceBundleId {
-    fn parse(value: &str) -> Result<Self, RuntimeResourceError> {
-        if value.len() != 64
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(RuntimeResourceError::InvalidBundleId);
-        }
-        Ok(Self(value.to_owned()))
-    }
-
-    fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+type RuntimeResourceBundleId = ContentId;
 
 /// A complete runtime resource root in app-private native storage.
 #[derive(Debug)]
@@ -172,7 +156,7 @@ impl RuntimeResourceRoot {
 fn read_bundle_id(source: impl Read) -> Result<RuntimeResourceBundleId, RuntimeResourceError> {
     let mut text = String::new();
     source.take(128).read_to_string(&mut text)?;
-    RuntimeResourceBundleId::parse(text.trim())
+    RuntimeResourceBundleId::parse(text.trim()).map_err(|_| RuntimeResourceError::InvalidBundleId)
 }
 
 fn create_staging_directory(
