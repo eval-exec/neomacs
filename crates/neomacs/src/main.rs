@@ -3878,8 +3878,7 @@ fn run_gui_evaluator_worker(
     install_diagnostics_eval_hooks(&mut evaluator);
 
     frame_layout::REDISPLAY_RUNTIME.with(|runtime| {
-        runtime.enable_cosmic_metrics();
-        runtime.set_font_sizing(bootstrap_display.font_sizing());
+        runtime.use_scalable_metrics(bootstrap_display.font_sizing());
     });
     let preview_tx = emacs_comms.cmd_tx.clone();
     let preview_waker = render_waker.clone();

@@ -10,13 +10,12 @@
 //! (`combine_updates_for_frame`) and the redisplay callback wiring that
 //! normally lives in `src/xdisp.c` / `src/dispnew.c`.
 
+use neomacs_app::presentation::{EditorPresentationRuntime, PresentationMetrics};
+pub use neomacs_app::presentation::{FrameLayoutPurpose, PreparedFrameDisplay};
 use neomacs_display_protocol::SealedFramePresentation;
-use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 use neomacs_display_runtime::backend::tty::rif::TtyRif;
-use neomacs_display_runtime::redisplay::RedisplayRuntime;
-pub use neomacs_display_runtime::redisplay::{FrameLayoutPurpose, PreparedFrameDisplay};
 use neovm_core::emacs_core::eval::Context;
-use neovm_core::window::{FrameId, RenderFrameScope, RenderFrameVisibility};
+use neovm_core::window::{FrameId, RenderFrameVisibility};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -27,16 +26,14 @@ thread_local! {
     /// Start without font metrics to avoid the ~500ms cosmic-text font
     /// database scan on first access. The GUI path enables cosmic metrics
     /// explicitly; the TTY path leaves it disabled.
-    pub static REDISPLAY_RUNTIME: RedisplayRuntime = RedisplayRuntime::new_without_font_metrics();
+    pub static REDISPLAY_RUNTIME: EditorPresentationRuntime =
+        EditorPresentationRuntime::new(PresentationMetrics::CellGrid);
 }
 
 // ── Layout helpers ────────────────────────────────────────────────────────
 
 pub(crate) fn current_layout_frame_id(evaluator: &Context) -> Option<FrameId> {
-    evaluator
-        .frame_manager()
-        .selected_frame()
-        .map(|frame| frame.id)
+    REDISPLAY_RUNTIME.with(|runtime| runtime.current_frame_id(evaluator))
 }
 
 pub fn layout_frame_display_state(
@@ -47,97 +44,11 @@ pub fn layout_frame_display_state(
     REDISPLAY_RUNTIME.with(|runtime| runtime.prepare_frame(evaluator, frame_id, purpose))
 }
 
-/// Lay out the frames a snapshot request covers — freshest state, on
-/// demand — preserving the canonical parent-relative placement published by
-/// layout. Shared by the TTY and GUI frontends (both use the same thread-local
-/// redisplay runtime).
-pub fn collect_snapshot_states(
+pub fn publish_visible_frames(
     evaluator: &mut Context,
-    target: &neovm_core::emacs_core::xdisp::SnapshotTarget,
-) -> Result<Vec<FrameDisplayState>, String> {
-    use neovm_core::emacs_core::xdisp::SnapshotTarget;
-
-    let selected =
-        current_layout_frame_id(evaluator).ok_or_else(|| "no selected frame".to_string())?;
-    let tree = evaluator
-        .frame_manager()
-        .render_frame_forest(
-            RenderFrameScope::TreeContaining(selected),
-            RenderFrameVisibility::VisibleOnly,
-        )
-        .into_iter()
-        .next()
-        .ok_or_else(|| "no render frame tree for the selected frame".to_string())?;
-
-    let mut states = Vec::new();
-    for node in tree.frames_bottom_to_top {
-        let keep = match target {
-            SnapshotTarget::All => true,
-            SnapshotTarget::Selected => node.frame_id == selected,
-            SnapshotTarget::Frame(id) => node.frame_id.0 == *id,
-        };
-        if !keep {
-            continue;
-        }
-        let prepared =
-            layout_frame_display_state(evaluator, node.frame_id, FrameLayoutPurpose::Snapshot);
-        if evaluator.has_mode_line_display_flow() {
-            // This callback carries String errors. Keep the original Flow in
-            // Context for run_frame_snapshot to return after reinstalling it.
-            return Err("frame snapshot: mode-line evaluation exited nonlocally".to_string());
-        }
-        let Some(prepared) = prepared else {
-            continue;
-        };
-        states.push(prepared.discard(evaluator));
-    }
-
-    // A live frame outside the selected frame's tree (another top-level
-    // frame): lay it out directly with its canonical root placement.
-    if states.is_empty()
-        && let SnapshotTarget::Frame(id) = target
-    {
-        let prepared =
-            layout_frame_display_state(evaluator, FrameId(*id), FrameLayoutPurpose::Snapshot);
-        if evaluator.has_mode_line_display_flow() {
-            // The core drains the Context-owned Flow after this callback.
-            return Err("frame snapshot: mode-line evaluation exited nonlocally".to_string());
-        }
-        if let Some(prepared) = prepared {
-            states.push(prepared.discard(evaluator));
-        }
-    }
-
-    if states.is_empty() {
-        return Err("frame snapshot: no frame produced display state".to_string());
-    }
-    Ok(states)
-}
-
-/// JSON envelope of a snapshot: `{"frames":[FrameDisplayState...]}` — the
-/// array form is uniform for one frame or many, and the wrapper leaves room
-/// for future metadata without a schema break.
-#[derive(serde::Serialize)]
-struct SnapshotDoc<'a> {
-    frames: &'a [FrameDisplayState],
-}
-
-/// Geometry-only diagnostics borrow the protocol's authoritative window data.
-/// Serializing the whole state can repeat large in-memory font assets in the
-/// resolved font tables and off-screen coverage (notably CoreText fonts).
-#[derive(serde::Serialize)]
-struct SnapshotGeometryFrame<'a> {
-    presentation_id: &'a neomacs_display_protocol::frame_chrome::PresentationId,
-    frame_cols: usize,
-    frame_rows: usize,
-    frame_pixel_width: f32,
-    frame_pixel_height: f32,
-    window_infos: &'a [neomacs_display_protocol::frame_glyphs::WindowInfo],
-}
-
-#[derive(serde::Serialize)]
-struct SnapshotGeometryDoc<'a> {
-    frames: Vec<SnapshotGeometryFrame<'a>>,
+    try_publish: impl FnMut(SealedFramePresentation) -> bool,
+) -> neomacs_app::presentation::FramePublishResult {
+    REDISPLAY_RUNTIME.with(|runtime| runtime.publish_visible_frames(evaluator, try_publish))
 }
 
 /// Install the `neomacs--frame-snapshot` hook (`Context::frame_snapshot_fn`).
@@ -145,43 +56,7 @@ struct SnapshotGeometryDoc<'a> {
 /// Called by both frontends right where they install `redisplay_fn`; batch
 /// mode installs nothing, so the subr signals "no display attached" there.
 pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
-    evaluator.redisplay_prepare_fn = Some(Box::new(|eval, request| {
-        REDISPLAY_RUNTIME.with(|runtime| runtime.prepare_minibuffer_geometry(eval, request))
-    }));
-    use neovm_core::emacs_core::xdisp::SnapshotFormat;
-
-    evaluator.frame_snapshot_fn = Some(Box::new(|eval, request| {
-        let states = collect_snapshot_states(eval, &request.target)?;
-        Ok(match request.format {
-            SnapshotFormat::Json => serde_json::to_string(&SnapshotDoc { frames: &states })
-                .map_err(|error| format!("frame snapshot JSON serialization failed: {error}"))?,
-            SnapshotFormat::JsonGeometry => {
-                let frames = states
-                    .iter()
-                    .map(|state| SnapshotGeometryFrame {
-                        presentation_id: &state.presentation_id,
-                        frame_cols: state.frame_cols,
-                        frame_rows: state.frame_rows,
-                        frame_pixel_width: state.frame_pixel_width,
-                        frame_pixel_height: state.frame_pixel_height,
-                        window_infos: &state.window_infos,
-                    })
-                    .collect();
-                serde_json::to_string(&SnapshotGeometryDoc { frames })
-                    .map_err(|error| format!("frame geometry JSON serialization failed: {error}"))?
-            }
-            SnapshotFormat::Text => states
-                .iter()
-                .map(|state| state.render_text())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            SnapshotFormat::TextFaces => states
-                .iter()
-                .map(|state| state.render_text_faces())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        })
-    }));
+    REDISPLAY_RUNTIME.with(|runtime| runtime.install_frame_snapshot_hook(evaluator));
 }
 
 /// Install the synchronous layout-query adapter used by display primitives
@@ -205,9 +80,7 @@ pub fn install_window_layout_query_fn(evaluator: &mut Context) {
     evaluator.display_idle_maintenance_fn = Some(Box::new(|eval| {
         REDISPLAY_RUNTIME.with(|runtime| runtime.maintain_scroll_coverage(eval))
     }));
-    evaluator.install_window_layout_query(|eval, frame_id, window_id, scope| {
-        REDISPLAY_RUNTIME.with(|runtime| runtime.query_window(eval, frame_id, window_id, scope))
-    });
+    REDISPLAY_RUNTIME.with(|runtime| runtime.install_window_layout_query_hook(evaluator));
 }
 
 // ── TTY layout tree and redisplay ─────────────────────────────────────────
@@ -385,7 +258,7 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
     // FontMetricsService so char_advance,
     // status_line_font_metrics, etc. fall back to the
     // char-cell grid.
-    REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+    REDISPLAY_RUNTIME.with(EditorPresentationRuntime::use_cell_grid);
     evaluator.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
         eval.setup_thread_locals();
         // The selected frame determines the output device.  An explicit
