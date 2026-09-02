@@ -133,6 +133,7 @@
 //! fast path -- exactly the shape and exactly the cost GNU pays, and the same
 //! shape this port already uses for the Lisp profiler's watchdog flag.
 
+use std::ffi::c_int;
 use std::sync::OnceLock;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
@@ -360,7 +361,7 @@ impl InstallReport {
 
     /// The self-pipe read end, for the poller registration ledger 184 leaves
     /// open.  `None` when the pipe could not be created.
-    pub(crate) fn self_pipe_read_fd(&self) -> Option<libc::c_int> {
+    pub(crate) fn self_pipe_read_fd(&self) -> Option<c_int> {
         self.wake_pipe
             .as_ref()
             .and_then(platform::WakePipe::read_fd)
