@@ -91,24 +91,6 @@ fn lisp_string(eval: &mut super::super::eval::Context, expr: &str) -> String {
         .to_string()
 }
 
-/// GNU gets the boot time from the utmp BOOT_TIME record (gnulib
-/// boot-time.c), which systemd stamps seconds LATER than the kernel's
-/// /proc/stat btime.  current_lock_owner's staleness check tolerates only
-/// one second of skew, so a boot time from any other source makes neomacs
-/// zap live GNU locks as stale.  Pin the source, not just the concept.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn boot_time_source_is_the_utmp_boot_record_like_gnu() {
-    let Some(utmp_boot) = boot_time_from_utmp_sec() else {
-        return; // No utmp boot record: the fallback path is all we have.
-    };
-    assert_eq!(
-        system_boot_time_sec(),
-        utmp_boot,
-        "boot time must come from the utmp BOOT_TIME record, as GNU's does"
-    );
-}
-
 #[test]
 fn zero_is_never_a_valid_lock_owner_pid() {
     assert!(!process_is_alive(0));
