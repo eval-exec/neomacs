@@ -6012,34 +6012,7 @@ pub(crate) fn builtin_set_process_plist_impl(
 // Builtins (pure — no evaluator needed)
 // ---------------------------------------------------------------------------
 
-/// (getenv-internal VARIABLE &optional ENV) -> string or nil
-pub(crate) fn builtin_getenv_internal(
-    eval: &mut super::super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_min_args("getenv-internal", &args, 1)?;
-    if args.len() > 2 {
-        return Err(signal(
-            LispCondition::WrongNumberOfArguments,
-            vec![
-                Value::symbol("getenv-internal"),
-                Value::fixnum(args.len() as i64),
-            ],
-        ));
-    }
-    // `getenv_internal` takes `&mut Context`, so a borrow of VARNAME's payload
-    // would span it. The name is short and this is not a hot path, so copy the
-    // bytes out rather than reason about whether the callee can reach a
-    // safepoint (DIVERGENCES.md 163).
-    let varname = eval.expect_lisp_string(args[0])?.clone();
-    super::super::environment::getenv_internal(
-        eval,
-        &varname,
-        args.get(1).copied().unwrap_or(Value::NIL),
-    )
-}
-
-pub(crate) fn make_network_process_subfeatures() -> Value {
+pub(crate) fn make_network_process_subfeatures() -> Option<Value> {
     // Advertise only behavior that this runtime actually implements.  Packages
     // use `featurep' to choose code paths, so keep this list tied to backed
     // behavior, not parser acceptance.
@@ -6080,28 +6053,7 @@ pub(crate) fn make_network_process_subfeatures() -> Value {
         }
         _ => {}
     }
-    Value::list(features)
-}
-
-/// (set-binary-mode STREAM MODE) -> t
-///
-/// Batch/runtime compatibility path. Accepts stdin/stdout/stderr symbols.
-pub(crate) fn builtin_set_binary_mode(args: Vec<Value>) -> EvalResult {
-    expect_args("set-binary-mode", &args, 2)?;
-    let stream = args[0].as_symbol_name().ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), args[0]],
-        )
-    })?;
-
-    match stream {
-        "stdin" | "stdout" | "stderr" => Ok(Value::T),
-        _ => Err(signal(
-            "error",
-            vec![Value::string("unsupported stream"), args[0]],
-        )),
-    }
+    Some(Value::list(features))
 }
 
 impl GcTrace for ProcessManager {

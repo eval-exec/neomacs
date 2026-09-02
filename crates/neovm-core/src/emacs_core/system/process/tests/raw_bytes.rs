@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::Context;
+use crate::emacs_core::environment::builtin_getenv_internal;
 use crate::emacs_core::value::list_to_vec;
 use crate::heap_types::LispString;
 use std::time::Duration;
