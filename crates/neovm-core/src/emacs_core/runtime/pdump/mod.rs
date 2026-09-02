@@ -218,7 +218,10 @@ pub enum DumpError {
     Io(std::io::Error),
     BadMagic,
     UnsupportedVersion(u32),
-    FingerprintMismatch { expected: String, found: String },
+    FingerprintMismatch {
+        expected: String,
+        found: String,
+    },
     ChecksumMismatch,
     ImageFormatError(String),
     SerializationError(String),
