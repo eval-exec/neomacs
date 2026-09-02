@@ -26,8 +26,15 @@ crates/neomacs-android/android/gradlew \
   -PneomacsNativeLibrary="$PWD/target/aarch64-linux-android/release/libneomacs_android.so" \
   -PneomacsPortableAssets="$PWD/tmp/neomacs-android-assets" \
   assembleRelease
+
+cargo xtask verify-android-apk \
+  --apk crates/neomacs-android/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+  --portable-assets ./tmp/neomacs-android-assets
 ```
 
 The Android NDK compiler/linker environment must be configured for the Cargo
 step.  CI uses NDK `28.2.13676358`, API level 24, and `arm64-v8a`.  Gradle pins
 the same NDK and refuses to assemble when either generated input is absent.
+The final command authenticates every packaged Neomacs asset and checks the
+manifest identity, ABI, uncompressed storage, 16 KiB ZIP/ELF alignment, native
+exports, and Android-only dynamic-library closure.
