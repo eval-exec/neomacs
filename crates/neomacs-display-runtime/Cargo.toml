@@ -108,6 +108,7 @@ objc2-app-kit = { workspace = true, features = ["NSColor", "NSFont", "objc2-core
 neovm-core = { workspace = true, features = ["desktop-font-settings"] }
 # 0.22.9 references GDBusActionGroupClass absent from gio-sys 0.22.8.
 gio = { version = "=0.22.8", default-features = false }
+winit = { workspace = true, features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
 smithay-clipboard.workspace = true
 x11-dl.workspace = true
 rustix.workspace = true

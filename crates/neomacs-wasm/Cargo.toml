@@ -1,0 +1,22 @@
+[package]
+name = "neomacs-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Browser WebAssembly application adapter for Neomacs"
+
+[lib]
+name = "neomacs_wasm"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+neomacs-app.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+winit.workspace = true
+
+[lints]
+workspace = true
