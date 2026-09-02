@@ -425,6 +425,9 @@ mod kill_ring_test;
 #[path = "tests/architecture/layout.rs"]
 mod layout_test;
 #[cfg(test)]
+#[path = "tests/build_support/native_library_probe.rs"]
+mod native_library_probe_test;
+#[cfg(test)]
 #[path = "lisp/provide_coupled_vars/tests/runtime_surface.rs"]
 mod provide_coupled_vars_test;
 #[cfg(test)]
