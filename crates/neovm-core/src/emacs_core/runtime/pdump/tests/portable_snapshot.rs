@@ -1,5 +1,16 @@
 use super::*;
 
+fn producer_only_subr(_eval: &mut Context) -> crate::emacs_core::error::EvalResult {
+    Ok(crate::emacs_core::value::Value::NIL)
+}
+
+fn one_argument_subr(
+    _eval: &mut Context,
+    value: crate::emacs_core::value::Value,
+) -> crate::emacs_core::error::EvalResult {
+    Ok(value)
+}
+
 #[test]
 fn portable_snapshot_round_trips_evaluator_state() {
     let mut eval = Context::new();
@@ -39,6 +50,65 @@ fn portable_snapshot_rejects_unknown_schema_version() {
         load_from_portable_snapshot(&incompatible),
         Err(DumpError::UnsupportedVersion(u32::MAX))
     ));
+}
+
+#[test]
+fn portable_snapshot_rejects_a_missing_required_native_subr() {
+    let mut producer = Context::new();
+    producer.register_subr(crate::emacs_core::subr::SubrSpec::fixed0(
+        "portable-producer-only-subr",
+        producer_only_subr,
+    ));
+    let image = encode_portable_snapshot(&producer).expect("encode producer image");
+
+    // Model a different compiled consumer. Portable restore must rebuild the
+    // primitive table from this binary, not inherit the producer's process.
+    crate::emacs_core::eval::clear_global_subr_table();
+
+    assert!(matches!(
+        load_from_portable_snapshot(&image),
+        Err(DumpError::PortableRuntimeContractMismatch(message))
+            if message.contains("portable-producer-only-subr")
+    ));
+}
+
+#[test]
+fn portable_snapshot_rejects_an_incompatible_native_subr_abi() {
+    let mut producer = Context::new();
+    producer.register_subr(crate::emacs_core::subr::SubrSpec::fixed0(
+        "portable-changed-subr",
+        producer_only_subr,
+    ));
+    let image = encode_portable_snapshot(&producer).expect("encode producer image");
+
+    crate::emacs_core::eval::clear_global_subr_table();
+    let mut consumer = Context::new();
+    consumer.register_subr(crate::emacs_core::subr::SubrSpec::fixed1(
+        "portable-changed-subr",
+        one_argument_subr,
+        crate::emacs_core::subr::FixedMin1::One,
+    ));
+
+    assert!(matches!(
+        load_from_portable_snapshot(&image),
+        Err(DumpError::PortableRuntimeContractMismatch(message))
+            if message.contains("portable-changed-subr")
+                && message.contains("incompatible ABI")
+    ));
+}
+
+#[test]
+fn portable_snapshot_accepts_a_consumer_with_additional_native_subrs() {
+    let producer = Context::new();
+    let image = encode_portable_snapshot(&producer).expect("encode producer image");
+
+    let mut consumer = Context::new();
+    consumer.register_subr(crate::emacs_core::subr::SubrSpec::fixed0(
+        "portable-consumer-only-subr",
+        producer_only_subr,
+    ));
+
+    load_from_portable_snapshot(&image).expect("a primitive superset is compatible");
 }
 
 #[test]

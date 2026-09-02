@@ -9,17 +9,117 @@
 use std::io::{Cursor, Write};
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::types::DumpContextState;
 use super::{Context, DumpError, mark_after_pdump_load_hook_pending, restore_snapshot};
+use crate::emacs_core::eval::{SubrEntry, registered_global_subr_entries};
+use crate::emacs_core::intern::resolve_name;
+use crate::tagged::header::SubrDispatchKind;
 
 const MAGIC: [u8; 16] = *b"NEOMACS-PRTDUMP!";
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const MAGIC_END: usize = MAGIC.len();
 const VERSION_END: usize = MAGIC_END + size_of::<u32>();
 const PAYLOAD_LEN_END: usize = VERSION_END + size_of::<u64>();
 const CHECKSUM_END: usize = PAYLOAD_LEN_END + 32;
+
+/// Pointer-free envelope payload. The native-subr contract is deliberately a
+/// minimum requirement rather than a build fingerprint: a consumer may offer
+/// additional primitives, but every primitive the producer could have placed
+/// in the image must exist with the same Lisp call ABI.
+#[derive(Serialize, Deserialize)]
+struct PortableSnapshotPayload {
+    required_subrs: Vec<PortableSubrAbi>,
+    state: DumpContextState,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+struct PortableSubrAbi {
+    name: String,
+    min_args: u16,
+    max_args: Option<u16>,
+    dispatch: PortableSubrDispatch,
+    interactive: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+enum PortableSubrDispatch {
+    Builtin,
+    ContextCallable,
+    SpecialForm,
+}
+
+impl From<SubrDispatchKind> for PortableSubrDispatch {
+    fn from(value: SubrDispatchKind) -> Self {
+        match value {
+            SubrDispatchKind::Builtin => Self::Builtin,
+            SubrDispatchKind::ContextCallable => Self::ContextCallable,
+            SubrDispatchKind::SpecialForm => Self::SpecialForm,
+        }
+    }
+}
+
+impl PortableSubrAbi {
+    fn from_entry(entry: SubrEntry) -> Self {
+        Self {
+            name: resolve_name(entry.name_id).to_owned(),
+            min_args: entry.min_args,
+            max_args: entry.max_args,
+            dispatch: entry.dispatch_kind.into(),
+            interactive: entry.interactive_spec.is_some(),
+        }
+    }
+
+    fn describe(&self) -> String {
+        let maximum = self
+            .max_args
+            .map_or_else(|| "many".to_owned(), |maximum| maximum.to_string());
+        format!(
+            "{} ({}..{}, {:?}, interactive={})",
+            self.name, self.min_args, maximum, self.dispatch, self.interactive
+        )
+    }
+}
+
+fn compiled_subr_contract() -> Vec<PortableSubrAbi> {
+    let mut entries = registered_global_subr_entries()
+        .into_iter()
+        .map(PortableSubrAbi::from_entry)
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries.dedup();
+    entries
+}
+
+fn validate_subr_contract(required: &[PortableSubrAbi]) -> Result<(), DumpError> {
+    let available = compiled_subr_contract();
+    for requirement in required {
+        match available.binary_search(requirement) {
+            Ok(_) => {}
+            Err(_) => {
+                if let Some(actual) = available
+                    .iter()
+                    .find(|entry| entry.name == requirement.name)
+                {
+                    return Err(DumpError::PortableRuntimeContractMismatch(format!(
+                        "native subr `{}` has incompatible ABI: image requires {}, consumer provides {}",
+                        requirement.name,
+                        requirement.describe(),
+                        actual.describe(),
+                    )));
+                }
+                return Err(DumpError::PortableRuntimeContractMismatch(format!(
+                    "consumer does not provide required native subr `{}` ({})",
+                    requirement.name,
+                    requirement.describe(),
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Build-internal environment variable naming a companion portable image.
 ///
@@ -33,9 +133,12 @@ pub const PORTABLE_RUNTIME_IMAGE_ENV: &str = "NEOVM_PORTABLE_RUNTIME_IMAGE";
 /// notably browser WebAssembly. It is intentionally separate from the native
 /// mmap format: neither format pays for the other's ownership model.
 pub fn encode_portable_snapshot(eval: &Context) -> Result<Vec<u8>, DumpError> {
-    let state = super::snapshot_evaluator(eval);
+    let payload_value = PortableSnapshotPayload {
+        required_subrs: compiled_subr_contract(),
+        state: super::snapshot_evaluator(eval),
+    };
     let mut payload = Vec::new();
-    ciborium::ser::into_writer(&state, &mut payload)
+    ciborium::ser::into_writer(&payload_value, &mut payload)
         .map_err(|err| DumpError::SerializationError(err.to_string()))?;
 
     let payload_len = u64::try_from(payload.len()).map_err(|_| {
@@ -119,7 +222,7 @@ pub fn load_from_portable_snapshot(image: &[u8]) -> Result<Context, DumpError> {
     }
 
     let mut reader = Cursor::new(payload);
-    let state: DumpContextState = ciborium::de::from_reader(&mut reader)
+    let payload: PortableSnapshotPayload = ciborium::de::from_reader(&mut reader)
         .map_err(|err| DumpError::DeserializationError(err.to_string()))?;
     if reader.position() != actual_len {
         return Err(DumpError::DeserializationError(format!(
@@ -128,7 +231,8 @@ pub fn load_from_portable_snapshot(image: &[u8]) -> Result<Context, DumpError> {
         )));
     }
 
-    let mut eval = restore_snapshot(&state)?;
+    let mut eval = restore_snapshot(&payload.state)?;
+    validate_subr_contract(&payload.required_subrs)?;
     mark_after_pdump_load_hook_pending(&mut eval);
     Ok(eval)
 }

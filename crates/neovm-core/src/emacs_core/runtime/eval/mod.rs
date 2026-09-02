@@ -506,6 +506,15 @@ pub(crate) fn lookup_global_subr_entry(sym_id: SymId) -> Option<SubrEntry> {
     GLOBAL_SUBR_TABLE.with(|table| table.borrow().get(sym_id.0 as usize).copied().flatten())
 }
 
+/// Snapshot the Rust primitive ABI compiled into the current runtime.
+///
+/// Portable runtime images use this to state their minimum consumer contract.
+/// Returning entries rather than exposing the thread-local table keeps its
+/// dense `SymId` indexing an evaluator implementation detail.
+pub(crate) fn registered_global_subr_entries() -> Vec<SubrEntry> {
+    GLOBAL_SUBR_TABLE.with(|table| table.borrow().iter().flatten().copied().collect())
+}
+
 #[cfg(test)]
 pub(crate) fn reset_global_subr_lookup_count() {
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(0));
