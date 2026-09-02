@@ -19,7 +19,10 @@ use crate::emacs_core::intern::resolve_name;
 use crate::tagged::header::SubrDispatchKind;
 
 const MAGIC: [u8; 16] = *b"NEOMACS-PRTDUMP!";
-const SCHEMA_VERSION: u32 = 2;
+// Version 3 defines `DumpValue::Int` by Lisp integer value rather than by the
+// producer's immediate representation. A narrower consumer may materialize a
+// producer fixnum as a bignum without changing its Lisp value.
+const SCHEMA_VERSION: u32 = 3;
 const MAGIC_END: usize = MAGIC.len();
 const VERSION_END: usize = MAGIC_END + size_of::<u32>();
 const PAYLOAD_LEN_END: usize = VERSION_END + size_of::<u64>();

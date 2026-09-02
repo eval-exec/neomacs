@@ -628,15 +628,18 @@ fn equality_identity() {
 }
 
 #[test]
-fn fixnum_62bit_range() {
+fn fixnum_range_follows_the_target_word_width() {
     crate::test_utils::init_test_tracing();
-    // Verify 62-bit range works
+    let (min_for_32_bits, max_for_32_bits) = super::value::fixnum_bounds_for_word_bits(32);
+    assert_eq!(min_for_32_bits, -(1_i64 << 29));
+    assert_eq!(max_for_32_bits, (1_i64 << 29) - 1);
+
     let max = TaggedValue::MOST_POSITIVE_FIXNUM;
     let min = TaggedValue::MOST_NEGATIVE_FIXNUM;
-
-    assert!(max > 0);
-    assert!(min < 0);
-    assert!(max > i32::MAX as i64); // Must be larger than 32 bits
+    assert_eq!(
+        (min, max),
+        super::value::fixnum_bounds_for_word_bits(usize::BITS)
+    );
 
     let v_max = TaggedValue::fixnum(max);
     assert_eq!(v_max.as_fixnum(), Some(max));
