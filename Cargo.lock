@@ -3763,6 +3763,9 @@ dependencies = [
 [[package]]
 name = "neomacs-app"
 version = "0.0.16"
+dependencies = [
+ "neovm-host-abi",
+]
 
 [[package]]
 name = "neomacs-diagnostics"
