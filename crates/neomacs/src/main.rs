@@ -122,6 +122,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use neomacs_app::frontend_event::FrontendEvent;
 use neomacs_app::host::{ExecutionEngine, HostProfile};
 use neomacs_display_protocol::{VideoId, VisualConfig, WebViewId};
 use neomacs_display_runtime::display_scale::observe_event_loop_display;
@@ -1363,29 +1364,23 @@ fn prime_initial_monitor_snapshot(shared: &SharedMonitorInfo) {
 }
 
 fn record_primary_window_resize(shared: &SharedPrimaryWindowSize, event: &DisplayInputEvent) {
-    let DisplayInputEvent::WindowResize {
-        width,
-        height,
-        scale_factor: _,
-        emacs_frame_id,
-    } = event
-    else {
+    let DisplayInputEvent::Frontend(FrontendEvent::ViewportChanged(viewport)) = event else {
         return;
     };
 
-    if *emacs_frame_id != 0 || *width == 0 || *height == 0 {
+    if viewport.target().get() != 0 || viewport.width() == 0 || viewport.height() == 0 {
         return;
     }
 
     match shared.lock() {
         Ok(mut state) => {
-            state.width = *width;
-            state.height = *height;
+            state.width = viewport.width();
+            state.height = viewport.height();
         }
         Err(poisoned) => {
             let mut state = poisoned.into_inner();
-            state.width = *width;
-            state.height = *height;
+            state.width = viewport.width();
+            state.height = viewport.height();
         }
     }
 }

@@ -765,9 +765,9 @@ impl RenderApp {
                     {
                         match Self::frame_window_titlebar_hit_test(window_state, x, y) {
                             2 => {
-                                event = Some(InputEvent::WindowClose {
-                                    emacs_frame_id: window_state.render.emacs_frame_id,
-                                });
+                                event = Some(InputEvent::close_requested(
+                                    window_state.render.emacs_frame_id,
+                                ));
                             }
                             action => {
                                 window_state.handle_titlebar_action(action);

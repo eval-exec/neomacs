@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
+use neomacs_app::frontend_event::{FrontendEvent, FrontendKeyState};
 use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 use neomacs_display_protocol::{
     ImageId, ImageLoadAttempt, ImageLoadToken, ImageStateEvent, VideoId,
@@ -151,27 +152,17 @@ fn thread_comms_new_constructs_all_channels() {
 fn thread_comms_input_channel_roundtrip() {
     let comms = ThreadComms::new();
 
-    let event = InputEvent::Key {
-        keysym: 65, // 'A'
-        modifiers: 0,
-        pressed: true,
-        emacs_frame_id: 0,
-    };
+    let event = InputEvent::key(65, 0, true, 0);
 
     comms.input_tx.send(event.clone()).unwrap();
 
     let received = comms.input_rx.try_recv().unwrap();
     match received {
-        InputEvent::Key {
-            keysym,
-            modifiers,
-            pressed,
-            emacs_frame_id,
-        } => {
-            assert_eq!(keysym, 65);
-            assert_eq!(modifiers, 0);
-            assert!(pressed);
-            assert_eq!(emacs_frame_id, 0);
+        InputEvent::Frontend(FrontendEvent::Key(key)) => {
+            assert_eq!(key.symbol().get(), 65);
+            assert_eq!(key.modifiers().bits(), 0);
+            assert_eq!(key.state(), FrontendKeyState::Pressed);
+            assert_eq!(key.target().get(), 0);
         }
         other => panic!("Expected Key event, got {:?}", other),
     }
@@ -253,22 +244,12 @@ fn thread_comms_input_channel_bounded_capacity() {
 
     // Fill up the input channel to capacity
     for _ in 0..INPUT_CHANNEL_CAPACITY {
-        let event = InputEvent::Key {
-            keysym: 0,
-            modifiers: 0,
-            pressed: false,
-            emacs_frame_id: 0,
-        };
+        let event = InputEvent::key(1, 0, false, 0);
         comms.input_tx.try_send(event).unwrap();
     }
 
     // Next try_send should fail (channel full)
-    let result = comms.input_tx.try_send(InputEvent::Key {
-        keysym: 0,
-        modifiers: 0,
-        pressed: false,
-        emacs_frame_id: 0,
-    });
+    let result = comms.input_tx.try_send(InputEvent::key(1, 0, false, 0));
     assert!(
         result.is_err(),
         "input channel should be full after {} sends",
@@ -336,11 +317,13 @@ fn thread_comms_split_channels_work() {
     // Render sends input, Emacs receives
     render
         .input_tx
-        .send(InputEvent::WindowClose { emacs_frame_id: 42 })
+        .send(InputEvent::close_requested(42))
         .unwrap();
     let evt = emacs.input_rx.try_recv().unwrap();
     match evt {
-        InputEvent::WindowClose { emacs_frame_id } => assert_eq!(emacs_frame_id, 42),
+        InputEvent::Frontend(FrontendEvent::CloseRequested { target }) => {
+            assert_eq!(target.get(), 42)
+        }
         other => panic!("Expected WindowClose, got {:?}", other),
     }
 
@@ -386,23 +369,13 @@ fn render_comms_send_input_delivers_event() {
 
 #[test]
 fn input_event_key_construction() {
-    let event = InputEvent::Key {
-        keysym: 0xFF0D, // Return
-        modifiers: 4,   // Ctrl
-        pressed: true,
-        emacs_frame_id: 0,
-    };
+    let event = InputEvent::key(0xFF0D, 4, true, 0);
     match event {
-        InputEvent::Key {
-            keysym,
-            modifiers,
-            pressed,
-            emacs_frame_id,
-        } => {
-            assert_eq!(keysym, 0xFF0D);
-            assert_eq!(modifiers, 4);
-            assert!(pressed);
-            assert_eq!(emacs_frame_id, 0);
+        InputEvent::Frontend(FrontendEvent::Key(key)) => {
+            assert_eq!(key.symbol().get(), 0xFF0D);
+            assert_eq!(key.modifiers().bits(), 4);
+            assert_eq!(key.state(), FrontendKeyState::Pressed);
+            assert_eq!(key.target().get(), 0);
         }
         _ => panic!("Wrong variant"),
     }
@@ -509,23 +482,13 @@ fn input_event_pixel_scroll_uses_a_distinct_delta_variant() {
 
 #[test]
 fn input_event_window_resize_construction() {
-    let event = InputEvent::WindowResize {
-        width: 1920,
-        height: 1080,
-        scale_factor: 1.0,
-        emacs_frame_id: 0,
-    };
+    let event = InputEvent::viewport_changed(1920, 1080, 1.0, 0).unwrap();
     match event {
-        InputEvent::WindowResize {
-            width,
-            height,
-            scale_factor,
-            emacs_frame_id,
-        } => {
-            assert_eq!(width, 1920);
-            assert_eq!(height, 1080);
-            assert_eq!(scale_factor, 1.0);
-            assert_eq!(emacs_frame_id, 0);
+        InputEvent::Frontend(FrontendEvent::ViewportChanged(viewport)) => {
+            assert_eq!(viewport.width(), 1920);
+            assert_eq!(viewport.height(), 1080);
+            assert_eq!(viewport.scale().get(), 1.0);
+            assert_eq!(viewport.target().get(), 0);
         }
         _ => panic!("Wrong variant"),
     }
@@ -533,43 +496,31 @@ fn input_event_window_resize_construction() {
 
 #[test]
 fn input_event_window_close_construction() {
-    let event = InputEvent::WindowClose {
-        emacs_frame_id: 123,
-    };
+    let event = InputEvent::close_requested(123);
     match event {
-        InputEvent::WindowClose { emacs_frame_id } => assert_eq!(emacs_frame_id, 123),
+        InputEvent::Frontend(FrontendEvent::CloseRequested { target }) => {
+            assert_eq!(target.get(), 123)
+        }
         _ => panic!("Wrong variant"),
     }
 }
 
 #[test]
 fn input_event_window_focus_construction() {
-    let focused = InputEvent::WindowFocus {
-        focused: true,
-        emacs_frame_id: 0,
-    };
+    let focused = InputEvent::focus_changed(true, 0);
     match focused {
-        InputEvent::WindowFocus {
-            focused,
-            emacs_frame_id,
-        } => {
+        InputEvent::Frontend(FrontendEvent::FocusChanged { focused, target }) => {
             assert!(focused);
-            assert_eq!(emacs_frame_id, 0);
+            assert_eq!(target.get(), 0);
         }
         _ => panic!("Wrong variant"),
     }
 
-    let unfocused = InputEvent::WindowFocus {
-        focused: false,
-        emacs_frame_id: 5,
-    };
+    let unfocused = InputEvent::focus_changed(false, 5);
     match unfocused {
-        InputEvent::WindowFocus {
-            focused,
-            emacs_frame_id,
-        } => {
+        InputEvent::Frontend(FrontendEvent::FocusChanged { focused, target }) => {
             assert!(!focused);
-            assert_eq!(emacs_frame_id, 5);
+            assert_eq!(target.get(), 5);
         }
         _ => panic!("Wrong variant"),
     }
@@ -626,24 +577,14 @@ fn input_event_file_drop_construction() {
 
 #[test]
 fn input_event_clone() {
-    let original = InputEvent::Key {
-        keysym: 42,
-        modifiers: 8,
-        pressed: false,
-        emacs_frame_id: 0,
-    };
+    let original = InputEvent::key(42, 8, false, 0);
     let cloned = original.clone();
     match cloned {
-        InputEvent::Key {
-            keysym,
-            modifiers,
-            pressed,
-            emacs_frame_id,
-        } => {
-            assert_eq!(keysym, 42);
-            assert_eq!(modifiers, 8);
-            assert!(!pressed);
-            assert_eq!(emacs_frame_id, 0);
+        InputEvent::Frontend(FrontendEvent::Key(key)) => {
+            assert_eq!(key.symbol().get(), 42);
+            assert_eq!(key.modifiers().bits(), 8);
+            assert_eq!(key.state(), FrontendKeyState::Released);
+            assert_eq!(key.target().get(), 0);
         }
         _ => panic!("Clone changed variant"),
     }
@@ -651,12 +592,7 @@ fn input_event_clone() {
 
 #[test]
 fn input_event_debug() {
-    let event = InputEvent::Key {
-        keysym: 65,
-        modifiers: 0,
-        pressed: true,
-        emacs_frame_id: 0,
-    };
+    let event = InputEvent::key(65, 0, true, 0);
     let debug = format!("{:?}", event);
     assert!(
         debug.contains("Key"),
@@ -1504,31 +1440,11 @@ fn channel_sends_multiple_input_events_in_order() {
     let comms = ThreadComms::new();
 
     let events = vec![
-        InputEvent::Key {
-            keysym: 1,
-            modifiers: 0,
-            pressed: true,
-            emacs_frame_id: 0,
-        },
-        InputEvent::Key {
-            keysym: 2,
-            modifiers: 0,
-            pressed: true,
-            emacs_frame_id: 0,
-        },
-        InputEvent::Key {
-            keysym: 3,
-            modifiers: 0,
-            pressed: true,
-            emacs_frame_id: 0,
-        },
+        InputEvent::key(1, 0, true, 0),
+        InputEvent::key(2, 0, true, 0),
+        InputEvent::key(3, 0, true, 0),
         unpresented_pointer(10.0, 20.0, 0, PointerAction::Move { modifiers: 0 }),
-        InputEvent::WindowResize {
-            width: 800,
-            height: 600,
-            scale_factor: 1.0,
-            emacs_frame_id: 0,
-        },
+        InputEvent::viewport_changed(800, 600, 1.0, 0).unwrap(),
     ];
 
     for e in &events {
@@ -1604,18 +1520,8 @@ fn cross_thread_input_event_delivery() {
     let (emacs, render) = comms.split();
 
     let handle = std::thread::spawn(move || {
-        render.send_input(InputEvent::Key {
-            keysym: 0x61, // 'a'
-            modifiers: 0,
-            pressed: true,
-            emacs_frame_id: 0,
-        });
-        render.send_input(InputEvent::WindowResize {
-            width: 1920,
-            height: 1080,
-            scale_factor: 1.0,
-            emacs_frame_id: 0,
-        });
+        render.send_input(InputEvent::key(0x61, 0, true, 0));
+        render.send_input(InputEvent::viewport_changed(1920, 1080, 1.0, 0).unwrap());
     });
 
     handle.join().unwrap();
@@ -1623,15 +1529,17 @@ fn cross_thread_input_event_delivery() {
     // Both events should be receivable on the Emacs side
     let evt1 = emacs.input_rx.try_recv().unwrap();
     match evt1 {
-        InputEvent::Key { keysym, .. } => assert_eq!(keysym, 0x61),
+        InputEvent::Frontend(FrontendEvent::Key(key)) => {
+            assert_eq!(key.symbol().get(), 0x61)
+        }
         other => panic!("Expected Key, got {:?}", other),
     }
 
     let evt2 = emacs.input_rx.try_recv().unwrap();
     match evt2 {
-        InputEvent::WindowResize { width, height, .. } => {
-            assert_eq!(width, 1920);
-            assert_eq!(height, 1080);
+        InputEvent::Frontend(FrontendEvent::ViewportChanged(viewport)) => {
+            assert_eq!(viewport.width(), 1920);
+            assert_eq!(viewport.height(), 1080);
         }
         other => panic!("Expected WindowResize, got {:?}", other),
     }

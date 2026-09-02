@@ -507,8 +507,7 @@ pub(crate) fn run_render_loop_with_event_loop(
     // This handles cases like Wayland connection loss (ExitFailure(1)) where the
     // window disappears without an explicit close request.
     tracing::info!("Render thread exiting, sending WindowClose to Emacs");
-    app.comms
-        .send_input(InputEvent::WindowClose { emacs_frame_id: 0 });
+    app.comms.send_input(InputEvent::close_requested(0));
 
     result.map_err(|err| format!("Event loop error: {err}"))
 }

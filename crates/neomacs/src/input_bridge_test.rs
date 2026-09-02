@@ -36,10 +36,7 @@ fn mouse_move_is_excluded_from_input_bridge_debug_logging() {
 
 #[test]
 fn non_mouse_move_is_included_in_input_bridge_debug_logging() {
-    let event = DisplayEvent::WindowFocus {
-        focused: true,
-        emacs_frame_id: 7,
-    };
+    let event = DisplayEvent::focus_changed(true, 7);
 
     assert!(should_log_display_event(&event));
 }
@@ -132,6 +129,7 @@ fn frame_shader_failure_reaches_the_evaluator() {
 }
 
 #[test]
+#[cfg(feature = "neo-term")]
 fn terminal_lifecycle_events_reach_the_evaluator_losslessly() {
     let id = neovm_core::emacs_core::display_host::TerminalId::new(17).unwrap();
     assert!(matches!(
@@ -182,12 +180,7 @@ fn presentation_lifecycle_events_reach_the_evaluator_losslessly() {
 
 #[test]
 fn key_release_is_dropped_by_core_transport_owner() {
-    let display_event = DisplayEvent::Key {
-        keysym: keyboard::XK_RETURN,
-        modifiers: 0,
-        pressed: false,
-        emacs_frame_id: 0,
-    };
+    let display_event = DisplayEvent::key(keyboard::XK_RETURN, 0, false, 0);
     let event = convert_display_event(&display_event);
     assert!(event.is_none());
 }
@@ -232,12 +225,7 @@ fn raw_tty_bytes_cross_the_bridge_without_interpretation() {
 
 #[test]
 fn key_transport_preserves_source_frame_identity() {
-    let display_event = DisplayEvent::Key {
-        keysym: 'a' as u32,
-        modifiers: keyboard::RENDER_CTRL_MASK,
-        pressed: true,
-        emacs_frame_id: 42,
-    };
+    let display_event = DisplayEvent::key('a' as u32, keyboard::RENDER_CTRL_MASK, true, 42);
     let event = convert_display_event(&display_event);
 
     match event {
@@ -253,6 +241,22 @@ fn key_transport_preserves_source_frame_identity() {
         }
         other => panic!("unexpected event: {other:?}"),
     }
+}
+
+#[test]
+fn nul_keysym_remains_a_real_control_character() {
+    let event = DisplayEvent::key(0, 0, true, 42);
+
+    assert!(matches!(
+        convert_display_event(&event),
+        Some(KbInputEvent::KeyPress {
+            key: keyboard::KeyEvent {
+                key: keyboard::Key::Char('\0'),
+                ..
+            },
+            emacs_frame_id: 42,
+        })
+    ));
 }
 
 #[test]
@@ -389,10 +393,7 @@ fn menu_bar_click_reaches_keyboard_owner() {
 
 #[test]
 fn window_focus_preserves_frame_id_for_keyboard_owner() {
-    let display_event = DisplayEvent::WindowFocus {
-        focused: true,
-        emacs_frame_id: 42,
-    };
+    let display_event = DisplayEvent::focus_changed(true, 42);
     let event = convert_display_event(&display_event);
 
     match event {
@@ -406,13 +407,43 @@ fn window_focus_preserves_frame_id_for_keyboard_owner() {
 
 #[test]
 fn window_close_preserves_frame_id_for_keyboard_owner() {
-    let display_event = DisplayEvent::WindowClose { emacs_frame_id: 42 };
+    let display_event = DisplayEvent::close_requested(42);
     let event = convert_display_event(&display_event);
 
     match event {
         Some(KbInputEvent::WindowClose { emacs_frame_id: 42 }) => {}
         other => panic!("unexpected event: {other:?}"),
     }
+}
+
+#[test]
+fn committed_text_expands_in_order_without_losing_frame_identity() {
+    let event = DisplayEvent::text_committed("λ🙂", 42);
+    let converted = super::convert_display_event(&event)
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    assert_eq!(converted.len(), 2);
+    assert!(matches!(
+        &converted[0],
+        KbInputEvent::KeyPress {
+            key: keyboard::KeyEvent {
+                key: keyboard::Key::Char('λ'),
+                ..
+            },
+            emacs_frame_id: 42,
+        }
+    ));
+    assert!(matches!(
+        &converted[1],
+        KbInputEvent::KeyPress {
+            key: keyboard::KeyEvent {
+                key: keyboard::Key::Char('🙂'),
+                ..
+            },
+            emacs_frame_id: 42,
+        }
+    ));
 }
 
 #[test]
