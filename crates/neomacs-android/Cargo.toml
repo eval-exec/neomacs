@@ -18,6 +18,7 @@ neomacs-app.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-layout-engine.workspace = true
 neomacs-wgpu-runtime.workspace = true
+neovm-core.workspace = true
 pollster.workspace = true
 winit = { workspace = true, features = ["android-game-activity"] }
 
