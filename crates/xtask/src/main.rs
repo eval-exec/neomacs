@@ -64,6 +64,7 @@ struct FreshBuildOptions {
     dry_run: bool,
     native_comp: bool,
     skip_build: bool,
+    product_variant: ProductVariant,
     no_byte_compile: bool,
     features: Vec<RequestedCargoFeature>,
     /// Opt into the in-neomacs dump-time AOT preload producer. xtask sets
@@ -94,6 +95,14 @@ impl AotPreloadMode {
     fn enabled(self) -> bool {
         self != Self::Disabled
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProductVariant {
+    Full,
+    /// Host-built, interpreter-only runtime image consumed by Android and
+    /// browser WASM, built in an isolated Cargo target directory.
+    PortableSeed,
 }
 
 /// One Cargo feature request as written at the command line.
@@ -537,6 +546,7 @@ impl FreshBuildOptions {
         let mut native_comp =
             env::var("NEOMACS_NATIVE_COMP").is_ok_and(|value| value.eq_ignore_ascii_case("yes"));
         let mut skip_build = false;
+        let mut product_variant = None;
         let mut no_byte_compile = false;
         let mut features: Vec<RequestedCargoFeature> = Vec::new();
         let mut aot_preload = AotPreloadMode::Disabled;
@@ -586,6 +596,11 @@ impl FreshBuildOptions {
                 "--native-comp" => native_comp = true,
                 "--no-native-comp" => native_comp = false,
                 "--skip-build" => skip_build = true,
+                "--portable-seed" => {
+                    if product_variant.replace(ProductVariant::PortableSeed).is_some() {
+                        return Err("a product variant may be selected only once".into());
+                    }
+                }
                 "--no-byte-compile" => no_byte_compile = true,
                 "--aot-preload" => aot_preload = AotPreloadMode::Explicit,
                 "--no-aot-preload" => aot_preload = AotPreloadMode::Disabled,
@@ -614,6 +629,8 @@ impl FreshBuildOptions {
                 }
             }
         }
+
+        let product_variant = product_variant.unwrap_or(ProductVariant::Full);
 
         let profile = match profile {
             Some(profile) => profile,
@@ -644,7 +661,54 @@ impl FreshBuildOptions {
             .into());
         }
 
-        let bin_dir = bin_dir.unwrap_or_else(|| default_bin_dir(&repo_root, &profile));
+        if product_variant == ProductVariant::PortableSeed {
+            if portable_runtime_image.is_none() {
+                return Err(
+                    "the portable seed product requires --portable-runtime-image PATH".into(),
+                );
+            }
+            if !features.is_empty() {
+                return Err(
+                    "the portable seed product has a fixed interpreter-only capability surface; --features is not supported"
+                        .into(),
+                );
+            }
+            if aot_preload {
+                return Err("the portable seed product cannot enable --aot-preload".into());
+            }
+            if skip_build {
+                return Err(
+                    "the portable seed product cannot use --skip-build because its capability surface must be built by this invocation"
+                        .into(),
+                );
+            }
+            if native_comp {
+                return Err("the portable seed product cannot enable --native-comp".into());
+            }
+            if no_byte_compile {
+                return Err("the portable seed product cannot use --no-byte-compile".into());
+            }
+            if profile.consumes_pgo() {
+                return Err("the portable seed product does not support PGO profiles".into());
+            }
+            if bin_dir.is_some() {
+                return Err(
+                    "the portable seed product owns an isolated bin directory; set CARGO_TARGET_DIR to relocate it"
+                        .into(),
+                );
+            }
+        } else if portable_runtime_image.is_some() {
+            return Err(
+                "--portable-runtime-image requires the --portable-seed product variant".into(),
+            );
+        }
+
+        let bin_dir = bin_dir.unwrap_or_else(|| match product_variant {
+            ProductVariant::PortableSeed => {
+                portable_seed_target_dir(&repo_root).join(profile.target_subdir())
+            }
+            ProductVariant::Full => default_bin_dir(&repo_root, &profile),
+        });
 
         Ok(FreshBuildOptions {
             repo_root,
@@ -656,6 +720,7 @@ impl FreshBuildOptions {
             dry_run,
             native_comp,
             skip_build,
+            product_variant,
             no_byte_compile,
             features,
             aot_preload,
@@ -721,6 +786,20 @@ fn default_bin_dir(repo_root: &Path, profile: &BuildProfile) -> PathBuf {
         })
         .unwrap_or_else(|| repo_root.join("target"))
         .join(profile.target_subdir())
+}
+
+fn portable_seed_target_dir(repo_root: &Path) -> PathBuf {
+    env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        })
+        .unwrap_or_else(|| repo_root.join("target"))
+        .join("portable-seed")
 }
 
 fn resolve_cli_path(repo_root: &Path, raw: OsString) -> PathBuf {
@@ -1497,11 +1576,10 @@ fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
         OsString::from("-p"),
         OsString::from("neomacs"),
     ];
-    let mut features = options
-        .production_capabilities
-        .cargo_feature_names()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
+    let mut features = match options.product_variant {
+        ProductVariant::Full => options.production_capabilities.cargo_feature_names().map(str::to_owned).collect::<Vec<_>>(),
+        ProductVariant::PortableSeed => Vec::new(),
+    };
     features.extend(
         options
             .features
@@ -1511,6 +1589,11 @@ fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
     );
     features.sort();
     features.dedup();
+    if options.product_variant == ProductVariant::PortableSeed {
+        cargo_args.push(OsString::from("--no-default-features"));
+        cargo_args.push(OsString::from("--target-dir"));
+        cargo_args.push(portable_seed_target_dir(&options.repo_root).into_os_string());
+    }
     if !features.is_empty() {
         cargo_args.push(OsString::from("--features"));
         cargo_args.push(OsString::from(features.join(",")));
@@ -1523,11 +1606,13 @@ fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
     cargo_args
 }
 
-/// The Linux product declares `video`, so its executable must link GStreamer.
-/// Nothing else is shipped, so this is the whole contract.
+/// Desktop Linux links GStreamer; the isolated portable seed must not.
 #[cfg(target_os = "linux")]
-fn verify_built_product(_options: &FreshBuildOptions, binary: &Path) -> Result<()> {
-    let expected = "LinkedGstreamer";
+fn verify_built_product(options: &FreshBuildOptions, binary: &Path) -> Result<()> {
+    let expected = match options.product_variant {
+        ProductVariant::Full => "LinkedGstreamer",
+        ProductVariant::PortableSeed => "NoGstreamer",
+    };
     // LC_ALL=C: readelf localizes the "Shared library: [...]" tag (e.g.
     // zh_CN prints "共享库"), which would break the English-only grep below
     // even when the binary is correctly linked.
@@ -1553,7 +1638,7 @@ fn verify_built_product(_options: &FreshBuildOptions, binary: &Path) -> Result<(
     let has_gstreamer = dynamic
         .lines()
         .any(|line| line.contains("Shared library: [libgst"));
-    if !has_gstreamer {
+    if has_gstreamer != (options.product_variant == ProductVariant::Full) {
         return Err(format!(
             "{} does not satisfy the {expected} product contract (GStreamer linkage present: {has_gstreamer})",
             binary.display()
@@ -4649,9 +4734,11 @@ fn print_usage() {
 fn usage_text() -> &'static str {
     "\
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload] [--portable-runtime-image PATH]
+       cargo xtask fresh-build (--release | --profile NAME) --portable-seed --portable-runtime-image PATH [--runtime-root DIR] [--low-memory|--jobs N]
        cargo xtask check-dependency-coherence
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask package-portable-assets --portable-runtime-image PATH --output-dir DIR [--runtime-root DIR]
+       cargo xtask check-dependency-coherence
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
        cargo xtask perf compare SCENARIO --baseline-editor PATH --candidate-editor PATH [--samples N>=3]
@@ -4723,6 +4810,10 @@ Options:
   --native-comp       Include native-comp-only COMPILE_FIRST entries
   --no-native-comp    Exclude native-comp-only COMPILE_FIRST entries
   --skip-build        Skip the initial cargo build -p neomacs stage
+  --portable-seed     Build the fixed interpreter-only, SQLite-free runtime
+                      image contract shared by Android and neomacs-wasm. Uses
+                      an isolated target/portable-seed directory and requires
+                      --portable-runtime-image.
   --no-byte-compile   Skip byte-compilation steps (5, 9, 11); keep existing .elc
   --no-aot-preload    Disable optional AOT preload production (the default).
   --aot-preload       Opt into preload production:
@@ -4734,9 +4825,9 @@ Options:
                       linking/writing a preload; ordinary --dry-run only prints.
   --portable-runtime-image PATH
                       Atomically co-produce a target-independent final image
-                      from the same dump-time evaluator as neomacs.pdump. This
-                      is the packaged seed for Android and neomacs-wasm; it is
-                      opt-in so desktop-only builds pay no serialization cost.
+                      from the portable-seed dump-time evaluator. This is the
+                      packaged seed for Android and neomacs-wasm; it is opt-in
+                      so desktop-only builds pay no serialization cost.
 
 Environment:
   NEOMACS_NATIVE_COMP=yes
