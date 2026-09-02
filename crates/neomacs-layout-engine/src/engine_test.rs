@@ -14322,8 +14322,7 @@ fn layout_frame_rust_measures_the_quarter_width_rule_from_the_text_area_not_the_
     // the border cell, four line-number cells, 75 cells of text), so GNU's
     // crop is 200 - (1592 - 1456).
     assert_eq!(
-        cropped.width,
-        136.0,
+        cropped.width, 136.0,
         "GNU: pixel_width -= crop; {cropped:?}"
     );
     assert_eq!(cropped.content.width_px(), 200.0);
