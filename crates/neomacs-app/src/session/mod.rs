@@ -11,7 +11,9 @@ std::cfg_select! {
     target_family = "wasm" => {}
     _ => {
         mod blocking;
+        mod native_worker;
         pub use blocking::EditorSessionExit;
+        pub use native_worker::{NativeEditorWorker, NativeEditorWorkerEvent};
     }
 }
 
