@@ -124,6 +124,10 @@ use std::time::{Duration, Instant};
 
 use neomacs_app::frontend_event::FrontendEvent;
 use neomacs_app::host::{ExecutionEngine, HostProfile};
+use neomacs_app::initial_surface::{
+    InitialBackgroundMode, InitialDisplayType, InitialEditorSurface, InitialEditorSurfaceSpec,
+    InitialFrameFont, InitialFrameMetrics, prepare_initial_editor_surface_with_gui_setup,
+};
 use neomacs_display_protocol::{VideoId, VisualConfig, WebViewId};
 use neomacs_display_runtime::display_scale::observe_event_loop_display;
 #[cfg(not(feature = "neo-term"))]
@@ -167,7 +171,6 @@ use neomacs_webview::{
     StoragePartition, WebContentSize, WebProfileId, WebViewCommand, WebViewCreate, WebViewPolicy,
 };
 
-use neovm_core::buffer::{BufferId, EmacsBytePos, EmacsByteRange, LispCharPos1};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::builtins::set_neomacs_monitor_info;
 use neovm_core::emacs_core::display::gui_window_system_symbol;
@@ -204,7 +207,7 @@ use neovm_core::emacs_core::value::list_length;
 use neovm_core::emacs_core::{
     Context, DisplayHost, GraphicalFaceAttribute, GuiFrameHostRequest, PopupMenuRequest,
 };
-use neovm_core::face::{FaceHeight, FontWeight, LFaceAttr};
+use neovm_core::face::{FaceHeight, FontWeight};
 use neovm_core::heap_types::LispString;
 use neovm_core::window::{
     FrameDisplayIdentity, FrameFullscreen, FrameId, FrameParam, FrameVisibility, Window,
@@ -934,23 +937,6 @@ fn bootstrap_gui_display_config(
         // otherwise. Live frame-parameter updates recompute this later.
         background_mode: "light",
         interactivity,
-    }
-}
-
-impl BootstrapDisplayConfig {
-    fn window_system_symbol(self) -> Option<&'static str> {
-        match self.frontend() {
-            FrontendKind::Gui => Some(gui_window_system_symbol()),
-            FrontendKind::Tty => None,
-        }
-    }
-
-    fn display_type_symbol(self) -> &'static str {
-        if self.color_cells > 0 {
-            "color"
-        } else {
-            "mono"
-        }
     }
 }
 
@@ -4359,13 +4345,6 @@ fn main() {
 // Bootstrap helpers
 // ---------------------------------------------------------------------------
 
-struct BootstrapResult {
-    #[allow(dead_code)]
-    scratch_id: BufferId,
-    #[allow(dead_code)]
-    minibuf_id: BufferId,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct BootstrapFrameMetrics {
     char_width: f32,
@@ -4546,310 +4525,47 @@ fn bootstrap_frame_metrics_for_display(display: BootstrapDisplayConfig) -> Boots
 }
 
 fn bootstrap_buffers(
-    eval: &mut Context,
+    evaluator: &mut Context,
     width: u32,
     height: u32,
     display: BootstrapDisplayConfig,
-) -> BootstrapResult {
+) -> InitialEditorSurface {
     let frame_metrics = bootstrap_frame_metrics_for_display(display);
-    let gui_display_identity =
-        (display.frontend() == FrontendKind::Gui).then(host_gui_display_identity);
-    let find_or_create_buffer = |eval: &mut Context, name: &str| {
-        eval.buffer_manager()
-            .find_buffer_by_name(name)
-            .unwrap_or_else(|| eval.buffer_manager_mut().create_buffer(name))
+    let metrics = InitialFrameMetrics::new(
+        width,
+        height,
+        frame_metrics.char_width,
+        frame_metrics.char_height,
+        frame_metrics.font_pixel_size,
+    )
+    .expect("validated startup frame geometry");
+
+    let spec = match display.frontend() {
+        FrontendKind::Gui => InitialEditorSurfaceSpec::gui(
+            metrics,
+            host_gui_display_identity(),
+            if display.color_cells > 0 {
+                InitialDisplayType::Color
+            } else {
+                InitialDisplayType::Monochrome
+            },
+            match display.background_mode {
+                "dark" => InitialBackgroundMode::Dark,
+                _ => InitialBackgroundMode::Light,
+            },
+            InitialFrameFont::new(
+                bootstrap_default_font_parameter(frame_metrics.font_pixel_size),
+                bootstrap_default_font_name(frame_metrics.font_pixel_size),
+            ),
+        ),
+        FrontendKind::Tty => {
+            InitialEditorSurfaceSpec::tty(metrics, display.interactivity.is_batch())
+        }
     };
 
-    // Reuse GNU startup buffers instead of creating duplicate names on top of
-    // cached bootstrap state.
-    let scratch_id = find_or_create_buffer(eval, "*scratch*");
-    let _ = eval
-        .buffer_manager_mut()
-        .clear_buffer_labeled_restrictions(scratch_id);
-    if let Some(buf) = eval.buffer_manager_mut().get_mut(scratch_id) {
-        buf.widen();
-        // Don't insert scratch content here. GNU Emacs populates
-        // *scratch* from startup.el:2948 via
-        //   (insert (substitute-command-keys initial-scratch-message))
-        // which handles \\[...] key-binding expansion and backtick →
-        // curly-quote conversion via text-quoting-style. Hardcoding
-        // the content in Rust bypassed both of those, producing bare
-        // "C-x C-f" instead of quoted "'C-x C-f'".
-        buf.goto_emacs_byte_pos(buf.point_max_emacs_byte_pos());
-    }
-
-    // Set *scratch* as the current buffer
-    eval.buffer_manager_mut().set_current(scratch_id);
-
-    let mini_id = find_or_create_buffer(eval, " *Minibuf-0*");
-    let _ = eval
-        .buffer_manager_mut()
-        .clear_buffer_labeled_restrictions(mini_id);
-    let _ = eval
-        .buffer_manager_mut()
-        .configure_buffer_undo_list(mini_id, Value::NIL);
-    if let Some(buf) = eval.buffer_manager_mut().get_mut(mini_id) {
-        buf.widen();
-        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
-    }
-
-    let msg_id = find_or_create_buffer(eval, "*Messages*");
-    let _ = eval
-        .buffer_manager_mut()
-        .clear_buffer_labeled_restrictions(msg_id);
-    if let Some(buf) = eval.buffer_manager_mut().get_mut(msg_id) {
-        buf.widen();
-        let len = buf.total_emacs_byte_len().get();
-        if len > 0 {
-            buf.delete_emacs_byte_range(EmacsByteRange::new(
-                EmacsBytePos::ZERO,
-                EmacsBytePos::new(len),
-            ));
-        }
-        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
-    }
-    let _ = eval.buffer_manager_mut().note_buffer_order_tail(msg_id);
-
-    let frame_id = {
-        let frame_manager = eval.frame_manager();
-        let selected = frame_manager.selected_frame().map(|frame| frame.id);
-        let should_reuse_existing = selected.is_some() && frame_manager.frame_list().len() == 1;
-        (selected, should_reuse_existing)
-    };
-    let frame_id = if frame_id.1 {
-        let frame_id = frame_id.0.expect("selected startup frame");
-        tracing::info!(
-            "Reusing existing startup frame {:?} as bootstrap frame ({}x{})",
-            frame_id,
-            width,
-            height
-        );
-        frame_id
-    } else {
-        let frame_id = eval
-            .frame_manager_mut()
-            .create_frame("F1", width, height, scratch_id);
-        tracing::info!(
-            "Created frame {:?} ({}x{}) with *scratch*={:?}",
-            frame_id,
-            width,
-            height,
-            scratch_id
-        );
-        frame_id
-    };
-    let _ = eval.frame_manager_mut().select_frame(frame_id);
-
-    // GNU's startup selects `*scratch*' in the initial window and
-    // `record_buffer' (src/buffer.c) puts it at the front of the frame's
-    // `buffer_list', so `(frame-parameter nil 'buffer-list)' returns
-    // `("*scratch*")' immediately after startup.  The frame's `buffer_list' is
-    // not serialized in the pdump, so seed it here -- the runtime point where
-    // the initial frame is established showing `*scratch*' -- mirroring GNU's
-    // early `record_buffer'.  No `buffer-list-update-hook' runs (it predates
-    // any user hook registration, as in GNU).
-    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
-        if !frame.buffer_list.contains(&scratch_id) {
-            frame.buffer_list.retain(|bid| *bid != scratch_id);
-            frame.buffer_list.insert(0, scratch_id);
-        }
-        frame.buried_buffer_list.retain(|bid| *bid != scratch_id);
-    }
-
-    // Seed frame parameters so GNU Lisp startup sees the correct host surface.
-    //
-    // Use the authoritative `startup.noninteractive` flag, NOT the obarray
-    // `noninteractive` value: the latter is only seeded later (see below, where
-    // we `set_variable("noninteractive", ...)`), so at this point it still
-    // holds the stale value baked into the batch-built pdump (t). Reading it
-    // here marked the interactive TTY frame as the initial frame, which made
-    // `frame-initial-p' return t and `debug' (debug.el) take its
-    // non-interactive `message'-only branch instead of displaying *Backtrace*.
-    let initial_tty_frame =
-        display.frontend() == FrontendKind::Tty && display.interactivity.is_batch();
-    // Preserve the host-selected bootstrap font across GNU face
-    // finalization.  That Lisp pass may update live frame font state while it
-    // computes specifications, but the opening host frame's font and geometry
-    // remain the startup policy inputs until normal user configuration runs.
-    let (bootstrap_font, bootstrap_font_name) = if display.frontend() == FrontendKind::Tty {
-        (Value::NIL, Value::string("fixed"))
-    } else {
-        (
-            bootstrap_default_font_parameter(frame_metrics.font_pixel_size),
-            bootstrap_default_font_name(frame_metrics.font_pixel_size),
-        )
-    };
-    let bootstrap_font_snapshot = bootstrap_font
-        .as_vector_data()
-        .map(|items| Value::vector(items.to_vec()))
-        .unwrap_or(bootstrap_font);
-    let bootstrap_root_scope = neovm_core::emacs_core::eval::save_scratch_gc_roots();
-    neovm_core::emacs_core::eval::push_scratch_gc_root(bootstrap_font_snapshot);
-    neovm_core::emacs_core::eval::push_scratch_gc_root(bootstrap_font_name);
-    if display.frontend() == FrontendKind::Tty {
-        // GNU `make_initial_frame` resets its dedicated `tty_frame_count` and
-        // assigns F1.  The reused pdump surrogate's internal FrameId is not a
-        // presentation ordinal.
-        let assigned = eval
-            .frame_manager_mut()
-            .assign_initial_tty_frame_name(frame_id);
-        debug_assert!(assigned, "selected startup frame must remain live");
-    }
-    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
-        // Font parameter resolution creates a FontMetricsService which
-        // scans the system font database (~500ms). Skip for TTY where
-        // font parameters are unused — TTY uses 1x1 character cells.
-        // Reused startup frames must be normalized back to GNU's initial-frame
-        // surface: generated name (e.g. "F1"), nil title, nil icon-name.
-        if display.frontend() != FrontendKind::Tty {
-            // This is likewise the one initial GUI frame, whose existing
-            // bootstrap contract is F1. Terminal F<n> allocation is owned by
-            // FrameManager's GNU-shaped tty_frame_count analogue above.
-            frame.set_generated_name_value(Value::string("F1"));
-        }
-        frame.clear_title();
-        frame.icon_name = Value::NIL;
-        frame.initial = initial_tty_frame;
-        frame.width = width;
-        frame.height = height;
-        frame.visibility = FrameVisibility::Visible;
-        if let Some(window_system) = display.window_system_symbol() {
-            frame.set_window_system(Some(Value::symbol(window_system)));
-            frame.install_gnu_gui_default_parameters();
-        } else {
-            frame.set_window_system(None);
-        }
-        if display.frontend() == FrontendKind::Gui {
-            frame.set_display_identity(gui_display_identity.clone().unwrap_or_default());
-            frame.set_parameter(
-                Value::symbol("display-type"),
-                Value::symbol(display.display_type_symbol()),
-            );
-            frame.set_parameter(
-                Value::symbol("background-mode"),
-                Value::symbol(display.background_mode),
-            );
-        } else {
-            frame.set_display_identity(FrameDisplayIdentity::default());
-            frame.remove_parameter(Value::symbol("display-type"));
-            frame.remove_parameter(Value::symbol("background-mode"));
-        }
-        frame.set_known_parameter(FrameParam::Font, bootstrap_font_name);
-        frame.set_parameter(Value::symbol("font-parameter"), bootstrap_font);
-        // GNU frame.c: initial frame title is NULL (unset). The %F
-        // mode-line construct falls through to frame->name ("F1") when
-        // title is unset. Don't set a title here — let %F show the
-        // frame name, matching GNU behaviour.
-
-        frame.font_pixel_size = frame_metrics.font_pixel_size;
-        if display.frontend() == FrontendKind::Tty {
-            // TTY frames use 1x1 character cell metrics
-            // (GNU Emacs frame.c:1184-1185: column_width=1, line_height=1).
-            frame.char_width = 1.0;
-            frame.char_height = 1.0;
-            // The minibuffer was created with a pixel height (16.0) in Frame::new.
-            // For TTY, resize it to 1 row (char_height=1.0) before sync.
-            if let Some(mini) = frame.minibuffer_leaf.as_mut() {
-                let b = *mini.bounds();
-                mini.set_bounds(neovm_core::window::Rect::new(b.x, b.y, b.width, 1.0));
-            }
-        } else {
-            frame.char_width = frame_metrics.char_width;
-            frame.char_height = frame_metrics.char_height;
-        }
-        frame.sync_tab_bar_height_from_parameters();
-        // Match GNU `frame.c:1307-1309` (TTY frame init):
-        //   FRAME_MENU_BAR_LINES (f) = NILP (Vmenu_bar_mode) ? 0 : 1;
-        // On TTY frames neomacs has no per-frame default-frame-alist
-        // bridge yet, so seed the parameter directly here when the
-        // frontend is TTY before calling `sync_menu_bar_height_from_parameters`.
-        // The GUI path has its own menu bar pipeline (see
-        // `neomacs-display-runtime`) and never goes through this code,
-        // so we only need to set the parameter for `FrontendKind::Tty`.
-        if display.frontend() == FrontendKind::Tty {
-            frame.set_parameter(
-                FrameParam::MenuBarLines.symbol(),
-                neovm_core::emacs_core::Value::fixnum(1),
-            );
-        }
-        frame.sync_menu_bar_height_from_parameters();
-        frame.sync_tool_bar_height_from_parameters();
-        if let Window::Leaf {
-            buffer_id,
-            window_start,
-            point,
-            ..
-        } = &mut frame.root_window
-        {
-            *buffer_id = scratch_id;
-            *window_start = LispCharPos1::ONE;
-            *point = LispCharPos1::ONE;
-        }
-    }
-    eval.create_window_markers_for_root(frame_id, scratch_id);
-    if display.frontend() == FrontendKind::Gui {
-        initialize_reused_gui_startup_frame(eval, frame_id);
-    } else {
-        eval.set_face_attribute(
-            "default",
-            LFaceAttr::Foreground,
-            neovm_core::face::FaceAttrValue::Unspecified,
-        );
-        eval.set_face_attribute(
-            "default",
-            LFaceAttr::Background,
-            neovm_core::face::FaceAttrValue::Unspecified,
-        );
-    }
-
-    if display.window_system_symbol().is_some() {
-        if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
-            frame.set_known_parameter(FrameParam::Font, bootstrap_font_name);
-            frame.set_parameter(Value::symbol("font-parameter"), bootstrap_font_snapshot);
-            frame.font_pixel_size = frame_metrics.font_pixel_size;
-            frame.char_width = frame_metrics.char_width;
-            frame.char_height = frame_metrics.char_height;
-        }
-        neovm_core::emacs_core::font::seed_live_frame_default_face_from_font_parameter(
-            eval, frame_id,
-        );
-        // Bootstrap callers inspect the default face and establish initial
-        // geometry before the normal redisplay callback exists.  Materialize
-        // the newly seeded specification once for those consumers.
-        eval.sync_runtime_faces_for_frame(frame_id);
-    }
-    neovm_core::emacs_core::eval::restore_scratch_gc_roots(bootstrap_root_scope);
-
-    // Fix window geometry: root window takes frame height minus minibuffer.
-    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
-        let mini_h = frame.char_height.max(1.0);
-        let mini_y = height as f32 - mini_h;
-        if let Window::Leaf { bounds, .. } = &mut frame.root_window {
-            bounds.height = mini_y;
-        }
-        if let Some(mini_leaf) = &mut frame.minibuffer_leaf
-            && let Window::Leaf {
-                buffer_id,
-                window_start,
-                point,
-                bounds,
-                ..
-            } = mini_leaf
-        {
-            *buffer_id = mini_id;
-            *window_start = LispCharPos1::ONE;
-            *point = LispCharPos1::ONE;
-            bounds.y = mini_y;
-            bounds.height = mini_h;
-            bounds.width = width as f32;
-        }
-    }
-    eval.create_window_markers_for_minibuffer(frame_id, mini_id);
-
-    BootstrapResult {
-        scratch_id,
-        minibuf_id: mini_id,
-    }
+    prepare_initial_editor_surface_with_gui_setup(evaluator, spec, |evaluator, frame| {
+        initialize_reused_gui_startup_frame(evaluator, frame)
+    })
 }
 
 fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &StartupOptions) {

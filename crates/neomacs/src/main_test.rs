@@ -4801,7 +4801,7 @@ fn bootstrap_buffers_reuses_existing_named_buffers_in_cached_bootstrap() {
 
     let bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
 
-    assert_eq!(bootstrap.scratch_id, original_scratch);
+    assert_eq!(bootstrap.scratch_buffer(), original_scratch);
     let scratch_count = eval
         .buffer_manager()
         .buffer_list()
