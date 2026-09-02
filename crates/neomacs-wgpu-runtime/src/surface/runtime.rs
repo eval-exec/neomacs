@@ -1,11 +1,25 @@
-use std::sync::Arc;
-
 use thiserror::Error;
 use wgpu::{CurrentSurfaceTexture, SurfaceCapabilities};
+use winit::event_loop::OwnedDisplayHandle;
 use winit::window::Window;
 
 use super::SurfaceExtent;
 use super::policy::{preferred_alpha_mode, preferred_format};
+
+std::cfg_select! {
+    target_family = "wasm" => {
+        use std::rc::Rc;
+
+        /// Shared ownership used for a browser window and its canvas.
+        pub type SurfaceWindow = Rc<Window>;
+    }
+    _ => {
+        use std::sync::Arc;
+
+        /// Shared ownership used for a native window.
+        pub type SurfaceWindow = Arc<Window>;
+    }
+}
 
 /// Failure while creating a surface-compatible GPU context.
 #[derive(Debug, Error)]
@@ -51,6 +65,45 @@ pub enum PresentationOutcome {
     Skipped(PresentationSkipReason),
 }
 
+impl PresentationOutcome {
+    /// Whether the frontend should immediately schedule another redraw.
+    pub const fn should_request_redraw(self) -> bool {
+        matches!(
+            self,
+            Self::Skipped(PresentationSkipReason::Timeout | PresentationSkipReason::SurfaceChanged)
+        )
+    }
+}
+
+/// Linear RGBA color used when a frontend presents without a scene renderer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceClearColor {
+    pub red: f64,
+    pub green: f64,
+    pub blue: f64,
+    pub alpha: f64,
+}
+
+impl SurfaceClearColor {
+    pub const fn rgb(red: f64, green: f64, blue: f64) -> Self {
+        Self {
+            red,
+            green,
+            blue,
+            alpha: 1.0,
+        }
+    }
+
+    const fn as_wgpu(self) -> wgpu::Color {
+        wgpu::Color {
+            r: self.red,
+            g: self.green,
+            b: self.blue,
+            a: self.alpha,
+        }
+    }
+}
+
 enum AcquiredFrame {
     Present {
         texture: wgpu::SurfaceTexture,
@@ -67,9 +120,9 @@ enum AcquiredFrame {
 pub struct SurfaceRuntime {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-    window: Arc<Window>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    window: SurfaceWindow,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     extent: SurfaceExtent,
@@ -77,9 +130,11 @@ pub struct SurfaceRuntime {
 
 impl SurfaceRuntime {
     /// Create a surface-compatible adapter and device for `window`.
-    pub async fn new(window: Arc<Window>) -> Result<Self, SurfaceInitError> {
-        let descriptor =
-            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()));
+    pub async fn new(
+        display: OwnedDisplayHandle,
+        window: SurfaceWindow,
+    ) -> Result<Self, SurfaceInitError> {
+        let descriptor = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
         let instance = wgpu::Instance::new(descriptor);
         let surface = instance.create_surface(window.clone())?;
         let adapter = instance
@@ -100,8 +155,6 @@ impl SurfaceRuntime {
                 trace: wgpu::Trace::Off,
             })
             .await?;
-        let device = Arc::new(device);
-        let queue = Arc::new(queue);
         let size = window.inner_size();
         let extent = SurfaceExtent::from_physical_size(size.width, size.height);
         let config = Self::surface_configuration(&surface.get_capabilities(&adapter), extent)
@@ -129,13 +182,13 @@ impl SurfaceRuntime {
     }
 
     /// Device shared with the concrete scene renderer.
-    pub fn device(&self) -> Arc<wgpu::Device> {
-        Arc::clone(&self.device)
+    pub fn device(&self) -> wgpu::Device {
+        self.device.clone()
     }
 
     /// Queue shared with the concrete scene renderer.
-    pub fn queue(&self) -> Arc<wgpu::Queue> {
-        Arc::clone(&self.queue)
+    pub fn queue(&self) -> wgpu::Queue {
+        self.queue.clone()
     }
 
     /// Texture format selected for the host surface.
@@ -195,10 +248,11 @@ impl SurfaceRuntime {
     /// Clear and present a frame without constructing a concrete scene renderer.
     pub fn present_clear(
         &mut self,
-        color: wgpu::Color,
+        color: SurfaceClearColor,
     ) -> Result<PresentationOutcome, SurfacePresentError> {
-        let device = Arc::clone(&self.device);
-        let queue = Arc::clone(&self.queue);
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+        let color = color.as_wgpu();
         self.present(move |view| {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Neomacs portable surface clear encoder"),
