@@ -315,9 +315,8 @@ pub(crate) fn lookup_full_name_by_login(login: &str) -> Option<String> {
 }
 
 fn normalized_system_name() -> String {
-    hostname::get()
-        .map(|os| os.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "localhost".to_string())
+    crate::emacs_core::host_info::system_name()
+        .unwrap_or_else(|| "localhost".to_string())
         .chars()
         .map(|character| match character {
             ' ' | '\t' => '-',
@@ -327,7 +326,7 @@ fn normalized_system_name() -> String {
 }
 
 pub(crate) fn operating_system_release_value() -> Value {
-    sysinfo::System::kernel_version()
+    crate::emacs_core::host_info::operating_system_release()
         .map(Value::string)
         .unwrap_or(Value::NIL)
 }

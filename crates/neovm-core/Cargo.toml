@@ -20,7 +20,6 @@ libc.workspace = true
 errno.workspace = true
 rustix = { workspace = true, features = ["event", "pipe"] }
 fs4.workspace = true
-sysinfo.workspace = true
 native-regex.workspace = true
 regex-automata.workspace = true
 memchr.workspace = true
@@ -41,7 +40,6 @@ tracing-log.workspace = true
 tracing-appender.workspace = true
 stacker.workspace = true
 dns-lookup.workspace = true
-hostname.workspace = true
 network-interface.workspace = true
 libloading.workspace = true
 tree-sitter.workspace = true
@@ -94,6 +92,13 @@ windows-sys.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 inotify.workspace = true
+
+# Browser WebAssembly has no OS hostname or system inventory. Keep these
+# dependencies out of every WebAssembly build; the runtime selects its honest
+# portable fallbacks with `cfg(target_family = "wasm")`.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+hostname.workspace = true
+sysinfo.workspace = true
 
 [features]
 default = ["jit", "sqlite"]

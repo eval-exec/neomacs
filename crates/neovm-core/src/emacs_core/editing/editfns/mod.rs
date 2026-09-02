@@ -1721,18 +1721,20 @@ pub(crate) fn builtin_group_name(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_load_average(args: Vec<Value>) -> EvalResult {
     expect_max_args("load-average", &args, 1)?;
     let use_floats = args.first().is_some_and(|value| value.is_truthy());
-    let loads = read_load_average().unwrap_or([0.0, 0.0, 0.0]);
+    // GNU returns three zeroes when the host has no load-average facility.
+    let loads = crate::emacs_core::host_info::load_average()
+        .unwrap_or(crate::emacs_core::host_info::LoadAverage::ZERO);
     if use_floats {
         Ok(Value::list(vec![
-            Value::make_float(loads[0]),
-            Value::make_float(loads[1]),
-            Value::make_float(loads[2]),
+            Value::make_float(loads.one_minute()),
+            Value::make_float(loads.five_minutes()),
+            Value::make_float(loads.fifteen_minutes()),
         ]))
     } else {
         Ok(Value::list(vec![
-            Value::fixnum((loads[0] * 100.0) as i64),
-            Value::fixnum((loads[1] * 100.0) as i64),
-            Value::fixnum((loads[2] * 100.0) as i64),
+            Value::fixnum((loads.one_minute() * 100.0) as i64),
+            Value::fixnum((loads.five_minutes() * 100.0) as i64),
+            Value::fixnum((loads.fifteen_minutes() * 100.0) as i64),
         ]))
     }
 }
@@ -1794,16 +1796,6 @@ fn lookup_group_name(_gid: u32) -> Option<String> {
     None
 }
 
-#[cfg(unix)]
-fn read_load_average() -> Option<[f64; 3]> {
-    let load = sysinfo::System::load_average();
-    Some([load.one, load.five, load.fifteen])
-}
-
-#[cfg(not(unix))]
-fn read_load_average() -> Option<[f64; 3]> {
-    None
-}
 // ---------------------------------------------------------------------------
 // translate-region-internal (mirrors GNU editfns.c:2506)
 // ---------------------------------------------------------------------------

@@ -273,6 +273,8 @@ pub(crate) mod environment;
 pub mod fileio;
 #[path = "system/filelock/mod.rs"]
 pub mod filelock;
+#[path = "system/host_info/mod.rs"]
+pub(crate) mod host_info;
 #[path = "system/network/mod.rs"]
 pub mod network;
 #[path = "system/os_signal/mod.rs"]

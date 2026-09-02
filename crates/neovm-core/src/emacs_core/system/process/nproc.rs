@@ -137,14 +137,9 @@ fn current_processors_count() -> u64 {
 /// offline or affinity-excluded CPUs; without it the honest answer is the
 /// available set, which is also gnulib's own fallback.
 fn all_processors_count() -> u64 {
-    let mut system = sysinfo::System::new();
-    system.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
-    let count = system.cpus().len() as u64;
-    if count == 0 {
-        current_processors_count()
-    } else {
-        count
-    }
+    crate::emacs_core::host_info::configured_processor_count()
+        .map(std::num::NonZeroU64::get)
+        .unwrap_or_else(current_processors_count)
 }
 
 #[cfg(test)]
