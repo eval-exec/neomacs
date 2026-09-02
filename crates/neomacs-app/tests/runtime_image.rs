@@ -1,5 +1,12 @@
+#![cfg(not(target_family = "wasm"))]
+
+use std::cell::Cell;
+use std::io::Cursor;
+
 use neomacs_app::host::{ExecutionEngine, HostProfile, RuntimeImageModel};
-use neomacs_app::runtime_image::{RuntimeImageError, RuntimeImageSource};
+use neomacs_app::runtime_image::{
+    ExtractedRuntimeImage, RuntimeImageError, RuntimeImageInstall, RuntimeImageSource,
+};
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::pdump::encode_portable_snapshot;
 use neovm_core::emacs_core::value::Value;
@@ -32,4 +39,43 @@ fn source_must_match_the_host_runtime_image_model() {
             source: RuntimeImageModel::LinearMemory,
         })
     ));
+}
+
+#[test]
+fn extracted_image_is_installed_atomically_and_reused_without_reopening_asset() {
+    let directory = tempfile::tempdir().expect("runtime image directory");
+    let opens = Cell::new(0);
+    let open_asset = || {
+        opens.set(opens.get() + 1);
+        Ok::<_, std::io::Error>(Cursor::new(b"runtime-image"))
+    };
+
+    let first = ExtractedRuntimeImage::prepare(directory.path(), "neomacs-test.pdump", open_asset)
+        .expect("install runtime image");
+    assert_eq!(first.install(), RuntimeImageInstall::Installed);
+    assert_eq!(std::fs::read(first.path()).unwrap(), b"runtime-image");
+
+    let second = ExtractedRuntimeImage::prepare(
+        directory.path(),
+        "neomacs-test.pdump",
+        || -> std::io::Result<Cursor<&'static [u8]>> {
+            panic!("an existing immutable image must not reopen the packaged asset")
+        },
+    )
+    .expect("reuse runtime image");
+    assert_eq!(second.install(), RuntimeImageInstall::Reused);
+    assert_eq!(first.path(), second.path());
+    assert_eq!(opens.get(), 1);
+}
+
+#[test]
+fn extracted_image_rejects_paths_disguised_as_asset_names() {
+    let directory = tempfile::tempdir().expect("runtime image directory");
+
+    let error = ExtractedRuntimeImage::prepare(directory.path(), "../neomacs.pdump", || {
+        Ok::<_, std::io::Error>(Cursor::new(b"runtime-image"))
+    })
+    .expect_err("asset name must be one path component");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }
