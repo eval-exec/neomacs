@@ -46,7 +46,7 @@ jobs:
         run: mkdir -p "$TMPDIR"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           # CodeQL 2.26.4 regresses Rust analysis enough to terminate the hosted runner.
           # Remove this pin after https://github.com/github/codeql/issues/22463 is fixed.
