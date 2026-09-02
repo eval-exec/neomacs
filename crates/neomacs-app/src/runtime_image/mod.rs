@@ -1,5 +1,13 @@
 //! Host-checked sources for evaluator startup images.
 
+std::cfg_select! {
+    target_family = "wasm" => {}
+    _ => {
+        mod extracted;
+        pub use extracted::{ExtractedRuntimeImage, RuntimeImageInstall};
+    }
+}
+
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
