@@ -743,6 +743,42 @@ fn explicit_bin_dir_before_release_stays_in_effect() {
 /// rejected rather than silently ignored, so a stale caller fails loudly
 /// instead of shipping a product nobody verified.
 #[test]
+fn portable_runtime_image_is_opt_in_and_resolves_from_the_repository() {
+    assert_eq!(parse_options(&["--release"]).portable_runtime_image, None);
+
+    let options = parse_options(&[
+        "--release",
+        "--portable-runtime-image",
+        "dist/neomacs.portable",
+    ]);
+    assert_eq!(
+        options.portable_runtime_image,
+        Some(PathBuf::from("/repo/dist/neomacs.portable")),
+    );
+}
+
+#[test]
+fn final_dump_receives_the_requested_portable_runtime_image_path() {
+    let options = parse_options(&[
+        "--release",
+        "--portable-runtime-image",
+        "dist/neomacs.portable",
+    ]);
+    let envs = final_dump_envs(
+        &options,
+        &[(
+            OsString::from("NEOMACS_RUNTIME_ROOT"),
+            OsString::from("/repo"),
+        )],
+    );
+
+    assert!(envs.contains(&(
+        OsString::from(PORTABLE_RUNTIME_IMAGE_ENV),
+        OsString::from("/repo/dist/neomacs.portable"),
+    )));
+}
+
+#[test]
 fn the_minimal_product_flag_is_retired() {
     let error = FreshBuildOptions::parse(
         PathBuf::from("/repo"),
@@ -2199,6 +2235,7 @@ fn generated_unidata_source_files_match_gnu_gen_clean_shape() {
         no_byte_compile: false,
         features: Vec::new(),
         aot_preload: AotPreloadMode::Disabled,
+        portable_runtime_image: None,
     };
     let paths = PipelinePaths {
         lisp_root: lisp.clone(),
@@ -2869,6 +2906,7 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
         no_byte_compile: true,
         features: Vec::new(),
         aot_preload: AotPreloadMode::Disabled,
+        portable_runtime_image: None,
     };
     let paths = PipelinePaths {
         lisp_root: lisp.clone(),
@@ -2930,6 +2968,7 @@ fn a_recompiling_run_clears_primary_but_keeps_secondary_loaddefs_bytecode() {
         no_byte_compile: false,
         features: Vec::new(),
         aot_preload: AotPreloadMode::Disabled,
+        portable_runtime_image: None,
     };
     let paths = PipelinePaths {
         lisp_root: lisp.clone(),

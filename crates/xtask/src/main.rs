@@ -73,6 +73,9 @@ struct FreshBuildOptions {
     /// stats (no link/write); an ordinary dry-run only prints the build plan.
     /// xtask itself does not link neovm-core.
     aot_preload: AotPreloadMode,
+    /// Optional target-independent final runtime image co-produced by the
+    /// dump-time evaluator for Android and browser packaging.
+    portable_runtime_image: Option<PathBuf>,
 }
 
 /// Preload production in an immutable, process-owned fresh-build plan.
@@ -528,6 +531,7 @@ impl FreshBuildOptions {
         let mut no_byte_compile = false;
         let mut features: Vec<RequestedCargoFeature> = Vec::new();
         let mut aot_preload = AotPreloadMode::Disabled;
+        let mut portable_runtime_image = None;
 
         while let Some(arg) = args.next() {
             match arg.to_string_lossy().as_ref() {
@@ -576,6 +580,12 @@ impl FreshBuildOptions {
                 "--no-byte-compile" => no_byte_compile = true,
                 "--aot-preload" => aot_preload = AotPreloadMode::Explicit,
                 "--no-aot-preload" => aot_preload = AotPreloadMode::Disabled,
+                "--portable-runtime-image" => {
+                    let value = args.next().ok_or_else(|| {
+                        "--portable-runtime-image requires an output path".to_string()
+                    })?;
+                    portable_runtime_image = Some(resolve_cli_path(&repo_root, value));
+                }
                 "--features" => {
                     let value = args
                         .next()
@@ -640,6 +650,7 @@ impl FreshBuildOptions {
             no_byte_compile,
             features,
             aot_preload,
+            portable_runtime_image,
         })
     }
 }
@@ -804,6 +815,7 @@ fn run_pgo_training(options: &FreshBuildOptions) -> Result<PathBuf> {
     // instrumented binary never displaces a normal build.
     let gen_options = FreshBuildOptions {
         profile: BuildProfile::ReleasePgoGen,
+        portable_runtime_image: None,
         ..options.clone()
     };
     let gen_options = FreshBuildOptions {
@@ -1231,7 +1243,10 @@ fn run_fresh_build_inner(
     // emitted `.so`'s content-hashes + the manifest fingerprint match the runtime
     // by construction (xtask cannot satisfy the pdump fingerprint check itself).
     // xtask only sets the env here + verifies the artifacts afterward.
-    let pdump_envs = aot_preload_dump_envs(options, &envs);
+    if let Some(output) = &options.portable_runtime_image {
+        ensure_output_parent(options, output)?;
+    }
+    let pdump_envs = final_dump_envs(options, &envs);
     prepare_aot_preload_artifacts(options, &paths)?;
     run_command(
         options,
@@ -1292,22 +1307,31 @@ fn run_fresh_build_inner(
 const AOT_PRELOAD_ENV: &str = "NEOVM_AOT_PRELOAD";
 /// Make the in-neomacs producer LOG candidates + stats without linking/writing.
 const AOT_PRELOAD_DRY_RUN_ENV: &str = "NEOVM_AOT_PRELOAD_DRY_RUN";
+/// Ask the in-neomacs final dump producer to atomically publish the same
+/// evaluator state in the target-independent runtime-image format.
+const PORTABLE_RUNTIME_IMAGE_ENV: &str = "NEOVM_PORTABLE_RUNTIME_IMAGE";
 /// Artifact names the in-neomacs producer writes beside the pdump (must match
 /// `aot::PRELOAD_SO_NAME` / `aot::PRELOAD_MANIFEST_NAME` in neovm-core).
 const PRELOAD_SO_NAME: &str = "libneomacs-preload.so";
 const PRELOAD_MANIFEST_NAME: &str = "libneomacs-preload.manifest";
 
-/// Build the env for the `--temacs=pdump` step: the base `envs` plus
-/// `NEOVM_AOT_PRELOAD=1` when `--aot-preload` (real run). The dry-run gate uses a
-/// separate path ([`run_aot_preload_dry_run_gate`]), so this only ever sets the
-/// real-build flag.
-fn aot_preload_dump_envs(
+/// Build the env for the final `--temacs=pdump` step.
+///
+/// AOT and portable-image production both require the live dump-time
+/// evaluator, so their opt-in requests meet at this one process boundary.
+fn final_dump_envs(
     options: &FreshBuildOptions,
     base: &[(OsString, OsString)],
 ) -> Vec<(OsString, OsString)> {
     let mut envs = base.to_vec();
     if options.aot_preload.enabled() {
         envs.push((OsString::from(AOT_PRELOAD_ENV), OsString::from("1")));
+    }
+    if let Some(path) = &options.portable_runtime_image {
+        envs.push((
+            OsString::from(PORTABLE_RUNTIME_IMAGE_ENV),
+            path.as_os_str().to_os_string(),
+        ));
     }
     envs
 }
@@ -4573,7 +4597,7 @@ fn print_usage() {
 
 fn usage_text() -> &'static str {
     "\
-Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload]
+Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload] [--portable-runtime-image PATH]
        cargo xtask check-dependency-coherence
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list
@@ -4656,6 +4680,11 @@ Options:
                       NEOVM_AOT=1. Explicit --aot-preload --dry-run executes the
                       dump for real to list candidates + dedup stats without
                       linking/writing a preload; ordinary --dry-run only prints.
+  --portable-runtime-image PATH
+                      Atomically co-produce a target-independent final image
+                      from the same dump-time evaluator as neomacs.pdump. This
+                      is the packaged seed for Android and neomacs-wasm; it is
+                      opt-in so desktop-only builds pay no serialization cost.
 
 Environment:
   NEOMACS_NATIVE_COMP=yes
