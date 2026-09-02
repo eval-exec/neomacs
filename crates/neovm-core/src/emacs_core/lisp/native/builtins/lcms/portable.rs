@@ -1,5 +1,8 @@
 //! Color-management subrs for hosts without native shared libraries.
 
-use crate::emacs_core::eval::Context;
+#[path = "subrs.rs"]
+mod subrs;
 
-pub(crate) fn register_subrs(_ctx: &mut Context) {}
+#[cfg(test)]
+pub(crate) use self::subrs::SUBRS;
+pub(crate) use self::subrs::register_subrs;

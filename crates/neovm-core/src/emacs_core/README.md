@@ -24,10 +24,18 @@ emacs_core/
 - Keep out-of-line subsystem tests in `<subsystem>/tests/`; small white-box
   unit tests may remain inline in `mod.rs`. Cross-subsystem tests belong in
   `emacs_core/tests/`.
-- Put Rust-backed Elisp implementations in the subsystem's `mod.rs` and their
-  declarations in `subrs.rs`. Use `define_subrs!` so the const `SubrBatch` and
-  its registrar are generated from the same typed declarations (plus typed
-  dispatch metadata when the evaluator requires it).
+- Put Rust-backed Elisp declarations in the subsystem's `subrs.rs`, and keep
+  the subsystem's `mod.rs` as their owning facade. Implementations normally
+  live in `mod.rs`; a private sibling may hold host-independent policy shared
+  verbatim by cfg-selected backends, or one target backend selected as the
+  subsystem module. Those files must not register themselves: every backend
+  re-exports the same `define_subrs!` batch and registrar from the owning
+  `subrs.rs`. Do not duplicate an Elisp implementation merely to satisfy the
+  physical layout. Use `define_subrs!` so the const `SubrBatch` and its
+  registrar are generated from the same typed declarations (plus typed
+  dispatch metadata when the evaluator requires it). Mark a batch
+  `target_filtered` when every declaration can legitimately be compiled out;
+  unconditional batches remain compile-time nonempty.
 - Treat `emacs_core/mod.rs` as wiring and a compatibility facade. Physical moves
   must not force callers to change stable paths such as
   `crate::emacs_core::eval`.
