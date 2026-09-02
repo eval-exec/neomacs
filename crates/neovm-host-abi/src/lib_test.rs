@@ -188,3 +188,41 @@ fn select_result_ready_reports_op_index_and_value() {
         _ => panic!("expected Ready"),
     }
 }
+
+#[test]
+fn wasm_profile_rejects_native_process_facilities() {
+    let profile = HostProfile::WASM;
+
+    assert_eq!(profile.kind(), HostKind::Wasm);
+    assert_eq!(profile.processes(), ProcessModel::Unavailable);
+    assert_eq!(
+        profile.require(HostOperation::SpawnProcess),
+        Err(HostOperationError::Unsupported {
+            host: HostKind::Wasm,
+            operation: HostOperation::SpawnProcess,
+        })
+    );
+    assert_eq!(
+        profile.require(HostOperation::OpenPty),
+        Err(HostOperationError::Unsupported {
+            host: HostKind::Wasm,
+            operation: HostOperation::OpenPty,
+        })
+    );
+}
+
+#[test]
+fn android_profile_distinguishes_sandbox_restriction_from_absence() {
+    let profile = HostProfile::android();
+
+    assert_eq!(profile.kind(), HostKind::Android);
+    assert_eq!(profile.processes(), ProcessModel::AndroidRestricted);
+    assert_eq!(
+        profile.require(HostOperation::SpawnProcess),
+        Err(HostOperationError::Restricted {
+            host: HostKind::Android,
+            operation: HostOperation::SpawnProcess,
+        })
+    );
+    assert!(profile.require(HostOperation::MapRuntimeImage).is_ok());
+}
