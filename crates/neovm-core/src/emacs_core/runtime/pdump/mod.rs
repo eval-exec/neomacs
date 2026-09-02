@@ -23,6 +23,7 @@ pub(crate) use convert::{
     stub_required_only_arity,
 };
 pub(crate) mod face_image;
+pub(crate) mod image_format;
 pub(crate) mod mapped_heap;
 pub(crate) mod mmap_image;
 pub(crate) mod obarray_image;
