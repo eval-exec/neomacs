@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Portable wgpu surface lifecycle for Neomacs frontends"
 
 [dependencies]
+neomacs-app.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-renderer-wgpu.workspace = true
 thiserror.workspace = true
