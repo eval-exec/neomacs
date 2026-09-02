@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::error::EvalError;
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::emacs_core::terminal::pure::{
+    TerminalRuntimeConfig, ensure_terminal_runtime_owner,
+};
+use neovm_core::window::FrameId;
 
 use crate::initial_surface::InitialEditorSurface;
 
@@ -91,9 +95,8 @@ pub fn configure_interactive_gui_startup(
     );
 
     let frame = Value::make_frame(surface.frame().0);
-    // Mobile/browser GUI products have no bootstrap TTY terminal. Their live
-    // GUI frame is therefore the initial terminal-frame owner as well.
-    evaluator.set_variable("terminal-frame", frame);
+    let terminal_frame = ensure_gnu_startup_terminal_frame(evaluator, surface.frame());
+    evaluator.set_variable("terminal-frame", Value::make_frame(terminal_frame.0));
     evaluator.set_variable("frame-initial-frame", frame);
     evaluator.set_variable("default-minibuffer-frame", frame);
     evaluator.set_variable("inhibit-startup-screen", Value::T);
@@ -110,6 +113,72 @@ pub fn configure_interactive_gui_startup(
                (face-set-after-frame-default (selected-frame))))",
     )?;
     Ok(())
+}
+
+fn ensure_gnu_startup_terminal_frame(evaluator: &mut Context, opening_frame: FrameId) -> FrameId {
+    const STARTUP_TERMINAL_ID: u64 = 1;
+
+    if let Some(existing) = evaluator
+        .frame_manager()
+        .frame_list()
+        .into_iter()
+        .find(|candidate| {
+            *candidate != opening_frame
+                && evaluator
+                    .frame_manager()
+                    .get(*candidate)
+                    .is_some_and(|frame| {
+                        !frame.visible && frame.effective_window_system().is_none()
+                    })
+        })
+    {
+        return existing;
+    }
+
+    let seed_buffer = evaluator
+        .buffer_manager()
+        .current_buffer_id()
+        .or_else(|| evaluator.buffer_manager().find_buffer_by_name("*scratch*"))
+        .unwrap_or_else(|| evaluator.buffer_manager_mut().create_buffer("*scratch*"));
+    let (width, height, display_type, background_mode, environment) = evaluator
+        .frame_manager()
+        .get(opening_frame)
+        .map(|frame| {
+            (
+                frame.width.max(1),
+                frame.height.max(1),
+                frame
+                    .parameter("display-type")
+                    .unwrap_or_else(|| Value::symbol("color")),
+                frame
+                    .parameter("background-mode")
+                    .unwrap_or_else(|| Value::symbol("light")),
+                frame.parameter("environment"),
+            )
+        })
+        .unwrap_or((80, 25, Value::symbol("color"), Value::symbol("light"), None));
+    ensure_terminal_runtime_owner(
+        STARTUP_TERMINAL_ID,
+        "startup_terminal",
+        TerminalRuntimeConfig::inactive(),
+    );
+    let terminal_frame = evaluator.frame_manager_mut().create_frame_on_terminal(
+        "Fstartup-tty",
+        STARTUP_TERMINAL_ID,
+        width,
+        height,
+        seed_buffer,
+    );
+    if let Some(frame) = evaluator.frame_manager_mut().get_mut(terminal_frame) {
+        frame.visible = false;
+        frame.set_window_system(None);
+        frame.set_parameter(Value::symbol("display-type"), display_type);
+        frame.set_parameter(Value::symbol("background-mode"), background_mode);
+        if let Some(environment) = environment {
+            frame.set_parameter(Value::symbol("environment"), environment);
+        }
+    }
+    terminal_frame
 }
 
 fn lisp_directory_name(path: &Path) -> String {
