@@ -5,12 +5,21 @@ use std::io::Cursor;
 
 use neomacs_app::host::{ExecutionEngine, HostKind, HostProfile, RuntimeImageModel};
 use neomacs_app::runtime_image::{
-    ExtractedRuntimeImage, PORTABLE_FINAL_RUNTIME_IMAGE_ASSET, RuntimeImageError,
-    RuntimeImageInstall, RuntimeImageSource,
+    ExtractedRuntimeImage, PORTABLE_FINAL_RUNTIME_IMAGE_ASSET,
+    PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET, RuntimeImageError, RuntimeImageInstall,
+    RuntimeImageProvisionError, RuntimeImageSource,
 };
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::pdump::{dump_to_file, encode_portable_snapshot, load_from_dump};
 use neovm_core::emacs_core::value::Value;
+use sha2::{Digest, Sha256};
+
+fn content_id(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 #[test]
 fn browser_profile_loads_linear_memory_snapshot() {
@@ -115,13 +124,18 @@ fn portable_asset_materializes_and_reuses_a_target_native_final_image() {
     let mut source = Context::new();
     source.set_variable("portable-runtime-value", Value::fixnum(73));
     let portable = encode_portable_snapshot(&source).expect("encode portable image");
+    let portable_id = format!("{}\n", content_id(&portable));
     let opens = Cell::new(0);
 
     let first =
         ExtractedRuntimeImage::prepare_final_from_portable(directory.path(), |asset_name| {
             opens.set(opens.get() + 1);
-            assert_eq!(asset_name, PORTABLE_FINAL_RUNTIME_IMAGE_ASSET);
-            Ok::<_, std::io::Error>(Cursor::new(portable.as_slice()))
+            let bytes = match asset_name {
+                PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET => portable_id.as_bytes(),
+                PORTABLE_FINAL_RUNTIME_IMAGE_ASSET => portable.as_slice(),
+                other => panic!("unexpected portable runtime asset {other}"),
+            };
+            Ok::<_, std::io::Error>(Cursor::new(bytes))
         })
         .expect("materialize target-native image");
 
@@ -141,14 +155,79 @@ fn portable_asset_materializes_and_reuses_a_target_native_final_image() {
 
     let second = ExtractedRuntimeImage::prepare_final_from_portable(
         directory.path(),
-        |_| -> std::io::Result<Cursor<&'static [u8]>> {
-            panic!("an existing native image must not reopen the portable asset")
+        |asset_name| -> std::io::Result<Cursor<&[u8]>> {
+            assert_eq!(asset_name, PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET);
+            Ok(Cursor::new(portable_id.as_bytes()))
         },
     )
     .expect("reuse target-native image");
     assert_eq!(second.install(), RuntimeImageInstall::Reused);
     assert_eq!(first.path(), second.path());
-    assert_eq!(opens.get(), 1);
+    assert_eq!(opens.get(), 2);
+}
+
+#[test]
+fn portable_image_content_selects_the_cached_native_image() {
+    let directory = tempfile::tempdir().unwrap();
+    let portable = |value| {
+        let mut source = Context::new();
+        source.set_variable("portable-runtime-value", Value::fixnum(value));
+        encode_portable_snapshot(&source).expect("encode portable image")
+    };
+
+    let first_portable = portable(1);
+    let first_id = format!("{}\n", content_id(&first_portable));
+    let first =
+        ExtractedRuntimeImage::prepare_final_from_portable(directory.path(), |asset_name| {
+            Ok::<_, std::io::Error>(Cursor::new(match asset_name {
+                PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET => first_id.as_bytes(),
+                PORTABLE_FINAL_RUNTIME_IMAGE_ASSET => first_portable.as_slice(),
+                other => panic!("unexpected portable runtime asset {other}"),
+            }))
+        })
+        .expect("materialize first target-native image");
+
+    let second_portable = portable(2);
+    let second_id = format!("{}\n", content_id(&second_portable));
+    let second =
+        ExtractedRuntimeImage::prepare_final_from_portable(directory.path(), |asset_name| {
+            Ok::<_, std::io::Error>(Cursor::new(match asset_name {
+                PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET => second_id.as_bytes(),
+                PORTABLE_FINAL_RUNTIME_IMAGE_ASSET => second_portable.as_slice(),
+                other => panic!("unexpected portable runtime asset {other}"),
+            }))
+        })
+        .expect("materialize second target-native image");
+
+    assert_ne!(first.path(), second.path());
+    assert_eq!(second.install(), RuntimeImageInstall::Installed);
+    let loaded = load_from_dump(second.path()).expect("load second native image");
+    assert_eq!(
+        loaded.obarray().symbol_value("portable-runtime-value"),
+        Some(&Value::fixnum(2)),
+    );
+}
+
+#[test]
+fn portable_image_must_match_its_packaged_content_id() {
+    let directory = tempfile::tempdir().unwrap();
+    let portable = encode_portable_snapshot(&Context::new()).expect("encode portable image");
+    let wrong_id = format!("{}\n", content_id(b"different portable image"));
+
+    let error =
+        ExtractedRuntimeImage::prepare_final_from_portable(directory.path(), |asset_name| {
+            Ok::<_, std::io::Error>(Cursor::new(match asset_name {
+                PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET => wrong_id.as_bytes(),
+                PORTABLE_FINAL_RUNTIME_IMAGE_ASSET => portable.as_slice(),
+                other => panic!("unexpected portable runtime asset {other}"),
+            }))
+        })
+        .expect_err("portable image digest mismatch must fail closed");
+
+    assert!(matches!(
+        error,
+        RuntimeImageProvisionError::PortableImageDigestMismatch { .. }
+    ));
 }
 
 #[test]
