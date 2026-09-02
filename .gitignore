@@ -406,6 +406,13 @@ src/macuvs.h
 
 # Rust build artifacts
 /target/
+
+# Android Studio and Gradle outputs.  The wrapper itself is committed under
+# crates/neomacs-android/android/; local SDK selection and generated packages
+# are machine-specific.
+crates/neomacs-android/android/local.properties
+crates/neomacs-android/android/build/
+crates/neomacs-android/android/app/build/
 /dist/
 rust/target/
 neomacs-display/target/
