@@ -5330,18 +5330,31 @@ pub(crate) fn builtin_dump_emacs_portable(
     }
     ctx.set_variable("command-line-processed", Value::NIL);
     ctx.set_variable("process-environment", Value::NIL);
-    let dump_result = crate::emacs_core::pdump::dump_to_file(ctx, dump_path);
+    let portable_path = is_final_dump
+        .then(|| {
+            std::env::var_os(crate::emacs_core::pdump::PORTABLE_RUNTIME_IMAGE_ENV)
+                .map(std::path::PathBuf::from)
+        })
+        .flatten();
+    let dump_result = crate::emacs_core::pdump::dump_to_file(ctx, dump_path)
+        .map_err(|error| (expanded_path.clone(), error))
+        .and_then(|()| {
+            portable_path.as_ref().map_or(Ok(()), |path| {
+                crate::emacs_core::pdump::dump_portable_snapshot_to_file(ctx, path)
+                    .map_err(|error| (path.display().to_string(), error))
+            })
+        });
     ctx.set_variable("post-gc-hook", saved_post_gc_hook);
     ctx.set_variable("command-line-processed", saved_command_line_processed);
     ctx.set_variable("process-environment", saved_process_environment);
 
-    dump_result.map_err(|err| {
+    dump_result.map_err(|(path, error)| {
         signal(
             LispCondition::FileError,
             vec![
                 Value::string("dump-emacs-portable"),
-                Value::string(expanded_path),
-                Value::string(err.to_string()),
+                Value::string(path),
+                Value::string(error.to_string()),
             ],
         )
     })?;

@@ -40,7 +40,10 @@ pub(crate) mod object_extra;
 pub(crate) mod object_starts;
 pub(crate) mod object_value_codec;
 mod portable_snapshot;
-pub use portable_snapshot::{encode_portable_snapshot, load_from_portable_snapshot};
+pub use portable_snapshot::{
+    PORTABLE_RUNTIME_IMAGE_ENV, dump_portable_snapshot_to_file, encode_portable_snapshot,
+    load_from_portable_snapshot,
+};
 pub(crate) mod roots_image;
 pub mod runtime;
 pub(crate) mod runtime_managers_image;
