@@ -4,19 +4,19 @@ use super::*;
 use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 
 crate::emacs_core::subr::define_subrs! {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     SubrSpec::new(
         "inotify-add-watch",
         NativeFn::ContextVec(inotify_add_watch),
         SubrArity::new(3, Some(3)),
     ),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     SubrSpec::new(
         "inotify-rm-watch",
         NativeFn::ContextVec(|_ctx, args| inotify_rm_watch(args)),
         SubrArity::new(1, Some(1)),
     ),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     SubrSpec::new(
         "inotify-valid-p",
         NativeFn::ContextVec(|_ctx, args| inotify_valid_p(args)),
