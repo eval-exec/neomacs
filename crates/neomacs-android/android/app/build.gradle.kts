@@ -57,6 +57,7 @@ abstract class StageNeomacsPortableAssets : DefaultTask() {
             )
         val required = listOf(
             "neomacs.portable",
+            "neomacs.portable.sha256",
             "neomacs-runtime.bundle",
             "neomacs-runtime.sha256",
         )

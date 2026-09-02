@@ -63,11 +63,22 @@ fn portable_assets_command_stages_a_deterministic_complete_runtime_bundle() {
         fs::read(output.join("neomacs.portable")).unwrap(),
         b"portable image"
     );
+    let expected_portable_id = Sha256::digest(b"portable image")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        fs::read_to_string(output.join("neomacs.portable.sha256"))
+            .unwrap()
+            .trim(),
+        expected_portable_id
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         for asset in [
             "neomacs.portable",
+            "neomacs.portable.sha256",
             "neomacs-runtime.bundle",
             "neomacs-runtime.sha256",
         ] {

@@ -14,6 +14,7 @@ use tempfile::NamedTempFile;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const PORTABLE_RUNTIME_IMAGE_ASSET: &str = "neomacs.portable";
+const PORTABLE_RUNTIME_IMAGE_ID_ASSET: &str = "neomacs.portable.sha256";
 // Use an opaque transport suffix: Android's asset packager treats `.gz` as a
 // directive to decompress the file and remove its suffix.  The bytes remain a
 // deterministic gzip-compressed tar archive on every host.
@@ -82,10 +83,16 @@ fn package(runtime_root: &Path, portable_image: &Path, output_dir: &Path) -> Res
 
     let archive_path = output_dir.join(RUNTIME_RESOURCE_ARCHIVE_ASSET);
     let archive_id = write_runtime_archive(runtime_root, output_dir, &archive_path)?;
+    let portable_image_id = sha256_file(portable_image)?;
     atomic_copy(
         portable_image,
         output_dir,
         &output_dir.join(PORTABLE_RUNTIME_IMAGE_ASSET),
+    )?;
+    atomic_write(
+        output_dir,
+        &output_dir.join(PORTABLE_RUNTIME_IMAGE_ID_ASSET),
+        format!("{portable_image_id}\n").as_bytes(),
     )?;
     // Publish the resource ID last. Android treats this small file as the
     // selection/commit record and authenticates the archive against it before
@@ -102,6 +109,7 @@ fn package(runtime_root: &Path, portable_image: &Path, output_dir: &Path) -> Res
         "  image     = {}",
         output_dir.join(PORTABLE_RUNTIME_IMAGE_ASSET).display()
     );
+    println!("  image id  = {portable_image_id}");
     println!("  resources = {}", archive_path.display());
     println!("  id        = {archive_id}");
     Ok(())
