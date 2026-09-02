@@ -222,9 +222,18 @@ pub enum DumpError {
     BadMagic,
     #[error("unsupported pdump version {0}")]
     UnsupportedVersion(u32),
+<<<<<<< HEAD
     #[error("pdump fingerprint mismatch (expected {expected}, found {found})")]
     FingerprintMismatch { expected: String, found: String },
     #[error("pdump checksum mismatch (corrupted file)")]
+||||||| parent of b2497da908 (style: apply current rustfmt output)
+    FingerprintMismatch { expected: String, found: String },
+=======
+    FingerprintMismatch {
+        expected: String,
+        found: String,
+    },
+>>>>>>> b2497da908 (style: apply current rustfmt output)
     ChecksumMismatch,
     #[error("pdump image format error: {0}")]
     ImageFormatError(String),
