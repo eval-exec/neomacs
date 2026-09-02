@@ -15,6 +15,12 @@ use bytemuck::{Pod, Zeroable};
 use memmap2::{MmapMut, MmapOptions};
 use sha2::{Digest, Sha256};
 
+use super::image_format::{
+    DumpImageRelocation, RELOCATION_SIZE, RELOCATION_TAG_BITS, RELOCATION_TAG_MASK,
+};
+pub(crate) use super::image_format::{
+    DumpSectionKind, ImageRelocation, ImageSection, relocation_section_bytes,
+};
 use super::{DumpError, fingerprint_bytes, hex_string};
 
 const MMAP_MAGIC: [u8; 16] = *b"NEOMMAPDUMP\0\0\0\0\0";
@@ -55,45 +61,6 @@ const MMAP_FORMAT_VERSION: u32 = 16;
 /// across runs (GNU pdumper keeps ASLR) — a deliberate, documented trade.
 pub(crate) const PLANNED_MAP_BASE: u64 = 0x6900_0000_0000;
 const SECTION_ALIGN: u64 = 8;
-const RELOCATION_TAG_BITS: u64 = 4;
-const RELOCATION_TAG_MASK: u64 = (1 << RELOCATION_TAG_BITS) - 1;
-
-#[repr(u32)]
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, num_enum::IntoPrimitive, num_enum::TryFromPrimitive,
-)]
-pub enum DumpSectionKind {
-    Metadata = 1,
-    HeapImage = 2,
-    Roots = 3,
-    Relocations = 4,
-    ObjectStarts = 5,
-    EmacsRelocations = 6,
-    RuntimeState = 7,
-    SymbolTable = 8,
-    Obarray = 10,
-    Autoloads = 11,
-    CharsetRegistry = 12,
-    CodingSystems = 13,
-    FaceTable = 14,
-    Buffers = 15,
-    RuntimeManagers = 16,
-    ObjectExtra = 17,
-    ValueRelocations = 18,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ImageSection<'a> {
-    pub kind: DumpSectionKind,
-    pub flags: u32,
-    pub bytes: &'a [u8],
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ImageRelocation {
-    pub location_offset: u64,
-    pub addend: u8,
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -134,15 +101,8 @@ struct DumpImageSection {
     reserved: u64,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct DumpImageRelocation {
-    packed: u64,
-}
-
 const HEADER_SIZE: usize = std::mem::size_of::<DumpImageHeader>();
 const SECTION_SIZE: usize = std::mem::size_of::<DumpImageSection>();
-const RELOCATION_SIZE: usize = std::mem::size_of::<DumpImageRelocation>();
 
 /// The image mapping's owner. Production hits map raw at the planned base
 /// (memmap2 cannot request an address); everything else keeps MmapMut.
@@ -491,20 +451,6 @@ pub(crate) fn write_image(path: &Path, sections: &[ImageSection<'_>]) -> Result<
     file.as_file().sync_all()?;
     file.persist(path).map_err(|err| DumpError::Io(err.error))?;
     Ok(())
-}
-
-pub(crate) fn relocation_section_bytes(relocations: &[ImageRelocation]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(relocations.len() * RELOCATION_SIZE);
-    for relocation in relocations {
-        assert!(u64::from(relocation.addend) <= RELOCATION_TAG_MASK);
-        assert!(relocation.location_offset <= (u64::MAX >> RELOCATION_TAG_BITS));
-        let raw = DumpImageRelocation {
-            packed: (relocation.location_offset << RELOCATION_TAG_BITS)
-                | u64::from(relocation.addend),
-        };
-        bytes.extend_from_slice(bytemuck::bytes_of(&raw));
-    }
-    bytes
 }
 
 /// Test support: flood one section's on-disk payload with 0xFF, leaving the
