@@ -143,4 +143,7 @@ dependencies {
     // Must match the native glue vendored by android-activity 0.6.1.  Do not
     // enable Prefab: android-activity supplies its own Rust-compatible glue.
     implementation("androidx.games:games-activity:4.4.0")
+    // GameActivity extends AppCompatActivity, but the 4.4.0 artifact's POM
+    // does not declare that Java/resource dependency for consumers.
+    implementation("androidx.appcompat:appcompat:1.8.0")
 }
