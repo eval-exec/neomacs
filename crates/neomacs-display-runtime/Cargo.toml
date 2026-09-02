@@ -98,6 +98,7 @@ neo-term = [
 windows-sys.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+winit = { workspace = true, features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
 smithay-clipboard.workspace = true
 x11-dl.workspace = true
 rustix.workspace = true

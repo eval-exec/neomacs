@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/neomacs",
+    "crates/neomacs-app",
+    "crates/neomacs-android",
     "crates/neomacs-allocator",
     "crates/neomacs-diagnostics",
     "crates/neomacs-display-protocol",
@@ -18,6 +20,7 @@ members = [
     "crates/neomacs-tui-tests",
     "crates/neomacs-video",
     "crates/neomacs-video-model",
+    "crates/neomacs-wasm",
     "crates/neomacs-webview",
     "crates/neovm-core",
     "crates/neovm-host-abi",
@@ -78,6 +81,7 @@ unsafe_op_in_unsafe_fn = "warn"
 [workspace.dependencies]
 # Internal crates
 neomacs-allocator = { path = "crates/neomacs-allocator" }
+neomacs-app = { path = "crates/neomacs-app" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
 neovm-host-abi = { path = "crates/neovm-host-abi" }
 neovm-oracle-tests = { path = "crates/neovm-oracle-tests" }
@@ -217,7 +221,7 @@ malachite = "0.9"
 itoa = "1.0"
 
 # GPU / windowing
-winit = "0.30"
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 # "glsl" gates ShaderSource::Glsl, which the render thread needs to compile
 # composed Shadertoy-dialect surface shaders (shader_surface.rs).
 wgpu = { version = "30", features = ["glsl"] }

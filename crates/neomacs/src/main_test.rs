@@ -14,12 +14,14 @@ use super::{
     bootstrap_default_font_name, bootstrap_frame_metrics, bootstrap_frame_metrics_for_font_sizing,
     bootstrap_frame_metrics_for_frontend, bootstrap_gui_display_config,
     bootstrap_tty_display_config, classify_early_cli_action, configure_gnu_startup_state,
-    gui_display_identity, gui_frame_font_scale_from_observation, load_neomacs_gui_term_layer,
-    parse_startup_options, publish_gui_frame, raw_dump_loadup_invocation, raw_loadup_command_line,
-    render_fingerprint_text, render_help_text, render_startup_image_error, render_version_text,
-    run_gnu_startup, runtime_mode_from_program_name, source_bootstrap_loadup_invocation,
-    startup_dimensions, sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
+    desktop_host_profile, gui_display_identity, gui_frame_font_scale_from_observation,
+    load_neomacs_gui_term_layer, parse_startup_options, publish_gui_frame,
+    raw_dump_loadup_invocation, raw_loadup_command_line, render_fingerprint_text, render_help_text,
+    render_startup_image_error, render_version_text, run_gnu_startup,
+    runtime_mode_from_program_name, source_bootstrap_loadup_invocation, startup_dimensions,
+    sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
 };
+use neomacs_app::host::{ExecutionEngine, HostKind, ProcessModel, StorageModel};
 use neomacs_display_protocol::{VideoId, WebViewId};
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageRenderState, SharedImageRenderState,
@@ -1688,6 +1690,23 @@ fn runtime_mode_dump_image_kinds_match_pipeline_roles() {
     assert_eq!(
         RuntimeMode::FinalRun.dump_image_kind(),
         Some(DumpImageKind::Final)
+    );
+}
+
+#[test]
+fn desktop_adapter_profile_matches_the_compiled_execution_engine() {
+    let profile = desktop_host_profile();
+
+    assert_eq!(profile.kind(), HostKind::Desktop);
+    assert_eq!(profile.storage(), StorageModel::NativePaths);
+    assert_eq!(profile.processes(), ProcessModel::Native);
+    assert_eq!(
+        profile.execution(),
+        if cfg!(feature = "jit") {
+            ExecutionEngine::NativeJit
+        } else {
+            ExecutionEngine::Interpreter
+        }
     );
 }
 

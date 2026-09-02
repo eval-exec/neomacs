@@ -321,6 +321,53 @@ jobs:
           "${{ matrix.binary }}" --batch -Q \
             -l test/lisp/filenotify-tests.el \
             -f ert-run-tests-batch-and-exit
+  portable-frontends:
+    name: cargo check ${{ matrix.product }} (${{ matrix.target }})
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - product: neomacs-android
+            target: aarch64-linux-android
+          - product: neomacs-wasm
+            target: wasm32-unknown-unknown
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      # NDK r28 produces 16-KiB-aligned shared libraries by default, which is
+      # part of Android's current native-library compatibility contract.
+      NEOMACS_ANDROID_NDK_VERSION: 28.2.13676358
+    steps:
+      - *checkout
+
+      - name: Set up Rust target
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-${{ matrix.product }}-${{ matrix.target }}
+          target: ${{ matrix.target }}
+
+      - name: Configure Android NDK toolchain
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          ndk_root="$ANDROID_SDK_ROOT/ndk/$NEOMACS_ANDROID_NDK_VERSION"
+          if [[ ! -d "$ndk_root" ]]; then
+            yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+              "ndk;$NEOMACS_ANDROID_NDK_VERSION"
+          fi
+          toolchain="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "AR_aarch64_linux_android=$toolchain/llvm-ar"
+            echo "CC_aarch64_linux_android=$toolchain/aarch64-linux-android24-clang"
+            echo "CXX_aarch64_linux_android=$toolchain/aarch64-linux-android24-clang++"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$toolchain/aarch64-linux-android24-clang"
+          } >> "$GITHUB_ENV"
+
+      - name: Check portable frontend
+        run: cargo check -p ${{ matrix.product }} --target ${{ matrix.target }}
 
   linux-no-gstreamer-startup:
     name: startup without GStreamer (linux x86_64)

@@ -33,6 +33,7 @@ raw-window-handle.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = { workspace = true, optional = true }
 udev = "0.9"
+winit = { workspace = true, features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle.workspace = true

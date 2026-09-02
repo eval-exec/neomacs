@@ -122,6 +122,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use neomacs_app::host::{ExecutionEngine, HostProfile};
 use neomacs_display_protocol::{VideoId, VisualConfig, WebViewId};
 use neomacs_display_runtime::display_scale::observe_event_loop_display;
 #[cfg(not(feature = "neo-term"))]
@@ -237,6 +238,21 @@ pub enum RuntimeMode {
 pub enum DumpImageKind {
     Bootstrap,
     Final,
+}
+
+/// Capabilities supplied by the native desktop application adapter.
+///
+/// Keep feature-to-capability translation at the product edge. The evaluator
+/// and shared application modules must consume this typed profile as they move
+/// behind the host boundary; they must not infer host semantics from Cargo
+/// features themselves.
+pub(crate) const fn desktop_host_profile() -> HostProfile {
+    let execution = if cfg!(feature = "jit") {
+        ExecutionEngine::NativeJit
+    } else {
+        ExecutionEngine::Interpreter
+    };
+    HostProfile::desktop(execution)
 }
 
 impl RuntimeMode {
@@ -3969,6 +3985,7 @@ pub fn run(mode: RuntimeMode) {
     }
 
     tracing::info!(
+        host_profile = ?desktop_host_profile(),
         "{} {} starting (pure Rust, backend={}, pid={}, mode={:?}, image={:?})",
         mode.binary_name(),
         neomacs_display_runtime::VERSION,

@@ -187,6 +187,7 @@ dependencies = [
  "ndk-context",
  "ndk-sys 0.6.0+11769913",
  "num_enum",
+ "simd_cesu8",
  "thiserror 2.0.20",
 ]
 
@@ -3722,6 +3723,7 @@ dependencies = [
  "libmimalloc-sys",
  "mimalloc",
  "neomacs-allocator",
+ "neomacs-app",
  "neomacs-diagnostics",
  "neomacs-display-protocol",
  "neomacs-display-runtime",
@@ -3749,6 +3751,18 @@ dependencies = [
  "mimalloc",
  "tikv-jemallocator",
 ]
+
+[[package]]
+name = "neomacs-android"
+version = "0.0.16"
+dependencies = [
+ "neomacs-app",
+ "winit",
+]
+
+[[package]]
+name = "neomacs-app"
+version = "0.0.16"
 
 [[package]]
 name = "neomacs-diagnostics"
@@ -4033,6 +4047,15 @@ version = "0.0.16"
 dependencies = [
  "neomacs-display-protocol",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "neomacs-wasm"
+version = "0.0.16"
+dependencies = [
+ "neomacs-app",
+ "wasm-bindgen",
+ "winit",
 ]
 
 [[package]]

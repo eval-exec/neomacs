@@ -73,6 +73,7 @@ path = "src/bin/cmdproxy/main.rs"
 
 
 [dependencies]
+neomacs-app.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
 neomacs-display-runtime = { workspace = true, default-features = false }
