@@ -3,12 +3,12 @@
 use std::cell::Cell;
 use std::io::Cursor;
 
-use neomacs_app::host::{ExecutionEngine, HostProfile, RuntimeImageModel};
+use neomacs_app::host::{ExecutionEngine, HostKind, HostProfile, RuntimeImageModel};
 use neomacs_app::runtime_image::{
     ExtractedRuntimeImage, RuntimeImageError, RuntimeImageInstall, RuntimeImageSource,
 };
 use neovm_core::emacs_core::eval::Context;
-use neovm_core::emacs_core::pdump::encode_portable_snapshot;
+use neovm_core::emacs_core::pdump::{dump_to_file, encode_portable_snapshot};
 use neovm_core::emacs_core::value::Value;
 
 #[test]
@@ -37,6 +37,14 @@ fn browser_profile_loads_linear_memory_snapshot() {
             .expect("restored final image has callable Rust builtins"),
         Value::fixnum(43),
     );
+    assert_eq!(
+        loaded
+            .obarray()
+            .symbol_value("data-directory")
+            .and_then(|value| value.as_utf8_str()),
+        Some("/neomacs/etc/"),
+        "browser startup must not discover a build-machine filesystem root",
+    );
 }
 
 #[test]
@@ -51,6 +59,53 @@ fn source_must_match_the_host_runtime_image_model() {
             source: RuntimeImageModel::LinearMemory,
         })
     ));
+}
+
+#[test]
+fn android_requires_an_explicit_app_private_runtime_root() {
+    assert!(matches!(
+        RuntimeImageSource::ExtractedFile(std::path::Path::new("never-read.pdump"))
+            .load_for(HostProfile::android()),
+        Err(RuntimeImageError::RuntimeRootRequired {
+            host: HostKind::Android,
+        })
+    ));
+}
+
+#[test]
+fn android_finalization_uses_the_supplied_app_private_runtime_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime_root = directory.path().join("runtime");
+    std::fs::create_dir_all(runtime_root.join("lisp")).unwrap();
+    std::fs::create_dir_all(runtime_root.join("etc/charsets")).unwrap();
+    let image_path = directory.path().join("android.pdump");
+    dump_to_file(&Context::new(), &image_path).unwrap();
+
+    let loaded = RuntimeImageSource::ExtractedFile(&image_path)
+        .load_for_in_runtime_root(HostProfile::android(), &runtime_root)
+        .expect("load Android image with explicit resources");
+
+    let expected = format!("{}/etc/", runtime_root.display());
+    assert_eq!(
+        loaded
+            .obarray()
+            .symbol_value("data-directory")
+            .and_then(|value| value.as_utf8_str()),
+        Some(expected.as_str()),
+    );
+}
+
+#[test]
+fn final_asset_extraction_owns_the_fingerprinted_product_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let image = ExtractedRuntimeImage::prepare_final(directory.path(), |asset_name| {
+        assert!(asset_name.starts_with("neomacs-"));
+        assert!(asset_name.ends_with(".pdump"));
+        Ok::<_, std::io::Error>(Cursor::new(b"final-image"))
+    })
+    .unwrap();
+
+    assert_eq!(std::fs::read(image.path()).unwrap(), b"final-image");
 }
 
 #[test]
