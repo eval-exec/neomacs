@@ -57,7 +57,7 @@ pub(crate) const JIT_STACK_SCRATCH_WORDS: usize = 7;
 /// stacker cannot tell the segment's bounds (no guard; never a false signal).
 #[inline(never)]
 pub(crate) fn jit_stack_limit_here() -> usize {
-    let Some(remaining) = stacker::remaining_stack() else {
+    let Some(remaining) = crate::emacs_core::stack_growth::remaining_stack() else {
         return 0;
     };
     let marker = 0u8;
@@ -71,7 +71,7 @@ pub(crate) fn jit_stack_limit_here() -> usize {
 /// [`JIT_STACK_RED_ZONE`]: the exact test behind a compiled leaf's entry
 /// guard. Unknown bounds answer `false`.
 pub(crate) fn native_stack_exhausted() -> bool {
-    stacker::remaining_stack().is_some_and(|remaining| remaining < JIT_STACK_RED_ZONE)
+    crate::emacs_core::stack_growth::remaining_stack().is_some_and(|remaining| remaining < JIT_STACK_RED_ZONE)
 }
 
 /// `stacker::maybe_grow(red_zone, segment, ..)` over `owner`, keeping the
@@ -85,7 +85,13 @@ pub(crate) fn maybe_grow_tracking_jit_limit<T: ?Sized, R>(
     segment: usize,
     f: impl FnOnce(&mut T) -> R,
 ) -> R {
-    match stacker::remaining_stack() {
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = (limit, red_zone, segment);
+        return f(owner);
+    }
+    #[cfg(not(target_family = "wasm"))]
+    match crate::emacs_core::stack_growth::remaining_stack() {
         Some(remaining) if remaining >= red_zone => f(owner),
         _ => grow_tracking_jit_limit(owner, limit, segment, f),
     }
@@ -105,7 +111,7 @@ pub(crate) fn grow_tracking_jit_limit<T: ?Sized, R>(
 ) -> R {
     let saved = *limit(owner);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        stacker::grow(segment, || {
+        crate::emacs_core::stack_growth::grow(segment, || {
             *limit(owner) = jit_stack_limit_here();
             f(owner)
         })

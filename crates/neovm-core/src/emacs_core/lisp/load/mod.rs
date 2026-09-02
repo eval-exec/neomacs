@@ -6164,7 +6164,7 @@ pub fn create_bootstrap_evaluator_for_loadup(
         lisp_dir.display()
     );
     refuse_stale_lisp_bytecode(&lisp_dir);
-    let built = stacker::maybe_grow(128 * 1024, 2 * 1024 * 1024, || {
+    let built = super::stack_growth::maybe_grow(128 * 1024, 2 * 1024 * 1024, || {
         maybe_trace_bootstrap_step("create_bootstrap_evaluator_with_features: enter");
         let mut eval = super::eval::Context::new();
         maybe_trace_bootstrap_step("create_bootstrap_evaluator_with_features: evaluator-new");
