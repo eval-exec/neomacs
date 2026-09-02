@@ -3702,6 +3702,7 @@ dependencies = [
 name = "neomacs-app"
 version = "0.0.16"
 dependencies = [
+ "crossbeam-channel",
  "neomacs-display-protocol",
  "neomacs-layout-engine",
  "neovm-core",
