@@ -4115,6 +4115,7 @@ dependencies = [
 name = "neomacs-wgpu-runtime"
 version = "0.0.16"
 dependencies = [
+ "neomacs-app",
  "neomacs-display-protocol",
  "neomacs-renderer-wgpu",
  "thiserror 2.0.20",
