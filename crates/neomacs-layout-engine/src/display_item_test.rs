@@ -325,51 +325,37 @@ fn replacement_source_keeps_non_text_kinds_with_covered_span() {
     );
 }
 
-/// GNU crops an image's slice along with its width (src/xdisp.c:32597), so
-/// the left part stays at scale; an xwidget keeps its content and is
-/// clipped when drawn (nsxwidget.m / xwidget.c `clip_right`).
+/// `produce_xwidget_glyph` crops the glyph's advance (`it->pixel_width -=
+/// crop`, src/xdisp.c:32579, emacs-31.0.90) and nothing else: the widget's
+/// own size still drives the native view, which
+/// `x_draw_xwidget_glyph_string` clips (src/xwidget.c:2841-2847).
 #[test]
-fn cropping_a_media_replacement_narrows_an_image_slice_but_not_an_xwidget() {
-    let image = DisplayMediaReplacement {
-        kind: DisplayMediaReplacementKind::Image {
-            image_id: 1,
-            source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
-            margin_left: 0.0,
-            margin_right: 0.0,
-            margin_top: 0.0,
-            margin_bottom: 0.0,
-            opaque_background: None,
-        },
-        width: 400.0,
-        height: 100.0,
-        ascent: 100.0,
-        positive_box_line_width: 0.0,
-    };
-    let cropped = image.cropped_to_visible_width(100.0);
-    assert_eq!(cropped.width, 100.0);
-    assert_eq!(cropped.height, 100.0);
-    let DisplayMediaReplacementKind::Image { source_rect, .. } = cropped.kind else {
-        panic!("still an image");
-    };
-    assert!((source_rect.width() - 0.25).abs() < 1e-4, "{source_rect:?}");
-    assert_eq!(source_rect.x(), 0.0);
-    assert!((source_rect.height() - 1.0).abs() < 1e-4);
-
+fn cropping_an_xwidgets_advance_keeps_its_content_extent() {
     let xwidget = DisplayMediaReplacement::xwidget(DisplayXwidgetItem {
         xwidget_id: neomacs_display_protocol::XwidgetId::new(1),
         webview_id: neomacs_display_protocol::WebViewId::new(1),
         width: 600.0,
         height: 40.0,
     });
-    let cropped = xwidget.cropped_to_visible_width(304.0);
-    assert_eq!(cropped.width, 304.0);
+    let content = |media: DisplayMediaReplacement| match media.kind {
+        DisplayMediaReplacementKind::Xwidget { content, .. } => content,
+        other => panic!("still an xwidget, got {other:?}"),
+    };
+    assert_eq!(xwidget.width, 600.0);
+    assert_eq!(content(xwidget).width_px(), 600.0);
+    assert_eq!(content(xwidget).height_px(), 40.0);
+
+    let cropped = xwidget.xwidget_advance_cropped_to(304.0);
+    assert_eq!(cropped.width, 304.0, "the layout advance is cropped");
     assert_eq!(cropped.height, 40.0);
-    assert!(matches!(
-        cropped.kind,
-        DisplayMediaReplacementKind::Xwidget { .. }
-    ));
+    assert_eq!(
+        content(cropped).width_px(),
+        600.0,
+        "the widget's own width is not"
+    );
 
     // Widening is not cropping; a non-positive width is not either.
-    assert_eq!(xwidget.cropped_to_visible_width(900.0).width, 600.0);
-    assert_eq!(xwidget.cropped_to_visible_width(0.0).width, 600.0);
+    assert_eq!(xwidget.xwidget_advance_cropped_to(900.0).width, 600.0);
+    assert_eq!(xwidget.xwidget_advance_cropped_to(0.0).width, 600.0);
+    assert_eq!(xwidget.xwidget_advance_cropped_to(f32::NAN).width, 600.0);
 }

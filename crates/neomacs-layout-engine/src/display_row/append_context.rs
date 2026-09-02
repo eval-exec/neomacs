@@ -6,7 +6,9 @@ use crate::display_row::builder::{
     DisplayRowAppendStartPolicy, DisplayRowPosition, DisplayTabPolicy,
 };
 use crate::display_row::face_state::DisplayRowActiveFaceState;
-use crate::display_row::geometry::{DisplayRowGeometry, DisplayRowGeometryState, DisplayRowMaxX};
+use crate::display_row::geometry::{
+    DisplayRowGeometry, DisplayRowGeometryState, DisplayRowMaxX, DisplayRowTextAreaOrigin,
+};
 use crate::display_row::metrics::{DisplayRowFallbackMetrics, DisplayRowMeasuredFaceMetrics};
 use crate::display_row::render_state::DisplayRowRenderBounds;
 use crate::display_row::text_output::TextRowOutput;
@@ -784,6 +786,14 @@ impl DisplayRowAppendFrame {
         self.content_x() + self.geometry().width()
     }
 
+    /// The window's text area starts where the content does, less the
+    /// line-number prefix that `content_x` already skips: GNU's
+    /// `it->current_x` counts that prefix (it is produced as glyphs), so the
+    /// origin GNU measures from is the text area's own left edge.
+    fn text_area_origin(&self) -> DisplayRowTextAreaOrigin {
+        DisplayRowTextAreaOrigin::at_frame_x(self.content_x() - self.line_number_width())
+    }
+
     fn text_right_edge_excluding_line_number(&self) -> f32 {
         self.content_x() + (self.text_width() - self.line_number_width()).max(0.0)
     }
@@ -859,7 +869,11 @@ impl DisplayRowAppendFrame {
             GlyphRowRole::Text,
         )
         .with_image_scale_environment(self.image_scale_environment)
-        .with_render_bounds(DisplayRowRenderBounds::new(position, kind.max_x(self)))
+        .with_render_bounds(DisplayRowRenderBounds::in_window_text_area(
+            position,
+            kind.max_x(self),
+            self.text_area_origin(),
+        ))
         .with_line_end_right_edge_x(self.text_right_edge_excluding_line_number())
     }
 

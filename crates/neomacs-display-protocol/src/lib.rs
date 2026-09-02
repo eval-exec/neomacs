@@ -33,6 +33,7 @@ pub mod types;
 pub mod ui_types;
 pub mod visual_config;
 pub mod xterm_palette;
+pub mod xwidget_extent;
 pub use glyph_matrix::*;
 pub mod tty_capabilities;
 
@@ -59,6 +60,7 @@ pub use types::*;
 pub use ui_types::*;
 pub use visual_config::*;
 pub use xterm_palette::xterm_256_rgb;
+pub use xwidget_extent::*;
 
 #[cfg(test)]
 #[path = "frame_chrome_test.rs"]

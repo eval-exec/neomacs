@@ -3,7 +3,7 @@ use crate::display_property::DisplayPropertyClassification;
 use neomacs_display_protocol::face::{BoxRunMembership, BoxVerticalEdges};
 use neomacs_display_protocol::glyph_matrix::TerminalComposition;
 use neomacs_display_protocol::types::FaceId;
-use neomacs_display_protocol::{WebViewId, XwidgetId};
+use neomacs_display_protocol::{WebViewId, XwidgetContentExtent, XwidgetId};
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::emacs_char::EmacsChar;
@@ -1373,9 +1373,12 @@ pub(crate) enum DisplayMediaReplacementKind {
         video_id: neomacs_display_protocol::VideoId,
         opacity: f32,
     },
+    /// `content` is GNU `xw->width`/`xw->height`; the outer `width` is the
+    /// layout advance, which the right-edge crop may narrow below it.
     Xwidget {
         xwidget_id: XwidgetId,
         webview_id: WebViewId,
+        content: XwidgetContentExtent,
     },
     Surface {
         surface_id: u32,
@@ -1415,35 +1418,6 @@ impl DisplayMediaReplacement {
     /// content.  Fold that inset into the durable image placement now, while
     /// the realized face is available, so layout advance and renderer replay
     /// cannot disagree or paint the border over the outer image pixels.
-    /// Narrow the replacement to `visible_width_px`, the way GNU's producers
-    /// crop a glyph at the right edge (see
-    /// `DisplayMediaReplacementOverflowAction`).  An image also narrows its
-    /// slice -- `slice.width -= crop`, src/xdisp.c:32597 -- so what remains is
-    /// the left part of the image rather than the whole image squeezed; the
-    /// other kinds keep their full content and are clipped when drawn
-    /// (`x_draw_xwidget_glyph_string`'s `clip_*`).
-    pub(crate) fn cropped_to_visible_width(mut self, visible_width_px: f32) -> Self {
-        if !visible_width_px.is_finite()
-            || visible_width_px <= 0.0
-            || visible_width_px >= self.width
-        {
-            return self;
-        }
-        if let DisplayMediaReplacementKind::Image { source_rect, .. } = &mut self.kind {
-            let kept = visible_width_px / self.width;
-            if let Some(cropped) = neomacs_display_protocol::ImageSourceRect::new(
-                source_rect.x(),
-                source_rect.y(),
-                source_rect.width() * kept,
-                source_rect.height(),
-            ) {
-                *source_rect = cropped;
-            }
-        }
-        self.width = visible_width_px;
-        self
-    }
-
     pub(crate) fn with_positive_box_line_width(mut self, per_edge: f32) -> Self {
         if !per_edge.is_finite() || per_edge <= 0.0 {
             return self;
@@ -1519,16 +1493,43 @@ impl DisplayMediaReplacement {
     }
 
     pub(crate) fn xwidget(xwidget: DisplayXwidgetItem) -> Self {
+        let width = display_replacement_dimension(xwidget.width);
+        let height = display_replacement_dimension(xwidget.height);
         Self {
             kind: DisplayMediaReplacementKind::Xwidget {
                 xwidget_id: xwidget.xwidget_id,
                 webview_id: xwidget.webview_id,
+                content: XwidgetContentExtent::new(width, height)
+                    .expect("display_replacement_dimension yields finite widths of at least 1"),
             },
-            width: display_replacement_dimension(xwidget.width),
-            height: display_replacement_dimension(xwidget.height),
+            width,
+            height,
             ascent: display_replacement_ascent(xwidget.height),
             positive_box_line_width: 0.0,
         }
+    }
+
+    /// Narrow an xwidget's layout advance to `visible_width_px`, the way
+    /// `produce_xwidget_glyph` does at the right edge (`it->pixel_width -=
+    /// crop`, src/xdisp.c:32579, emacs-31.0.90).  The widget's own size in
+    /// `DisplayMediaReplacementKind::Xwidget::content` is untouched: GNU sizes
+    /// the native view from `xww->width` and clips it
+    /// (`x_draw_xwidget_glyph_string`, src/xwidget.c:2841-2847).
+    ///
+    /// Only an xwidget has this rule; see `DisplayXwidgetOverflowAction`.
+    pub(crate) fn xwidget_advance_cropped_to(mut self, visible_width_px: f32) -> Self {
+        debug_assert!(
+            matches!(self.kind, DisplayMediaReplacementKind::Xwidget { .. }),
+            "the right-edge crop is the xwidget rule; images have their own"
+        );
+        if !visible_width_px.is_finite()
+            || visible_width_px <= 0.0
+            || visible_width_px >= self.width
+        {
+            return self;
+        }
+        self.width = visible_width_px;
+        self
     }
 
     pub(crate) fn surface(surface: DisplaySurfaceItem) -> Self {

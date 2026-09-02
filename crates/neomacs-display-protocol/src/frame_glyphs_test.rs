@@ -1718,13 +1718,14 @@ fn add_video_appends_video_glyph() {
 #[test]
 fn add_xwidget_appends_xwidget_glyph() {
     let mut buf = FrameGlyphBuffer::new();
+    let content = crate::XwidgetContentExtent::new(800.0, 600.0).expect("content extent");
     buf.add_xwidget(
         XwidgetId::new(99),
         WebViewId::new(700),
         0.0,
         0.0,
+        content,
         800.0,
-        600.0,
     );
 
     match &buf.glyphs[0] {

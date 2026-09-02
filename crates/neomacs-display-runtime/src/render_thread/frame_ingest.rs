@@ -41,19 +41,24 @@ fn collect_frame_webviews(
             webview_id,
             x,
             y,
-            width,
-            height,
+            content,
             clip_rect,
             ..
         } = glyph
         else {
             continue;
         };
+        // The native view is sized from the widget's own extent, GNU
+        // `xww->width`/`xww->height`, never from the glyph slot: layout may
+        // have cropped the slot at the right edge (`produce_xwidget_glyph`,
+        // src/xdisp.c:32577-32579, emacs-31.0.90) and GNU answers that by
+        // clipping the view, not resizing it (`x_draw_xwidget_glyph_string`,
+        // src/xwidget.c:2841-2847).  The clip below is that text-area clip.
         let Ok(content) = neomacs_display_protocol::RootSurfaceRect::new(
             offset_x + *x,
             offset_y + *y,
-            *width,
-            *height,
+            content.width_px(),
+            content.height_px(),
         ) else {
             continue;
         };
@@ -1153,3 +1158,7 @@ fn dump_frame_glyphs_resolved(frame: &crate::core::frame_glyphs::FrameGlyphBuffe
     }
     out
 }
+
+#[cfg(all(test, feature = "webview"))]
+#[path = "frame_ingest_test.rs"]
+mod tests;

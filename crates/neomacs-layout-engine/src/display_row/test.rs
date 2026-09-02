@@ -3951,6 +3951,8 @@ fn install_measured_display_row_clips_window_chrome_media_to_measured_row() {
         xwidget_id: neomacs_display_protocol::XwidgetId::new(1234),
         webview_id: neomacs_display_protocol::WebViewId::new(5678),
         width_cols: 12,
+        content: neomacs_display_protocol::XwidgetContentExtent::new(96.0, 54.0)
+            .expect("content extent"),
     };
     row.glyphs[GlyphArea::Text.index()].push(xwidget);
     let rendered = RenderedDisplayRow::new(

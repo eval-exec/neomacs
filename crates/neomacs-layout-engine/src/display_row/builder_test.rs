@@ -1526,6 +1526,7 @@ fn source_position_progress_counts_complex_run_growth_before_tab() {
             &mut glyph_advances,
             DisplayRowPosition::new(0.0, 0),
             1280.0,
+            crate::display_row::geometry::DisplayRowTextAreaOrigin::row_local(),
             GlyphArea::Text,
             DisplayRowAppendStartPolicy::SourcePosition,
         );

@@ -12,6 +12,7 @@ use crate::types::{
     Color, DisplayFrameId, DisplayWindowId, FaceId, ImageId, Px, Rect, SurfaceId, VideoId,
     WebViewId, XwidgetId,
 };
+use crate::xwidget_extent::XwidgetContentExtent;
 use crate::{ContentTransitionIntent, TransitionDirection};
 use std::collections::HashMap;
 
@@ -242,6 +243,14 @@ pub enum FrameGlyph {
     },
 
     /// Xwidget glyph (inline in buffer).
+    ///
+    /// Three extents, as in GNU (see [`XwidgetContentExtent`]): `x`, `y`,
+    /// `width`, `height` are the glyph slot, the layout advance after
+    /// `produce_xwidget_glyph`'s right-edge crop and the cell a cursor on the
+    /// glyph occupies; `content` is the widget's own size, which sizes the
+    /// native view; `clip_rect` is the window's text area, which bounds what
+    /// of the widget is visible.  Native placement reads `content`, never
+    /// `width`.
     Xwidget {
         window_id: DisplayWindowId,
         row_role: GlyphRowRole,
@@ -253,6 +262,7 @@ pub enum FrameGlyph {
         y: f32,
         width: f32,
         height: f32,
+        content: XwidgetContentExtent,
         face_id: FaceId,
         box_vertical_edges: BoxVerticalEdges,
     },
@@ -2027,15 +2037,16 @@ impl FrameGlyphBuffer {
         });
     }
 
-    /// Add an xwidget glyph.
+    /// Add an xwidget glyph whose slot is `slot_width` wide: the widget's
+    /// `content` width when nothing cropped it, less when the right edge did.
     pub fn add_xwidget(
         &mut self,
         xwidget_id: XwidgetId,
         webview_id: WebViewId,
         x: f32,
         y: f32,
-        width: f32,
-        height: f32,
+        content: XwidgetContentExtent,
+        slot_width: f32,
     ) {
         self.glyphs.push(FrameGlyph::Xwidget {
             window_id: self.current_window_id,
@@ -2046,8 +2057,9 @@ impl FrameGlyphBuffer {
             webview_id,
             x,
             y,
-            width,
-            height,
+            width: slot_width,
+            height: content.height_px(),
+            content,
             face_id: self.current_face_id,
             box_vertical_edges: BoxVerticalEdges::Both,
         });

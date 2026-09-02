@@ -52,13 +52,15 @@ mod webview_tests {
     #[test]
     fn hit_testing_keeps_xwidget_and_webview_identities_distinct() {
         let mut glyphs = neomacs_display_protocol::FrameGlyphBuffer::new();
+        let content =
+            neomacs_display_protocol::XwidgetContentExtent::new(320.0, 200.0).expect("extent");
         glyphs.add_xwidget(
             neomacs_display_protocol::XwidgetId::new(7),
             neomacs_display_protocol::WebViewId::new(91),
             10.0,
             20.0,
+            content,
             320.0,
-            200.0,
         );
 
         assert_eq!(
@@ -78,17 +80,55 @@ mod webview_tests {
             neomacs_display_protocol::GlyphRowRole::Text,
             Some(neomacs_display_protocol::Rect::new(20.0, 30.0, 50.0, 40.0)),
         );
+        let content =
+            neomacs_display_protocol::XwidgetContentExtent::new(100.0, 80.0).expect("extent");
         glyphs.add_xwidget(
             neomacs_display_protocol::XwidgetId::new(7),
             neomacs_display_protocol::WebViewId::new(91),
             10.0,
             20.0,
+            content,
             100.0,
-            80.0,
         );
 
         assert_eq!(webview_glyph_hit_test(&glyphs.glyphs, 15.0, 25.0), None);
         assert!(webview_glyph_hit_test(&glyphs.glyphs, 25.0, 35.0).is_some());
+    }
+
+    /// A slot cropped at the right edge does not shrink the pointer target:
+    /// the widget is still its own size behind the text-area clip, so a
+    /// point inside the clip but past the cropped slot still hits it.
+    #[test]
+    fn hit_testing_uses_the_widgets_own_extent_not_the_cropped_slot() {
+        let mut glyphs = neomacs_display_protocol::FrameGlyphBuffer::new();
+        glyphs.set_draw_context(
+            neomacs_display_protocol::DisplayWindowId::new(1),
+            neomacs_display_protocol::GlyphRowRole::Text,
+            Some(neomacs_display_protocol::Rect::new(0.0, 0.0, 400.0, 100.0)),
+        );
+        let content =
+            neomacs_display_protocol::XwidgetContentExtent::new(600.0, 40.0).expect("extent");
+        glyphs.add_xwidget(
+            neomacs_display_protocol::XwidgetId::new(7),
+            neomacs_display_protocol::WebViewId::new(91),
+            8.0,
+            10.0,
+            content,
+            304.0,
+        );
+
+        assert_eq!(
+            webview_glyph_hit_test(&glyphs.glyphs, 350.0, 20.0),
+            Some(WebViewPointerHit {
+                view: neomacs_display_protocol::WebViewId::new(91),
+                position: WebContentPoint::new(342.0, 10.0),
+            })
+        );
+        assert_eq!(
+            webview_glyph_hit_test(&glyphs.glyphs, 450.0, 20.0),
+            None,
+            "past the clip nothing of the widget is visible"
+        );
     }
 }
 
@@ -163,19 +203,22 @@ impl WebViewDeliveryTarget {
 #[cfg(feature = "webview")]
 fn webview_glyph_hit_test(glyphs: &[FrameGlyph], x: f32, y: f32) -> Option<WebViewPointerHit> {
     for glyph in glyphs.iter().rev() {
+        // The pointer target is the widget itself, GNU `xww->width` by
+        // `xww->height` at the glyph origin, minus what the text-area clip
+        // hides: the same content-and-clip pair `collect_frame_webviews`
+        // places the native view with, so hits and placement cannot differ.
         if let FrameGlyph::Xwidget {
             webview_id,
             clip_rect,
             x: wx,
             y: wy,
-            width,
-            height,
+            content,
             ..
         } = glyph
             && x >= *wx
-            && x < *wx + *width
+            && x < *wx + content.width_px()
             && y >= *wy
-            && y < *wy + *height
+            && y < *wy + content.height_px()
             && clip_rect.as_ref().is_none_or(|clip| {
                 x >= clip.x && x < clip.x + clip.width && y >= clip.y && y < clip.y + clip.height
             })

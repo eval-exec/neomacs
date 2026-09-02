@@ -503,20 +503,49 @@ impl WgpuRenderer {
                     webview_id,
                     x,
                     y,
-                    width,
-                    height,
+                    content,
                     clip_rect,
                     ..
                 } = glyph
                 {
-                    let (draw_y, clipped_height, tex_v_min, tex_v_max) =
+                    // The texture is the widget at its own size (GNU
+                    // `xww->width` x `xww->height`); the glyph slot may have
+                    // been cropped at the right edge, so draw the content
+                    // extent and cut it to the text-area clip on all four
+                    // sides, the way the image path does.
+                    let width = content.width_px();
+                    let height = content.height_px();
+                    let (draw_x, draw_y, clipped_width, clipped_height, u0, u1, v0, v1) =
                         if let Some(clip) = clip_rect {
+                            let mut x0 = *x;
                             let mut y0 = *y;
-                            let mut h0 = *height;
+                            let mut w0 = width;
+                            let mut h0 = height;
+                            let mut u0 = 0.0_f32;
+                            let mut u1 = 1.0_f32;
                             let mut v0 = 0.0_f32;
                             let mut v1 = 1.0_f32;
+                            let left = clip.x;
+                            let right = clip.x + clip.width;
                             let top = clip.y;
                             let bottom = clip.y + clip.height;
+                            if x0 < left {
+                                let cut = left - x0;
+                                if cut >= w0 {
+                                    continue;
+                                }
+                                x0 = left;
+                                w0 -= cut;
+                                u0 += cut / width;
+                            }
+                            if x0 + w0 > right {
+                                let cut = (x0 + w0) - right;
+                                if cut >= w0 {
+                                    continue;
+                                }
+                                w0 -= cut;
+                                u1 -= cut / width;
+                            }
                             if y0 < top {
                                 let cut = top - y0;
                                 if cut >= h0 {
@@ -524,9 +553,7 @@ impl WgpuRenderer {
                                 }
                                 y0 = top;
                                 h0 -= cut;
-                                if *height > 0.0 {
-                                    v0 += cut / *height;
-                                }
+                                v0 += cut / height;
                             }
                             if y0 + h0 > bottom {
                                 let cut = (y0 + h0) - bottom;
@@ -534,17 +561,15 @@ impl WgpuRenderer {
                                     continue;
                                 }
                                 h0 -= cut;
-                                if *height > 0.0 {
-                                    v1 -= cut / *height;
-                                }
+                                v1 -= cut / height;
                             }
-                            (y0, h0, v0, v1)
+                            (x0, y0, w0, h0, u0, u1, v0, v1)
                         } else {
-                            (*y, *height, 0.0, 1.0)
+                            (*x, *y, width, height, 0.0, 1.0, 0.0, 1.0)
                         };
 
                     // Skip if fully clipped
-                    if clipped_height <= 0.0 {
+                    if clipped_width <= 0.0 || clipped_height <= 0.0 {
                         continue;
                     }
 
@@ -555,24 +580,27 @@ impl WgpuRenderer {
                         self.media_budget
                             .touch(crate::media_budget::MediaType::WebKit, view_id.get());
                         tracing::debug!(
-                            "Rendering webkit {} at ({}, {}) size {}x{} (clipped to {})",
+                            "Rendering webkit {} at ({}, {}) size {}x{} (clipped to {}x{})",
                             webview_id,
                             x,
                             y,
                             width,
                             height,
+                            clipped_width,
                             clipped_height
                         );
                         // Create vertices for webkit quad (white color = no tinting)
                         quads.push(MediaQuad {
                             id: view_id,
-                            vertices: textured_quad_vertices(
-                                *x,
+                            vertices: textured_quad_vertices_uv(
+                                draw_x,
                                 draw_y,
-                                *width,
+                                clipped_width,
                                 clipped_height,
-                                tex_v_min,
-                                tex_v_max,
+                                u0,
+                                u1,
+                                v0,
+                                v1,
                             ),
                         });
                     } else {

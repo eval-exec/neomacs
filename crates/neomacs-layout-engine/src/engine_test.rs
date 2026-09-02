@@ -14039,7 +14039,7 @@ fn inline_xwidget_glyph_in_frame(
     frame_height: u32,
     width: i32,
     height: i32,
-) -> Option<(f32, f32, f32, Option<neomacs_display_protocol::Rect>)> {
+) -> Option<InlineXwidgetGlyph> {
     let mut eval = Context::new();
     eval.set_display_host(Box::new(RecordingImageDisplayHost {
         requests: Arc::new(Mutex::new(Vec::new())),
@@ -14097,38 +14097,202 @@ fn inline_xwidget_glyph_in_frame(
                 x,
                 width,
                 height,
+                content,
                 clip_rect,
                 ..
-            } => Some((*x, *width, *height, *clip_rect)),
+            } => Some(InlineXwidgetGlyph {
+                x: *x,
+                width: *width,
+                height: *height,
+                content: *content,
+                clip_rect: *clip_rect,
+            }),
             _ => None,
         })
 }
 
-/// GNU `produce_xwidget_glyph` (src/xdisp.c:32659-32707) never declines to
-/// produce the glyph.  It crops a wide widget at the right edge of the text
-/// area -- `crop = pixel_width - (last_visible_x - current_x)`, applied when
-/// the glyph starts the row or is wider than a quarter of the visible width
-/// (:32704-32706) -- so the widget is shown partially, which is what
-/// `x_draw_xwidget_glyph_string`'s `clip_*` machinery exists for.  Issue 301:
-/// this port emitted nothing, and the window showed an empty background
+/// The three extents of a materialized xwidget glyph: the slot (`x`,
+/// `width`, `height`), the widget's own size (`content`), and the visible
+/// clip.
+#[derive(Clone, Copy, Debug)]
+struct InlineXwidgetGlyph {
+    x: f32,
+    width: f32,
+    height: f32,
+    content: neomacs_display_protocol::XwidgetContentExtent,
+    clip_rect: Option<neomacs_display_protocol::Rect>,
+}
+
+/// Lay out `prefix` + an xwidget + "b" in the right-hand window of a
+/// horizontally split frame and return that window's xwidget glyph.
+fn inline_xwidget_glyph_in_right_split(
+    frame_width: u32,
+    frame_height: u32,
+    prefix: &str,
+    width: i32,
+    height: i32,
+) -> Option<InlineXwidgetGlyph> {
+    let mut eval = Context::new();
+    eval.set_display_host(Box::new(RecordingImageDisplayHost {
+        requests: Arc::new(Mutex::new(Vec::new())),
+        video_requests: Arc::new(Mutex::new(Vec::new())),
+        webkit_requests: Arc::new(Mutex::new(Vec::new())),
+        surface_requests: Arc::new(Mutex::new(Vec::new())),
+    }));
+    let left_buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let right_buf_id = eval.buffer_manager_mut().create_buffer("*right*");
+    let xwidget = Value::make_xwidget(
+        Value::symbol("webkit"),
+        Value::string("Title"),
+        Value::make_buffer(right_buf_id),
+        width,
+        height,
+        4322,
+        neomacs_display_protocol::WebViewId::new(8766),
+    );
+    let prefix_chars = prefix.chars().count();
+    {
+        let buf = eval
+            .buffer_manager_mut()
+            .get_mut(right_buf_id)
+            .expect("right buffer");
+        buf.insert(&format!("{prefix}Xb"));
+        buf.goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(1));
+        buf.put_text_property(
+            prefix_chars + 1,
+            prefix_chars + 2,
+            Value::symbol("display"),
+            Value::list(vec![
+                Value::symbol("xwidget"),
+                Value::keyword("xwidget"),
+                xwidget,
+            ]),
+        );
+    }
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "layout-oversized-xwidget-split",
+        frame_width,
+        frame_height,
+        left_buf_id,
+    );
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let right_window = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected_window,
+            neovm_core::window::SplitDirection::Horizontal,
+            right_buf_id,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split window");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("frame display state");
+    state
+        .materialize()
+        .glyphs
+        .iter()
+        .find_map(|glyph| match glyph {
+            FrameGlyph::Xwidget {
+                window_id,
+                x,
+                width,
+                height,
+                content,
+                clip_rect,
+                ..
+            } if window_id.get() == right_window.0 as i64 => Some(InlineXwidgetGlyph {
+                x: *x,
+                width: *width,
+                height: *height,
+                content: *content,
+                clip_rect: *clip_rect,
+            }),
+            _ => None,
+        })
+}
+
+/// GNU `produce_xwidget_glyph` (src/xdisp.c:32534-32620, emacs-31.0.90)
+/// never declines to produce the glyph.  It crops a wide widget's advance at
+/// the right edge of the text area -- `crop = pixel_width - (last_visible_x
+/// - current_x)`, applied when the glyph starts the row or is wider than a
+/// quarter of the visible width (:32577-32579) -- so the widget is shown
+/// partially, which is what `x_draw_xwidget_glyph_string`'s `clip_*`
+/// machinery exists for (src/xwidget.c:2841-2847).  Issue 301: this port
+/// emitted nothing, and the window showed an empty background
 /// indistinguishable from a page that failed to load.
 #[test]
 fn layout_frame_rust_crops_an_xwidget_wider_than_its_window_like_gnu() {
     let fits = inline_xwidget_glyph_in_frame(320, 120, 96, 40).expect("fitting xwidget glyph");
-    assert_eq!(fits.1, 96.0);
+    assert_eq!(fits.width, 96.0);
+    assert_eq!(fits.content.width_px(), 96.0);
 
-    let (x, width, height, _clip) = inline_xwidget_glyph_in_frame(320, 120, 600, 40)
+    let cropped = inline_xwidget_glyph_in_frame(320, 120, 600, 40)
         .expect("a wide xwidget is cropped, not dropped");
-    assert_eq!(height, 40.0);
+    assert_eq!(cropped.height, 40.0);
     assert_eq!(
-        x, fits.0,
+        cropped.x, fits.x,
         "cropping changes the width, not where the glyph starts"
     );
     // The test frame is a TTY frame: 8 px cells, no fringes, and one column
     // reserved at the right edge, so `last_visible_x` is 312 and the widget
     // after the one-cell "a" starts at 8: GNU's crop = 600 - (312 - 8).
-    assert_eq!(x, 8.0);
-    assert_eq!(width, 304.0, "GNU: pixel_width -= crop");
+    assert_eq!(cropped.x, 8.0, "{cropped:?}");
+    assert_eq!(
+        cropped.width, 304.0,
+        "GNU: pixel_width -= crop; {cropped:?}"
+    );
+    // The crop narrows the glyph, not the widget: the native view is still
+    // sized from `xww->width` and clipped to the text area.
+    assert_eq!(cropped.content.width_px(), 600.0);
+    assert_eq!(cropped.content.height_px(), 40.0);
+    let clip = cropped
+        .clip_rect
+        .expect("body rows carry the text-area clip");
+    assert!(
+        clip.x <= 8.0 && clip.x + clip.width >= 312.0,
+        "the clip is the window's text area: {clip:?}"
+    );
+}
+
+/// The quarter-width predicate is `pixel_width > last_visible_x / 4` with
+/// `last_visible_x` window-local (src/dispextern.h:2785-2791).  In the
+/// right-hand window of a 1600 px frame the frame-absolute edge is 1592, so
+/// a 300 px widget compared against that (300 <= 398) would be left whole
+/// and then rejected by the row; GNU compares against 792 and crops it.
+#[test]
+fn layout_frame_rust_crops_an_xwidget_in_a_right_hand_split_by_the_windows_width() {
+    let prefix = "a".repeat(70);
+    let glyph = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, 300, 40)
+        .expect("the right window's xwidget is cropped, not dropped");
+    // Right window: 8 px cells, its text starts at frame x 808 (the column
+    // at 800 is the vertical border) and one column is reserved at the
+    // right edge, so `last_visible_x` is frame x 1592 and the widget after
+    // 70 cells sits at 1368: crop = 300 - (1592 - 1368).  Against the
+    // window's own width (1592 - 808 = 784, a quarter of which is 196) the
+    // 300 px widget is wide enough to crop; against the frame-absolute edge
+    // (1592 / 4 = 398) it would not have been.
+    assert_eq!(glyph.x, 1368.0, "{glyph:?}");
+    assert_eq!(glyph.width, 224.0, "GNU: pixel_width -= crop; {glyph:?}");
+    assert_eq!(glyph.content.width_px(), 300.0);
+    let clip = glyph.clip_rect.expect("body rows carry the text-area clip");
+    assert!(
+        clip.x >= 800.0 && clip.x <= 808.0 && clip.x + clip.width >= 1592.0,
+        "the clip is the right window's text area: {clip:?}"
+    );
 }
 
 /// A widget taller than the window becomes a partially visible row in GNU
@@ -14137,14 +14301,17 @@ fn layout_frame_rust_crops_an_xwidget_wider_than_its_window_like_gnu() {
 /// full height and the presentation carries the clip.
 #[test]
 fn layout_frame_rust_keeps_an_xwidget_taller_than_its_window_partially_visible() {
-    let (_x, width, height, clip) = inline_xwidget_glyph_in_frame(320, 120, 96, 900)
+    let glyph = inline_xwidget_glyph_in_frame(320, 120, 96, 900)
         .expect("a tall xwidget is clipped, not dropped");
-    assert_eq!(width, 96.0);
+    assert_eq!(glyph.width, 96.0);
     assert_eq!(
-        height, 900.0,
+        glyph.height, 900.0,
         "GNU keeps the widget's height; drawing clips"
     );
-    let clip = clip.expect("a partially visible row carries its clip");
+    assert_eq!(glyph.content.height_px(), 900.0);
+    let clip = glyph
+        .clip_rect
+        .expect("a partially visible row carries its clip");
     assert!(
         clip.height < 900.0 && clip.height <= 120.0,
         "the clip is bounded by the window: {clip:?}"

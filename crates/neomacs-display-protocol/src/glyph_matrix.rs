@@ -22,6 +22,7 @@ use super::types::{
     Color, DisplayWindowId, FaceId, ImageId, Px, Rect, ResolvedBidiDirection, SurfaceId, VideoId,
     WebViewId, XwidgetId,
 };
+use super::xwidget_extent::XwidgetContentExtent;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 
@@ -99,11 +100,16 @@ pub enum GlyphType {
         width_cols: u16,
         opacity: f32,
     },
-    /// Inline native/web widget.
+    /// Inline native/web widget.  `width_cols` and the glyph's `pixel_width`
+    /// are the layout advance, which `produce_xwidget_glyph` may crop at the
+    /// right edge (src/xdisp.c:32577-32579, emacs-31.0.90); `content` is the
+    /// widget's own size, GNU `xw->width`/`xw->height`, which the crop never
+    /// touches.
     Xwidget {
         xwidget_id: XwidgetId,
         webview_id: WebViewId,
         width_cols: u16,
+        content: XwidgetContentExtent,
     },
     /// Inline shader surface (NeoMacs extension): a compositor-rendered GPU
     /// texture owned by the row primitive that reserves its layout slot.
@@ -1141,11 +1147,14 @@ impl GlyphRow {
                         xwidget_id,
                         webview_id,
                         width_cols,
+                        content,
                     } => {
                         0x5000_0000
                             ^ u64::from(xwidget_id.get())
                             ^ u64::from(webview_id.get()).rotate_left(17)
                             ^ u64::from(*width_cols).rotate_left(9)
+                            ^ u64::from(content.width_px().to_bits()).rotate_left(29)
+                            ^ u64::from(content.height_px().to_bits()).rotate_left(41)
                     }
                     GlyphType::Surface {
                         surface_id,
@@ -3209,6 +3218,7 @@ impl FrameDisplayState {
                     GlyphType::Xwidget {
                         xwidget_id,
                         webview_id,
+                        content,
                         ..
                     } => {
                         let layout_height = if glyph.pixel_height > 0.0 {
@@ -3237,6 +3247,7 @@ impl FrameDisplayState {
                             y: baseline - layout_ascent + glyph.vertical_offset_px,
                             width: materialized_width,
                             height: layout_height,
+                            content: *content,
                             face_id: glyph.face_id,
                             box_vertical_edges: glyph.box_vertical_edges,
                         });

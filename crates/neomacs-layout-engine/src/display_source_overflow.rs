@@ -1,3 +1,4 @@
+use crate::display_row::geometry::DisplayRowTextAreaOrigin;
 use crate::display_row::transition::{DisplayRowOverflowTransitionPlan, VisualWrapBreak};
 use crate::display_row::walk_state::{
     DisplayRowTextOverflowDecision, SpecialTextRowOverflowDecision, TextRowTransitionStatePolicy,
@@ -75,48 +76,94 @@ impl DisplaySourceSpecialCharOverflowAction {
     }
 }
 
-/// What GNU does with a media replacement -- an image, video, xwidget or
-/// surface glyph -- that would extend past the right edge of the text area.
+/// GNU `it->current_x` and `it->last_visible_x` for one `produce_*` call.
 ///
-/// `produce_image_glyph` (src/xdisp.c:32582-32598) and
-/// `produce_xwidget_glyph` (:32700-32704) decide this at production time,
-/// before `display_line` measures the glyph:
+/// Both are window-local: pixels from the left edge of the window's text
+/// area, not from the frame's (src/dispextern.h:2785-2791, emacs-31.0.90:
+/// "last_visible_x == pixel width of W + first_visible_x").  The row writer
+/// keeps frame-absolute positions, so the conversion happens here, once,
+/// through [`DisplayRowTextAreaOrigin`]; a policy that compared against a
+/// frame-absolute edge would be wrong in every window but the leftmost.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WindowLocalRowExtent {
+    current_x_px: f32,
+    last_visible_x_px: f32,
+}
+
+impl WindowLocalRowExtent {
+    pub(crate) fn from_frame_coordinates(
+        origin: DisplayRowTextAreaOrigin,
+        x_px: f32,
+        right_edge_px: f32,
+    ) -> Self {
+        Self {
+            current_x_px: origin.window_local(x_px),
+            last_visible_x_px: origin.window_local(right_edge_px),
+        }
+    }
+
+    pub(crate) fn current_x_px(self) -> f32 {
+        self.current_x_px
+    }
+
+    pub(crate) fn last_visible_x_px(self) -> f32 {
+        self.last_visible_x_px
+    }
+
+    /// `it->last_visible_x - it->current_x`: how much of the row is left.
+    pub(crate) fn remaining_px(self) -> f32 {
+        self.last_visible_x_px - self.current_x_px
+    }
+}
+
+/// What GNU does with an xwidget glyph that would extend past the right
+/// edge of the text area.
+///
+/// `produce_xwidget_glyph` (src/xdisp.c:32575-32579, emacs-31.0.90) decides
+/// this at production time, before `display_line` measures the glyph:
 ///
 /// ```c
+///   /* Automatically crop wide image glyphs at right edge so we can
+///      draw the cursor on same display row.  */
 ///   crop = it->pixel_width - (it->last_visible_x - it->current_x);
 ///   if (crop > 0 && (it->hpos == 0 || it->pixel_width > it->last_visible_x / 4))
 ///     it->pixel_width -= crop;
 /// ```
 ///
-/// A glyph that starts the row, or is wider than a quarter of the visible
-/// width, is cropped so it fits exactly and is shown partially rather than
-/// not at all -- `display_line` then keeps it (:26254-26310) and the row's
-/// clip does the rest.  A narrower glyph in the middle of a row is left
-/// whole for `display_line`'s continuation or truncation handling.
+/// A glyph that starts the row, or is wider than a quarter of the window's
+/// visible width, has its layout advance cropped so it fits exactly and is
+/// shown partially rather than not at all -- `display_line` then keeps it
+/// and `x_draw_xwidget_glyph_string` clips the widget, whose own size is
+/// untouched (src/xwidget.c:2841-2847).  A narrower glyph in the middle of a
+/// row is left whole for `display_line`'s continuation or truncation
+/// handling.
+///
+/// This is the xwidget rule only.  `produce_image_glyph` has its own
+/// (src/xdisp.c:32457-32473), which also weighs word wrap, the line-number
+/// prefix and the frame's column width, and it is not ported here.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum DisplayMediaReplacementOverflowAction {
+pub(crate) enum DisplayXwidgetOverflowAction {
     Fits,
-    CropToVisibleWidth {
+    CropAdvanceToVisibleWidth {
         visible_width_px: f32,
     },
     /// GNU leaves the glyph whole; the row's overflow policy decides.
     LeaveWhole,
 }
 
-impl DisplayMediaReplacementOverflowAction {
-    pub(crate) fn for_replacement(
+impl DisplayXwidgetOverflowAction {
+    pub(crate) fn for_xwidget(
         width_px: f32,
-        x_px: f32,
-        right_edge_px: f32,
+        extent: WindowLocalRowExtent,
         at_row_start: bool,
     ) -> Self {
-        let visible_width_px = right_edge_px - x_px;
+        let visible_width_px = extent.remaining_px();
         let crop = width_px - visible_width_px;
         if crop <= 0.0 {
             return Self::Fits;
         }
-        if visible_width_px > 0.0 && (at_row_start || width_px > right_edge_px / 4.0) {
-            Self::CropToVisibleWidth { visible_width_px }
+        if visible_width_px > 0.0 && (at_row_start || width_px > extent.last_visible_x_px() / 4.0) {
+            Self::CropAdvanceToVisibleWidth { visible_width_px }
         } else {
             Self::LeaveWhole
         }

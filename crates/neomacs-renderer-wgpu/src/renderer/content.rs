@@ -1737,11 +1737,15 @@ impl WgpuRenderer {
                         webview_id,
                         x,
                         y,
-                        width,
-                        height,
+                        content,
                         ..
                     } = glyph
                     {
+                        // The texture is the widget at its own size; the
+                        // glyph slot may be narrower after the right-edge
+                        // crop and must not squeeze it.
+                        let width = content.width_px();
+                        let height = content.height_px();
                         let view_id = *webview_id;
                         if self.caches.webview.get(view_id).is_some() {
                             let wx = *x + offset_x;
@@ -1757,7 +1761,7 @@ impl WgpuRenderer {
                             webkit_quads.push(MediaQuad {
                                 id: view_id,
                                 vertices: super::layer_media::textured_quad_vertices(
-                                    wx, wy, *width, *height, 0.0, 1.0,
+                                    wx, wy, width, height, 0.0, 1.0,
                                 ),
                             });
                         }
