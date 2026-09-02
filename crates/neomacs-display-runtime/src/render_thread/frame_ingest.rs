@@ -95,11 +95,44 @@ fn collect_frame_webviews(
 /// presentations. Their evaluator presentation IDs are independent clocks,
 /// so a `max()` of those IDs can move backwards when a child disappears.
 /// This clock advances only when the resolved placement snapshot changes.
+/// Everything the resolved placements of one top-level host depend on,
+/// cheap enough to rebuild on every event-loop pass.
+///
+/// The glyph walk in `collect_frame_webviews` is a function of the presented
+/// root frame, the presented child frames with their placement and clip, and
+/// the device scale -- nothing else.  Redisplay replaces a presentation
+/// wholesale (a new `PresentationId`), so equal inputs mean equal glyphs and
+/// the walk can be skipped; that is what makes an idle session with one web
+/// view stop paying O(glyphs) per pass.
+#[cfg(feature = "webview")]
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct WebViewPlacementInputs {
+    /// Root presentation, width and height; `None` before the first frame.
+    root: Option<(
+        neomacs_display_protocol::frame_chrome::PresentationId,
+        f32,
+        f32,
+    )>,
+    scale: f32,
+    /// Child frames in renderer z-order: id, presentation, absolute offset,
+    /// clip in root.
+    children: Vec<(
+        u64,
+        neomacs_display_protocol::frame_chrome::PresentationId,
+        f32,
+        f32,
+        neomacs_display_protocol::PresentedClip,
+    )>,
+}
+
 #[cfg(feature = "webview")]
 #[derive(Default)]
 pub(super) struct WebViewSceneClock {
     revision: u64,
     placements: Vec<neomacs_webview::ResolvedWebViewPlacement>,
+    /// The inputs `placements` were resolved from, so an unchanged
+    /// presentation reuses them instead of walking the glyph buffer again.
+    inputs: Option<WebViewPlacementInputs>,
 }
 
 #[cfg(feature = "webview")]
@@ -117,6 +150,29 @@ impl WebViewSceneClock {
             host,
             neomacs_webview::WebViewSceneRevision::new(self.revision),
             placements,
+        )
+    }
+
+    /// [`Self::resolve`], but `compute` runs only when `inputs` differ from
+    /// the inputs the cached placements came from.
+    fn resolve_cached(
+        &mut self,
+        host: neomacs_webview::HostWindowId,
+        inputs: WebViewPlacementInputs,
+        compute: impl FnOnce() -> Vec<neomacs_webview::ResolvedWebViewPlacement>,
+    ) -> Result<neomacs_webview::ResolvedWebViewScene, neomacs_webview::WebViewSceneError> {
+        if self.inputs.as_ref() != Some(&inputs) {
+            let placements = compute();
+            if self.revision == 0 || self.placements != placements {
+                self.revision = self.revision.saturating_add(1);
+                self.placements = placements;
+            }
+            self.inputs = Some(inputs);
+        }
+        neomacs_webview::ResolvedWebViewScene::try_new(
+            host,
+            neomacs_webview::WebViewSceneRevision::new(self.revision),
+            self.placements.clone(),
         )
     }
 }
@@ -141,6 +197,84 @@ mod webview_scene_clock_tests {
             DeviceScale::ONE,
         )
         .unwrap()
+    }
+
+    fn inputs(root: u64, children: &[u64]) -> super::WebViewPlacementInputs {
+        use neomacs_display_protocol::frame_chrome::PresentationId;
+        super::WebViewPlacementInputs {
+            root: Some((PresentationId::new(root), 800.0, 600.0)),
+            scale: 2.0,
+            children: children
+                .iter()
+                .map(|child| {
+                    (
+                        *child,
+                        PresentationId::new(*child),
+                        10.0,
+                        20.0,
+                        neomacs_display_protocol::PresentedClip::Empty,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// The glyph walk runs once per presentation, not once per event-loop
+    /// pass: equal inputs answer from the cache without calling `compute`.
+    #[test]
+    fn unchanged_inputs_reuse_the_cached_placements_without_walking_glyphs() {
+        let host = HostWindowId::new(3);
+        let mut clock = WebViewSceneClock::default();
+        let mut walks = 0;
+        let mut walk = |placements: Vec<ResolvedWebViewPlacement>| {
+            walks += 1;
+            placements
+        };
+
+        let first = clock
+            .resolve_cached(host, inputs(1, &[]), || walk(vec![placement(7)]))
+            .unwrap();
+        let idle = clock
+            .resolve_cached(host, inputs(1, &[]), || walk(vec![placement(9)]))
+            .unwrap();
+
+        assert_eq!(walks, 1, "the second pass had nothing new to look at");
+        assert_eq!(first.revision(), WebViewSceneRevision::new(1));
+        assert_eq!(idle.revision(), WebViewSceneRevision::new(1));
+        assert_eq!(idle.placements(), first.placements());
+    }
+
+    /// A new presentation, a moved child frame, or a scale change is a new
+    /// input set: the walk runs again, and the revision advances only when
+    /// the resolved placements really differ.
+    #[test]
+    fn changed_inputs_walk_again_and_advance_only_on_a_real_difference() {
+        let host = HostWindowId::new(3);
+        let mut clock = WebViewSceneClock::default();
+        let mut walks = 0;
+        let mut walk = |placements: Vec<ResolvedWebViewPlacement>| {
+            walks += 1;
+            placements
+        };
+
+        let a = clock
+            .resolve_cached(host, inputs(1, &[]), || walk(vec![placement(7)]))
+            .unwrap();
+        let same_glyphs_new_presentation = clock
+            .resolve_cached(host, inputs(2, &[]), || walk(vec![placement(7)]))
+            .unwrap();
+        let child_appeared = clock
+            .resolve_cached(host, inputs(2, &[5]), || walk(Vec::new()))
+            .unwrap();
+
+        assert_eq!(walks, 3);
+        assert_eq!(a.revision(), WebViewSceneRevision::new(1));
+        assert_eq!(
+            same_glyphs_new_presentation.revision(),
+            WebViewSceneRevision::new(1),
+            "redisplay that left the web view where it was is not a scene change"
+        );
+        assert_eq!(child_appeared.revision(), WebViewSceneRevision::new(2));
     }
 
     #[test]
@@ -222,43 +356,68 @@ impl RenderApp {
         placements
     }
 
+    /// The inputs the host's resolved placements depend on; see
+    /// [`WebViewPlacementInputs`].
+    #[cfg(feature = "webview")]
+    fn webview_placement_inputs(window_state: &GuiFrameWindowState) -> WebViewPlacementInputs {
+        let render = &window_state.render;
+        let root = render
+            .compositor
+            .current_frame
+            .as_ref()
+            .map(|root| (root.presentation_id, root.width, root.height));
+        let children = render
+            .compositor
+            .child_frames
+            .sorted_for_rendering()
+            .iter()
+            .filter_map(|frame_id| {
+                let entry = render.compositor.child_frames.frames.get(frame_id)?;
+                Some((
+                    *frame_id,
+                    entry.frame.presentation_id,
+                    entry.abs_x,
+                    entry.abs_y,
+                    entry.clip_in_root,
+                ))
+            })
+            .collect();
+        WebViewPlacementInputs {
+            root,
+            scale: window_state.scale_factor() as f32,
+            children,
+        }
+    }
+
     #[cfg(feature = "webview")]
     pub(super) fn synchronize_webview_presentations(&mut self) {
-        let mut candidates = Vec::new();
+        let mut scenes = Vec::new();
         let mut live_hosts = std::collections::HashSet::new();
+        let clocks = &mut self.webview_scene_clocks;
         self.frame_windows
             .for_each_top_level_window(|window_state| {
-                live_hosts.insert(neomacs_webview::HostWindowId::new(
-                    window_state.render.emacs_frame_id,
-                ));
                 let host_id =
                     neomacs_webview::HostWindowId::new(window_state.render.emacs_frame_id);
-                let placements = Self::resolved_webview_placements(window_state);
+                live_hosts.insert(host_id);
                 let host = window_state
                     .window()
                     .cloned()
                     .map(neomacs_webview::WebViewHost::new);
-                candidates.push((host_id, placements, host));
-            });
-        self.webview_scene_clocks
-            .retain(|host, _clock| live_hosts.contains(host));
-        let scenes = candidates
-            .into_iter()
-            .filter_map(|(host_id, placements, host)| {
-                match self
-                    .webview_scene_clocks
+                // The glyph walk runs only when the presented frames changed.
+                let inputs = Self::webview_placement_inputs(window_state);
+                match clocks
                     .entry(host_id)
                     .or_default()
-                    .resolve(host_id, placements)
-                {
-                    Ok(scene) => Some((scene, host)),
+                    .resolve_cached(host_id, inputs, || {
+                        Self::resolved_webview_placements(window_state)
+                    }) {
+                    Ok(scene) => scenes.push((scene, host)),
                     Err(error) => {
                         tracing::warn!(?host_id, %error, "invalid resolved WebView scene");
-                        None
                     }
                 }
-            })
-            .collect::<Vec<_>>();
+            });
+        clocks.retain(|host, _clock| live_hosts.contains(host));
         let Some(system) = self.webview_system.as_mut() else {
             return;
         };
