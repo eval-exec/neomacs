@@ -1985,6 +1985,20 @@ fn cargo_build_environment_carries_the_exact_selected_profile() {
 }
 
 #[test]
+fn portable_seed_build_disables_host_native_library_discovery() {
+    let options = parse_options(&[
+        "--release",
+        "--portable-seed",
+        "--portable-runtime-image",
+        "dist/neomacs.portable",
+    ]);
+
+    let envs = cargo_build_envs(&options, &[]);
+
+    assert!(envs.contains(&(OsString::from("LCMS2_NO_PKG_CONFIG"), OsString::from("1"),)));
+}
+
+#[test]
 fn initial_cargo_build_passes_webview_when_requested() {
     let options = parse_options(&["--features", "webview", "--release"]);
     let args = initial_cargo_build_args(&options);

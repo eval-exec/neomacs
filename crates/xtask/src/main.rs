@@ -1598,6 +1598,13 @@ fn cargo_build_envs(
         OsString::from("NEOMACS_BUILD_PROFILE"),
         OsString::from(options.profile.as_name()),
     ));
+    if options.product_variant == ProductVariant::PortableSeed {
+        // A portable seed describes the common consumer capability surface,
+        // not whichever optional native libraries happen to be installed on
+        // the producer host. Otherwise its serialized subr contract can demand
+        // primitives that Android or browser WASM cannot register.
+        envs.push((OsString::from("LCMS2_NO_PKG_CONFIG"), OsString::from("1")));
+    }
     envs
 }
 
