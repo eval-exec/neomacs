@@ -32,6 +32,91 @@ fn top_level_dispatch_routes_perf_without_parsing_fresh_build_options() {
 }
 
 #[test]
+fn portable_assets_command_stages_a_deterministic_complete_runtime_bundle() {
+    let repo = tempdir();
+    fs::create_dir_all(repo.join("lisp/emacs-lisp")).unwrap();
+    fs::create_dir_all(repo.join("etc/charsets")).unwrap();
+    fs::create_dir_all(repo.join("leim/quail")).unwrap();
+    fs::write(repo.join("lisp/loadup.el"), b"loadup").unwrap();
+    fs::write(repo.join("lisp/emacs-lisp/bytecomp.elc"), b"bytecode").unwrap();
+    fs::write(repo.join("etc/charsets/JIS.map"), b"charset").unwrap();
+    fs::write(repo.join("leim/quail/input.el"), b"input").unwrap();
+    fs::write(repo.join("portable.input"), b"portable image").unwrap();
+    let output = repo.join("assets");
+
+    let package = || {
+        run_xtask(
+            repo.to_path_buf(),
+            [
+                OsString::from("package-portable-assets"),
+                OsString::from("--portable-runtime-image"),
+                OsString::from("portable.input"),
+                OsString::from("--output-dir"),
+                OsString::from("assets"),
+            ],
+        )
+        .unwrap();
+    };
+    package();
+
+    assert_eq!(
+        fs::read(output.join("neomacs.portable")).unwrap(),
+        b"portable image"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for asset in [
+            "neomacs.portable",
+            "neomacs-runtime.tar.gz",
+            "neomacs-runtime.sha256",
+        ] {
+            assert_eq!(
+                fs::metadata(output.join(asset))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o644,
+                "packaged asset {asset} should be distribution-readable"
+            );
+        }
+    }
+    let archive = fs::read(output.join("neomacs-runtime.tar.gz")).unwrap();
+    let expected_id = Sha256::digest(&archive)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        fs::read_to_string(output.join("neomacs-runtime.sha256"))
+            .unwrap()
+            .trim(),
+        expected_id
+    );
+
+    let decoder = flate2::read::GzDecoder::new(archive.as_slice());
+    let mut paths = tar::Archive::new(decoder)
+        .entries()
+        .unwrap()
+        .map(|entry| entry.unwrap().path().unwrap().into_owned())
+        .collect::<Vec<_>>();
+    let emitted = paths.clone();
+    paths.sort();
+    assert_eq!(emitted, paths, "bundle entries must have stable order");
+    assert!(emitted.contains(&PathBuf::from("lisp/loadup.el")));
+    assert!(emitted.contains(&PathBuf::from("etc/charsets/JIS.map")));
+    assert!(emitted.contains(&PathBuf::from("leim/quail/input.el")));
+
+    let first_archive = fs::read(output.join("neomacs-runtime.tar.gz")).unwrap();
+    package();
+    assert_eq!(
+        fs::read(output.join("neomacs-runtime.tar.gz")).unwrap(),
+        first_archive,
+        "repackaging identical inputs must be byte-for-byte reproducible"
+    );
+}
+
+#[test]
 fn nix_runtime_closure_includes_the_cxx_standard_library() {
     let dependencies = include_str!(concat!(
         env!("CARGO_WORKSPACE_DIR"),
