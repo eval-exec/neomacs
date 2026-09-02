@@ -605,11 +605,11 @@ fn register_windows_dynamic_library_versions(obarray: &mut Obarray) {
     defvar_int(obarray, "libgif-version", -1);
     defvar_int(obarray, "libjpeg-version", -1);
     defvar_int(obarray, "libgnutls-version", -1);
-    defvar_int(
-        obarray,
-        "tree-sitter--library-abi",
-        tree_sitter::LANGUAGE_VERSION as i64,
-    );
+    #[cfg(not(target_family = "wasm"))]
+    let tree_sitter_abi = tree_sitter::LANGUAGE_VERSION as i64;
+    #[cfg(target_family = "wasm")]
+    let tree_sitter_abi = -1;
+    defvar_int(obarray, "tree-sitter--library-abi", tree_sitter_abi);
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
