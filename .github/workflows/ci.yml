@@ -322,7 +322,7 @@ jobs:
             -l test/lisp/filenotify-tests.el \
             -f ert-run-tests-batch-and-exit
   portable-frontends:
-    name: cargo check ${{ matrix.product }} (${{ matrix.target }})
+    name: cargo check core + ${{ matrix.product }} (${{ matrix.target }})
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -365,6 +365,12 @@ jobs:
             echo "CXX_aarch64_linux_android=$toolchain/aarch64-linux-android24-clang++"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$toolchain/aarch64-linux-android24-clang"
           } >> "$GITHUB_ENV"
+
+      - name: Check interpreter core
+        run: >-
+          cargo check -p neovm-core
+          --target ${{ matrix.target }}
+          --no-default-features
 
       - name: Check portable frontend
         run: cargo check -p ${{ matrix.product }} --target ${{ matrix.target }}
