@@ -48,7 +48,11 @@ sys-locale.workspace = true
 winapi.workspace = true
 wio.workspace = true
 
+[target.'cfg(any(target_os = "android", target_family = "wasm"))'.dependencies]
+epaint_default_fonts.workspace = true
+
 [dev-dependencies]
+epaint_default_fonts.workspace = true
 neomacs-test-fonts.workspace = true
 tracing-test.workspace = true
 

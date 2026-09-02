@@ -20,6 +20,8 @@ mod linux;
 mod macos;
 #[cfg(any(target_os = "macos", windows, test))]
 mod native_asset_cache;
+#[cfg(any(target_os = "android", target_family = "wasm", test))]
+mod packaged;
 #[cfg(windows)]
 mod windows;
 
@@ -27,6 +29,8 @@ mod windows;
 pub use linux::FontconfigBackend;
 #[cfg(target_os = "macos")]
 pub use macos::CoreTextBackend;
+#[cfg(any(target_os = "android", target_family = "wasm", test))]
+pub use packaged::PackagedFontBackend;
 #[cfg(windows)]
 pub use windows::DirectWriteBackend;
 
@@ -581,6 +585,9 @@ pub fn default_font_backend() -> Box<dyn FontBackend> {
         windows => {
             Box::new(DirectWriteBackend::default())
         }
+        any(target_os = "android", target_family = "wasm") => {
+            Box::new(PackagedFontBackend)
+        }
         target_os = "linux" => {
             Box::new(FontconfigBackend::default())
         }
@@ -601,6 +608,8 @@ mod tests {
         assert_eq!(backend.kind(), FontBackendKind::CoreText);
         #[cfg(windows)]
         assert_eq!(backend.kind(), FontBackendKind::DirectWrite);
+        #[cfg(any(target_os = "android", target_family = "wasm"))]
+        assert_eq!(backend.kind(), FontBackendKind::Packaged);
     }
 
     #[cfg(target_os = "macos")]

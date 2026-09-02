@@ -200,6 +200,7 @@ image = "0.25"
 imagesize = "0.15"
 allsorts = { version = "0.17.0", default-features = false, features = ["flate2_rust"] }
 encoding_rs = "0.8"
+epaint_default_fonts = "=0.36.1"
 
 # Compression
 flate2 = "1"

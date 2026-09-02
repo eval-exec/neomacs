@@ -1784,6 +1784,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "epaint_default_fonts"
+version = "0.36.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18dee69613aac468922cf28a32025eb7d7ed6985b61f73245848e58f37876c98"
+
+[[package]]
 name = "equator"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3876,6 +3882,7 @@ version = "0.0.16"
 dependencies = [
  "cosmic-text",
  "dwrote",
+ "epaint_default_fonts",
  "fontconfig",
  "fontdb",
  "freetype-rs",
