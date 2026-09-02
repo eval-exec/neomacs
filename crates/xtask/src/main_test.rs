@@ -1690,6 +1690,7 @@ fn portable_runtime_image_is_opt_in_and_resolves_from_the_repository() {
 
     let options = parse_options(&[
         "--release",
+        "--portable-seed",
         "--portable-runtime-image",
         "dist/neomacs.portable",
     ]);
@@ -1703,6 +1704,7 @@ fn portable_runtime_image_is_opt_in_and_resolves_from_the_repository() {
 fn final_dump_receives_the_requested_portable_runtime_image_path() {
     let options = parse_options(&[
         "--release",
+        "--portable-seed",
         "--portable-runtime-image",
         "dist/neomacs.portable",
     ]);
@@ -1752,6 +1754,89 @@ fn product_variant_defaults_to_full_and_can_be_minimal() {
         parse_options(&["--release", "--minimal"]).product_variant,
         ProductVariant::Minimal
     );
+}
+
+#[test]
+fn portable_seed_is_an_isolated_interpreter_only_product() {
+    let options = parse_options(&[
+        "--release",
+        "--portable-seed",
+        "--portable-runtime-image",
+        "dist/neomacs.portable",
+    ]);
+
+    assert_eq!(options.product_variant, ProductVariant::PortableSeed);
+    assert_eq!(
+        options.bin_dir,
+        PathBuf::from("/repo/target/portable-seed/release")
+    );
+    assert_eq!(
+        initial_cargo_build_args(&options),
+        vec![
+            OsString::from("build"),
+            OsString::from("--verbose"),
+            OsString::from("-p"),
+            OsString::from("neomacs"),
+            OsString::from("--no-default-features"),
+            OsString::from("--target-dir"),
+            OsString::from("/repo/target/portable-seed"),
+            OsString::from("--profile"),
+            OsString::from("release"),
+        ]
+    );
+}
+
+#[test]
+fn portable_seed_requires_an_output_and_rejects_capability_drift() {
+    let missing_output = FreshBuildOptions::parse(
+        PathBuf::from("/repo"),
+        ["--release", "--portable-seed"]
+            .into_iter()
+            .map(OsString::from),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(missing_output.contains("--portable-runtime-image"));
+
+    for extra in [
+        vec!["--features", "sqlite"],
+        vec!["--aot-preload"],
+        vec!["--skip-build"],
+        vec!["--native-comp"],
+    ] {
+        let mut args = vec![
+            "--release",
+            "--portable-seed",
+            "--portable-runtime-image",
+            "dist/neomacs.portable",
+        ];
+        args.extend(extra);
+        let error =
+            FreshBuildOptions::parse(PathBuf::from("/repo"), args.into_iter().map(OsString::from))
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("portable seed"), "unexpected error: {error}");
+    }
+}
+
+#[test]
+fn product_variants_are_mutually_exclusive() {
+    let error = FreshBuildOptions::parse(
+        PathBuf::from("/repo"),
+        [
+            "--release",
+            "--minimal",
+            "--portable-seed",
+            "--portable-runtime-image",
+            "dist/neomacs.portable",
+        ]
+        .into_iter()
+        .map(OsString::from),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("only once"), "unexpected error: {error}");
 }
 
 #[test]
