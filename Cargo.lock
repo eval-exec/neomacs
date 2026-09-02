@@ -3779,6 +3779,7 @@ dependencies = [
  "neovm-core",
  "neovm-host-abi",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
