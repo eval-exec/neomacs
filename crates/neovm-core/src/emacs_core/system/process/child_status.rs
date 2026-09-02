@@ -608,8 +608,9 @@ impl ProcessManager {
 /// `(exit . 256)` -- behavior 4d7e6e51dd4 introduced in 2012 and master no
 /// longer has.  This port follows master's arm (see `write_process_input_once`),
 /// so the ninth line is deliberately not a variant; the line numbers cited
-/// on the eight variants are emacs-31.1's (master's are 1169, 1189, 6075,
-/// 6092, 6101, 6158, 7193, 7752).  **Seven of them have nothing to do with
+/// on the eight variants are emacs-31.0.90's, identical in emacs-31.1
+/// (master's are 1169, 1189, 6075, 6092, 6101, 6158, 7193, 7752, the same
+/// eight sites renumbered).  **Seven of them have nothing to do with
 /// SIGCHLD**, which is the fact this type exists to keep in front of the next
 /// reader: the record that decides whom `status_notify` visits is not the
 /// child-signal record.  GNU declares the counter and the reason for it at

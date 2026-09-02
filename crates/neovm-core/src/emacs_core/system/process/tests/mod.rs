@@ -14331,20 +14331,21 @@ fn gnus_eight_update_status_sites_are_enumerated_and_four_are_the_asynchronous_o
 
 /// GNU's EIGHT `p->tick = ++process_tick;` sites, as a table.
 ///
-/// `grep -n 'tick = ++process_tick' src/process.c` returns exactly eight
-/// lines on GNU master (verified at master snapshot 98165ff73e8, 2026-08-30:
-/// lines 1169, 1189, 6075, 6092, 6101, 6158, 7193, 7752), and **seven of
-/// them are not `handle_child_signal`'s** -- which is the whole point of
-/// [`StatusChangeSite`].  The table used to carry a NINTH row for an EPIPE
-/// tick in `send_process` at ":6927", and that line is still real on the
-/// release lineage: emacs-31.1 (a360712c9d, 2026-08-24) has nine sites, the
-/// ninth being the `(exit . 256)` arm GNU commit 4d7e6e51dd4 introduced in
-/// 2012.  Master commit e381cf1fc97 (2025-08-15) removed it, and that is the
-/// arm this port follows: it closes the write fd and touches neither status
-/// nor tick.  The eight citations below use emacs-31.1's line numbers for
-/// the sites both lineages share, spelled out here so a renumbered line is a
-/// failing test rather than a stale comment, and the count is asserted so a
-/// ninth site cannot appear without one.
+/// The citations pinned below are the release lineage's line numbers, which
+/// the rest of `child_status.rs` uses: `grep -n '++process_tick'
+/// src/process.c` on emacs-31.0.90 and emacs-31.1 (a360712c9d, 2026-08-24;
+/// identical numbering) gives 1128, 1148, 6058, 6075, 6084, 6141, 7178,
+/// 7746 -- and a ninth, 6927, in `send_process`'s EPIPE arm, which is the
+/// `(exit . 256)` behavior GNU commit 4d7e6e51dd4 introduced in 2012.  That
+/// ninth line is deliberately NOT in the table: master commit e381cf1fc97
+/// (2025-08-15) removed it, leaving exactly eight sites (master snapshot
+/// 98165ff73e8, 2026-08-30: 1169, 1189, 6075, 6092, 6101, 6158, 7193, 7752,
+/// the same eight sites renumbered), and master's arm -- close the write fd,
+/// touch neither status nor tick -- is the one this port follows.  **Seven
+/// of the eight are not `handle_child_signal`'s**, which is the whole point
+/// of [`StatusChangeSite`].  The citations are spelled out here so a
+/// renumbered line is a failing test rather than a stale comment, and the
+/// count is asserted so a ninth site cannot appear without one.
 #[test]
 fn the_status_change_sites_are_gnus_eight_tick_bumps() {
     use crate::emacs_core::process::StatusChangeSite;
