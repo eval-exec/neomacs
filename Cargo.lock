@@ -3773,6 +3773,7 @@ dependencies = [
 name = "neomacs-app"
 version = "0.0.16"
 dependencies = [
+ "neovm-core",
  "neovm-host-abi",
 ]
 
