@@ -9154,6 +9154,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "strum",
+ "tar",
  "tempfile",
  "toml",
 ]
