@@ -24,6 +24,7 @@ neovm-core.workspace = true
 cosmic-text.workspace = true
 fontdb.workspace = true
 tracing.workspace = true
+thiserror.workspace = true
 once_cell.workspace = true
 ttf-parser.workspace = true
 unicode-script.workspace = true

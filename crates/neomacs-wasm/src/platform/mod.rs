@@ -4,7 +4,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
-use neomacs_display_protocol::{Color, FrameGlyphBuffer};
+use neomacs_display_protocol::FrameGlyphBuffer;
+use neomacs_layout_engine::bootstrap_frame::PortableBootstrapFrameBuilder;
 use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -22,14 +23,16 @@ struct BrowserFrontend {
 
 struct PresentedFrontend {
     renderer: SurfaceFrameRenderer,
-    frame: FrameGlyphBuffer,
+    bootstrap: PortableBootstrapFrameBuilder,
+    frame: Option<FrameGlyphBuffer>,
 }
 
 impl PresentedFrontend {
     fn new(renderer: SurfaceFrameRenderer) -> Self {
         let mut this = Self {
             renderer,
-            frame: FrameGlyphBuffer::new(),
+            bootstrap: PortableBootstrapFrameBuilder::new(),
+            frame: None,
         };
         this.resize_frame();
         this
@@ -41,16 +44,15 @@ impl PresentedFrontend {
     }
 
     fn resize_frame(&mut self) {
-        let Some(size) = self
+        let size = self
             .renderer
             .logical_size()
-            .unwrap_or_else(|error| panic!("invalid browser surface geometry: {error}"))
-        else {
-            return;
-        };
-        self.frame.width = size.width();
-        self.frame.height = size.height();
-        self.frame.background = Color::rgb(0.055, 0.067, 0.090);
+            .unwrap_or_else(|error| panic!("invalid browser surface geometry: {error}"));
+        self.frame = size.map(|size| {
+            self.bootstrap
+                .build(size)
+                .unwrap_or_else(|error| panic!("failed to build browser initial frame: {error}"))
+        });
     }
 }
 
@@ -144,9 +146,12 @@ impl ApplicationHandler for BrowserFrontend {
                 let Some(presented) = presented.as_mut() else {
                     return;
                 };
+                let Some(frame) = presented.frame.as_ref() else {
+                    return;
+                };
                 let outcome = presented
                     .renderer
-                    .present_frame(&presented.frame)
+                    .present_frame(frame)
                     .unwrap_or_else(|error| panic!("browser GPU presentation failed: {error}"));
                 if outcome.should_request_redraw()
                     && let Some(window) = self.window.as_ref()

@@ -751,7 +751,18 @@ impl FontMetricsService {
         // Install native catalog observation before taking the font-system
         // snapshot. A change racing after this point is then visible through
         // the backend's per-service cursor and triggers a safe-point rebuild.
-        let font_resolver = crate::font::resolver::FontResolver::platform_default();
+        Self::with_font_resolver(crate::font::resolver::FontResolver::platform_default())
+    }
+
+    /// Create a metrics service over an explicit catalog backend.
+    ///
+    /// This is the dependency-injection seam for packaged product catalogs and
+    /// deterministic tests; GNU-compatible selection remains in `FontResolver`.
+    pub fn with_font_backend(backend: Box<dyn crate::font_backend::FontBackend>) -> Self {
+        Self::with_font_resolver(crate::font::resolver::FontResolver::new(backend))
+    }
+
+    fn with_font_resolver(font_resolver: crate::font::resolver::FontResolver) -> Self {
         tracing::info!("FontMetricsService: initializing cosmic-text FontSystem");
         let font_system = FontSystem::new();
         tracing::info!("FontMetricsService: FontSystem ready");

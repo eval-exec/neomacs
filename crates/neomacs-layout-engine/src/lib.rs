@@ -14,6 +14,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod bidi;
+pub mod bootstrap_frame;
 pub(crate) mod buffer_source;
 pub mod composition;
 pub(crate) mod coords;
