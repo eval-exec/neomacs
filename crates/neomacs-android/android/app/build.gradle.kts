@@ -57,7 +57,7 @@ abstract class StageNeomacsPortableAssets : DefaultTask() {
             )
         val required = listOf(
             "neomacs.portable",
-            "neomacs-runtime.tar.gz",
+            "neomacs-runtime.bundle",
             "neomacs-runtime.sha256",
         )
         val missing = required.filterNot { input.resolve(it).isFile }
@@ -128,7 +128,7 @@ android {
     }
 
     androidResources {
-        noCompress += listOf("portable", "gz", "sha256")
+        noCompress += listOf("portable", "bundle", "sha256")
     }
 
     packaging {
