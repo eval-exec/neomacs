@@ -27,6 +27,10 @@ const TAG_CONS: u64 = 0b011;
 const TAG_STRING: u64 = 0b100;
 const TAG_VECLIKE: u64 = 0b101;
 const TAG_FLOAT: u64 = 0b111;
+const GC_HEADER_PADDING: usize = std::mem::size_of::<usize>() - 2;
+const VECLIKE_HEADER_PADDING: usize = std::mem::size_of::<usize>() - 1;
+const STRING_I64_PADDING: usize = 8 - std::mem::size_of::<usize>();
+const STRING_TRAILING_PADDING: usize = 8 - std::mem::size_of::<usize>();
 
 #[derive(Default)]
 pub(crate) struct MappedHeapPayload {
@@ -40,7 +44,7 @@ pub(crate) struct MappedHeapPayload {
 struct RawGcHeader {
     marked: u8,
     kind: u8,
-    padding: [u8; 6],
+    padding: [u8; GC_HEADER_PADDING],
     next: usize,
 }
 
@@ -56,7 +60,7 @@ struct RawFloatObj {
 struct RawVecLikeHeader {
     header: RawGcHeader,
     type_tag: u8,
-    padding: [u8; 7],
+    padding: [u8; VECLIKE_HEADER_PADDING],
 }
 
 #[repr(C)]
@@ -64,11 +68,42 @@ struct RawVecLikeHeader {
 struct RawStringObj {
     header: RawGcHeader,
     size: usize,
+    size_padding: [u8; STRING_I64_PADDING],
     size_byte: i64,
     intervals: usize,
     data: usize,
     storage: usize,
+    trailing_padding: [u8; STRING_TRAILING_PADDING],
 }
+
+// The raw mirrors must reproduce the runtime object layouts byte for byte on
+// EVERY target, including wasm32's 4-byte words: a mapped string's data word
+// is relocated by offset, so a drifted field lands the pointer in the wrong
+// word. Proving it here makes the wasm32/Android cross-checks part of the
+// evidence instead of a dump-time debug assertion nobody runs on those hosts.
+const _: () = {
+    use std::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<RawGcHeader>() == size_of::<GcHeader>());
+    assert!(align_of::<RawGcHeader>() == align_of::<GcHeader>());
+    assert!(offset_of!(RawGcHeader, kind) == offset_of!(GcHeader, kind));
+    assert!(offset_of!(RawGcHeader, next) == offset_of!(GcHeader, next));
+
+    assert!(size_of::<RawFloatObj>() == size_of::<FloatObj>());
+    assert!(align_of::<RawFloatObj>() == align_of::<FloatObj>());
+    assert!(offset_of!(RawFloatObj, value) == offset_of!(FloatObj, value));
+
+    assert!(size_of::<RawVecLikeHeader>() == size_of::<VecLikeHeader>());
+    assert!(align_of::<RawVecLikeHeader>() == align_of::<VecLikeHeader>());
+    assert!(offset_of!(RawVecLikeHeader, type_tag) == offset_of!(VecLikeHeader, type_tag));
+
+    assert!(size_of::<RawStringObj>() == size_of::<StringObj>());
+    assert!(align_of::<RawStringObj>() == align_of::<StringObj>());
+    assert!(offset_of!(RawStringObj, size) == offset_of!(StringObj, data));
+    assert!(
+        offset_of!(RawStringObj, data)
+            == offset_of!(StringObj, data) + LispString::data_field_offset()
+    );
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct MappedHeapView {
@@ -1321,7 +1356,6 @@ impl MappedHeapBuilder {
     }
 
     fn populate_raw_heap_payloads(&mut self, heap: &DumpTaggedHeap) {
-        self.debug_assert_raw_layout_matches_runtime();
         for (index, object) in heap.objects.iter().enumerate() {
             match object {
                 DumpHeapObject::Cons { car, cdr } => {
@@ -1525,47 +1559,12 @@ impl MappedHeapBuilder {
         }
     }
 
-    fn debug_assert_raw_layout_matches_runtime(&self) {
-        debug_assert_eq!(
-            std::mem::size_of::<RawGcHeader>(),
-            std::mem::size_of::<GcHeader>()
-        );
-        debug_assert_eq!(
-            std::mem::align_of::<RawGcHeader>(),
-            std::mem::align_of::<GcHeader>()
-        );
-        debug_assert_eq!(
-            std::mem::size_of::<RawFloatObj>(),
-            std::mem::size_of::<FloatObj>()
-        );
-        debug_assert_eq!(
-            std::mem::align_of::<RawFloatObj>(),
-            std::mem::align_of::<FloatObj>()
-        );
-        debug_assert_eq!(
-            std::mem::size_of::<RawVecLikeHeader>(),
-            std::mem::size_of::<VecLikeHeader>()
-        );
-        debug_assert_eq!(
-            std::mem::align_of::<RawVecLikeHeader>(),
-            std::mem::align_of::<VecLikeHeader>()
-        );
-        debug_assert_eq!(
-            std::mem::size_of::<RawStringObj>(),
-            std::mem::size_of::<StringObj>()
-        );
-        debug_assert_eq!(
-            std::mem::align_of::<RawStringObj>(),
-            std::mem::align_of::<StringObj>()
-        );
-    }
-
     fn write_raw_float_obj(&mut self, offset: usize, value: f64) {
         let raw = RawFloatObj {
             header: RawGcHeader {
                 marked: 0,
                 kind: u8::from(HeapObjectKind::Float),
-                padding: [0; 6],
+                padding: [0; GC_HEADER_PADDING],
                 next: 0,
             },
             value,
@@ -1578,11 +1577,11 @@ impl MappedHeapBuilder {
             header: RawGcHeader {
                 marked: 0,
                 kind: u8::from(HeapObjectKind::VecLike),
-                padding: [0; 6],
+                padding: [0; GC_HEADER_PADDING],
                 next: 0,
             },
             type_tag: u8::from(type_tag),
-            padding: [0; 7],
+            padding: [0; VECLIKE_HEADER_PADDING],
         };
         self.write_bytes(offset, bytemuck::bytes_of(&raw));
     }
@@ -1622,14 +1621,16 @@ impl MappedHeapBuilder {
             header: RawGcHeader {
                 marked: 0,
                 kind: u8::from(HeapObjectKind::String),
-                padding: [0; 6],
+                padding: [0; GC_HEADER_PADDING],
                 next: 0,
             },
             size,
+            size_padding: [0; STRING_I64_PADDING],
             size_byte,
             intervals: 0,
             data: data_word,
             storage: 0,
+            trailing_padding: [0; STRING_TRAILING_PADDING],
         };
         self.write_bytes(offset, bytemuck::bytes_of(&raw));
     }
