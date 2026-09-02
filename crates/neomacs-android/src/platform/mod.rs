@@ -1,7 +1,8 @@
 //! Android Activity and window lifecycle adapter.
 
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
-use neomacs_wgpu_runtime::{SurfaceClearColor, SurfaceRuntime, SurfaceWindow};
+use neomacs_display_protocol::{Color, FrameGlyphBuffer};
+use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -12,17 +13,49 @@ use winit::window::{Window, WindowId};
 struct AndroidFrontend {
     lifecycle: FrontendLifecycle,
     window: Option<SurfaceWindow>,
-    surface: Option<SurfaceRuntime>,
+    presented: Option<PresentedFrontend>,
 }
 
-const INITIAL_CLEAR_COLOR: SurfaceClearColor = SurfaceClearColor::rgb(0.055, 0.067, 0.090);
+struct PresentedFrontend {
+    renderer: SurfaceFrameRenderer,
+    frame: FrameGlyphBuffer,
+}
+
+impl PresentedFrontend {
+    fn new(renderer: SurfaceFrameRenderer) -> Self {
+        let mut this = Self {
+            renderer,
+            frame: FrameGlyphBuffer::new(),
+        };
+        this.resize_frame();
+        this
+    }
+
+    fn resize_physical(&mut self, width: u32, height: u32) {
+        self.renderer.resize_physical(width, height);
+        self.resize_frame();
+    }
+
+    fn resize_frame(&mut self) {
+        let Some(size) = self
+            .renderer
+            .logical_size()
+            .unwrap_or_else(|error| panic!("invalid Android surface geometry: {error}"))
+        else {
+            return;
+        };
+        self.frame.width = size.width();
+        self.frame.height = size.height();
+        self.frame.background = Color::rgb(0.055, 0.067, 0.090);
+    }
+}
 
 impl Default for AndroidFrontend {
     fn default() -> Self {
         Self {
             lifecycle: FrontendLifecycle::new(),
             window: None,
-            surface: None,
+            presented: None,
         }
     }
 }
@@ -39,7 +72,7 @@ impl ApplicationHandler for AndroidFrontend {
                 .create_window(attributes)
                 .unwrap_or_else(|error| panic!("failed to create the Android window: {error}")),
         );
-        let surface = pollster::block_on(SurfaceRuntime::new(
+        let renderer = pollster::block_on(SurfaceFrameRenderer::new(
             event_loop.owned_display_handle(),
             window.clone(),
         ))
@@ -47,7 +80,7 @@ impl ApplicationHandler for AndroidFrontend {
 
         window.request_redraw();
         self.window = Some(window);
-        self.surface = Some(surface);
+        self.presented = Some(PresentedFrontend::new(renderer));
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
@@ -56,7 +89,7 @@ impl ApplicationHandler for AndroidFrontend {
         // tracer bullet drops the window and recreates it on the next resume.
         if self.lifecycle.transition(LifecycleEvent::Suspended) == LifecycleAction::DestroyFrontend
         {
-            self.surface = None;
+            self.presented = None;
             self.window = None;
         }
     }
@@ -83,19 +116,34 @@ impl ApplicationHandler for AndroidFrontend {
                 }
             }
             WindowEvent::Resized(size) => {
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.resize_physical(size.width, size.height);
+                if let Some(presented) = self.presented.as_mut() {
+                    presented.resize_physical(size.width, size.height);
                 }
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
             }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                let size = self.window.as_ref().expect("validated window").inner_size();
+                if let Some(presented) = self.presented.as_mut() {
+                    presented
+                        .renderer
+                        .set_scale_factor(scale_factor)
+                        .unwrap_or_else(|error| panic!("invalid Android display scale: {error}"));
+                    presented.resize_physical(size.width, size.height);
+                }
+                self.window
+                    .as_ref()
+                    .expect("validated window")
+                    .request_redraw();
+            }
             WindowEvent::RedrawRequested => {
-                let Some(surface) = self.surface.as_mut() else {
+                let Some(presented) = self.presented.as_mut() else {
                     return;
                 };
-                let outcome = surface
-                    .present_clear(INITIAL_CLEAR_COLOR)
+                let outcome = presented
+                    .renderer
+                    .present_frame(&presented.frame)
                     .unwrap_or_else(|error| panic!("Android GPU presentation failed: {error}"));
                 if outcome.should_request_redraw()
                     && let Some(window) = self.window.as_ref()
