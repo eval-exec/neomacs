@@ -9161,9 +9161,10 @@ fn scroll_down_skips_invisible_logical_lines_when_measuring_a_page() {
                  (setq i (1+ i))))
              (goto-char (point-min))
              (forward-line 20)
+             (setq buffer-invisibility-spec '((fold . t)))
              (let ((hidden-beg (point)))
                (forward-line 40)
-               (put-text-property hidden-beg (point) 'invisible t))
+               (put-text-property hidden-beg (point) 'invisible 'fold))
              (goto-char (point-min))
              (forward-line 69))
            (set-window-point w (point))
@@ -9171,9 +9172,11 @@ fn scroll_down_skips_invisible_logical_lines_when_measuring_a_page() {
            (scroll-down nil)
            (list (window-body-height w)
                  next-screen-context-lines
-                 (line-number-at-pos (window-start w))))",
+                 (line-number-at-pos (window-start w))
+                 (line-number-at-pos (point))
+                 (invisible-p (point))))",
     );
-    assert_eq!(results[0], "OK (35 2 1)");
+    assert_eq!(results[0], "OK (35 2 1 70 nil)");
 }
 
 /// Page-up near the end of a large buffer must not restart display scanning at

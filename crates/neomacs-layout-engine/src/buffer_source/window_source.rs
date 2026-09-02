@@ -1,6 +1,6 @@
 //! Buffer window source read bounds and text extraction.
 
-use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess};
+use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess, RustTextPropAccess};
 use crate::scroll_policy::{
     ForwardScroll, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
     line_start_below, top_margin,
@@ -190,9 +190,79 @@ impl BufferWindowSourceRequest {
         self,
         access: &RustBufferAccess<'_, B>,
     ) -> ResolvedWindowStart {
+        let requested = self
+            .requested_window_start
+            .clamp(self.accessible_start, self.accessible_end);
+        if self.point_fits_visible_budget_through_folds(requested, access) {
+            return ResolvedWindowStart(requested);
+        }
         ResolvedWindowStart(
             self.resolve_window_start(|charpos| access.byte_at(access.charpos_to_bytepos(charpos))),
         )
+    }
+
+    /// Whether POINT still fits in the current viewport once invisible source
+    /// runs are elided.  The ordinary source preflight counts logical newlines;
+    /// a large folded Org drawer therefore looks hundreds of rows tall and can
+    /// recenter the window into the hidden LOGBOOK even though point is only a
+    /// few DISPLAY rows below the current start.  GNU makes this decision with
+    /// its display iterator, which skips the fold.  Keep the requested start
+    /// when a bounded display-aware scan proves point still fits.
+    fn point_fits_visible_budget_through_folds<B: LayoutBufferView>(
+        self,
+        window_start: i64,
+        access: &RustBufferAccess<'_, B>,
+    ) -> bool {
+        if self.point_charpos < window_start || self.point_charpos > self.accessible_end {
+            return false;
+        }
+        let row_budget = last_usable_row(self.max_rows, self.scroll_margin).max(1);
+        let props = RustTextPropAccess::new(access.view());
+        let mut pos = window_start;
+        let mut row = 0i64;
+        let mut col = 0i64;
+        let mut crossed_fold = false;
+
+        while pos < self.point_charpos && row <= row_budget {
+            let (status, next_visible) = props.check_invisible(pos);
+            if status.hidden {
+                crossed_fold = true;
+                if status.ellipsis {
+                    col += 3;
+                    row += col / self.visible_cols;
+                    col %= self.visible_cols;
+                }
+                pos = next_visible.max(pos + 1).min(self.accessible_end);
+                continue;
+            }
+
+            match access.byte_at(access.charpos_to_bytepos(pos)) {
+                Some(b'\n') => {
+                    row += 1;
+                    col = 0;
+                }
+                Some(b'\t') => {
+                    // The request deliberately has no full tab-stop state;
+                    // charging a whole conventional tab stop is safer than
+                    // treating a tab as one ordinary glyph in this preflight.
+                    col += 8;
+                    row += col / self.visible_cols;
+                    col %= self.visible_cols;
+                }
+                Some(_) => {
+                    // Two columns is conservative for ordinary wide glyphs;
+                    // if that already fits, the hidden logical lines cannot be
+                    // a valid reason to recenter into the fold.
+                    col += 2;
+                    row += col / self.visible_cols;
+                    col %= self.visible_cols;
+                }
+                None => break,
+            }
+            pos += 1;
+        }
+
+        crossed_fold && row <= row_budget
     }
 
     /// Treat the requested start as authoritative, clamped only to the live

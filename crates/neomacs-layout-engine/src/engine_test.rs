@@ -9321,6 +9321,72 @@ fn implemented_text_backends_match_layout_frame_invisible_text_output() {
 }
 
 #[test]
+fn point_after_large_fold_keeps_visually_valid_window_start() {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let hidden = (0..80)
+        .map(|index| format!("hidden state {index}\n"))
+        .collect::<String>();
+    let text = format!("heading\n:LOGBOOK:\n{hidden}:END:\nafter\nnext\n");
+    let hidden_start = text.find("hidden state").expect("hidden start");
+    let hidden_end = text.find(":END:").expect("hidden end");
+    let after = text.find("after").expect("after");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&text);
+        buf.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("folded"), Value::T)]),
+        );
+        assert!(buf.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::symbol("folded"),
+        ));
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("point-after-large-fold", 640, 120, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    eval.buffer_manager_mut()
+        .goto_buffer_emacs_byte_pos(buf_id, EmacsBytePos::new(after));
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+    let neovm_core::window::Window::Leaf { point, .. } = frame
+        .find_window_mut(selected_window)
+        .expect("selected window")
+    else {
+        panic!("selected window is not a leaf");
+    };
+    *point = LispCharPos1::new((after + 1) as i64);
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let frame = eval.frame_manager().get(frame_id).expect("frame");
+    let neovm_core::window::Window::Leaf { window_start, .. } =
+        frame.find_window(selected_window).expect("selected window")
+    else {
+        panic!("selected window is not a leaf");
+    };
+    assert_eq!(
+        *window_start,
+        LispCharPos1::ONE,
+        "hidden logical lines must not recenter a visually visible point into the fold"
+    );
+}
+
+#[test]
 fn layout_frame_rust_renders_invisible_ellipsis_through_row_builder() {
     let mut eval = Context::new();
     let buf_id = eval
