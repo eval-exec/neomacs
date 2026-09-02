@@ -605,7 +605,10 @@ const _: () = {
 // grow it. This const-asserts that invariant so a future field addition trips
 // the build rather than silently regressing scan throughput.
 const _: () = {
+    #[cfg(target_pointer_width = "64")]
     assert!(core::mem::size_of::<LispSymbol>() == 32);
+    #[cfg(target_pointer_width = "32")]
+    assert!(core::mem::size_of::<LispSymbol>() <= 32);
 };
 
 /// What a `Localized` symbol's BLV cache holds when it is loaded for one

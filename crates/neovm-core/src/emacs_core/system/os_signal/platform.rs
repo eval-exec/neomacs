@@ -7,6 +7,8 @@
 //! of rediscovering platform predicates at every call site.
 
 use super::HandledSignal;
+#[cfg(not(unix))]
+use std::ffi::c_int;
 
 #[cfg(all(unix, not(target_os = "android")))]
 pub(super) const SUPPORTED_SIGNALS: &[HandledSignal] = &HandledSignal::ALL;
@@ -52,7 +54,7 @@ impl WakePipe {
 
 #[cfg(not(unix))]
 impl WakePipe {
-    pub(super) fn read_fd(&self) -> Option<libc::c_int> {
+    pub(super) fn read_fd(&self) -> Option<c_int> {
         None
     }
 }

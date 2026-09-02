@@ -17,6 +17,7 @@ use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::rounding_modes::RoundingMode;
 use malachite::integer::Integer;
 use std::cell::RefCell;
+use std::ffi::c_int;
 use std::ffi::{CStr, OsString};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1607,7 +1608,7 @@ enum TmIsDst {
 }
 
 impl TmIsDst {
-    fn to_c(self) -> libc::c_int {
+    fn to_c(self) -> c_int {
         match self {
             TmIsDst::Auto => -1,
             TmIsDst::Standard => 0,

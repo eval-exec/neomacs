@@ -27,7 +27,9 @@ use md5::Md5;
 use sha1::Sha1;
 use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
 use std::borrow::Cow;
+#[cfg(unix)]
 use std::ffi::CString;
+use std::ffi::c_int;
 
 // Sentinel constants removed — no longer needed with Vec<u8> LispString
 
@@ -90,7 +92,7 @@ unsafe fn collation_errno() -> libc::c_int {
 /// This one was not merely a duplicate: it rendered the errno with Rust's
 /// `io::Error` Display, so every collation error it reported carried a
 /// " (os error N)" suffix GNU never emits. The shared helper cannot do that.
-fn collation_errno_message(errno: libc::c_int) -> String {
+fn collation_errno_message(errno: c_int) -> String {
     crate::emacs_core::errno::emacs_strerror(errno)
 }
 
