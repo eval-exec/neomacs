@@ -1,6 +1,6 @@
 use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendModifiers, FrontendViewport,
+    FrontendModifiers, FrontendPresentationId, FrontendViewport,
 };
 
 #[test]
@@ -50,4 +50,22 @@ fn committed_text_remains_atomic_until_the_evaluator_adapter() {
     };
     assert_eq!(text, "λ🙂");
     assert_eq!(target.get(), 7);
+}
+
+#[test]
+fn presentation_feedback_keeps_revision_and_frame_identity_together() {
+    let presentation = FrontendPresentationId::new(23);
+    let target = FrontendFrameId::new(7);
+
+    assert_eq!(
+        FrontendEvent::PresentationActivated {
+            presentation,
+            target,
+        },
+        FrontendEvent::PresentationActivated {
+            presentation: FrontendPresentationId::new(23),
+            target: FrontendFrameId::new(7),
+        }
+    );
+    assert_eq!(presentation.get(), 23);
 }
