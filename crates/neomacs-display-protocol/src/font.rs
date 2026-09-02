@@ -77,6 +77,8 @@ pub struct ResolvedFontId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum FontBackendKind {
+    /// Immutable application-packaged font catalog used without host discovery.
+    Packaged,
     /// Linux fontconfig / fontdb file identities.
     Fontconfig,
     /// macOS CoreText descriptors.
@@ -367,7 +369,9 @@ impl ResolvedFontIdentity {
     pub fn file_face_index(&self) -> u32 {
         match self.backend {
             FontBackendKind::Fontconfig => self.face_selector.raw() & 0x0000_ffff,
-            FontBackendKind::CoreText | FontBackendKind::DirectWrite => self.face_selector.raw(),
+            FontBackendKind::Packaged
+            | FontBackendKind::CoreText
+            | FontBackendKind::DirectWrite => self.face_selector.raw(),
         }
     }
 
@@ -378,7 +382,9 @@ impl ResolvedFontIdentity {
                 let index = (self.face_selector.raw() >> 16) & 0x7fff;
                 (index != 0).then_some(index)
             }
-            FontBackendKind::CoreText | FontBackendKind::DirectWrite => None,
+            FontBackendKind::Packaged
+            | FontBackendKind::CoreText
+            | FontBackendKind::DirectWrite => None,
         }
     }
 }
