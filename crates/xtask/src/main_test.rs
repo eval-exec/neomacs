@@ -383,6 +383,28 @@ fn linux_release_publishes_verified_full_and_minimal_products() {
 }
 
 #[test]
+fn android_ci_builds_and_verifies_the_complete_release_package() {
+    let workflow = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/workflows/ci.yml"
+    ));
+
+    for required in [
+        "android-package:",
+        "fresh-build --release --portable-seed",
+        "package-portable-assets",
+        "cargo build --release -p neomacs-android",
+        "assembleRelease",
+        "verify-android-apk",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "Android package CI is missing `{required}`"
+        );
+    }
+}
+
+#[test]
 fn release_workflow_publishes_only_tagged_nix_release_closures() {
     #[derive(Debug, Deserialize)]
     struct WorkflowDocument {

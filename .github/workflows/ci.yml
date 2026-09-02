@@ -375,6 +375,83 @@ jobs:
       - name: Check portable frontend
         run: cargo check -p ${{ matrix.product }} --target ${{ matrix.target }}
 
+  android-package:
+    name: assembled Android package (arm64-v8a)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      NEOMACS_ANDROID_NDK_VERSION: 28.2.13676358
+      NEOMACS_ANDROID_BUILD_TOOLS_VERSION: 36.0.0
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+
+      - name: Prepare workspace temp directory
+        run: mkdir -p "$TMPDIR"
+
+      - *install_linux_deps
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+          cache-key: ci-android-package-aarch64
+          target: aarch64-linux-android
+
+      - name: Install pinned Android SDK tools
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "build-tools;$NEOMACS_ANDROID_BUILD_TOOLS_VERSION" \
+            "ndk;$NEOMACS_ANDROID_NDK_VERSION" \
+            "platforms;android-36"
+
+      - name: Configure Android NDK toolchain
+        run: |
+          toolchain="$ANDROID_SDK_ROOT/ndk/$NEOMACS_ANDROID_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "AR_aarch64_linux_android=$toolchain/llvm-ar"
+            echo "CC_aarch64_linux_android=$toolchain/aarch64-linux-android24-clang"
+            echo "CXX_aarch64_linux_android=$toolchain/aarch64-linux-android24-clang++"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$toolchain/aarch64-linux-android24-clang"
+          } >> "$GITHUB_ENV"
+
+      - name: Build portable runtime image
+        run: >-
+          cargo xtask fresh-build --release --portable-seed
+          --portable-runtime-image "$TMPDIR/neomacs.portable" --low-memory
+
+      - name: Package portable runtime assets
+        run: >-
+          cargo xtask package-portable-assets
+          --portable-runtime-image "$TMPDIR/neomacs.portable"
+          --output-dir "$TMPDIR/neomacs-android-assets"
+
+      - name: Build Android native library
+        env:
+          RUSTC_WRAPPER: ""
+        run: >-
+          cargo build --release -p neomacs-android
+          --target aarch64-linux-android
+
+      - name: Assemble Android release package
+        run: |
+          android_project="$GITHUB_WORKSPACE/crates/neomacs-android/android"
+          "$android_project/gradlew" --no-daemon -p "$android_project" \
+            -PneomacsNativeLibrary="$GITHUB_WORKSPACE/target/aarch64-linux-android/release/libneomacs_android.so" \
+            -PneomacsPortableAssets="$TMPDIR/neomacs-android-assets" \
+            assembleRelease
+
+      - name: Verify assembled Android package
+        run: >-
+          cargo xtask verify-android-apk
+          --apk crates/neomacs-android/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          --portable-assets "$TMPDIR/neomacs-android-assets"
+
   linux-no-gstreamer-startup:
     name: startup without GStreamer (linux x86_64)
     if: github.event_name != 'schedule'
