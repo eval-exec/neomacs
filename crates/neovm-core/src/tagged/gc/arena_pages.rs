@@ -81,7 +81,15 @@ pub(super) trait PagedObject: Sized {
 // LispValueVec 24 — the 24 relies on the Owned(Vec)/Mapped niche packing; the
 // const assert below is the compile-time proof) → shares the 64B class, link
 // in bytes 56..64.
-pub(super) const _: () = assert!(size_of::<FloatObj>() == 24, "FloatObj must stay 24 bytes");
+pub(super) const _: () = assert!(
+    size_of::<GcHeader>() == 2 * size_of::<usize>(),
+    "GcHeader must stay two words"
+);
+pub(super) const _: () = assert!(
+    size_of::<FloatObj>()
+        == size_of::<GcHeader>().next_multiple_of(std::mem::align_of::<f64>()) + size_of::<f64>(),
+    "FloatObj must stay GcHeader + f64 (24 bytes on 64-bit, 16 on wasm32)"
+);
 pub(super) const _: () = assert!(
     size_of::<StringObj>() <= 56,
     "StringObj must fit a 64-byte slot with its trailing free-list link \

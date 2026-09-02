@@ -1830,9 +1830,16 @@ impl SymbolByteCodeCallCache {
 
 const _: () = {
     assert!(SYMBOL_BYTECODE_CALL_CACHE_CAPACITY.is_power_of_two());
-    // epoch + symbol + a one-word callee behind a tag: four words.
-    assert!(std::mem::size_of::<SymbolByteCodeCallCacheEntry>() <= 4 * std::mem::size_of::<u64>());
-    assert!(std::mem::size_of::<RecentInterpreterCall>() <= 8 * std::mem::size_of::<u64>());
+    // These are native-64 cache-density contracts, not semantic object
+    // layouts. A wasm32 interpreter has narrower Value/SymId fields and is
+    // allowed to use the correspondingly smaller representation.
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert!(
+            std::mem::size_of::<SymbolByteCodeCallCacheEntry>() <= 4 * std::mem::size_of::<u64>()
+        );
+        assert!(std::mem::size_of::<RecentInterpreterCall>() <= 8 * std::mem::size_of::<u64>());
+    }
 };
 
 /// Process-selected execution policy for bytecode calls in this VM.
