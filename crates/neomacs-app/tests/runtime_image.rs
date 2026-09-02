@@ -5,10 +5,11 @@ use std::io::Cursor;
 
 use neomacs_app::host::{ExecutionEngine, HostKind, HostProfile, RuntimeImageModel};
 use neomacs_app::runtime_image::{
-    ExtractedRuntimeImage, RuntimeImageError, RuntimeImageInstall, RuntimeImageSource,
+    ExtractedRuntimeImage, PORTABLE_FINAL_RUNTIME_IMAGE_ASSET, RuntimeImageError,
+    RuntimeImageInstall, RuntimeImageSource,
 };
 use neovm_core::emacs_core::eval::Context;
-use neovm_core::emacs_core::pdump::{dump_to_file, encode_portable_snapshot};
+use neovm_core::emacs_core::pdump::{dump_to_file, encode_portable_snapshot, load_from_dump};
 use neovm_core::emacs_core::value::Value;
 
 #[test]
@@ -106,6 +107,48 @@ fn final_asset_extraction_owns_the_fingerprinted_product_name() {
     .unwrap();
 
     assert_eq!(std::fs::read(image.path()).unwrap(), b"final-image");
+}
+
+#[test]
+fn portable_asset_materializes_and_reuses_a_target_native_final_image() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut source = Context::new();
+    source.set_variable("portable-runtime-value", Value::fixnum(73));
+    let portable = encode_portable_snapshot(&source).expect("encode portable image");
+    let opens = Cell::new(0);
+
+    let first =
+        ExtractedRuntimeImage::prepare_final_from_portable(directory.path(), |asset_name| {
+            opens.set(opens.get() + 1);
+            assert_eq!(asset_name, PORTABLE_FINAL_RUNTIME_IMAGE_ASSET);
+            Ok::<_, std::io::Error>(Cursor::new(portable.as_slice()))
+        })
+        .expect("materialize target-native image");
+
+    assert_eq!(first.install(), RuntimeImageInstall::Installed);
+    assert!(
+        first
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("neomacs-") && name.ends_with(".pdump")),
+    );
+    let loaded = load_from_dump(first.path()).expect("load materialized native image");
+    assert_eq!(
+        loaded.obarray().symbol_value("portable-runtime-value"),
+        Some(&Value::fixnum(73)),
+    );
+
+    let second = ExtractedRuntimeImage::prepare_final_from_portable(
+        directory.path(),
+        |_| -> std::io::Result<Cursor<&'static [u8]>> {
+            panic!("an existing native image must not reopen the portable asset")
+        },
+    )
+    .expect("reuse target-native image");
+    assert_eq!(second.install(), RuntimeImageInstall::Reused);
+    assert_eq!(first.path(), second.path());
+    assert_eq!(opens.get(), 1);
 }
 
 #[test]
