@@ -1,4 +1,5 @@
 mod dependency_coherence;
+mod android_package;
 mod gc_stress;
 mod portable_assets;
 mod production_capabilities;
@@ -478,6 +479,14 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     ) {
         args.next();
         portable_assets::run(&repo_root, args)?;
+        return Ok(());
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("verify-android-apk")
+    ) {
+        args.next();
+        android_package::run(&repo_root, args)?;
         return Ok(());
     }
     let options = FreshBuildOptions::parse(repo_root, args)?;
@@ -4749,6 +4758,7 @@ Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [-
        cargo xtask check-dependency-coherence
        cargo xtask package-portable-assets --portable-runtime-image PATH --output-dir DIR [--runtime-root DIR]
        cargo xtask check-dependency-coherence
+       cargo xtask verify-android-apk --apk PATH --portable-assets DIR [--android-sdk DIR]
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
        cargo xtask perf compare SCENARIO --baseline-editor PATH --candidate-editor PATH [--samples N>=3]
