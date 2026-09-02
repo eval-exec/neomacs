@@ -99,6 +99,12 @@ inotify.workspace = true
 default = ["jit", "sqlite"]
 sqlite = ["dep:rusqlite"]
 sound = ["rodio"]
+# Set by `neomacs`'s `webview` feature.  `build.rs` turns it into
+# `cfg(neomacs_have_wkwebview)` on macOS, which is what decides whether
+# `xwidget-internal` is provided: the evaluator cannot see
+# `neomacs-webview`'s feature directly, and advertising the layer without the
+# backend leaves `xwidget-webkit-browse-url` failing at creation.
+webview = []
 # Opt-in per-char validator for the display-motion stop cache (indent.rs
 # DisplayStopCache): re-runs every DisplayStopProp probe on each fast-path char
 # and asserts the cached stop skipped nothing. OFF by default (like GNU's

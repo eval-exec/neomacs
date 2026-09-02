@@ -43,7 +43,10 @@ cargo-features = ["video"]
 video-backend = "linked-gstreamer"
 
 [workspace.metadata.neomacs-production-capabilities.darwin]
-cargo-features = []
+# The inline browser is the system WKWebView (`crates/neomacs-webview`,
+# `platform/macos`); nothing to install, so production builds ship it and
+# `xwidget-internal` can be provided honestly.
+cargo-features = ["webview"]
 video-backend = "none"
 
 [workspace.metadata.neomacs-production-capabilities.windows]

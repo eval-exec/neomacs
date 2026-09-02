@@ -1330,9 +1330,35 @@ fn initial_cargo_build_passes_webview_when_requested() {
     );
 }
 
+/// macOS production builds ship the native `WKWebView` inline browser, so the
+/// darwin capability row in the workspace manifest requests `webview` and the
+/// stage-1 build carries it without anyone passing `--features`.  This is what
+/// `xwidget-internal` advertises to Lisp on macOS; a darwin build without the
+/// feature would provide the symbol and have no backend behind it.
 #[test]
-#[cfg(not(target_os = "linux"))]
-fn initial_cargo_build_passes_no_features_on_non_linux() {
+#[cfg(target_os = "macos")]
+fn initial_cargo_build_passes_webview_on_darwin() {
+    let options = parse_options(&["--release"]);
+    let args = initial_cargo_build_args(&options);
+
+    assert_eq!(
+        args,
+        vec![
+            OsString::from("build"),
+            OsString::from("--verbose"),
+            OsString::from("-p"),
+            OsString::from("neomacs"),
+            OsString::from("--features"),
+            OsString::from("webview"),
+            OsString::from("--profile"),
+            OsString::from("release"),
+        ]
+    );
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn initial_cargo_build_passes_no_features_on_windows() {
     let options = parse_options(&["--release"]);
     let args = initial_cargo_build_args(&options);
 

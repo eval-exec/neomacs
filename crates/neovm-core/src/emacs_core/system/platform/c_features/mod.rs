@@ -144,10 +144,10 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             // Linux keeps the old answer: its WPE path renders through
             // dma-buf and ledger 190's 13 missing subrs are still open there.
             here: DetectedAtBuildTime {
-                cfg: "neomacs_have_wkwebview -- neovm-core/build.rs detect_wkwebview(), \
-                      and crates/neomacs-display-runtime/src/backend/wkwebview places a real \
-                      WKWebView using GNU's own algorithm from src/xwidget.c; partial, \
-                      primary frame only, see issue 300",
+                cfg: "neomacs_have_wkwebview -- crates/neovm-core/build.rs detect_wkwebview(): \
+                      macOS AND the `webview' feature, which compiles \
+                      crates/neomacs-webview/src/platform/macos (a real WKWebView placed \
+                      with GNU's own algorithm from src/xwidget.c); see issue 300",
                 present: cfg!(neomacs_have_wkwebview),
             },
         },

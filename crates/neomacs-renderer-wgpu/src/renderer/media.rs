@@ -747,9 +747,18 @@ impl WgpuRenderer {
         )
     }
 
-    /// Remove a WebView from the cache.
-    #[cfg(all(feature = "webview", target_os = "linux"))]
+    /// Release whatever the renderer holds for a closed WebView.
+    ///
+    /// Only the Linux WPE path composites web content through a texture
+    /// cache; the native-overlay backends on macOS and Windows own their
+    /// views outside the renderer, so there is nothing to release here.  The
+    /// method exists on every `webview` build so the display runtime's close
+    /// path is one call, not a per-target `cfg`.
+    #[cfg(feature = "webview")]
     pub fn remove_webview(&mut self, view_id: neomacs_display_protocol::WebViewId) {
+        #[cfg(target_os = "linux")]
         self.caches.webview.remove(view_id);
+        #[cfg(not(target_os = "linux"))]
+        let _ = view_id;
     }
 }

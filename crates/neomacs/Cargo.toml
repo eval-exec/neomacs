@@ -50,7 +50,7 @@ sqlite = ["neovm-core/sqlite"]
 vm-profile = ["neovm-core/vm-profile"]
 neo-term = ["neomacs-display-runtime/neo-term"]
 video = ["neomacs-display-runtime/video"]
-webview = ["neomacs-display-runtime/webview"]
+webview = ["neomacs-display-runtime/webview", "neovm-core/webview"]
 
 [[bin]]
 name = "neomacs"

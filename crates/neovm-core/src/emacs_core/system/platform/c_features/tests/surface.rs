@@ -431,3 +431,20 @@ fn no_site_outside_the_table_decides_a_c_level_feature() {
          the table; missing names mean a provided row never reached `features'"
     );
 }
+
+/// `xwidget-internal` must follow the backend that is really compiled in.
+///
+/// The WKWebView adapter lives behind `neomacs-webview`'s `webview` feature,
+/// which `neomacs` forwards to `neovm-core/webview`; `build.rs` sets
+/// `neomacs_have_wkwebview` only when that feature is on AND the target is
+/// macOS.  Before this pin the cfg was set on every macOS build, so a binary
+/// with no backend still told `lisp/xwidget.el` the layer was there, and
+/// `xwidget-webkit-browse-url` failed at creation with `NotBuilt`.
+#[test]
+fn wkwebview_cfg_follows_the_webview_feature_on_macos() {
+    assert_eq!(
+        cfg!(neomacs_have_wkwebview),
+        cfg!(all(target_os = "macos", feature = "webview")),
+        "neomacs_have_wkwebview must be exactly `webview` feature AND macOS"
+    );
+}

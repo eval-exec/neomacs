@@ -126,13 +126,19 @@ fn ensure_generated_unicode_lisp(project_root: &Path) {
 
 /// Whether this build has a native inline web view.
 ///
-/// The backend is `crates/neomacs-display-runtime/src/backend/wkwebview`, which is
-/// itself `#[cfg(target_os = "macos")]` -- it places a real `WKWebView` over
-/// the GPU surface, so the platform check *is* the probe. There is no library
-/// to look for: `WebKit.framework` ships with macOS.
+/// The backend is `crates/neomacs-webview/src/platform/macos`, compiled only
+/// under `neomacs-webview`'s `webview` feature, which `neomacs` forwards to
+/// this crate's `webview` feature.  There is no library to look for --
+/// `WebKit.framework` ships with macOS -- so the probe is "the feature is on
+/// and the target is macOS".  Either half alone is wrong: the feature on
+/// Linux selects the WPE path, whose `xwidget-internal` is still NotBuilt,
+/// and macOS without the feature has no backend behind the symbol.
 fn detect_wkwebview() {
     println!("cargo:rustc-check-cfg=cfg(neomacs_have_wkwebview)");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_WEBVIEW");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+        && std::env::var_os("CARGO_FEATURE_WEBVIEW").is_some()
+    {
         println!("cargo:rustc-cfg=neomacs_have_wkwebview");
     }
 }
