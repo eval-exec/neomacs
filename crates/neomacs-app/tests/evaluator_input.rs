@@ -1,7 +1,7 @@
 use neomacs_app::evaluator_input::EvaluatorInputBatch;
 use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendModifiers, FrontendViewport,
+    FrontendModifiers, FrontendPresentationId, FrontendViewport,
 };
 use neovm_core::keyboard::{self, InputEvent};
 
@@ -99,5 +99,36 @@ fn viewport_focus_and_close_preserve_frame_identity() {
     assert!(matches!(
         one(&close),
         Some(InputEvent::WindowClose { emacs_frame_id: 9 })
+    ));
+}
+
+#[test]
+fn presentation_feedback_maps_without_losing_its_typed_identity() {
+    let presentation = FrontendPresentationId::new(41);
+    let target = FrontendFrameId::new(9);
+
+    assert!(matches!(
+        one(&FrontendEvent::PresentationActivated {
+            presentation,
+            target,
+        }),
+        Some(InputEvent::PresentationActivated {
+            presentation: 41,
+            emacs_frame_id: 9,
+        })
+    ));
+    assert!(matches!(
+        one(&FrontendEvent::PresentationDiscarded {
+            presentation,
+            target,
+        }),
+        Some(InputEvent::PresentationDiscarded {
+            presentation: 41,
+            emacs_frame_id: 9,
+        })
+    ));
+    assert!(matches!(
+        one(&FrontendEvent::PresentationRetired { presentation }),
+        Some(InputEvent::PresentationRetired { presentation: 41 })
     ));
 }

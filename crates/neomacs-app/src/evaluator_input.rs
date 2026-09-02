@@ -55,6 +55,25 @@ impl<'a> EvaluatorInputBatch<'a> {
                 focused: *focused,
                 emacs_frame_id: target.get(),
             }),
+            FrontendEvent::PresentationActivated {
+                presentation,
+                target,
+            } => Self::single(InputEvent::PresentationActivated {
+                presentation: presentation.get(),
+                emacs_frame_id: target.get(),
+            }),
+            FrontendEvent::PresentationDiscarded {
+                presentation,
+                target,
+            } => Self::single(InputEvent::PresentationDiscarded {
+                presentation: presentation.get(),
+                emacs_frame_id: target.get(),
+            }),
+            FrontendEvent::PresentationRetired { presentation } => {
+                Self::single(InputEvent::PresentationRetired {
+                    presentation: presentation.get(),
+                })
+            }
         }
     }
 
