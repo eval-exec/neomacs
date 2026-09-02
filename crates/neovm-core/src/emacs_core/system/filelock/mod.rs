@@ -310,56 +310,11 @@ fn process_is_alive(_pid: u32) -> bool {
 /// GNU appends this value to new lock files and uses it to reject a live PID
 /// recycled after a reboot.
 fn system_boot_time_sec() -> i64 {
-    static BOOT: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
-    *BOOT.get_or_init(query_system_boot_time_sec)
-}
-
-#[cfg(windows)]
-fn query_system_boot_time_sec() -> i64 {
-    // GNU gnulib checks this boot-touched file before falling back to
-    // current time minus GetTickCount64 uptime.
-    std::fs::metadata(r"C:\pagefile.sys")
-        .ok()
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
-        .or_else(|| i64::try_from(sysinfo::System::boot_time()).ok())
+    // GNU's lock format uses zero to mean that no comparable boot timestamp
+    // was available. Keep that sentinel at this compatibility boundary.
+    crate::emacs_core::host_info::boot_time()
+        .map(crate::emacs_core::host_info::BootTime::unix_seconds)
         .unwrap_or(0)
-}
-
-/// The utmp BOOT_TIME record, GNU gnulib's primary boot-time source
-/// (lib/boot-time.c get_boot_time_uncached).  systemd stamps this record
-/// seconds LATER than the kernel's /proc/stat btime, and GNU's staleness
-/// check in current_lock_owner tolerates only one second of skew: reading
-/// boot time from any other source makes us zap live GNU locks as stale.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn boot_time_from_utmp_sec() -> Option<i64> {
-    // getutxent is not thread-safe; this runs once under the OnceLock in
-    // system_boot_time_sec, and nothing else in the process reads utmp.
-    unsafe {
-        libc::setutxent();
-        let mut found = None;
-        loop {
-            let entry = libc::getutxent();
-            if entry.is_null() {
-                break;
-            }
-            if (*entry).ut_type == libc::BOOT_TIME {
-                found = Some((*entry).ut_tv.tv_sec as i64);
-            }
-        }
-        libc::endutxent();
-        found
-    }
-}
-
-#[cfg(not(windows))]
-fn query_system_boot_time_sec() -> i64 {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if let Some(utmp_boot) = boot_time_from_utmp_sec() {
-        return utmp_boot;
-    }
-    i64::try_from(sysinfo::System::boot_time()).unwrap_or(0)
 }
 
 fn create_lock_file(lock_path: &Path, contents: &str, force: bool) -> io::Result<()> {
