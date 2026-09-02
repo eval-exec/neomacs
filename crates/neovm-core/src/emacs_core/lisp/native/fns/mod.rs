@@ -20,7 +20,9 @@ use crate::buffer::{
 use sha1::Sha1;
 use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
 use std::borrow::Cow;
+#[cfg(unix)]
 use std::ffi::CString;
+use std::ffi::c_int;
 
 // Sentinel constants removed — no longer needed with Vec<u8> LispString
 
@@ -78,7 +80,7 @@ unsafe fn collation_errno() -> libc::c_int {
     unsafe { *collation_errno_location() }
 }
 
-fn collation_errno_message(errno: libc::c_int) -> String {
+fn collation_errno_message(errno: c_int) -> String {
     std::io::Error::from_raw_os_error(errno).to_string()
 }
 

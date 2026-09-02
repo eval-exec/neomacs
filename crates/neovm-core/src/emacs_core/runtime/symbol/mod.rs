@@ -511,7 +511,10 @@ const _: () = {
 // grow it. This const-asserts that invariant so a future field addition trips
 // the build rather than silently regressing scan throughput.
 const _: () = {
+    #[cfg(target_pointer_width = "64")]
     assert!(core::mem::size_of::<LispSymbol>() == 32);
+    #[cfg(target_pointer_width = "32")]
+    assert!(core::mem::size_of::<LispSymbol>() <= 32);
 };
 
 /// Mirrors GNU `swap_in_symval_forwarding` (`src/data.c:1539-1571`).
