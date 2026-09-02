@@ -16,7 +16,9 @@ mod generated_lisp;
 #[path = "build_support/native_library_probe.rs"]
 mod native_library_probe;
 
-use native_library_probe::{NativeLibraryProbe, native_library_probe};
+use native_library_probe::{
+    NativeLibraryProbe, cross_target_pkg_config, native_library_probe, target_pkg_config_env_names,
+};
 
 // Single source of truth (R2-C2): the `neovm_jit_*` shim names, shared with
 // runtime/jit/aot.rs (MIR_SHIM_NAMES) + crates/neomacs/build.rs via `include!` so the
@@ -167,7 +169,13 @@ fn detect_lcms2() {
 
     let host = std::env::var("HOST").expect("cargo sets HOST for build scripts");
     let target = std::env::var("TARGET").expect("cargo sets TARGET for build scripts");
-    if native_library_probe(&host, &target) == NativeLibraryProbe::DisabledForCrossCompilation {
+    for name in target_pkg_config_env_names(&target) {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    let cross_target = cross_target_pkg_config(&target, |name| std::env::var_os(name).is_some());
+    if native_library_probe(&host, &target, cross_target)
+        == NativeLibraryProbe::DisabledForCrossCompilation
+    {
         return;
     }
 
