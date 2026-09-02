@@ -6179,6 +6179,23 @@ pub fn finalize_restored_runtime_image(
     role: RuntimeImageRole,
     extra_features: &[&str],
 ) -> Result<(), EvalError> {
+    let runtime_root = runtime_project_root();
+    finalize_restored_runtime_image_at_root(eval, role, extra_features, &runtime_root)
+}
+
+/// Rebuild a deserialized image using an embedding host's explicit runtime
+/// resource root.
+///
+/// Sandboxed native applications cannot participate in executable-relative
+/// discovery, and browser embeddings have only a virtual path namespace. This
+/// entry point keeps that host fact explicit while preserving the same GNU
+/// post-image initialization sequence as desktop startup.
+pub fn finalize_restored_runtime_image_at_root(
+    eval: &mut super::eval::Context,
+    role: RuntimeImageRole,
+    extra_features: &[&str],
+    runtime_root: &Path,
+) -> Result<(), EvalError> {
     if !extra_features.is_empty() {
         let bootstrap_features = normalized_bootstrap_features(extra_features);
         for feature in &bootstrap_features {
@@ -6186,8 +6203,7 @@ pub fn finalize_restored_runtime_image(
         }
     }
 
-    let project_root = runtime_project_root();
-    activate_runtime_evaluator_at_root(eval, &project_root, role)?;
+    activate_runtime_evaluator_at_root(eval, runtime_root, role)?;
     Ok(())
 }
 
