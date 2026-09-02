@@ -2,6 +2,8 @@
 members = [
     "crates/neomacs",
     "crates/neomacs-terminfo",
+    "crates/neomacs-app",
+    "crates/neomacs-android",
     "crates/neomacs-allocator",
     "crates/neomacs-diagnostics",
     "crates/neomacs-display-protocol",
@@ -19,6 +21,7 @@ members = [
     "crates/neomacs-tui-tests",
     "crates/neomacs-video",
     "crates/neomacs-video-model",
+    "crates/neomacs-wasm",
     "crates/neomacs-webview",
     "crates/neovm-core",
     "crates/neovm-host-abi",
@@ -88,6 +91,7 @@ unsafe_op_in_unsafe_fn = "warn"
 # Internal crates
 neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }
+neomacs-app = { path = "crates/neomacs-app" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
 neovm-host-abi = { path = "crates/neovm-host-abi" }
 neovm-oracle-tests = { path = "crates/neovm-oracle-tests" }
@@ -230,7 +234,7 @@ itoa = "1.0"
 # GPU / windowing
 # Upstream a98b2b2 plus queued-event retirement for destroyed Wayland popups.
 # Keep immutable until upstream contains the fix; see the fork's NEOMACS_FORK.md.
-winit = { git = "https://github.com/eval-exec/winit", rev = "dc7af19d15de375f980687f650174989f4b668a8" }
+winit = { git = "https://github.com/eval-exec/winit", rev = "dc7af19d15de375f980687f650174989f4b668a8", default-features = false, features = ["rwh_06"] }
 # "glsl" gates ShaderSource::Glsl, which the render thread needs to compile
 # composed Shadertoy-dialect surface shaders (shader_surface.rs).
 wgpu = { version = "30", features = ["glsl"] }
