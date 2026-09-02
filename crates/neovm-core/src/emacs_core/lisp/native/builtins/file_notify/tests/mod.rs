@@ -16,7 +16,7 @@ fn workspace_temp_dir() -> tempfile::TempDir {
 #[test]
 fn compiled_file_notification_subrs_match_the_target_backend() {
     let names: Vec<_> = SUBRS.specs().iter().map(|spec| spec.name()).collect();
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     assert_eq!(
         names,
         ["inotify-add-watch", "inotify-rm-watch", "inotify-valid-p"]
@@ -26,8 +26,6 @@ fn compiled_file_notification_subrs_match_the_target_backend() {
         names,
         ["kqueue-add-watch", "kqueue-rm-watch", "kqueue-valid-p"]
     );
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    assert!(names.is_empty());
 }
 
 /// Destructure a `Flow` into its signal payload; Debug-printing a `SymId`
