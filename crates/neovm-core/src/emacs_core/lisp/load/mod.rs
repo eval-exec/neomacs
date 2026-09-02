@@ -3809,6 +3809,7 @@ impl BootstrapCacheWriteLock {
     fn acquire(lock_path: &Path) -> Result<Self, BootstrapCacheLockError> {
         let file = open_bootstrap_lock_file(lock_path).map_err(BootstrapCacheLockError::Other)?;
 
+        #[cfg(not(target_family = "wasm"))]
         match fs4::FileExt::try_lock(&file) {
             Ok(()) => Ok(Self { file }),
             Err(e) => match e {
@@ -3823,6 +3824,8 @@ impl BootstrapCacheWriteLock {
                 ))),
             },
         }
+        #[cfg(target_family = "wasm")]
+        Ok(Self { file })
     }
 }
 
@@ -3834,6 +3837,7 @@ struct BootstrapCacheReadLock {
 impl BootstrapCacheReadLock {
     fn wait(lock_path: &Path) -> Result<Self, String> {
         let file = open_bootstrap_lock_file(lock_path)?;
+        #[cfg(not(target_family = "wasm"))]
         file.lock_shared().map_err(|e| {
             format!(
                 "bootstrap cache lock: failed waiting on {}: {}",
@@ -3847,6 +3851,7 @@ impl BootstrapCacheReadLock {
 
 impl Drop for BootstrapCacheWriteLock {
     fn drop(&mut self) {
+        #[cfg(not(target_family = "wasm"))]
         let _ = self.file.unlock();
     }
 }

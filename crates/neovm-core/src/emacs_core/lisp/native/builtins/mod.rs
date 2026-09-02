@@ -440,20 +440,38 @@ pub(crate) use types::*;
 // primitive bodies (`builtin_point_0`, `builtin_char_after`, ...) by name
 // instead of reimplementing them (matches the sibling `navigation`/`editfns`/
 // `search` modules, already crate-visible).
-mod file_notify;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "file_notify/portable.rs"]
+        mod file_notify;
+    }
+    _ => { mod file_notify; }
+}
 pub(crate) mod fringe_bitmap;
 pub(crate) mod fringe_standard_bitmaps;
 pub(crate) mod gnutls;
 pub(crate) mod higher_order;
 mod hooks;
 pub(crate) mod keymaps;
-mod lcms;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "lcms/portable.rs"]
+        mod lcms;
+    }
+    _ => { mod lcms; }
+}
 pub(crate) mod misc_eval;
 pub(crate) mod search;
 mod stubs;
 mod subrs;
 pub(crate) mod symbols;
-mod treesit;
+std::cfg_select! {
+    target_family = "wasm" => {
+        #[path = "treesit_portable.rs"]
+        mod treesit;
+    }
+    _ => { mod treesit; }
+}
 
 pub(crate) use super::buffer::*;
 pub(crate) use file_notify::*;
