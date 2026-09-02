@@ -129,7 +129,7 @@ enum LockOwner {
 /// prompt), while file-locked-p and unlock-file report it as a file-error.
 fn invalid_lock_contents_error() -> io::Error {
     // Carry the real EINVAL so report_file_errno's strerror text matches GNU.
-    io::Error::from_raw_os_error(libc::EINVAL)
+    super::fileio::file_error_class::invalid_argument_error()
 }
 
 /// GNU's `make-lock-file-name` (files.el) prepends ".#" to the non-directory

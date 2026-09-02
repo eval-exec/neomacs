@@ -654,6 +654,58 @@ fn test_file_error_symbol_mapping() {
     assert_eq!(file_error_symbol(ErrorKind::InvalidInput), "file-error");
 }
 
+#[cfg(unix)]
+#[test]
+fn get_file_errno_data_keys_the_condition_on_errno_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU fileio.c get_file_errno_data: only EEXIST/ENOENT/EACCES are special;
+    // EPERM (chmod on a file you do not own) is a plain file-error even though
+    // Rust reports it as ErrorKind::PermissionDenied.
+    for (errno, symbol) in [
+        (libc::ENOENT, "file-missing"),
+        (libc::EACCES, "permission-denied"),
+        (libc::EPERM, "file-error"),
+        (libc::ENOTDIR, "file-error"),
+        (libc::EISDIR, "file-error"),
+    ] {
+        let err = std::io::Error::from_raw_os_error(errno);
+        let expected_text = file_error_class::classify(&err).strerror;
+        match get_file_errno_data(&err, "Doing chmod", vec![Value::string("/etc/passwd")]) {
+            Flow::Signal(sig) => {
+                assert_eq!(sig.symbol_name(), symbol, "errno {errno}");
+                let data: Vec<String> = sig
+                    .data
+                    .iter()
+                    .map(|value| value.as_utf8_str().expect("string datum").to_owned())
+                    .collect();
+                assert_eq!(
+                    data,
+                    vec![
+                        "Doing chmod".to_owned(),
+                        expected_text,
+                        "/etc/passwd".to_owned()
+                    ],
+                    "errno {errno}"
+                );
+                assert!(!data[1].contains("os error"));
+            }
+            other => panic!("expected signal, got {other:?}"),
+        }
+    }
+
+    // EEXIST drops the ACTION: (file-already-exists STRERROR . NAME).
+    let err = std::io::Error::from_raw_os_error(libc::EEXIST);
+    match get_file_errno_data(&err, "Creating", vec![Value::string("/tmp/x")]) {
+        Flow::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "file-already-exists");
+            assert_eq!(sig.data.len(), 2);
+            assert_eq!(sig.data[0].as_utf8_str(), Some("File exists"));
+            assert_eq!(sig.data[1].as_utf8_str(), Some("/tmp/x"));
+        }
+        other => panic!("expected signal, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_signal_file_io_error_uses_specific_condition() {
     crate::test_utils::init_test_tracing();

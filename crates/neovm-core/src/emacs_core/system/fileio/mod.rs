@@ -4,6 +4,7 @@
 //! directory operations, and file attribute queries.
 
 mod binary_mode;
+pub(crate) mod file_error_class;
 
 pub(crate) use binary_mode::builtin_set_binary_mode;
 
@@ -34,6 +35,7 @@ use super::symbol::Obarray;
 use super::value::{
     OrderedRuntimeBindingMap, Value, ValueKind, VecLikeType, eq_value, list_to_vec,
 };
+use file_error_class::{FileErrorClass, FileErrorReport};
 
 // ===========================================================================
 // Path operations (pure, no evaluator needed)
@@ -3081,52 +3083,16 @@ pub(crate) fn resolve_filename_lisp_for_eval(
 }
 
 fn file_error_symbol(kind: ErrorKind) -> &'static str {
-    match kind {
-        ErrorKind::NotFound => "file-missing",
-        ErrorKind::AlreadyExists => "file-already-exists",
-        ErrorKind::PermissionDenied => "permission-denied",
-        _ => "file-error",
-    }
-}
-
-/// The bare `strerror` text for an errno, matching GNU's `emacs_strerror`
-/// (e.g. ENOENT -> "No such file or directory").  Rust's
-/// `io::Error::to_string()` appends "(os error N)", which GNU never emits, so
-/// go through libc `strerror` directly.
-#[cfg(unix)]
-fn errno_strerror(errno: i32) -> String {
-    // SAFETY: `strerror` returns a pointer to a static (per-thread) C string.
-    unsafe {
-        let ptr = libc::strerror(errno);
-        if ptr.is_null() {
-            String::new()
-        } else {
-            CStr::from_ptr(ptr).to_string_lossy().into_owned()
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn errno_strerror(errno: i32) -> String {
-    std::io::Error::from_raw_os_error(errno).to_string()
-}
-
-/// Best-effort errno for a `std::io::Error` lacking a raw OS code, used so the
-/// errno-keyed branches of [`get_file_errno_data`] still classify correctly.
-fn errno_for_kind(kind: ErrorKind) -> i32 {
-    match kind {
-        ErrorKind::NotFound => libc::ENOENT,
-        ErrorKind::AlreadyExists => libc::EEXIST,
-        ErrorKind::PermissionDenied => libc::EACCES,
-        _ => libc::EIO,
-    }
+    FileErrorClass::from_kind(kind).condition_symbol()
 }
 
 /// Faithful port of GNU `get_file_errno_data` + `report_file_errno`
 /// (`src/fileio.c`).  Signals a `file-error`-family condition whose DATA
 /// matches GNU exactly:
 ///
-/// * `STRERROR` is the bare libc `strerror` text (no Rust "(os error N)").
+/// * `STRERROR` is the bare libc `strerror` text (no Rust "(os error N)") on
+///   hosts with errno; a host without one carries the standard library's text
+///   (see `file_error_class`).
 /// * For `EEXIST` the DATA is `(file-already-exists STRERROR . NAME)` — the
 ///   ACTION string is *omitted* (GNU's `Fcons (Qfile_already_exists, errdata)`).
 /// * Otherwise the DATA is `(SYMBOL ACTION STRERROR . NAME)` where SYMBOL is
@@ -3135,24 +3101,21 @@ fn errno_for_kind(kind: ErrorKind) -> i32 {
 /// `name_items` holds the flat NAME tail GNU would carry: one filename, or the
 /// two-element `(file newname)` list.  Each element is appended verbatim.
 fn get_file_errno_data(err: &std::io::Error, action: &str, name_items: Vec<Value>) -> Flow {
-    let errno = err
-        .raw_os_error()
-        .unwrap_or_else(|| errno_for_kind(err.kind()));
-    let strerror = errno_strerror(errno);
-    if errno == libc::EEXIST {
-        // `(file-already-exists STRERROR . NAME)` — no ACTION prefix.
-        let mut data = vec![Value::string(strerror)];
-        data.extend(name_items);
-        signal(LispCondition::FileAlreadyExists, data)
-    } else {
-        let symbol = match errno {
-            libc::ENOENT => "file-missing",
-            libc::EACCES => "permission-denied",
-            _ => "file-error",
-        };
-        let mut data = vec![Value::string(action), Value::string(strerror)];
-        data.extend(name_items);
-        signal(symbol, data)
+    let FileErrorReport { class, strerror } = file_error_class::classify(err);
+    match class {
+        FileErrorClass::FileAlreadyExists => {
+            // `(file-already-exists STRERROR . NAME)` — no ACTION prefix.
+            let mut data = vec![Value::string(strerror)];
+            data.extend(name_items);
+            signal(LispCondition::FileAlreadyExists, data)
+        }
+        FileErrorClass::FileMissing
+        | FileErrorClass::PermissionDenied
+        | FileErrorClass::FileError => {
+            let mut data = vec![Value::string(action), Value::string(strerror)];
+            data.extend(name_items);
+            signal(class.condition_symbol(), data)
+        }
     }
 }
 
