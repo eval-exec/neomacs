@@ -1,18 +1,18 @@
 //! Atomic installation of packaged runtime images into native host storage.
 
 use std::ffi::OsStr;
-use std::fs::{File, OpenOptions};
 use std::fmt::{Display, Formatter};
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use neovm_core::emacs_core::load::RuntimeImageRole;
-use neovm_core::emacs_core::pdump::{
-    DumpError, dump_to_file, load_from_portable_snapshot,
-};
+use neovm_core::emacs_core::pdump::{DumpError, dump_to_file, load_from_portable_snapshot};
 
-use super::PORTABLE_FINAL_RUNTIME_IMAGE_ASSET;
+use crate::content_id::ContentId;
+
+use super::{PORTABLE_FINAL_RUNTIME_IMAGE_ASSET, PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET};
 
 static TEMPORARY_IMAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -30,6 +30,10 @@ pub enum RuntimeImageProvisionError {
     Io(io::Error),
     /// The portable seed was invalid or native serialization failed.
     Image(DumpError),
+    /// The portable seed's packaged content ID was not canonical SHA-256.
+    InvalidPortableImageId,
+    /// The portable seed bytes did not match their packaged content ID.
+    PortableImageDigestMismatch { expected: String, actual: String },
 }
 
 impl Display for RuntimeImageProvisionError {
@@ -37,6 +41,14 @@ impl Display for RuntimeImageProvisionError {
         match self {
             Self::Io(error) => Display::fmt(error, formatter),
             Self::Image(error) => Display::fmt(error, formatter),
+            Self::InvalidPortableImageId => write!(
+                formatter,
+                "portable runtime image ID must be exactly 64 lowercase hexadecimal digits"
+            ),
+            Self::PortableImageDigestMismatch { expected, actual } => write!(
+                formatter,
+                "portable runtime image digest does not match its ID: expected {expected}, got {actual}"
+            ),
         }
     }
 }
@@ -46,6 +58,7 @@ impl std::error::Error for RuntimeImageProvisionError {
         match self {
             Self::Io(error) => Some(error),
             Self::Image(error) => Some(error),
+            Self::InvalidPortableImageId | Self::PortableImageDigestMismatch { .. } => None,
         }
     }
 }
@@ -86,14 +99,18 @@ impl ExtractedRuntimeImage {
     /// Materialize a packaged target-independent final image as the native
     /// pdump required by this executable.
     ///
-    /// The portable asset is opened only when the fingerprinted native image
-    /// is absent. The generated image is flushed and atomically published, so
-    /// interrupted first-launch provisioning cannot poison later startups.
+    /// Every call reads the small portable content ID. The large portable
+    /// image is opened only when the native image selected by both executable
+    /// schema and portable content is absent. The generated image is flushed
+    /// and atomically published, so interrupted first-launch provisioning
+    /// cannot poison later startups.
     pub fn prepare_final_from_portable<R: Read>(
         directory: &Path,
-        open_source: impl FnOnce(&str) -> io::Result<R>,
+        mut open_source: impl FnMut(&str) -> io::Result<R>,
     ) -> Result<Self, RuntimeImageProvisionError> {
-        let file_name = RuntimeImageRole::Final.fingerprinted_image_file_name();
+        let portable_id =
+            read_portable_image_id(open_source(PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET)?)?;
+        let file_name = native_image_file_name(&portable_id);
         validate_file_name(&file_name)?;
         std::fs::create_dir_all(directory)?;
         let destination = directory.join(&file_name);
@@ -108,6 +125,13 @@ impl ExtractedRuntimeImage {
         let mut source = open_source(PORTABLE_FINAL_RUNTIME_IMAGE_ASSET)?;
         let mut portable = Vec::new();
         source.read_to_end(&mut portable)?;
+        let actual_id = ContentId::for_bytes(&portable);
+        if actual_id != portable_id {
+            return Err(RuntimeImageProvisionError::PortableImageDigestMismatch {
+                expected: portable_id.to_string(),
+                actual: actual_id.to_string(),
+            });
+        }
         let evaluator = load_from_portable_snapshot(&portable)?;
         let temporary_path = create_temporary_image_path(directory, &file_name)?;
         let install_result = (|| {
@@ -180,6 +204,18 @@ impl ExtractedRuntimeImage {
     pub const fn install(&self) -> RuntimeImageInstall {
         self.install
     }
+}
+
+fn read_portable_image_id(source: impl Read) -> Result<ContentId, RuntimeImageProvisionError> {
+    let mut text = String::new();
+    source.take(128).read_to_string(&mut text)?;
+    ContentId::parse(text.trim()).map_err(|_| RuntimeImageProvisionError::InvalidPortableImageId)
+}
+
+fn native_image_file_name(portable_id: &ContentId) -> String {
+    let native = RuntimeImageRole::Final.fingerprinted_image_file_name();
+    let stem = native.strip_suffix(".pdump").unwrap_or(&native);
+    format!("{stem}-{portable_id}.pdump")
 }
 
 fn reject_non_file_destination(destination: &Path) -> io::Result<()> {
