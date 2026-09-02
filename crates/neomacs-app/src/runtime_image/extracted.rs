@@ -2,11 +2,17 @@
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
+use std::fmt::{Display, Formatter};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use neovm_core::emacs_core::load::RuntimeImageRole;
+use neovm_core::emacs_core::pdump::{
+    DumpError, dump_to_file, load_from_portable_snapshot,
+};
+
+use super::PORTABLE_FINAL_RUNTIME_IMAGE_ASSET;
 
 static TEMPORARY_IMAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -15,6 +21,45 @@ static TEMPORARY_IMAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub enum RuntimeImageInstall {
     Installed,
     Reused,
+}
+
+/// Failure to provision a target-native image from a packaged portable seed.
+#[derive(Debug)]
+pub enum RuntimeImageProvisionError {
+    /// Reading or atomically installing the image failed.
+    Io(io::Error),
+    /// The portable seed was invalid or native serialization failed.
+    Image(DumpError),
+}
+
+impl Display for RuntimeImageProvisionError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => Display::fmt(error, formatter),
+            Self::Image(error) => Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeImageProvisionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Image(error) => Some(error),
+        }
+    }
+}
+
+impl From<io::Error> for RuntimeImageProvisionError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<DumpError> for RuntimeImageProvisionError {
+    fn from(error: DumpError) -> Self {
+        Self::Image(error)
+    }
 }
 
 /// Runtime image materialized as a real file in native host storage.
@@ -38,6 +83,50 @@ impl ExtractedRuntimeImage {
         Self::prepare(directory, &file_name, || open_source(&file_name))
     }
 
+    /// Materialize a packaged target-independent final image as the native
+    /// pdump required by this executable.
+    ///
+    /// The portable asset is opened only when the fingerprinted native image
+    /// is absent. The generated image is flushed and atomically published, so
+    /// interrupted first-launch provisioning cannot poison later startups.
+    pub fn prepare_final_from_portable<R: Read>(
+        directory: &Path,
+        open_source: impl FnOnce(&str) -> io::Result<R>,
+    ) -> Result<Self, RuntimeImageProvisionError> {
+        let file_name = RuntimeImageRole::Final.fingerprinted_image_file_name();
+        validate_file_name(&file_name)?;
+        std::fs::create_dir_all(directory)?;
+        let destination = directory.join(&file_name);
+        if destination.is_file() {
+            return Ok(Self {
+                path: destination,
+                install: RuntimeImageInstall::Reused,
+            });
+        }
+        reject_non_file_destination(&destination)?;
+
+        let mut source = open_source(PORTABLE_FINAL_RUNTIME_IMAGE_ASSET)?;
+        let mut portable = Vec::new();
+        source.read_to_end(&mut portable)?;
+        let evaluator = load_from_portable_snapshot(&portable)?;
+        let temporary_path = create_temporary_image_path(directory, &file_name)?;
+        let install_result = (|| {
+            dump_to_file(&evaluator, &temporary_path)?;
+            File::open(&temporary_path)?.sync_all()?;
+            publish_temporary_image(&temporary_path, &destination)
+                .map_err(RuntimeImageProvisionError::Io)
+        })();
+
+        if temporary_path.exists() {
+            let _ = std::fs::remove_file(&temporary_path);
+        }
+        let install = install_result?;
+        Ok(Self {
+            path: destination,
+            install,
+        })
+    }
+
     /// Install an immutable packaged image into `directory` exactly once.
     ///
     /// `file_name` must be one path component. Callers should use a
@@ -59,15 +148,7 @@ impl ExtractedRuntimeImage {
                 install: RuntimeImageInstall::Reused,
             });
         }
-        if destination.exists() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "runtime image destination is not a regular file: {}",
-                    destination.display()
-                ),
-            ));
-        }
+        reject_non_file_destination(&destination)?;
 
         let mut source = open_source()?;
         let (temporary_path, mut temporary) = create_temporary_image(directory, file_name)?;
@@ -75,18 +156,7 @@ impl ExtractedRuntimeImage {
             io::copy(&mut source, &mut temporary)?;
             temporary.sync_all()?;
             drop(temporary);
-            match std::fs::rename(&temporary_path, &destination) {
-                Ok(()) => Ok(RuntimeImageInstall::Installed),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied
-                    ) && destination.is_file() =>
-                {
-                    Ok(RuntimeImageInstall::Reused)
-                }
-                Err(error) => Err(error),
-            }
+            publish_temporary_image(&temporary_path, &destination)
         })();
 
         if temporary_path.exists() {
@@ -109,6 +179,37 @@ impl ExtractedRuntimeImage {
     #[must_use]
     pub const fn install(&self) -> RuntimeImageInstall {
         self.install
+    }
+}
+
+fn reject_non_file_destination(destination: &Path) -> io::Result<()> {
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "runtime image destination is not a regular file: {}",
+                destination.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn publish_temporary_image(
+    temporary_path: &Path,
+    destination: &Path,
+) -> io::Result<RuntimeImageInstall> {
+    match std::fs::rename(temporary_path, destination) {
+        Ok(()) => Ok(RuntimeImageInstall::Installed),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied
+            ) && destination.is_file() =>
+        {
+            Ok(RuntimeImageInstall::Reused)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -144,4 +245,10 @@ fn create_temporary_image(directory: &Path, file_name: &str) -> io::Result<(Path
             Err(error) => return Err(error),
         }
     }
+}
+
+fn create_temporary_image_path(directory: &Path, file_name: &str) -> io::Result<PathBuf> {
+    let (path, file) = create_temporary_image(directory, file_name)?;
+    drop(file);
+    Ok(path)
 }

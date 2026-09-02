@@ -4,7 +4,9 @@ std::cfg_select! {
     target_family = "wasm" => {}
     _ => {
         mod extracted;
-        pub use extracted::{ExtractedRuntimeImage, RuntimeImageInstall};
+        pub use extracted::{
+            ExtractedRuntimeImage, RuntimeImageInstall, RuntimeImageProvisionError,
+        };
     }
 }
 
@@ -20,6 +22,13 @@ use neovm_core::emacs_core::pdump::{DumpError, load_from_dump, load_from_portabl
 use crate::host::{HostKind, HostProfile, RuntimeImageModel};
 
 const WASM_RUNTIME_ROOT: &str = "/neomacs";
+
+/// Target-independent final image bundled by portable product adapters.
+///
+/// Android turns this seed into a fingerprint-matched native pdump in
+/// app-private storage. Browser WASM restores the same bytes directly into
+/// linear memory.
+pub const PORTABLE_FINAL_RUNTIME_IMAGE_ASSET: &str = "neomacs.portable";
 
 /// Concrete storage supplied by a frontend for one runtime image.
 ///
