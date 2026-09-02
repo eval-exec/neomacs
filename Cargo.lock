@@ -3692,6 +3692,7 @@ version = "0.0.16"
 dependencies = [
  "neomacs-app",
  "neomacs-display-protocol",
+ "neomacs-layout-engine",
  "neomacs-wgpu-runtime",
  "pollster",
  "winit",
@@ -3832,6 +3833,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "strum",
  "sys-locale",
+ "thiserror 2.0.20",
  "tracing",
  "tracing-test",
  "ttf-parser",
@@ -4011,6 +4013,7 @@ version = "0.0.16"
 dependencies = [
  "neomacs-app",
  "neomacs-display-protocol",
+ "neomacs-layout-engine",
  "neomacs-wgpu-runtime",
  "wasm-bindgen",
  "wasm-bindgen-futures",
