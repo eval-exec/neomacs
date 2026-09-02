@@ -3,10 +3,39 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
+use neomacs_app::host::HostProfile;
 use neomacs_app::presentation::PresentationMetrics;
-use neomacs_app::session::{NativeEditorWorker, NativeEditorWorkerEvent};
+use neomacs_app::runtime_image::RuntimeImageSource;
+use neomacs_app::session::{EditorSession, NativeEditorWorker, NativeEditorWorkerEvent};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::emacs_core::pdump::encode_portable_snapshot;
+
+#[test]
+fn restored_session_runs_after_pdump_hook_before_top_level() {
+    let mut image = Context::new();
+    image
+        .eval_str(
+            "(setq top-level '(kill-emacs 7)\n\
+                   after-pdump-load-hook\n\
+                   (list (lambda () (setq top-level '(kill-emacs 23)))))",
+        )
+        .expect("prepare portable runtime image");
+    let bytes = encode_portable_snapshot(&image).expect("encode portable runtime image");
+    let evaluator = RuntimeImageSource::LinearMemory(&bytes)
+        .load_for(HostProfile::WASM)
+        .expect("restore portable runtime image");
+
+    let (session, _frontend) =
+        EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    let exit = session.run();
+
+    assert_eq!(
+        exit.shutdown_request().map(|request| request.exit_code),
+        Some(23),
+        "the restored image hook must run before the outer command loop",
+    );
+}
 
 #[test]
 fn native_worker_constructs_and_runs_the_evaluator_off_the_frontend_thread() {
