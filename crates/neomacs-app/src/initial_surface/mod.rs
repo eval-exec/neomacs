@@ -103,6 +103,19 @@ impl InitialFrameFont {
     pub const fn new(parameter: Value, name: Value) -> Self {
         Self { parameter, name }
     }
+
+    /// Use one host-selected family/name for both Lisp-visible font slots.
+    ///
+    /// Portable adapters use this when they have a stable public font name
+    /// but no native opened-font object to expose as `font-parameter` yet.
+    #[must_use]
+    pub fn named(name: impl Into<String>) -> Self {
+        let name = Value::string(name.into());
+        Self {
+            parameter: name,
+            name,
+        }
+    }
 }
 
 /// GNU display class advertised by the opening frame.
