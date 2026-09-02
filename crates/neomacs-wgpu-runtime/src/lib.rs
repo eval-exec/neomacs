@@ -4,6 +4,7 @@
 
 mod surface;
 mod surface_frame;
+mod winit_input;
 
 pub use surface::{
     PresentationOutcome, PresentationSkipReason, SurfaceClearColor, SurfaceExtent,
@@ -12,3 +13,4 @@ pub use surface::{
 pub use surface_frame::{
     SurfaceFrameInitError, SurfaceFramePresentError, SurfaceFrameRenderer, SurfaceScaleError,
 };
+pub use winit_input::WinitFrontendInput;
