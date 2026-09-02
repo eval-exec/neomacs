@@ -4,7 +4,7 @@
 //! send uninterpreted byte batches. This module preserves that distinction
 //! while converting the display transport into the core input transport.
 
-use neomacs_app::frontend_event::FrontendEvent;
+use neomacs_app::evaluator_input::EvaluatorInputBatch;
 use neomacs_display_runtime::thread_comm::{
     InputEvent as DisplayEvent, MonitorInfo as DisplayMonitorInfo, PointerAction, PointerTarget,
     PositionedPointerInput, ScrollDelta,
@@ -163,103 +163,6 @@ pub(crate) fn should_log_display_event(event: &DisplayEvent) -> bool {
     )
 }
 
-/// Allocation-free result of adapting one display event to the evaluator.
-///
-/// A positioned pointer may expand to two events. Committed host text remains
-/// borrowed and is expanded lazily, so ordinary key and pointer input retains
-/// its inline fast path while an IME commit does not require a second string.
-#[derive(Debug)]
-#[must_use]
-pub(crate) struct EvaluatorInputBatch<'a> {
-    inner: EvaluatorInputBatchInner<'a>,
-}
-
-#[derive(Debug)]
-enum EvaluatorInputBatchInner<'a> {
-    Inline([Option<KbInputEvent>; 2]),
-    CommittedText { text: &'a str, target_frame_id: u64 },
-}
-
-impl<'a> EvaluatorInputBatch<'a> {
-    fn none() -> Self {
-        Self {
-            inner: EvaluatorInputBatchInner::Inline([None, None]),
-        }
-    }
-
-    fn one(event: KbInputEvent) -> Self {
-        Self {
-            inner: EvaluatorInputBatchInner::Inline([Some(event), None]),
-        }
-    }
-
-    fn optional(event: Option<KbInputEvent>) -> Self {
-        event.map_or_else(Self::none, Self::one)
-    }
-
-    fn positioned(observation: Option<KbInputEvent>, action: KbInputEvent) -> Self {
-        match observation {
-            Some(observation) => Self {
-                inner: EvaluatorInputBatchInner::Inline([Some(observation), Some(action)]),
-            },
-            None => Self::one(action),
-        }
-    }
-
-    fn committed_text(text: &'a str, target_frame_id: u64) -> Self {
-        Self {
-            inner: EvaluatorInputBatchInner::CommittedText {
-                text,
-                target_frame_id,
-            },
-        }
-    }
-}
-
-pub(crate) enum EvaluatorInputIter<'a> {
-    Inline(std::iter::Flatten<std::array::IntoIter<Option<KbInputEvent>, 2>>),
-    CommittedText {
-        chars: std::str::Chars<'a>,
-        target_frame_id: u64,
-    },
-}
-
-impl Iterator for EvaluatorInputIter<'_> {
-    type Item = KbInputEvent;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Inline(events) => events.next(),
-            Self::CommittedText {
-                chars,
-                target_frame_id,
-            } => chars.find_map(|ch| {
-                keyboard::render_key_transport_to_input_event(ch as u32, 0, true, *target_frame_id)
-            }),
-        }
-    }
-}
-
-impl<'a> IntoIterator for EvaluatorInputBatch<'a> {
-    type Item = KbInputEvent;
-    type IntoIter = EvaluatorInputIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        match self.inner {
-            EvaluatorInputBatchInner::Inline(events) => {
-                EvaluatorInputIter::Inline(events.into_iter().flatten())
-            }
-            EvaluatorInputBatchInner::CommittedText {
-                text,
-                target_frame_id,
-            } => EvaluatorInputIter::CommittedText {
-                chars: text.chars(),
-                target_frame_id,
-            },
-        }
-    }
-}
-
 pub(crate) fn convert_monitor_infos(monitors: &[DisplayMonitorInfo]) -> Vec<NeomacsMonitorInfo> {
     monitors
         .iter()
@@ -283,59 +186,12 @@ pub(crate) fn convert_monitor_infos(monitors: &[DisplayMonitorInfo]) -> Vec<Neom
 /// observation immediately followed by its raw evaluator action.
 pub(crate) fn convert_display_event(event: &DisplayEvent) -> EvaluatorInputBatch<'_> {
     if let DisplayEvent::Frontend(event) = event {
-        return convert_frontend_event(event);
+        return EvaluatorInputBatch::from_frontend_event(event);
     }
     if let DisplayEvent::PositionedPointer(input) = event {
         return convert_positioned_pointer_input(*input);
     }
-    EvaluatorInputBatch::optional(convert_single_display_event(event))
-}
-
-fn convert_frontend_event(event: &FrontendEvent) -> EvaluatorInputBatch<'_> {
-    match event {
-        FrontendEvent::Key(key) => {
-            tracing::debug!(
-                "input_bridge: key keysym=0x{:04x} mods=0x{:x} pressed={}",
-                key.symbol().get(),
-                key.modifiers().bits(),
-                key.state().is_pressed()
-            );
-            EvaluatorInputBatch::optional(keyboard::render_key_transport_to_input_event(
-                key.symbol().get(),
-                key.modifiers().bits(),
-                key.state().is_pressed(),
-                key.target().get(),
-            ))
-        }
-        FrontendEvent::TextCommitted { text, target } => {
-            EvaluatorInputBatch::committed_text(text, target.get())
-        }
-        FrontendEvent::ViewportChanged(viewport) => {
-            tracing::debug!(
-                "input_bridge: resize {}x{} emacs_frame_id=0x{:x}",
-                viewport.width(),
-                viewport.height(),
-                viewport.target().get()
-            );
-            EvaluatorInputBatch::one(KbInputEvent::Resize {
-                width: viewport.width(),
-                height: viewport.height(),
-                scale_factor: viewport.scale().get(),
-                emacs_frame_id: viewport.target().get(),
-            })
-        }
-        FrontendEvent::CloseRequested { target } => {
-            EvaluatorInputBatch::one(KbInputEvent::WindowClose {
-                emacs_frame_id: target.get(),
-            })
-        }
-        FrontendEvent::FocusChanged { focused, target } => {
-            EvaluatorInputBatch::one(KbInputEvent::Focus {
-                focused: *focused,
-                emacs_frame_id: target.get(),
-            })
-        }
-    }
+    EvaluatorInputBatch::from_optional(convert_single_display_event(event))
 }
 
 fn convert_positioned_pointer_input(input: PositionedPointerInput) -> EvaluatorInputBatch<'static> {
@@ -363,7 +219,7 @@ fn convert_positioned_pointer_input(input: PositionedPointerInput) -> EvaluatorI
                 3 => MouseButton::Right,
                 4 => MouseButton::Button4,
                 5 => MouseButton::Button5,
-                _ => return EvaluatorInputBatch::none(),
+                _ => return EvaluatorInputBatch::empty(),
             };
             if pressed {
                 KbInputEvent::MousePress {
@@ -412,7 +268,7 @@ fn convert_positioned_pointer_input(input: PositionedPointerInput) -> EvaluatorI
             }
         }
     };
-    EvaluatorInputBatch::positioned(observation, action)
+    EvaluatorInputBatch::ordered(observation, action)
 }
 
 fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
