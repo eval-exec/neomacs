@@ -5,6 +5,7 @@
 pub mod evaluator_input;
 pub mod frontend_event;
 pub mod host;
+pub mod initial_surface;
 pub mod lifecycle;
 pub mod presentation;
 pub mod runtime_image;
