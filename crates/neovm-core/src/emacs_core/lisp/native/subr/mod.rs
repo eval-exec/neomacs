@@ -305,13 +305,36 @@ pub struct SubrBatch {
 impl SubrBatch {
     #[track_caller]
     pub const fn new(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
+        Self::new_inner(owner, specs, false)
+    }
+
+    /// Construct a batch whose declarations may all be removed by target
+    /// configuration.
+    ///
+    /// The explicit constructor keeps an accidentally empty unconditional
+    /// catalog a compile-time error while representing a subsystem that owns
+    /// native subrs on only some target families.
+    #[track_caller]
+    pub const fn target_filtered(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
+        Self::new_inner(owner, specs, true)
+    }
+
+    #[track_caller]
+    const fn new_inner(
+        owner: &'static str,
+        specs: &'static [SubrSpec],
+        permit_empty: bool,
+    ) -> Self {
         let source_file = std::panic::Location::caller().file();
         assert!(
             is_subrs_source_file(source_file),
             "localized subr catalogs must be declared in subrs.rs"
         );
         assert!(!owner.is_empty(), "a subr catalog must have an owner");
-        assert!(!specs.is_empty(), "a subr catalog must not be empty");
+        assert!(
+            permit_empty || !specs.is_empty(),
+            "a subr catalog must not be empty"
+        );
         Self {
             #[cfg(test)]
             source_file,
@@ -374,6 +397,19 @@ const fn is_subrs_source_file(path: &str) -> bool {
 /// same const data. This makes the compiled catalog—not syntax inferred by an
 /// architecture test—the source of truth for installation.
 macro_rules! define_subrs {
+    (target_filtered; $($spec:expr),+ $(,)?) => {
+        pub(crate) const SUBRS: $crate::emacs_core::subr::SubrBatch =
+            $crate::emacs_core::subr::SubrBatch::target_filtered(
+                module_path!(),
+                &[$($spec),+],
+            );
+
+        pub(crate) fn register_subrs(
+            ctx: &mut $crate::emacs_core::eval::Context,
+        ) {
+            SUBRS.install(ctx);
+        }
+    };
     ($($spec:expr),+ $(,)?) => {
         pub(crate) const SUBRS: $crate::emacs_core::subr::SubrBatch =
             $crate::emacs_core::subr::SubrBatch::new(

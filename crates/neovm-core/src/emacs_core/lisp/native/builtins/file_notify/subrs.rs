@@ -4,6 +4,7 @@ use super::*;
 use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 
 crate::emacs_core::subr::define_subrs! {
+    target_filtered;
     #[cfg(any(target_os = "linux", target_os = "android"))]
     SubrSpec::new(
         "inotify-add-watch",
