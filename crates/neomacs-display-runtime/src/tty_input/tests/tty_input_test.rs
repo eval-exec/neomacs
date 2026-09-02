@@ -26,9 +26,9 @@ fn key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
 
 fn key_parts(code: KeyCode, modifiers: KeyModifiers) -> (u32, u32) {
     match map_key_event(key_event(code, modifiers)).expect("key event") {
-        InputEvent::Key {
-            keysym, modifiers, ..
-        } => (keysym, modifiers),
+        InputEvent::Frontend(neomacs_app::frontend_event::FrontendEvent::Key(key)) => {
+            (key.symbol().get(), key.modifiers().bits())
+        }
         _ => panic!("expected key event"),
     }
 }
