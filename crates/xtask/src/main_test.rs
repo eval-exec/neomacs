@@ -90,7 +90,7 @@ fn portable_assets_command_stages_a_deterministic_complete_runtime_bundle() {
         use std::os::unix::fs::PermissionsExt;
         for asset in [
             "neomacs.portable",
-            "neomacs-runtime.tar.gz",
+            "neomacs-runtime.bundle",
             "neomacs-runtime.sha256",
         ] {
             assert_eq!(
@@ -104,7 +104,11 @@ fn portable_assets_command_stages_a_deterministic_complete_runtime_bundle() {
             );
         }
     }
-    let archive = fs::read(output.join("neomacs-runtime.tar.gz")).unwrap();
+    assert!(
+        !output.join("neomacs-runtime.tar.gz").exists(),
+        "the transport name must not trigger Android's special .gz handling"
+    );
+    let archive = fs::read(output.join("neomacs-runtime.bundle")).unwrap();
     let expected_id = Sha256::digest(&archive)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -129,10 +133,10 @@ fn portable_assets_command_stages_a_deterministic_complete_runtime_bundle() {
     assert!(emitted.contains(&PathBuf::from("etc/charsets/JIS.map")));
     assert!(emitted.contains(&PathBuf::from("leim/quail/input.el")));
 
-    let first_archive = fs::read(output.join("neomacs-runtime.tar.gz")).unwrap();
+    let first_archive = fs::read(output.join("neomacs-runtime.bundle")).unwrap();
     package();
     assert_eq!(
-        fs::read(output.join("neomacs-runtime.tar.gz")).unwrap(),
+        fs::read(output.join("neomacs-runtime.bundle")).unwrap(),
         first_archive,
         "repackaging identical inputs must be byte-for-byte reproducible"
     );
