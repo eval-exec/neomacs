@@ -1415,6 +1415,35 @@ impl DisplayMediaReplacement {
     /// content.  Fold that inset into the durable image placement now, while
     /// the realized face is available, so layout advance and renderer replay
     /// cannot disagree or paint the border over the outer image pixels.
+    /// Narrow the replacement to `visible_width_px`, the way GNU's producers
+    /// crop a glyph at the right edge (see
+    /// `DisplayMediaReplacementOverflowAction`).  An image also narrows its
+    /// slice -- `slice.width -= crop`, src/xdisp.c:32597 -- so what remains is
+    /// the left part of the image rather than the whole image squeezed; the
+    /// other kinds keep their full content and are clipped when drawn
+    /// (`x_draw_xwidget_glyph_string`'s `clip_*`).
+    pub(crate) fn cropped_to_visible_width(mut self, visible_width_px: f32) -> Self {
+        if !visible_width_px.is_finite()
+            || visible_width_px <= 0.0
+            || visible_width_px >= self.width
+        {
+            return self;
+        }
+        if let DisplayMediaReplacementKind::Image { source_rect, .. } = &mut self.kind {
+            let kept = visible_width_px / self.width;
+            if let Some(cropped) = neomacs_display_protocol::ImageSourceRect::new(
+                source_rect.x(),
+                source_rect.y(),
+                source_rect.width() * kept,
+                source_rect.height(),
+            ) {
+                *source_rect = cropped;
+            }
+        }
+        self.width = visible_width_px;
+        self
+    }
+
     pub(crate) fn with_positive_box_line_width(mut self, per_edge: f32) -> Self {
         if !per_edge.is_finite() || per_edge <= 0.0 {
             return self;

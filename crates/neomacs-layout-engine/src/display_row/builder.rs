@@ -16,6 +16,7 @@ use crate::display_row::append_context::{
 };
 #[cfg(test)]
 use crate::display_source::{DisplayItemSource, DisplaySourceContext};
+use crate::display_source_overflow::DisplayMediaReplacementOverflowAction;
 use crate::glyph_row_writer;
 #[cfg(test)]
 use crate::output::builder::DisplayOutputBuilder;
@@ -1697,6 +1698,31 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 let slot_start = self.position;
                 let slot_source = span.start.clone();
                 let before_len = self.area_len();
+                // GNU crops a wide media glyph when it produces it, before
+                // `display_line` measures the row; see
+                // `DisplayMediaReplacementOverflowAction`.  Body text only:
+                // margin lanes keep their own structural clip below.
+                let kind = match kind {
+                    DisplayItemKind::MediaReplacement(media)
+                        if self.writer.overflow_policy()
+                            == DisplayRowOverflowPolicy::RejectOverflowingGlyph =>
+                    {
+                        let action = DisplayMediaReplacementOverflowAction::for_replacement(
+                            media.width,
+                            self.position.x_px(),
+                            self.max_x_px,
+                            before_len == 0,
+                        );
+                        DisplayItemKind::MediaReplacement(match action {
+                            DisplayMediaReplacementOverflowAction::CropToVisibleWidth {
+                                visible_width_px,
+                            } => media.cropped_to_visible_width(visible_width_px),
+                            DisplayMediaReplacementOverflowAction::Fits
+                            | DisplayMediaReplacementOverflowAction::LeaveWhole => media,
+                        })
+                    }
+                    kind => kind,
+                };
                 let checkpoint = DisplayRowGlyphCheckpoint::capture(self.writer.row);
                 let mut written = self.writer.push_item(
                     DisplayItem::new(span, face, kind)

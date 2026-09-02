@@ -324,3 +324,52 @@ fn replacement_source_keeps_non_text_kinds_with_covered_span() {
         "the covered buffer span applies to every item kind the string yields"
     );
 }
+
+/// GNU crops an image's slice along with its width (src/xdisp.c:32597), so
+/// the left part stays at scale; an xwidget keeps its content and is
+/// clipped when drawn (nsxwidget.m / xwidget.c `clip_right`).
+#[test]
+fn cropping_a_media_replacement_narrows_an_image_slice_but_not_an_xwidget() {
+    let image = DisplayMediaReplacement {
+        kind: DisplayMediaReplacementKind::Image {
+            image_id: 1,
+            source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
+            margin_left: 0.0,
+            margin_right: 0.0,
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            opaque_background: None,
+        },
+        width: 400.0,
+        height: 100.0,
+        ascent: 100.0,
+        positive_box_line_width: 0.0,
+    };
+    let cropped = image.cropped_to_visible_width(100.0);
+    assert_eq!(cropped.width, 100.0);
+    assert_eq!(cropped.height, 100.0);
+    let DisplayMediaReplacementKind::Image { source_rect, .. } = cropped.kind else {
+        panic!("still an image");
+    };
+    assert!((source_rect.width() - 0.25).abs() < 1e-4, "{source_rect:?}");
+    assert_eq!(source_rect.x(), 0.0);
+    assert!((source_rect.height() - 1.0).abs() < 1e-4);
+
+    let xwidget = DisplayMediaReplacement::xwidget(DisplayXwidgetItem {
+        xwidget_id: neomacs_display_protocol::XwidgetId::new(1),
+        webview_id: neomacs_display_protocol::WebViewId::new(1),
+        width: 600.0,
+        height: 40.0,
+    });
+    let cropped = xwidget.cropped_to_visible_width(304.0);
+    assert_eq!(cropped.width, 304.0);
+    assert_eq!(cropped.height, 40.0);
+    assert!(matches!(
+        cropped.kind,
+        DisplayMediaReplacementKind::Xwidget { .. }
+    ));
+
+    // Widening is not cropping; a non-positive width is not either.
+    assert_eq!(xwidget.cropped_to_visible_width(900.0).width, 600.0);
+    assert_eq!(xwidget.cropped_to_visible_width(0.0).width, 600.0);
+}

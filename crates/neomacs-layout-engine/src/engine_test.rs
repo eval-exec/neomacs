@@ -14031,6 +14031,126 @@ fn layout_frame_rust_emits_inline_webkit_glyphs_for_display_webkit_specs() {
     assert_eq!(requests[0].height, 45);
 }
 
+/// Lay out a buffer whose second character is replaced by an xwidget of
+/// `width`x`height` pixels in a `frame_width`x`frame_height` frame, and return
+/// the presented xwidget glyph (`x`, `width`, `height`, `clip_rect`) if any.
+fn inline_xwidget_glyph_in_frame(
+    frame_width: u32,
+    frame_height: u32,
+    width: i32,
+    height: i32,
+) -> Option<(f32, f32, f32, Option<neomacs_display_protocol::Rect>)> {
+    let mut eval = Context::new();
+    eval.set_display_host(Box::new(RecordingImageDisplayHost {
+        requests: Arc::new(Mutex::new(Vec::new())),
+        video_requests: Arc::new(Mutex::new(Vec::new())),
+        webkit_requests: Arc::new(Mutex::new(Vec::new())),
+        surface_requests: Arc::new(Mutex::new(Vec::new())),
+    }));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let xwidget = Value::make_xwidget(
+        Value::symbol("webkit"),
+        Value::string("Title"),
+        Value::make_buffer(buf_id),
+        width,
+        height,
+        4321,
+        neomacs_display_protocol::WebViewId::new(8765),
+    );
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("aXb");
+        buf.goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(1));
+        buf.put_text_property(
+            1,
+            2,
+            Value::symbol("display"),
+            Value::list(vec![
+                Value::symbol("xwidget"),
+                Value::keyword("xwidget"),
+                xwidget,
+            ]),
+        );
+    }
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "layout-oversized-xwidget",
+        frame_width,
+        frame_height,
+        buf_id,
+    );
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("frame display state");
+    state
+        .materialize()
+        .glyphs
+        .iter()
+        .find_map(|glyph| match glyph {
+            FrameGlyph::Xwidget {
+                x,
+                width,
+                height,
+                clip_rect,
+                ..
+            } => Some((*x, *width, *height, *clip_rect)),
+            _ => None,
+        })
+}
+
+/// GNU `produce_xwidget_glyph` (src/xdisp.c:32659-32707) never declines to
+/// produce the glyph.  It crops a wide widget at the right edge of the text
+/// area -- `crop = pixel_width - (last_visible_x - current_x)`, applied when
+/// the glyph starts the row or is wider than a quarter of the visible width
+/// (:32704-32706) -- so the widget is shown partially, which is what
+/// `x_draw_xwidget_glyph_string`'s `clip_*` machinery exists for.  Issue 301:
+/// this port emitted nothing, and the window showed an empty background
+/// indistinguishable from a page that failed to load.
+#[test]
+fn layout_frame_rust_crops_an_xwidget_wider_than_its_window_like_gnu() {
+    let fits = inline_xwidget_glyph_in_frame(320, 120, 96, 40).expect("fitting xwidget glyph");
+    assert_eq!(fits.1, 96.0);
+
+    let (x, width, height, _clip) = inline_xwidget_glyph_in_frame(320, 120, 600, 40)
+        .expect("a wide xwidget is cropped, not dropped");
+    assert_eq!(height, 40.0);
+    assert_eq!(
+        x, fits.0,
+        "cropping changes the width, not where the glyph starts"
+    );
+    // The test frame is a TTY frame: 8 px cells, no fringes, and one column
+    // reserved at the right edge, so `last_visible_x` is 312 and the widget
+    // after the one-cell "a" starts at 8: GNU's crop = 600 - (312 - 8).
+    assert_eq!(x, 8.0);
+    assert_eq!(width, 304.0, "GNU: pixel_width -= crop");
+}
+
+/// A widget taller than the window becomes a partially visible row in GNU
+/// (`display_line` keeps the row; drawing clips it, src/xdisp.c:32703 and
+/// `x_draw_xwidget_glyph_string`'s clip_top/clip_bottom).  The glyph keeps its
+/// full height and the presentation carries the clip.
+#[test]
+fn layout_frame_rust_keeps_an_xwidget_taller_than_its_window_partially_visible() {
+    let (_x, width, height, clip) = inline_xwidget_glyph_in_frame(320, 120, 96, 900)
+        .expect("a tall xwidget is clipped, not dropped");
+    assert_eq!(width, 96.0);
+    assert_eq!(
+        height, 900.0,
+        "GNU keeps the widget's height; drawing clips"
+    );
+    let clip = clip.expect("a partially visible row carries its clip");
+    assert!(
+        clip.height < 900.0 && clip.height <= 120.0,
+        "the clip is bounded by the window: {clip:?}"
+    );
+}
+
 #[test]
 fn layout_frame_rust_emits_inline_xwidget_glyphs_for_gnu_display_xwidget_specs() {
     let mut eval = Context::new();
