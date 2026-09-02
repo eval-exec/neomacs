@@ -2351,11 +2351,10 @@ impl Context {
             cached_standard_case_table: None,
         };
         super::super::runtime_identity::install(&mut ev);
-        ev.provide_value(
-            Value::symbol("make-network-process"),
-            Some(super::super::process::make_network_process_subfeatures()),
-        )
-        .expect("startup make-network-process provide should succeed");
+        if let Some(subfeatures) = super::super::process::make_network_process_subfeatures() {
+            ev.provide_value(Value::symbol("make-network-process"), Some(subfeatures))
+                .expect("startup make-network-process provide should succeed");
+        }
         ev.finish_runtime_activation(false);
         ev
     }
