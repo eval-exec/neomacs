@@ -1,4 +1,4 @@
-//! Evaluator-thread redisplay ownership and reentrant display queries.
+//! Retained evaluator-thread layout ownership and reentrant display queries.
 //!
 //! Renderer presentation and GNU's stack-local display queries are different
 //! ownership domains. This module owns both engines and routes nested queries

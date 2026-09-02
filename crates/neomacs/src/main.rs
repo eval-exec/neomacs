@@ -3596,8 +3596,7 @@ fn run_gui_evaluator_worker(
     install_diagnostics_eval_hooks(&mut evaluator);
 
     frame_layout::REDISPLAY_RUNTIME.with(|runtime| {
-        runtime.enable_cosmic_metrics();
-        runtime.set_font_sizing(bootstrap_display.font_sizing());
+        runtime.use_scalable_metrics(bootstrap_display.font_sizing());
     });
     let frame_tx = emacs_comms.frame_tx;
     let initial_frame_tx = frame_tx.clone();
@@ -5281,37 +5280,21 @@ fn publish_gui_frame(
         sync_live_gui_frame_titles(evaluator);
     }
 
-    let forest = evaluator.frame_manager().render_frame_forest(
-        neovm_core::window::RenderFrameScope::AllNativeWindowTrees,
-        neovm_core::window::RenderFrameVisibility::VisibleOnly,
-    );
-
-    let mut sent_any = false;
-    for node in forest
-        .into_iter()
-        .flat_map(|tree| tree.frames_bottom_to_top)
-    {
-        let prepared = frame_layout::layout_frame_display_state(
-            evaluator,
-            node.frame_id,
-            frame_layout::FrameLayoutPurpose::Redisplay,
-        );
-        let Some(prepared) = prepared else {
-            continue;
-        };
-        let (ticket, display_state) = prepared.into_submission();
+    let result = frame_layout::publish_visible_frames(evaluator, |display_state| {
         match frame_tx.try_send(display_state) {
-            Ok(()) => sent_any = true,
+            Ok(()) => true,
             Err(error) => {
-                ticket.discard(evaluator);
                 tracing::debug!(
                     "discarded GUI presentation because render submission failed: {error}"
                 );
+                false
             }
         }
-    }
+    });
 
-    if sent_any && let Some(waker) = render_waker {
+    if result.published() > 0
+        && let Some(waker) = render_waker
+    {
         waker.wake();
     }
 }

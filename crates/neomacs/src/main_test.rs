@@ -3670,7 +3670,7 @@ fn publish_gui_frame_sends_opening_frame_before_startup_lisp() {
         .id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
 
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    REDISPLAY_RUNTIME.with(|runtime| runtime.use_scalable_metrics(gui_display().font_sizing()));
     let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
     let active_before = eval
         .frame_manager()
@@ -3723,7 +3723,7 @@ fn publish_gui_frame_sends_every_visible_top_level_frame_tree() {
         "creating another top-level frame must not make it selected"
     );
 
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    REDISPLAY_RUNTIME.with(|runtime| runtime.use_scalable_metrics(gui_display().font_sizing()));
     let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
 
     publish_gui_frame(&mut eval, &frame_tx, None);
@@ -3748,7 +3748,7 @@ fn rejected_gui_frame_is_discarded_instead_of_becoming_active() {
         .id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
 
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    REDISPLAY_RUNTIME.with(|runtime| runtime.use_scalable_metrics(gui_display().font_sizing()));
     let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
     drop(frame_rx);
 
@@ -6365,7 +6365,7 @@ fn frame_snapshot_subr_end_to_end_json_and_text() {
         .expect("selected frame after bootstrap")
         .id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    REDISPLAY_RUNTIME.with(|runtime| runtime.use_scalable_metrics(gui_display().font_sizing()));
     super::frame_layout::install_frame_snapshot_fn(&mut eval);
 
     let json_value = eval

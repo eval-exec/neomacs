@@ -3773,8 +3773,11 @@ dependencies = [
 name = "neomacs-app"
 version = "0.0.16"
 dependencies = [
+ "neomacs-display-protocol",
+ "neomacs-layout-engine",
  "neovm-core",
  "neovm-host-abi",
+ "serde_json",
 ]
 
 [[package]]
