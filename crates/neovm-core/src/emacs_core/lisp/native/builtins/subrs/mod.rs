@@ -18,7 +18,6 @@ use crate::emacs_core::subr::SubrBatch;
 const LOCALIZED_SUBR_CATALOG: &[SubrBatch] = &[
     #[cfg(windows)]
     crate::emacs_core::w32::SUBRS,
-    #[cfg(neomacs_have_lcms2)]
     lcms::SUBRS,
     crate::emacs_core::data::SUBRS,
     crate::emacs_core::eval::SUBRS,

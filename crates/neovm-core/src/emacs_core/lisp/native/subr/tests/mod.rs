@@ -5,6 +5,7 @@ use crate::emacs_core::value::Value;
 use crate::tagged::header::SubrFn;
 
 mod subrs;
+mod target_filtered;
 
 fn zero(_ctx: &mut Context) -> crate::emacs_core::error::EvalResult {
     Ok(Value::NIL)
@@ -35,6 +36,14 @@ fn compiled_subr_batch_is_the_executable_declaration_catalog() {
         .eval_str("(test-batch-zero)")
         .expect("the catalog should install its declaration");
     assert!(value.is_nil());
+}
+
+#[test]
+fn target_filtered_batch_can_represent_no_subrs_on_this_target() {
+    assert!(target_filtered::SUBRS.specs().is_empty());
+
+    let mut ctx = Context::new();
+    target_filtered::register_subrs(&mut ctx);
 }
 
 #[test]
