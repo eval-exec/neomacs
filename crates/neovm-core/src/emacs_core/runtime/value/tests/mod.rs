@@ -877,3 +877,96 @@ fn type_predicates() {
         assert!(Value::char('x').is_char());
     });
 }
+
+/// GNU `internal_equal_1` (src/fns.c:2984-2998 in emacs-31.1, :2987-3001 on
+/// master) compares a `PVEC_CLOSURE` exactly like a vector: the size check
+/// first (`ASIZE`, so a five-slot closure never equals a four-slot one), then
+/// every slot element-wise -- arglist, bytecode string, constants vector,
+/// max depth, doc, interactive spec, and any extras.  `sxhash_obj`
+/// (:5525-5536) hashes the same slots through `sxhash_vector`, so two `equal`
+/// closures land in the same `equal` hash-table bucket.
+///
+/// The Lisp-visible consequence lsp-mode depends on: it removes the request
+/// cancel closure it put on the global `post-command-hook` by rebuilding an
+/// `equal` closure and calling `remove-hook` -> `delete`.  When byte-code
+/// objects compare only by identity, that hook is never removed, fires on
+/// every later command, and keeps sending `$/cancelRequest` to a server that
+/// has since been shut down ("Sending to process failed ... not running").
+///
+/// Expected values are GNU Emacs 32's for this exact probe.
+#[test]
+fn equal_compares_byte_code_functions_element_wise_like_gnu_closures() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let result = eval
+        .eval_str(
+            r#"
+(let* ((a (make-byte-code 257 "\300\207" [42] 2))
+       (b (make-byte-code 257 "\300\207" [42] 2))
+       (c (make-byte-code 257 "\300\207" [43] 2))
+       (d (make-byte-code 257 "\300\207" [42] 3))
+       (e (make-byte-code 257 "\300\207" [42] 2 "doc"))
+       (f (make-byte-code 257 "\300\207" [42] 2 "doc"))
+       (g (make-byte-code 257 "\300\207" [42] 2 nil))
+       (h (make-byte-code 257 "\300\207" [42] 2 nil (list 'interactive "p")))
+       (i (make-byte-code 257 "\300\207" [42] 2 nil (list 'interactive "p")))
+       (j (make-byte-code 257 "\301\207" [42] 2))
+       (k (make-byte-code '(x) "\300\207" [42] 2))
+       (proto (make-byte-code 257 "\300\207" [placeholder] 2))
+       (k1 (make-closure proto 'w))
+       (k2 (make-closure proto 'w))
+       (k3 (make-closure proto 'z))
+       (table (make-hash-table :test 'equal))
+       (v (vector 257 "\300\207" [42] 2)))
+  (puthash a 'found table)
+  (list (equal a b)                       ; same slots, distinct objects
+        (equal a c)                       ; constants differ
+        (equal a d)                       ; max depth differs
+        (equal a e)                       ; doc slot differs
+        (equal e f)                       ; same doc
+        (equal a g)                       ; GNU ASIZE: 4 slots vs 5 slots
+        (equal h i)                       ; same interactive spec
+        (equal a j)                       ; bytecode differs
+        (equal a k)                       ; arglist differs
+        (equal k1 k2)                     ; make-closure: same captures
+        (equal k1 k3)                     ; make-closure: different capture
+        (eq k1 k2)
+        (equal a v)                       ; a plain vector is not a closure
+        (equal (list a 1) (list b 1))
+        (length (delete b (list a 1)))    ; what remove-hook does
+        (eq (car (member b (list 1 a))) a)
+        (= (sxhash-equal a) (sxhash-equal b))
+        (= (sxhash-equal k1) (sxhash-equal k2))
+        (gethash b table)
+        (gethash k1 (let ((tb (make-hash-table :test 'equal)))
+                      (puthash k2 'closure-found tb)
+                      tb))))"#,
+        )
+        .expect("byte-code equality probe should evaluate");
+
+    assert_eq!(
+        list_to_vec(&result).expect("probe returns a list"),
+        vec![
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::fixnum(1),
+            Value::T,
+            Value::T,
+            Value::T,
+            Value::symbol("found"),
+            Value::symbol("closure-found"),
+        ]
+    );
+}

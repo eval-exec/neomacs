@@ -248,6 +248,52 @@ fn emacs_sxhash_overlay(value: &Value, depth: usize) -> Option<u64> {
     Some(hash)
 }
 
+/// GNU `sxhash_obj` (src/fns.c:5525-5536) sends a `PVEC_CLOSURE` through
+/// `sxhash_vector` like any pseudovector `internal_equal` walks, so two
+/// `equal` byte-code objects hash alike and share an `equal` hash-table
+/// bucket.  The slots are the GNU closure slots in GNU's order (see
+/// `bytecode_equal` in `value/mod.rs`); `sxhash_vector` folds at most
+/// `SXHASH_MAX_LEN` of them over a hash seeded with the slot count.
+fn emacs_sxhash_bytecode(value: &Value, depth: usize) -> Option<u64> {
+    let bc = value.get_bytecode_data()?;
+    let obj = |v: &Value| emacs_sxhash_obj_with_fallback(v, depth + 1);
+    let len = bc.observable_closure_slot_count();
+    let mut hash = len as u64;
+    for index in 0..len.min(SXHASH_MAX_LEN) {
+        let slot_hash = match index {
+            0 => obj(&bc.arglist),
+            1 => match &bc.gnu_bytecode_bytes {
+                Some(bytes) => emacs_hash_char_array(bytes.as_slice()),
+                None => obj(&Value::NIL),
+            },
+            2 => match bc.env {
+                Some(env) => obj(&env),
+                None => {
+                    let constants = bc.constants.as_slice();
+                    let mut vector_hash = constants.len() as u64;
+                    for constant in constants.iter().take(SXHASH_MAX_LEN) {
+                        vector_hash = sxhash_combine(
+                            vector_hash,
+                            emacs_sxhash_obj_with_fallback(constant, depth + 2),
+                        );
+                    }
+                    vector_hash
+                }
+            },
+            3 => obj(&Value::fixnum(i64::from(bc.max_stack))),
+            4 => match (bc.doc_form, &bc.docstring) {
+                (Some(form), _) => obj(&form),
+                (None, Some(doc)) => emacs_hash_char_array(doc.as_bytes()),
+                (None, None) => obj(&Value::NIL),
+            },
+            5 => obj(&bc.interactive.unwrap_or(Value::NIL)),
+            extra => obj(&bc.extra_slots.get(extra - 6).copied().unwrap_or(Value::NIL)),
+        };
+        hash = sxhash_combine(hash, slot_hash);
+    }
+    Some(hash)
+}
+
 fn emacs_sxhash_obj(value: &Value, depth: usize) -> Option<u64> {
     if depth > SXHASH_MAX_DEPTH {
         return Some(0);
@@ -268,6 +314,7 @@ fn emacs_sxhash_obj(value: &Value, depth: usize) -> Option<u64> {
         | ValueKind::Veclike(VecLikeType::SubCharTable) => {
             emacs_sxhash_structural_pseudovector(value, depth)
         }
+        ValueKind::Veclike(VecLikeType::ByteCode) => emacs_sxhash_bytecode(value, depth),
         ValueKind::Veclike(VecLikeType::Bignum) => sxhash_bignum(value),
         ValueKind::Veclike(VecLikeType::Marker) => emacs_sxhash_marker(value),
         ValueKind::Veclike(VecLikeType::Overlay) => emacs_sxhash_overlay(value, depth),

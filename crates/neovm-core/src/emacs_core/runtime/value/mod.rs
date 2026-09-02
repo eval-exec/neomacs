@@ -2997,6 +2997,16 @@ impl TaggedValue {
                     self.to_eq_key()
                 }
             }
+            ValueKind::Veclike(VecLikeType::ByteCode) => {
+                let ptr = self.bits();
+                if let Some(index) = seen.iter().position(|&p| p == ptr) {
+                    return HashKey::Cycle(index as u32);
+                }
+                seen.push(ptr);
+                let key = bytecode_to_equal_key(self, depth + 1, seen, symbols_with_pos_enabled);
+                seen.pop();
+                key
+            }
             ValueKind::Veclike(VecLikeType::Lambda) => {
                 let ptr = self.bits();
                 if let Some(index) = seen.iter().position(|&p| p == ptr) {
@@ -3470,6 +3480,9 @@ fn equal_value_inner(
             true
         }
         VecLikeType::HashTable => false,
+        VecLikeType::ByteCode => {
+            bytecode_equal(&left, &right, depth, seen, symbols_with_pos_enabled, kind)
+        }
         VecLikeType::Lambda => {
             if depth > 10 {
                 let pair = EqualSeenPair::new(left, right);
@@ -3769,6 +3782,9 @@ fn try_equal_value_inner(
             Ok(true)
         }
         VecLikeType::HashTable => Ok(false),
+        VecLikeType::ByteCode => {
+            try_bytecode_equal(&left, &right, depth, seen, symbols_with_pos_enabled, kind)
+        }
         VecLikeType::Lambda => {
             if depth > 10 {
                 let pair = EqualSeenPair::new(left, right);
@@ -3815,6 +3831,77 @@ fn closure_params_to_equal_key(params: &LambdaParams) -> HashKey {
         values.push(HashKey::Symbol(rest));
     }
     HashKey::EqualVec(values.into_boxed_slice())
+}
+
+/// `equal`-table key for a byte-code object: the GNU closure slots that
+/// [`bytecode_equal`] compares, in the same order, behind a type tag and the
+/// slot count (GNU's `ASIZE`, which its `internal_equal` checks first).  Two
+/// byte-code objects that are `equal` produce the same key, so an `equal`
+/// hash table finds a closure by a freshly rebuilt twin, as GNU's
+/// `sxhash_obj` -> `sxhash_vector` arranges (src/fns.c:5525-5536).
+///
+/// The bytecode string is keyed as its exact byte sequence rather than as
+/// text: it is unibyte and rarely valid UTF-8.
+fn bytecode_to_equal_key(
+    value: Value,
+    depth: usize,
+    seen: &mut Vec<usize>,
+    symbols_with_pos_enabled: bool,
+) -> HashKey {
+    if depth > 200 {
+        return HashKey::Text("#<byte-code-depth-limit>".into());
+    }
+    let Some(bc) = value.get_bytecode_data() else {
+        return value.to_eq_key();
+    };
+    let mut key_of =
+        |slot: &Value| slot.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
+
+    let mut slots = Vec::with_capacity(bc.observable_closure_slot_count() + 3);
+    slots.push(HashKey::Text("#<byte-code>".into()));
+    slots.push(HashKey::Int(bc.observable_closure_slot_count() as i64));
+    // Slot 0: arglist.
+    slots.push(key_of(&bc.arglist));
+    // Slot 1: bytecode string, byte-exact.
+    slots.push(match &bc.gnu_bytecode_bytes {
+        Some(bytes) => HashKey::EqualVec(
+            bytes
+                .as_slice()
+                .iter()
+                .map(|byte| HashKey::Int(i64::from(*byte)))
+                .collect(),
+        ),
+        None => HashKey::Text(format!("#<ops {:?}>", bc.ops).into()),
+    });
+    // Slot 2: constants vector, plus the captured env when there is one.
+    slots.push(HashKey::EqualVec(
+        bc.constants.as_slice().iter().map(&mut key_of).collect(),
+    ));
+    slots.push(match bc.env {
+        Some(env) => key_of(&env),
+        None => HashKey::Nil,
+    });
+    // Slot 3: maximum stack depth.
+    slots.push(HashKey::Int(i64::from(bc.max_stack)));
+    // Slot 4: documentation form or docstring.
+    slots.push(match (bc.doc_form, &bc.docstring) {
+        (Some(form), _) => key_of(&form),
+        (None, Some(doc)) => HashKey::EqualVec(
+            doc.as_bytes()
+                .iter()
+                .map(|byte| HashKey::Int(i64::from(*byte)))
+                .collect(),
+        ),
+        (None, None) => HashKey::Nil,
+    });
+    // Slot 5: interactive spec.
+    slots.push(match bc.interactive {
+        Some(spec) => key_of(&spec),
+        None => HashKey::Nil,
+    });
+    // Slots 6..: extras.
+    slots.extend(bc.extra_slots.iter().map(&mut key_of));
+    HashKey::EqualVec(slots.into_boxed_slice())
 }
 
 fn closure_to_equal_key(value: Value, depth: usize, seen: &mut Vec<usize>) -> HashKey {
@@ -3967,6 +4054,234 @@ fn try_closure_equal(
         }
         _ => Ok(false),
     }
+}
+
+/// GNU `internal_equal_1` compares a `PVEC_CLOSURE` exactly like a vector
+/// (src/fns.c:2984-2998 in emacs-31.1, :2987-3001 on master): the `ASIZE`
+/// test first -- which is also the type test, so a five-slot closure never
+/// equals a four-slot one -- then every slot element-wise.  This port keeps a
+/// byte-code function's GNU slots in typed fields rather than in a vector, so
+/// the walk is spelled out here in GNU's slot order, the same order `aref`
+/// exposes through `bytecode_to_closure_vector`:
+///
+///   0 arglist, 1 bytecode string, 2 constants vector, 3 max depth,
+///   4 doc (string or form), 5 interactive spec, 6.. extra slots.
+///
+/// Two things have no GNU counterpart and are compared strictly: a function
+/// without retained GNU bytes compares its decoded instructions instead (two
+/// functions with different code are never `equal`), and a captured `env`
+/// alist is compared in addition to the constants it accompanies.
+///
+/// `make-closure` (bytecode.c `Fmake_closure`) copies the prototype and
+/// replaces the leading constants, so two instances of one prototype with
+/// `equal` captures are `equal` -- the property `remove-hook` needs to find a
+/// closure it was handed a freshly rebuilt twin of.
+fn bytecode_equal(
+    left: &Value,
+    right: &Value,
+    depth: usize,
+    seen: &mut Option<HashSet<EqualSeenPair>>,
+    symbols_with_pos_enabled: bool,
+    kind: EqualKind,
+) -> bool {
+    let (Some(l), Some(r)) = (left.get_bytecode_data(), right.get_bytecode_data()) else {
+        return false;
+    };
+    if l.observable_closure_slot_count() != r.observable_closure_slot_count() {
+        return false;
+    }
+    if depth > 10 {
+        let pair = EqualSeenPair::new(*left, *right);
+        if !seen.get_or_insert_with(HashSet::new).insert(pair) {
+            return true;
+        }
+    }
+    let mut slot_equal = |a: &Value, b: &Value, extra_depth: usize| {
+        equal_value_inner(
+            a,
+            b,
+            depth + extra_depth,
+            seen,
+            symbols_with_pos_enabled,
+            kind,
+        )
+    };
+
+    // Slot 0: arglist (an arg descriptor fixnum or an old-style list).
+    if !slot_equal(&l.arglist, &r.arglist, 1) {
+        return false;
+    }
+    // Slot 1: the bytecode string.
+    match (&l.gnu_bytecode_bytes, &r.gnu_bytecode_bytes) {
+        (Some(a), Some(b)) => {
+            if a.as_slice() != b.as_slice() {
+                return false;
+            }
+        }
+        (None, None) => {
+            if l.ops != r.ops {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    // Slot 2: the constants vector, element-wise as GNU compares the vector.
+    let (lc, rc) = (l.constants.as_slice(), r.constants.as_slice());
+    if lc.len() != rc.len() {
+        return false;
+    }
+    for (a, b) in lc.iter().zip(rc.iter()) {
+        if !slot_equal(a, b, 2) {
+            return false;
+        }
+    }
+    match (l.env, r.env) {
+        (None, None) => {}
+        (Some(a), Some(b)) => {
+            if !slot_equal(&a, &b, 1) {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    // Slot 3: maximum stack depth.
+    if l.max_stack != r.max_stack {
+        return false;
+    }
+    // Slot 4: docstring or documentation form.
+    match (l.doc_form, r.doc_form) {
+        (Some(a), Some(b)) => {
+            if !slot_equal(&a, &b, 1) {
+                return false;
+            }
+        }
+        (None, None) => {
+            if l.docstring != r.docstring {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    // Slot 5: interactive spec.
+    match (l.interactive, r.interactive) {
+        (None, None) => {}
+        (Some(a), Some(b)) => {
+            if !slot_equal(&a, &b, 1) {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    // Slots 6..: GNU's `&rest ELEMENTS`.
+    if l.extra_slots.len() != r.extra_slots.len() {
+        return false;
+    }
+    l.extra_slots
+        .iter()
+        .zip(r.extra_slots.iter())
+        .all(|(a, b)| slot_equal(a, b, 1))
+}
+
+/// [`bytecode_equal`] for the error-propagating walk.
+fn try_bytecode_equal(
+    left: &Value,
+    right: &Value,
+    depth: usize,
+    seen: &mut Option<HashSet<EqualSeenPair>>,
+    symbols_with_pos_enabled: bool,
+    kind: EqualKind,
+) -> Result<bool, Flow> {
+    let (Some(l), Some(r)) = (left.get_bytecode_data(), right.get_bytecode_data()) else {
+        return Ok(false);
+    };
+    if l.observable_closure_slot_count() != r.observable_closure_slot_count() {
+        return Ok(false);
+    }
+    if depth > 10 {
+        let pair = EqualSeenPair::new(*left, *right);
+        if !seen.get_or_insert_with(HashSet::new).insert(pair) {
+            return Ok(true);
+        }
+    }
+    let mut slot_equal = |a: &Value, b: &Value, extra_depth: usize| {
+        try_equal_value_inner(
+            a,
+            b,
+            depth + extra_depth,
+            seen,
+            symbols_with_pos_enabled,
+            kind,
+        )
+    };
+
+    if !slot_equal(&l.arglist, &r.arglist, 1)? {
+        return Ok(false);
+    }
+    match (&l.gnu_bytecode_bytes, &r.gnu_bytecode_bytes) {
+        (Some(a), Some(b)) => {
+            if a.as_slice() != b.as_slice() {
+                return Ok(false);
+            }
+        }
+        (None, None) => {
+            if l.ops != r.ops {
+                return Ok(false);
+            }
+        }
+        _ => return Ok(false),
+    }
+    let (lc, rc) = (l.constants.as_slice(), r.constants.as_slice());
+    if lc.len() != rc.len() {
+        return Ok(false);
+    }
+    for (a, b) in lc.iter().zip(rc.iter()) {
+        if !slot_equal(a, b, 2)? {
+            return Ok(false);
+        }
+    }
+    match (l.env, r.env) {
+        (None, None) => {}
+        (Some(a), Some(b)) => {
+            if !slot_equal(&a, &b, 1)? {
+                return Ok(false);
+            }
+        }
+        _ => return Ok(false),
+    }
+    if l.max_stack != r.max_stack {
+        return Ok(false);
+    }
+    match (l.doc_form, r.doc_form) {
+        (Some(a), Some(b)) => {
+            if !slot_equal(&a, &b, 1)? {
+                return Ok(false);
+            }
+        }
+        (None, None) => {
+            if l.docstring != r.docstring {
+                return Ok(false);
+            }
+        }
+        _ => return Ok(false),
+    }
+    match (l.interactive, r.interactive) {
+        (None, None) => {}
+        (Some(a), Some(b)) => {
+            if !slot_equal(&a, &b, 1)? {
+                return Ok(false);
+            }
+        }
+        _ => return Ok(false),
+    }
+    if l.extra_slots.len() != r.extra_slots.len() {
+        return Ok(false);
+    }
+    for (a, b) in l.extra_slots.iter().zip(r.extra_slots.iter()) {
+        if !slot_equal(a, b, 1)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
