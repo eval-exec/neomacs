@@ -223,6 +223,9 @@ pub enum DumpError {
     ImageFormatError(String),
     SerializationError(String),
     DeserializationError(String),
+    /// A portable image requires a Rust primitive ABI that this build does
+    /// not provide.
+    PortableRuntimeContractMismatch(String),
 }
 
 impl std::fmt::Display for DumpError {
@@ -239,6 +242,9 @@ impl std::fmt::Display for DumpError {
             DumpError::ImageFormatError(s) => write!(f, "pdump image format error: {s}"),
             DumpError::SerializationError(s) => write!(f, "serialization error: {s}"),
             DumpError::DeserializationError(s) => write!(f, "deserialization error: {s}"),
+            DumpError::PortableRuntimeContractMismatch(s) => {
+                write!(f, "portable runtime contract mismatch: {s}")
+            }
         }
     }
 }
