@@ -9,6 +9,7 @@ description = "Host-neutral application contracts for Neomacs"
 
 [dependencies]
 neovm-host-abi.workspace = true
+neovm-core.workspace = true
 
 [lints]
 workspace = true
