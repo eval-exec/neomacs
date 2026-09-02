@@ -19,12 +19,10 @@ cosmic-text.workspace = true
 swash.workspace = true
 fontdb.workspace = true
 wgpu.workspace = true
-wgpu-hal.workspace = true
 naga.workspace = true
 tracing.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
-ash.workspace = true
 image.workspace = true
 imagesize.workspace = true
 flate2.workspace = true
@@ -36,6 +34,10 @@ neomacs-display-protocol.workspace = true
 neomacs-font-materializer.workspace = true
 neomacs-layout-engine.workspace = true
 neomacs-video = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ash.workspace = true
+wgpu-hal.workspace = true
 
 [dev-dependencies]
 neomacs-test-fonts.workspace = true
