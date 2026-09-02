@@ -6,6 +6,8 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use neovm_core::emacs_core::load::RuntimeImageRole;
+
 static TEMPORARY_IMAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Whether this process installed an immutable image or found it ready.
@@ -23,6 +25,19 @@ pub struct ExtractedRuntimeImage {
 }
 
 impl ExtractedRuntimeImage {
+    /// Install the product's final runtime image under its schema/content
+    /// fingerprinted name.
+    ///
+    /// The opener receives the exact packaged asset name. This keeps product
+    /// adapters independent of Neovm's pdump naming and invalidation rules.
+    pub fn prepare_final<R: Read>(
+        directory: &Path,
+        open_source: impl FnOnce(&str) -> io::Result<R>,
+    ) -> io::Result<Self> {
+        let file_name = RuntimeImageRole::Final.fingerprinted_image_file_name();
+        Self::prepare(directory, &file_name, || open_source(&file_name))
+    }
+
     /// Install an immutable packaged image into `directory` exactly once.
     ///
     /// `file_name` must be one path component. Callers should use a
