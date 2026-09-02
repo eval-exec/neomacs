@@ -3750,6 +3750,7 @@ dependencies = [
  "fontdb",
  "image",
  "libc",
+ "neomacs-app",
  "neomacs-display-protocol",
  "neomacs-layout-engine",
  "neomacs-renderer-wgpu",
