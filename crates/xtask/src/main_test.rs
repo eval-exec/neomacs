@@ -1700,6 +1700,7 @@ fn portable_runtime_image_is_opt_in_and_resolves_from_the_repository() {
 
     let options = parse_options(&[
         "--release",
+        "--portable-seed",
         "--portable-runtime-image",
         "dist/neomacs.portable",
     ]);
@@ -1713,6 +1714,7 @@ fn portable_runtime_image_is_opt_in_and_resolves_from_the_repository() {
 fn final_dump_receives_the_requested_portable_runtime_image_path() {
     let options = parse_options(&[
         "--release",
+        "--portable-seed",
         "--portable-runtime-image",
         "dist/neomacs.portable",
     ]);
@@ -1750,6 +1752,89 @@ fn portable_runtime_image_verification_accepts_a_nonempty_artifact() {
     fs::write(&artifact, b"portable runtime image").unwrap();
 
     verify_portable_runtime_image(&artifact).unwrap();
+}
+
+#[test]
+fn portable_seed_is_an_isolated_interpreter_only_product() {
+    let options = parse_options(&[
+        "--release",
+        "--portable-seed",
+        "--portable-runtime-image",
+        "dist/neomacs.portable",
+    ]);
+
+    assert_eq!(options.product_variant, ProductVariant::PortableSeed);
+    assert_eq!(
+        options.bin_dir,
+        PathBuf::from("/repo/target/portable-seed/release")
+    );
+    assert_eq!(
+        initial_cargo_build_args(&options),
+        vec![
+            OsString::from("build"),
+            OsString::from("--verbose"),
+            OsString::from("-p"),
+            OsString::from("neomacs"),
+            OsString::from("--no-default-features"),
+            OsString::from("--target-dir"),
+            OsString::from("/repo/target/portable-seed"),
+            OsString::from("--profile"),
+            OsString::from("release"),
+        ]
+    );
+}
+
+#[test]
+fn portable_seed_requires_an_output_and_rejects_capability_drift() {
+    let missing_output = FreshBuildOptions::parse(
+        PathBuf::from("/repo"),
+        ["--release", "--portable-seed"]
+            .into_iter()
+            .map(OsString::from),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(missing_output.contains("--portable-runtime-image"));
+
+    for extra in [
+        vec!["--features", "sqlite"],
+        vec!["--aot-preload"],
+        vec!["--skip-build"],
+        vec!["--native-comp"],
+    ] {
+        let mut args = vec![
+            "--release",
+            "--portable-seed",
+            "--portable-runtime-image",
+            "dist/neomacs.portable",
+        ];
+        args.extend(extra);
+        let error =
+            FreshBuildOptions::parse(PathBuf::from("/repo"), args.into_iter().map(OsString::from))
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("portable seed"), "unexpected error: {error}");
+    }
+}
+
+#[test]
+fn product_variants_are_mutually_exclusive() {
+    let error = FreshBuildOptions::parse(
+        PathBuf::from("/repo"),
+        [
+            "--release",
+            "--portable-seed",
+            "--portable-seed",
+            "--portable-runtime-image",
+            "dist/neomacs.portable",
+        ]
+        .into_iter()
+        .map(OsString::from),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("only once"), "unexpected error: {error}");
 }
 
 #[test]
@@ -3222,6 +3307,7 @@ fn generated_unidata_source_files_match_gnu_gen_clean_shape() {
         dry_run: false,
         native_comp: false,
         skip_build: false,
+        product_variant: ProductVariant::Full,
         no_byte_compile: false,
         features: Vec::new(),
         aot_preload: false,
@@ -3893,6 +3979,7 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
         dry_run: false,
         native_comp: false,
         skip_build: false,
+        product_variant: ProductVariant::Full,
         no_byte_compile: true,
         features: Vec::new(),
         aot_preload: false,
@@ -3955,6 +4042,7 @@ fn a_recompiling_run_clears_primary_but_keeps_secondary_loaddefs_bytecode() {
         dry_run: false,
         native_comp: false,
         skip_build: false,
+        product_variant: ProductVariant::Full,
         no_byte_compile: false,
         features: Vec::new(),
         aot_preload: false,
@@ -4019,9 +4107,11 @@ fn full_loaddefs_regeneration_keeps_secondary_bootstrap_seeds_loadable() {
         dry_run: false,
         native_comp: false,
         skip_build: false,
+        product_variant: ProductVariant::Full,
         no_byte_compile: false,
         features: Vec::new(),
         aot_preload: false,
+        portable_runtime_image: None,
     };
     let paths = PipelinePaths {
         lisp_root: lisp.clone(),
