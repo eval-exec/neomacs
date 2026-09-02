@@ -630,16 +630,26 @@ fn gnutls_cipher_iv_bytes(
         if size < 0 || size as usize != expected_size {
             return Err(gnutls_cipher_extraction_error("cipher IV"));
         }
-        let mut iv = vec![0; expected_size];
-        getrandom::fill(&mut iv).map_err(|err| {
-            signal(
-                "error",
-                vec![Value::string(format!(
-                    "GnuTLS cipher IV generation failed: {err}"
-                ))],
-            )
-        })?;
-        return Ok(iv);
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let mut iv = vec![0; expected_size];
+            getrandom::fill(&mut iv).map_err(|err| {
+                signal(
+                    "error",
+                    vec![Value::string(format!(
+                        "GnuTLS cipher IV generation failed: {err}"
+                    ))],
+                )
+            })?;
+            return Ok(iv);
+        }
+        #[cfg(target_family = "wasm")]
+        return Err(signal(
+            LispCondition::Error,
+            vec![Value::string(
+                "automatic cipher IV generation is unavailable on this host",
+            )],
+        ));
     }
 
     let iv = gnutls_crypto_input_bytes(value, "cipher IV")?;

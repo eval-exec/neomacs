@@ -71,8 +71,14 @@ pub enum LogTarget {
 /// will cause subsequent log lines to be lost from the file output.
 #[must_use = "drop the LoggingGuard only at process exit; dropping early loses file log lines"]
 pub struct LoggingGuard {
-    _file: Option<tracing_appender::non_blocking::WorkerGuard>,
+    _file: Option<FileGuard>,
 }
+
+#[cfg(not(target_family = "wasm"))]
+type FileGuard = tracing_appender::non_blocking::WorkerGuard;
+
+#[cfg(target_family = "wasm")]
+struct FileGuard;
 
 type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 
@@ -108,7 +114,7 @@ type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 /// directory. New call sites should prefer `NEOMACS_LOG_FILE`.
 pub fn init(target: LogTarget) -> LoggingGuard {
     static INIT: OnceLock<()> = OnceLock::new();
-    let mut guard: Option<tracing_appender::non_blocking::WorkerGuard> = None;
+    let mut guard: Option<FileGuard> = None;
     INIT.get_or_init(|| {
         install_first_panic_capture();
         guard = init_inner(target);
@@ -212,12 +218,8 @@ fn default_layer(target: LogTarget) -> Option<BoxedLayer> {
     }
 }
 
-fn open_file_layer(
-    path: &std::path::Path,
-) -> (
-    Option<BoxedLayer>,
-    Option<tracing_appender::non_blocking::WorkerGuard>,
-) {
+#[cfg(not(target_family = "wasm"))]
+fn open_file_layer(path: &std::path::Path) -> (Option<BoxedLayer>, Option<FileGuard>) {
     match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -242,12 +244,19 @@ fn open_file_layer(
     }
 }
 
-fn file_layer_for(
-    _target: LogTarget,
-) -> (
-    Option<BoxedLayer>,
-    Option<tracing_appender::non_blocking::WorkerGuard>,
-) {
+/// Browser WebAssembly has no native file appender. The request is reported
+/// once so a `NEOMACS_LOG_FILE` that produces no file is not mistaken for a
+/// silent success.
+#[cfg(target_family = "wasm")]
+fn open_file_layer(path: &std::path::Path) -> (Option<BoxedLayer>, Option<FileGuard>) {
+    eprintln!(
+        "warning: NEOMACS_LOG_FILE={} ignored: browser WebAssembly has no native file logging",
+        path.display(),
+    );
+    (None, None)
+}
+
+fn file_layer_for(_target: LogTarget) -> (Option<BoxedLayer>, Option<FileGuard>) {
     let path = match resolve_env_log_file() {
         Some(path) => path,
         // No env override → no file layer for any target. TUI runs
@@ -257,7 +266,7 @@ fn file_layer_for(
     open_file_layer(&path)
 }
 
-fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+fn init_inner(target: LogTarget) -> Option<FileGuard> {
     // Note: `tracing_subscriber::fmt::Subscriber::try_init` (which the
     // `.try_init()` call below ultimately runs) installs the log→tracing
     // bridge itself via `LogTracer::init`, so we do NOT call
