@@ -1,7 +1,12 @@
 //! Browser canvas and event-loop adapter.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
+use neomacs_wgpu_runtime::{SurfaceClearColor, SurfaceRuntime, SurfaceWindow};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -10,14 +15,18 @@ use winit::window::{Window, WindowId};
 
 struct BrowserFrontend {
     lifecycle: FrontendLifecycle,
-    window: Option<Window>,
+    window: Option<SurfaceWindow>,
+    surface: Rc<RefCell<Option<SurfaceRuntime>>>,
 }
+
+const INITIAL_CLEAR_COLOR: SurfaceClearColor = SurfaceClearColor::rgb(0.055, 0.067, 0.090);
 
 impl Default for BrowserFrontend {
     fn default() -> Self {
         Self {
             lifecycle: FrontendLifecycle::new(),
             window: None,
+            surface: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -35,7 +44,19 @@ impl ApplicationHandler for BrowserFrontend {
             .with_prevent_default(true);
         match event_loop.create_window(attributes) {
             Ok(window) => {
-                window.request_redraw();
+                let window = SurfaceWindow::new(window);
+                let display = event_loop.owned_display_handle();
+                let surface_slot = Rc::clone(&self.surface);
+                let surface_window = window.clone();
+                spawn_local(async move {
+                    let surface = SurfaceRuntime::new(display, surface_window.clone())
+                        .await
+                        .unwrap_or_else(|error| {
+                            panic!("failed to initialize browser GPU presentation: {error}")
+                        });
+                    *surface_slot.borrow_mut() = Some(surface);
+                    surface_window.request_redraw();
+                });
                 self.window = Some(window);
             }
             Err(error) => panic!("failed to create the browser canvas window: {error}"),
@@ -63,7 +84,28 @@ impl ApplicationHandler for BrowserFrontend {
                     event_loop.exit();
                 }
             }
-            WindowEvent::RedrawRequested => {}
+            WindowEvent::Resized(size) => {
+                if let Some(surface) = self.surface.borrow_mut().as_mut() {
+                    surface.resize_physical(size.width, size.height);
+                }
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                let mut surface = self.surface.borrow_mut();
+                let Some(surface) = surface.as_mut() else {
+                    return;
+                };
+                let outcome = surface
+                    .present_clear(INITIAL_CLEAR_COLOR)
+                    .unwrap_or_else(|error| panic!("browser GPU presentation failed: {error}"));
+                if outcome.should_request_redraw()
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+            }
             _ => {}
         }
     }

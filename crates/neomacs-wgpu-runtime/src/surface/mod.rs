@@ -4,6 +4,6 @@ mod runtime;
 
 pub use extent::SurfaceExtent;
 pub use runtime::{
-    PresentationOutcome, PresentationSkipReason, SurfaceInitError, SurfacePresentError,
-    SurfaceRuntime,
+    PresentationOutcome, PresentationSkipReason, SurfaceClearColor, SurfaceInitError,
+    SurfacePresentError, SurfaceRuntime, SurfaceWindow,
 };
