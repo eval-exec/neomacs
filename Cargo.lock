@@ -4100,6 +4100,7 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "cbc",
+ "ciborium",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",

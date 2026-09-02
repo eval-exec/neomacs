@@ -2,8 +2,8 @@
 //!
 //! The image FORMAT (section kinds, relocation encoding) is shared with the
 //! native owner through `image_format`; only the file mapping capability is
-//! absent here. A browser runtime image will be installed from linear memory
-//! through a separate store and is never represented by this file-mapping
+//! absent here. A browser runtime image is restored from the pointer-free
+//! portable snapshot format and is never represented by this file-mapping
 //! owner, so every operation below reports the missing capability instead of
 //! producing an image nothing can read back.
 

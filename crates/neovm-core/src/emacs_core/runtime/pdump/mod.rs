@@ -12,6 +12,10 @@
 //! [symbol/runtime manager/root sections]
 //! [heap/relocation sections]
 //! ```
+//!
+//! Hosts without file-backed memory maps use a separate portable snapshot of
+//! the pointer-free logical state. The native mmap image remains optimized for
+//! direct mapping and is never treated as a cross-target wire format.
 
 pub(crate) mod autoloads_image;
 pub(crate) mod buffer_image;
@@ -35,6 +39,8 @@ pub(crate) mod obarray_image;
 pub(crate) mod object_extra;
 pub(crate) mod object_starts;
 pub(crate) mod object_value_codec;
+mod portable_snapshot;
+pub use portable_snapshot::{encode_portable_snapshot, load_from_portable_snapshot};
 pub(crate) mod roots_image;
 pub mod runtime;
 pub(crate) mod runtime_managers_image;
