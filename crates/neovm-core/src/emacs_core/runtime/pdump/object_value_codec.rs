@@ -6,10 +6,10 @@
 
 use super::DumpError;
 use super::types::{
-    DumpBufferId, DumpByteCodeFunction, DumpByteCodeInstructions, DumpByteData, DumpHashKey,
-    DumpHashTableTest, DumpHashTableWeakness, DumpHeapObject, DumpHeapRef, DumpLambdaParams,
-    DumpLispHashTable, DumpLispString, DumpMarker, DumpNameId, DumpOverlay,
-    DumpStringTextPropertyRun, DumpSymId, DumpValue,
+    DumpBufferId, DumpByteCodeFunction, DumpByteCodeInstructions, DumpByteCodeKeyPart,
+    DumpByteData, DumpHashKey, DumpHashTableTest, DumpHashTableWeakness, DumpHeapObject,
+    DumpHeapRef, DumpLambdaParams, DumpLispHashTable, DumpLispString, DumpMarker, DumpNameId,
+    DumpOverlay, DumpStringTextPropertyRun, DumpSymId, DumpValue,
 };
 
 use crate::emacs_core::bytecode::opcode::Op;
@@ -323,6 +323,15 @@ const HASH_KEY_MARKER: u8 = 18;
 const HASH_KEY_OVERLAY: u8 = 19;
 const HASH_KEY_BOOL_VEC: u8 = 20;
 const HASH_KEY_BIGNUM: u8 = 21;
+const HASH_KEY_BYTE_CODE: u8 = 22;
+
+const BYTE_CODE_KEY_OBSERVABLE_SLOT_COUNT: u8 = 0;
+const BYTE_CODE_KEY_VALUE: u8 = 1;
+const BYTE_CODE_KEY_BYTES: u8 = 2;
+const BYTE_CODE_KEY_OPS: u8 = 3;
+const BYTE_CODE_KEY_VALUES: u8 = 4;
+const BYTE_CODE_KEY_TEXT: u8 = 5;
+const BYTE_CODE_KEY_ABSENT: u8 = 6;
 
 fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError> {
     match key {
@@ -389,6 +398,13 @@ fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError>
             write_u8(out, HASH_KEY_EQUAL_VEC);
             write_hash_keys(out, keys)?;
         }
+        DumpHashKey::ByteCode(parts) => {
+            write_u8(out, HASH_KEY_BYTE_CODE);
+            write_len(out, parts.len(), "byte-code hash key part count")?;
+            for part in parts {
+                write_byte_code_key_part(out, part)?;
+            }
+        }
         DumpHashKey::Marker(buffer, bytepos) => {
             write_u8(out, HASH_KEY_MARKER);
             write_opt_u64(out, *buffer);
@@ -425,6 +441,41 @@ fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError>
             write_u8(out, HASH_KEY_TEXT);
             write_string(out, text)?;
         }
+    }
+    Ok(())
+}
+
+fn write_byte_code_key_part(
+    out: &mut Vec<u8>,
+    part: &DumpByteCodeKeyPart,
+) -> Result<(), DumpError> {
+    match part {
+        DumpByteCodeKeyPart::ObservableSlotCount(count) => {
+            write_u8(out, BYTE_CODE_KEY_OBSERVABLE_SLOT_COUNT);
+            write_usize(out, *count)?;
+        }
+        DumpByteCodeKeyPart::Value(value) => {
+            write_u8(out, BYTE_CODE_KEY_VALUE);
+            write_hash_key(out, value)?;
+        }
+        DumpByteCodeKeyPart::Bytes(bytes) => {
+            write_u8(out, BYTE_CODE_KEY_BYTES);
+            write_bytes(out, bytes)?;
+        }
+        DumpByteCodeKeyPart::Ops(ops) => {
+            write_u8(out, BYTE_CODE_KEY_OPS);
+            write_ops(out, ops);
+        }
+        DumpByteCodeKeyPart::Values(values) => {
+            write_u8(out, BYTE_CODE_KEY_VALUES);
+            write_hash_keys(out, values)?;
+        }
+        DumpByteCodeKeyPart::Text { char_count, bytes } => {
+            write_u8(out, BYTE_CODE_KEY_TEXT);
+            write_usize(out, *char_count)?;
+            write_bytes(out, bytes)?;
+        }
+        DumpByteCodeKeyPart::Absent => write_u8(out, BYTE_CODE_KEY_ABSENT),
     }
     Ok(())
 }
@@ -1099,6 +1150,14 @@ impl<'a> Cursor<'a> {
                 Box::new(self.read_hash_key()?),
             )),
             HASH_KEY_EQUAL_VEC => Ok(DumpHashKey::EqualVec(self.read_hash_keys()?)),
+            HASH_KEY_BYTE_CODE => {
+                let len = self.read_len("byte-code hash key part count")?;
+                let mut parts = Vec::with_capacity(len);
+                for _ in 0..len {
+                    parts.push(self.read_byte_code_key_part()?);
+                }
+                Ok(DumpHashKey::ByteCode(parts))
+            }
             HASH_KEY_MARKER => Ok(DumpHashKey::Marker(
                 self.read_opt_u64()?,
                 self.read_usize("hash marker byte position")?,
@@ -1137,6 +1196,26 @@ impl<'a> Cursor<'a> {
             keys.push(self.read_hash_key()?);
         }
         Ok(keys)
+    }
+
+    fn read_byte_code_key_part(&mut self) -> Result<DumpByteCodeKeyPart, DumpError> {
+        match self.read_u8("byte-code hash key part tag")? {
+            BYTE_CODE_KEY_OBSERVABLE_SLOT_COUNT => Ok(DumpByteCodeKeyPart::ObservableSlotCount(
+                self.read_usize("byte-code observable slot count")?,
+            )),
+            BYTE_CODE_KEY_VALUE => Ok(DumpByteCodeKeyPart::Value(self.read_hash_key()?)),
+            BYTE_CODE_KEY_BYTES => Ok(DumpByteCodeKeyPart::Bytes(self.read_bytes()?)),
+            BYTE_CODE_KEY_OPS => Ok(DumpByteCodeKeyPart::Ops(self.read_ops()?)),
+            BYTE_CODE_KEY_VALUES => Ok(DumpByteCodeKeyPart::Values(self.read_hash_keys()?)),
+            BYTE_CODE_KEY_TEXT => Ok(DumpByteCodeKeyPart::Text {
+                char_count: self.read_usize("byte-code hash key character count")?,
+                bytes: self.read_bytes()?,
+            }),
+            BYTE_CODE_KEY_ABSENT => Ok(DumpByteCodeKeyPart::Absent),
+            other => Err(DumpError::ImageFormatError(format!(
+                "unknown byte-code hash key part tag {other}"
+            ))),
+        }
     }
 
     fn read_ordered_hash_entries(
@@ -1596,6 +1675,22 @@ mod tests {
                     (
                         DumpHashKey::Bignum(vec![0, 0xFFFF_FFFF_FFFF_FFFF, 1]),
                         DumpValue::Int(9),
+                        None,
+                    ),
+                    (
+                        DumpHashKey::ByteCode(vec![
+                            DumpByteCodeKeyPart::ObservableSlotCount(5),
+                            DumpByteCodeKeyPart::Value(DumpHashKey::Int(257)),
+                            DumpByteCodeKeyPart::Bytes(vec![0xC0, 0x87]),
+                            DumpByteCodeKeyPart::Ops(vec![Op::Constant(0), Op::Return]),
+                            DumpByteCodeKeyPart::Values(vec![DumpHashKey::Int(42)]),
+                            DumpByteCodeKeyPart::Text {
+                                char_count: 3,
+                                bytes: b"doc".to_vec(),
+                            },
+                            DumpByteCodeKeyPart::Absent,
+                        ]),
+                        DumpValue::Int(10),
                         None,
                     ),
                     (DumpHashKey::Char('x'), DumpValue::Int(8), None),

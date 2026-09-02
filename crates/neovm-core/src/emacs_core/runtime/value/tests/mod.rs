@@ -1077,6 +1077,35 @@ fn equal_table_keys_keep_the_presence_of_a_captured_environment() {
     );
 }
 
+/// Structural key evidence must be domain-tagged rather than represented by
+/// Lisp-reachable sentinel contents. `ByteCodeStructuralPart::Absent` used to become
+/// the same `HashKey::Text` as a present string containing `"#<absent>"`, so
+/// the hash table treated two objects that `equal` rejected as one key.
+#[test]
+fn equal_table_keys_do_not_alias_absence_with_lisp_values() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let consts = || vec![Value::fixnum(42)];
+    let bytes = || Some(vec![0xC0, 0x87]);
+
+    let absent = byte_code_probe(None, None, bytes(), simple_ops(), consts());
+    let sentinel_text = byte_code_probe(
+        Some(Value::string("#<absent>")),
+        None,
+        bytes(),
+        simple_ops(),
+        consts(),
+    );
+
+    let (equal, _same_hash, table_found) =
+        byte_code_probe_agreement(&mut eval, absent, sentinel_text);
+    assert!(!equal, "an absent environment is not a present Lisp value");
+    assert!(
+        !table_found,
+        "an equal table must not alias typed absence with Lisp string contents"
+    );
+}
+
 /// GNU string equality is character count, byte count and contents
 /// (src/fns.c `internal_equal_1`, Lisp_String); the unibyte/multibyte
 /// representation flag is not part of it.  An ASCII docstring stored
@@ -1174,20 +1203,15 @@ fn functions_without_gnu_bytes_compare_their_decoded_instructions() {
     );
 }
 
-/// `sxhash_obj` hashes every slot `internal_equal` walks (src/fns.c:5525):
-/// the constants vector and the captured environment both move the hash.
+/// GNU only promises that `equal` byte-code objects have equal hashes;
+/// collisions between unequal objects are valid. Exercise that implication
+/// for both constants and captured environments, and independently require
+/// the equal-table key to distinguish the unequal pairs.
 #[test]
-fn sxhash_equal_folds_constants_and_the_captured_environment() {
+fn sxhash_equal_obeys_the_contract_for_constants_and_captured_environments() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let bytes = || Some(vec![0xC0, 0x87]);
-    let hash = |eval: &mut Context, value: Value| -> i64 {
-        eval.obarray.set_symbol_value("neomacs-probe-a", value);
-        eval.eval_str("(sxhash-equal neomacs-probe-a)")
-            .expect("sxhash")
-            .as_fixnum()
-            .expect("fixnum hash")
-    };
 
     let base = byte_code_probe(
         Some(Value::NIL),
@@ -1196,7 +1220,21 @@ fn sxhash_equal_folds_constants_and_the_captured_environment() {
         simple_ops(),
         vec![Value::fixnum(1)],
     );
+    let base_twin = byte_code_probe(
+        Some(Value::NIL),
+        None,
+        bytes(),
+        simple_ops(),
+        vec![Value::fixnum(1)],
+    );
     let other_constants = byte_code_probe(
+        Some(Value::NIL),
+        None,
+        bytes(),
+        simple_ops(),
+        vec![Value::fixnum(2)],
+    );
+    let other_constants_twin = byte_code_probe(
         Some(Value::NIL),
         None,
         bytes(),
@@ -1213,16 +1251,37 @@ fn sxhash_equal_folds_constants_and_the_captured_environment() {
         simple_ops(),
         vec![Value::fixnum(1)],
     );
-
-    let base_hash = hash(&mut eval, base);
-    assert_ne!(
-        base_hash,
-        hash(&mut eval, other_constants),
-        "constants participate"
+    let other_env_twin = byte_code_probe(
+        Some(Value::list(vec![Value::cons(
+            Value::symbol("x"),
+            Value::fixnum(1),
+        )])),
+        None,
+        bytes(),
+        simple_ops(),
+        vec![Value::fixnum(1)],
     );
-    assert_ne!(
-        base_hash,
-        hash(&mut eval, other_env),
-        "the environment participates"
+
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, base, base_twin),
+        (true, true, true)
+    );
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, other_constants, other_constants_twin),
+        (true, true, true)
+    );
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, other_env, other_env_twin),
+        (true, true, true)
+    );
+
+    let (equal, _same_hash, table_found) =
+        byte_code_probe_agreement(&mut eval, base, other_constants);
+    assert!(!equal && !table_found, "constants participate in structure");
+
+    let (equal, _same_hash, table_found) = byte_code_probe_agreement(&mut eval, base, other_env);
+    assert!(
+        !equal && !table_found,
+        "the environment participates in structure"
     );
 }

@@ -13,6 +13,6 @@ pub mod vm;
 
 // Re-export main types
 pub(crate) use chunk::fresh_bytecode_source_id;
-pub use chunk::{ByteCodeFunction, ByteCodeSlot};
+pub use chunk::{ByteCodeFunction, ByteCodeStructuralPart};
 pub use opcode::Op;
 pub use vm::Vm;

@@ -1106,6 +1106,23 @@ impl HashTableLiteralKey {
     }
 }
 
+/// Domain-tagged structural evidence for one byte-code key part.
+///
+/// Keeping these cases distinct prevents an internal marker such as absence
+/// or decoded instructions from aliasing an ordinary Lisp value with matching
+/// contents.  `HashKey::ByteCode` also makes this representation unavailable
+/// to keys produced by regular Lisp vectors.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ByteCodeKeyPart {
+    ObservableSlotCount(usize),
+    Value(HashKey),
+    Bytes(Box<[u8]>),
+    Ops(Box<[super::bytecode::Op]>),
+    Values(Box<[HashKey]>),
+    Text { char_count: usize, bytes: Box<[u8]> },
+    Absent,
+}
+
 /// Key type that supports hashing for `eq`, `eql`, and `equal` tests.
 #[derive(Clone, Debug)]
 pub enum HashKey {
@@ -1130,6 +1147,9 @@ pub enum HashKey {
     EqualCons(Box<HashKey>, Box<HashKey>),
     /// Structural pseudovector key for `equal`-test hash tables.
     EqualVec(Box<[HashKey]>),
+    /// Structural byte-code key. Its nested enum preserves the semantic kind
+    /// of every part rather than encoding type information as sentinel text.
+    ByteCode(Box<[ByteCodeKeyPart]>),
     /// Structural marker key for `equal`-test hash tables.
     Marker(Box<(Option<u64>, EmacsBytePos)>),
     /// Structural overlay key for `equal`-test hash tables.
@@ -1160,6 +1180,7 @@ impl std::hash::Hash for HashKey {
             HashKey::Ptr(_) => 10,
             HashKey::EqualCons(_, _) => 12,
             HashKey::EqualVec(_) => 13,
+            HashKey::ByteCode(_) => 22,
             HashKey::Keyword(_) => 14,
             HashKey::Cycle(_) => 15,
             HashKey::Text(_) => 16,
@@ -1192,6 +1213,7 @@ impl std::hash::Hash for HashKey {
                     item.hash(state);
                 }
             }
+            HashKey::ByteCode(parts) => parts.hash(state),
             HashKey::Marker(parts) => {
                 parts.0.hash(state);
                 parts.1.hash(state);
@@ -1235,6 +1257,7 @@ impl PartialEq for HashKey {
                 a_car == b_car && a_cdr == b_cdr
             }
             (HashKey::EqualVec(a), HashKey::EqualVec(b)) => a == b,
+            (HashKey::ByteCode(a), HashKey::ByteCode(b)) => a == b,
             (HashKey::Marker(a), HashKey::Marker(b)) => a == b,
             (HashKey::Overlay(a), HashKey::Overlay(b)) => a == b,
             (HashKey::BoolVec(a), HashKey::BoolVec(b)) => a == b,
@@ -3834,7 +3857,7 @@ fn closure_params_to_equal_key(params: &LambdaParams) -> HashKey {
 }
 
 /// `equal`-table key for a byte-code object, derived from
-/// [`ByteCodeFunction::structural_slots`] so it agrees with [`bytecode_equal`]
+/// [`ByteCodeFunction::structural_parts`] so it agrees with [`bytecode_equal`]
 /// by construction: equal objects produce equal keys, and every difference
 /// `equal` sees -- including an absent versus a present-but-`nil` captured
 /// environment, and a docstring's character count -- reaches the key.  GNU's
@@ -3846,43 +3869,37 @@ fn bytecode_to_equal_key(
     seen: &mut Vec<usize>,
     symbols_with_pos_enabled: bool,
 ) -> HashKey {
-    use super::bytecode::ByteCodeSlot;
+    use super::bytecode::ByteCodeStructuralPart as Part;
     if depth > 200 {
-        return HashKey::Text("#<byte-code-depth-limit>".into());
+        return value.to_eq_key();
     }
     let Some(bc) = value.get_bytecode_data() else {
         return value.to_eq_key();
     };
     let mut key_of =
         |slot: &Value| slot.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
-    fn byte_keys(bytes: &[u8]) -> impl Iterator<Item = HashKey> + '_ {
-        bytes.iter().map(|byte| HashKey::Int(i64::from(*byte)))
-    }
-
-    let slots = bc.structural_slots();
-    let mut keys = Vec::with_capacity(slots.len() + 2);
-    keys.push(HashKey::Text("#<byte-code>".into()));
-    keys.push(HashKey::Int(bc.observable_closure_slot_count() as i64));
-    for slot in slots {
-        keys.push(match slot {
-            ByteCodeSlot::Value(value) => key_of(&value),
-            ByteCodeSlot::Bytes(bytes) => HashKey::EqualVec(byte_keys(bytes).collect()),
-            ByteCodeSlot::Ops(ops) => HashKey::Text(format!("#<ops {ops:?}>").into()),
-            ByteCodeSlot::Values(values) => {
-                HashKey::EqualVec(values.iter().map(&mut key_of).collect())
+    let parts = bc.structural_parts();
+    let mut keys = Vec::with_capacity(parts.len());
+    for part in parts {
+        keys.push(match part {
+            Part::ObservableSlotCount(count) => ByteCodeKeyPart::ObservableSlotCount(count),
+            Part::Value(value) => ByteCodeKeyPart::Value(key_of(&value)),
+            Part::Bytes(bytes) => ByteCodeKeyPart::Bytes(bytes.into()),
+            Part::Ops(ops) => ByteCodeKeyPart::Ops(ops.into()),
+            Part::Values(values) => {
+                ByteCodeKeyPart::Values(values.iter().map(&mut key_of).collect())
             }
             // GNU string equality is characters + bytes + contents; the
             // representation flag is not part of it, and the character count
             // is (two raw bytes are not one multibyte character).
-            ByteCodeSlot::Text(text) => HashKey::EqualVec(
-                std::iter::once(HashKey::Int(text.schars() as i64))
-                    .chain(byte_keys(text.as_bytes()))
-                    .collect(),
-            ),
-            ByteCodeSlot::Absent => HashKey::Text("#<absent>".into()),
+            Part::Text(text) => ByteCodeKeyPart::Text {
+                char_count: text.schars(),
+                bytes: text.as_bytes().into(),
+            },
+            Part::Absent => ByteCodeKeyPart::Absent,
         });
     }
-    HashKey::EqualVec(keys.into_boxed_slice())
+    HashKey::ByteCode(keys.into_boxed_slice())
 }
 
 fn closure_to_equal_key(value: Value, depth: usize, seen: &mut Vec<usize>) -> HashKey {
@@ -4049,7 +4066,7 @@ fn gnu_string_contents_equal(left: &LispString, right: &LispString) -> bool {
 }
 
 /// The slot walk behind both [`bytecode_equal`] and [`try_bytecode_equal`]:
-/// GNU's `ASIZE` check first, then [`ByteCodeFunction::structural_slots`]
+/// GNU's `ASIZE` check first, then [`ByteCodeFunction::structural_parts`]
 /// pairwise, with `value_equal` deciding the Lisp values (constants at one
 /// extra level of depth, as elements of the vector they sit in).
 fn bytecode_slots_equal(
@@ -4058,20 +4075,18 @@ fn bytecode_slots_equal(
     depth: usize,
     value_equal: &mut dyn FnMut(&Value, &Value, usize) -> Result<bool, Flow>,
 ) -> Result<bool, Flow> {
-    use super::bytecode::ByteCodeSlot;
-    if left.observable_closure_slot_count() != right.observable_closure_slot_count() {
+    use super::bytecode::ByteCodeStructuralPart as Part;
+    let (left_parts, right_parts) = (left.structural_parts(), right.structural_parts());
+    if left_parts.len() != right_parts.len() {
         return Ok(false);
     }
-    let (left_slots, right_slots) = (left.structural_slots(), right.structural_slots());
-    if left_slots.len() != right_slots.len() {
-        return Ok(false);
-    }
-    for (left, right) in left_slots.into_iter().zip(right_slots) {
+    for (left, right) in left_parts.zip(right_parts) {
         let equal = match (left, right) {
-            (ByteCodeSlot::Value(a), ByteCodeSlot::Value(b)) => value_equal(&a, &b, depth + 1)?,
-            (ByteCodeSlot::Bytes(a), ByteCodeSlot::Bytes(b)) => a == b,
-            (ByteCodeSlot::Ops(a), ByteCodeSlot::Ops(b)) => a == b,
-            (ByteCodeSlot::Values(a), ByteCodeSlot::Values(b)) => {
+            (Part::ObservableSlotCount(a), Part::ObservableSlotCount(b)) => a == b,
+            (Part::Value(a), Part::Value(b)) => value_equal(&a, &b, depth + 1)?,
+            (Part::Bytes(a), Part::Bytes(b)) => a == b,
+            (Part::Ops(a), Part::Ops(b)) => a == b,
+            (Part::Values(a), Part::Values(b)) => {
                 if a.len() != b.len() {
                     return Ok(false);
                 }
@@ -4082,8 +4097,8 @@ fn bytecode_slots_equal(
                 }
                 true
             }
-            (ByteCodeSlot::Text(a), ByteCodeSlot::Text(b)) => gnu_string_contents_equal(a, b),
-            (ByteCodeSlot::Absent, ByteCodeSlot::Absent) => true,
+            (Part::Text(a), Part::Text(b)) => gnu_string_contents_equal(a, b),
+            (Part::Absent, Part::Absent) => true,
             _ => false,
         };
         if !equal {
@@ -4098,7 +4113,7 @@ fn bytecode_slots_equal(
 /// test first -- which is also the type test, so a five-slot closure never
 /// equals a four-slot one -- then every slot element-wise.  This port keeps
 /// a byte-code function's GNU slots in typed fields, so the walk reads
-/// [`ByteCodeFunction::structural_slots`], the one place that spells the
+/// [`ByteCodeFunction::structural_parts`], the one place that spells the
 /// schema; `make-closure` (bytecode.c `Fmake_closure`) copies the prototype
 /// and replaces the leading constants, so two instances of one prototype
 /// with `equal` captures are `equal` -- the property `remove-hook` needs to

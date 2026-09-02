@@ -51,8 +51,8 @@ use crate::emacs_core::rect::RectangleState;
 use crate::emacs_core::register::{RegisterContent, RegisterManager};
 use crate::emacs_core::symbol::{LispSymbol, Obarray, SymbolTrappedWrite};
 use crate::emacs_core::value::{
-    HashKey, HashTableTest, HashTableWeakness, LambdaParams, LispHashTable, RuntimeBindingValue,
-    StringTextPropertyRun, Value,
+    ByteCodeKeyPart, HashKey, HashTableTest, HashTableWeakness, LambdaParams, LispHashTable,
+    RuntimeBindingValue, StringTextPropertyRun, Value,
 };
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::emacs_core::value::{
@@ -3046,6 +3046,12 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
         HashKey::EqualVec(v) => {
             DumpHashKey::EqualVec(v.iter().map(|key| dump_hash_key(encoder, key)).collect())
         }
+        HashKey::ByteCode(parts) => DumpHashKey::ByteCode(
+            parts
+                .iter()
+                .map(|part| dump_byte_code_key_part(encoder, part))
+                .collect(),
+        ),
         HashKey::Marker(parts) => DumpHashKey::Marker(parts.0, parts.1.get()),
         HashKey::Overlay(parts) => DumpHashKey::Overlay {
             buffer: parts.0,
@@ -3063,6 +3069,31 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
         ),
         HashKey::Cycle(index) => DumpHashKey::Cycle(*index),
         HashKey::Text(text) => DumpHashKey::Text(text.to_string()),
+    }
+}
+
+fn dump_byte_code_key_part(
+    encoder: &mut DumpEncoder,
+    part: &ByteCodeKeyPart,
+) -> DumpByteCodeKeyPart {
+    match part {
+        ByteCodeKeyPart::ObservableSlotCount(count) => {
+            DumpByteCodeKeyPart::ObservableSlotCount(*count)
+        }
+        ByteCodeKeyPart::Value(value) => DumpByteCodeKeyPart::Value(dump_hash_key(encoder, value)),
+        ByteCodeKeyPart::Bytes(bytes) => DumpByteCodeKeyPart::Bytes(bytes.to_vec()),
+        ByteCodeKeyPart::Ops(ops) => DumpByteCodeKeyPart::Ops(ops.to_vec()),
+        ByteCodeKeyPart::Values(values) => DumpByteCodeKeyPart::Values(
+            values
+                .iter()
+                .map(|value| dump_hash_key(encoder, value))
+                .collect(),
+        ),
+        ByteCodeKeyPart::Text { char_count, bytes } => DumpByteCodeKeyPart::Text {
+            char_count: *char_count,
+            bytes: bytes.to_vec(),
+        },
+        ByteCodeKeyPart::Absent => DumpByteCodeKeyPart::Absent,
     }
 }
 
@@ -4701,6 +4732,13 @@ pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashK
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
+        DumpHashKey::ByteCode(parts) => HashKey::ByteCode(
+            parts
+                .iter()
+                .map(|part| load_byte_code_key_part(decoder, part))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
         DumpHashKey::Marker(buffer, bytepos) => {
             HashKey::Marker(Box::new((*buffer, EmacsBytePos::new(*bytepos))))
         }
@@ -4722,6 +4760,34 @@ pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashK
         ),
         DumpHashKey::Cycle(index) => HashKey::Cycle(*index),
         DumpHashKey::Text(text) => HashKey::Text(text.clone().into_boxed_str()),
+    }
+}
+
+fn load_byte_code_key_part(
+    decoder: &mut LoadDecoder,
+    part: &DumpByteCodeKeyPart,
+) -> ByteCodeKeyPart {
+    match part {
+        DumpByteCodeKeyPart::ObservableSlotCount(count) => {
+            ByteCodeKeyPart::ObservableSlotCount(*count)
+        }
+        DumpByteCodeKeyPart::Value(value) => ByteCodeKeyPart::Value(load_hash_key(decoder, value)),
+        DumpByteCodeKeyPart::Bytes(bytes) => {
+            ByteCodeKeyPart::Bytes(bytes.clone().into_boxed_slice())
+        }
+        DumpByteCodeKeyPart::Ops(ops) => ByteCodeKeyPart::Ops(ops.clone().into_boxed_slice()),
+        DumpByteCodeKeyPart::Values(values) => ByteCodeKeyPart::Values(
+            values
+                .iter()
+                .map(|value| load_hash_key(decoder, value))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        DumpByteCodeKeyPart::Text { char_count, bytes } => ByteCodeKeyPart::Text {
+            char_count: *char_count,
+            bytes: bytes.clone().into_boxed_slice(),
+        },
+        DumpByteCodeKeyPart::Absent => ByteCodeKeyPart::Absent,
     }
 }
 
@@ -4755,6 +4821,13 @@ fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
+        DumpHashKey::ByteCode(parts) => HashKey::ByteCode(
+            parts
+                .into_iter()
+                .map(|part| load_byte_code_key_part_owned(decoder, part))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
         DumpHashKey::Marker(buffer, bytepos) => {
             HashKey::Marker(Box::new((buffer, EmacsBytePos::new(bytepos))))
         }
@@ -4776,6 +4849,34 @@ fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
         ),
         DumpHashKey::Cycle(index) => HashKey::Cycle(index),
         DumpHashKey::Text(text) => HashKey::Text(text.into_boxed_str()),
+    }
+}
+
+fn load_byte_code_key_part_owned(
+    decoder: &mut LoadDecoder,
+    part: DumpByteCodeKeyPart,
+) -> ByteCodeKeyPart {
+    match part {
+        DumpByteCodeKeyPart::ObservableSlotCount(count) => {
+            ByteCodeKeyPart::ObservableSlotCount(count)
+        }
+        DumpByteCodeKeyPart::Value(value) => {
+            ByteCodeKeyPart::Value(load_hash_key_owned(decoder, value))
+        }
+        DumpByteCodeKeyPart::Bytes(bytes) => ByteCodeKeyPart::Bytes(bytes.into_boxed_slice()),
+        DumpByteCodeKeyPart::Ops(ops) => ByteCodeKeyPart::Ops(ops.into_boxed_slice()),
+        DumpByteCodeKeyPart::Values(values) => ByteCodeKeyPart::Values(
+            values
+                .into_iter()
+                .map(|value| load_hash_key_owned(decoder, value))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        DumpByteCodeKeyPart::Text { char_count, bytes } => ByteCodeKeyPart::Text {
+            char_count,
+            bytes: bytes.into_boxed_slice(),
+        },
+        DumpByteCodeKeyPart::Absent => ByteCodeKeyPart::Absent,
     }
 }
 

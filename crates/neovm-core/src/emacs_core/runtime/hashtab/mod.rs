@@ -73,6 +73,7 @@ fn hash_key_to_value(key: &HashKey) -> Value {
             let vals: Vec<Value> = items.iter().map(hash_key_to_value).collect();
             Value::vector(vals)
         }
+        HashKey::ByteCode(_) => Value::NIL,
         HashKey::Marker(_) | HashKey::Overlay(_) => Value::NIL,
         HashKey::BoolVec(parts) => {
             let (len, bits) = **parts;
@@ -251,21 +252,32 @@ fn emacs_sxhash_overlay(value: &Value, depth: usize) -> Option<u64> {
 /// GNU `sxhash_obj` (src/fns.c:5525-5536) sends a `PVEC_CLOSURE` through
 /// `sxhash_vector` like any pseudovector `internal_equal` walks, so two
 /// `equal` byte-code objects hash alike and share an `equal` hash-table
-/// bucket.  The elements are [`ByteCodeFunction::structural_slots`] -- the
+/// bucket.  The elements are [`ByteCodeFunction::structural_parts`] -- the
 /// same sequence `equal` compares, so everything `equal` distinguishes,
 /// including a captured environment beside the constants, moves the hash --
 /// folded like `sxhash_vector`: seeded with the slot count, at most
 /// `SXHASH_MAX_LEN` elements.
 fn emacs_sxhash_bytecode(value: &Value, depth: usize) -> Option<u64> {
-    use crate::emacs_core::bytecode::ByteCodeSlot;
+    use crate::emacs_core::bytecode::ByteCodeStructuralPart as Part;
     let bc = value.get_bytecode_data()?;
-    let mut hash = bc.observable_closure_slot_count() as u64;
-    for slot in bc.structural_slots().into_iter().take(SXHASH_MAX_LEN) {
-        let slot_hash = match slot {
-            ByteCodeSlot::Value(value) => emacs_sxhash_obj_with_fallback(&value, depth + 1),
-            ByteCodeSlot::Bytes(bytes) => emacs_hash_char_array(bytes),
-            ByteCodeSlot::Ops(ops) => emacs_hash_char_array(format!("{ops:?}").as_bytes()),
-            ByteCodeSlot::Values(values) => {
+    let mut parts = bc.structural_parts();
+    let Part::ObservableSlotCount(slot_count) = parts.next()? else {
+        unreachable!("byte-code structure starts with its observable shape")
+    };
+    let mut hash = slot_count as u64;
+    for part in parts.take(SXHASH_MAX_LEN) {
+        let part_hash = match part {
+            Part::ObservableSlotCount(_) => {
+                unreachable!("byte-code structure contains one leading shape")
+            }
+            Part::Value(value) => emacs_sxhash_obj_with_fallback(&value, depth + 1),
+            Part::Bytes(bytes) => emacs_hash_char_array(bytes),
+            Part::Ops(ops) => {
+                let mut hasher = DefaultHasher::new();
+                ops.hash(&mut hasher);
+                hasher.finish() & SXHASH_FALLBACK_NONNEG_MASK
+            }
+            Part::Values(values) => {
                 let mut vector_hash = values.len() as u64;
                 for value in values.iter().take(SXHASH_MAX_LEN) {
                     vector_hash = sxhash_combine(
@@ -277,10 +289,10 @@ fn emacs_sxhash_bytecode(value: &Value, depth: usize) -> Option<u64> {
             }
             // GNU `sxhash_string` hashes the bytes; equal strings have equal
             // bytes whatever their representation.
-            ByteCodeSlot::Text(text) => emacs_hash_char_array(text.as_bytes()),
-            ByteCodeSlot::Absent => 42,
+            Part::Text(text) => emacs_hash_char_array(text.as_bytes()),
+            Part::Absent => 42,
         };
-        hash = sxhash_combine(hash, slot_hash);
+        hash = sxhash_combine(hash, part_hash);
     }
     Some(hash)
 }

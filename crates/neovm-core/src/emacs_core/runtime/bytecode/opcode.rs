@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A single bytecode instruction.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Op {
     // -- Constants and stack --------------------------------------------------
     /// Push a constant from the constant pool.

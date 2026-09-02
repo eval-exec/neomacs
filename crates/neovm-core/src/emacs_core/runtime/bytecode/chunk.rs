@@ -122,9 +122,18 @@ fn arglist_value_from_params(params: &LambdaParams) -> Value {
     Value::list(elements)
 }
 
-/// One element of [`ByteCodeFunction::structural_slots`].
+/// One piece of evidence used for structural byte-code equality and hashing.
+///
+/// This is deliberately named a "part", not a GNU closure "slot": Neomacs
+/// keeps some execution state (notably the captured environment) beside the
+/// GNU-compatible slot projection.  Consumers must compare that state too,
+/// because it affects execution even when it has no independently observable
+/// GNU slot.
 #[derive(Clone, Copy, Debug)]
-pub enum ByteCodeSlot<'a> {
+pub enum ByteCodeStructuralPart<'a> {
+    /// GNU's observable pseudovector size.  Keeping shape in the sequence
+    /// makes it impossible for a consumer to forget the `ASIZE` comparison.
+    ObservableSlotCount(usize),
     /// A Lisp value compared, hashed and keyed as any other.
     Value(Value),
     /// The GNU bytecode string, byte-exact.
@@ -135,9 +144,36 @@ pub enum ByteCodeSlot<'a> {
     Values(&'a [Value]),
     /// A docstring, under GNU string equality: characters, bytes, contents.
     Text(&'a LispString),
-    /// An optional slot that is not there.
+    /// An optional structural part that is not present.
     Absent,
 }
+
+/// Allocation-free iterator over a byte-code function's structural evidence.
+pub(crate) struct ByteCodeStructuralParts<'a> {
+    fixed: std::array::IntoIter<ByteCodeStructuralPart<'a>, 8>,
+    extras: std::slice::Iter<'a, Value>,
+}
+
+impl<'a> Iterator for ByteCodeStructuralParts<'a> {
+    type Item = ByteCodeStructuralPart<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.fixed.next().or_else(|| {
+            self.extras
+                .next()
+                .copied()
+                .map(ByteCodeStructuralPart::Value)
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.fixed.len() + self.extras.len();
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for ByteCodeStructuralParts<'_> {}
+impl std::iter::FusedIterator for ByteCodeStructuralParts<'_> {}
 
 /// A compiled bytecode function.
 #[derive(Debug)]
@@ -634,9 +670,9 @@ impl ByteCodeFunction {
         }
     }
 
-    /// The structural view of this function: GNU's closure slots, in GNU's
-    /// order, plus the one field GNU keeps inside a slot and this port keeps
-    /// beside it.
+    /// The structural evidence for this function: GNU's observable shape and
+    /// closure slots, in GNU's order, plus the environment this port keeps
+    /// beside the constants vector.
     ///
     /// GNU's `internal_equal_1` compares a `PVEC_CLOSURE` element-wise
     /// (src/fns.c:2984-2998 in emacs-31.1) and `sxhash_obj` hashes it through
@@ -645,16 +681,17 @@ impl ByteCodeFunction {
     /// `equal`, its fallible twin, `sxhash-equal` and the `equal`-table key
     /// all read THIS sequence rather than each re-deriving the schema:
     ///
-    /// | index | GNU slot            | here                                   |
-    /// |-------|---------------------|----------------------------------------|
-    /// | 0     | arglist             | `Value`                                |
-    /// | 1     | bytecode string     | `Bytes`, or `Ops` when none is retained|
-    /// | 2     | constants vector    | `Values`                               |
-    /// | 3     | (inside slot 2)     | captured `env`: `Value`, else `Absent` |
-    /// | 4     | max stack depth     | `Value` (a fixnum)                     |
-    /// | 5     | docstring / form    | `Text`, `Value`, or `Absent`           |
-    /// | 6     | interactive spec    | `Value` or `Absent`                    |
-    /// | 7..   | `&rest ELEMENTS`    | `Value` each                           |
+    /// | part | GNU representation  | Neomacs structural evidence             |
+    /// |------|---------------------|------------------------------------------|
+    /// | 0    | pseudovector ASIZE  | `ObservableSlotCount`                    |
+    /// | 1    | arglist             | `Value`                                  |
+    /// | 2    | bytecode string     | `Bytes`, or `Ops` when none is retained  |
+    /// | 3    | constants vector    | `Values`                                 |
+    /// | 4    | inside constants    | captured `env`: `Value`, else `Absent`   |
+    /// | 5    | max stack depth     | `Value` (a fixnum)                       |
+    /// | 6    | docstring / form    | `Text`, `Value`, or `Absent`             |
+    /// | 7    | interactive spec    | `Value` or `Absent`                      |
+    /// | 8..  | `&rest ELEMENTS`    | `Value` each                             |
     ///
     /// `Absent` is distinct from a present `nil`: `Op::MakeClosure` stores
     /// `Some(lexenv)`, and a closure over no variables has a present, `nil`
@@ -662,29 +699,30 @@ impl ByteCodeFunction {
     /// constants vector.  A function with no retained GNU bytes compares its
     /// decoded instructions instead, so two functions with different code are
     /// never equal even though GNU's slot 1 would be `nil` for both.
-    pub(crate) fn structural_slots(&self) -> Vec<ByteCodeSlot<'_>> {
-        let mut slots = Vec::with_capacity(7 + self.extra_slots.len());
-        slots.push(ByteCodeSlot::Value(self.arglist));
-        slots.push(match &self.gnu_bytecode_bytes {
-            Some(bytes) => ByteCodeSlot::Bytes(bytes.as_slice()),
-            None => ByteCodeSlot::Ops(&self.ops),
-        });
-        slots.push(ByteCodeSlot::Values(self.constants.as_slice()));
-        slots.push(self.env.map_or(ByteCodeSlot::Absent, ByteCodeSlot::Value));
-        slots.push(ByteCodeSlot::Value(Value::fixnum(i64::from(
-            self.max_stack,
-        ))));
-        slots.push(match (self.doc_form, &self.docstring) {
-            (Some(form), _) => ByteCodeSlot::Value(form),
-            (None, Some(doc)) => ByteCodeSlot::Text(doc),
-            (None, None) => ByteCodeSlot::Absent,
-        });
-        slots.push(
-            self.interactive
-                .map_or(ByteCodeSlot::Absent, ByteCodeSlot::Value),
-        );
-        slots.extend(self.extra_slots.iter().copied().map(ByteCodeSlot::Value));
-        slots
+    pub(crate) fn structural_parts(&self) -> ByteCodeStructuralParts<'_> {
+        use ByteCodeStructuralPart as Part;
+
+        ByteCodeStructuralParts {
+            fixed: [
+                Part::ObservableSlotCount(self.observable_closure_slot_count()),
+                Part::Value(self.arglist),
+                match &self.gnu_bytecode_bytes {
+                    Some(bytes) => Part::Bytes(bytes.as_slice()),
+                    None => Part::Ops(&self.ops),
+                },
+                Part::Values(self.constants.as_slice()),
+                self.env.map_or(Part::Absent, Part::Value),
+                Part::Value(Value::fixnum(i64::from(self.max_stack))),
+                match (self.doc_form, &self.docstring) {
+                    (Some(form), _) => Part::Value(form),
+                    (None, Some(doc)) => Part::Text(doc),
+                    (None, None) => Part::Absent,
+                },
+                self.interactive.map_or(Part::Absent, Part::Value),
+            ]
+            .into_iter(),
+            extras: self.extra_slots.iter(),
+        }
     }
 
     pub fn observable_closure_slot_count(&self) -> usize {

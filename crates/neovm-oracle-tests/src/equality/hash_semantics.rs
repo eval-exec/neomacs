@@ -188,6 +188,35 @@ fn oracle_equal_char_tables_obey_structural_hash_contract() {
 }
 
 #[test]
+fn oracle_byte_code_closures_obey_structural_equal_and_hash_contracts() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"
+(let* ((a (make-byte-code 257 "\300\207" [42] 2))
+       (b (make-byte-code 257 "\300\207" [42] 2))
+       (different (make-byte-code 257 "\300\207" [43] 2))
+       (proto (make-byte-code 257 "\300\207" [placeholder] 2))
+       (closure-a (make-closure proto 'captured))
+       (closure-b (make-closure proto 'captured))
+       (table (make-hash-table :test 'equal)))
+  (puthash a 'byte-code-found table)
+  (puthash closure-a 'closure-found table)
+  (list
+   (equal a b)
+   (equal a different)
+   (equal closure-a closure-b)
+   (= (sxhash-equal a) (sxhash-equal b))
+   (= (sxhash-equal closure-a) (sxhash-equal closure-b))
+   (gethash b table 'missing)
+   (gethash closure-b table 'missing)
+   (length (delete b (list a 1)))))
+"#;
+
+    let expect = expect_test::expect![[r#""OK (t nil t t t byte-code-found closure-found 1)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
 fn oracle_sxhash_equal_invariants_for_properties_and_structures() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

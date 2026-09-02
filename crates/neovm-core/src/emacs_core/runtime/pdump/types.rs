@@ -285,6 +285,7 @@ pub enum DumpHashKey {
     HeapRef(u32),
     EqualCons(Box<DumpHashKey>, Box<DumpHashKey>),
     EqualVec(Vec<DumpHashKey>),
+    ByteCode(Vec<DumpByteCodeKeyPart>),
     Marker(Option<u64>, usize),
     Overlay {
         buffer: Option<u64>,
@@ -299,6 +300,18 @@ pub enum DumpHashKey {
     SymbolWithPos(Box<DumpHashKey>, Box<DumpHashKey>),
     Cycle(u32),
     Text(String),
+}
+
+/// Serializable mirror of `ByteCodeKeyPart`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum DumpByteCodeKeyPart {
+    ObservableSlotCount(usize),
+    Value(DumpHashKey),
+    Bytes(Vec<u8>),
+    Ops(Vec<crate::emacs_core::bytecode::Op>),
+    Values(Vec<DumpHashKey>),
+    Text { char_count: usize, bytes: Vec<u8> },
+    Absent,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
