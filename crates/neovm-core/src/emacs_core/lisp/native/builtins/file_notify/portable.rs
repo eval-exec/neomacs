@@ -4,7 +4,12 @@ use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
-pub(crate) fn register_subrs(_ctx: &mut Context) {}
+#[path = "subrs.rs"]
+mod subrs;
+
+#[cfg(test)]
+pub(crate) use self::subrs::SUBRS;
+pub(crate) use self::subrs::register_subrs;
 
 pub(crate) fn reset_file_notify_thread_locals() {}
 

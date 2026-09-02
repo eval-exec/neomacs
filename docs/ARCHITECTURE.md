@@ -147,13 +147,21 @@ admits only minimum arities valid for that maximum. A fixed native function
 can therefore no longer be paired with contradictory arity metadata.
 Compile-fail doctests pin wrong function widths and wrong minimum-width types.
 
-Subsystem-owned implementations live in their subsystem's `mod.rs`; their
-declarations live in a sibling `subrs.rs`. The `define_subrs!` macro builds a
-const `SubrBatch` and the subsystem's `register_subrs` function from the same
-data. Its const constructor verifies the declaration's `subrs.rs` location,
-with a compile-fail doctest pinning that placement rule,
+Subsystem-owned declarations live in a sibling `subrs.rs`; the subsystem's
+`mod.rs` is their owning facade. Implementation bodies normally live in that
+facade. A private sibling may instead hold host-independent policy shared
+verbatim by cfg-selected backends, and a target backend may be selected as the
+subsystem module. This exception avoids duplicating GNU-compatible policy, but
+does not create another registration path: every backend re-exports the same
+declaration batch and registrar from the owning `subrs.rs`. The `define_subrs!`
+macro builds a const `SubrBatch` and the subsystem's `register_subrs` function
+from the same data. Its const constructor verifies the declaration's
+`subrs.rs` location, with a compile-fail doctest pinning that placement rule,
 and each batch is the executable value installed by production startup. The
-test-only root catalog uses those same compiled batches to check the localized
+explicit `target_filtered` form permits a target to compile every declaration
+out while preserving the owning batch and registrar; unconditional batches
+remain compile-time nonempty. The test-only root catalog uses those same
+compiled batches to check the localized
 inventory, duplicate Lisp names, and the batch-install trace produced by a real
 `Context::new` startup. These checks operate on executable declaration data and
 startup behavior rather than trying to infer architecture by parsing Rust
