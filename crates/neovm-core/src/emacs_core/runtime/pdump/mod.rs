@@ -232,6 +232,7 @@ pub enum DumpError {
     SerializationError(String),
     #[error("deserialization error: {0}")]
     DeserializationError(String),
+<<<<<<< HEAD
     #[error("invalid symbol trapped-write code: {0}")]
     InvalidSymbolTrappedWrite(
         #[from] num_enum::TryFromPrimitiveError<crate::emacs_core::symbol::SymbolTrappedWrite>,
@@ -285,6 +286,67 @@ pub enum DumpError {
     InvalidFontWidth(#[from] num_enum::TryFromPrimitiveError<types::DumpFontWidth>),
     #[error("invalid font slant: {0}")]
     InvalidFontSlant(#[from] num_enum::TryFromPrimitiveError<types::DumpFontSlant>),
+||||||| parent of cab30e4685 (feat: validate portable runtime primitive contract)
+}
+
+impl std::fmt::Display for DumpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DumpError::Io(e) => write!(f, "I/O error: {e}"),
+            DumpError::BadMagic => write!(f, "not a valid pdump file (bad magic)"),
+            DumpError::UnsupportedVersion(v) => write!(f, "unsupported pdump version {v}"),
+            DumpError::FingerprintMismatch { expected, found } => write!(
+                f,
+                "pdump fingerprint mismatch (expected {expected}, found {found})"
+            ),
+            DumpError::ChecksumMismatch => write!(f, "pdump checksum mismatch (corrupted file)"),
+            DumpError::ImageFormatError(s) => write!(f, "pdump image format error: {s}"),
+            DumpError::SerializationError(s) => write!(f, "serialization error: {s}"),
+            DumpError::DeserializationError(s) => write!(f, "deserialization error: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for DumpError {}
+
+impl From<std::io::Error> for DumpError {
+    fn from(e: std::io::Error) -> Self {
+        DumpError::Io(e)
+    }
+=======
+    /// A portable image requires a Rust primitive ABI that this build does
+    /// not provide.
+    PortableRuntimeContractMismatch(String),
+}
+
+impl std::fmt::Display for DumpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DumpError::Io(e) => write!(f, "I/O error: {e}"),
+            DumpError::BadMagic => write!(f, "not a valid pdump file (bad magic)"),
+            DumpError::UnsupportedVersion(v) => write!(f, "unsupported pdump version {v}"),
+            DumpError::FingerprintMismatch { expected, found } => write!(
+                f,
+                "pdump fingerprint mismatch (expected {expected}, found {found})"
+            ),
+            DumpError::ChecksumMismatch => write!(f, "pdump checksum mismatch (corrupted file)"),
+            DumpError::ImageFormatError(s) => write!(f, "pdump image format error: {s}"),
+            DumpError::SerializationError(s) => write!(f, "serialization error: {s}"),
+            DumpError::DeserializationError(s) => write!(f, "deserialization error: {s}"),
+            DumpError::PortableRuntimeContractMismatch(s) => {
+                write!(f, "portable runtime contract mismatch: {s}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DumpError {}
+
+impl From<std::io::Error> for DumpError {
+    fn from(e: std::io::Error) -> Self {
+        DumpError::Io(e)
+    }
+>>>>>>> cab30e4685 (feat: validate portable runtime primitive contract)
 }
 
 fn empty_lisp_string() -> types::DumpLispString {
