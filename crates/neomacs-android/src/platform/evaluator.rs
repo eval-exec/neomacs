@@ -10,6 +10,7 @@ use neomacs_app::initial_surface::{
 };
 use neomacs_app::presentation::PresentationMetrics;
 use neomacs_app::runtime_image::{ExtractedRuntimeImage, RuntimeImageSource};
+use neomacs_app::runtime_resources::RuntimeResourceRoot;
 use neomacs_app::session::{NativeEditorWorker, NativeEditorWorkerEvent};
 use neomacs_app::startup::{InteractiveGuiStartup, configure_interactive_gui_startup};
 use neomacs_layout_engine::font::metrics::FontMetricsService;
@@ -41,29 +42,51 @@ fn create_evaluator(
     let app_data = app
         .internal_data_path()
         .ok_or_else(|| "Android did not provide an internal data directory".to_owned())?;
-    let runtime_root = app_data.join("neomacs-runtime");
     let asset_manager = app.asset_manager();
-    let image = ExtractedRuntimeImage::prepare_final_from_portable(&runtime_root, |asset_name| {
+    let resources = RuntimeResourceRoot::prepare(&app_data.join("neomacs-runtime"), |asset_name| {
         let asset_name = CString::new(asset_name).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "runtime image asset name contains NUL",
+                "runtime resource asset name contains NUL",
             )
         })?;
         asset_manager.open(&asset_name).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
                 format!(
-                    "packaged Android portable runtime image {} was not found",
+                    "packaged Android runtime resource asset {} was not found",
                     asset_name.to_string_lossy()
                 ),
             )
         })
     })
+    .map_err(|error| format!("failed to provision Android runtime resources: {error}"))?;
+    let runtime_root = resources.path();
+
+    let image = ExtractedRuntimeImage::prepare_final_from_portable(
+        &app_data.join("neomacs-images"),
+        |asset_name| {
+            let asset_name = CString::new(asset_name).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "runtime image asset name contains NUL",
+                )
+            })?;
+            asset_manager.open(&asset_name).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "packaged Android portable runtime image {} was not found",
+                        asset_name.to_string_lossy()
+                    ),
+                )
+            })
+        },
+    )
     .map_err(|error| format!("failed to provision Android runtime image: {error}"))?;
 
     let mut evaluator = RuntimeImageSource::ExtractedFile(image.path())
-        .load_for_in_runtime_root(HostProfile::android(), &runtime_root)
+        .load_for_in_runtime_root(HostProfile::android(), runtime_root)
         .map_err(|error| format!("failed to restore Android runtime image: {error}"))?;
     evaluator.setup_thread_locals();
     evaluator.set_max_depth(1600);
@@ -88,7 +111,7 @@ fn create_evaluator(
             InitialFrameFont::named("Monospace"),
         ),
     );
-    let startup = InteractiveGuiStartup::new("neomacs-android", &runtime_root, &app_data);
+    let startup = InteractiveGuiStartup::new("neomacs-android", runtime_root, &app_data);
     configure_interactive_gui_startup(&mut evaluator, surface, &startup)
         .map_err(|error| format!("failed to initialize Android GUI startup: {error}"))?;
     Ok(evaluator)
