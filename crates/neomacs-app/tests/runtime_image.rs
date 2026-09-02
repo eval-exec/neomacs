@@ -15,15 +15,27 @@ use neovm_core::emacs_core::value::Value;
 fn browser_profile_loads_linear_memory_snapshot() {
     let mut eval = Context::new();
     eval.set_variable("runtime-image-value", Value::fixnum(42));
+    eval.set_variable("load-in-progress", Value::T);
     let bytes = encode_portable_snapshot(&eval).expect("encode portable image");
 
-    let loaded = RuntimeImageSource::LinearMemory(&bytes)
+    let mut loaded = RuntimeImageSource::LinearMemory(&bytes)
         .load_for(HostProfile::WASM)
         .expect("load browser runtime image");
 
     assert_eq!(
         loaded.obarray().symbol_value("runtime-image-value"),
         Some(&Value::fixnum(42))
+    );
+    assert_eq!(
+        loaded.obarray().symbol_value("load-in-progress"),
+        Some(&Value::NIL),
+        "transient image-construction state must not leak into a live session",
+    );
+    assert_eq!(
+        loaded
+            .eval_str("(+ runtime-image-value 1)")
+            .expect("restored final image has callable Rust builtins"),
+        Value::fixnum(43),
     );
 }
 

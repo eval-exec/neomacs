@@ -12,6 +12,7 @@ use std::fmt::{Display, Formatter};
 use std::path::Path;
 
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::emacs_core::load::{RuntimeImageRole, finalize_restored_runtime_image};
 use neovm_core::emacs_core::pdump::{DumpError, load_from_dump, load_from_portable_snapshot};
 
 use crate::host::{HostProfile, RuntimeImageModel};
@@ -53,14 +54,17 @@ impl RuntimeImageSource<'_> {
             });
         }
 
-        match self {
+        let mut evaluator = match self {
             Self::MappedFile(path) | Self::ExtractedFile(path) => {
                 load_from_dump(path).map_err(RuntimeImageError::Load)
             }
             Self::LinearMemory(bytes) => {
                 load_from_portable_snapshot(bytes).map_err(RuntimeImageError::Load)
             }
-        }
+        }?;
+        finalize_restored_runtime_image(&mut evaluator, RuntimeImageRole::Final, &[])
+            .map_err(RuntimeImageError::Finalize)?;
+        Ok(evaluator)
     }
 }
 
@@ -76,6 +80,9 @@ pub enum RuntimeImageError {
     },
     /// The selected image failed validation or reconstruction.
     Load(DumpError),
+    /// Deserialization succeeded but the live Rust/host surface could not be
+    /// rebuilt.
+    Finalize(neovm_core::emacs_core::error::EvalError),
 }
 
 impl Display for RuntimeImageError {
@@ -86,6 +93,9 @@ impl Display for RuntimeImageError {
                 "runtime image source {source:?} does not match host model {host:?}"
             ),
             Self::Load(error) => Display::fmt(error, formatter),
+            Self::Finalize(error) => {
+                write!(formatter, "runtime image finalization failed: {error}")
+            }
         }
     }
 }
@@ -95,6 +105,7 @@ impl std::error::Error for RuntimeImageError {
         match self {
             Self::ModelMismatch { .. } => None,
             Self::Load(error) => Some(error),
+            Self::Finalize(error) => Some(error),
         }
     }
 }
