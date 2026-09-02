@@ -1646,6 +1646,28 @@ fn final_dump_receives_the_requested_portable_runtime_image_path() {
 }
 
 #[test]
+fn portable_runtime_image_verification_rejects_missing_and_empty_artifacts() {
+    let directory = tempdir();
+    let artifact = directory.join("neomacs.portable");
+
+    let missing = verify_portable_runtime_image(&artifact).unwrap_err();
+    assert!(missing.to_string().contains("expected artifact not found"));
+
+    fs::write(&artifact, []).unwrap();
+    let empty = verify_portable_runtime_image(&artifact).unwrap_err();
+    assert!(empty.to_string().contains("artifact is empty"));
+}
+
+#[test]
+fn portable_runtime_image_verification_accepts_a_nonempty_artifact() {
+    let directory = tempdir();
+    let artifact = directory.join("neomacs.portable");
+    fs::write(&artifact, b"portable runtime image").unwrap();
+
+    verify_portable_runtime_image(&artifact).unwrap();
+}
+
+#[test]
 fn the_minimal_product_flag_is_retired() {
     let error = FreshBuildOptions::parse(
         PathBuf::from("/repo"),
