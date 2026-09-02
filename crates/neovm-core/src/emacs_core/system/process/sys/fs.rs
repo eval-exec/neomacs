@@ -15,11 +15,19 @@ use std::path::Path;
 /// a runnable program, so perform that check after a successful `faccessat`.
 #[cfg(unix)]
 pub fn executable_path_access(path: &Path) -> Result<(), libc::c_int> {
+    // Android applications cannot be set-id: their real and effective app
+    // identities are the same. Rustix therefore omits `AtFlags::EACCESS` for
+    // Android, where an empty flag set has the same effective-access result.
+    #[cfg(target_os = "android")]
+    let effective_access = rustix::fs::AtFlags::empty();
+    #[cfg(not(target_os = "android"))]
+    let effective_access = rustix::fs::AtFlags::EACCESS;
+
     match rustix::fs::accessat(
         rustix::fs::CWD,
         path,
         rustix::fs::Access::EXEC_OK,
-        rustix::fs::AtFlags::EACCESS,
+        effective_access,
     ) {
         Ok(()) if path.is_dir() => Err(libc::EISDIR),
         Ok(()) => Ok(()),
