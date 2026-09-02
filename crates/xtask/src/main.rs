@@ -1196,7 +1196,14 @@ fn run_fresh_build_inner(
         &pdump_envs,
     )?;
 
-    // Verify the in-neomacs producer actually emitted the artifacts (real run).
+    // Verify the in-neomacs producers actually emitted their requested
+    // artifacts. A successful dump subprocess is not, by itself, the release
+    // contract when the caller explicitly requested companion output.
+    if !options.dry_run
+        && let Some(path) = &options.portable_runtime_image
+    {
+        verify_portable_runtime_image(path)?;
+    }
     if options.aot_preload {
         verify_aot_preload_artifacts(&paths)?;
     }
@@ -1357,6 +1364,41 @@ fn verify_aot_preload_artifacts(paths: &PipelinePaths) -> Result<()> {
     }
     println!("  OK    {}", so.display());
     println!("  OK    {}", manifest.display());
+    Ok(())
+}
+
+/// Verify that the dump-time portable-image producer published a usable
+/// artifact envelope. The producer owns format validation; xtask owns the
+/// release-pipeline postcondition that requested output exists and is not an
+/// empty placeholder.
+fn verify_portable_runtime_image(path: &Path) -> Result<()> {
+    print_synthetic_step("portable runtime image: verify requested artifact");
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Err(format!(
+                "portable runtime image: expected artifact not found: {} (did the in-neomacs producer run? it is gated by {PORTABLE_RUNTIME_IMAGE_ENV} on the --temacs=pdump dump)",
+                path.display()
+            )
+            .into());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() {
+        return Err(format!(
+            "portable runtime image: artifact is not a regular file: {}",
+            path.display()
+        )
+        .into());
+    }
+    if metadata.len() == 0 {
+        return Err(format!(
+            "portable runtime image: artifact is empty: {}",
+            path.display()
+        )
+        .into());
+    }
+    println!("  OK    {} ({} bytes)", path.display(), metadata.len());
     Ok(())
 }
 
