@@ -238,6 +238,7 @@ objc2-foundation = { version = "0.3", features = [
     "NSError",
     "NSGeometry",
     "NSJSONSerialization",
+    "NSKeyValueObserving",
     "NSObjCRuntime",
     "NSUUID",
     "NSString",

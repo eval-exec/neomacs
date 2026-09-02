@@ -21,9 +21,9 @@ mod system_test;
 
 pub use model::{
     BrowsingRelationship, ButtonState, DeveloperToolsPolicy, DmaBufFrame, DmaBufPlane,
-    DmaBufReadiness, FocusIntent, HistoryAction, HostWindowId, JavaScriptPolicy, NavigationId,
-    NavigationTarget, PixelFrame, PointerButton, PolicyDecisionId, ScriptError, ScriptRequest,
-    ScriptRequestId, ScriptWorld, StoragePartition, WebContentPoint, WebContentSize,
+    DmaBufReadiness, FocusIntent, HistoryAction, HostWindowId, JavaScriptPolicy, LoadPhase,
+    NavigationId, NavigationTarget, PixelFrame, PointerButton, PolicyDecisionId, ScriptError,
+    ScriptRequest, ScriptRequestId, ScriptWorld, StoragePartition, WebContentPoint, WebContentSize,
     WebContentSizeError, WebProcessFailure, WebProfileId, WebValue, WebViewCommand,
     WebViewCommandError, WebViewCreate, WebViewEvent, WebViewFrame, WebViewFrameTransport,
     WebViewGeneration, WebViewHost, WebViewInitError, WebViewInput, WebViewInputTarget,

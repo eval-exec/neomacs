@@ -1,5 +1,8 @@
 //! macOS native-overlay backend built on WKWebView.
 
+mod observed;
+#[cfg(test)]
+mod observed_test;
 mod view;
 
 use std::collections::HashMap;

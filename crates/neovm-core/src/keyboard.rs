@@ -42,6 +42,27 @@ pub enum FrontendWebProcessFailure {
     Other(i32),
 }
 
+/// The load phases GNU reports through `load-changed` (src/xwidget.c:2427-2447).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrontendLoadPhase {
+    Started,
+    Redirected,
+    Committed,
+    Finished,
+}
+
+impl FrontendLoadPhase {
+    /// The string GNU stores as the event's fourth element.
+    pub const fn gnu_name(self) -> &'static str {
+        match self {
+            Self::Started => "load-started",
+            Self::Redirected => "load-redirected",
+            Self::Committed => "load-committed",
+            Self::Finished => "load-finished",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrontendWebViewEvent {
     Ready {
@@ -71,6 +92,14 @@ pub enum FrontendWebViewEvent {
         id: neomacs_display_protocol::WebViewId,
         generation: u64,
         progress: f64,
+    },
+    /// One GNU `load-changed` phase; the evaluator turns it into the
+    /// `(xwidget-event load-changed XWIDGET STRING)` input event
+    /// `lisp/xwidget.el` handles.
+    LoadChanged {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        phase: FrontendLoadPhase,
     },
     LoadFinished {
         id: neomacs_display_protocol::WebViewId,

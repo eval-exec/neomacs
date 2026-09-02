@@ -1030,6 +1030,7 @@ impl RenderComms {
                 neomacs_webview::WebViewEvent::LoadProgressChanged { .. } => {
                     "webview-load-progress-changed"
                 }
+                neomacs_webview::WebViewEvent::LoadChanged { .. } => "webview-load-changed",
                 neomacs_webview::WebViewEvent::LoadFinished { .. } => "webview-load-finished",
                 neomacs_webview::WebViewEvent::ScriptFinished { .. } => "webview-script-finished",
                 neomacs_webview::WebViewEvent::ProcessFailed { .. } => "webview-process-failed",

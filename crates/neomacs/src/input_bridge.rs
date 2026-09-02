@@ -10,7 +10,7 @@ use neomacs_display_runtime::thread_comm::{
 };
 use neovm_core::emacs_core::builtins::NeomacsMonitorInfo;
 use neovm_core::keyboard::{
-    self, FrontendWebProcessFailure, FrontendWebValue, FrontendWebViewEvent,
+    self, FrontendLoadPhase, FrontendWebProcessFailure, FrontendWebValue, FrontendWebViewEvent,
     InputEvent as KbInputEvent, MouseButton,
 };
 
@@ -93,6 +93,20 @@ fn convert_webview_event(event: &neomacs_webview::WebViewEvent) -> FrontendWebVi
             id: *id,
             generation: generation.get(),
             progress: *progress,
+        },
+        WebViewEvent::LoadChanged {
+            id,
+            generation,
+            phase,
+        } => FrontendWebViewEvent::LoadChanged {
+            id: *id,
+            generation: generation.get(),
+            phase: match phase {
+                neomacs_webview::LoadPhase::Started => FrontendLoadPhase::Started,
+                neomacs_webview::LoadPhase::Redirected => FrontendLoadPhase::Redirected,
+                neomacs_webview::LoadPhase::Committed => FrontendLoadPhase::Committed,
+                neomacs_webview::LoadPhase::Finished => FrontendLoadPhase::Finished,
+            },
         },
         WebViewEvent::LoadFinished {
             id,

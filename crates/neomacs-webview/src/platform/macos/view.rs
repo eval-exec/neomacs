@@ -7,6 +7,8 @@
 //! visible rectangles from `ResolvedWebViewPlacement`.
 
 use std::cell::RefCell;
+use std::ffi::c_void;
+use std::ptr;
 use std::rc::Rc;
 
 use block2::RcBlock;
@@ -15,14 +17,16 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::NSView;
 use objc2_foundation::{
-    NSError, NSJSONSerialization, NSJSONWritingOptions, NSObject, NSObjectProtocol, NSPoint,
-    NSRect, NSSize, NSString, NSURL, NSURLRequest, NSUTF8StringEncoding,
+    NSError, NSJSONSerialization, NSJSONWritingOptions, NSKeyValueObservingOptions, NSObject,
+    NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+    NSURL, NSURLRequest, NSUTF8StringEncoding, ns_string,
 };
 use objc2_web_kit::{
     WKContentWorld, WKNavigation, WKNavigationDelegate, WKWebView, WKWebViewConfiguration,
     WKWebsiteDataStore,
 };
 
+use super::observed::ObservedWebState;
 use crate::backend::NavigationMilestone;
 use crate::{
     FocusIntent, HistoryAction, HostWindowId, NavigationTarget, ResolvedWebViewPlacement,
@@ -81,6 +85,16 @@ define_class!(
             self.publish_navigation(NavigationMilestone::Started);
         }
 
+        #[unsafe(method(webView:didReceiveServerRedirectForProvisionalNavigation:))]
+        #[allow(non_snake_case)]
+        unsafe fn webView_didReceiveServerRedirectForProvisionalNavigation(
+            &self,
+            _web_view: &WKWebView,
+            _navigation: Option<&WKNavigation>,
+        ) {
+            self.publish_navigation(NavigationMilestone::Redirected);
+        }
+
         #[unsafe(method(webView:didCommitNavigation:))]
         #[allow(non_snake_case)]
         unsafe fn webView_didCommitNavigation(
@@ -88,7 +102,7 @@ define_class!(
             _web_view: &WKWebView,
             _navigation: Option<&WKNavigation>,
         ) {
-            self.publish_navigation(NavigationMilestone::StateChanged);
+            self.publish_navigation(NavigationMilestone::Committed);
         }
 
         #[unsafe(method(webView:didFinishNavigation:))]
@@ -172,6 +186,120 @@ impl WebViewNavigationDelegate {
     }
 }
 
+struct WebViewObserverIvars {
+    id: WebViewId,
+    generation: WebViewGeneration,
+    web: Retained<WKWebView>,
+    state: Rc<RefCell<ObservedWebState>>,
+    events: Rc<RefCell<Vec<WebViewEvent>>>,
+    wake: WebViewWake,
+}
+
+define_class!(
+    /// KVO observer for the page properties GNU reads as GObject
+    /// properties: `estimatedProgress` (`xwidget-webkit-estimated-load-
+    /// progress`), `title` and `URL`.  The callback samples the view and
+    /// wakes the event loop, so intermediate progress reaches Lisp while the
+    /// session is otherwise idle -- the sampling in `service_events` alone
+    /// only ran when something else woke the loop.
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = WebViewObserverIvars]
+    #[name = "NeomacsWebViewObserver"]
+    struct WebViewObserver;
+
+    unsafe impl NSObjectProtocol for WebViewObserver {}
+
+    impl WebViewObserver {
+        #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
+        fn observe_value_for_key_path(
+            &self,
+            _key_path: Option<&NSString>,
+            _object: Option<&AnyObject>,
+            _change: Option<&AnyObject>,
+            _context: *mut c_void,
+        ) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sample()));
+        }
+    }
+);
+
+impl WebViewObserver {
+    fn key_paths() -> [&'static NSString; 3] {
+        [
+            ns_string!("estimatedProgress"),
+            ns_string!("title"),
+            ns_string!("URL"),
+        ]
+    }
+
+    fn new(
+        mtm: MainThreadMarker,
+        id: WebViewId,
+        generation: WebViewGeneration,
+        web: Retained<WKWebView>,
+        state: Rc<RefCell<ObservedWebState>>,
+        events: Rc<RefCell<Vec<WebViewEvent>>>,
+        wake: WebViewWake,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(WebViewObserverIvars {
+            id,
+            generation,
+            web,
+            state,
+            events,
+            wake,
+        });
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        for key_path in Self::key_paths() {
+            // SAFETY: the observer outlives the registration; `unregister`
+            // runs before the owning `MacWebView` releases it.
+            unsafe {
+                this.ivars().web.addObserver_forKeyPath_options_context(
+                    &this,
+                    key_path,
+                    NSKeyValueObservingOptions::New,
+                    ptr::null_mut(),
+                );
+            }
+        }
+        this
+    }
+
+    fn unregister(&self) {
+        for key_path in Self::key_paths() {
+            // SAFETY: every key path was registered in `new` with this
+            // observer, and KVO tolerates the removal order.
+            unsafe { self.ivars().web.removeObserver_forKeyPath(self, key_path) };
+        }
+    }
+
+    fn sample(&self) {
+        let ivars = self.ivars();
+        let (title, uri, progress) = sample_web_view(&ivars.web);
+        let events =
+            ivars
+                .state
+                .borrow_mut()
+                .observe(ivars.id, ivars.generation, title, uri, progress);
+        if !events.is_empty() {
+            ivars.events.borrow_mut().extend(events);
+            ivars.wake.notify();
+        }
+    }
+}
+
+/// The three observed properties, read together so one event batch reflects
+/// one moment of the page.
+fn sample_web_view(web: &WKWebView) -> (Option<String>, Option<String>, f64) {
+    let title = unsafe { web.title() }.map(|value| value.to_string());
+    let uri = unsafe { web.URL() }
+        .and_then(|url| url.absoluteString())
+        .map(|value| value.to_string());
+    let progress = unsafe { web.estimatedProgress() };
+    (title, uri, progress)
+}
+
 /// Native objects for one logical WebView generation.
 pub(crate) struct MacWebView {
     id: WebViewId,
@@ -180,11 +308,10 @@ pub(crate) struct MacWebView {
     clip: Retained<WebViewClipView>,
     web: Retained<WKWebView>,
     _navigation_delegate: Retained<WebViewNavigationDelegate>,
+    observer: Retained<WebViewObserver>,
     attached_host: Option<HostWindowId>,
     hidden: bool,
-    title: Option<String>,
-    uri: Option<String>,
-    progress: f64,
+    observed: Rc<RefCell<ObservedWebState>>,
     focused: bool,
     events: Rc<RefCell<Vec<WebViewEvent>>>,
     wake: WebViewWake,
@@ -231,6 +358,16 @@ impl MacWebView {
         unsafe {
             web.setNavigationDelegate(Some(ProtocolObject::from_ref(&*navigation_delegate)));
         }
+        let observed = Rc::new(RefCell::new(ObservedWebState::new()));
+        let observer = WebViewObserver::new(
+            mtm,
+            id,
+            generation,
+            web.clone(),
+            observed.clone(),
+            events.clone(),
+            wake.clone(),
+        );
 
         Self {
             id,
@@ -239,11 +376,10 @@ impl MacWebView {
             clip,
             web,
             _navigation_delegate: navigation_delegate,
+            observer,
             attached_host: None,
             hidden: true,
-            title: None,
-            uri: None,
-            progress: 0.0,
+            observed,
             focused: false,
             events,
             wake,
@@ -381,41 +517,19 @@ impl MacWebView {
         }
     }
 
+    /// Drain the events the delegate, the KVO observer and the script
+    /// completions queued, plus one fallback sample of the observed page
+    /// properties in case a KVO notification was coalesced away.
     pub(crate) fn service_events(&mut self) -> Vec<WebViewEvent> {
-        let title = unsafe { self.web.title() }.map(|value| value.to_string());
-        let uri = unsafe { self.web.URL() }
-            .and_then(|url| url.absoluteString())
-            .map(|value| value.to_string());
-        let progress = unsafe { self.web.estimatedProgress() };
         let mut events = std::mem::take(&mut *self.events.borrow_mut());
-        if title != self.title {
-            self.title = title.clone();
-            if let Some(title) = title {
-                events.push(WebViewEvent::TitleChanged {
-                    id: self.id,
-                    generation: self.generation,
-                    title,
-                });
-            }
-        }
-        if uri != self.uri {
-            self.uri = uri.clone();
-            if let Some(uri) = uri {
-                events.push(WebViewEvent::UriChanged {
-                    id: self.id,
-                    generation: self.generation,
-                    uri,
-                });
-            }
-        }
-        if (progress - self.progress).abs() > f64::EPSILON {
-            self.progress = progress;
-            events.push(WebViewEvent::LoadProgressChanged {
-                id: self.id,
-                generation: self.generation,
-                progress,
-            });
-        }
+        let (title, uri, progress) = sample_web_view(&self.web);
+        events.extend(self.observed.borrow_mut().observe(
+            self.id,
+            self.generation,
+            title,
+            uri,
+            progress,
+        ));
         events
     }
 
@@ -476,6 +590,8 @@ impl MacWebView {
 
 impl Drop for MacWebView {
     fn drop(&mut self) {
+        // KVO registrations must not outlive the observer.
+        self.observer.unregister();
         self.web.removeFromSuperview();
         self.clip.removeFromSuperview();
     }

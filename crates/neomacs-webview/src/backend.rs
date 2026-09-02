@@ -1,7 +1,7 @@
 use neomacs_display_protocol::WebViewId;
 
 use crate::{
-    BrowsingRelationship, FocusIntent, HistoryAction, HostWindowId, NavigationTarget,
+    BrowsingRelationship, FocusIntent, HistoryAction, HostWindowId, LoadPhase, NavigationTarget,
     ResolvedWebViewPlacement, ScriptRequest, StoragePartition, WebContentSize, WebViewEvent,
     WebViewFrame, WebViewGeneration, WebViewInput, WebViewPolicy,
 };
@@ -120,7 +120,8 @@ pub(crate) enum PlatformUpdate<'a> {
 #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
 pub(crate) enum NavigationMilestone {
     Started,
-    StateChanged,
+    Redirected,
+    Committed,
     Finished,
 }
 
@@ -131,19 +132,29 @@ impl NavigationMilestone {
         id: WebViewId,
         generation: WebViewGeneration,
     ) -> Vec<WebViewEvent> {
+        let phase = |phase| WebViewEvent::LoadChanged {
+            id,
+            generation,
+            phase,
+        };
         match self {
-            Self::Started => vec![WebViewEvent::LoadProgressChanged {
-                id,
-                generation,
-                progress: 0.0,
-            }],
-            Self::StateChanged => Vec::new(),
+            Self::Started => vec![
+                WebViewEvent::LoadProgressChanged {
+                    id,
+                    generation,
+                    progress: 0.0,
+                },
+                phase(LoadPhase::Started),
+            ],
+            Self::Redirected => vec![phase(LoadPhase::Redirected)],
+            Self::Committed => vec![phase(LoadPhase::Committed)],
             Self::Finished => vec![
                 WebViewEvent::LoadProgressChanged {
                     id,
                     generation,
                     progress: 1.0,
                 },
+                phase(LoadPhase::Finished),
                 WebViewEvent::LoadFinished {
                     id,
                     generation,

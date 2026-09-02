@@ -21,7 +21,7 @@ use crate::emacs_core::display_host::XwidgetScriptRequestId;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args_range;
 use crate::heap_types::LispString;
-use crate::keyboard::{FrontendWebValue, FrontendWebViewEvent};
+use crate::keyboard::{FrontendLoadPhase, FrontendWebValue, FrontendWebViewEvent};
 use neomacs_display_protocol::{WebViewId, XwidgetId};
 use std::collections::HashMap;
 use strum::IntoStaticStr;
@@ -55,9 +55,10 @@ struct WebKitRuntimeState {
     /// progress' reports it.
     ///
     /// GNU reads WebKitGTK's continuous `estimated-load-progress' property.
-    /// Neomacs initializes this optimistically when dispatching navigation,
-    /// then replaces it with generation-qualified measurements from backends
-    /// that expose progress (WPEPlatform and WKWebView).
+    /// Neomacs resets this to 0.0 when dispatching a navigation, then
+    /// applies generation-qualified measurements from backends that expose
+    /// progress (WPEPlatform, and KVO on WKWebView's `estimatedProgress'),
+    /// and pins 1.0 at "load-finished".
     load_progress: f64,
 }
 
@@ -70,12 +71,27 @@ struct PendingScriptCallback {
 pub(crate) enum XwidgetFrontendEffect {
     None,
     Redisplay,
-    InvokeScriptCallback { function: Value, argument: Value },
+    InvokeScriptCallback {
+        function: Value,
+        argument: Value,
+    },
+    /// Store a GNU `xwidget-event` input event -- what
+    /// `store_xwidget_event_string` (src/xwidget.c:2284-2296) does with
+    /// `kbd_buffer_store_event`, and what `special-event-map`'s
+    /// `xwidget-event-handler` in lisp/xwidget.el then dispatches.
+    QueueXwidgetEvent {
+        event: Value,
+        redisplay: bool,
+    },
 }
 
 impl XwidgetFrontendEffect {
     pub(crate) const fn redisplay_needed(&self) -> bool {
-        matches!(self, Self::Redisplay | Self::InvokeScriptCallback { .. })
+        match self {
+            Self::None => false,
+            Self::Redisplay | Self::InvokeScriptCallback { .. } => true,
+            Self::QueueXwidgetEvent { redisplay, .. } => *redisplay,
+        }
     }
 }
 
@@ -184,6 +200,33 @@ impl XwidgetState {
         self.webkit_state.entry(id).or_default().title = title;
     }
 
+    /// The live xwidget object whose browser instance is `id`, if any.
+    fn xwidget_for_webview(&self, id: WebViewId) -> Option<Value> {
+        let mut rest = self.internal_xwidget_list;
+        while rest.is_cons() {
+            let candidate = rest.cons_car();
+            if candidate
+                .as_xwidget()
+                .is_some_and(|xwidget| xwidget.webview_id == id)
+            {
+                return Some(candidate);
+            }
+            rest = rest.cons_cdr();
+        }
+        None
+    }
+
+    /// GNU's `(xwidget-event load-changed XWIDGET STRING)` for one phase.
+    fn load_changed_event(&self, id: WebViewId, phase: FrontendLoadPhase) -> Option<Value> {
+        let xwidget = self.xwidget_for_webview(id)?;
+        Some(Value::list(vec![
+            Value::symbol("xwidget-event"),
+            Value::symbol("load-changed"),
+            xwidget,
+            Value::string(phase.gnu_name()),
+        ]))
+    }
+
     pub(crate) fn apply_frontend_event(
         &mut self,
         event: &FrontendWebViewEvent,
@@ -241,6 +284,30 @@ impl XwidgetState {
                 self.set_webkit_load_progress(*id, 1.0);
                 XwidgetFrontendEffect::Redisplay
             }
+            FrontendWebViewEvent::LoadChanged {
+                id,
+                generation,
+                phase,
+            } if self
+                .webkit_state
+                .get(id)
+                .is_some_and(|state| state.generation == *generation) =>
+            {
+                // GNU's callback only stores the event; the progress GNU
+                // would read at "load-finished" is 1.0, and the frontend's
+                // own measurement arrives separately.
+                let finished = *phase == FrontendLoadPhase::Finished;
+                if finished {
+                    self.set_webkit_load_progress(*id, 1.0);
+                }
+                match self.load_changed_event(*id, *phase) {
+                    Some(event) => XwidgetFrontendEffect::QueueXwidgetEvent {
+                        event,
+                        redisplay: finished,
+                    },
+                    None => XwidgetFrontendEffect::None,
+                }
+            }
             FrontendWebViewEvent::ScriptFinished {
                 view,
                 generation,
@@ -290,6 +357,7 @@ impl XwidgetState {
             | FrontendWebViewEvent::TitleChanged { .. }
             | FrontendWebViewEvent::UriChanged { .. }
             | FrontendWebViewEvent::LoadProgressChanged { .. }
+            | FrontendWebViewEvent::LoadChanged { .. }
             | FrontendWebViewEvent::LoadFinished { .. }
             | FrontendWebViewEvent::ScriptFinished { .. }
             | FrontendWebViewEvent::FocusChanged { .. } => XwidgetFrontendEffect::None,
@@ -337,8 +405,14 @@ impl Context {
     ) -> Result<bool, Flow> {
         let effect = self.xwidgets.apply_frontend_event(event);
         let redisplay = effect.redisplay_needed();
-        if let XwidgetFrontendEffect::InvokeScriptCallback { function, argument } = effect {
-            self.funcall_general(function, vec![argument])?;
+        match effect {
+            XwidgetFrontendEffect::InvokeScriptCallback { function, argument } => {
+                self.funcall_general(function, vec![argument])?;
+            }
+            XwidgetFrontendEffect::QueueXwidgetEvent { event, .. } => {
+                self.queue_special_event(event);
+            }
+            XwidgetFrontendEffect::None | XwidgetFrontendEffect::Redisplay => {}
         }
         Ok(redisplay)
     }
@@ -732,9 +806,11 @@ fn navigate_webkit(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     }
     eval.xwidgets
         .set_webkit_uri(id, String::from_utf8_lossy(uri.as_bytes()).into_owned());
-    // Establish an immediate optimistic value; a measured backend event can
-    // replace it after the frontend acknowledges the active generation.
-    eval.xwidgets.set_webkit_load_progress(id, 1.0);
+    // GNU reads WebKitGTK's `estimated-load-progress', which a new load
+    // resets; the backend's generation-qualified measurements (KVO on
+    // `estimatedProgress' for WKWebView) move it from here, and
+    // "load-finished" pins 1.0.
+    eval.xwidgets.set_webkit_load_progress(id, 0.0);
     Ok(Value::NIL)
 }
 

@@ -2,7 +2,9 @@ use super::eval::{Context, DisplayHost, GuiFrameHostRequest, XwidgetScriptReques
 use super::intern::resolve_sym;
 use super::value::{Value, eq_value, list_to_vec};
 use crate::heap_types::LispString;
-use crate::keyboard::{FrontendWebProcessFailure, FrontendWebValue, FrontendWebViewEvent};
+use crate::keyboard::{
+    FrontendLoadPhase, FrontendWebProcessFailure, FrontendWebValue, FrontendWebViewEvent,
+};
 use neomacs_display_protocol::WebViewId;
 use std::sync::{Arc, Mutex};
 
@@ -352,10 +354,12 @@ fn xwidget_webkit_lifecycle_uses_gnu_model_id() {
     );
 }
 
-/// Dispatch establishes the immediate optimistic progress value. Measured
-/// frontend events are covered separately by the generation-state test.
+/// GNU reads WebKitGTK's `estimated-load-progress' property, which a new
+/// load resets; nothing is finished until the engine says so.  Dispatching a
+/// navigation therefore resets the reported progress to 0.0, and only
+/// generation-qualified measurements from the backend move it.
 #[test]
-fn xwidget_webkit_load_progress_is_dispatched_not_measured() {
+fn xwidget_webkit_goto_uri_resets_progress_until_the_backend_measures_it() {
     crate::test_utils::init_test_tracing();
     let mut ctx = xwidget_context();
     ctx.set_display_host(Box::new(RecordingXwidgetDisplayHost::default()));
@@ -363,17 +367,119 @@ fn xwidget_webkit_load_progress_is_dispatched_not_measured() {
     let result = eval(
         &mut ctx,
         r#"
-(let ((xw (make-xwidget 'webkit "Title" 10 20)))
-  (prog1
-      (list (xwidget-webkit-estimated-load-progress xw)
-            (progn (xwidget-webkit-goto-uri xw "https://example.com")
-                   (xwidget-webkit-estimated-load-progress xw)))
-    (kill-xwidget xw)))
+(setq xw-progress-test (make-xwidget 'webkit "Title" 10 20))
+(list (xwidget-webkit-estimated-load-progress xw-progress-test)
+      (progn (xwidget-webkit-goto-uri xw-progress-test "https://example.com")
+             (xwidget-webkit-estimated-load-progress xw-progress-test)))
 "#,
     );
     let values = list_to_vec(&result).expect("result list");
     assert_eq!(values[0].as_float(), Some(0.0), "before any navigation");
-    assert_eq!(values[1].as_float(), Some(1.0), "once one is dispatched");
+    assert_eq!(
+        values[1].as_float(),
+        Some(0.0),
+        "dispatch starts a load; it does not finish one"
+    );
+
+    ctx.apply_xwidget_frontend_event(&FrontendWebViewEvent::Ready {
+        id: WebViewId::new(1),
+        generation: 1,
+    })
+    .unwrap();
+    ctx.apply_xwidget_frontend_event(&FrontendWebViewEvent::LoadProgressChanged {
+        id: WebViewId::new(1),
+        generation: 1,
+        progress: 0.35,
+    })
+    .unwrap();
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(xwidget-webkit-estimated-load-progress xw-progress-test)"
+        )
+        .as_float(),
+        Some(0.35),
+        "a measured value is what Lisp reads"
+    );
+    eval(&mut ctx, "(kill-xwidget xw-progress-test)");
+}
+
+/// GNU's `webkit_view_load_changed_cb' (src/xwidget.c:2427-2447) stores an
+/// `(xwidget-event load-changed XWIDGET STRING)' input event for every load
+/// phase, and `xwidget-webkit-callback' in lisp/xwidget.el depends on it: it
+/// keys its progress timer on the first phase and renames the buffer on
+/// "load-finished".  The event goes through `special-event-map' like any
+/// other, so the test binds the handler the way xwidget.el does.
+#[test]
+fn load_changed_events_reach_lisp_as_gnu_xwidget_events() {
+    crate::test_utils::init_test_tracing();
+    // `special-event-map' dispatch runs `command-execute', so this needs the
+    // startup runtime rather than the bare evaluator the other tests use.
+    let mut ctx = crate::test_utils::runtime_startup_context();
+    ctx.provide_value(Value::symbol("xwidget"), None)
+        .expect("provide xwidget in the startup runtime");
+    ctx.set_display_host(Box::new(RecordingXwidgetDisplayHost::default()));
+    eval(
+        &mut ctx,
+        r#"
+(setq xw-load-test (make-xwidget 'webkit "Title" 10 20)
+      xw-load-events nil)
+(define-key special-event-map [xwidget-event]
+  (lambda () (interactive) (push last-input-event xw-load-events)))
+"#,
+    );
+    ctx.apply_xwidget_frontend_event(&FrontendWebViewEvent::Ready {
+        id: WebViewId::new(1),
+        generation: 1,
+    })
+    .unwrap();
+
+    // A stale generation is a callback for a replaced browser: dropped.
+    assert!(
+        !ctx.apply_xwidget_frontend_event(&FrontendWebViewEvent::LoadChanged {
+            id: WebViewId::new(1),
+            generation: 0,
+            phase: FrontendLoadPhase::Finished,
+        })
+        .unwrap()
+    );
+    for phase in [FrontendLoadPhase::Started, FrontendLoadPhase::Finished] {
+        ctx.apply_xwidget_frontend_event(&FrontendWebViewEvent::LoadChanged {
+            id: WebViewId::new(1),
+            generation: 1,
+            phase,
+        })
+        .unwrap();
+        eval(&mut ctx, "(read-event nil nil 1)");
+    }
+
+    let result = eval(
+        &mut ctx,
+        r#"
+(mapcar (lambda (ev) (list (car ev) (nth 1 ev) (eq (nth 2 ev) xw-load-test) (nth 3 ev)))
+        (reverse xw-load-events))
+"#,
+    );
+    let expected = eval(
+        &mut ctx,
+        r#"'((xwidget-event load-changed t "load-started")
+    (xwidget-event load-changed t "load-finished"))"#,
+    );
+    assert!(
+        crate::emacs_core::value::equal_value(&result, &expected, 0),
+        "GNU event shape, in order: {}",
+        crate::emacs_core::print::print_value(&result)
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(xwidget-webkit-estimated-load-progress xw-load-test)"
+        )
+        .as_float(),
+        Some(1.0),
+        "load-finished pins the progress GNU would report"
+    );
+    eval(&mut ctx, "(kill-xwidget xw-load-test)");
 }
 
 /// GNU retains FUN until asynchronous JavaScript success, then invokes it on
