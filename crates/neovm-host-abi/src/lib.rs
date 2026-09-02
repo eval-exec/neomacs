@@ -28,6 +28,13 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
+mod host;
+
+pub use host::{
+    ExecutionEngine, HostKind, HostOperation, HostOperationError, HostProfile, NativeModuleModel,
+    ProcessModel, RuntimeImageModel, StorageModel,
+};
+
 /// Opaque identifier for a VM-side object handle exposed across the
 /// host boundary. Issued by the VM and interpreted only by the VM;
 /// the host treats it as an opaque token.
