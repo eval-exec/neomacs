@@ -1,5 +1,6 @@
 mod dependency_coherence;
 mod gc_stress;
+mod portable_assets;
 mod production_capabilities;
 mod window_icon;
 
@@ -498,6 +499,14 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     if matches!(args.peek().and_then(|arg| arg.to_str()), Some("infra")) {
         args.next();
         return run_workspace_cli("neomacs-infra", &[], args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("package-portable-assets")
+    ) {
+        args.next();
+        portable_assets::run(&repo_root, args)?;
+        return Ok(());
     }
     let options = FreshBuildOptions::parse(repo_root, args)?;
     run_fresh_build(&options)
@@ -4642,6 +4651,7 @@ fn usage_text() -> &'static str {
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload] [--portable-runtime-image PATH]
        cargo xtask check-dependency-coherence
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
+       cargo xtask package-portable-assets --portable-runtime-image PATH --output-dir DIR [--runtime-root DIR]
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
        cargo xtask perf compare SCENARIO --baseline-editor PATH --candidate-editor PATH [--samples N>=3]
