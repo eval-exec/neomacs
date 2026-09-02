@@ -1,7 +1,7 @@
 use strum::IntoEnumIterator;
 
-use super::super::image_format::*;
 use super::super::DumpError;
+use super::super::image_format::*;
 
 #[test]
 fn every_section_kind_round_trips_through_its_discriminant() {
