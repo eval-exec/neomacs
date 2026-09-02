@@ -1,6 +1,6 @@
 //! Event types for winit → Emacs communication.
 
-use neomacs_app::frontend_event::FrontendModifiers;
+use neovm_host_abi::frontend_event::FrontendModifiers;
 
 /// Input event kinds matching Emacs event types.
 #[repr(u32)]
