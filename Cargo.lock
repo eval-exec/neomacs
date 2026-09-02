@@ -3775,11 +3775,14 @@ name = "neomacs-app"
 version = "0.0.16"
 dependencies = [
  "crossbeam-channel",
+ "flate2",
  "neomacs-display-protocol",
  "neomacs-layout-engine",
  "neovm-core",
  "neovm-host-abi",
  "serde_json",
+ "sha2",
+ "tar",
  "tempfile",
 ]
 
