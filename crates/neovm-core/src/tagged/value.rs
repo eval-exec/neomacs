@@ -13,8 +13,8 @@
 //! 111   Float        pointer | 7                     (v & 7) == 7
 //! ```
 //!
-//! Fixnum uses tags 010 and 110 (both have `(v & 3) == 2`), giving
-//! 62-bit signed integer range without heap allocation.
+//! Fixnum uses tags 010 and 110 (both have `(v & 3) == 2`), giving a signed
+//! payload two bits narrower than the target pointer without heap allocation.
 //!
 //! Special values:
 //! - `nil`  = Symbol(0) = `0x0` (intern "nil" as SymId(0))
@@ -63,7 +63,21 @@ pub(crate) const TAG_FLOAT: usize = 0b111;
 // same single source of truth instead of hardcoding the layout.
 pub(crate) const FIXNUM_CHECK_MASK: usize = 0b11;
 pub(crate) const FIXNUM_CHECK_VALUE: usize = 0b10;
-pub(crate) const FIXNUM_SHIFT: u32 = 2; // integer stored in bits 2..63
+pub(crate) const FIXNUM_SHIFT: u32 = 2;
+
+pub(crate) const fn fixnum_bounds_for_word_bits(word_bits: u32) -> (i64, i64) {
+    assert!(word_bits > FIXNUM_SHIFT && word_bits <= i64::BITS);
+    let magnitude_bits = word_bits - FIXNUM_SHIFT - 1;
+    let magnitude = 1_i64 << magnitude_bits;
+    (-magnitude, magnitude - 1)
+}
+
+const fn decode_fixnum_word(word: usize) -> i64 {
+    (word as isize as i64) >> FIXNUM_SHIFT
+}
+
+const _: () =
+    assert!(decode_fixnum_word(((-42_isize as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE) == -42);
 
 thread_local! {
     static STATIC_SUBR_OBJECTS: RefCell<Vec<Option<TaggedValue>>> = const { RefCell::new(Vec::new()) };
@@ -240,18 +254,19 @@ impl TaggedValue {
 
     // -- Fixnum --
 
-    /// Create a fixnum (62-bit signed integer, no heap allocation).
+    /// Create a target-width fixnum without heap allocation.
     #[inline]
     pub fn fixnum(n: i64) -> Self {
+        debug_assert!((Self::MOST_NEGATIVE_FIXNUM..=Self::MOST_POSITIVE_FIXNUM).contains(&n));
         // Encode: (n << 2) | 2. The low 2 bits are `10`, matching GNU's
         // fixnum tags 010 and 110.
         Self(((n as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE)
     }
 
-    /// Maximum fixnum value (62-bit signed).
-    pub const MOST_POSITIVE_FIXNUM: i64 = (1_i64 << (64 - FIXNUM_SHIFT - 1)) - 1;
-    /// Minimum fixnum value (62-bit signed).
-    pub const MOST_NEGATIVE_FIXNUM: i64 = -(1_i64 << (64 - FIXNUM_SHIFT - 1));
+    /// Maximum fixnum value for this target's pointer width.
+    pub const MOST_POSITIVE_FIXNUM: i64 = fixnum_bounds_for_word_bits(usize::BITS).1;
+    /// Minimum fixnum value for this target's pointer width.
+    pub const MOST_NEGATIVE_FIXNUM: i64 = fixnum_bounds_for_word_bits(usize::BITS).0;
 
     // -- Symbol --
 
@@ -550,7 +565,7 @@ impl TaggedValue {
     #[inline]
     pub fn as_fixnum(self) -> Option<i64> {
         if self.is_fixnum() {
-            Some((self.0 as i64) >> FIXNUM_SHIFT)
+            Some(decode_fixnum_word(self.0))
         } else {
             None
         }
@@ -560,7 +575,7 @@ impl TaggedValue {
     #[inline]
     pub fn xfixnum(self) -> i64 {
         debug_assert!(self.is_fixnum());
-        (self.0 as i64) >> FIXNUM_SHIFT
+        decode_fixnum_word(self.0)
     }
 
     /// Extract SymId for a symbol (including keywords, which are symbols

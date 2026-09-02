@@ -2358,7 +2358,7 @@ impl<'a> LoadDecoder<'a> {
         match v {
             DumpValue::Nil => Value::NIL,
             DumpValue::True => Value::T,
-            DumpValue::Int(n) => Value::fixnum(*n),
+            DumpValue::Int(n) => Value::make_int(*n),
             DumpValue::Float(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
             DumpValue::Symbol(s) => Value::symbol(load_sym_id(s)),
             DumpValue::Str(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
@@ -2399,7 +2399,7 @@ impl<'a> LoadDecoder<'a> {
         match v {
             DumpValue::Nil => Value::NIL,
             DumpValue::True => Value::T,
-            DumpValue::Int(n) => Value::fixnum(n),
+            DumpValue::Int(n) => Value::make_int(n),
             DumpValue::Float(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
             DumpValue::Symbol(s) => Value::symbol(load_sym_id(&s)),
             DumpValue::Str(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
