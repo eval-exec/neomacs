@@ -137,24 +137,9 @@ pub(super) struct WebViewSceneClock {
 
 #[cfg(feature = "webview")]
 impl WebViewSceneClock {
-    fn resolve(
-        &mut self,
-        host: neomacs_webview::HostWindowId,
-        placements: Vec<neomacs_webview::ResolvedWebViewPlacement>,
-    ) -> Result<neomacs_webview::ResolvedWebViewScene, neomacs_webview::WebViewSceneError> {
-        if self.revision == 0 || self.placements != placements {
-            self.revision = self.revision.saturating_add(1);
-            self.placements.clone_from(&placements);
-        }
-        neomacs_webview::ResolvedWebViewScene::try_new(
-            host,
-            neomacs_webview::WebViewSceneRevision::new(self.revision),
-            placements,
-        )
-    }
-
-    /// [`Self::resolve`], but `compute` runs only when `inputs` differ from
-    /// the inputs the cached placements came from.
+    /// The host's scene for this pass.  `compute` -- the glyph walk -- runs
+    /// only when `inputs` differ from the inputs the cached placements came
+    /// from, and the revision advances only when the placements changed.
     fn resolve_cached(
         &mut self,
         host: neomacs_webview::HostWindowId,
@@ -281,9 +266,15 @@ mod webview_scene_clock_tests {
     fn removing_the_newest_child_advances_the_host_scene_revision() {
         let host = HostWindowId::new(3);
         let mut clock = WebViewSceneClock::default();
-        let with_child = clock.resolve(host, vec![placement(7)]).unwrap();
-        let unchanged = clock.resolve(host, vec![placement(7)]).unwrap();
-        let child_removed = clock.resolve(host, Vec::new()).unwrap();
+        let with_child = clock
+            .resolve_cached(host, inputs(1, &[7]), || vec![placement(7)])
+            .unwrap();
+        let unchanged = clock
+            .resolve_cached(host, inputs(2, &[7]), || vec![placement(7)])
+            .unwrap();
+        let child_removed = clock
+            .resolve_cached(host, inputs(3, &[]), Vec::new)
+            .unwrap();
 
         assert_eq!(with_child.revision(), WebViewSceneRevision::new(1));
         assert_eq!(unchanged.revision(), WebViewSceneRevision::new(1));
