@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use malachite::integer::Integer;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::DumpError;
@@ -2140,18 +2141,20 @@ impl<'a> LoadDecoder<'a> {
                     rehash_threshold,
                     ordered_entries,
                 } = ht;
+                let restored_test = load_hash_table_test(&test);
                 let entries: Vec<_> = ordered_entries
                     .into_iter()
                     .map(|(k, v, snap)| {
-                        (
-                            load_hash_key_owned(self, k),
-                            self.load_value_owned(v),
-                            snap.map(|s| self.load_value_owned(s)),
-                        )
+                        let value = self.load_value_owned(v);
+                        let snapshot = snap.map(|s| self.load_value_owned(s));
+                        let rebuilt =
+                            rebuild_target_hash_key(&k, snapshot, restored_test, usize::BITS)?;
+                        let key = rebuilt.unwrap_or_else(|| load_hash_key_owned(self, k));
+                        Ok((key, value, snapshot))
                     })
-                    .collect();
+                    .collect::<Result<_, DumpError>>()?;
                 let _ = value.with_hash_table_mut(|table| {
-                    table.test = load_hash_table_test(&test);
+                    table.test = restored_test;
                     table.test_name = test_name.map(|s| load_sym_id(&s));
                     table.size = size;
                     table.weakness = weakness.as_ref().map(load_hash_table_weakness);
@@ -2505,6 +2508,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn restored_hash_keys_follow_the_consumers_integer_representation() {
+        let (minimum, maximum) = crate::tagged::value::fixnum_bounds_for_word_bits(32);
+        assert!(!hash_key_requires_target_rebuild(
+            &DumpHashKey::Int(minimum),
+            32
+        ));
+        assert!(!hash_key_requires_target_rebuild(
+            &DumpHashKey::Int(maximum),
+            32
+        ));
+
+        let integer = Value::MOST_POSITIVE_FIXNUM + 1;
+        let serialized = DumpHashKey::Int(integer);
+        let restored_bignum = Value::bignum(malachite::Integer::from(integer));
+        assert!(hash_key_requires_target_rebuild(&serialized, 32));
+
+        assert!(matches!(
+            rebuild_target_hash_key(
+                &serialized,
+                Some(restored_bignum),
+                HashTableTest::Eq,
+                32,
+            )
+            .unwrap(),
+            Some(HashKey::Ptr(pointer)) if pointer == restored_bignum.bits()
+        ));
+        assert_eq!(
+            rebuild_target_hash_key(&serialized, Some(restored_bignum), HashTableTest::Eql, 32,)
+                .unwrap(),
+            Some(restored_bignum.to_hash_key(&HashTableTest::Eql))
+        );
+        assert!(
+            rebuild_target_hash_key(&serialized, None, HashTableTest::Eql, 32).is_err(),
+            "a cross-width key without its Lisp key snapshot cannot be reconstructed"
+        );
+
+        let wasm32_bignum = maximum + 1;
+        let serialized_bignum = DumpHashKey::Bignum(
+            malachite::Integer::from(wasm32_bignum).to_twos_complement_limbs_asc(),
+        );
+        assert!(
+            hash_key_requires_target_rebuild(&serialized_bignum, 64),
+            "a 32-bit producer bignum that fits a 64-bit fixnum must be re-keyed"
+        );
+        assert_eq!(
+            rebuild_target_hash_key(
+                &serialized_bignum,
+                Some(Value::fixnum(wasm32_bignum)),
+                HashTableTest::Eql,
+                64,
+            )
+            .unwrap(),
+            Some(HashKey::Int(wasm32_bignum))
+        );
+    }
+
+    #[test]
     fn preload_tagged_heap_handles_deep_cons_chains_without_recursive_population() {
         crate::test_utils::init_test_tracing();
 
@@ -2701,7 +2761,8 @@ mod tests {
                     (DumpHashKey::Int(2), DumpValue::True, None),
                 ],
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(table.data.len(), 2);
         assert_eq!(
@@ -4707,6 +4768,84 @@ fn load_bytecode_owned(
 
 // --- Hash tables ---
 
+/// Whether replaying a producer-owned hash key would disagree with the Lisp
+/// key representation on a consumer with `word_bits`-wide tagged values.
+///
+/// Portable images carry both the precomputed producer key and the original
+/// Lisp key snapshot. Most keys can use the producer key directly, preserving
+/// lazy hash-table hydration. Integers that cross a fixnum boundary cannot:
+/// `eq` must switch between immediate identity and bignum pointer identity,
+/// while `eql`/`equal` must switch between [`HashKey::Int`] and
+/// [`HashKey::Bignum`]. Nested structural keys inherit the same requirement.
+fn hash_key_requires_target_rebuild(key: &DumpHashKey, word_bits: u32) -> bool {
+    let (minimum, maximum) = crate::tagged::value::fixnum_bounds_for_word_bits(word_bits);
+    match key {
+        DumpHashKey::Int(integer) => !(minimum..=maximum).contains(integer),
+        DumpHashKey::Bignum(limbs) => {
+            let integer = Integer::from_twos_complement_limbs_asc(limbs);
+            i64::try_from(&integer).is_ok_and(|integer| (minimum..=maximum).contains(&integer))
+        }
+        DumpHashKey::Ptr(pointer) => usize::try_from(*pointer).is_err(),
+        DumpHashKey::EqualCons(car, cdr) => {
+            hash_key_requires_target_rebuild(car, word_bits)
+                || hash_key_requires_target_rebuild(cdr, word_bits)
+        }
+        DumpHashKey::EqualVec(keys) => keys
+            .iter()
+            .any(|key| hash_key_requires_target_rebuild(key, word_bits)),
+        DumpHashKey::ByteCode(parts) => parts.iter().any(|part| match part {
+            DumpByteCodeKeyPart::Value(key) => hash_key_requires_target_rebuild(key, word_bits),
+            DumpByteCodeKeyPart::Values(keys) => keys
+                .iter()
+                .any(|key| hash_key_requires_target_rebuild(key, word_bits)),
+            DumpByteCodeKeyPart::ObservableSlotCount(_)
+            | DumpByteCodeKeyPart::Bytes(_)
+            | DumpByteCodeKeyPart::Ops(_)
+            | DumpByteCodeKeyPart::Text { .. }
+            | DumpByteCodeKeyPart::Absent => false,
+        }),
+        DumpHashKey::Overlay { plist, .. } => hash_key_requires_target_rebuild(plist, word_bits),
+        DumpHashKey::SymbolWithPos(symbol, position) => {
+            hash_key_requires_target_rebuild(symbol, word_bits)
+                || hash_key_requires_target_rebuild(position, word_bits)
+        }
+        DumpHashKey::Nil
+        | DumpHashKey::True
+        | DumpHashKey::Float(_)
+        | DumpHashKey::FloatEq(_, _)
+        | DumpHashKey::Symbol(_)
+        | DumpHashKey::Keyword(_)
+        | DumpHashKey::Str(_)
+        | DumpHashKey::Char(_)
+        | DumpHashKey::Window(_)
+        | DumpHashKey::Frame(_)
+        | DumpHashKey::HeapRef(_)
+        | DumpHashKey::Marker(_, _)
+        | DumpHashKey::BoolVec { .. }
+        | DumpHashKey::Cycle(_)
+        | DumpHashKey::Text(_) => false,
+    }
+}
+
+/// Recompute only keys whose target representation differs from the producer.
+/// Returning `None` explicitly preserves the serialized-key fast path.
+fn rebuild_target_hash_key(
+    serialized: &DumpHashKey,
+    restored_key_snapshot: Option<Value>,
+    test: HashTableTest,
+    word_bits: u32,
+) -> Result<Option<HashKey>, DumpError> {
+    if !hash_key_requires_target_rebuild(serialized, word_bits) {
+        return Ok(None);
+    }
+    let restored_key = restored_key_snapshot.ok_or_else(|| {
+        DumpError::ImageFormatError(
+            "cross-width hash key is missing its original Lisp key snapshot".into(),
+        )
+    })?;
+    Ok(Some(restored_key.to_hash_key(&test)))
+}
+
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashKey {
     match k {
@@ -4904,21 +5043,25 @@ pub(crate) fn load_hash_table_weakness(w: &DumpHashTableWeakness) -> HashTableWe
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn load_hash_table(decoder: &mut LoadDecoder, ht: &DumpLispHashTable) -> LispHashTable {
+pub(crate) fn load_hash_table(
+    decoder: &mut LoadDecoder,
+    ht: &DumpLispHashTable,
+) -> Result<LispHashTable, DumpError> {
+    let restored_test = load_hash_table_test(&ht.test);
     let entries: Vec<_> = ht
         .ordered_entries
         .iter()
         .map(|(k, v, snap)| {
-            (
-                load_hash_key(decoder, k),
-                decoder.load_value(v),
-                snap.as_ref().map(|s| decoder.load_value(s)),
-            )
+            let value = decoder.load_value(v);
+            let snapshot = snap.as_ref().map(|s| decoder.load_value(s));
+            let rebuilt = rebuild_target_hash_key(k, snapshot, restored_test, usize::BITS)?;
+            let key = rebuilt.unwrap_or_else(|| load_hash_key(decoder, k));
+            Ok((key, value, snapshot))
         })
-        .collect();
+        .collect::<Result<_, DumpError>>()?;
 
     let mut table = LispHashTable::new_unpopulated_with_options(
-        load_hash_table_test(&ht.test),
+        restored_test,
         ht.size,
         ht.weakness.as_ref().map(load_hash_table_weakness),
         ht.rehash_size,
@@ -4926,7 +5069,7 @@ pub(crate) fn load_hash_table(decoder: &mut LoadDecoder, ht: &DumpLispHashTable)
     );
     table.test_name = ht.test_name.map(|s| load_sym_id(&s));
     table.rebuild_from_ordered_entries(entries);
-    table
+    Ok(table)
 }
 
 // --- Dump-wide symbol table ---
