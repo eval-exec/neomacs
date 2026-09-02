@@ -46,3 +46,23 @@ fn initial_frame_metrics_reject_non_renderable_geometry() {
     assert!(InitialFrameMetrics::new(800, 600, f32::NAN, 16.0, 16.0).is_err());
     assert!(InitialFrameMetrics::new(800, 600, 8.0, -1.0, 16.0).is_err());
 }
+
+#[test]
+fn named_initial_font_keeps_parameter_and_public_name_identical() {
+    let mut evaluator = Context::new();
+    let metrics = InitialFrameMetrics::new(320, 240, 8.0, 16.0, 16.0).unwrap();
+    let spec = InitialEditorSurfaceSpec::gui(
+        metrics,
+        FrameDisplayIdentity::default(),
+        InitialDisplayType::Color,
+        InitialBackgroundMode::Light,
+        InitialFrameFont::named("Monospace"),
+    );
+
+    prepare_initial_editor_surface(&mut evaluator, spec);
+
+    let frame = evaluator.frame_manager().selected_frame().unwrap();
+    let expected = Value::string("Monospace");
+    assert_eq!(frame.parameter("font-parameter"), Some(expected));
+    assert_eq!(frame.parameter("font"), Some(expected));
+}
