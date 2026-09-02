@@ -209,9 +209,8 @@ impl RenderApp {
                 // Like GNU's DELETE_WINDOW_EVENT, this asks Lisp to decide.
                 // Saving, confirmation dialogs, and delete-frame hooks still
                 // need this window and the live render command receiver.
-                self.comms.send_input(InputEvent::WindowClose {
-                    emacs_frame_id: emacs_fid,
-                });
+                self.comms
+                    .send_input(InputEvent::close_requested(emacs_fid));
             }
 
             WindowEvent::Destroyed => {
@@ -277,10 +276,8 @@ impl RenderApp {
                         })
                         .unwrap_or_default()
                 };
-                self.comms.send_input(InputEvent::WindowFocus {
-                    focused,
-                    emacs_frame_id: emacs_fid,
-                });
+                self.comms
+                    .send_input(InputEvent::focus_changed(focused, emacs_fid));
                 for presentation in retirements {
                     self.comms
                         .send_input(InputEvent::PresentationRetired { presentation });
@@ -393,12 +390,12 @@ impl RenderApp {
                                 control_keysym,
                                 ordinary_modifiers
                             );
-                            self.comms.send_input(InputEvent::Key {
-                                key: FrontendKey::Keysym(control_keysym),
-                                modifiers: ordinary_modifiers,
-                                pressed: true,
-                                emacs_frame_id: self.emacs_frame_for_window_event(window_id),
-                            });
+                            self.comms.send_input(InputEvent::key(
+                                control_keysym,
+                                ordinary_modifiers,
+                                true,
+                                self.emacs_frame_for_window_event(window_id),
+                            ));
                             self.record_idle_dim_activity(window_id);
                             self.record_typing_speed_keypress(window_id);
                             handled_via_text = true;
@@ -417,12 +414,27 @@ impl RenderApp {
                                     key,
                                     ordinary_modifiers
                                 );
-                                self.comms.send_input(InputEvent::Key {
-                                    key,
-                                    modifiers: ordinary_modifiers,
-                                    pressed: true,
-                                    emacs_frame_id: self.emacs_frame_for_window_event(window_id),
-                                });
+                                match key {
+                                    // Text identity must survive transport
+                                    // (#458): committed characters ride the
+                                    // text channel, never a numeric keysym.
+                                    FrontendKey::Character(character) => {
+                                        self.comms
+                                            .send_input(InputEvent::text_committed_with_modifiers(
+                                                character.to_string(),
+                                                ordinary_modifiers,
+                                                self.emacs_frame_for_window_event(window_id),
+                                            ));
+                                    }
+                                    FrontendKey::Keysym(keysym) => {
+                                        self.comms.send_input(InputEvent::key(
+                                            keysym,
+                                            ordinary_modifiers,
+                                            true,
+                                            self.emacs_frame_for_window_event(window_id),
+                                        ));
+                                    }
+                                }
                                 self.record_idle_dim_activity(window_id);
                                 self.record_typing_speed_keypress(window_id);
                             }
@@ -466,12 +478,32 @@ impl RenderApp {
                                 self.record_idle_dim_activity(window_id);
                             }
                             let (receipt, token) =
-                                self.comms.send_input_with_receipt(InputEvent::Key {
-                                    key,
-                                    modifiers: key_modifiers,
-                                    pressed: state == ElementState::Pressed,
-                                    emacs_frame_id: self.emacs_frame_for_window_event(window_id),
-                                });
+                                let input = match key {
+                                    FrontendKey::Character(character) => {
+                                        // Text identity must survive transport
+                                        // (#458): characters ride the text
+                                        // channel, never a numeric keysym.
+                                        // Releases carry no text, so nothing
+                                        // is sent for them.
+                                        (state == ElementState::Pressed).then(|| {
+                                            InputEvent::text_committed_with_modifiers(
+                                                character.to_string(),
+                                                key_modifiers,
+                                                self.emacs_frame_for_window_event(window_id),
+                                            )
+                                        })
+                                    }
+                                    FrontendKey::Keysym(keysym) => Some(InputEvent::key(
+                                        keysym,
+                                        key_modifiers,
+                                        state == ElementState::Pressed,
+                                        self.emacs_frame_for_window_event(window_id),
+                                    )),
+                                };
+                                let (receipt, token) = match input {
+                                    Some(input) => self.comms.send_input_with_receipt(input),
+                                    None => (None, None),
+                                };
                             if let Some(receipt) = receipt
                                 && let Some(window) = self.frame_windows.get_by_winit_mut(window_id)
                             {
@@ -689,17 +721,14 @@ impl RenderApp {
                     {
                         ws.render.clear_ime_preedit()
                     };
-                    for ch in text.chars() {
-                        if ch != '\0' {
-                            self.comms.send_input(InputEvent::Key {
-                                key: FrontendKey::Character(ch),
-                                modifiers: 0,
-                                pressed: true,
-                                emacs_frame_id: self.emacs_frame_for_window_event(window_id),
-                            });
-                            self.record_idle_dim_activity(window_id);
-                            self.record_typing_speed_keypress(window_id);
-                        }
+                    if !text.is_empty() {
+                        self.comms.send_input(InputEvent::text_committed(
+                            text,
+                            self.emacs_frame_for_window_event(window_id),
+                        ));
+                        self.record_idle_dim_activity(window_id);
+                        self.record_typing_speed_keypress(window_id);
+                    }
                     }
                 }
                 winit::event::Ime::Preedit(text, cursor_range) => {

@@ -11,6 +11,10 @@ use std::time::Instant;
 
 mod frame_mailbox;
 pub use frame_mailbox::{FrameReceiver, FrameSender, QueuedPresentation, SupersededPresentation};
+use neomacs_app::frontend_event::{
+    FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
+    FrontendModifiers, FrontendViewport, InvalidFrontendScaleFactor,
+};
 use neomacs_display_protocol::{
     ImageColorContext, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization, ImageRotation,
     ImageSizeSpec, SelectionOwner, VideoId,
@@ -119,6 +123,8 @@ pub enum InputEvent {
         token: neomacs_display_protocol::input_latency::InputToken,
         event: Box<InputEvent>,
     },
+    /// Host-neutral window, keyboard, and committed-text observation.
+    Frontend(FrontendEvent),
     /// Bytes read directly from a Unix TTY.
     ///
     /// This transport fact deliberately carries no terminal-sequence or
@@ -128,31 +134,7 @@ pub enum InputEvent {
         bytes: Vec<u8>,
         emacs_frame_id: u64,
     },
-    Key {
-        key: neovm_core::keyboard::FrontendKey,
-        modifiers: u32,
-        pressed: bool,
-        /// Emacs frame_id of the window that produced the key event
-        emacs_frame_id: u64,
-    },
     PositionedPointer(PositionedPointerInput),
-    WindowResize {
-        width: u32,
-        height: u32,
-        /// Physical device pixels per logical Emacs pixel.
-        scale_factor: f64,
-        /// Emacs frame_id of the window that resized
-        emacs_frame_id: u64,
-    },
-    WindowClose {
-        /// Emacs frame_id of the window being closed
-        emacs_frame_id: u64,
-    },
-    WindowFocus {
-        focused: bool,
-        /// Emacs frame_id of the window that gained/lost focus
-        emacs_frame_id: u64,
-    },
     /// Monitor configuration changed on the active terminal.
     MonitorsChanged {
         monitors: Vec<MonitorInfo>,
@@ -265,6 +247,76 @@ pub enum InputEvent {
         anchor: PopupAnchorRect,
         emacs_frame_id: u64,
     },
+}
+
+impl InputEvent {
+    pub fn key(keysym: u32, modifiers: u32, pressed: bool, emacs_frame_id: u64) -> Self {
+        Self::Frontend(FrontendEvent::Key(FrontendKeyEvent::new(
+            FrontendKeySymbol::new(keysym),
+            FrontendModifiers::from_bits(modifiers),
+            if pressed {
+                FrontendKeyState::Pressed
+            } else {
+                FrontendKeyState::Released
+            },
+            FrontendFrameId::new(emacs_frame_id),
+        )))
+    }
+
+    pub fn viewport_changed(
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        emacs_frame_id: u64,
+    ) -> Result<Self, InvalidFrontendScaleFactor> {
+        Ok(Self::Frontend(FrontendEvent::ViewportChanged(
+            FrontendViewport::new(
+                width,
+                height,
+                scale_factor,
+                FrontendFrameId::new(emacs_frame_id),
+            )?,
+        )))
+    }
+
+    #[must_use]
+    pub fn text_committed(text: impl Into<String>, emacs_frame_id: u64) -> Self {
+        Self::Frontend(FrontendEvent::text_committed(
+            text,
+            FrontendFrameId::new(emacs_frame_id),
+        ))
+    }
+
+    /// Committed text that keeps the modifier state sampled with it, so
+    /// shift-only chords like `S-SPC` survive transport (issue #458 keeps
+    /// text identity apart from keysyms; modifiers finish that separation).
+    #[must_use]
+    pub fn text_committed_with_modifiers(
+        text: impl Into<String>,
+        modifiers: u32,
+        emacs_frame_id: u64,
+    ) -> Self {
+        Self::Frontend(FrontendEvent::text_committed_with_modifiers(
+            text,
+            FrontendModifiers::from_bits(modifiers),
+            FrontendFrameId::new(emacs_frame_id),
+        ))
+    }
+
+    #[must_use]
+    pub const fn close_requested(emacs_frame_id: u64) -> Self {
+        Self::Frontend(FrontendEvent::CloseRequested {
+            target: FrontendFrameId::new(emacs_frame_id),
+        })
+    }
+
+    #[must_use]
+    pub const fn focus_changed(focused: bool, emacs_frame_id: u64) -> Self {
+        Self::Frontend(FrontendEvent::FocusChanged {
+            focused,
+            target: FrontendFrameId::new(emacs_frame_id),
+        })
+    }
 }
 
 pub type PopupAnchorRect = neomacs_display_protocol::Rect;
@@ -1114,10 +1166,11 @@ impl RenderComms {
     fn should_log_delivery(event: &InputEvent) -> bool {
         matches!(
             event,
-            InputEvent::WindowResize { .. }
-                | InputEvent::WindowClose { .. }
-                | InputEvent::WindowFocus { .. }
-                | InputEvent::MonitorsChanged { .. }
+            InputEvent::Frontend(
+                FrontendEvent::ViewportChanged(_)
+                    | FrontendEvent::CloseRequested { .. }
+                    | FrontendEvent::FocusChanged { .. }
+            ) | InputEvent::MonitorsChanged { .. }
                 | InputEvent::DisplayReset
         )
     }
@@ -1127,16 +1180,19 @@ impl RenderComms {
             InputEvent::Observed { event, .. } | InputEvent::Tracked { event, .. } => {
                 Self::event_name(event)
             }
+            InputEvent::Frontend(event) => match event {
+                FrontendEvent::Key(_) => "key",
+                FrontendEvent::TextCommitted { .. } => "text-committed",
+                FrontendEvent::ViewportChanged(_) => "viewport-changed",
+                FrontendEvent::CloseRequested { .. } => "close-requested",
+                FrontendEvent::FocusChanged { .. } => "focus-changed",
+            },
             InputEvent::RawTtyBytes { .. } => "raw-tty-bytes",
-            InputEvent::Key { .. } => "key",
             InputEvent::PositionedPointer(PositionedPointerInput { action, .. }) => match action {
                 PointerAction::Button { .. } => "positioned-pointer-button",
                 PointerAction::Move { .. } => "positioned-pointer-move",
                 PointerAction::Scroll { .. } => "positioned-pointer-scroll",
             },
-            InputEvent::WindowResize { .. } => "window-resize",
-            InputEvent::WindowClose { .. } => "window-close",
-            InputEvent::WindowFocus { .. } => "window-focus",
             InputEvent::MonitorsChanged { .. } => "monitors-changed",
             InputEvent::DisplayReset => "display-reset",
             InputEvent::WebView(event) => match event {

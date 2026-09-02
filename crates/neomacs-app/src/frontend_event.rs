@@ -46,6 +46,8 @@ pub struct FrontendModifiers {
     control: bool,
     meta: bool,
     super_: bool,
+    alt: bool,
+    hyper: bool,
 }
 
 impl FrontendModifiers {
@@ -53,6 +55,8 @@ impl FrontendModifiers {
     pub const CONTROL_MASK: u32 = 1 << 1;
     pub const META_MASK: u32 = 1 << 2;
     pub const SUPER_MASK: u32 = 1 << 3;
+    pub const ALT_MASK: u32 = 1 << 4;
+    pub const HYPER_MASK: u32 = 1 << 5;
 
     #[must_use]
     pub const fn new(shift: bool, control: bool, meta: bool, super_: bool) -> Self {
@@ -61,18 +65,22 @@ impl FrontendModifiers {
             control,
             meta,
             super_,
+            alt: false,
+            hyper: false,
         }
     }
 
     /// Decode the established renderer-to-evaluator modifier representation.
     #[must_use]
     pub const fn from_bits(bits: u32) -> Self {
-        Self::new(
-            bits & Self::SHIFT_MASK != 0,
-            bits & Self::CONTROL_MASK != 0,
-            bits & Self::META_MASK != 0,
-            bits & Self::SUPER_MASK != 0,
-        )
+        Self {
+            shift: bits & Self::SHIFT_MASK != 0,
+            control: bits & Self::CONTROL_MASK != 0,
+            meta: bits & Self::META_MASK != 0,
+            super_: bits & Self::SUPER_MASK != 0,
+            alt: bits & Self::ALT_MASK != 0,
+            hyper: bits & Self::HYPER_MASK != 0,
+        }
     }
 
     /// Encode modifiers for the existing evaluator keyboard conversion.
@@ -82,6 +90,8 @@ impl FrontendModifiers {
             | (if self.control { Self::CONTROL_MASK } else { 0 })
             | (if self.meta { Self::META_MASK } else { 0 })
             | (if self.super_ { Self::SUPER_MASK } else { 0 })
+            | (if self.alt { Self::ALT_MASK } else { 0 })
+            | (if self.hyper { Self::HYPER_MASK } else { 0 })
     }
 
     #[must_use]
@@ -242,8 +252,14 @@ impl FrontendViewport {
 pub enum FrontendEvent {
     Key(FrontendKeyEvent),
     /// Text committed by an IME or other host text service.
+    ///
+    /// `modifiers` carries the shift-like state sampled with the text so the
+    /// evaluator can distinguish `S-SPC` from plain space (GNU keeps Shift
+    /// observable for characters with no shifted form). IME commits report no
+    /// modifiers.
     TextCommitted {
         text: String,
+        modifiers: FrontendModifiers,
         target: FrontendFrameId,
     },
     ViewportChanged(FrontendViewport),
@@ -261,6 +277,23 @@ impl FrontendEvent {
     pub fn text_committed(text: impl Into<String>, target: FrontendFrameId) -> Self {
         Self::TextCommitted {
             text: text.into(),
+            modifiers: FrontendModifiers::from_bits(0),
+            target,
+        }
+    }
+
+    /// Committed text that must keep the modifier state sampled with it,
+    /// such as keyboard committed text where only shift-like bits can be
+    /// active.
+    #[must_use]
+    pub fn text_committed_with_modifiers(
+        text: impl Into<String>,
+        modifiers: FrontendModifiers,
+        target: FrontendFrameId,
+    ) -> Self {
+        Self::TextCommitted {
+            text: text.into(),
+            modifiers,
             target,
         }
     }

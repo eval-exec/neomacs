@@ -13,6 +13,7 @@
 // restructuring for this test binary's lint gate.
 #![allow(clippy::too_many_arguments)]
 
+use neomacs_app::frontend_event::FrontendEvent;
 use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::face::{Face, FaceAttributes};
 use neomacs_display_protocol::glyph_matrix::*;
@@ -229,12 +230,13 @@ fn run_gui(demo: &str) {
     loop {
         std::thread::sleep(Duration::from_millis(100));
         while let Ok(event) = emacs_comms.input_rx.try_recv() {
-            if let InputEvent::Key { key, .. } = event
-                && matches!(
-                    key,
-                    neovm_core::keyboard::FrontendKey::Character('q')
-                        | neovm_core::keyboard::FrontendKey::Keysym(0xff1b)
-                )
+            if let InputEvent::Frontend(event) = &event
+                && match event {
+                    // `q` rides the text channel; Escape keeps its keysym.
+                    FrontendEvent::TextCommitted { text, .. } => text.as_str() == "q",
+                    FrontendEvent::Key(key) => key.symbol().get() == 0xff1b,
+                    _ => false,
+                }
             {
                 let _ = emacs_comms
                     .cmd_tx

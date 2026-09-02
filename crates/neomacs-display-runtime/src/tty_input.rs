@@ -82,7 +82,7 @@ fn tty_control_char_keysym(c: char) -> Option<u32> {
     }
 }
 
-/// Map a crossterm key event to an `InputEvent::Key`.
+/// Map a crossterm key event to a typed frontend key event.
 ///
 /// Returns `None` for modifier-only keys (Shift, Ctrl, Alt, Super,
 /// CapsLock, NumLock, etc.) — those are tracked by crossterm's modifier
@@ -139,11 +139,18 @@ fn map_key_event(event: KeyEvent) -> Option<InputEvent> {
 
     let key = key?;
 
-    Some(InputEvent::Key {
-        key,
-        modifiers,
-        pressed: event.kind == KeyEventKind::Press,
-        emacs_frame_id: 0,
+    Some(match key {
+        // Text identity must survive transport (#458): crossterm characters
+        // ride the text channel, named keys keep their keysym identity.
+        neovm_core::keyboard::FrontendKey::Character(c) => {
+            InputEvent::text_committed_with_modifiers(c.to_string(), modifiers, 0)
+        }
+        neovm_core::keyboard::FrontendKey::Keysym(keysym) => InputEvent::key(
+            keysym,
+            modifiers,
+            event.kind == KeyEventKind::Press,
+            0,
+        ),
     })
 }
 
@@ -168,12 +175,8 @@ fn read_tty_events(
             && last_size != Some(size)
         {
             last_size = Some(size);
-            let event = InputEvent::WindowResize {
-                width: size.0 as u32,
-                height: size.1 as u32,
-                scale_factor: 1.0,
-                emacs_frame_id: 0,
-            };
+            let event = InputEvent::viewport_changed(size.0 as u32, size.1 as u32, 1.0, 0)
+                .expect("one is a valid TTY scale");
             if tx.send(event).is_err() {
                 tracing::warn!("tty_input: channel closed");
                 return;
@@ -253,12 +256,8 @@ fn read_tty_events(
                     }
                     Ok(Event::Resize(cols, rows)) => {
                         tracing::debug!("tty_input: resize {}x{}", cols, rows);
-                        let event = InputEvent::WindowResize {
-                            width: cols as u32,
-                            height: rows as u32,
-                            scale_factor: 1.0,
-                            emacs_frame_id: 0,
-                        };
+                        let event = InputEvent::viewport_changed(cols as u32, rows as u32, 1.0, 0)
+                            .expect("one is a valid TTY scale");
                         if tx.send(event).is_err() {
                             tracing::warn!("tty_input: channel closed");
                             return;

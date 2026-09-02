@@ -1,5 +1,7 @@
 //! Event types for winit → Emacs communication.
 
+use neomacs_app::frontend_event::FrontendModifiers;
+
 /// Input event kinds matching Emacs event types.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,17 +26,12 @@ pub enum EventKind {
 }
 
 /// Modifier flags matching Emacs.
-///
-/// Bit positions are the wire values of
-/// `neomacs_display_protocol`'s `TransportModifierBit` (`modifier_policy.rs`);
-/// `Alt` and `Hyper` were appended when the NS modifier policy (issue #442)
-/// taught the transport to carry the full GNU modifier set.
-pub const NEOMACS_SHIFT_MASK: u32 = 1 << 0;
-pub const NEOMACS_CTRL_MASK: u32 = 1 << 1;
-pub const NEOMACS_META_MASK: u32 = 1 << 2;
-pub const NEOMACS_SUPER_MASK: u32 = 1 << 3;
-pub const NEOMACS_ALT_MASK: u32 = 1 << 4;
-pub const NEOMACS_HYPER_MASK: u32 = 1 << 5;
+pub const NEOMACS_SHIFT_MASK: u32 = FrontendModifiers::SHIFT_MASK;
+pub const NEOMACS_CTRL_MASK: u32 = FrontendModifiers::CONTROL_MASK;
+pub const NEOMACS_META_MASK: u32 = FrontendModifiers::META_MASK;
+pub const NEOMACS_SUPER_MASK: u32 = FrontendModifiers::SUPER_MASK;
+pub const NEOMACS_ALT_MASK: u32 = FrontendModifiers::ALT_MASK;
+pub const NEOMACS_HYPER_MASK: u32 = FrontendModifiers::HYPER_MASK;
 
 /// Event kind constants for FFI.
 pub const NEOMACS_EVENT_KEY_PRESS: u32 = EventKind::KeyPress as u32;
