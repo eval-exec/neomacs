@@ -87,6 +87,20 @@ fn identity_from_file_builds_stable_key() {
 }
 
 #[test]
+fn packaged_identity_keeps_its_memory_face_selector() {
+    let identity = ResolvedFontIdentity::from_memory(
+        FontBackendKind::Packaged,
+        "packaged:hack-regular#0".to_owned(),
+        3,
+        Some("Hack-Regular".to_owned()),
+    );
+
+    assert_eq!(identity.file_face_index(), 3);
+    assert_eq!(identity.named_instance_index(), None);
+    assert_eq!(identity.freetype_selector(), None);
+}
+
+#[test]
 fn file_asset_normalizes_a_fontconfig_named_instance_selector() {
     let identity = ResolvedFontIdentity::from_file("/fonts/variable.ttc", 0x0007_0003, None);
     let asset = FontFileAsset::from_identity(&identity).expect("file-backed identity");
