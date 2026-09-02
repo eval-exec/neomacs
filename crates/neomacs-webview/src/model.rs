@@ -462,6 +462,33 @@ pub enum WebViewEvent {
     },
 }
 
+impl WebViewEvent {
+    /// The browser instance and generation this event is about.
+    ///
+    /// Every variant carries both, so the match is exhaustive here, once,
+    /// where every platform compiles it: the Linux reactor keys its
+    /// per-view queues on this, and a variant added without an arm fails on
+    /// the developer's machine rather than on Linux CI.
+    #[must_use]
+    pub fn identity(&self) -> (WebViewId, WebViewGeneration) {
+        match self {
+            Self::Ready { id, generation }
+            | Self::Failed { id, generation, .. }
+            | Self::Closed { id, generation }
+            | Self::TitleChanged { id, generation, .. }
+            | Self::UriChanged { id, generation, .. }
+            | Self::LoadProgressChanged { id, generation, .. }
+            | Self::LoadChanged { id, generation, .. }
+            | Self::LoadFinished { id, generation, .. }
+            | Self::ProcessFailed { id, generation, .. }
+            | Self::FocusChanged { id, generation, .. } => (*id, *generation),
+            Self::ScriptFinished {
+                view, generation, ..
+            } => (*view, *generation),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum WebValue {
     Null,

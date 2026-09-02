@@ -138,23 +138,6 @@ pub(crate) struct LinuxView {
     generation: WebViewGeneration,
 }
 
-fn event_identity(event: &WebViewEvent) -> (WebViewId, WebViewGeneration) {
-    match event {
-        WebViewEvent::Ready { id, generation }
-        | WebViewEvent::Failed { id, generation, .. }
-        | WebViewEvent::Closed { id, generation }
-        | WebViewEvent::TitleChanged { id, generation, .. }
-        | WebViewEvent::UriChanged { id, generation, .. }
-        | WebViewEvent::LoadProgressChanged { id, generation, .. }
-        | WebViewEvent::LoadFinished { id, generation, .. }
-        | WebViewEvent::ProcessFailed { id, generation, .. }
-        | WebViewEvent::FocusChanged { id, generation, .. } => (*id, *generation),
-        WebViewEvent::ScriptFinished {
-            view, generation, ..
-        } => (*view, *generation),
-    }
-}
-
 impl Platform for LinuxPlatform {
     type Host = WebViewHost;
     type PendingCreate = ();
@@ -204,7 +187,7 @@ impl Platform for LinuxPlatform {
                 }
                 ReactorEvent::View(event) => {
                     self.pending_events
-                        .entry(event_identity(&event))
+                        .entry(event.identity())
                         .or_default()
                         .push(event);
                 }
