@@ -14,7 +14,10 @@ use tempfile::NamedTempFile;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const PORTABLE_RUNTIME_IMAGE_ASSET: &str = "neomacs.portable";
-const RUNTIME_RESOURCE_ARCHIVE_ASSET: &str = "neomacs-runtime.tar.gz";
+// Use an opaque transport suffix: Android's asset packager treats `.gz` as a
+// directive to decompress the file and remove its suffix.  The bytes remain a
+// deterministic gzip-compressed tar archive on every host.
+const RUNTIME_RESOURCE_ARCHIVE_ASSET: &str = "neomacs-runtime.bundle";
 const RUNTIME_RESOURCE_ID_ASSET: &str = "neomacs-runtime.sha256";
 const REQUIRED_RESOURCE_ROOTS: [&str; 2] = ["lisp", "etc"];
 const OPTIONAL_RESOURCE_ROOTS: [&str; 2] = ["leim", "info"];
