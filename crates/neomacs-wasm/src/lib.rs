@@ -4,7 +4,7 @@
 
 use neomacs_app::host::HostProfile;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 mod platform;
 
 /// Capabilities exposed by the browser WebAssembly product adapter.
