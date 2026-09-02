@@ -601,7 +601,15 @@ impl ProcessManager {
 /// `src/process.c` that spells it**.
 ///
 /// `grep -n 'tick = ++process_tick' src/process.c` returns exactly eight lines
-/// and they are the eight below.  **Seven of them have nothing to do with
+/// on GNU master since e381cf1fc97 (2025-08-15, "Allow child processes to
+/// continue after EPIPE"), and they are the eight below.  The emacs-31.1
+/// release (a360712c9d, 2026-08-24) predates that change on its branch and
+/// still has a NINTH: `send_process`'s EPIPE arm at :6927, which synthesizes
+/// `(exit . 256)` -- behavior 4d7e6e51dd4 introduced in 2012 and master no
+/// longer has.  This port follows master's arm (see `write_process_input_once`),
+/// so the ninth line is deliberately not a variant; the line numbers cited
+/// on the eight variants are emacs-31.1's (master's are 1169, 1189, 6075,
+/// 6092, 6101, 6158, 7193, 7752).  **Seven of them have nothing to do with
 /// SIGCHLD**, which is the fact this type exists to keep in front of the next
 /// reader: the record that decides whom `status_notify` visits is not the
 /// child-signal record.  GNU declares the counter and the reason for it at
@@ -614,7 +622,7 @@ impl ProcessManager {
 /// static EMACS_INT update_tick;
 /// ```
 ///
-/// A tenth site cannot be added without a GNU citation, because
+/// A ninth site cannot be added without a GNU citation, because
 /// [`Self::gnu`], [`Self::what`] and [`Self::notifier`] are exhaustive matches
 /// and [`Self::COUNT`] (derived from the last discriminant) is asserted in
 /// `process_test.rs`.

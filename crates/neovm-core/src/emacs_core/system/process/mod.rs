@@ -7440,7 +7440,8 @@ impl ProcessManager {
                 Ok(ProcessWriteAttempt::WouldBlock)
             }
             Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => {
-                // GNU `send_process`'s EPIPE arm (src/process.c:6941-6947):
+                // GNU `send_process`'s EPIPE arm on master
+                // (src/process.c:6941-6947, since e381cf1fc97, 2025-08-15):
                 //
                 //   close_process_fd (&p->open_fd[WRITE_TO_SUBPROCESS]);
                 //   p->outfd = -1;
@@ -7448,9 +7449,11 @@ impl ProcessManager {
                 //
                 // and NOTHING else -- the status is not touched, so the child
                 // stays sweepable and the next wait's `status_notify` hands
-                // the sentinel the child's REAL exit status.  Writing
-                // `(exit . 256)` here (introduced by GNU commit
-                // 4d7e6e51dd4, 2012, and removed by e381cf1fc97, 2025) made
+                // the sentinel the child's REAL exit status.  The emacs-31.1
+                // release still has the older arm (:6923-6931): GNU commit
+                // 4d7e6e51dd4 (2012) made it synthesize `(exit . 256)` and
+                // bump the tick, and e381cf1fc97 removed that on master.
+                // This port follows master.  Writing `(exit . 256)` here made
                 // the status terminal before the reap, which no later sweep
                 // may overwrite
                 // (`SweepableChild::of` admits only `run`/`stop`) and which

@@ -14332,15 +14332,19 @@ fn gnus_eight_update_status_sites_are_enumerated_and_four_are_the_asynchronous_o
 /// GNU's EIGHT `p->tick = ++process_tick;` sites, as a table.
 ///
 /// `grep -n 'tick = ++process_tick' src/process.c` returns exactly eight
-/// lines (verified against the emacs-31.1 mirror, 98165ff73e8: lines 1169,
-/// 1189, 6075, 6092, 6101, 6158, 7193, 7752), and **seven of them are
-/// not `handle_child_signal`'s** -- which is the whole point of
+/// lines on GNU master (verified at master snapshot 98165ff73e8, 2026-08-30:
+/// lines 1169, 1189, 6075, 6092, 6101, 6158, 7193, 7752), and **seven of
+/// them are not `handle_child_signal`'s** -- which is the whole point of
 /// [`StatusChangeSite`].  The table used to carry a NINTH row for an EPIPE
-/// tick in `send_process` at ":6927"; GNU commit 4d7e6e51dd4 introduced that
-/// behavior in 2012, and e381cf1fc97 removed it in 2025 -- GNU 31's EPIPE arm
-/// closes the write fd and touches neither status nor tick.  The citations are spelled out here
-/// so a renumbered line is a failing test rather than a stale comment, and
-/// the count is asserted so a ninth site cannot appear without one.
+/// tick in `send_process` at ":6927", and that line is still real on the
+/// release lineage: emacs-31.1 (a360712c9d, 2026-08-24) has nine sites, the
+/// ninth being the `(exit . 256)` arm GNU commit 4d7e6e51dd4 introduced in
+/// 2012.  Master commit e381cf1fc97 (2025-08-15) removed it, and that is the
+/// arm this port follows: it closes the write fd and touches neither status
+/// nor tick.  The eight citations below use emacs-31.1's line numbers for
+/// the sites both lineages share, spelled out here so a renumbered line is a
+/// failing test rather than a stale comment, and the count is asserted so a
+/// ninth site cannot appear without one.
 #[test]
 fn the_status_change_sites_are_gnus_eight_tick_bumps() {
     use crate::emacs_core::process::StatusChangeSite;
@@ -15355,10 +15359,13 @@ fn a_just_this_one_wait_notifies_another_childs_sentinel_like_gnu() {
 }
 
 /// A write that hits `EPIPE` must not decide the child's fate: GNU's EPIPE
-/// arm in `send_process` (src/process.c:6940-6946) closes the write fd and
-/// signals `"Process %s no longer connected to pipe; closed it"` -- and
-/// touches NOTHING else.  The child's real status arrives through the
-/// SIGCHLD record and `status_notify` runs the sentinel with it.
+/// arm in `send_process` (src/process.c:6940-6946 on master, as of
+/// e381cf1fc97, 2025-08-15) closes the write fd and signals `"Process %s no
+/// longer connected to pipe; closed it"` -- and touches NOTHING else.  The
+/// child's real status arrives through the SIGCHLD record and
+/// `status_notify` runs the sentinel with it.  (The emacs-31.1 release still
+/// has the pre-e381cf1fc97 arm at :6923-6931, which synthesizes
+/// `(exit . 256)` and bumps the tick; this port follows master.)
 ///
 /// This port used to write `(exit . 256)` into the settled status right in
 /// the EPIPE branch.  A terminal status makes the child ineligible for the
