@@ -3694,6 +3694,7 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-layout-engine",
  "neomacs-wgpu-runtime",
+ "neovm-core",
  "pollster",
  "winit",
 ]

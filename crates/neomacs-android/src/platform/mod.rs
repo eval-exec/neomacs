@@ -1,68 +1,143 @@
-//! Android Activity and window lifecycle adapter.
+//! Android Activity, editor-session, and window lifecycle adapter.
 
+mod evaluator;
+mod presentation;
+
+use neomacs_app::frontend_event::{FrontendEvent, FrontendFrameId, FrontendViewport};
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
-use neomacs_display_protocol::FrameGlyphBuffer;
-use neomacs_layout_engine::bootstrap_frame::PortableBootstrapFrameBuilder;
-use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow};
+use neomacs_app::session::{
+    FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort, NativeEditorWorker,
+    NativeEditorWorkerEvent,
+};
+use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow, WinitFrontendInput};
+use presentation::PresentedFrontend;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event::{Ime, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::platform::android::activity::AndroidApp;
 use winit::window::{Window, WindowId};
 
 struct AndroidFrontend {
+    app: AndroidApp,
+    worker_events: EventLoopProxy<NativeEditorWorkerEvent>,
     lifecycle: FrontendLifecycle,
     window: Option<SurfaceWindow>,
     presented: Option<PresentedFrontend>,
+    worker: Option<NativeEditorWorker>,
+    input: Option<FrontendInputPort>,
+    frames: Option<FrontendFrameInbox>,
+    input_translation: WinitFrontendInput,
+    target: FrontendFrameId,
+    close_pending: bool,
 }
 
-struct PresentedFrontend {
-    renderer: SurfaceFrameRenderer,
-    bootstrap: PortableBootstrapFrameBuilder,
-    frame: Option<FrameGlyphBuffer>,
-}
-
-impl PresentedFrontend {
-    fn new(renderer: SurfaceFrameRenderer) -> Self {
-        let mut this = Self {
-            renderer,
-            bootstrap: PortableBootstrapFrameBuilder::new(),
-            frame: None,
-        };
-        this.resize_frame();
-        this
-    }
-
-    fn resize_physical(&mut self, width: u32, height: u32) {
-        self.renderer.resize_physical(width, height);
-        self.resize_frame();
-    }
-
-    fn resize_frame(&mut self) {
-        let size = self
-            .renderer
-            .logical_size()
-            .unwrap_or_else(|error| panic!("invalid Android surface geometry: {error}"));
-        self.frame = size.map(|size| {
-            self.bootstrap
-                .build(size)
-                .unwrap_or_else(|error| panic!("failed to build Android initial frame: {error}"))
-        });
-    }
-}
-
-impl Default for AndroidFrontend {
-    fn default() -> Self {
+impl AndroidFrontend {
+    fn new(app: AndroidApp, worker_events: EventLoopProxy<NativeEditorWorkerEvent>) -> Self {
         Self {
+            app,
+            worker_events,
             lifecycle: FrontendLifecycle::new(),
             window: None,
             presented: None,
+            worker: None,
+            input: None,
+            frames: None,
+            input_translation: WinitFrontendInput::default(),
+            target: FrontendFrameId::PRIMARY,
+            close_pending: false,
+        }
+    }
+
+    fn start_worker(&mut self) {
+        if self.worker.is_some() {
+            return;
+        }
+        let Some(size) = self
+            .presented
+            .as_ref()
+            .and_then(|presented| presented.logical_size().ok().flatten())
+        else {
+            return;
+        };
+        let width = size.width().ceil().max(1.0) as u32;
+        let height = size.height().ceil().max(1.0) as u32;
+        let proxy = self.worker_events.clone();
+        self.worker = Some(
+            evaluator::spawn(self.app.clone(), width, height, move |event| {
+                let _ = proxy.send_event(event);
+            })
+            .unwrap_or_else(|error| panic!("failed to spawn Android evaluator: {error}")),
+        );
+    }
+
+    fn submit(&mut self, event: FrontendEvent) {
+        if self
+            .input
+            .as_ref()
+            .is_some_and(|input| input.submit(&event).is_err())
+        {
+            self.input = None;
+        }
+    }
+
+    fn submit_viewport(&mut self) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        let viewport =
+            FrontendViewport::new(size.width, size.height, window.scale_factor(), self.target)
+                .expect("winit supplied an invalid Android scale factor");
+        self.submit(FrontendEvent::ViewportChanged(viewport));
+    }
+
+    fn receive_latest_frame(&mut self) {
+        let receive = match self.frames.as_mut() {
+            Some(frames) => frames.try_latest(),
+            None => return,
+        };
+        match receive {
+            FrontendFrameReceive::Empty => {}
+            FrontendFrameReceive::Disconnected => self.frames = None,
+            FrontendFrameReceive::Frame(pending) => {
+                let Some(presented) = self.presented.as_mut() else {
+                    // Dropping the pending guard reports a discard. A viewport
+                    // event on resume asks the evaluator for a fresh revision.
+                    return;
+                };
+                match presented.install(pending) {
+                    Ok(target) => {
+                        self.target = target;
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                    }
+                    Err(_) => self.input = None,
+                }
+            }
+        }
+    }
+
+    fn finish_worker(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker
+                .join()
+                .unwrap_or_else(|_| panic!("Android evaluator worker panicked"));
+        }
+    }
+
+    fn request_exit(&mut self, event_loop: &ActiveEventLoop) {
+        if self.lifecycle.transition(LifecycleEvent::ExitRequested) == LifecycleAction::Exit {
+            event_loop.exit();
         }
     }
 }
 
-impl ApplicationHandler for AndroidFrontend {
+impl ApplicationHandler<NativeEditorWorkerEvent> for AndroidFrontend {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.lifecycle.transition(LifecycleEvent::Resumed) != LifecycleAction::CreateFrontend {
             return;
@@ -83,12 +158,14 @@ impl ApplicationHandler for AndroidFrontend {
         window.request_redraw();
         self.window = Some(window);
         self.presented = Some(PresentedFrontend::new(renderer));
+        self.start_worker();
+        self.submit_viewport();
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        // Android may destroy the native window while retaining the Activity.
-        // The renderer will eventually own surface teardown at this point; the
-        // tracer bullet drops the window and recreates it on the next resume.
+        // The evaluator and transport survive Activity surface loss. Dropping
+        // presentation retires its active frame before the Android window is
+        // released; resume creates a new surface and requests a fresh frame.
         if self.lifecycle.transition(LifecycleEvent::Suspended) == LifecycleAction::DestroyFrontend
         {
             self.presented = None;
@@ -96,9 +173,38 @@ impl ApplicationHandler for AndroidFrontend {
         }
     }
 
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: NativeEditorWorkerEvent) {
+        match event {
+            NativeEditorWorkerEvent::Started(frontend) => {
+                let (input, frames) = frontend.split();
+                self.input = Some(input);
+                self.frames = Some(frames);
+                self.submit_viewport();
+                if self.close_pending {
+                    self.submit(FrontendEvent::CloseRequested {
+                        target: self.target,
+                    });
+                }
+            }
+            NativeEditorWorkerEvent::FramesReady => self.receive_latest_frame(),
+            NativeEditorWorkerEvent::StartupFailed(error) => {
+                eprintln!("Neomacs Android startup failed: {error}");
+                self.finish_worker();
+                self.request_exit(event_loop);
+            }
+            NativeEditorWorkerEvent::Exited(exit) => {
+                if let Some(error) = exit.command_loop_error() {
+                    eprintln!("Neomacs Android command loop failed: {error}");
+                }
+                self.finish_worker();
+                self.request_exit(event_loop);
+            }
+        }
+    }
+
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -112,15 +218,17 @@ impl ApplicationHandler for AndroidFrontend {
 
         match event {
             WindowEvent::CloseRequested => {
-                if self.lifecycle.transition(LifecycleEvent::ExitRequested) == LifecycleAction::Exit
-                {
-                    event_loop.exit();
-                }
+                self.close_pending = true;
+                self.submit(FrontendEvent::CloseRequested {
+                    target: self.target,
+                });
             }
             WindowEvent::Resized(size) => {
                 if let Some(presented) = self.presented.as_mut() {
                     presented.resize_physical(size.width, size.height);
                 }
+                self.start_worker();
+                self.submit_viewport();
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -129,28 +237,47 @@ impl ApplicationHandler for AndroidFrontend {
                 let size = self.window.as_ref().expect("validated window").inner_size();
                 if let Some(presented) = self.presented.as_mut() {
                     presented
-                        .renderer
                         .set_scale_factor(scale_factor)
                         .unwrap_or_else(|error| panic!("invalid Android display scale: {error}"));
                     presented.resize_physical(size.width, size.height);
                 }
+                self.start_worker();
+                self.submit_viewport();
                 self.window
                     .as_ref()
                     .expect("validated window")
                     .request_redraw();
             }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.input_translation.set_modifiers(modifiers.state());
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let Some(event) = self.input_translation.translate_key(
+                    &event.logical_key,
+                    event.text.as_deref(),
+                    event.state,
+                    self.target,
+                ) {
+                    self.submit(event);
+                }
+            }
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                if let Some(event) = self.input_translation.committed_text(&text, self.target) {
+                    self.submit(event);
+                }
+            }
+            WindowEvent::Focused(focused) => self.submit(FrontendEvent::FocusChanged {
+                focused,
+                target: self.target,
+            }),
             WindowEvent::RedrawRequested => {
                 let Some(presented) = self.presented.as_mut() else {
                     return;
                 };
-                let Some(frame) = presented.frame.as_ref() else {
-                    return;
-                };
                 let outcome = presented
-                    .renderer
-                    .present_frame(frame)
+                    .present()
                     .unwrap_or_else(|error| panic!("Android GPU presentation failed: {error}"));
-                if outcome.should_request_redraw()
+                if outcome.is_some_and(|outcome| outcome.should_request_redraw())
                     && let Some(window) = self.window.as_ref()
                 {
                     window.request_redraw();
@@ -168,13 +295,14 @@ impl ApplicationHandler for AndroidFrontend {
 /// Activity-owned state remains local to this call.
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
-    let mut builder = EventLoop::builder();
-    builder.with_android_app(app);
+    let mut builder = EventLoop::<NativeEditorWorkerEvent>::with_user_event();
+    builder.with_android_app(app.clone());
     let event_loop = builder
         .build()
         .unwrap_or_else(|error| panic!("failed to create the Android event loop: {error}"));
+    let worker_events = event_loop.create_proxy();
 
-    let mut frontend = AndroidFrontend::default();
+    let mut frontend = AndroidFrontend::new(app, worker_events);
     event_loop
         .run_app(&mut frontend)
         .unwrap_or_else(|error| panic!("Android event loop failed: {error}"));
