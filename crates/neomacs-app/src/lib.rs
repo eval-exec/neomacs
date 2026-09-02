@@ -10,3 +10,4 @@ pub mod lifecycle;
 pub mod presentation;
 pub mod runtime_image;
 pub mod session;
+pub mod startup;
