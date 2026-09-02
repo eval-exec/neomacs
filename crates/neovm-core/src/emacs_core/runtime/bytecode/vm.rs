@@ -2202,7 +2202,7 @@ impl<'a> Vm<'a> {
         nargs: usize,
         func_value: Value,
     ) -> EvalResult {
-        stacker::maybe_grow(VM_STACK_RED_ZONE, VM_STACK_SEGMENT, || {
+        crate::emacs_core::stack_growth::maybe_grow(VM_STACK_RED_ZONE, VM_STACK_SEGMENT, || {
             self.execute_from_stack_args_body(func, args_start, nargs, func_value)
         })
     }

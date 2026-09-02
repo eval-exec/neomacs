@@ -3811,7 +3811,7 @@ impl Context {
         {
             return callback(self);
         }
-        stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || callback(self))
+        super::stack_growth::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || callback(self))
     }
 
     /// Whether lexical-binding is currently enabled.

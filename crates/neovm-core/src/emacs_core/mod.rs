@@ -249,6 +249,8 @@ pub mod plist;
 pub(crate) mod position;
 #[path = "runtime/runtime_identity/mod.rs"]
 pub(crate) mod runtime_identity;
+#[path = "runtime/stack_growth/mod.rs"]
+pub(crate) mod stack_growth;
 #[path = "runtime/symbol/mod.rs"]
 pub mod symbol;
 #[path = "runtime/threads/mod.rs"]
