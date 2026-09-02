@@ -2,12 +2,18 @@ use neomacs_wgpu_runtime::SurfaceExtent;
 
 #[test]
 fn zero_width_suspends_surface_configuration() {
-    assert_eq!(SurfaceExtent::from_physical_size(0, 720), SurfaceExtent::Suspended);
+    assert_eq!(
+        SurfaceExtent::from_physical_size(0, 720),
+        SurfaceExtent::Suspended
+    );
 }
 
 #[test]
 fn zero_height_suspends_surface_configuration() {
-    assert_eq!(SurfaceExtent::from_physical_size(1280, 0), SurfaceExtent::Suspended);
+    assert_eq!(
+        SurfaceExtent::from_physical_size(1280, 0),
+        SurfaceExtent::Suspended
+    );
 }
 
 #[test]
