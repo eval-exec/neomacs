@@ -132,6 +132,67 @@ fn portable_assets_command_stages_a_deterministic_complete_runtime_bundle() {
 }
 
 #[test]
+fn android_package_contract_accepts_the_expected_archive_and_native_surface() {
+    let zip_listing = "
+32918256 Stored 32918256 0% lib/arm64-v8a/libneomacs_android.so
+42461274 Stored 42461274 0% assets/neomacs-runtime.bundle
+65 Stored 65 0% assets/neomacs-runtime.sha256
+19239790 Stored 19239790 0% assets/neomacs.portable
+65 Stored 65 0% assets/neomacs.portable.sha256
+";
+    android_package::validate_zip_listing(zip_listing).expect("valid APK entries");
+
+    let badging = "
+package: name='org.neomacs' versionCode='1' versionName='0.0.16' compileSdkVersion='36'
+minSdkVersion:'24'
+targetSdkVersion:'36'
+launchable-activity: name='com.google.androidgamesdk.GameActivity'
+native-code: 'arm64-v8a'
+";
+    android_package::validate_badging(badging).expect("valid Android manifest");
+
+    let elf = "
+Class: ELF64
+Machine: AArch64
+LOAD 0x000000 0x0 0x0 0x100 0x100 R 0x4000
+LOAD 0x004000 0x4000 0x4000 0x100 0x100 R E 0x4000
+0x1 (NEEDED) Shared library: [libdl.so]
+0x1 (NEEDED) Shared library: [libandroid.so]
+0x1 (NEEDED) Shared library: [liblog.so]
+0x1 (NEEDED) Shared library: [libm.so]
+0x1 (NEEDED) Shared library: [libc.so]
+1: 0 1 FUNC GLOBAL DEFAULT 1 android_main
+2: 0 1 FUNC GLOBAL DEFAULT 1 GameActivity_onCreate
+3: 0 1 FUNC GLOBAL DEFAULT 1 Java_com_google_androidgamesdk_GameActivity_initializeNativeCode
+";
+    android_package::validate_elf_report(elf).expect("valid Android native library");
+}
+
+#[test]
+fn android_package_contract_rejects_compressed_assets_and_host_dependencies() {
+    let compressed = "
+1 Defl:N 1 0% lib/arm64-v8a/libneomacs_android.so
+1 Stored 1 0% assets/neomacs-runtime.bundle
+1 Stored 1 0% assets/neomacs-runtime.sha256
+1 Stored 1 0% assets/neomacs.portable
+1 Stored 1 0% assets/neomacs.portable.sha256
+";
+    assert!(android_package::validate_zip_listing(compressed).is_err());
+
+    let host_dependency = "
+Class: ELF64
+Machine: AArch64
+LOAD 0 0 0 0 0 R 0x4000
+0x1 (NEEDED) Shared library: [libc.so]
+0x1 (NEEDED) Shared library: [libstdc++.so]
+1: 0 1 FUNC GLOBAL DEFAULT 1 android_main
+2: 0 1 FUNC GLOBAL DEFAULT 1 GameActivity_onCreate
+3: 0 1 FUNC GLOBAL DEFAULT 1 Java_com_google_androidgamesdk_GameActivity_initializeNativeCode
+";
+    assert!(android_package::validate_elf_report(host_dependency).is_err());
+}
+
+#[test]
 fn nix_runtime_closure_includes_the_cxx_standard_library() {
     let dependencies = include_str!(concat!(
         env!("CARGO_WORKSPACE_DIR"),
