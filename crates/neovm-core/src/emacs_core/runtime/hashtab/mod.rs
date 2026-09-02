@@ -251,43 +251,34 @@ fn emacs_sxhash_overlay(value: &Value, depth: usize) -> Option<u64> {
 /// GNU `sxhash_obj` (src/fns.c:5525-5536) sends a `PVEC_CLOSURE` through
 /// `sxhash_vector` like any pseudovector `internal_equal` walks, so two
 /// `equal` byte-code objects hash alike and share an `equal` hash-table
-/// bucket.  The slots are the GNU closure slots in GNU's order (see
-/// `bytecode_equal` in `value/mod.rs`); `sxhash_vector` folds at most
-/// `SXHASH_MAX_LEN` of them over a hash seeded with the slot count.
+/// bucket.  The elements are [`ByteCodeFunction::structural_slots`] -- the
+/// same sequence `equal` compares, so everything `equal` distinguishes,
+/// including a captured environment beside the constants, moves the hash --
+/// folded like `sxhash_vector`: seeded with the slot count, at most
+/// `SXHASH_MAX_LEN` elements.
 fn emacs_sxhash_bytecode(value: &Value, depth: usize) -> Option<u64> {
+    use crate::emacs_core::bytecode::ByteCodeSlot;
     let bc = value.get_bytecode_data()?;
-    let obj = |v: &Value| emacs_sxhash_obj_with_fallback(v, depth + 1);
-    let len = bc.observable_closure_slot_count();
-    let mut hash = len as u64;
-    for index in 0..len.min(SXHASH_MAX_LEN) {
-        let slot_hash = match index {
-            0 => obj(&bc.arglist),
-            1 => match &bc.gnu_bytecode_bytes {
-                Some(bytes) => emacs_hash_char_array(bytes.as_slice()),
-                None => obj(&Value::NIL),
-            },
-            2 => match bc.env {
-                Some(env) => obj(&env),
-                None => {
-                    let constants = bc.constants.as_slice();
-                    let mut vector_hash = constants.len() as u64;
-                    for constant in constants.iter().take(SXHASH_MAX_LEN) {
-                        vector_hash = sxhash_combine(
-                            vector_hash,
-                            emacs_sxhash_obj_with_fallback(constant, depth + 2),
-                        );
-                    }
-                    vector_hash
+    let mut hash = bc.observable_closure_slot_count() as u64;
+    for slot in bc.structural_slots().into_iter().take(SXHASH_MAX_LEN) {
+        let slot_hash = match slot {
+            ByteCodeSlot::Value(value) => emacs_sxhash_obj_with_fallback(&value, depth + 1),
+            ByteCodeSlot::Bytes(bytes) => emacs_hash_char_array(bytes),
+            ByteCodeSlot::Ops(ops) => emacs_hash_char_array(format!("{ops:?}").as_bytes()),
+            ByteCodeSlot::Values(values) => {
+                let mut vector_hash = values.len() as u64;
+                for value in values.iter().take(SXHASH_MAX_LEN) {
+                    vector_hash = sxhash_combine(
+                        vector_hash,
+                        emacs_sxhash_obj_with_fallback(value, depth + 2),
+                    );
                 }
-            },
-            3 => obj(&Value::fixnum(i64::from(bc.max_stack))),
-            4 => match (bc.doc_form, &bc.docstring) {
-                (Some(form), _) => obj(&form),
-                (None, Some(doc)) => emacs_hash_char_array(doc.as_bytes()),
-                (None, None) => obj(&Value::NIL),
-            },
-            5 => obj(&bc.interactive.unwrap_or(Value::NIL)),
-            extra => obj(&bc.extra_slots.get(extra - 6).copied().unwrap_or(Value::NIL)),
+                vector_hash
+            }
+            // GNU `sxhash_string` hashes the bytes; equal strings have equal
+            // bytes whatever their representation.
+            ByteCodeSlot::Text(text) => emacs_hash_char_array(text.as_bytes()),
+            ByteCodeSlot::Absent => 42,
         };
         hash = sxhash_combine(hash, slot_hash);
     }

@@ -970,3 +970,259 @@ fn equal_compares_byte_code_functions_element_wise_like_gnu_closures() {
         ]
     );
 }
+
+/// Build a byte-code object the way the VM and `make-closure` do, so the
+/// probes below can reach states `make-byte-code` cannot: a captured
+/// lexical environment (`Op::MakeClosure` stores `Some(lexenv)`, and that
+/// environment is `nil` for a closure over no variables), a docstring in
+/// either string representation, and a function with no retained GNU
+/// bytecode string.
+fn byte_code_probe(
+    env: Option<Value>,
+    docstring: Option<crate::heap_types::LispString>,
+    gnu_bytes: Option<Vec<u8>>,
+    ops: Vec<crate::emacs_core::bytecode::Op>,
+    constants: Vec<Value>,
+) -> Value {
+    use crate::emacs_core::bytecode::ByteCodeFunction;
+    Value::make_bytecode(ByteCodeFunction {
+        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+        ops_sealed: true,
+        stack_verified: false,
+        ops,
+        constants: constants.into(),
+        max_stack: 1,
+        params: LambdaParams::simple(vec![]),
+        arglist: Value::fixnum(257),
+        lexical: true,
+        env,
+        gnu_byte_offset_map: None,
+        gnu_bytecode_bytes: gnu_bytes.map(crate::tagged::header::LispByteVec::owned),
+        docstring,
+        doc_form: None,
+        interactive: None,
+        closure_slot_count: 4,
+        extra_slots: Vec::new(),
+        #[cfg(feature = "jit")]
+        runtime: Some(crate::emacs_core::jit::Runtime::new()),
+        lazy_gnu_code: None,
+    })
+}
+
+/// `(equal A B)`, whether `sxhash-equal` agrees, and whether an `equal`
+/// hash table keyed by A finds B -- the three surfaces that must agree.
+fn byte_code_probe_agreement(eval: &mut Context, a: Value, b: Value) -> (bool, bool, bool) {
+    eval.obarray.set_symbol_value("neomacs-probe-a", a);
+    eval.obarray.set_symbol_value("neomacs-probe-b", b);
+    let result = eval
+        .eval_str(
+            r#"
+(list (equal neomacs-probe-a neomacs-probe-b)
+      (= (sxhash-equal neomacs-probe-a) (sxhash-equal neomacs-probe-b))
+      (let ((table (make-hash-table :test 'equal)))
+        (puthash neomacs-probe-a 'found table)
+        (eq (gethash neomacs-probe-b table) 'found)))"#,
+        )
+        .expect("probe should evaluate");
+    let values = list_to_vec(&result).expect("probe list");
+    (
+        !values[0].is_nil(),
+        !values[1].is_nil(),
+        !values[2].is_nil(),
+    )
+}
+
+fn simple_ops() -> Vec<crate::emacs_core::bytecode::Op> {
+    use crate::emacs_core::bytecode::Op;
+    vec![Op::Constant(0), Op::Return]
+}
+
+/// A closure that captured an empty lexical environment (`env: Some(nil)`)
+/// is observably different from a function with no environment (`aref`
+/// slot 2 answers nil versus the constants vector), so `equal` says so --
+/// and the `equal`-table key must say the same, or two unequal objects
+/// share a bucket.
+#[test]
+fn equal_table_keys_keep_the_presence_of_a_captured_environment() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let consts = || vec![Value::fixnum(42)];
+    let bytes = || Some(vec![0xC0, 0x87]);
+
+    let absent = byte_code_probe(None, None, bytes(), simple_ops(), consts());
+    let captured_nil = byte_code_probe(Some(Value::NIL), None, bytes(), simple_ops(), consts());
+    let captured_nil_twin =
+        byte_code_probe(Some(Value::NIL), None, bytes(), simple_ops(), consts());
+    let captured_w = byte_code_probe(
+        Some(Value::symbol("w")),
+        None,
+        bytes(),
+        simple_ops(),
+        consts(),
+    );
+
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, absent, captured_nil),
+        (false, false, false),
+        "no environment vs a captured nil environment"
+    );
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, captured_nil, captured_nil_twin),
+        (true, true, true)
+    );
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, captured_nil, captured_w),
+        (false, false, false),
+        "the captured environment participates in equal, sxhash and the key"
+    );
+}
+
+/// GNU string equality is character count, byte count and contents
+/// (src/fns.c `internal_equal_1`, Lisp_String); the unibyte/multibyte
+/// representation flag is not part of it.  An ASCII docstring stored
+/// unibyte equals the same text stored multibyte -- verified with GNU
+/// Emacs: `(equal (make-byte-code 257 "\300\207" [42] 2 "doc")
+/// (make-byte-code 257 "\300\207" [42] 2 (string-to-multibyte "doc")))` is t
+/// -- while a raw-byte unibyte string and the multibyte string with the
+/// same bytes differ in character count and are not equal.
+#[test]
+fn docstrings_compare_with_gnu_string_equality_not_representation() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    use crate::heap_types::LispString;
+    let consts = || vec![Value::fixnum(42)];
+    let bytes = || Some(vec![0xC0, 0x87]);
+
+    let unibyte = byte_code_probe(
+        None,
+        Some(LispString::from_unibyte(b"doc".to_vec())),
+        bytes(),
+        simple_ops(),
+        consts(),
+    );
+    let multibyte = byte_code_probe(
+        None,
+        Some(LispString::new("doc".to_owned(), true)),
+        bytes(),
+        simple_ops(),
+        consts(),
+    );
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, unibyte, multibyte),
+        (true, true, true),
+        "same characters, same bytes: equal in GNU"
+    );
+
+    let raw_bytes = byte_code_probe(
+        None,
+        Some(LispString::from_unibyte(vec![0xC3, 0xA9])),
+        bytes(),
+        simple_ops(),
+        consts(),
+    );
+    let e_acute = byte_code_probe(
+        None,
+        Some(LispString::new("\u{e9}".to_owned(), true)),
+        bytes(),
+        simple_ops(),
+        consts(),
+    );
+    // GNU `sxhash_string` hashes the bytes, so these two collide in the
+    // hash -- legal for unequal objects -- while `equal` and the table key
+    // both tell them apart by character count.
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, raw_bytes, e_acute),
+        (false, true, false),
+        "two raw bytes are two characters; one multibyte character is one"
+    );
+}
+
+/// A function with no retained GNU bytecode string (the `byte-code` subr's
+/// transient functions, pdump stubs) has only its decoded instructions to
+/// compare: equal instructions and constants are equal, and different
+/// instructions are not, even though GNU's slot 1 would be nil for both.
+#[test]
+fn functions_without_gnu_bytes_compare_their_decoded_instructions() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    use crate::emacs_core::bytecode::Op;
+    let consts = || vec![Value::fixnum(42)];
+
+    let a = byte_code_probe(None, None, None, simple_ops(), consts());
+    let b = byte_code_probe(None, None, None, simple_ops(), consts());
+    let other_ops = byte_code_probe(
+        None,
+        None,
+        None,
+        vec![Op::Constant(0), Op::Constant(0), Op::Return],
+        consts(),
+    );
+    let with_bytes = byte_code_probe(None, None, Some(vec![0xC0, 0x87]), simple_ops(), consts());
+
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, a, b),
+        (true, true, true)
+    );
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, a, other_ops),
+        (false, false, false)
+    );
+    assert_eq!(
+        byte_code_probe_agreement(&mut eval, a, with_bytes),
+        (false, false, false),
+        "retained bytes versus none is a different object"
+    );
+}
+
+/// `sxhash_obj` hashes every slot `internal_equal` walks (src/fns.c:5525):
+/// the constants vector and the captured environment both move the hash.
+#[test]
+fn sxhash_equal_folds_constants_and_the_captured_environment() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let bytes = || Some(vec![0xC0, 0x87]);
+    let hash = |eval: &mut Context, value: Value| -> i64 {
+        eval.obarray.set_symbol_value("neomacs-probe-a", value);
+        eval.eval_str("(sxhash-equal neomacs-probe-a)")
+            .expect("sxhash")
+            .as_fixnum()
+            .expect("fixnum hash")
+    };
+
+    let base = byte_code_probe(
+        Some(Value::NIL),
+        None,
+        bytes(),
+        simple_ops(),
+        vec![Value::fixnum(1)],
+    );
+    let other_constants = byte_code_probe(
+        Some(Value::NIL),
+        None,
+        bytes(),
+        simple_ops(),
+        vec![Value::fixnum(2)],
+    );
+    let other_env = byte_code_probe(
+        Some(Value::list(vec![Value::cons(
+            Value::symbol("x"),
+            Value::fixnum(1),
+        )])),
+        None,
+        bytes(),
+        simple_ops(),
+        vec![Value::fixnum(1)],
+    );
+
+    let base_hash = hash(&mut eval, base);
+    assert_ne!(
+        base_hash,
+        hash(&mut eval, other_constants),
+        "constants participate"
+    );
+    assert_ne!(
+        base_hash,
+        hash(&mut eval, other_env),
+        "the environment participates"
+    );
+}

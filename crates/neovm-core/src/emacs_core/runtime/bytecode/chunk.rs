@@ -122,6 +122,23 @@ fn arglist_value_from_params(params: &LambdaParams) -> Value {
     Value::list(elements)
 }
 
+/// One element of [`ByteCodeFunction::structural_slots`].
+#[derive(Clone, Copy, Debug)]
+pub enum ByteCodeSlot<'a> {
+    /// A Lisp value compared, hashed and keyed as any other.
+    Value(Value),
+    /// The GNU bytecode string, byte-exact.
+    Bytes(&'a [u8]),
+    /// Decoded instructions of a function with no retained GNU bytes.
+    Ops(&'a [Op]),
+    /// The constants vector, element-wise like a Lisp vector.
+    Values(&'a [Value]),
+    /// A docstring, under GNU string equality: characters, bytes, contents.
+    Text(&'a LispString),
+    /// An optional slot that is not there.
+    Absent,
+}
+
 /// A compiled bytecode function.
 #[derive(Debug)]
 pub struct ByteCodeFunction {
@@ -615,6 +632,59 @@ impl ByteCodeFunction {
                 .unwrap_or(0),
             None => self.gnu_byte_offset_map.as_ref().map_or(0, Vec::capacity),
         }
+    }
+
+    /// The structural view of this function: GNU's closure slots, in GNU's
+    /// order, plus the one field GNU keeps inside a slot and this port keeps
+    /// beside it.
+    ///
+    /// GNU's `internal_equal_1` compares a `PVEC_CLOSURE` element-wise
+    /// (src/fns.c:2984-2998 in emacs-31.1) and `sxhash_obj` hashes it through
+    /// `sxhash_vector` (:5525-5536); `equal` hash tables therefore key on the
+    /// same elements.  Neomacs stores those elements in typed fields, so
+    /// `equal`, its fallible twin, `sxhash-equal` and the `equal`-table key
+    /// all read THIS sequence rather than each re-deriving the schema:
+    ///
+    /// | index | GNU slot            | here                                   |
+    /// |-------|---------------------|----------------------------------------|
+    /// | 0     | arglist             | `Value`                                |
+    /// | 1     | bytecode string     | `Bytes`, or `Ops` when none is retained|
+    /// | 2     | constants vector    | `Values`                               |
+    /// | 3     | (inside slot 2)     | captured `env`: `Value`, else `Absent` |
+    /// | 4     | max stack depth     | `Value` (a fixnum)                     |
+    /// | 5     | docstring / form    | `Text`, `Value`, or `Absent`           |
+    /// | 6     | interactive spec    | `Value` or `Absent`                    |
+    /// | 7..   | `&rest ELEMENTS`    | `Value` each                           |
+    ///
+    /// `Absent` is distinct from a present `nil`: `Op::MakeClosure` stores
+    /// `Some(lexenv)`, and a closure over no variables has a present, `nil`
+    /// environment that `(aref FN 2)` reports as `nil` rather than as the
+    /// constants vector.  A function with no retained GNU bytes compares its
+    /// decoded instructions instead, so two functions with different code are
+    /// never equal even though GNU's slot 1 would be `nil` for both.
+    pub(crate) fn structural_slots(&self) -> Vec<ByteCodeSlot<'_>> {
+        let mut slots = Vec::with_capacity(7 + self.extra_slots.len());
+        slots.push(ByteCodeSlot::Value(self.arglist));
+        slots.push(match &self.gnu_bytecode_bytes {
+            Some(bytes) => ByteCodeSlot::Bytes(bytes.as_slice()),
+            None => ByteCodeSlot::Ops(&self.ops),
+        });
+        slots.push(ByteCodeSlot::Values(self.constants.as_slice()));
+        slots.push(self.env.map_or(ByteCodeSlot::Absent, ByteCodeSlot::Value));
+        slots.push(ByteCodeSlot::Value(Value::fixnum(i64::from(
+            self.max_stack,
+        ))));
+        slots.push(match (self.doc_form, &self.docstring) {
+            (Some(form), _) => ByteCodeSlot::Value(form),
+            (None, Some(doc)) => ByteCodeSlot::Text(doc),
+            (None, None) => ByteCodeSlot::Absent,
+        });
+        slots.push(
+            self.interactive
+                .map_or(ByteCodeSlot::Absent, ByteCodeSlot::Value),
+        );
+        slots.extend(self.extra_slots.iter().copied().map(ByteCodeSlot::Value));
+        slots
     }
 
     pub fn observable_closure_slot_count(&self) -> usize {
