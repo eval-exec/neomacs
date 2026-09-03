@@ -1,7 +1,7 @@
 //! WebView texture cache for wgpu rendering.
 
+use crate::clock::Instant;
 use std::collections::HashMap;
-use std::time::Instant;
 
 use neomacs_display_protocol::types::WebViewId;
 

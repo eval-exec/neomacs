@@ -16,6 +16,7 @@
 //! composes the accessor functions into the module, this side only keeps the
 //! name -> slot table so [`FramePost::set_uniform`] can update values live.
 
+use crate::clock::Instant;
 use std::collections::HashMap;
 
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample, observe_platform_now};

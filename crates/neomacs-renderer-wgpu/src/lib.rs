@@ -5,6 +5,7 @@
 // structs is a separate refactor, so this bulk category is allowed crate-wide.
 #![allow(clippy::too_many_arguments)]
 
+mod clock;
 pub mod device_request;
 pub mod external_buffer;
 pub mod frame_post;
