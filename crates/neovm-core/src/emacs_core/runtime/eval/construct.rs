@@ -84,6 +84,7 @@ impl Context {
         ev.kmacro = KmacroManager::new();
         ev.command_loop = crate::keyboard::CommandLoop::default();
         ev.input_rx = None;
+        ev.host_input_wait_backend = None;
         ev.eval_task_rx = None;
         ev.redisplay_fn = None;
         ev.mode_line_display_flow = None;
@@ -2249,6 +2250,7 @@ impl Context {
             kmacro: KmacroManager::new(),
             command_loop,
             input_rx: None,
+            host_input_wait_backend: None,
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,

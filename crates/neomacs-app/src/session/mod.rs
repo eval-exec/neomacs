@@ -22,6 +22,7 @@ use std::rc::Rc;
 use crossbeam_channel::{Sender, unbounded};
 use neomacs_display_protocol::SealedFramePresentation;
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::keyboard::HostInputWaitBackend;
 
 use crate::presentation::{EditorPresentationRuntime, FramePublishResult, PresentationMetrics};
 
@@ -98,6 +99,20 @@ impl EditorSession {
             &self.frame_tx,
             self.notify_frontend.as_ref(),
         )
+    }
+
+    /// Install the host suspension boundary used while this session waits for
+    /// frontend input.
+    ///
+    /// Browser Workers use this to bridge the blocking GNU command loop to
+    /// JSPI or an Atomics mailbox. Events still enter through the
+    /// [`FrontendInputPort`], so host-specific wake mechanics cannot bypass
+    /// the shared event validation and translation path.
+    pub fn install_host_input_wait_backend(
+        &mut self,
+        backend: impl HostInputWaitBackend + 'static,
+    ) {
+        self.evaluator.install_host_input_wait_backend(backend);
     }
 }
 

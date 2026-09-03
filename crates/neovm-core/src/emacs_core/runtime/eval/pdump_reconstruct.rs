@@ -145,6 +145,7 @@ impl Context {
             kmacro,
             command_loop: crate::keyboard::CommandLoop::new(),
             input_rx: None,
+            host_input_wait_backend: None,
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
