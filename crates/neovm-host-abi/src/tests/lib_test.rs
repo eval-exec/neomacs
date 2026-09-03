@@ -194,6 +194,10 @@ fn wasm_profile_rejects_native_process_facilities() {
     let profile = HostProfile::WASM;
 
     assert_eq!(profile.kind(), HostKind::Wasm);
+    assert_eq!(
+        profile.kind().process_environment(),
+        ProcessEnvironmentModel::Empty,
+    );
     assert_eq!(profile.processes(), ProcessModel::Unavailable);
     assert_eq!(
         profile.require(HostOperation::SpawnProcess),
@@ -216,6 +220,10 @@ fn android_profile_distinguishes_sandbox_restriction_from_absence() {
     let profile = HostProfile::android();
 
     assert_eq!(profile.kind(), HostKind::Android);
+    assert_eq!(
+        profile.kind().process_environment(),
+        ProcessEnvironmentModel::InheritedNative,
+    );
     assert_eq!(profile.processes(), ProcessModel::AndroidRestricted);
     assert_eq!(
         profile.require(HostOperation::SpawnProcess),

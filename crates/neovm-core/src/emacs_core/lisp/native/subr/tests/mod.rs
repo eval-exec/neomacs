@@ -4,6 +4,7 @@ use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::Value;
 use crate::tagged::header::SubrFn;
 
+mod native_host;
 mod subrs;
 mod target_filtered;
 
@@ -44,6 +45,27 @@ fn target_filtered_batch_can_represent_no_subrs_on_this_target() {
 
     let mut ctx = Context::new();
     target_filtered::register_subrs(&mut ctx);
+}
+
+#[test]
+fn native_host_batch_follows_the_product_host() {
+    let mut ctx = Context::new_for_host(neovm_host_abi::HostKind::Wasm);
+
+    native_host::register_subrs(&mut ctx, neovm_host_abi::HostKind::Wasm);
+
+    assert!(
+        ctx.eval_str("(fboundp 'test-native-host-zero)")
+            .expect("fboundp should inspect the browser host surface")
+            .is_nil()
+    );
+
+    let mut ctx = Context::new_for_host(neovm_host_abi::HostKind::Desktop);
+    native_host::register_subrs(&mut ctx, neovm_host_abi::HostKind::Desktop);
+    assert!(
+        ctx.eval_str("(fboundp 'test-native-host-zero)")
+            .expect("fboundp should inspect the desktop host surface")
+            .is_truthy()
+    );
 }
 
 #[test]

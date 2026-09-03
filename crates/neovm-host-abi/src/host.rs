@@ -14,6 +14,21 @@ pub enum HostKind {
 }
 
 impl HostKind {
+    /// Product host represented by the current compilation target.
+    pub const CURRENT: Self = std::cfg_select! {
+        target_family = "wasm" => { Self::Wasm }
+        target_os = "android" => { Self::Android }
+        _ => { Self::Desktop }
+    };
+
+    /// Source of the Lisp-visible environment inherited at editor startup.
+    pub const fn process_environment(self) -> ProcessEnvironmentModel {
+        match self {
+            Self::Desktop | Self::Android => ProcessEnvironmentModel::InheritedNative,
+            Self::Wasm => ProcessEnvironmentModel::Empty,
+        }
+    }
+
     const fn product_name(self) -> &'static str {
         match self {
             Self::Desktop => "neomacs",
@@ -21,6 +36,15 @@ impl HostKind {
             Self::Wasm => "neomacs-wasm",
         }
     }
+}
+
+/// Source of `initial-environment` and the initial `process-environment`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessEnvironmentModel {
+    /// Inherit the native process environment supplied by the operating system.
+    InheritedNative,
+    /// The embedding host has no native process environment.
+    Empty,
 }
 
 /// How user-visible documents are addressed by the host.
