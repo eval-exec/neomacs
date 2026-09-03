@@ -40,6 +40,76 @@ fn lisp_directory_primitives_use_the_context_filesystem() {
     );
 }
 
+#[test]
+fn lisp_metadata_and_directory_mutations_share_the_context_filesystem() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .create_directory(std::path::Path::new("/neomacs-fake"), false)
+        .expect("seed virtual home mount");
+    eval.install_editor_file_system(Box::new(filesystem));
+
+    let directory = Value::string("/neomacs-fake/notes");
+    let draft = Value::string("/neomacs-fake/notes/draft");
+    let final_name = Value::string("/neomacs-fake/notes/final");
+    builtin_make_directory_internal(&mut eval, vec![directory])
+        .expect("create directory through installed filesystem");
+    eval.buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert("persistent text");
+    builtin_write_region(&mut eval, vec![Value::NIL, Value::NIL, draft])
+        .expect("write file through installed filesystem");
+
+    assert!(
+        builtin_file_directory_p(&mut eval, vec![directory])
+            .expect("query virtual directory")
+            .is_t()
+    );
+    assert!(
+        builtin_file_regular_p(&mut eval, vec![draft])
+            .expect("query virtual file")
+            .is_t()
+    );
+    let entries =
+        builtin_directory_files(&mut eval, vec![directory]).expect("enumerate virtual directory");
+    let entry_names = list_to_vec(&entries)
+        .expect("directory-files returns a list")
+        .into_iter()
+        .map(|entry| {
+            entry
+                .as_utf8_str()
+                .expect("virtual directory entry is UTF-8")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entry_names, vec![".", "..", "draft"]);
+
+    builtin_rename_file(&mut eval, vec![draft, final_name])
+        .expect("rename through installed filesystem");
+    assert!(
+        builtin_file_exists_p(&mut eval, vec![draft])
+            .expect("query old virtual path")
+            .is_nil()
+    );
+    assert!(
+        builtin_file_exists_p(&mut eval, vec![final_name])
+            .expect("query renamed virtual path")
+            .is_t()
+    );
+
+    builtin_delete_file_internal(&mut eval, vec![final_name])
+        .expect("delete file through installed filesystem");
+    builtin_delete_directory_internal(&mut eval, vec![directory])
+        .expect("delete directory through installed filesystem");
+    assert!(
+        builtin_file_exists_p(&mut eval, vec![directory])
+            .expect("query deleted virtual directory")
+            .is_nil()
+    );
+}
+
 thread_local! {
     /// Keep ALL test contexts alive across a single #[test] so that
     /// heap-backed return values from earlier `call_fileio_builtin!`
