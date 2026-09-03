@@ -98,7 +98,7 @@ impl EditorSession {
             evaluator,
             EditorPresentationRuntime::new(metrics),
             |_| SessionRedisplayAction::Publish,
-            move |frame| frame_tx.try_send(frame).is_ok(),
+            move |frame| frame_tx.try_send(Box::new(frame)).is_ok(),
             notify_frontend,
         );
 
