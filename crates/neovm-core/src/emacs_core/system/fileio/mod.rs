@@ -3688,7 +3688,9 @@ pub(crate) fn builtin_file_writable_p(eval: &mut Context, args: Vec<Value>) -> E
         .and_then(|store| store.node(&path))
     {
         Some(RuntimeResourceNode::File(_) | RuntimeResourceNode::Directory) => false,
-        None => eval.editor_file_system().access(&path, AccessMode::Write),
+        None => eval
+            .editor_file_system()
+            .access(&path, AccessMode::WriteOrCreate),
     };
     Ok(Value::bool_val(writable))
 }
