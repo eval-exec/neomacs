@@ -17,7 +17,23 @@ use super::portable_assets::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-const WEB_SOURCE_FILES: [&str; 3] = ["index.html", "main.js", "style.css"];
+const WEB_SOURCE_FILES: [&str; 4] = ["editor-worker.js", "index.html", "main.js", "style.css"];
+const EDITOR_WORKER_WASM: &str = "neomacs_wasm_worker.wasm";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WasmArtifact {
+    Frontend,
+    EditorWorker,
+}
+
+impl WasmArtifact {
+    const fn filename(self) -> &'static str {
+        match self {
+            Self::Frontend => "neomacs_wasm.wasm",
+            Self::EditorWorker => EDITOR_WORKER_WASM,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct WasmPackageOptions {
@@ -91,8 +107,10 @@ fn package(options: WasmPackageOptions) -> Result<()> {
         build_wasm(&options.repo_root)?;
     }
 
-    let input_wasm = wasm_artifact(&options.repo_root);
+    let input_wasm = wasm_artifact(&options.repo_root, WasmArtifact::Frontend);
     validate_nonempty_file(&input_wasm, "optimized neomacs-wasm artifact")?;
+    let worker_wasm = wasm_artifact(&options.repo_root, WasmArtifact::EditorWorker);
+    validate_nonempty_file(&worker_wasm, "optimized neomacs-wasm Worker artifact")?;
 
     let parent = options
         .output_dir
@@ -104,6 +122,11 @@ fn package(options: WasmPackageOptions) -> Result<()> {
         .tempdir_in(parent)?;
 
     generate_bindings(&input_wasm, staging.path())?;
+    copy_nonempty_file(
+        &worker_wasm,
+        &staging.path().join(EDITOR_WORKER_WASM),
+        "optimized neomacs-wasm Worker artifact",
+    )?;
     copy_web_sources(&options.repo_root, staging.path())?;
     copy_portable_assets(&options.portable_assets, staging.path())?;
 
@@ -183,6 +206,8 @@ fn build_wasm(repo_root: &Path) -> Result<()> {
             "--release",
             "--package",
             "neomacs-wasm",
+            "--package",
+            "neomacs-wasm-worker",
             "--target",
             "wasm32-unknown-unknown",
         ])
@@ -193,7 +218,7 @@ fn build_wasm(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn wasm_artifact(repo_root: &Path) -> PathBuf {
+pub(super) fn wasm_artifact(repo_root: &Path, artifact: WasmArtifact) -> PathBuf {
     let target_root = env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .map(|path| {
@@ -207,7 +232,7 @@ fn wasm_artifact(repo_root: &Path) -> PathBuf {
     target_root
         .join("wasm32-unknown-unknown")
         .join("release")
-        .join("neomacs_wasm.wasm")
+        .join(artifact.filename())
 }
 
 fn generate_bindings(input_wasm: &Path, output: &Path) -> Result<()> {
