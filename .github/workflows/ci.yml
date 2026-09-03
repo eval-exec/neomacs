@@ -287,6 +287,18 @@ jobs:
         shell: bash
         run: cargo xtask fresh-build --release
 
+      # loaddefs-gen deliberately warns and continues when loading a source
+      # file fails, so a successful fresh-build exit status alone cannot catch
+      # a broken clean-tree bootstrap.  Simulate Darwin without the generated
+      # tramp-loaddefs seed and require Tramp's source-loading guard to work.
+      - name: Test clean-tree Tramp loaddefs bootstrap
+        shell: bash
+        run: >-
+          "${{ matrix.binary }}" --batch -Q
+          -L lisp/net
+          -l test/lisp/net/tramp-bootstrap-tests.el
+          -f ert-run-tests-batch-and-exit
+
       - name: Run unchanged upstream GNU file-notify ERT suite
         shell: bash
         run: |
