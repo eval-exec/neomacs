@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use super::virtual_path::VirtualPath;
 use super::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileMode, FileTimestamp,
-    WriteRequest,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileMode, FileStability,
+    FileSystemSpace, FileTimestamp, WriteRequest,
 };
 
 struct Mount {
@@ -105,6 +105,7 @@ fn namespace_metadata() -> FileMetadata {
         kind: FileEntryKind::Directory,
         len: 0,
         modified: None,
+        stability: FileStability::Immutable,
         readonly: true,
     }
 }
@@ -214,6 +215,11 @@ impl EditorFileSystem for MountTableFileSystem {
         mount
             .filesystem
             .set_times(&relative, timestamp, follow_links)
+    }
+
+    fn file_system_space(&self, path: &Path) -> io::Result<FileSystemSpace> {
+        let (mount, relative) = self.route(path)?;
+        mount.filesystem.file_system_space(&relative)
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {

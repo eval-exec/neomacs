@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 mod browser_layout;
 mod memory;
 mod mounts;
+mod namespace;
 mod native;
 #[cfg(test)]
 mod tests;
@@ -15,15 +16,16 @@ mod virtual_path;
 pub use browser_layout::BrowserFileSystemLayout;
 pub use memory::MemoryFileSystem;
 pub use mounts::MountTableFileSystem;
+pub(crate) use namespace::EditorFileSystemNamespace;
 pub use native::NativeFileSystem;
 
-pub(crate) fn default_editor_file_system() -> Box<dyn EditorFileSystem> {
+pub(crate) fn default_editor_file_system() -> EditorFileSystemNamespace {
     std::cfg_select! {
         target_family = "wasm" => {
-            Box::new(MemoryFileSystem::new())
+            EditorFileSystemNamespace::new(Box::new(MemoryFileSystem::new()))
         }
         _ => {
-            Box::new(NativeFileSystem)
+            EditorFileSystemNamespace::new(Box::new(NativeFileSystem))
         }
     }
 }
@@ -114,7 +116,23 @@ pub struct FileMetadata {
     pub kind: FileEntryKind,
     pub len: u64,
     pub modified: Option<FileTimestamp>,
+    pub stability: FileStability,
     pub readonly: bool,
+}
+
+/// Whether an entry can change while the editor session is running.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileStability {
+    Mutable,
+    Immutable,
+}
+
+/// Storage capacity visible at one path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileSystemSpace {
+    pub total_bytes: i64,
+    pub free_bytes: i64,
+    pub available_bytes: i64,
 }
 
 /// Access predicate requested by a Lisp filesystem primitive.
@@ -212,6 +230,12 @@ pub trait EditorFileSystem {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "changing file timestamps is unsupported by this storage backend",
+        ))
+    }
+    fn file_system_space(&self, _path: &Path) -> io::Result<FileSystemSpace> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "filesystem capacity is unsupported by this storage backend",
         ))
     }
 
