@@ -1495,6 +1495,7 @@ fn write_bytes_to_file_with_mode(
 fn read_directory_names_lisp(
     dir: &crate::heap_types::LispString,
     runtime_resources: Option<&dyn RuntimeResourceStore>,
+    filesystem: &dyn EditorFileSystem,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
     let path = lisp_file_name_to_path_buf(dir);
     if let Some(store) = runtime_resources {
@@ -1526,22 +1527,20 @@ fn read_directory_names_lisp(
             None => {}
         }
     }
-    let entries = fs::read_dir(path).map_err(|e| DirectoryFilesError::Io {
-        action: "Opening directory",
-        err: e,
-    })?;
+    let entries = filesystem
+        .read_directory(&path)
+        .map_err(|e| DirectoryFilesError::Io {
+            action: "Opening directory",
+            err: e,
+        })?;
     let mut names = vec![
         crate::heap_types::LispString::from_unibyte(b".".to_vec()),
         crate::heap_types::LispString::from_unibyte(b"..".to_vec()),
     ];
     for entry in entries {
-        let entry = entry.map_err(|e| DirectoryFilesError::Io {
-            action: "Reading directory entry",
-            err: e,
-        })?;
         // Keep the host entry bytes intact here.  Public directory primitives
         // apply GNU's DECODE_FILE step before matching or returning names.
-        names.push(path_to_lisp_file_name(Path::new(&entry.file_name())));
+        names.push(path_to_lisp_file_name(Path::new(&entry)));
     }
     Ok(names)
 }
@@ -1568,6 +1567,7 @@ fn directory_files(
     directory_files_with_decoder(
         dir,
         None,
+        eval.editor_file_system(),
         full,
         match_regex,
         nosort,
@@ -1583,6 +1583,7 @@ fn directory_files(
 fn directory_files_with_decoder(
     dir: &crate::heap_types::LispString,
     runtime_resources: Option<&dyn RuntimeResourceStore>,
+    filesystem: &dyn EditorFileSystem,
     full: bool,
     match_regex: Option<&crate::heap_types::LispString>,
     nosort: bool,
@@ -1596,7 +1597,7 @@ fn directory_files_with_decoder(
         return Ok(Vec::new());
     }
 
-    let names = read_directory_names_lisp(dir, runtime_resources)?;
+    let names = read_directory_names_lisp(dir, runtime_resources, filesystem)?;
 
     // Emacs builds this list via `cons` while scanning readdir output.
     // That makes NOSORT results reverse the traversal order and applies COUNT
@@ -3229,6 +3230,20 @@ fn signal_existing_path_value(path: &Path, value: Value) -> Flow {
     }
 }
 
+fn signal_existing_metadata_value(metadata: FileMetadata, value: Value) -> Flow {
+    if metadata.kind == FileEntryKind::Directory {
+        signal(
+            LispCondition::FileError,
+            vec![Value::string("File is a directory"), value],
+        )
+    } else {
+        signal(
+            LispCondition::FileAlreadyExists,
+            vec![Value::string("File already exists"), value],
+        )
+    }
+}
+
 /// Faithful port of GNU `barf_or_query_if_file_exists` (`src/fileio.c`).
 ///
 /// If FILENAME exists (or `known_to_exist` is set), either signal a
@@ -3477,14 +3492,6 @@ fn access_file_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn file_directory_path(path: &Path) -> bool {
-    path.is_dir()
-}
-
-fn file_regular_path(path: &Path) -> bool {
-    path.is_file()
-}
-
 fn file_name_case_insensitive_path(path: &Path) -> bool {
     let mut probe = path.to_path_buf();
     while !probe.exists() {
@@ -3668,8 +3675,12 @@ fn delete_file_compat(filename: &str) -> Result<(), Flow> {
     }
 }
 
-fn delete_file_compat_path(path: &Path, path_value: Value) -> Result<(), Flow> {
-    match unlink_file_path(path) {
+fn delete_file_compat_path(
+    filesystem: &dyn EditorFileSystem,
+    path: &Path,
+    path_value: Value,
+) -> Result<(), Flow> {
+    match filesystem.remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
         Err(err) => Err(signal_file_action_error_value(err, "Deleting", path_value)),
@@ -3916,7 +3927,10 @@ pub(crate) fn builtin_file_directory_p(eval: &mut Context, args: Vec<Value>) -> 
     {
         Some(RuntimeResourceNode::Directory) => true,
         Some(RuntimeResourceNode::File(_)) => false,
-        None => file_directory_path(&path),
+        None => eval
+            .editor_file_system()
+            .metadata(&path, true)
+            .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory),
     };
     Ok(Value::bool_val(is_directory))
 }
@@ -3940,7 +3954,10 @@ pub(crate) fn builtin_file_regular_p(eval: &mut Context, args: Vec<Value>) -> Ev
     {
         Some(RuntimeResourceNode::File(_)) => true,
         Some(RuntimeResourceNode::Directory) => false,
-        None => file_regular_path(&path),
+        None => eval
+            .editor_file_system()
+            .metadata(&path, true)
+            .is_ok_and(|metadata| metadata.kind == FileEntryKind::File),
     };
     Ok(Value::bool_val(is_regular))
 }
@@ -4408,6 +4425,7 @@ pub(crate) fn builtin_delete_file(eval: &mut Context, args: Vec<Value>) -> EvalR
         }
     };
     delete_file_compat_path(
+        eval.editor_file_system(),
         &lisp_file_name_to_path_buf(&resolved),
         Value::heap_string(resolved),
     )?;
@@ -4424,6 +4442,7 @@ pub(crate) fn builtin_delete_file_internal(eval: &mut Context, args: Vec<Value>)
     let filename = expect_lisp_string_strict(&args[0])?;
     let resolved = resolve_filename_lisp_for_eval(eval, &filename);
     delete_file_compat_path(
+        eval.editor_file_system(),
         &lisp_file_name_to_path_buf(&resolved),
         Value::heap_string(resolved),
     )?;
@@ -4438,9 +4457,11 @@ pub(crate) fn builtin_delete_directory_internal(
     expect_args("delete-directory-internal", &args, 1)?;
     let directory = expect_lisp_string_strict(&args[0])?;
     let resolved = lisp_directory_file_name(&resolve_filename_lisp_for_eval(eval, &directory));
-    fs::remove_dir(lisp_file_name_to_path_buf(&resolved)).map_err(|err| {
-        signal_file_action_error_value(err, "Removing directory", Value::heap_string(resolved))
-    })?;
+    eval.editor_file_system()
+        .remove_directory(&lisp_file_name_to_path_buf(&resolved), false)
+        .map_err(|err| {
+            signal_file_action_error_value(err, "Removing directory", Value::heap_string(resolved))
+        })?;
     Ok(Value::NIL)
 }
 
@@ -4464,11 +4485,9 @@ pub(crate) fn builtin_delete_directory(eval: &mut Context, args: Vec<Value>) -> 
     let directory = expect_lisp_string_strict(&args[0])?;
     let directory = lisp_directory_file_name(&resolve_filename_lisp_for_eval(eval, &directory));
     let recursive = args.get(1).is_some_and(|value| value.is_truthy());
-    let result = if recursive {
-        fs::remove_dir_all(lisp_file_name_to_path_buf(&directory))
-    } else {
-        fs::remove_dir(lisp_file_name_to_path_buf(&directory))
-    };
+    let result = eval
+        .editor_file_system()
+        .remove_directory(&lisp_file_name_to_path_buf(&directory), recursive);
     result.map_err(|err| {
         signal_file_action_error_value(err, "Removing directory", Value::heap_string(directory))
     })?;
@@ -4605,24 +4624,23 @@ pub(crate) fn builtin_rename_file(eval: &mut Context, args: Vec<Value>) -> EvalR
     }
     let ok_if_exists = args.get(2).is_some_and(|value| value.is_truthy());
     let to_path = lisp_file_name_to_path_buf(&to);
-    if fs::symlink_metadata(&to_path).is_ok() && !ok_if_exists {
-        return Err(signal_existing_path_value(
-            &to_path,
+    if !ok_if_exists && let Ok(metadata) = eval.editor_file_system().metadata(&to_path, false) {
+        return Err(signal_existing_metadata_value(
+            metadata,
             Value::heap_string(to.clone()),
         ));
     }
     let from_path = lisp_file_name_to_path_buf(&from);
-    rename_path_with_cross_device_fallback(&from_path, &to_path, ok_if_exists, |from, to| {
-        fs::rename(from, to)
-    })
-    .map_err(|err| {
-        signal_file_action_error_pair_values(
-            err,
-            "Renaming",
-            Value::heap_string(from),
-            Value::heap_string(to),
-        )
-    })?;
+    eval.editor_file_system()
+        .rename(&from_path, &to_path, ok_if_exists)
+        .map_err(|err| {
+            signal_file_action_error_pair_values(
+                err,
+                "Renaming",
+                Value::heap_string(from),
+                Value::heap_string(to),
+            )
+        })?;
     Ok(Value::NIL)
 }
 
@@ -5138,6 +5156,7 @@ pub(crate) fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> E
     let files = directory_files_with_decoder(
         &dir,
         eval.runtime_resource_store(),
+        eval.editor_file_system(),
         full,
         match_pattern.as_ref(),
         nosort,
