@@ -7,9 +7,14 @@ use super::portable_assets::{
     RUNTIME_RESOURCE_ID_ASSET, sha256_file,
 };
 use super::wasm_package::{
-    WasmArtifact, WasmPackageOptions, validate_output_destination, validate_portable_assets,
-    wasm_artifact,
+    WEB_SOURCE_FILES, WasmArtifact, WasmPackageOptions, validate_output_destination,
+    validate_portable_assets, wasm_artifact,
 };
+
+#[test]
+fn wasm_package_includes_the_browser_text_service_adapter() {
+    assert!(WEB_SOURCE_FILES.contains(&"browser-input.mjs"));
+}
 
 #[test]
 fn wasm_package_options_require_portable_assets_and_output_directory() {
