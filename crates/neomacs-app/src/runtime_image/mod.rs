@@ -9,6 +9,8 @@ std::cfg_select! {
         };
     }
 }
+mod portable;
+pub use portable::{AuthenticatedPortableRuntimeImage, PortableRuntimeImageError};
 
 use std::fmt::{Display, Formatter};
 use std::path::Path;
@@ -82,7 +84,7 @@ impl RuntimeImageSource<'_> {
     ///
     /// The store is installed before image finalization, so every load during
     /// finalization and the subsequent editor session sees the same root.
-    pub fn load_for_with_mounted_runtime_resources(
+    fn load_authenticated_browser_image(
         self,
         host: HostProfile,
         resources: MountedRuntimeResources,

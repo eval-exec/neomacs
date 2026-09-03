@@ -10,6 +10,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 let memory = null;
 let runtimeImage = null;
+let runtimeImageId = null;
 let runtimeResourceBundle = null;
 let runtimeResourceId = null;
 let startup = null;
@@ -121,6 +122,9 @@ function hostImports(waitForInput) {
       copy_startup: (destination, capacity) => copyToMemory(startup, destination, capacity),
       runtime_image_len: () => runtimeImage?.byteLength ?? 0,
       copy_runtime_image: (destination, capacity) => copyToMemory(runtimeImage, destination, capacity),
+      runtime_image_id_len: () => runtimeImageId?.byteLength ?? 0,
+      copy_runtime_image_id: (destination, capacity) =>
+        copyToMemory(runtimeImageId, destination, capacity),
       runtime_resource_bundle_len: () => runtimeResourceBundle?.byteLength ?? 0,
       copy_runtime_resource_bundle: (destination, capacity) =>
         copyToMemory(runtimeResourceBundle, destination, capacity),
@@ -167,6 +171,7 @@ async function start(message) {
   startup = encoder.encode(JSON.stringify(message.startup));
   const assets = await fetchEditorWorkerAssets(message);
   runtimeImage = assets.runtimeImage;
+  runtimeImageId = assets.runtimeImageId;
   runtimeResourceBundle = assets.runtimeResourceBundle;
   runtimeResourceId = assets.runtimeResourceId;
 
