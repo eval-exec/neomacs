@@ -15,6 +15,31 @@ fn bootstrap_eval(src: &str) -> Vec<String> {
     runtime_startup_eval_all(src)
 }
 
+#[test]
+fn lisp_directory_primitives_use_the_context_filesystem() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .create_directory(std::path::Path::new("/neomacs-fake"), false)
+        .expect("seed virtual home mount");
+    eval.install_editor_file_system(Box::new(filesystem));
+
+    let directory = Value::string("/neomacs-fake/.emacs.d");
+    assert!(
+        builtin_file_accessible_directory_p(&mut eval, vec![directory])
+            .expect("query missing virtual directory")
+            .is_nil()
+    );
+    builtin_make_directory_internal(&mut eval, vec![directory])
+        .expect("create directory through installed filesystem");
+    assert!(
+        builtin_file_accessible_directory_p(&mut eval, vec![directory])
+            .expect("query created virtual directory")
+            .is_t()
+    );
+}
+
 thread_local! {
     /// Keep ALL test contexts alive across a single #[test] so that
     /// heap-backed return values from earlier `call_fileio_builtin!`
