@@ -1695,7 +1695,7 @@ pub(crate) fn eager_expand_toplevel_forms(
     let mutation_epoch_before = eval.macro_expansion_mutation_epoch();
     // Step 1: one-level expand — val = (internal-macroexpand-for-load val nil)
     // Note: real Emacs mutates `val` here; we shadow it.
-    let step1_start = crate::host_time::Instant::now();
+    let step1_start = crate::host::time::Instant::now();
     let step1_roots = eval.save_specpdl_roots();
     eval.push_specpdl_root(form_value);
     eval.push_specpdl_root(macroexpand_fn);
@@ -1754,7 +1754,7 @@ pub(crate) fn eager_expand_toplevel_forms(
     eval.push_specpdl_root(val);
     eval.push_specpdl_root(macroexpand_fn);
     eval.push_specpdl_root(original_form);
-    let t3 = crate::host_time::Instant::now();
+    let t3 = crate::host::time::Instant::now();
     // Call internal-macroexpand-for-load(val, t) — full-p=t means deep expand
     let expanded = match eval.apply2(macroexpand_fn, val, Value::T) {
         Ok(v) => v,
@@ -1803,7 +1803,7 @@ pub(crate) fn eager_expand_eval(
         &mut |ctx, _original, expanded, _requires_eager_replay| {
             let roots = ctx.save_specpdl_roots();
             ctx.push_specpdl_root(expanded);
-            let t4 = crate::host_time::Instant::now();
+            let t4 = crate::host::time::Instant::now();
             let value = ctx.eval_value(&expanded).map_err(map_flow);
             let d4 = t4.elapsed();
             ctx.note_eager_macro_perf_step4(d4);
@@ -2214,7 +2214,7 @@ fn streaming_readevalloop_eager_expand_eval(
     eval.push_specpdl_root(macroexpand);
 
     // Step 1: one-level expand (full_p = nil)
-    let step1_start = crate::host_time::Instant::now();
+    let step1_start = crate::host::time::Instant::now();
     let expanded = match eval.apply2(macroexpand, form, Value::NIL) {
         Ok(v) => v,
         Err(_) => {
@@ -2264,7 +2264,7 @@ fn streaming_readevalloop_eager_expand_eval_inner(
     }
 
     // Step 3: full expand (full_p = t), then eval
-    let step3_start = crate::host_time::Instant::now();
+    let step3_start = crate::host::time::Instant::now();
     let fully_expanded = match eval.apply2(macroexpand, expanded, Value::T) {
         Ok(v) => v,
         Err(_) => {
@@ -2277,7 +2277,7 @@ fn streaming_readevalloop_eager_expand_eval_inner(
 
     let roots = eval.save_specpdl_roots();
     eval.push_specpdl_root(fully_expanded);
-    let step4_start = crate::host_time::Instant::now();
+    let step4_start = crate::host::time::Instant::now();
     let result = eval.eval_sub(fully_expanded).map_err(map_flow);
     eval.note_eager_macro_perf_step4(step4_start.elapsed());
     eval.restore_specpdl_roots(roots);
@@ -3566,11 +3566,6 @@ fn bootstrap_source_newest_mtime(stats: &[BootstrapSourceStat]) -> u128 {
         .unwrap_or(0)
 }
 
-fn system_time_nanos(time: std::time::SystemTime) -> u128 {
-    time.duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos())
-}
-
 /// Read the cheap stat facts for each already-collected source file.
 ///
 /// A file whose metadata cannot be read contributes zeroed facts, which simply
@@ -3712,7 +3707,9 @@ fn bootstrap_fingerprint_memo_lookup(
 /// test processes race here; a loser simply overwrites with its own equally
 /// valid view, and a reader only ever sees a complete file.
 fn bootstrap_fingerprint_memo_store(memo_path: &Path, stat_key: &str, fingerprint: &str) {
-    let recorded = system_time_nanos(std::time::SystemTime::now());
+    let recorded = crate::host::time::wall_time_since_unix_epoch()
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
     let mut lines = vec![format!("{stat_key}\t{recorded}\t{fingerprint}")];
     if let Ok(existing) = fs::read_to_string(memo_path) {
         for line in existing.lines() {
@@ -6577,7 +6574,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
         project_root: &Path,
         log_context: &str,
     ) -> Result<Option<super::eval::Context>, EvalError> {
-        let start = crate::host_time::Instant::now();
+        let start = crate::host::time::Instant::now();
         match pdump::load_from_dump(dump_path) {
             Ok(mut eval) => {
                 tracing::info!(
@@ -6689,7 +6686,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
     }
 
     // Full bootstrap
-    let start = crate::host_time::Instant::now();
+    let start = crate::host::time::Instant::now();
     let mut eval = create_bootstrap_evaluator_with_features(extra_features)?;
     ensure_startup_compat_variables(&mut eval, &project_root);
     let bootstrap_time = start.elapsed();
@@ -6705,7 +6702,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
     {
         let _ = std::fs::create_dir_all(parent);
     }
-    let dump_start = crate::host_time::Instant::now();
+    let dump_start = crate::host::time::Instant::now();
     match pdump::dump_to_file(&eval, dump_path) {
         Ok(()) => {
             tracing::info!(
@@ -6714,7 +6711,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
                 dump_start.elapsed(),
                 bootstrap_time,
             );
-            let reload_start = crate::host_time::Instant::now();
+            let reload_start = crate::host::time::Instant::now();
             match pdump::load_from_dump(dump_path) {
                 Ok(mut loaded) => {
                     finalize_or_log(

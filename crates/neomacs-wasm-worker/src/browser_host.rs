@@ -23,6 +23,8 @@ unsafe extern "C" {
     safe fn imported_wait_for_input(timeout_milliseconds: f64) -> u32;
     #[link_name = "monotonic_time_milliseconds"]
     safe fn imported_monotonic_time_milliseconds() -> f64;
+    #[link_name = "wall_time_milliseconds"]
+    safe fn imported_wall_time_milliseconds() -> f64;
     safe fn startup_len() -> u32;
     safe fn copy_startup(destination: *mut u8, capacity: u32) -> u32;
     safe fn runtime_image_len() -> u32;
@@ -48,6 +50,10 @@ pub(crate) fn wait_for_input(timeout_milliseconds: f64) -> u32 {
 
 pub(crate) fn monotonic_time_milliseconds() -> f64 {
     imported_monotonic_time_milliseconds()
+}
+
+pub(crate) fn wall_time_milliseconds() -> f64 {
+    imported_wall_time_milliseconds()
 }
 
 pub(crate) fn wait(timeout: Duration) -> Result<HostWake, String> {

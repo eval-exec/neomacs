@@ -20,6 +20,8 @@ use winit::window::{Window, WindowId};
 extern "C" {
     #[wasm_bindgen(js_namespace = performance, js_name = now)]
     fn browser_monotonic_time_milliseconds() -> f64;
+    #[wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn browser_wall_time_milliseconds() -> f64;
 }
 
 thread_local! {
@@ -233,8 +235,11 @@ pub fn install_worker_presentation(bytes: &[u8]) -> Result<WorkerPresentationRec
 /// Start the browser frontend without emulating a never-returning native loop.
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
-    neovm_core::host_time::install_monotonic_clock(browser_monotonic_time_milliseconds)
-        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    neovm_core::host::time::install_browser_clocks(
+        browser_monotonic_time_milliseconds,
+        browser_wall_time_milliseconds,
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let event_loop = EventLoop::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
     event_loop.spawn_app(BrowserFrontend::default());
     Ok(())

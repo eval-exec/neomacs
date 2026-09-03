@@ -22,7 +22,8 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::UNIX_EPOCH;
 
 use crate::buffer::{
     BufferId, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
@@ -2677,8 +2678,7 @@ fn split_nearby_temp_prefix(
 fn make_temp_name_suffix() -> String {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let nonce = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    let now = crate::host::time::wall_time_since_unix_epoch()
         .unwrap_or_default()
         .as_nanos() as u64;
     let mut value = now ^ nonce.rotate_left(7);

@@ -147,7 +147,7 @@ impl TaggedHeap {
         // Immutable snapshot of owned cons-block bases — read-only on the GC
         // thread. New blocks allocated during marking are absent, which is fine:
         // their conses allocate-black and never enter the GC's gray queue.
-        let conssnap_t0 = crate::host_time::Instant::now();
+        let conssnap_t0 = crate::host::time::Instant::now();
         let mut owned =
             FxHashSet::with_capacity_and_hasher(self.cons_blocks.len(), Default::default());
         for block in &self.cons_blocks {
@@ -173,7 +173,7 @@ impl TaggedHeap {
         // claim arm). Same immutability + Arc-publication argument as
         // `string_page_bases`; pages created after this point are absent and
         // their floats DEFER (fail-safe). O(pages); own handshake timer.
-        let floatsnap_t0 = crate::host_time::Instant::now();
+        let floatsnap_t0 = crate::host::time::Instant::now();
         let mut float_bases =
             FxHashSet::with_capacity_and_hasher(self.float_arena.pages.len(), Default::default());
         for page in &self.float_arena.pages {
@@ -186,7 +186,7 @@ impl TaggedHeap {
         // the claim arm). Same discipline as the float/string snapshots.
         // O(pages); own handshake timer, distinct from the Tier-B backing
         // `vecsnap` below.
-        let vecbasesnap_t0 = crate::host_time::Instant::now();
+        let vecbasesnap_t0 = crate::host::time::Instant::now();
         let mut vector_bases =
             FxHashSet::with_capacity_and_hasher(self.vector_arena.pages.len(), Default::default());
         for page in &self.vector_arena.pages {
@@ -198,7 +198,7 @@ impl TaggedHeap {
         // (retired pages included — tenured bytecode recognize-and-drops at
         // the claim arm). Same discipline as the float/vector snapshots.
         // O(pages); own handshake timer.
-        let bcsnap_t0 = crate::host_time::Instant::now();
+        let bcsnap_t0 = crate::host::time::Instant::now();
         let mut bytecode_bases = FxHashSet::with_capacity_and_hasher(
             self.bytecode_arena.pages.len(),
             Default::default(),
@@ -207,7 +207,7 @@ impl TaggedHeap {
             bytecode_bases.insert(page.base_addr());
         }
         self.handshake.last_start_bcsnap_us = bcsnap_t0.elapsed().as_micros() as u64;
-        let vecsnap_t0 = crate::host_time::Instant::now();
+        let vecsnap_t0 = crate::host::time::Instant::now();
         // Stage 2 Tier B CONCURRENT VECTOR SCAN: snapshot every
         // OWNED/Mapped vector backing AT THIS world-stopped point (same instant the
         // cons `owned_bases` snapshot is taken and the roots are seeded), so the GC
@@ -293,7 +293,7 @@ impl TaggedHeap {
         self.handshake.last_start_vecsnap_us = vecsnap_t0.elapsed().as_micros() as u64;
         self.handshake.probe_vector_snapshot_len =
             vectors.as_ref().map(|snap| snap.len()).unwrap_or(0);
-        let jobasm_t0 = crate::host_time::Instant::now();
+        let jobasm_t0 = crate::host::time::Instant::now();
         let gray = std::mem::take(&mut self.gray_queue);
         let (exited_tx, exited_rx) = std::sync::mpsc::channel();
         self.gc_done
@@ -348,7 +348,7 @@ impl TaggedHeap {
         launch_background_mark(job);
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
-        self.pace_mark_start = Some(crate::host_time::Instant::now());
+        self.pace_mark_start = Some(crate::host::time::Instant::now());
         self.pace_mark_start_bytes = self.bytes_since_gc;
     }
 
@@ -356,7 +356,7 @@ impl TaggedHeap {
     /// the caller can finish marking stop-the-world. After this, the heap is
     /// owned exclusively by the mutator again (the GC thread has exited its loop).
     pub(crate) fn join_concurrent_mark(&mut self) {
-        let join_t0 = crate::host_time::Instant::now();
+        let join_t0 = crate::host::time::Instant::now();
         self.gc_stop
             .store(true, std::sync::atomic::Ordering::Release);
         // Task #7 stage 2a (Fix B): wake the GC thread out of its idle nap
@@ -378,7 +378,7 @@ impl TaggedHeap {
         // the caller reseeds roots, then drains to a fixpoint stop-the-world.
         // The fold is timed (`last_termination_fold_us`) so the termination's
         // cheap push half is attributable separately from the mark fixpoint.
-        let fold_t0 = crate::host_time::Instant::now();
+        let fold_t0 = crate::host::time::Instant::now();
         let satb = std::mem::take(&mut *self.satb_shared.lock().unwrap());
         self.last_termination_satb = satb.len();
         self.gray_queue.extend(satb);

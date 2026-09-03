@@ -1701,9 +1701,8 @@ fn emacs_seed_random(seed: &[u8]) {
 }
 
 fn emacs_init_random() {
-    let seed = (std::process::id() as u32)
-        ^ (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+    let seed = crate::host::process::id()
+        ^ (crate::host::time::wall_time_since_unix_epoch()
             .map(|d| (d.as_secs() as u32) ^ d.subsec_nanos())
             .unwrap_or(0));
     emacs_seed_random(&seed.to_ne_bytes());

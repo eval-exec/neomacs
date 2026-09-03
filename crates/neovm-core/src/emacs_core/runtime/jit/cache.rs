@@ -18,7 +18,7 @@
 
 use super::compile::lowering::{RegallocChoice, RegallocPolicy, RegallocScope, forced_regalloc};
 use super::compile::{CompileError, CompileRequest, compile_bytecode_function_requested};
-use crate::host_time::Instant;
+use crate::host::time::Instant;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
