@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
+mod browser_layout;
 mod memory;
 mod mounts;
 mod native;
@@ -11,6 +12,7 @@ mod native;
 mod tests;
 mod virtual_path;
 
+pub use browser_layout::BrowserFileSystemLayout;
 pub use memory::MemoryFileSystem;
 pub use mounts::MountTableFileSystem;
 pub use native::NativeFileSystem;
@@ -40,6 +42,70 @@ pub enum FileEntryKind {
 pub struct FileTimestamp {
     pub seconds: i64,
     pub nanoseconds: u32,
+}
+
+impl FileTimestamp {
+    pub(crate) fn from_system_time(time: std::time::SystemTime) -> Option<Self> {
+        match time.duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => Some(Self {
+                seconds: i64::try_from(duration.as_secs()).ok()?,
+                nanoseconds: duration.subsec_nanos(),
+            }),
+            Err(error) => {
+                let duration = error.duration();
+                let seconds = i64::try_from(duration.as_secs()).ok()?;
+                if duration.subsec_nanos() == 0 {
+                    Some(Self {
+                        seconds: -seconds,
+                        nanoseconds: 0,
+                    })
+                } else {
+                    Some(Self {
+                        seconds: seconds.checked_neg()?.checked_sub(1)?,
+                        nanoseconds: 1_000_000_000 - duration.subsec_nanos(),
+                    })
+                }
+            }
+        }
+    }
+
+    pub(crate) fn to_system_time(self) -> Option<std::time::SystemTime> {
+        if self.seconds >= 0 {
+            return std::time::UNIX_EPOCH.checked_add(std::time::Duration::new(
+                self.seconds as u64,
+                self.nanoseconds,
+            ));
+        }
+
+        let seconds_before_epoch = self.seconds.unsigned_abs();
+        let duration = if self.nanoseconds == 0 {
+            std::time::Duration::from_secs(seconds_before_epoch)
+        } else {
+            std::time::Duration::new(
+                seconds_before_epoch.checked_sub(1)?,
+                1_000_000_000_u32.checked_sub(self.nanoseconds)?,
+            )
+        };
+        std::time::UNIX_EPOCH.checked_sub(duration)
+    }
+}
+
+/// Portable representation of GNU-visible file permission bits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileMode(u32);
+
+impl FileMode {
+    const PERMISSION_MASK: u32 = 0o7777;
+
+    #[must_use]
+    pub const fn from_bits_truncate(bits: u32) -> Self {
+        Self(bits & Self::PERMISSION_MASK)
+    }
+
+    #[must_use]
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
 }
 
 /// Metadata shared by native and sandboxed storage adapters.
@@ -124,6 +190,29 @@ pub trait EditorFileSystem {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
     fn read_link(&self, _path: &Path) -> io::Result<PathBuf> {
         Err(io::Error::from(io::ErrorKind::InvalidInput))
+    }
+    fn mode(&self, _path: &Path, _follow_links: bool) -> io::Result<FileMode> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "file permission modes are unsupported by this storage backend",
+        ))
+    }
+    fn set_mode(&self, _path: &Path, _mode: FileMode, _follow_links: bool) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "changing file permission modes is unsupported by this storage backend",
+        ))
+    }
+    fn set_times(
+        &self,
+        _path: &Path,
+        _timestamp: Option<FileTimestamp>,
+        _follow_links: bool,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "changing file timestamps is unsupported by this storage backend",
+        ))
     }
 
     fn same_file(&self, left: &Path, right: &Path) -> io::Result<bool> {

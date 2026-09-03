@@ -2536,6 +2536,39 @@ fn test_builtin_file_modes_semantics() {
     delete_file(&path_str).unwrap();
 }
 
+#[test]
+fn installed_filesystem_reports_unsupported_posix_metadata_explicitly() {
+    let persistent = MemoryFileSystem::new();
+    persistent
+        .write(
+            Path::new("/note"),
+            b"contents",
+            WriteRequest {
+                mode: WriteMode::Truncate,
+                sync: true,
+            },
+        )
+        .expect("write mounted fixture");
+    let mut filesystem = MountTableFileSystem::new();
+    filesystem
+        .mount(Path::new("/neomacs-fake"), Box::new(persistent))
+        .expect("mount editor home");
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(filesystem));
+    let path = Value::string("/neomacs-fake/note");
+
+    for result in [
+        builtin_file_modes(&mut eval, vec![path]),
+        builtin_set_file_modes(&mut eval, vec![path, Value::fixnum(0o600)]),
+        builtin_set_file_times(&mut eval, vec![path, Value::fixnum(0)]),
+    ] {
+        match result.expect_err("unsupported host metadata must be explicit") {
+            Flow::Signal(signal) => assert_eq!(signal.symbol_name(), "file-error"),
+            other => panic!("expected file-error signal, got {other:?}"),
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn builtin_file_modes_treats_any_non_nil_flag_as_nofollow() {
