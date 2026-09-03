@@ -219,21 +219,14 @@ impl LoadHistoryEntry {
     }
 }
 
-fn gnu_system_type(host: neovm_host_abi::HostKind) -> &'static str {
-    match host {
-        neovm_host_abi::HostKind::Wasm => "wasm",
-        neovm_host_abi::HostKind::Android => "android",
-        neovm_host_abi::HostKind::Desktop => {
-            if cfg!(target_os = "windows") {
-                "windows-nt"
-            } else if cfg!(target_os = "macos") {
-                "darwin"
-            } else if cfg!(target_os = "linux") {
-                "gnu/linux"
-            } else {
-                std::env::consts::OS
-            }
-        }
+fn gnu_system_type() -> &'static str {
+    std::cfg_select! {
+        target_family = "wasm" => { "wasm" }
+        target_os = "android" => { "android" }
+        target_os = "windows" => { "windows-nt" }
+        target_os = "macos" => { "darwin" }
+        target_os = "linux" => { "gnu/linux" }
+        _ => { std::env::consts::OS }
     }
 }
 
@@ -243,24 +236,21 @@ fn gnu_system_type(host: neovm_host_abi::HostKind) -> &'static str {
 /// 192 made that true here too -- the list is derived from
 /// [`super::c_features::gnu_c_features`], a table whose every row names either
 /// the implementation behind the feature or the reason there is none.
-fn initial_feature_names(host: neovm_host_abi::HostKind) -> Vec<&'static str> {
-    super::c_features::initial_feature_names_for(host)
+fn initial_feature_names() -> Vec<&'static str> {
+    super::c_features::initial_feature_names()
 }
 
-fn initial_features_value(host: neovm_host_abi::HostKind) -> Value {
+fn initial_features_value() -> Value {
     Value::list(
-        initial_feature_names(host)
+        initial_feature_names()
             .into_iter()
             .map(Value::symbol)
             .collect(),
     )
 }
 
-fn initial_feature_ids(host: neovm_host_abi::HostKind) -> Vec<SymId> {
-    initial_feature_names(host)
-        .into_iter()
-        .map(intern)
-        .collect()
+fn initial_feature_ids() -> Vec<SymId> {
+    initial_feature_names().into_iter().map(intern).collect()
 }
 
 /// GNU's `echo_buffer[2]`: the two buffers the echo area is allowed to display
@@ -559,6 +549,7 @@ pub(crate) struct SubrEntry {
     pub(crate) max_args: Option<u16>,
     pub(crate) dispatch_kind: crate::tagged::header::SubrDispatchKind,
     pub(crate) interactive_spec: Option<super::interactive::BuiltinInteractiveSpec>,
+    pub(crate) portability: super::subr::SubrPortability,
 }
 
 thread_local! {
@@ -872,6 +863,10 @@ pub(crate) fn subr_entry_from_value(function: Value) -> Option<(SymId, SubrEntry
             dispatch_kind: subr.dispatch_kind,
             interactive_spec: lookup_global_subr_entry(subr.sym_id)
                 .and_then(|entry| entry.interactive_spec),
+            portability: lookup_global_subr_entry(subr.sym_id)
+                .map_or(super::subr::SubrPortability::AllTargets, |entry| {
+                    entry.portability
+                }),
         },
     ))
 }
@@ -3052,10 +3047,6 @@ pub(crate) struct DaemonState {
 
 pub struct Context {
     pub(crate) owned_roots: crate::emacs_core::owned_roots::OwnedRootRegistry,
-    /// Product host whose Lisp-visible primitive and feature surface this
-    /// evaluator represents. Portable-image producers can differ from the
-    /// native compilation host executing loadup.
-    pub(crate) host_kind: neovm_host_abi::HostKind,
     /// Tagged pointer heap — sole GC and allocator.
     pub(crate) tagged_heap: Box<crate::tagged::gc::TaggedHeap>,
     /// Mmap-backed pdump image that owns any mapped heap payloads borrowed by
@@ -5028,6 +5019,25 @@ impl Context {
 
     pub(crate) fn refresh_features_from_variable(&mut self) {
         refresh_features_from_variable_in_state(&self.obarray, &mut self.features);
+    }
+
+    /// Rebind target-owned Lisp identity after restoring a portable image.
+    ///
+    /// A portable snapshot carries editor state, not the producer binary's
+    /// platform contract. This consumer therefore owns `system-type` and the
+    /// C-level feature tail, just as its compiled primitive catalog owns the
+    /// callable subr surface.
+    pub(crate) fn rebind_compiled_target_identity(&mut self) {
+        self.set_variable("system-type", Value::symbol(gnu_system_type()));
+
+        let target_owned_features = super::c_features::gnu_c_features()
+            .into_iter()
+            .map(|feature| intern(feature.name))
+            .collect::<HashSet<_>>();
+        self.features
+            .retain(|feature| !target_owned_features.contains(feature));
+        self.features.extend(initial_feature_ids());
+        self.sync_features_variable();
     }
 
     fn has_feature(&mut self, name: &str) -> bool {
