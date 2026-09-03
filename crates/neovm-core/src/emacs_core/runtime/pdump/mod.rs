@@ -503,7 +503,7 @@ pub fn dump_to_file(eval: &Context, path: &Path) -> Result<(), DumpError> {
 /// This reconstructs a full `Context` from explicit mmap sections, setting up
 /// thread-local pointers and resetting caches.
 pub fn load_from_dump(path: &Path) -> Result<Context, DumpError> {
-    let load_start = std::time::Instant::now();
+    let load_start = crate::host_time::Instant::now();
     let mut image = mmap_image::load_image(path)?;
     image.apply_relocations()?;
     let mut eval = match load_from_mapped_image(&mut image) {

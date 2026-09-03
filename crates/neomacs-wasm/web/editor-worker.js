@@ -118,6 +118,7 @@ function hostImports(waitForInput) {
   return {
     neomacs_host: {
       wait_for_input: waitForInput,
+      monotonic_time_milliseconds: () => performance.now(),
       startup_len: () => startup?.byteLength ?? 0,
       copy_startup: (destination, capacity) => copyToMemory(startup, destination, capacity),
       runtime_image_len: () => runtimeImage?.byteLength ?? 0,

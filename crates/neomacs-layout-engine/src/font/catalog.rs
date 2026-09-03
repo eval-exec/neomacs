@@ -5,8 +5,9 @@
 //! generation, and owns every resulting cache invalidation.
 
 use neomacs_display_protocol::font::FontCatalogGeneration;
+use neovm_core::host_time::Instant;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[must_use]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

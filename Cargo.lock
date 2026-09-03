@@ -4088,6 +4088,7 @@ dependencies = [
  "neomacs-layout-engine",
  "neomacs-wasm-protocol",
  "neomacs-wgpu-runtime",
+ "neovm-core",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "winit",
