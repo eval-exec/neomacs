@@ -6,11 +6,13 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 mod memory;
+mod mounts;
 mod native;
 #[cfg(test)]
 mod tests;
 
 pub use memory::MemoryFileSystem;
+pub use mounts::MountTableFileSystem;
 pub use native::NativeFileSystem;
 
 pub(crate) fn default_editor_file_system() -> Box<dyn EditorFileSystem> {

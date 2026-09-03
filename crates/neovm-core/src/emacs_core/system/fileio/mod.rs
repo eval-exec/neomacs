@@ -11,8 +11,8 @@ mod runtime_resources;
 pub(crate) use binary_mode::builtin_set_binary_mode;
 pub(crate) use filesystem::default_editor_file_system;
 pub use filesystem::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, MemoryFileSystem, WriteMode,
-    WriteRequest,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, MemoryFileSystem,
+    MountTableFileSystem, WriteMode, WriteRequest,
 };
 pub use runtime_resources::{RuntimeResourceNode, RuntimeResourceStore};
 
