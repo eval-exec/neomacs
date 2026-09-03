@@ -854,6 +854,7 @@ pub(crate) fn subr_entry_from_value(function: Value) -> Option<(SymId, SubrEntry
     }
     #[cfg(feature = "vm-profile")]
     crate::emacs_core::bytecode::vm::vm_profile::bump_subr(subr.sym_id);
+    let registered = lookup_global_subr_entry(subr.sym_id);
     Some((
         subr.sym_id,
         SubrEntry {
@@ -861,12 +862,11 @@ pub(crate) fn subr_entry_from_value(function: Value) -> Option<(SymId, SubrEntry
             min_args: subr.min_args,
             max_args: subr.max_args,
             dispatch_kind: subr.dispatch_kind,
-            interactive_spec: lookup_global_subr_entry(subr.sym_id)
-                .and_then(|entry| entry.interactive_spec),
-            portability: lookup_global_subr_entry(subr.sym_id)
-                .map_or(super::subr::SubrPortability::AllTargets, |entry| {
-                    entry.portability
-                }),
+            name_id: subr.name,
+            interactive_spec: registered.and_then(|entry| entry.interactive_spec),
+            portability: registered.map_or(super::subr::SubrPortability::AllTargets, |entry| {
+                entry.portability
+            }),
         },
     ))
 }
