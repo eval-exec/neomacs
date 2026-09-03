@@ -4113,8 +4113,6 @@ dependencies = [
  "neomacs-layout-engine",
  "neomacs-wasm-protocol",
  "neomacs-wgpu-runtime",
- "serde",
- "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "winit",
@@ -4128,6 +4126,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "neomacs-wasm-worker"
+version = "0.0.16"
 
 [[package]]
 name = "neomacs-webview"

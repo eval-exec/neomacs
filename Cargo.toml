@@ -22,6 +22,7 @@ members = [
     "crates/neomacs-video-model",
     "crates/neomacs-wasm",
     "crates/neomacs-wasm-protocol",
+    "crates/neomacs-wasm-worker",
     "crates/neomacs-webview",
     "crates/neomacs-wgpu-runtime",
     "crates/neovm-core",

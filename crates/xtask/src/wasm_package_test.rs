@@ -7,7 +7,8 @@ use super::portable_assets::{
     RUNTIME_RESOURCE_ID_ASSET, sha256_file,
 };
 use super::wasm_package::{
-    WasmPackageOptions, validate_output_destination, validate_portable_assets,
+    WasmArtifact, WasmPackageOptions, validate_output_destination, validate_portable_assets,
+    wasm_artifact,
 };
 
 #[test]
@@ -49,6 +50,20 @@ fn wasm_package_accepts_a_new_destination() {
     let temporary = tempdir().unwrap();
 
     validate_output_destination(&temporary.path().join("neomacs-wasm")).unwrap();
+}
+
+#[test]
+fn wasm_package_addresses_frontend_and_editor_worker_as_distinct_artifacts() {
+    let repo = std::path::Path::new("/workspace/neomacs");
+
+    assert_eq!(
+        wasm_artifact(repo, WasmArtifact::Frontend),
+        repo.join("target/wasm32-unknown-unknown/release/neomacs_wasm.wasm"),
+    );
+    assert_eq!(
+        wasm_artifact(repo, WasmArtifact::EditorWorker),
+        repo.join("target/wasm32-unknown-unknown/release/neomacs_wasm_worker.wasm"),
+    );
 }
 
 #[test]
