@@ -21,11 +21,54 @@
 /// with, and therefore the size of the native web view's content area.
 ///
 /// Both dimensions are finite and strictly positive; a widget with no area
-/// has no native view to place.
+/// has no native view to place.  [`XwidgetContentExtent::new`] is the only
+/// way in: deserialization goes through it as well, so a serialized frame
+/// cannot carry an extent the constructor would refuse.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "XwidgetContentExtentWire")]
 pub struct XwidgetContentExtent {
     width_px: f32,
     height_px: f32,
+}
+
+/// The serialized shape of [`XwidgetContentExtent`]: the two raw
+/// dimensions, validated by [`XwidgetContentExtent::new`] on the way in.
+#[derive(serde::Deserialize)]
+struct XwidgetContentExtentWire {
+    width_px: f32,
+    height_px: f32,
+}
+
+/// A serialized extent that [`XwidgetContentExtent::new`] refuses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InvalidXwidgetContentExtent {
+    /// The rejected width.
+    pub width_px: f32,
+    /// The rejected height.
+    pub height_px: f32,
+}
+
+impl std::fmt::Display for InvalidXwidgetContentExtent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "xwidget content extent {} x {} px is not finite and strictly positive",
+            self.width_px, self.height_px
+        )
+    }
+}
+
+impl std::error::Error for InvalidXwidgetContentExtent {}
+
+impl TryFrom<XwidgetContentExtentWire> for XwidgetContentExtent {
+    type Error = InvalidXwidgetContentExtent;
+
+    fn try_from(wire: XwidgetContentExtentWire) -> Result<Self, Self::Error> {
+        Self::new(wire.width_px, wire.height_px).ok_or(InvalidXwidgetContentExtent {
+            width_px: wire.width_px,
+            height_px: wire.height_px,
+        })
+    }
 }
 
 impl XwidgetContentExtent {
