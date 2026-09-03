@@ -78,6 +78,17 @@ impl DisplayRowAppendArea {
         self.line_number_width
     }
 
+    /// Left edge of the complete TEXT_AREA, including a structural display
+    /// line-number prefix.  `content_x` is the ordinary buffer body's start,
+    /// so the prefix sits between the two.  This is the one place the append
+    /// context computes the edge: GNU's `it->current_x` counts the prefix
+    /// (it is produced as glyphs, `maybe_produce_line_number`,
+    /// src/xdisp.c:25701), so both hscroll truncation and the window-local
+    /// extent an overflowing glyph is measured against start here.
+    pub(crate) fn text_area_left(self) -> f32 {
+        self.content_x - self.line_number_width
+    }
+
     pub(crate) fn right_edge(self) -> f32 {
         self.content_x() + self.width()
     }
@@ -223,10 +234,9 @@ impl DisplayRowAppendSurface {
         self.area.content_x()
     }
 
-    /// Left edge of the complete TEXT_AREA, including a structural display
-    /// line-number prefix.  `content_x` is the ordinary buffer body's start.
+    /// See [`DisplayRowAppendArea::text_area_left`].
     pub(crate) fn text_area_left(&self) -> f32 {
-        self.area.content_x() - self.area.line_number_width()
+        self.area.text_area_left()
     }
 
     pub(crate) fn right_edge(&self) -> f32 {
@@ -692,9 +702,11 @@ pub(crate) struct DisplayRowAppendFrame {
     glyph_y: f32,
     geometry: DisplayRowGeometry,
     default_row_height: f32,
-    content_x: f32,
-    text_width: f32,
-    line_number_width: f32,
+    /// The text area this row is appended into, held whole so every
+    /// derived edge (`content_x`, the text-area origin, the right edge)
+    /// comes from one value and cannot drift from what hscroll
+    /// truncation reads through [`DisplayRowAppendSurface`].
+    area: DisplayRowAppendArea,
     margin_areas: DisplayRowMarginAreas,
     face_space_width: f32,
     image_scale_environment: ImageScaleEnvironment,
@@ -759,15 +771,15 @@ impl DisplayRowAppendFrame {
     }
 
     pub(crate) fn content_x(&self) -> f32 {
-        self.content_x
+        self.area.content_x()
     }
 
     pub(crate) fn text_width(&self) -> f32 {
-        self.text_width
+        self.area.text_width()
     }
 
     pub(crate) fn line_number_width(&self) -> f32 {
-        self.line_number_width
+        self.area.line_number_width()
     }
 
     pub(crate) fn face_space_width(&self) -> f32 {
@@ -786,12 +798,11 @@ impl DisplayRowAppendFrame {
         self.content_x() + self.geometry().width()
     }
 
-    /// The window's text area starts where the content does, less the
-    /// line-number prefix that `content_x` already skips: GNU's
-    /// `it->current_x` counts that prefix (it is produced as glyphs), so the
-    /// origin GNU measures from is the text area's own left edge.
+    /// The origin GNU's window-local `it->current_x` is measured from: the
+    /// text area's own left edge ([`DisplayRowAppendArea::text_area_left`]),
+    /// the same edge hscroll truncation uses.
     fn text_area_origin(&self) -> DisplayRowTextAreaOrigin {
-        DisplayRowTextAreaOrigin::at_frame_x(self.content_x() - self.line_number_width())
+        DisplayRowTextAreaOrigin::at_frame_x(self.area.text_area_left())
     }
 
     fn text_right_edge_excluding_line_number(&self) -> f32 {
@@ -818,9 +829,7 @@ impl DisplayRowAppendFrame {
                 tab_policy,
             ),
             default_row_height: metrics.fallback_metrics().row_height(),
-            content_x: area.content_x(),
-            text_width: area.text_width(),
-            line_number_width: area.line_number_width(),
+            area,
             margin_areas,
             face_space_width: metrics.space_width(),
             image_scale_environment,
