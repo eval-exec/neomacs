@@ -1,5 +1,6 @@
 //! Renderer-facing facade over the cross-platform native video subsystem.
 
+use crate::clock::Instant;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use neomacs_display_protocol::types::VideoId;
@@ -90,7 +91,7 @@ const SUBMISSION_TIMING_WINDOW: usize = 4096;
 
 #[derive(Default)]
 struct SubmissionTimingState {
-    last_submitted_at: Option<std::time::Instant>,
+    last_submitted_at: Option<Instant>,
     intervals_us: VecDeque<u64>,
     interval_samples: u64,
     interval_total_us: u64,
@@ -99,7 +100,7 @@ struct SubmissionTimingState {
 }
 
 impl SubmissionTimingState {
-    fn record(&mut self, submitted_at: std::time::Instant) {
+    fn record(&mut self, submitted_at: Instant) {
         let Some(previous) = self.last_submitted_at.replace(submitted_at) else {
             return;
         };
@@ -176,10 +177,10 @@ impl VideoSubmissionTracker {
     fn finish_submitted_surface(&mut self) {
         // Measure actual CPU-side handoff intervals, not predicted scheduler
         // timestamps. These samples do not establish native presentation times.
-        self.finish_submitted_surface_at(std::time::Instant::now());
+        self.finish_submitted_surface_at(Instant::now());
     }
 
-    fn finish_submitted_surface_at(&mut self, submitted_at: std::time::Instant) {
+    fn finish_submitted_surface_at(&mut self, submitted_at: Instant) {
         let SurfaceSubmissionState::Recording(pending) = std::mem::take(&mut self.surface) else {
             return;
         };
