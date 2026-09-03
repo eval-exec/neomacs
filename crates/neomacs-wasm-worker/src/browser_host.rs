@@ -42,6 +42,35 @@ unsafe extern "C" {
     safe fn publish_frame(source: *const u8, length: u32) -> u32;
     safe fn post_status(source: *const u8, length: u32);
     safe fn post_failure(source: *const u8, length: u32);
+    safe fn fs_stat(path: *const u8, path_length: u32) -> u32;
+    safe fn fs_read(path: *const u8, path_length: u32) -> u32;
+    safe fn fs_read_directory(path: *const u8, path_length: u32) -> u32;
+    safe fn fs_write(
+        path: *const u8,
+        path_length: u32,
+        source: *const u8,
+        source_length: u32,
+        mode: u32,
+        offset: f64,
+        sync: u32,
+    ) -> u32;
+    safe fn fs_create_directory(path: *const u8, path_length: u32, parents: u32) -> u32;
+    safe fn fs_remove_file(path: *const u8, path_length: u32) -> u32;
+    safe fn fs_remove_directory(path: *const u8, path_length: u32, recursive: u32) -> u32;
+    safe fn fs_rename(
+        from: *const u8,
+        from_length: u32,
+        to: *const u8,
+        to_length: u32,
+        replace: u32,
+    ) -> u32;
+    safe fn fs_canonicalize(path: *const u8, path_length: u32) -> u32;
+    safe fn fs_result_kind() -> u32;
+    safe fn fs_result_len() -> f64;
+    safe fn fs_result_modified_milliseconds() -> f64;
+    safe fn fs_result_error_len() -> u32;
+    safe fn fs_copy_result(destination: *mut u8, capacity: u32) -> u32;
+    safe fn fs_copy_result_error(destination: *mut u8, capacity: u32) -> u32;
 }
 
 pub(crate) fn wait_for_input(timeout_milliseconds: f64) -> u32 {
@@ -165,4 +194,101 @@ pub(crate) fn report_status(message: &str) {
 
 pub(crate) fn report_failure(message: &str) {
     post_failure(message.as_ptr(), message.len() as u32);
+}
+
+pub(super) fn filesystem_stat(path: &str) -> u32 {
+    fs_stat(path.as_ptr(), path.len() as u32)
+}
+
+pub(super) fn filesystem_read(path: &str) -> u32 {
+    fs_read(path.as_ptr(), path.len() as u32)
+}
+
+pub(super) fn filesystem_read_directory(path: &str) -> u32 {
+    fs_read_directory(path.as_ptr(), path.len() as u32)
+}
+
+pub(super) fn filesystem_write(
+    path: &str,
+    contents: &[u8],
+    mode: u32,
+    offset: u64,
+    sync: bool,
+) -> u32 {
+    fs_write(
+        path.as_ptr(),
+        path.len() as u32,
+        contents.as_ptr(),
+        contents.len() as u32,
+        mode,
+        offset as f64,
+        u32::from(sync),
+    )
+}
+
+pub(super) fn filesystem_create_directory(path: &str, parents: bool) -> u32 {
+    fs_create_directory(path.as_ptr(), path.len() as u32, u32::from(parents))
+}
+
+pub(super) fn filesystem_remove_file(path: &str) -> u32 {
+    fs_remove_file(path.as_ptr(), path.len() as u32)
+}
+
+pub(super) fn filesystem_remove_directory(path: &str, recursive: bool) -> u32 {
+    fs_remove_directory(
+        path.as_ptr(),
+        path.len() as u32,
+        u32::from(recursive),
+    )
+}
+
+pub(super) fn filesystem_rename(from: &str, to: &str, replace: bool) -> u32 {
+    fs_rename(
+        from.as_ptr(),
+        from.len() as u32,
+        to.as_ptr(),
+        to.len() as u32,
+        u32::from(replace),
+    )
+}
+
+pub(super) fn filesystem_canonicalize(path: &str) -> u32 {
+    fs_canonicalize(path.as_ptr(), path.len() as u32)
+}
+
+pub(super) fn filesystem_result_kind() -> u32 {
+    fs_result_kind()
+}
+
+pub(super) fn filesystem_result_len() -> f64 {
+    fs_result_len()
+}
+
+pub(super) fn filesystem_result_modified_milliseconds() -> f64 {
+    fs_result_modified_milliseconds()
+}
+
+pub(super) fn filesystem_result_error() -> Result<String, String> {
+    let length = fs_result_error_len() as usize;
+    let mut bytes = vec![0; length];
+    let copied = fs_copy_result_error(bytes.as_mut_ptr(), bytes.len() as u32) as usize;
+    if copied != length {
+        return Err(format!(
+            "browser filesystem copied {copied} of {length} error bytes"
+        ));
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+pub(super) fn filesystem_result_bytes(length: usize) -> Result<Vec<u8>, String> {
+    let capacity = u32::try_from(length)
+        .map_err(|_| "browser filesystem result exceeds the Wasm32 transfer limit".to_owned())?;
+    let mut bytes = vec![0; length];
+    let copied = fs_copy_result(bytes.as_mut_ptr(), capacity) as usize;
+    if copied != length {
+        return Err(format!(
+            "browser filesystem copied {copied} of {length} result bytes"
+        ));
+    }
+    Ok(bytes)
 }

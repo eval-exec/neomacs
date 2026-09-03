@@ -1,4 +1,8 @@
 import { fetchEditorWorkerAssets } from "./worker-assets.mjs";
+import {
+  OriginPrivateFileSystem,
+  createOpfsHostImports,
+} from "./opfs-storage.mjs";
 
 const INPUT_WAKE = 1;
 const TIMEOUT_WAKE = 2;
@@ -114,7 +118,7 @@ function acknowledgeInput(source, length) {
   return 1;
 }
 
-function hostImports(waitForInput) {
+function hostImports(waitForInput, filesystemImports) {
   return {
     neomacs_host: {
       wait_for_input: waitForInput,
@@ -152,8 +156,27 @@ function hostImports(waitForInput) {
       post_failure: (source, length) => post("failed", {
         message: decodeMemoryString(source, length),
       }),
+      ...filesystemImports,
     },
   };
+}
+
+function suspendingFilesystemImports(imports) {
+  const suspending = new Set([
+    "fs_stat",
+    "fs_read",
+    "fs_read_directory",
+    "fs_write",
+    "fs_create_directory",
+    "fs_remove_file",
+    "fs_remove_directory",
+    "fs_rename",
+    "fs_canonicalize",
+  ]);
+  return Object.fromEntries(Object.entries(imports).map(([name, implementation]) => [
+    name,
+    suspending.has(name) ? new WebAssembly.Suspending(implementation) : implementation,
+  ]));
 }
 
 async function instantiate(response, imports) {
@@ -169,6 +192,11 @@ async function instantiate(response, imports) {
 
 async function start(message) {
   const jspi = supportsJspi();
+  if (!jspi) {
+    throw new Error(
+      "neomacs-wasm requires the WebAssembly JavaScript Promise Integration available in current Chrome releases",
+    );
+  }
   mailbox = message.mailbox;
   startup = encoder.encode(JSON.stringify(message.startup));
   const assets = await fetchEditorWorkerAssets(message);
@@ -176,9 +204,16 @@ async function start(message) {
   runtimeImageId = assets.runtimeImageId;
   runtimeResourceBundle = assets.runtimeResourceBundle;
   runtimeResourceId = assets.runtimeResourceId;
+  const filesystem = await OriginPrivateFileSystem.open();
+  const filesystemImports = suspendingFilesystemImports(
+    createOpfsHostImports(filesystem, () => memory),
+  );
 
   const waitForInput = jspi ? createJspiWait() : createAtomicsWait();
-  const { instance } = await instantiate(assets.wasmResponse, hostImports(waitForInput));
+  const { instance } = await instantiate(
+    assets.wasmResponse,
+    hostImports(waitForInput, filesystemImports),
+  );
   memory = instance.exports.memory;
   const probe = instance.exports.neomacs_wasm_worker_probe;
   const run = instance.exports.neomacs_wasm_worker_run;
