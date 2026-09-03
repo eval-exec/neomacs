@@ -3,8 +3,10 @@ use neomacs_display_protocol::{
     AxisSize, ImageFrameDelay, ImageFrameIndex, ImageRotation, ImageSizeSpec,
 };
 use std::io::Cursor;
+#[cfg(not(target_family = "wasm"))]
 use std::num::NonZeroUsize;
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn image_decoder_pool_is_nonempty_and_bounded_on_large_hosts() {
     let one = NonZeroUsize::new(1).unwrap();
@@ -79,6 +81,7 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
     );
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn decoder_worker_survives_a_panicking_request() {
     let (request_tx, request_rx) = mpsc::channel();
