@@ -1,9 +1,13 @@
 import init, {
   install_worker_presentation,
+  wait_for_first_editor_presentation,
   worker_protocol_version,
 } from "./neomacs_wasm.js";
 import { installBrowserInput } from "./browser-input.mjs";
-import { initializeWasmFrontend } from "./wasm-bootstrap.mjs";
+import {
+  initializeWasmFrontend,
+  observeFirstEditorPresentation,
+} from "./wasm-bootstrap.mjs";
 
 const MAILBOX_CAPACITY = 1024 * 1024;
 const MAILBOX_HEADER_BYTES = 16;
@@ -75,8 +79,6 @@ function installFrame(payload) {
   activePresentation = presentation;
   targetFrame = target;
   enqueueInput(events);
-  status.textContent = `Neomacs ready (${workerStrategy} Worker suspension)`;
-  status.dataset.state = "ready";
 }
 
 function sendViewport() {
@@ -91,9 +93,6 @@ function sendViewport() {
 }
 
 async function start() {
-  if (!("gpu" in navigator)) {
-    throw new Error("this browser does not expose WebGPU");
-  }
   if (typeof Worker !== "function") {
     throw new Error("this browser does not expose module Workers");
   }
@@ -107,6 +106,18 @@ async function start() {
   await initializeWasmFrontend(
     init,
     new URL("./neomacs_wasm_bg.wasm", import.meta.url),
+  );
+  void observeFirstEditorPresentation(
+    wait_for_first_editor_presentation,
+    (presentation) => {
+      status.textContent = `Neomacs ready (${workerStrategy} Worker suspension, presentation ${presentation})`;
+      status.dataset.state = "ready";
+    },
+    (error) => {
+      showFailure(error);
+      worker?.terminate();
+      worker = null;
+    },
   );
   mailbox = globalThis.crossOriginIsolated
     ? new SharedArrayBuffer(MAILBOX_HEADER_BYTES + MAILBOX_CAPACITY)
