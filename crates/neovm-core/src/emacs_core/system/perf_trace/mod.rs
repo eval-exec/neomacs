@@ -1,4 +1,4 @@
-use crate::host::time::Instant;
+use neomacs_host_runtime::time::Instant;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 use std::time::Duration;

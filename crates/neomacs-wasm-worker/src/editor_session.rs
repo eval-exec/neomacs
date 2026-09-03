@@ -22,10 +22,11 @@ use neovm_core::window::FrameDisplayIdentity;
 use crate::browser_host::{self, HostWake};
 
 pub(crate) fn run() -> Result<EditorSessionExit, String> {
-    neovm_core::host::time::install_browser_clocks(
+    neomacs_host_runtime::time::BrowserClocks::new(
         browser_host::monotonic_time_milliseconds,
         browser_host::wall_time_milliseconds,
     )
+    .install()
     .map_err(|error| error.to_string())?;
     browser_host::report_status("restoring portable runtime image");
     let startup = decode_startup(browser_host::startup_bytes()?)?;

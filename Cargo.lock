@@ -3947,6 +3947,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "neomacs-host-runtime"
+version = "0.0.16"
+
+[[package]]
 name = "neomacs-layout-engine"
 version = "0.0.19"
 dependencies = [
@@ -3959,6 +3963,7 @@ dependencies = [
  "memchr",
  "neomacs-display-protocol",
  "neomacs-font-materializer",
+ "neomacs-host-runtime",
  "neomacs-test-fonts",
  "neovm-core",
  "num_enum",
@@ -4053,11 +4058,11 @@ dependencies = [
  "naga",
  "neomacs-display-protocol",
  "neomacs-font-materializer",
+ "neomacs-host-runtime",
  "neomacs-infra",
  "neomacs-layout-engine",
  "neomacs-test-fonts",
  "neomacs-video",
- "neovm-core",
  "png",
  "pollster",
  "resvg",
@@ -4161,6 +4166,7 @@ dependencies = [
  "ciborium",
  "neomacs-app",
  "neomacs-display-protocol",
+ "neomacs-host-runtime",
  "neomacs-layout-engine",
  "neomacs-wasm-protocol",
  "neomacs-wgpu-runtime",
@@ -4185,6 +4191,7 @@ version = "0.0.16"
 dependencies = [
  "ciborium",
  "neomacs-app",
+ "neomacs-host-runtime",
  "neomacs-layout-engine",
  "neomacs-wasm-protocol",
  "neovm-core",
@@ -4272,6 +4279,7 @@ dependencies = [
  "memchr",
  "memmap2",
  "neomacs-display-protocol",
+ "neomacs-host-runtime",
  "neomacs-infra",
  "neomacs-video-model",
  "neovm-host-abi",

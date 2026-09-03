@@ -1,6 +1,6 @@
 //! Renderer-facing facade over the cross-platform native video subsystem.
 
-use crate::clock::Instant;
+use neomacs_host_runtime::time::Instant;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use neomacs_display_protocol::types::VideoId;

@@ -26,7 +26,7 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
 }
@@ -78,7 +78,7 @@ fn reuse_within_one_cooperative_sweep_window_body(verify: bool) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     assert!(heap.sweep_in_progress());
 
     // Slice 1 (budget 1): sweeps float page 0 only — the window is open.
@@ -186,7 +186,7 @@ fn parity_two_cycle_float_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine); // f deliberately NOT seeded
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         heap.owns_non_cons_object(f_ptr),
@@ -219,7 +219,7 @@ fn parity_two_cycle_float_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(f);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
     // No allocations since the sweep: the ownership probes below cannot
     // be confused by slot reuse.
@@ -319,7 +319,7 @@ fn deferred_floats_resolve_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     for (i, f) in float_vals.iter().enumerate() {
