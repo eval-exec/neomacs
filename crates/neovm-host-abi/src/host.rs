@@ -35,14 +35,14 @@ impl HostKind {
 pub enum ProcessEnvironmentModel {
     /// Inherit the native process environment supplied by the operating system.
     InheritedNative,
-    /// The embedding host has no native process environment.
-    Empty,
+    /// Browser-owned virtual paths replace an unavailable native environment.
+    BrowserVirtualPaths,
 }
 
 impl ProcessEnvironmentModel {
     /// Environment model compiled into the current editor executable.
     pub const CURRENT: Self = std::cfg_select! {
-        target_family = "wasm" => { Self::Empty }
+        target_family = "wasm" => { Self::BrowserVirtualPaths }
         _ => { Self::InheritedNative }
     };
 }
