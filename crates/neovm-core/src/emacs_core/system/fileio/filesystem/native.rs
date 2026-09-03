@@ -6,8 +6,8 @@ use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use super::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, WriteMode,
-    WriteRequest,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, TemporaryEntry,
+    WriteMode, WriteRequest,
 };
 
 fn timestamp_from_native(time: std::time::SystemTime) -> Option<FileTimestamp> {
@@ -158,6 +158,33 @@ impl EditorFileSystem for NativeFileSystem {
             fs::create_dir_all(path)
         } else {
             fs::create_dir(path)
+        }
+    }
+
+    fn create_temporary(&self, path: &Path, entry: TemporaryEntry<'_>) -> io::Result<()> {
+        match entry {
+            TemporaryEntry::File(contents) => {
+                let mut options = OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut file = options.open(path)?;
+                file.write_all(contents)
+            }
+            TemporaryEntry::Directory => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::DirBuilderExt;
+                    fs::DirBuilder::new().mode(0o700).create(path)
+                }
+                #[cfg(not(unix))]
+                {
+                    fs::create_dir(path)
+                }
+            }
         }
     }
 
