@@ -140,8 +140,6 @@ pub(super) fn visit_authenticated_archive(
         if !seen_paths.insert(path.clone()) {
             return Err(RuntimeResourceError::DuplicateArchivePath(path));
         }
-        mark_required_directory(&path, &mut seen_required_directories);
-
         let entry_type = entry.header().entry_type();
         let kind = if entry_type.is_dir() {
             ArchiveEntryKind::Directory
@@ -150,6 +148,7 @@ pub(super) fn visit_authenticated_archive(
         } else {
             return Err(RuntimeResourceError::UnsupportedArchiveEntry(path));
         };
+        mark_required_directory(&path, kind, &mut seen_required_directories);
         let validated = ValidatedArchiveEntry {
             path,
             kind,
@@ -193,10 +192,19 @@ fn validate_archive_path(path: &Path) -> Result<(), RuntimeResourceError> {
     Ok(())
 }
 
-fn mark_required_directory(path: &Path, seen: &mut [bool; REQUIRED_DIRECTORIES.len()]) {
-    let Some(Component::Normal(root)) = path.components().next() else {
+fn mark_required_directory(
+    path: &Path,
+    kind: ArchiveEntryKind,
+    seen: &mut [bool; REQUIRED_DIRECTORIES.len()],
+) {
+    let mut components = path.components();
+    let Some(Component::Normal(root)) = components.next() else {
         return;
     };
+    let names_a_tree = kind == ArchiveEntryKind::Directory || components.next().is_some();
+    if !names_a_tree {
+        return;
+    }
     for (index, required) in REQUIRED_DIRECTORIES.iter().enumerate() {
         if root == std::ffi::OsStr::new(required) {
             seen[index] = true;

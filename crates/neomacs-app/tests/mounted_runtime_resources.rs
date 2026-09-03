@@ -75,3 +75,18 @@ fn mounted_runtime_resources_require_lisp_and_data_trees() {
         RuntimeResourceError::MissingRequiredDirectory("etc")
     ));
 }
+
+#[test]
+fn files_named_after_required_roots_do_not_count_as_runtime_trees() {
+    let archive = runtime_archive(&[("lisp", b"not a tree"), ("etc", b"not a tree")]);
+    let id = content_id(&archive);
+
+    let error =
+        MountedRuntimeResources::from_bundle(Path::new("/neomacs"), &archive, id.as_bytes())
+            .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeResourceError::MissingRequiredDirectory("lisp")
+    ));
+}
