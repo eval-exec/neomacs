@@ -1,4 +1,5 @@
 use super::*;
+use crate::clock::Instant;
 use crate::effect_config::EffectsConfig;
 use neomacs_display_protocol::frame_glyphs::{FrameGlyphBuffer, WindowInfo};
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample, observe_platform_now};

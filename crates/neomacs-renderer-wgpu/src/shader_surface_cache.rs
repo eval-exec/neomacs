@@ -14,7 +14,7 @@
 
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytemuck::Zeroable;
 
