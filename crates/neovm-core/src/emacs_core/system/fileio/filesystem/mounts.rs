@@ -3,12 +3,13 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{self, ErrorKind};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
+use super::virtual_path::VirtualPath;
 use super::{AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, WriteRequest};
 
 struct Mount {
-    path: PathBuf,
+    path: VirtualPath,
     filesystem: Box<dyn EditorFileSystem>,
 }
 
@@ -29,13 +30,13 @@ impl MountTableFileSystem {
 
     /// Add one mount. Mount paths must be absolute, normalized, and unique.
     pub fn mount(&mut self, path: &Path, filesystem: Box<dyn EditorFileSystem>) -> io::Result<()> {
-        let normalized = normalize(path)?;
-        if normalized == Path::new("/") {
+        let normalized = VirtualPath::parse(path)?;
+        if normalized.is_root() {
             return Err(invalid_path(
                 "the virtual namespace root cannot be replaced",
             ));
         }
-        if normalized != path {
+        if normalized.to_path_buf().to_str() != path.to_str() {
             return Err(invalid_path("mount path must already be normalized"));
         }
         if self.mounts.iter().any(|mount| mount.path == normalized) {
@@ -48,16 +49,15 @@ impl MountTableFileSystem {
         self.mounts.sort_by(|left, right| {
             right
                 .path
-                .components()
-                .count()
-                .cmp(&left.path.components().count())
+                .depth()
+                .cmp(&left.path.depth())
                 .then_with(|| left.path.cmp(&right.path))
         });
         Ok(())
     }
 
     fn route(&self, path: &Path) -> io::Result<(&Mount, PathBuf)> {
-        let path = normalize(path)?;
+        let path = VirtualPath::parse(path)?;
         let mount = self
             .mounts
             .iter()
@@ -66,12 +66,12 @@ impl MountTableFileSystem {
         let relative = path
             .strip_prefix(&mount.path)
             .expect("selected mount must prefix routed path");
-        Ok((mount, Path::new("/").join(relative)))
+        Ok((mount, relative.to_path_buf()))
     }
 
     fn namespace_directory(&self, path: &Path) -> io::Result<bool> {
-        let path = normalize(path)?;
-        Ok(path == Path::new("/")
+        let path = VirtualPath::parse(path)?;
+        Ok(path.is_root()
             || self
                 .mounts
                 .iter()
@@ -79,20 +79,14 @@ impl MountTableFileSystem {
     }
 
     fn namespace_children(&self, path: &Path) -> io::Result<Vec<OsString>> {
-        let path = normalize(path)?;
-        if !self.namespace_directory(&path)? {
+        let path = VirtualPath::parse(path)?;
+        if !self.namespace_directory(&path.to_path_buf())? {
             return Err(io::Error::from(ErrorKind::NotFound));
         }
         Ok(self
             .mounts
             .iter()
-            .filter_map(|mount| {
-                let relative = mount.path.strip_prefix(&path).ok()?;
-                relative.components().find_map(|component| match component {
-                    Component::Normal(name) => Some(name.to_owned()),
-                    _ => None,
-                })
-            })
+            .filter_map(|mount| mount.path.strip_prefix(&path)?.first_component())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect())
@@ -101,29 +95,6 @@ impl MountTableFileSystem {
 
 fn invalid_path(message: &'static str) -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, message)
-}
-
-fn normalize(path: &Path) -> io::Result<PathBuf> {
-    if !path.is_absolute() {
-        return Err(invalid_path("mounted filesystem paths must be absolute"));
-    }
-    let mut normalized = PathBuf::from("/");
-    for component in path.components() {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(component) => normalized.push(component),
-            Component::ParentDir => {
-                if normalized == Path::new("/") {
-                    return Err(invalid_path("mounted filesystem path escapes its root"));
-                }
-                normalized.pop();
-            }
-            Component::Prefix(_) => {
-                return Err(invalid_path("mounted filesystem path has a native prefix"));
-            }
-        }
-    }
-    Ok(normalized)
 }
 
 fn namespace_metadata() -> FileMetadata {
@@ -200,7 +171,7 @@ impl EditorFileSystem for MountTableFileSystem {
 
     fn remove_directory(&self, path: &Path, recursive: bool) -> io::Result<()> {
         let (mount, relative) = self.route(path)?;
-        if relative == Path::new("/") {
+        if VirtualPath::parse(&relative)?.is_root() {
             return Err(io::Error::new(
                 ErrorKind::PermissionDenied,
                 "cannot remove a filesystem mount",
@@ -222,10 +193,7 @@ impl EditorFileSystem for MountTableFileSystem {
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         let (mount, relative) = self.route(path)?;
-        let canonical = mount.filesystem.canonicalize(&relative)?;
-        let relative = canonical
-            .strip_prefix("/")
-            .map_err(|_| invalid_path("mounted backend returned a non-rooted canonical path"))?;
-        Ok(mount.path.join(relative))
+        let canonical = VirtualPath::parse(&mount.filesystem.canonicalize(&relative)?)?;
+        Ok(mount.path.join(&canonical).to_path_buf())
     }
 }

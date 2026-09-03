@@ -3,10 +3,10 @@
 use std::ffi::OsString;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
 
 use neovm_core::emacs_core::fileio::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, WriteMode, WriteRequest,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, WriteMode,
+    WriteRequest,
 };
 
 use crate::browser_host;
@@ -145,10 +145,10 @@ fn current_metadata() -> io::Result<FileMetadata> {
         HostFileKind::Other => FileEntryKind::Other,
     };
     let modified = browser_host::filesystem_result_modified_milliseconds();
-    let modified = (modified.is_finite() && modified >= 0.0)
-        .then(|| Duration::try_from_secs_f64(modified / 1000.0).ok())
-        .flatten()
-        .and_then(|duration| UNIX_EPOCH.checked_add(duration));
+    let modified = (modified.is_finite() && modified >= 0.0).then(|| FileTimestamp {
+        seconds: (modified / 1000.0).floor() as i64,
+        nanoseconds: ((modified % 1000.0) * 1_000_000.0) as u32,
+    });
     Ok(FileMetadata {
         kind,
         len: result_len()?,
