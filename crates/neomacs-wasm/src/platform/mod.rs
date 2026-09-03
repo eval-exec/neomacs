@@ -16,6 +16,12 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 use winit::window::{Window, WindowId};
 
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = performance, js_name = now)]
+    fn browser_monotonic_time_milliseconds() -> f64;
+}
+
 thread_local! {
     static WORKER_FRAME: RefCell<Option<FrameGlyphBuffer>> = const { RefCell::new(None) };
     static WORKER_WINDOW: RefCell<Option<SurfaceWindow>> = const { RefCell::new(None) };
@@ -227,6 +233,8 @@ pub fn install_worker_presentation(bytes: &[u8]) -> Result<WorkerPresentationRec
 /// Start the browser frontend without emulating a never-returning native loop.
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
+    neovm_core::host_time::install_monotonic_clock(browser_monotonic_time_milliseconds)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let event_loop = EventLoop::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
     event_loop.spawn_app(BrowserFrontend::default());
     Ok(())

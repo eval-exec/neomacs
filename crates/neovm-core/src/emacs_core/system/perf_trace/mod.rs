@@ -1,6 +1,7 @@
+use crate::host_time::Instant;
 use std::cell::RefCell;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Clone, Copy)]
 pub(crate) enum HotpathOp {

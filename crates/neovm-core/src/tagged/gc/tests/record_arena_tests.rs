@@ -23,7 +23,7 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
 }
@@ -137,7 +137,7 @@ fn parity_two_cycle_record_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         heap.owns_non_cons_object(b_ptr),
@@ -166,7 +166,7 @@ fn parity_two_cycle_record_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(b);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         !heap.owns_non_cons_object(g1_ptr),
@@ -246,7 +246,7 @@ fn deferred_record_resolves_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     for (i, b) in records.iter().enumerate() {
@@ -383,7 +383,7 @@ fn record_reuse_within_one_cooperative_sweep_window() {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     assert!(heap.sweep_in_progress());
     assert!(!heap.incremental_sweep_slice(1), "3 pages need >1 slice");
 
@@ -439,7 +439,7 @@ fn record_sweep_live_bytes_track_variable_payload_sizes() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert_eq!(heap.live_bytes(), expected, "incremental site");
 }

@@ -21,6 +21,8 @@ pub(crate) enum HostWake {
 unsafe extern "C" {
     #[link_name = "wait_for_input"]
     safe fn imported_wait_for_input(timeout_milliseconds: f64) -> u32;
+    #[link_name = "monotonic_time_milliseconds"]
+    safe fn imported_monotonic_time_milliseconds() -> f64;
     safe fn startup_len() -> u32;
     safe fn copy_startup(destination: *mut u8, capacity: u32) -> u32;
     safe fn runtime_image_len() -> u32;
@@ -42,6 +44,10 @@ unsafe extern "C" {
 
 pub(crate) fn wait_for_input(timeout_milliseconds: f64) -> u32 {
     imported_wait_for_input(timeout_milliseconds)
+}
+
+pub(crate) fn monotonic_time_milliseconds() -> f64 {
+    imported_monotonic_time_milliseconds()
 }
 
 pub(crate) fn wait(timeout: Duration) -> Result<HostWake, String> {

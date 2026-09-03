@@ -20,6 +20,7 @@ ciborium.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-layout-engine.workspace = true
 neomacs-wgpu-runtime.workspace = true
+neovm-core.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures = "0.4"
 winit.workspace = true
