@@ -7,8 +7,8 @@ use super::portable_assets::{
     RUNTIME_RESOURCE_ID_ASSET, sha256_file,
 };
 use super::wasm_package::{
-    WEB_SOURCE_FILES, WasmArtifact, WasmPackageOptions, validate_output_destination,
-    validate_portable_assets, wasm_artifact,
+    WEB_REPOSITORY_ASSETS, WEB_SOURCE_FILES, WasmArtifact, WasmPackageOptions,
+    validate_output_destination, validate_portable_assets, wasm_artifact,
 };
 
 #[test]
@@ -16,6 +16,21 @@ fn wasm_package_includes_the_browser_text_service_adapter() {
     assert!(WEB_SOURCE_FILES.contains(&"browser-input.mjs"));
     assert!(WEB_SOURCE_FILES.contains(&"wasm-bootstrap.mjs"));
     assert!(WEB_SOURCE_FILES.contains(&"worker-assets.mjs"));
+}
+
+#[test]
+fn wasm_package_reuses_the_window_icon_as_its_favicon() {
+    assert_eq!(
+        WEB_REPOSITORY_ASSETS,
+        [(
+            "crates/neomacs-display-runtime/assets/window-icon.svg",
+            "favicon.svg"
+        )]
+    );
+    assert!(
+        include_str!("../../neomacs-wasm/web/index.html")
+            .contains(r#"<link rel="icon" type="image/svg+xml" href="./favicon.svg">"#)
+    );
 }
 
 #[test]
