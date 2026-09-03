@@ -13,13 +13,13 @@ use tempfile::NamedTempFile;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-const PORTABLE_RUNTIME_IMAGE_ASSET: &str = "neomacs.portable";
-const PORTABLE_RUNTIME_IMAGE_ID_ASSET: &str = "neomacs.portable.sha256";
+pub(super) const PORTABLE_RUNTIME_IMAGE_ASSET: &str = "neomacs.portable";
+pub(super) const PORTABLE_RUNTIME_IMAGE_ID_ASSET: &str = "neomacs.portable.sha256";
 // Use an opaque transport suffix: Android's asset packager treats `.gz` as a
 // directive to decompress the file and remove its suffix.  The bytes remain a
 // deterministic gzip-compressed tar archive on every host.
-const RUNTIME_RESOURCE_ARCHIVE_ASSET: &str = "neomacs-runtime.bundle";
-const RUNTIME_RESOURCE_ID_ASSET: &str = "neomacs-runtime.sha256";
+pub(super) const RUNTIME_RESOURCE_ARCHIVE_ASSET: &str = "neomacs-runtime.bundle";
+pub(super) const RUNTIME_RESOURCE_ID_ASSET: &str = "neomacs-runtime.sha256";
 const REQUIRED_RESOURCE_ROOTS: [&str; 2] = ["lisp", "etc"];
 const OPTIONAL_RESOURCE_ROOTS: [&str; 2] = ["leim", "info"];
 
@@ -217,7 +217,7 @@ fn persist(temporary: NamedTempFile, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+pub(super) fn sha256_file(path: &Path) -> Result<String> {
     let mut file = File::open(path)?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -235,7 +235,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         .collect())
 }
 
-fn validate_nonempty_file(path: &Path, description: &str) -> Result<()> {
+pub(super) fn validate_nonempty_file(path: &Path, description: &str) -> Result<()> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("cannot read {description} {}: {error}", path.display()))?;
     if !metadata.is_file() || metadata.len() == 0 {
