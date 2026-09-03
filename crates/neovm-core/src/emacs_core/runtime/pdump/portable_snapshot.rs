@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::types::DumpContextState;
-use super::{Context, DumpError, mark_after_pdump_load_hook_pending, restore_snapshot};
+use super::{Context, DumpError, mark_after_pdump_load_hook_pending, restore_snapshot_for_host};
 use crate::emacs_core::eval::{SubrEntry, registered_global_subr_entries};
 use crate::emacs_core::intern::resolve_name;
 use crate::tagged::header::SubrDispatchKind;
@@ -187,6 +187,16 @@ pub fn dump_portable_snapshot_to_file(eval: &Context, path: &Path) -> Result<(),
 /// bytes. Restoration marks the normal `after-pdump-load-hook` as pending, so
 /// host startup can share the same post-image initialization path as native.
 pub fn load_from_portable_snapshot(image: &[u8]) -> Result<Context, DumpError> {
+    load_from_portable_snapshot_for_host(image, neovm_host_abi::HostKind::CURRENT)
+}
+
+/// Restore a portable image against an explicit product-host primitive
+/// catalog. Native release tooling uses this same boundary to prove that the
+/// image it produces can be consumed by browser WebAssembly.
+pub fn load_from_portable_snapshot_for_host(
+    image: &[u8],
+    host: neovm_host_abi::HostKind,
+) -> Result<Context, DumpError> {
     if image.len() < CHECKSUM_END {
         return Err(DumpError::ImageFormatError(
             "portable snapshot header is truncated".into(),
@@ -234,7 +244,7 @@ pub fn load_from_portable_snapshot(image: &[u8]) -> Result<Context, DumpError> {
         )));
     }
 
-    let mut eval = restore_snapshot(&payload.state)?;
+    let mut eval = restore_snapshot_for_host(&payload.state, host)?;
     validate_subr_contract(&payload.required_subrs)?;
     mark_after_pdump_load_hook_pending(&mut eval);
     Ok(eval)
