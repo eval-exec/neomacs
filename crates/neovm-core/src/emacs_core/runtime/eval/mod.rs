@@ -2829,7 +2829,8 @@ pub struct Context {
     /// Browser Workers install this to suspend the Wasm stack without
     /// replacing the typed input channel. Native sessions leave it unset and
     /// use the unified OS input/process poller.
-    pub(crate) host_input_wait_backend: Option<Box<dyn crate::keyboard::HostInputWaitBackend>>,
+    pub(crate) host_input_wait_backend:
+        Option<Box<dyn crate::emacs_core::wait::HostInputWaitBackend>>,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
     eval_task_rx: Option<crossbeam_channel::Receiver<EvalThreadTask>>,

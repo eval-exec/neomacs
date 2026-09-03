@@ -511,7 +511,7 @@ impl Context {
     /// the evaluator never accepts untyped input directly from this callback.
     pub fn install_host_input_wait_backend(
         &mut self,
-        backend: impl crate::keyboard::HostInputWaitBackend + 'static,
+        backend: impl crate::emacs_core::wait::HostInputWaitBackend + 'static,
     ) {
         self.host_input_wait_backend = Some(Box::new(backend));
     }

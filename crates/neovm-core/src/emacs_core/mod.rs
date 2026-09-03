@@ -338,11 +338,11 @@ pub(crate) mod w32;
 std::cfg_select! {
     target_family = "wasm" => {
         #[path = "system/wait/portable.rs"]
-        pub(crate) mod wait;
+        pub mod wait;
     }
     _ => {
         #[path = "system/wait/mod.rs"]
-        pub(crate) mod wait;
+        pub mod wait;
     }
 }
 
@@ -418,6 +418,9 @@ mod gnu_defvar_special_test;
 #[cfg(test)]
 #[path = "tests/gnu_surface/subr.rs"]
 mod gnu_subr_surface_test;
+#[cfg(test)]
+#[path = "tests/host_input_wait.rs"]
+mod host_input_wait_test;
 #[cfg(test)]
 #[path = "editing/undo/tests/kill_ring.rs"]
 mod kill_ring_test;
