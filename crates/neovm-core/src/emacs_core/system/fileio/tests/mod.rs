@@ -1223,6 +1223,54 @@ fn test_builtin_copy_file_optional_arg_semantics() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// GNU `copy-file` gives KEEP-TIME semantic meaning independently of the
+/// platform copy primitive: a non-nil value preserves the source's
+/// last-modified time (`src/fileio.c:Fcopy_file`).
+#[test]
+fn copy_file_keep_time_preserves_source_modification_time() {
+    crate::test_utils::init_test_tracing();
+    let parent = std::path::Path::new(env!("CARGO_WORKSPACE_DIR"))
+        .join("target")
+        .join("neovm-core-fileio-tests");
+    fs::create_dir_all(&parent).expect("create workspace test directory");
+    let directory = tempfile::Builder::new()
+        .prefix("copy-keep-time-")
+        .tempdir_in(parent)
+        .expect("create copy-file fixture");
+    let source = directory.path().join("source.txt");
+    let destination = directory.path().join("destination.txt");
+    fs::write(&source, "contents").expect("create copy source");
+
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(86_400);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .expect("open copy source")
+        .set_times(fs::FileTimes::new().set_accessed(old).set_modified(old))
+        .expect("age copy source");
+
+    let mut eval = Context::new();
+    builtin_copy_file(
+        &mut eval,
+        vec![
+            Value::string(source.display().to_string()),
+            Value::string(destination.display().to_string()),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("copy file with KEEP-TIME");
+
+    let destination_modified = fs::metadata(&destination)
+        .expect("stat copied file")
+        .modified()
+        .expect("copied file modification time");
+    assert_eq!(
+        destination_modified, old,
+        "copy-file ignored non-nil KEEP-TIME"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn builtin_copy_file_handles_raw_unibyte_paths() {

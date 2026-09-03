@@ -242,6 +242,7 @@ jobs:
           test(windows_set_file_times_does_not_require_content_write_access) |
           test(windows_file_writable_p_accepts_existing_directory_forms) |
           test(windows_copy_file_without_keep_time_refreshes_timestamps) |
+          test(copy_file_keep_time_preserves_source_modification_time) |
           test(backup_buffer_uses_rename_when_copying_is_disabled)'
 
   # The native Rust tests above isolate backend/thread/lifecycle failures.  A
