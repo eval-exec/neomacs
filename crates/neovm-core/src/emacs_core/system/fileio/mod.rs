@@ -600,6 +600,7 @@ pub fn file_truename(filename: &str, default_dir: Option<&str>) -> String {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn file_truename_lisp_inner(
+    filesystem: &dyn EditorFileSystem,
     filename: &crate::heap_types::LispString,
     default_dir: &crate::heap_types::LispString,
     remaining_links: &mut i64,
@@ -633,6 +634,7 @@ fn file_truename_lisp_inner(
                 dir = cached;
             } else {
                 let new = lisp_file_name_as_directory(&file_truename_lisp_inner(
+                    filesystem,
                     &dirfile,
                     &default_dir,
                     remaining_links,
@@ -656,7 +658,11 @@ fn file_truename_lisp_inner(
         }
 
         filename = concat_file_name_lisp(&dir, &filename_no_dir);
-        match file_symlink_target_lisp(&filename) {
+        match filesystem
+            .read_link(&lisp_file_name_to_path_buf(&filename))
+            .ok()
+            .map(|target| path_to_lisp_file_name(&target))
+        {
             Some(target) => {
                 filename = lisp_files_splice_dirname_file(&dir, &target);
             }
@@ -667,6 +673,7 @@ fn file_truename_lisp_inner(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn file_truename_lisp(
+    filesystem: &dyn EditorFileSystem,
     filename: &crate::heap_types::LispString,
     default_dir: Option<&crate::heap_types::LispString>,
 ) -> Result<crate::heap_types::LispString, Flow> {
@@ -675,7 +682,13 @@ fn file_truename_lisp(
         .unwrap_or_else(fallback_root_default_directory);
     let mut remaining_links = 100;
     let mut prev_dirs = HashMap::new();
-    file_truename_lisp_inner(filename, &default_dir, &mut remaining_links, &mut prev_dirs)
+    file_truename_lisp_inner(
+        filesystem,
+        filename,
+        &default_dir,
+        &mut remaining_links,
+        &mut prev_dirs,
+    )
 }
 
 fn join_file_name(base: &str, name: &str) -> String {
@@ -2866,6 +2879,7 @@ pub(crate) fn builtin_file_truename(eval: &mut Context, args: Vec<Value>) -> Eva
 
     let default_dir = default_directory_lisp_for_eval(eval);
     Ok(Value::heap_string(file_truename_lisp(
+        eval.editor_file_system(),
         &filename,
         default_dir.as_ref(),
     )?))
@@ -6968,7 +6982,7 @@ pub(crate) fn builtin_find_file_noselect(
         let _ = eval
             .buffers
             .set_buffer_file_name(buf_id, Value::heap_string(abs_path.clone()));
-        let truename = file_truename_lisp(&abs_path, None)?;
+        let truename = file_truename_lisp(eval.editor_file_system(), &abs_path, None)?;
         let _ = eval
             .buffers
             .set_buffer_file_truename(buf_id, Value::heap_string(truename));

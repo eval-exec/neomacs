@@ -196,4 +196,13 @@ impl EditorFileSystem for MountTableFileSystem {
         let canonical = VirtualPath::parse(&mount.filesystem.canonicalize(&relative)?)?;
         Ok(mount.path.join(&canonical).to_path_buf())
     }
+
+    fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
+        let (mount, relative) = self.route(path)?;
+        let target = mount.filesystem.read_link(&relative)?;
+        match VirtualPath::parse(&target) {
+            Ok(target) => Ok(mount.path.join(&target).to_path_buf()),
+            Err(_) => Ok(target),
+        }
+    }
 }
