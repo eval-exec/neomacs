@@ -2385,6 +2385,29 @@ fn test_builtin_make_nearby_temp_file_eval_relative_prefix_uses_temp_dir() {
 }
 
 #[test]
+fn temp_prefix_helpers_use_editor_filename_syntax() {
+    crate::test_utils::init_test_tracing();
+
+    let temp_dir = LispString::from_utf8("/tmp/");
+    let absolute = LispString::from_utf8("/neomacs-fake/cache-");
+    let relative = LispString::from_utf8("cache-");
+
+    assert_eq!(
+        temp_file_absolute_prefix(&temp_dir, &absolute).as_bytes(),
+        b"/neomacs-fake/cache-"
+    );
+    assert_eq!(
+        temp_file_absolute_prefix(&temp_dir, &relative).as_bytes(),
+        b"/tmp/cache-"
+    );
+
+    let (directory, name) = split_nearby_temp_prefix(&absolute).unwrap();
+    assert_eq!(directory.as_bytes(), b"/neomacs-fake");
+    assert_eq!(name.as_bytes(), b"cache-");
+    assert!(split_nearby_temp_prefix(&relative).is_none());
+}
+
+#[test]
 fn test_builtin_file_predicates() {
     crate::test_utils::init_test_tracing();
     let result = call_fileio_builtin!(builtin_file_exists_p, vec![Value::string("/tmp")]);
