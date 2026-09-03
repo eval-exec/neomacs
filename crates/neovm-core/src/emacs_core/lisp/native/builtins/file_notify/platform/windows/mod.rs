@@ -143,7 +143,7 @@ mod native {
     };
     use super::*;
     use crate::emacs_core::process::WaitNotifier;
-    use worker::{Worker, WorkerFailure, WorkerMessage};
+    use worker::{Worker, WorkerMessage, WorkerTermination};
 
     struct W32Watch {
         common: FileWatch<W32Request>,
@@ -160,8 +160,8 @@ mod native {
 
     #[derive(Default)]
     pub(crate) struct W32NotifyBackend {
-        tx: Option<DeliverySender<WorkerMessage, WorkerFailure>>,
-        rx: Option<DeliveryReceiver<WorkerMessage, WorkerFailure>>,
+        tx: Option<DeliverySender<WorkerMessage, WorkerTermination>>,
+        rx: Option<DeliveryReceiver<WorkerMessage, WorkerTermination>>,
         watches: Vec<W32Watch>,
         ids: WatchIdAllocator,
     }
@@ -249,7 +249,6 @@ mod native {
         fn drain_events(&mut self) -> Result<DrainBatch<Self::Event>, Flow> {
             let mut events = Vec::new();
             let mut rescans = Vec::new();
-            let mut failures = Vec::new();
             let mut terminated = Vec::new();
             let mut delivery_overflow = false;
             if let Some(rx) = self.rx.as_ref() {
@@ -261,10 +260,19 @@ mod native {
                             WorkerMessage::Event(event) => events.push(event),
                             WorkerMessage::Overflow(watch_id) => rescans.push(watch_id),
                         },
-                        DeliveryRecord::Control(WorkerFailure { watch_id, error }) => {
-                            failures.push(format!("watch {}: {error}", watch_id.slot()));
-                            terminated.push(watch_id);
-                        }
+                        DeliveryRecord::Control(termination) => match termination {
+                            WorkerTermination::Invalidated { watch_id } => {
+                                terminated.push(watch_id);
+                            }
+                            WorkerTermination::Failed { watch_id, error } => {
+                                tracing::warn!(
+                                    watch = watch_id.slot(),
+                                    %error,
+                                    "Windows file-notification worker exited"
+                                );
+                                terminated.push(watch_id);
+                            }
+                        },
                     }
                 }
             }
@@ -297,17 +305,10 @@ mod native {
                 self.tx = None;
                 self.rx = None;
             }
-            let failure = (!failures.is_empty()).then(|| {
-                file_notify_error(
-                    "Error while retrieving file system events",
-                    Some(failures.join("\n")),
-                    None,
-                )
-            });
             Ok(DrainBatch {
                 events,
                 terminated,
-                failure,
+                failure: None,
             })
         }
 

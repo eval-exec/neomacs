@@ -15,7 +15,8 @@ use std::ptr;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use windows_sys::Win32::Foundation::{
-    ERROR_OPERATION_ABORTED, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0,
+    ERROR_ACCESS_DENIED, ERROR_OPERATION_ABORTED, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED,
+    WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_OVERLAPPED,
@@ -34,9 +35,16 @@ pub(super) enum WorkerMessage {
     Overflow(WatchId),
 }
 
-pub(super) struct WorkerFailure {
-    pub(super) watch_id: WatchId,
-    pub(super) error: String,
+/// Why an already-armed Windows watch stopped.
+///
+/// GNU exposes initial registration errors synchronously, but an asynchronous
+/// worker exit only invalidates the descriptor (`w32notify-valid-p' becomes
+/// nil). Keeping expected invalidation distinct from an abnormal worker exit
+/// lets the evaluator retire both without turning either into an unrelated
+/// Lisp read error, while still logging unexpected failures.
+pub(super) enum WorkerTermination {
+    Invalidated { watch_id: WatchId },
+    Failed { watch_id: WatchId, error: String },
 }
 
 enum StartupReport {
@@ -56,7 +64,7 @@ impl Worker {
         native_filter: u32,
         watch_id: WatchId,
         activity: WatchActivity,
-        events: DeliverySender<WorkerMessage, WorkerFailure>,
+        events: DeliverySender<WorkerMessage, WorkerTermination>,
     ) -> Result<Self, String> {
         let (directory, watched_name) = if path.is_dir() {
             (path.to_path_buf(), None)
@@ -127,7 +135,7 @@ fn run(
     native_filter: u32,
     watch_id: WatchId,
     activity: WatchActivity,
-    events: DeliverySender<WorkerMessage, WorkerFailure>,
+    events: DeliverySender<WorkerMessage, WorkerTermination>,
     startup: SyncSender<StartupReport>,
 ) {
     let directory_raw = directory.as_raw_handle() as HANDLE;
@@ -155,7 +163,7 @@ fn run(
                     let _ = startup.send(StartupReport::Failed(error.to_string()));
                     return;
                 }
-                fail(&activity, events, watch_id, error.to_string());
+                finish_after_io_error(&activity, events, watch_id, error);
                 return;
             }
         };
@@ -178,7 +186,7 @@ fn run(
             } else {
                 format!("unexpected wait result {ready}")
             };
-            fail(&activity, events, watch_id, error);
+            finish_after_worker_failure(&activity, events, watch_id, error);
             return;
         }
 
@@ -188,7 +196,7 @@ fn run(
                 if error.raw_os_error() == Some(ERROR_OPERATION_ABORTED as i32) {
                     return;
                 }
-                fail(&activity, events, watch_id, error.to_string());
+                finish_after_io_error(&activity, events, watch_id, error);
                 return;
             }
         };
@@ -308,13 +316,42 @@ impl Drop for PendingDirectoryRead<'_> {
     }
 }
 
-fn fail(
+fn finish_after_io_error(
     activity: &WatchActivity,
-    events: DeliverySender<WorkerMessage, WorkerFailure>,
+    events: DeliverySender<WorkerMessage, WorkerTermination>,
+    watch_id: WatchId,
+    error: std::io::Error,
+) {
+    let termination = if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
+        WorkerTermination::Invalidated { watch_id }
+    } else {
+        WorkerTermination::Failed {
+            watch_id,
+            error: error.to_string(),
+        }
+    };
+    finish(activity, events, termination);
+}
+
+fn finish_after_worker_failure(
+    activity: &WatchActivity,
+    events: DeliverySender<WorkerMessage, WorkerTermination>,
     watch_id: WatchId,
     error: String,
 ) {
-    events.finish_with(WorkerFailure { watch_id, error }, || activity.terminate());
+    finish(
+        activity,
+        events,
+        WorkerTermination::Failed { watch_id, error },
+    );
+}
+
+fn finish(
+    activity: &WatchActivity,
+    events: DeliverySender<WorkerMessage, WorkerTermination>,
+    termination: WorkerTermination,
+) {
+    events.finish_with(termination, || activity.terminate());
 }
 
 fn open_directory(path: &Path) -> Result<OwnedHandle, String> {
