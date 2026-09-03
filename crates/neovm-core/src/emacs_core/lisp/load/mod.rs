@@ -5554,6 +5554,7 @@ fn finalize_cached_bootstrap_eval(
             project_root,
             &lisp_dir,
             include_site_lisp,
+            eval.runtime_resource_store(),
         )),
     );
 
@@ -5622,6 +5623,13 @@ fn finalize_cached_bootstrap_eval(
 }
 
 pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
+    bootstrap_load_path_entries_with_resources(lisp_dir, None)
+}
+
+fn bootstrap_load_path_entries_with_resources(
+    lisp_dir: &Path,
+    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+) -> Vec<Value> {
     let mut load_path_entries = Vec::new();
     for sub in BOOTSTRAP_LOAD_PATH_SUBDIRS {
         let dir = if sub.is_empty() {
@@ -5629,7 +5637,9 @@ pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
         } else {
             lisp_dir.join(sub)
         };
-        if dir.is_dir() {
+        if runtime_resources.is_some_and(|resources| resources.directory_exists(&dir))
+            || dir.is_dir()
+        {
             load_path_entries.push(Value::string(
                 crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&dir),
             ));
@@ -5641,14 +5651,14 @@ pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
 /// The default `load-path`: the site-lisp directories in front of the
 /// bundled Lisp tree, mirroring the list GNU's `init_lread` hands to the
 /// `EMACSLOADPATH` splice (`src/lread.c:5477-5489`).
-fn default_load_path_entries(lisp_dir: &Path, site_lisp: &[PathBuf]) -> Vec<Value> {
+fn default_load_path_entries(lisp_dir: &Path, site_lisp: &[PathBuf], runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>) -> Vec<Value> {
     let mut entries: Vec<Value> = site_lisp
         .iter()
         .map(|dir| {
             Value::string(crate::emacs_core::fileio::host_path_to_lisp_file_name_string(dir))
         })
         .collect();
-    entries.extend(bootstrap_load_path_entries(lisp_dir));
+    entries.extend(bootstrap_load_path_entries_with_resources(lisp_dir, runtime_resources));
     entries
 }
 
@@ -5738,22 +5748,33 @@ fn runtime_load_path_entries(
     project_root: &Path,
     lisp_dir: &Path,
     include_site_lisp: bool,
+    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
 ) -> Vec<Value> {
     let site_lisp = if include_site_lisp {
         site_lisp_load_path_entries(project_root)
     } else {
         Vec::new()
     };
-    runtime_load_path_entries_from_os(lisp_dir, std::env::var_os("EMACSLOADPATH"), &site_lisp)
+    runtime_load_path_entries_from_os_with_resources(lisp_dir, std::env::var_os("EMACSLOADPATH"), &site_lisp, runtime_resources)
 }
 
 /// Testable core of [`runtime_load_path_entries`].
+#[cfg(test)]
 pub(crate) fn runtime_load_path_entries_from_os(
     lisp_dir: &Path,
     emacs_load_path: Option<std::ffi::OsString>,
     site_lisp: &[PathBuf],
 ) -> Vec<Value> {
-    let default_load_path = default_load_path_entries(lisp_dir, site_lisp);
+    runtime_load_path_entries_from_os_with_resources(lisp_dir, emacs_load_path, site_lisp, None)
+}
+
+fn runtime_load_path_entries_from_os_with_resources(
+    lisp_dir: &Path,
+    emacs_load_path: Option<std::ffi::OsString>,
+    site_lisp: &[PathBuf],
+    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+) -> Vec<Value> {
+    let default_load_path = default_load_path_entries(lisp_dir, site_lisp, runtime_resources);
     let Some(emacs_load_path) = emacs_load_path else {
         return default_load_path;
     };

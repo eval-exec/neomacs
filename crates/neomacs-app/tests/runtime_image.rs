@@ -3,16 +3,19 @@
 use std::cell::Cell;
 use std::io::Cursor;
 
+use flate2::{Compression, GzBuilder};
 use neomacs_app::host::{ExecutionEngine, HostKind, HostProfile, RuntimeImageModel};
 use neomacs_app::runtime_image::{
     ExtractedRuntimeImage, PORTABLE_FINAL_RUNTIME_IMAGE_ASSET,
     PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET, RuntimeImageError, RuntimeImageInstall,
     RuntimeImageProvisionError, RuntimeImageSource,
 };
+use neomacs_app::runtime_resources::MountedRuntimeResources;
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::pdump::{dump_to_file, encode_portable_snapshot, load_from_dump};
 use neovm_core::emacs_core::value::Value;
 use sha2::{Digest, Sha256};
+use tar::{Builder, Header};
 
 fn content_id(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -21,15 +24,46 @@ fn content_id(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn runtime_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let encoder = GzBuilder::new()
+        .mtime(0)
+        .write(Vec::new(), Compression::fast());
+    let mut archive = Builder::new(encoder);
+    for (path, contents) in entries {
+        let mut header = Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, path, Cursor::new(*contents))
+            .unwrap();
+    }
+    archive.into_inner().unwrap().finish().unwrap()
+}
+
+fn mounted_runtime_resources(entries: &[(&str, &[u8])]) -> MountedRuntimeResources {
+    let archive = runtime_archive(entries);
+    let id = content_id(&archive);
+    MountedRuntimeResources::from_bundle(std::path::Path::new("/neomacs"), &archive, id.as_bytes())
+        .expect("mount browser runtime bundle")
+}
+
 #[test]
 fn browser_profile_loads_linear_memory_snapshot() {
     let mut eval = Context::new();
     eval.set_variable("runtime-image-value", Value::fixnum(42));
     eval.set_variable("load-in-progress", Value::T);
     let bytes = encode_portable_snapshot(&eval).expect("encode portable image");
+    let resources = mounted_runtime_resources(&[
+        ("lisp/loadup.el", b"(provide 'loadup)"),
+        ("etc/NEWS", b"news"),
+    ]);
 
     let mut loaded = RuntimeImageSource::LinearMemory(&bytes)
-        .load_for(HostProfile::WASM)
+        .load_for_with_mounted_runtime_resources(HostProfile::WASM, resources)
         .expect("load browser runtime image");
 
     assert_eq!(
@@ -55,6 +89,41 @@ fn browser_profile_loads_linear_memory_snapshot() {
         Some("/neomacs/etc/"),
         "browser startup must not discover a build-machine filesystem root",
     );
+}
+
+#[test]
+fn browser_image_load_installs_its_authenticated_runtime_resource_mount() {
+    let image = encode_portable_snapshot(&Context::new()).expect("encode portable image");
+    let resources = mounted_runtime_resources(&[
+        (
+            "lisp/browser-runtime-probe.el",
+            b"(setq browser-runtime-probe 104)\n",
+        ),
+        ("etc/NEWS", b"news"),
+    ]);
+
+    let mut loaded = RuntimeImageSource::LinearMemory(&image)
+        .load_for_with_mounted_runtime_resources(HostProfile::WASM, resources)
+        .expect("load browser image with mounted resources");
+
+    assert_eq!(
+        loaded
+            .eval_str("(progn (load \"browser-runtime-probe\") browser-runtime-probe)")
+            .expect("load Lisp from restored browser runtime root"),
+        Value::fixnum(104),
+    );
+}
+
+#[test]
+fn browser_image_rejects_startup_without_its_runtime_resource_mount() {
+    let image = encode_portable_snapshot(&Context::new()).expect("encode portable image");
+
+    assert!(matches!(
+        RuntimeImageSource::LinearMemory(&image).load_for(HostProfile::WASM),
+        Err(RuntimeImageError::RuntimeResourceMountRequired {
+            host: HostKind::Wasm,
+        })
+    ));
 }
 
 #[test]
