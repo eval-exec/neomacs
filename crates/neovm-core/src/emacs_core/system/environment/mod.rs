@@ -66,7 +66,26 @@ fn repair_native_process_environment(entries: &mut Vec<(String, String)>) {
 fn host_process_environment() -> Value {
     let mut entries = match ProcessEnvironmentModel::CURRENT {
         ProcessEnvironmentModel::InheritedNative => inherited_native_process_environment(),
-        ProcessEnvironmentModel::Empty => Vec::new(),
+        ProcessEnvironmentModel::BrowserVirtualPaths => vec![
+            ("HOME".to_owned(), "/neomacs-fake".to_owned()),
+            (
+                "XDG_CONFIG_HOME".to_owned(),
+                "/neomacs-fake/.config".to_owned(),
+            ),
+            (
+                "XDG_CACHE_HOME".to_owned(),
+                "/neomacs-fake/.cache".to_owned(),
+            ),
+            (
+                "XDG_DATA_HOME".to_owned(),
+                "/neomacs-fake/.local/share".to_owned(),
+            ),
+            (
+                "XDG_STATE_HOME".to_owned(),
+                "/neomacs-fake/.local/state".to_owned(),
+            ),
+            ("TMPDIR".to_owned(), "/tmp".to_owned()),
+        ],
     };
     repair_native_process_environment(&mut entries);
 
