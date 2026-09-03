@@ -479,6 +479,23 @@ fn presented_pointer_map_rejects_spans_outside_the_matching_primitive_table() {
 }
 
 #[test]
+fn presented_pointer_appearance_count_uses_the_full_u32_index_domain() {
+    assert!(super::presented_pointer::appearance_count_fits_protocol(0));
+    assert!(super::presented_pointer::appearance_count_fits_protocol(
+        u32::MAX as usize
+    ));
+
+    if let Ok(full_domain) = usize::try_from(u64::from(u32::MAX) + 1) {
+        assert!(super::presented_pointer::appearance_count_fits_protocol(
+            full_domain
+        ));
+        assert!(!super::presented_pointer::appearance_count_fits_protocol(
+            full_domain + 1
+        ));
+    }
+}
+
+#[test]
 fn presented_pointer_map_rejects_empty_spans_and_unknown_faces() {
     let face_id = FaceId::new(7);
     let empty_span = PresentedPointerAppearance::new(

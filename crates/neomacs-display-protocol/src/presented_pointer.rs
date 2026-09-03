@@ -1717,7 +1717,7 @@ impl PresentedPointerSourceMap {
         let new_len = offset
             .checked_add(other.appearances.len())
             .ok_or(PresentedPointerMapError::PaintSpanOutOfRange)?;
-        if new_len > u32::MAX as usize + 1 {
+        if !appearance_count_fits_protocol(new_len) {
             return Err(PresentedPointerMapError::PaintSpanOutOfRange);
         }
         let mut remapped_regions = Vec::with_capacity(other.regions.len());
@@ -1893,6 +1893,17 @@ impl PresentedPointerSourceMap {
         }
         Ok((regions, resolved_appearances))
     }
+}
+
+/// Whether every zero-based index in an appearance table fits the wire ID.
+///
+/// Expressing the bound in terms of the last index avoids materializing the
+/// cardinality `u32::MAX + 1` in `usize`, where it is unrepresentable on
+/// wasm32 even though every possible wasm32 table length is valid.
+pub(crate) fn appearance_count_fits_protocol(count: usize) -> bool {
+    count
+        .checked_sub(1)
+        .is_none_or(|last_index| u32::try_from(last_index).is_ok())
 }
 
 impl PresentedPointerRegion {
