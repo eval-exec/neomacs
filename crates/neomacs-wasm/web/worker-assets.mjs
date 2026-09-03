@@ -1,8 +1,9 @@
 const assetSpecs = [
-  ["wasmResponse", "wasmUrl", "editor Worker Wasm", false],
-  ["runtimeImage", "runtimeImageUrl", "portable runtime image", true],
-  ["runtimeResourceBundle", "runtimeResourceBundleUrl", "runtime resource bundle", true],
-  ["runtimeResourceId", "runtimeResourceIdUrl", "runtime resource bundle ID", true],
+  ["wasmResponse", "wasmUrl", "editor Worker Wasm"],
+  ["runtimeImage", "runtimeImageUrl", "portable runtime image"],
+  ["runtimeImageId", "runtimeImageIdUrl", "portable runtime image ID"],
+  ["runtimeResourceBundle", "runtimeResourceBundleUrl", "runtime resource bundle"],
+  ["runtimeResourceId", "runtimeResourceIdUrl", "runtime resource bundle ID"],
 ];
 
 /** Fetch the complete immutable input set for one editor Worker instance. */
