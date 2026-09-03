@@ -13,14 +13,33 @@ fn workspace_temp_dir() -> tempfile::TempDir {
 
 fn context_with_gnu_files() -> Context {
     let mut eval = Context::new();
-    crate::test_utils::load_minimal_gnu_backquote_runtime(&mut eval);
-    crate::test_utils::load_gnu_macroexp_runtime(&mut eval);
     let lisp = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("lisp");
-    // GNU loadup.el establishes these definitions before files.el.  Load the
-    // same source-owned prerequisites instead of using runtime_startup_context:
-    // the latter requires every generated charset and therefore cannot run in
-    // the small native-contract CI job.
-    for relative in ["keymap.el", "version.el", "widget.el", "custom.el"] {
+    eval.set_lexical_binding(true);
+    eval.set_variable(
+        "load-path",
+        Value::list(crate::emacs_core::load::bootstrap_load_path_entries(&lisp)),
+    );
+    // This is GNU loadup.el's exact source order through files.el.  Loading
+    // explicit source paths makes the test independent of ignored .elc files
+    // in a developer checkout; runtime_startup_context is unsuitable because
+    // it additionally requires every generated charset artifact.
+    for relative in [
+        "emacs-lisp/debug-early.el",
+        "emacs-lisp/byte-run.el",
+        "emacs-lisp/backquote.el",
+        "subr.el",
+        "keymap.el",
+        "version.el",
+        "widget.el",
+        "custom.el",
+        "emacs-lisp/map-ynp.el",
+        "international/mule.el",
+        "international/mule-conf.el",
+        "env.el",
+        "format.el",
+        "bindings.el",
+        "window.el",
+    ] {
         crate::emacs_core::load::load_file(&mut eval, &lisp.join(relative))
             .unwrap_or_else(|error| panic!("load GNU {relative}: {error:?}"));
     }
