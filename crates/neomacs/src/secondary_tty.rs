@@ -23,19 +23,31 @@ pub struct SecondaryTtyRegistry {
 
 impl SecondaryTtyRegistry {
     pub fn render_selected(&self, eval: &mut neovm_core::emacs_core::Context) -> bool {
+        frame_layout::REDISPLAY_RUNTIME.with(|runtime| self.render_selected_with(eval, runtime))
+    }
+
+    pub fn render_selected_with(
+        &self,
+        eval: &mut neovm_core::emacs_core::Context,
+        runtime: &neomacs_app::presentation::EditorPresentationRuntime,
+    ) -> bool {
         #[cfg(not(unix))]
         {
-            let _ = eval;
+            let _ = (eval, runtime);
             return false;
         }
         #[cfg(unix)]
         {
-            self.render_selected_unix(eval)
+            self.render_selected_unix(eval, runtime)
         }
     }
 
     #[cfg(unix)]
-    fn render_selected_unix(&self, eval: &mut neovm_core::emacs_core::Context) -> bool {
+    fn render_selected_unix(
+        &self,
+        eval: &mut neovm_core::emacs_core::Context,
+        runtime: &neomacs_app::presentation::EditorPresentationRuntime,
+    ) -> bool {
         let Some((terminal_id, is_tty)) = eval
             .frame_manager()
             .selected_frame()
@@ -53,7 +65,7 @@ impl SecondaryTtyRegistry {
             return false;
         }
 
-        let presentations = frame_layout::run_tty_layout_tree(eval);
+        let presentations = frame_layout::run_tty_layout_tree_with(runtime, eval);
         let mut sessions = self
             .sessions
             .lock()

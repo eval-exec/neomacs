@@ -8,7 +8,7 @@
 
 mod blocking;
 mod transport;
-pub use blocking::EditorSessionExit;
+pub use blocking::{EditorSessionExit, StoppedEditorSession};
 std::cfg_select! {
     target_family = "wasm" => {}
     _ => {
@@ -19,7 +19,7 @@ std::cfg_select! {
 
 use std::rc::Rc;
 
-use crossbeam_channel::{Sender, unbounded};
+use crossbeam_channel::unbounded;
 use neomacs_display_protocol::SealedFramePresentation;
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::wait::HostInputWaitBackend;
@@ -35,9 +35,40 @@ pub use transport::{
 /// Evaluator state wired to one frontend's input and presentation streams.
 pub struct EditorSession {
     evaluator: Context,
-    presentation: EditorPresentationRuntime,
-    frame_tx: Sender<SealedFramePresentation>,
+    presentation: SessionPresentationTransport,
+}
+
+/// Decision made by a host-specific redisplay route before GUI publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionRedisplayAction {
+    /// Continue through the session's shared presentation runtime.
+    Publish,
+    /// A different host renderer, such as a selected secondary TTY, handled it.
+    Handled,
+}
+
+#[derive(Clone)]
+struct SessionPresentationTransport {
+    runtime: EditorPresentationRuntime,
+    route: Rc<dyn Fn(&mut Context) -> SessionRedisplayAction>,
+    try_publish: Rc<dyn Fn(SealedFramePresentation) -> bool>,
     notify_frontend: Rc<dyn Fn()>,
+}
+
+impl SessionPresentationTransport {
+    fn publish(&self, evaluator: &mut Context) -> FramePublishResult {
+        evaluator.setup_thread_locals();
+        if (self.route)(evaluator) == SessionRedisplayAction::Handled {
+            return FramePublishResult::default();
+        }
+        let result = self
+            .runtime
+            .publish_visible_frames(evaluator, |frame| (self.try_publish)(frame));
+        if result.published() > 0 {
+            (self.notify_frontend)();
+        }
+        result
+    }
 }
 
 impl EditorSession {
@@ -62,43 +93,69 @@ impl EditorSession {
         );
         evaluator.init_input_system(input_rx);
 
-        let presentation = EditorPresentationRuntime::new(metrics);
-        presentation.install_evaluator_query_hooks(&mut evaluator);
-
         let (frame_tx, frame_rx) = unbounded();
-        let notify_frontend: Rc<dyn Fn()> = Rc::new(notify_frontend);
-        let redisplay_runtime = presentation.clone();
-        let redisplay_tx = frame_tx.clone();
-        let redisplay_notify = Rc::clone(&notify_frontend);
-        evaluator.redisplay_fn = Some(Box::new(move |evaluator| {
-            publish_presentations(
-                &redisplay_runtime,
-                evaluator,
-                &redisplay_tx,
-                redisplay_notify.as_ref(),
-            );
-        }));
+        let session = Self::attach_presentation_transport(
+            evaluator,
+            EditorPresentationRuntime::new(metrics),
+            |_| SessionRedisplayAction::Publish,
+            move |frame| frame_tx.try_send(frame).is_ok(),
+            notify_frontend,
+        );
 
         let frontend = EditorFrontend::new(input, frame_rx);
-        (
-            Self {
-                evaluator,
-                presentation,
-                frame_tx,
-                notify_frontend,
-            },
-            frontend,
+        (session, frontend)
+    }
+
+    /// Attach an evaluator whose host has already installed its input channel.
+    ///
+    /// Native GUI adapters use this form because their input vocabulary also
+    /// contains platform observations beyond [`crate::frontend_event::FrontendEvent`].
+    /// Presentation ownership, query hooks, initial publication, and command
+    /// loop lifecycle still remain inside this session.
+    pub fn attach_host_transport(
+        evaluator: Context,
+        presentation: EditorPresentationRuntime,
+        route: impl Fn(&mut Context) -> SessionRedisplayAction + 'static,
+        try_publish: impl Fn(SealedFramePresentation) -> bool + 'static,
+        notify_frontend: impl Fn() + 'static,
+    ) -> Self {
+        Self::attach_presentation_transport(
+            evaluator,
+            presentation,
+            route,
+            try_publish,
+            notify_frontend,
         )
+    }
+
+    fn attach_presentation_transport(
+        mut evaluator: Context,
+        presentation: EditorPresentationRuntime,
+        route: impl Fn(&mut Context) -> SessionRedisplayAction + 'static,
+        try_publish: impl Fn(SealedFramePresentation) -> bool + 'static,
+        notify_frontend: impl Fn() + 'static,
+    ) -> Self {
+        evaluator.setup_thread_locals();
+        presentation.install_evaluator_query_hooks(&mut evaluator);
+        let transport = SessionPresentationTransport {
+            runtime: presentation,
+            route: Rc::new(route),
+            try_publish: Rc::new(try_publish),
+            notify_frontend: Rc::new(notify_frontend),
+        };
+        let redisplay_transport = transport.clone();
+        evaluator.redisplay_fn = Some(Box::new(move |evaluator| {
+            redisplay_transport.publish(evaluator);
+        }));
+        Self {
+            evaluator,
+            presentation: transport,
+        }
     }
 
     /// Publish the currently visible frame forest immediately.
     pub fn publish_now(&mut self) -> FramePublishResult {
-        publish_presentations(
-            &self.presentation,
-            &mut self.evaluator,
-            &self.frame_tx,
-            self.notify_frontend.as_ref(),
-        )
+        self.presentation.publish(&mut self.evaluator)
     }
 
     /// Install the host suspension boundary used while this session waits for
@@ -114,18 +171,4 @@ impl EditorSession {
     ) {
         self.evaluator.install_host_input_wait_backend(backend);
     }
-}
-
-fn publish_presentations(
-    presentation: &EditorPresentationRuntime,
-    evaluator: &mut Context,
-    frame_tx: &Sender<SealedFramePresentation>,
-    notify_frontend: &dyn Fn(),
-) -> FramePublishResult {
-    let result =
-        presentation.publish_visible_frames(evaluator, |frame| frame_tx.try_send(frame).is_ok());
-    if result.published() > 0 {
-        notify_frontend();
-    }
-    result
 }

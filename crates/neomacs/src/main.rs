@@ -128,6 +128,8 @@ use neomacs_app::initial_surface::{
     InitialBackgroundMode, InitialDisplayType, InitialEditorSurface, InitialEditorSurfaceSpec,
     InitialFrameFont, InitialFrameMetrics, prepare_initial_editor_surface_with_gui_setup,
 };
+use neomacs_app::presentation::{EditorPresentationRuntime, PresentationMetrics};
+use neomacs_app::session::{EditorSession, SessionRedisplayAction};
 use neomacs_display_protocol::{VideoId, VisualConfig, WebViewId};
 use neomacs_display_runtime::display_scale::observe_event_loop_display;
 #[cfg(not(feature = "neo-term"))]
@@ -3581,34 +3583,55 @@ fn run_gui_evaluator_worker(
     )));
     install_diagnostics_eval_hooks(&mut evaluator);
 
-    frame_layout::REDISPLAY_RUNTIME.with(|runtime| {
-        runtime.use_scalable_metrics(bootstrap_display.font_sizing());
-    });
-    let frame_tx = emacs_comms.frame_tx;
-    let initial_frame_tx = frame_tx.clone();
-    let redisplay_waker = render_waker.clone();
-    let secondary_ttys_for_redisplay = secondary_ttys.clone();
-    evaluator.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
-        if !secondary_ttys_for_redisplay.render_selected(eval) {
-            publish_gui_frame(eval, &frame_tx, Some(&redisplay_waker));
-        }
-    }));
-    frame_layout::install_frame_snapshot_fn(&mut evaluator);
-    frame_layout::install_window_layout_query_fn(&mut evaluator);
-    publish_gui_frame(&mut evaluator, &initial_frame_tx, Some(&render_waker));
-
     if let Some(buf) = evaluator.buffer_manager_mut().current_buffer_mut() {
         let mut ul = buf.get_undo_list();
         neovm_core::buffer::undo_list_boundary(&mut ul);
         buf.set_undo_list(ul);
     }
 
-    neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut evaluator);
-    // R2-C3: native-from-call-1 — prepopulate the AOT preload before first dispatch.
-    maybe_prepopulate_aot(mode, &evaluator);
+    let presentation = EditorPresentationRuntime::new(PresentationMetrics::Scalable(
+        bootstrap_display.font_sizing(),
+    ));
+    let presentation_for_secondary_tty = presentation.clone();
+    let secondary_ttys_for_redisplay = secondary_ttys.clone();
+    let frame_tx = emacs_comms.frame_tx;
+    let session_render_waker = render_waker.clone();
+    let session = EditorSession::attach_host_transport(
+        evaluator,
+        presentation,
+        move |eval| {
+            if secondary_ttys_for_redisplay
+                .render_selected_with(eval, &presentation_for_secondary_tty)
+            {
+                return SessionRedisplayAction::Handled;
+            }
+            sync_selected_gui_chrome_state(eval);
+            if !throw_on_input_active(eval) {
+                // Title formatting may evaluate Lisp mode-line forms too.
+                sync_live_gui_frame_titles(eval);
+            }
+            SessionRedisplayAction::Publish
+        },
+        move |display_state| match frame_tx.try_send(display_state) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::debug!(
+                    "discarded GUI presentation because render submission failed: {error}"
+                );
+                false
+            }
+        },
+        move || session_render_waker.wake(),
+    );
+
     tracing::info!("Entering GNU command loop on GUI evaluator worker...");
-    let exit_status = evaluator.recursive_edit();
-    if exit_status.is_ok() {
+    let stopped = session.run_until_stopped(|evaluator| {
+        // R2-C3: native-from-call-1 — prepopulate after the pdump hook and
+        // immediately before first dispatch.
+        maybe_prepopulate_aot(mode, evaluator);
+    });
+    let (exit_status, evaluator) = stopped.into_parts();
+    if exit_status.is_success() {
         tracing::info!("Command loop exited normally");
     } else {
         tracing::warn!("Command loop exited with error");
@@ -3625,7 +3648,7 @@ fn run_gui_evaluator_worker(
     // early return so it fires on kill-emacs too). No-op unless NEOVM_AOT_PGO set.
     maybe_drain_aot_pgo(mode, &evaluator);
 
-    if let Some(request) = evaluator.shutdown_request() {
+    if let Some(request) = exit_status.shutdown_request() {
         let exit = EvaluatorExit {
             exit_code: request.exit_code,
             restart: request.restart,
@@ -4984,6 +5007,7 @@ fn ensure_dir_string(path: &Path) -> String {
     dir
 }
 
+#[cfg(test)]
 fn publish_gui_frame(
     evaluator: &mut Context,
     frame_tx: &crossbeam_channel::Sender<neomacs_display_protocol::SealedFramePresentation>,
