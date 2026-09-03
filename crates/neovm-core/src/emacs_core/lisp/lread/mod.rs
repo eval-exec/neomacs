@@ -916,10 +916,10 @@ pub(crate) fn finish_read_char_exclusive_interactive_in_runtime(
     let tty_input_decoding = super::reader::tty_input_decoding_from_read_args(args);
     let deadline = read_plan
         .timeout()
-        .map(|timeout| crate::host_time::Instant::now() + timeout);
+        .map(|timeout| crate::host::time::Instant::now() + timeout);
     loop {
         let remaining = deadline.map(|deadline| {
-            deadline.saturating_duration_since(crate::host_time::Instant::now())
+            deadline.saturating_duration_since(crate::host::time::Instant::now())
         });
         let Some(event) = runtime.read_char_with_timeout(remaining, tty_input_decoding)? else {
             return Ok(Value::NIL);

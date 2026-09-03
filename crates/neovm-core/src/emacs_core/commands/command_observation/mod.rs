@@ -7,7 +7,7 @@
 //! command such as `execute-extended-command` includes time spent in its nested
 //! minibuffer command loop, and `depth` makes that nesting explicit.
 
-use crate::host_time::Instant;
+use crate::host::time::Instant;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 

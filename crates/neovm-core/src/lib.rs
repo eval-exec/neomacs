@@ -11,7 +11,7 @@ pub mod fuzz_support;
 pub mod gc_trace;
 pub mod heap_types;
 mod image_identity;
-pub mod host_time;
+pub mod host;
 pub mod keyboard;
 mod keyboard_input;
 pub mod logging;

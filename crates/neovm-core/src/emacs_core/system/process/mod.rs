@@ -39,8 +39,8 @@ use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListene
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use crate::host_time::Instant;
+use std::time::Duration;
+use crate::host::time::Instant;
 use strum::{EnumString, IntoStaticStr};
 
 use super::tls::{
