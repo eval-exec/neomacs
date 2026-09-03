@@ -2824,6 +2824,12 @@ pub struct Context {
     /// `None` in batch mode (tests, non-interactive evaluation).
     /// When `Some`, `read_char()` blocks on this channel for interactive input.
     pub input_rx: Option<crossbeam_channel::Receiver<crate::keyboard::InputEvent>>,
+    /// Optional host-defined suspension point for input waits.
+    ///
+    /// Browser Workers install this to suspend the Wasm stack without
+    /// replacing the typed input channel. Native sessions leave it unset and
+    /// use the unified OS input/process poller.
+    pub(crate) host_input_wait_backend: Option<Box<dyn crate::keyboard::HostInputWaitBackend>>,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
     eval_task_rx: Option<crossbeam_channel::Receiver<EvalThreadTask>>,

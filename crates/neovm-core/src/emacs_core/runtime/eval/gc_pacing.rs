@@ -504,6 +504,22 @@ impl Context {
         self.command_loop.running = true;
     }
 
+    /// Replace the blocking primitive used while waiting for host input.
+    ///
+    /// The backend is only a suspension boundary. It must arrange for input
+    /// to be sent through the receiver installed by [`Self::init_input_system`];
+    /// the evaluator never accepts untyped input directly from this callback.
+    pub fn install_host_input_wait_backend(
+        &mut self,
+        backend: impl crate::keyboard::HostInputWaitBackend + 'static,
+    ) {
+        self.host_input_wait_backend = Some(Box::new(backend));
+    }
+
+    pub(crate) fn has_host_input_wait_backend(&self) -> bool {
+        self.host_input_wait_backend.is_some()
+    }
+
     /// Install the receiver for cross-thread [`EvalThreadTask`]s (e.g. from the
     /// diagnostics server). The sender side wakes the Lisp thread via
     /// [`Context::wait_notifier`]; queued tasks run at the next safe point.
