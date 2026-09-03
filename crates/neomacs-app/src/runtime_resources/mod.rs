@@ -1,11 +1,17 @@
-//! Packaged runtime-resource installation for native sandboxed hosts.
+//! Authenticated packaged resources for sandboxed editor hosts.
+
+mod bundle;
+mod mounted;
+
+pub use bundle::RuntimeResourceError;
+pub use mounted::MountedRuntimeResources;
 
 std::cfg_select! {
     target_family = "wasm" => {}
     _ => {
         mod extracted;
         pub use extracted::{
-            RuntimeResourceError, RuntimeResourceInstall, RuntimeResourceRoot,
+            RuntimeResourceInstall, RuntimeResourceRoot,
         };
     }
 }

@@ -1,21 +1,17 @@
 //! Atomic extraction of packaged runtime resources into native host storage.
 
-use std::fmt::{Display, Formatter};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flate2::read::GzDecoder;
-use sha2::{Digest, Sha256};
-
-use crate::content_id::ContentId;
-
 use super::{RUNTIME_RESOURCE_ARCHIVE_ASSET, RUNTIME_RESOURCE_ID_ASSET};
+use super::bundle::{
+    ArchiveEntryKind, REQUIRED_DIRECTORIES, RuntimeResourceBundleId, RuntimeResourceError,
+    ValidatedArchiveEntry, read_bundle_id, visit_authenticated_archive,
+};
 
 const READY_FILE_NAME: &str = ".neomacs-runtime-ready";
-const REQUIRED_DIRECTORIES: [&str; 2] = ["lisp", "etc"];
-const OWNED_ARCHIVE_ROOTS: [&str; 4] = ["lisp", "etc", "leim", "info"];
 static TEMPORARY_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Whether this process installed a resource tree or found it ready.
@@ -24,70 +20,6 @@ pub enum RuntimeResourceInstall {
     Installed,
     Reused,
 }
-
-/// Failure to validate or install packaged runtime resources.
-#[derive(Debug)]
-pub enum RuntimeResourceError {
-    Io(io::Error),
-    InvalidBundleId,
-    InvalidExistingInstallation(PathBuf),
-    UnownedArchivePath(PathBuf),
-    UnsupportedArchiveEntry(PathBuf),
-    ArchiveDigestMismatch { expected: String, actual: String },
-    MissingRequiredDirectory(&'static str),
-}
-
-impl Display for RuntimeResourceError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(error) => Display::fmt(error, formatter),
-            Self::InvalidBundleId => write!(
-                formatter,
-                "runtime resource bundle ID must be exactly 64 lowercase hexadecimal digits"
-            ),
-            Self::InvalidExistingInstallation(path) => write!(
-                formatter,
-                "runtime resource destination exists but is not a complete installation: {}",
-                path.display()
-            ),
-            Self::UnownedArchivePath(path) => write!(
-                formatter,
-                "unowned runtime resource path in packaged archive: {}",
-                path.display()
-            ),
-            Self::UnsupportedArchiveEntry(path) => write!(
-                formatter,
-                "unsupported runtime resource archive entry: {}",
-                path.display()
-            ),
-            Self::ArchiveDigestMismatch { expected, actual } => write!(
-                formatter,
-                "runtime resource archive digest does not match bundle ID: expected {expected}, got {actual}"
-            ),
-            Self::MissingRequiredDirectory(directory) => write!(
-                formatter,
-                "runtime resource archive does not contain required {directory}/ directory"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for RuntimeResourceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
-impl From<io::Error> for RuntimeResourceError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-
-type RuntimeResourceBundleId = ContentId;
 
 /// A complete runtime resource root in app-private native storage.
 #[derive(Debug)]
@@ -153,12 +85,6 @@ impl RuntimeResourceRoot {
     }
 }
 
-fn read_bundle_id(source: impl Read) -> Result<RuntimeResourceBundleId, RuntimeResourceError> {
-    let mut text = String::new();
-    source.take(128).read_to_string(&mut text)?;
-    RuntimeResourceBundleId::parse(text.trim()).map_err(|_| RuntimeResourceError::InvalidBundleId)
-}
-
 fn create_staging_directory(
     storage: &Path,
     id: &RuntimeResourceBundleId,
@@ -184,67 +110,31 @@ fn extract_authenticated_archive(
     destination: &Path,
     expected: &RuntimeResourceBundleId,
 ) -> Result<(), RuntimeResourceError> {
-    let digesting = DigestingReader::new(source);
-    let decoder = GzDecoder::new(digesting);
-    let mut archive = tar::Archive::new(decoder);
-    for entry in archive.entries()? {
-        extract_entry(entry?, destination)?;
-    }
-
-    // Consume the gzip footer and any remaining compressed bytes before
-    // finalizing the digest; tar stops logically at its end markers.
-    let mut decoder = archive.into_inner();
-    io::copy(&mut decoder, &mut io::sink())?;
-    let actual = decoder.into_inner().finish_hex();
-    if actual != expected.as_str() {
-        return Err(RuntimeResourceError::ArchiveDigestMismatch {
-            expected: expected.as_str().to_owned(),
-            actual,
-        });
-    }
-    Ok(())
+    visit_authenticated_archive(source, expected, |entry, contents| {
+        extract_entry(entry, contents, destination)
+    })
 }
 
-fn extract_entry<R: Read>(
-    mut entry: tar::Entry<'_, R>,
+fn extract_entry(
+    entry: &ValidatedArchiveEntry,
+    contents: &mut dyn Read,
     destination: &Path,
 ) -> Result<(), RuntimeResourceError> {
-    let relative = entry.path()?.into_owned();
-    validate_archive_path(&relative)?;
-    let output = destination.join(&relative);
-    let entry_type = entry.header().entry_type();
-    if entry_type.is_dir() {
+    let output = destination.join(entry.path());
+    if entry.kind() == ArchiveEntryKind::Directory {
         std::fs::create_dir_all(&output)?;
         return Ok(());
-    }
-    if !entry_type.is_file() {
-        return Err(RuntimeResourceError::UnsupportedArchiveEntry(relative));
     }
 
     let parent = output
         .parent()
-        .ok_or_else(|| RuntimeResourceError::UnownedArchivePath(relative.clone()))?;
+        .ok_or_else(|| RuntimeResourceError::UnownedArchivePath(entry.path().to_owned()))?;
     std::fs::create_dir_all(parent)?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&output)?;
-    io::copy(&mut entry, &mut file)?;
-    Ok(())
-}
-
-fn validate_archive_path(path: &Path) -> Result<(), RuntimeResourceError> {
-    let mut components = path.components();
-    let Some(Component::Normal(root)) = components.next() else {
-        return Err(RuntimeResourceError::UnownedArchivePath(path.to_owned()));
-    };
-    if !OWNED_ARCHIVE_ROOTS
-        .iter()
-        .any(|owned| root == std::ffi::OsStr::new(owned))
-        || components.any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(RuntimeResourceError::UnownedArchivePath(path.to_owned()));
-    }
+    io::copy(contents, &mut file)?;
     Ok(())
 }
 
@@ -302,34 +192,4 @@ fn sync_directory(path: &Path) -> io::Result<()> {
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> io::Result<()> {
     Ok(())
-}
-
-struct DigestingReader<R> {
-    inner: R,
-    digest: Sha256,
-}
-
-impl<R> DigestingReader<R> {
-    fn new(inner: R) -> Self {
-        Self {
-            inner,
-            digest: Sha256::new(),
-        }
-    }
-
-    fn finish_hex(self) -> String {
-        self.digest
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
-    }
-}
-
-impl<R: Read> Read for DigestingReader<R> {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let read = self.inner.read(buffer)?;
-        self.digest.update(&buffer[..read]);
-        Ok(read)
-    }
 }
