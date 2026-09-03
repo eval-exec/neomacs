@@ -35,6 +35,98 @@ pub(super) enum WorkerMessage {
     Overflow(WatchId),
 }
 
+/// One completed native read, detached from the kernel-owned buffer.
+///
+/// Decoding into owned paths lets the worker arm the next directory read
+/// before publishing this batch.  That ordering is observable: publication
+/// wakes Lisp, whose callback may immediately make another filesystem change.
+enum CompletedDirectoryBatch {
+    Events(Vec<(super::W32Action, PathBuf)>),
+    Overflow,
+}
+
+/// A completed batch paired with the next live kernel read.
+///
+/// Only this state exposes publication on the normal path, making
+/// "re-arm before wake" part of the worker's type-level protocol.
+struct ArmedDirectoryBatch<'a> {
+    next_read: PendingDirectoryRead<'a>,
+    completed: CompletedDirectoryBatch,
+}
+
+impl CompletedDirectoryBatch {
+    fn decode(bytes: &[u8]) -> Self {
+        match codec::decode(bytes) {
+            Ok(events) => Self::Events(events),
+            Err(error) => {
+                tracing::warn!(%error, "malformed Windows file-notification batch; rescanning");
+                Self::Overflow
+            }
+        }
+    }
+
+    fn rearm<'a>(
+        self,
+        directory: HANDLE,
+        buffer: &'a mut [u8],
+        overlapped: &'a mut OVERLAPPED,
+        recursive: bool,
+        native_filter: u32,
+    ) -> Result<ArmedDirectoryBatch<'a>, (Self, std::io::Error)> {
+        match PendingDirectoryRead::start(directory, buffer, overlapped, recursive, native_filter) {
+            Ok(next_read) => Ok(ArmedDirectoryBatch {
+                next_read,
+                completed: self,
+            }),
+            Err(error) => Err((self, error)),
+        }
+    }
+
+    fn publish(
+        self,
+        watch_id: &WatchId,
+        events: &DeliverySender<WorkerMessage, WorkerTermination>,
+    ) -> PublishOutcome {
+        match self {
+            Self::Events(decoded) => {
+                // ReadDirectoryChangesW watches the directory, not an
+                // individual child. Preserve the complete ordered stream so
+                // filenotify.el can pair rename halves before filtering.
+                let mut aggregate = PublishOutcome::Published;
+                for (action, path) in decoded {
+                    let outcome = events.publish(WorkerMessage::Event(W32Event {
+                        watch_id: watch_id.clone(),
+                        action,
+                        path,
+                    }));
+                    if outcome == PublishOutcome::Closed {
+                        return outcome;
+                    }
+                    if outcome == PublishOutcome::Overflowed {
+                        aggregate = outcome;
+                    }
+                }
+                aggregate
+            }
+            Self::Overflow => events.publish(WorkerMessage::Overflow(watch_id.clone())),
+        }
+    }
+}
+
+impl<'a> ArmedDirectoryBatch<'a> {
+    fn publish(
+        self,
+        watch_id: &WatchId,
+        events: &DeliverySender<WorkerMessage, WorkerTermination>,
+    ) -> (PendingDirectoryRead<'a>, PublishOutcome) {
+        let Self {
+            next_read,
+            completed,
+        } = self;
+        (next_read, completed.publish(watch_id, events))
+    }
+}
+
 /// Why an already-armed Windows watch stopped.
 ///
 /// GNU exposes initial registration errors synchronously, but an asynchronous
@@ -140,36 +232,28 @@ fn run(
     let stop_event_raw = stop_event.as_raw_handle() as HANDLE;
     let handles = [stop_event_raw, io_event_raw];
     let mut buffer = vec![0_u8; BUFFER_CAPACITY];
-    let mut startup = Some(startup);
-
-    loop {
-        let mut overlapped = OVERLAPPED {
-            hEvent: io_event_raw,
-            ..OVERLAPPED::default()
-        };
-        let mut pending = match PendingDirectoryRead::start(
-            directory_raw,
-            &mut buffer,
-            &mut overlapped,
-            recursive,
-            native_filter,
-        ) {
-            Ok(pending) => pending,
-            Err(error) => {
-                if let Some(startup) = startup.take() {
-                    let _ = startup.send(StartupReport::Failed(error.to_string()));
-                    return;
-                }
-                finish_after_io_error(&activity, events, watch_id, error);
-                return;
-            }
-        };
-        if let Some(startup) = startup.take()
-            && startup.send(StartupReport::Ready).is_err()
-        {
+    let mut overlapped = OVERLAPPED {
+        hEvent: io_event_raw,
+        ..OVERLAPPED::default()
+    };
+    let mut pending = match PendingDirectoryRead::start(
+        directory_raw,
+        &mut buffer,
+        &mut overlapped,
+        recursive,
+        native_filter,
+    ) {
+        Ok(pending) => pending,
+        Err(error) => {
+            let _ = startup.send(StartupReport::Failed(error.to_string()));
             return;
         }
+    };
+    if startup.send(StartupReport::Ready).is_err() {
+        return;
+    }
 
+    loop {
         // SAFETY: both event handles stay owned for the full wait.
         let ready = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) };
         if ready == WAIT_OBJECT_0 {
@@ -197,37 +281,42 @@ fn run(
                 return;
             }
         };
-        if bytes == 0 {
-            if events.publish(WorkerMessage::Overflow(watch_id.clone())) == PublishOutcome::Closed {
-                return;
-            }
-            continue;
-        }
+        let completed = if bytes == 0 {
+            CompletedDirectoryBatch::Overflow
+        } else {
+            CompletedDirectoryBatch::decode(pending.completed_bytes(bytes))
+        };
 
-        let decoded = match codec::decode(pending.completed_bytes(bytes)) {
-            Ok(decoded) => decoded,
-            Err(error) => {
-                tracing::warn!(%error, "malformed Windows file-notification batch; rescanning");
-                if events.publish(WorkerMessage::Overflow(watch_id.clone()))
-                    == PublishOutcome::Closed
-                {
+        // GNU reissues ReadDirectoryChangesW in watch_completion before it
+        // calls send_notifications (src/w32notify.c).  Preserve that ordering:
+        // publishing wakes Lisp, and a callback can mutate the watched file
+        // before this worker would otherwise reach the top of the loop.
+        drop(pending);
+        overlapped = OVERLAPPED {
+            hEvent: io_event_raw,
+            ..OVERLAPPED::default()
+        };
+        let rearmed = completed.rearm(
+            directory_raw,
+            &mut buffer,
+            &mut overlapped,
+            recursive,
+            native_filter,
+        );
+
+        match rearmed {
+            Ok(rearmed) => {
+                let (next_read, outcome) = rearmed.publish(&watch_id, &events);
+                if outcome == PublishOutcome::Closed {
                     return;
                 }
-                continue;
+                pending = next_read;
             }
-        };
-        // ReadDirectoryChangesW watches the directory, not an individual
-        // child.  Preserve that complete ordered stream exactly as GNU's
-        // w32notify backend does.  In particular, a rename's new name may not
-        // equal the originally requested file name; filenotify.el must receive
-        // both halves before it can pair and select the high-level event.
-        for (action, path) in decoded {
-            if events.publish(WorkerMessage::Event(W32Event {
-                watch_id: watch_id.clone(),
-                action,
-                path,
-            })) == PublishOutcome::Closed
-            {
+            Err((completed, error)) => {
+                if completed.publish(&watch_id, &events) == PublishOutcome::Closed {
+                    return;
+                }
+                finish_after_io_error(&activity, events, watch_id, error);
                 return;
             }
         }

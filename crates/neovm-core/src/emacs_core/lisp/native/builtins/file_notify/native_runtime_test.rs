@@ -435,6 +435,69 @@ fn windows_file_watch_preserves_a_rename_to_a_different_name() {
     reset_file_notify_thread_locals();
 }
 
+/// GNU arms the next ReadDirectoryChangesW request before it wakes Lisp
+/// (`src/w32notify.c:watch_completion`).  A callback is therefore free to
+/// mutate the same file immediately without falling into an unmonitored gap.
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_callback_change_is_observed_by_an_already_rearmed_watch() {
+    crate::test_utils::init_test_tracing();
+    reset_file_notify_thread_locals();
+    let directory = workspace_temp_dir();
+    let file = directory.path().join("rearm-before-callback.txt");
+    std::fs::write(&file, "first contents").expect("seed watched file");
+
+    let mut eval = crate::emacs_core::eval::Context::new();
+    eval.set_variable(
+        "neovm-test-w32-rearm-file",
+        Value::string(file.display().to_string()),
+    );
+    let callback = eval
+        .eval_str(
+            r#"
+        (progn
+          (setq neovm-test-w32-rearm-events nil
+                neovm-test-w32-rearm-trigger t)
+          (lambda (event)
+            (setq neovm-test-w32-rearm-events
+                  (cons event neovm-test-w32-rearm-events))
+            (when neovm-test-w32-rearm-trigger
+              (setq neovm-test-w32-rearm-trigger nil)
+              (set-file-times neovm-test-w32-rearm-file 0 'nofollow))))
+        "#,
+        )
+        .expect("create callback that immediately changes the watched file");
+    let descriptor = w32notify_add_watch(
+        &mut eval,
+        vec![
+            Value::string(file.display().to_string()),
+            Value::list(vec![Value::symbol("last-write-time")]),
+            callback,
+        ],
+    )
+    .expect("add Windows last-write watch");
+
+    std::fs::write(&file, "second contents").expect("trigger first change");
+    let events = service_until(&mut eval, "neovm-test-w32-rearm-events", |events| {
+        events
+            .iter()
+            .filter(|fields| fields.get(1) == Some(&Value::symbol("modified")))
+            .count()
+            >= 2
+    });
+    assert!(
+        events
+            .iter()
+            .filter(|fields| fields.get(1) == Some(&Value::symbol("modified")))
+            .count()
+            >= 2,
+        "the callback's immediate timestamp change was not observed"
+    );
+
+    w32notify_rm_watch(vec![descriptor]).expect("remove Windows rearm watch");
+    reset_file_notify_thread_locals();
+}
+
 /// GNU's w32notify worker treats deletion of the watched directory as normal
 /// descriptor invalidation: the pending native read ends, `w32notify-valid-p'
 /// becomes nil, and no asynchronous `file-notify-error' escapes through the
