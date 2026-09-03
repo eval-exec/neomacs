@@ -19,6 +19,11 @@ fn wasm_package_includes_the_browser_text_service_adapter() {
 }
 
 #[test]
+fn wasm_package_includes_the_origin_private_filesystem_adapter() {
+    assert!(WEB_SOURCE_FILES.contains(&"opfs-storage.mjs"));
+}
+
+#[test]
 fn wasm_package_reuses_the_window_icon_as_its_favicon() {
     assert_eq!(
         WEB_REPOSITORY_ASSETS,
