@@ -3903,7 +3903,9 @@ impl Drop for BootstrapCacheWriteLock {
 fn ensure_startup_compat_variables(eval: &mut super::eval::Context, project_root: &Path) {
     let etc_dir = lisp_directory_name_from_host_path(&project_root.join("etc"));
     let source_dir = lisp_directory_name_from_host_path(project_root);
-    let temporary_file_directory = lisp_directory_name_from_host_path(&std::env::temp_dir());
+    let temporary_file_directory = lisp_directory_name_from_host_path(
+        &super::fileio::host_temporary_directory(eval.host_kind),
+    );
     let path_separator = if cfg!(windows) { ";" } else { ":" };
     super::runtime_identity::install(eval);
     let system_configuration = super::builtins_extra::system_configuration_value();
@@ -5445,7 +5447,7 @@ fn finalize_cached_bootstrap_eval(
     //    default-directory etc. are Forwarded again).
     // 3. Reset thread-local caches
     // 4. Set path variables for the current runtime location
-    super::builtins::init_builtins(eval);
+    super::builtins::init_builtins(eval, eval.host_kind);
 
     // Re-install BUFFER_OBJFWD forwarders to restore the Forwarded
     // redirect tag on per-buffer variables. `pdump::convert.rs`
@@ -6007,6 +6009,20 @@ pub fn create_bootstrap_evaluator_for_loadup(
     extra_features: &[&str],
     invocation: &LoadupInvocation,
 ) -> Result<super::eval::Context, EvalError> {
+    create_bootstrap_evaluator_for_loadup_on_host(
+        extra_features,
+        invocation,
+        neovm_host_abi::HostKind::CURRENT,
+    )
+}
+
+/// Create a bootstrap evaluator for a product host which may differ from the
+/// native producer executing loadup.
+pub fn create_bootstrap_evaluator_for_loadup_on_host(
+    extra_features: &[&str],
+    invocation: &LoadupInvocation,
+    host: neovm_host_abi::HostKind,
+) -> Result<super::eval::Context, EvalError> {
     // Discover the runtime root (contains lisp/ and etc/).
     let project_root = runtime_project_root();
     let lisp_dir = project_root.join("lisp");
@@ -6018,7 +6034,7 @@ pub fn create_bootstrap_evaluator_for_loadup(
     refuse_stale_lisp_bytecode(&lisp_dir);
     super::stack_growth::maybe_grow(128 * 1024, 2 * 1024 * 1024, || {
         maybe_trace_bootstrap_step("create_bootstrap_evaluator_with_features: enter");
-        let mut eval = super::eval::Context::new();
+        let mut eval = super::eval::Context::new_for_host(host);
         maybe_trace_bootstrap_step("create_bootstrap_evaluator_with_features: evaluator-new");
         // Match GNU's initialization order: Lisp startup must inherit the host
         // environment before loadup.el can inspect HOME or any other variable.

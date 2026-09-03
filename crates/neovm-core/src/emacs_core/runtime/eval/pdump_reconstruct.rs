@@ -36,6 +36,7 @@ impl Context {
         registers: RegisterManager,
         bookmarks: BookmarkManager,
         watchers: VariableWatcherList,
+        host: neovm_host_abi::HostKind,
     ) -> Self {
         let dumped_function_surface = obarray.clone();
         let mut obarray = obarray;
@@ -60,6 +61,7 @@ impl Context {
             obarray.symbol_value_id_or_nil(core_eval_symbols.throw_on_input_symbol);
 
         let mut ev = Self {
+            host_kind: host,
             tagged_heap,
             pdump_image: None,
             after_pdump_load_hook_pending: false,
@@ -205,7 +207,7 @@ impl Context {
         // Rebuild the builtin subr registry after pdump restore. The dumped
         // obarray already carries the authoritative runtime function-cell
         // surface, so restore that surface immediately afterward.
-        builtins::init_builtins(&mut ev);
+        builtins::init_builtins(&mut ev, host);
         for (sym_id, symbol) in dumped_function_surface.iter_symbols() {
             if !symbol.function.is_nil() {
                 ev.obarray.set_symbol_function_id(sym_id, symbol.function);
@@ -216,7 +218,9 @@ impl Context {
             }
         }
 
-        if let Some(subfeatures) = super::super::process::make_network_process_subfeatures() {
+        if host != neovm_host_abi::HostKind::Wasm
+            && let Some(subfeatures) = super::super::process::make_network_process_subfeatures()
+        {
             ev.provide_value(Value::symbol("make-network-process"), Some(subfeatures))
                 .expect("startup make-network-process provide should succeed");
         }

@@ -193,17 +193,21 @@ impl LoadHistoryEntry {
     }
 }
 
-fn gnu_system_type() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "windows-nt"
-    } else if cfg!(target_os = "macos") {
-        "darwin"
-    } else if cfg!(target_os = "linux") {
-        "gnu/linux"
-    } else if cfg!(target_os = "android") {
-        "android"
-    } else {
-        std::env::consts::OS
+fn gnu_system_type(host: neovm_host_abi::HostKind) -> &'static str {
+    match host {
+        neovm_host_abi::HostKind::Wasm => "wasm",
+        neovm_host_abi::HostKind::Android => "android",
+        neovm_host_abi::HostKind::Desktop => {
+            if cfg!(target_os = "windows") {
+                "windows-nt"
+            } else if cfg!(target_os = "macos") {
+                "darwin"
+            } else if cfg!(target_os = "linux") {
+                "gnu/linux"
+            } else {
+                std::env::consts::OS
+            }
+        }
     }
 }
 
@@ -213,21 +217,24 @@ fn gnu_system_type() -> &'static str {
 /// 192 made that true here too -- the list is derived from
 /// [`super::c_features::gnu_c_features`], a table whose every row names either
 /// the implementation behind the feature or the reason there is none.
-fn initial_feature_names() -> Vec<&'static str> {
-    super::c_features::initial_feature_names()
+fn initial_feature_names(host: neovm_host_abi::HostKind) -> Vec<&'static str> {
+    super::c_features::initial_feature_names_for(host)
 }
 
-fn initial_features_value() -> Value {
+fn initial_features_value(host: neovm_host_abi::HostKind) -> Value {
     Value::list(
-        initial_feature_names()
+        initial_feature_names(host)
             .into_iter()
             .map(Value::symbol)
             .collect(),
     )
 }
 
-fn initial_feature_ids() -> Vec<SymId> {
-    initial_feature_names().into_iter().map(intern).collect()
+fn initial_feature_ids(host: neovm_host_abi::HostKind) -> Vec<SymId> {
+    initial_feature_names(host)
+        .into_iter()
+        .map(intern)
+        .collect()
 }
 
 /// GNU's `echo_buffer[2]`: the two buffers the echo area is allowed to display
@@ -2580,6 +2587,10 @@ pub(crate) enum SymbolValueLookup {
 }
 
 pub struct Context {
+    /// Product host whose Lisp-visible primitive and feature surface this
+    /// evaluator represents. Portable-image producers can differ from the
+    /// native compilation host executing loadup.
+    pub(crate) host_kind: neovm_host_abi::HostKind,
     /// Tagged pointer heap — sole GC and allocator.
     pub(crate) tagged_heap: Box<crate::tagged::gc::TaggedHeap>,
     /// Mmap-backed pdump image that owns any mapped heap payloads borrowed by

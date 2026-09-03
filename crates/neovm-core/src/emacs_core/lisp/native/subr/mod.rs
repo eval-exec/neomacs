@@ -300,12 +300,32 @@ pub struct SubrBatch {
     #[cfg(test)]
     owner: &'static str,
     specs: &'static [SubrSpec],
+    hosts: SubrHosts,
+}
+
+/// Product hosts on which every declaration in a batch has an implementation.
+///
+/// Keeping this on the batch makes host filtering part of the subsystem-owned
+/// declaration instead of a name-based exception in the central sequencer.
+#[derive(Clone, Copy)]
+enum SubrHosts {
+    All,
+    Native,
+}
+
+impl SubrHosts {
+    const fn includes(self, host: neovm_host_abi::HostKind) -> bool {
+        match self {
+            Self::All => true,
+            Self::Native => !matches!(host, neovm_host_abi::HostKind::Wasm),
+        }
+    }
 }
 
 impl SubrBatch {
     #[track_caller]
     pub const fn new(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
-        Self::new_inner(owner, specs, false)
+        Self::new_inner(owner, specs, false, SubrHosts::All)
     }
 
     /// Construct a batch whose declarations may all be removed by target
@@ -316,7 +336,17 @@ impl SubrBatch {
     /// native subrs on only some target families.
     #[track_caller]
     pub const fn target_filtered(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
-        Self::new_inner(owner, specs, true)
+        Self::new_inner(owner, specs, true, SubrHosts::All)
+    }
+
+    /// Construct a target-filtered batch backed only by native product hosts.
+    #[track_caller]
+    pub const fn native_host(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
+        let batch = Self::target_filtered(owner, specs);
+        Self {
+            hosts: SubrHosts::Native,
+            ..batch
+        }
     }
 
     #[track_caller]
@@ -324,6 +354,7 @@ impl SubrBatch {
         owner: &'static str,
         specs: &'static [SubrSpec],
         permit_empty: bool,
+        hosts: SubrHosts,
     ) -> Self {
         let source_file = std::panic::Location::caller().file();
         assert!(
@@ -341,6 +372,7 @@ impl SubrBatch {
             #[cfg(test)]
             owner,
             specs,
+            hosts,
         }
     }
 
@@ -363,6 +395,16 @@ impl SubrBatch {
         #[cfg(test)]
         INSTALLED_SUBR_BATCHES.with(|installed| installed.borrow_mut().push(self.owner));
         ctx.register_subrs(self.specs);
+    }
+
+    pub(crate) fn install_for_host(
+        self,
+        ctx: &mut crate::emacs_core::eval::Context,
+        host: neovm_host_abi::HostKind,
+    ) {
+        if self.hosts.includes(host) {
+            self.install(ctx);
+        }
     }
 }
 
@@ -397,6 +439,20 @@ const fn is_subrs_source_file(path: &str) -> bool {
 /// same const data. This makes the compiled catalog—not syntax inferred by an
 /// architecture test—the source of truth for installation.
 macro_rules! define_subrs {
+    (native_host; $($spec:expr),+ $(,)?) => {
+        pub(crate) const SUBRS: $crate::emacs_core::subr::SubrBatch =
+            $crate::emacs_core::subr::SubrBatch::native_host(
+                module_path!(),
+                &[$($spec),+],
+            );
+
+        pub(crate) fn register_subrs(
+            ctx: &mut $crate::emacs_core::eval::Context,
+            host: neovm_host_abi::HostKind,
+        ) {
+            SUBRS.install_for_host(ctx, host);
+        }
+    };
     (target_filtered; $($spec:expr),+ $(,)?) => {
         pub(crate) const SUBRS: $crate::emacs_core::subr::SubrBatch =
             $crate::emacs_core::subr::SubrBatch::target_filtered(

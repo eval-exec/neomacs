@@ -55,10 +55,17 @@ pub(crate) enum HereDecision {
     /// GNU provides it in every build, so this port must too.
     UnconditionalInGnu,
     /// The capability is implemented here; `by` names where.
-    Implemented { by: &'static str },
+    Implemented {
+        by: &'static str,
+        hosts: HostAvailability,
+    },
     /// A `build.rs` probe decides it, exactly as `configure` decides GNU's --
     /// the one shape in this port that already matched GNU before ledger 192.
-    DetectedAtBuildTime { cfg: &'static str, present: bool },
+    DetectedAtBuildTime {
+        cfg: &'static str,
+        present: bool,
+        hosts: HostAvailability,
+    },
     /// This build does not have the capability, so it does not advertise it.
     /// That is not a gap: it is what GNU's own build without the option leaves,
     /// and it is what GNU's Lisp is written to detect.
@@ -67,12 +74,32 @@ pub(crate) enum HereDecision {
 
 impl HereDecision {
     /// Whether this build puts the feature on `features`.
+    #[cfg(test)]
     pub(crate) const fn provided(self) -> bool {
+        self.provided_on(neovm_host_abi::HostKind::CURRENT)
+    }
+
+    const fn provided_on(self, host: neovm_host_abi::HostKind) -> bool {
         match self {
-            Self::UnconditionalInGnu | Self::Implemented { .. } => true,
-            Self::DetectedAtBuildTime { present, .. } => present,
+            Self::UnconditionalInGnu => true,
+            Self::Implemented { hosts, .. } => hosts.includes(host),
+            Self::DetectedAtBuildTime { present, hosts, .. } => present && hosts.includes(host),
             Self::NotBuilt { .. } => false,
         }
+    }
+}
+
+/// Product hosts on which an implemented C-level feature has real backing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HostAvailability {
+    wasm: bool,
+}
+
+impl HostAvailability {
+    const NATIVE: Self = Self { wasm: false };
+
+    const fn includes(self, host: neovm_host_abi::HostKind) -> bool {
+        !matches!(host, neovm_host_abi::HostKind::Wasm) || self.wasm
     }
 }
 
@@ -97,6 +124,7 @@ pub(crate) struct GnuCFeature {
 pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
     use GnuGuard::{BuildOption, Unconditional};
     use HereDecision::{DetectedAtBuildTime, Implemented, NotBuilt, UnconditionalInGnu};
+    const NATIVE: HostAvailability = HostAvailability::NATIVE;
 
     /// This port has no X, GTK, PGTK, W32, NS, Haiku or Android terminal: it
     /// has its own `neo` backend.  Ledger 189 measured that whole branch and
@@ -113,6 +141,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             here: Implemented {
                 by: "crates/neovm-core/src/emacs_core/runtime/threads/mod.rs -- real OS threads, \
                      make-thread/make-mutex/condition-variable",
+                hosts: NATIVE,
             },
         },
         GnuCFeature {
@@ -148,6 +177,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                       crates/neomacs-webview/src/platform/macos (a real WKWebView placed \
                       with GNU's own algorithm from src/xwidget.c); see issue 300",
                 present: cfg!(neomacs_have_wkwebview),
+                hosts: NATIVE,
             },
         },
         GnuCFeature {
@@ -159,6 +189,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                     by: "crates/neovm-core/src/emacs_core/lisp/native/builtins/file_notify/platform/windows -- \
                          w32notify-add-watch/-rm-watch/-valid-p over an explicit \
                          ReadDirectoryChangesW adapter, with GNU-compatible event shapes",
+                    hosts: NATIVE,
                 }
             } else {
                 NotBuilt {
@@ -199,6 +230,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                          vnode flags plus GNU-style directory snapshot diffs; GNU's macOS default is \
                          --with-file-notification=kqueue, so this is the feature \
                          `filenotify.el' expects to find there",
+                    hosts: NATIVE,
                 }
             } else {
                 NotBuilt {
@@ -216,6 +248,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                     by: "crates/neovm-core/src/emacs_core/lisp/native/builtins/file_notify/platform/linux -- \
                          direct typed inotify masks through the `inotify' crate; \
                          inotify-add-watch/-rm-watch/-valid-p",
+                    hosts: NATIVE,
                 }
             } else {
                 NotBuilt {
@@ -295,6 +328,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                       pkg-config exactly as `configure.ac' does, and \
                       builtins/lcms/mod.rs dlopens liblcms2 for the eight subrs",
                 present: cfg!(neomacs_have_lcms2),
+                hosts: NATIVE,
             },
         },
         GnuCFeature {
@@ -391,6 +425,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                 by: "crates/neovm-core/src/emacs_core/system/process/mod.rs -- real sockets, and \
                      `make_network_process_subfeatures' supplies GNU's SUBFEATURES \
                      list rather than nil",
+                hosts: NATIVE,
             },
         },
         GnuCFeature {
@@ -420,10 +455,16 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
 
 /// The C-level features this build advertises, newest-provided first, which is
 /// the order `features` reads in.
+#[cfg(test)]
 pub(crate) fn initial_feature_names() -> Vec<&'static str> {
+    initial_feature_names_for(neovm_host_abi::HostKind::CURRENT)
+}
+
+/// C-level features backed by the requested product host.
+pub(crate) fn initial_feature_names_for(host: neovm_host_abi::HostKind) -> Vec<&'static str> {
     gnu_c_features()
         .into_iter()
-        .filter(|feature| feature.here.provided())
+        .filter(|feature| feature.here.provided_on(host))
         .map(|feature| feature.name)
         .collect()
 }

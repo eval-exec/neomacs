@@ -219,6 +219,30 @@ fn startup_environment_snapshot_is_independent_from_process_policy() {
 }
 
 #[test]
+fn wasm_startup_has_no_native_process_environment() {
+    let mut eval = Context::new_for_host(neovm_host_abi::HostKind::Wasm);
+
+    crate::emacs_core::environment::install_host_environment_snapshot(&mut eval);
+
+    let environments_are_empty = eval
+        .eval_str("(and (null initial-environment) (null process-environment))")
+        .expect("read the browser startup environments");
+    assert_eq!(
+        environments_are_empty,
+        Value::T,
+        "a browser host has no native process environment to inherit",
+    );
+}
+
+#[test]
+fn wasm_startup_uses_a_virtual_temporary_directory() {
+    assert_eq!(
+        crate::emacs_core::fileio::host_temporary_directory(neovm_host_abi::HostKind::Wasm),
+        PathBuf::from("/tmp"),
+    );
+}
+
+#[test]
 fn stale_preloaded_face_doc_ref_restore_is_idempotent() {
     let mut eval = Context::new();
     let face = Value::symbol("blink-matching-paren-offscreen");

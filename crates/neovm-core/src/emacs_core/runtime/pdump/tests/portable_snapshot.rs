@@ -29,6 +29,32 @@ fn portable_snapshot_round_trips_evaluator_state() {
 }
 
 #[test]
+fn native_portable_seed_uses_the_browser_host_surface() {
+    let mut producer = Context::new_for_host(neovm_host_abi::HostKind::Wasm);
+
+    for expression in [
+        "(featurep 'inotify)",
+        "(featurep 'threads)",
+        "(featurep 'make-network-process)",
+        "(fboundp 'inotify-add-watch)",
+    ] {
+        assert_eq!(
+            producer
+                .eval_str(expression)
+                .expect("inspect portable seed surface"),
+            Value::NIL,
+            "portable seed advertised {expression}",
+        );
+    }
+
+    let image = encode_portable_snapshot(&producer).expect("encode browser portable seed");
+    crate::emacs_core::eval::clear_global_subr_table();
+
+    load_from_portable_snapshot_for_host(&image, neovm_host_abi::HostKind::Wasm)
+        .expect("browser host must accept its portable seed");
+}
+
+#[test]
 fn portable_snapshot_preserves_an_integer_beyond_the_wasm32_fixnum_range() {
     const WASM32_MOST_POSITIVE_FIXNUM: i64 = (1_i64 << 29) - 1;
     const INTEGER: i64 = WASM32_MOST_POSITIVE_FIXNUM + 1;

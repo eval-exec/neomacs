@@ -7,11 +7,17 @@ use super::*;
 
 impl Context {
     pub fn new() -> Self {
-        let mut ctx = Self::new_inner(true);
+        Self::new_for_host(neovm_host_abi::HostKind::CURRENT)
+    }
+
+    /// Construct an evaluator whose Lisp-visible host surface belongs to
+    /// `host`, even when a native build is producing a portable image for it.
+    pub fn new_for_host(host: neovm_host_abi::HostKind) -> Self {
+        let mut ctx = Self::new_inner(true, host);
         // Register builtins AFTER new_inner returns — the function is too
         // large (1500+ lines) for reliable codegen in debug mode when
         // combined with the full native subr manifest in the same frame.
-        builtins::init_builtins(&mut ctx);
+        builtins::init_builtins(&mut ctx, host);
         // Seed GNU's 24 standard built-in fringe bitmaps (right-arrow, left-arrow,
         // continuation/truncation markers, …) and their `'fringe` indices into
         // the registry, AFTER the obarray is populated by init_builtins.
@@ -41,7 +47,7 @@ impl Context {
     pub(crate) fn new_minimal_vm_harness() -> Self {
         // Keep this reduced constructor only for low-level VM/opcode tests
         // that intentionally do not depend on the full builtin surface.
-        let mut ev = Self::new_inner(true);
+        let mut ev = Self::new_inner(true, neovm_host_abi::HostKind::CURRENT);
         ev.obarray = Obarray::new();
         super::super::errors::init_standard_errors(&mut ev.obarray);
         ev.obarray
@@ -127,6 +133,7 @@ impl Context {
     pub(super) fn seed_startup_platform_variables(
         obarray: &mut Obarray,
         default_directory: String,
+        host: neovm_host_abi::HostKind,
     ) {
         // Set up standard global variables
         // Match GNU data.c: DEFVAR_LISP marks these symbols declared-special,
@@ -151,7 +158,7 @@ impl Context {
         obarray.set_symbol_value("emacs-major-version", Value::fixnum(31));
         obarray.set_symbol_value("emacs-minor-version", Value::fixnum(0));
         obarray.set_symbol_value("emacs-build-number", Value::fixnum(1));
-        obarray.set_symbol_value("system-type", Value::symbol(gnu_system_type()));
+        obarray.set_symbol_value("system-type", Value::symbol(gnu_system_type(host)));
         obarray.make_special("system-type");
         // GNU Emacs uses unibyte for default-directory during dump because
         // the locale isn't set up yet (see init_buffer in buffer.c).
@@ -355,7 +362,7 @@ impl Context {
         // GNU fns.c initializes `features' to include `emacs', and
         // thread.c:syms_of_threads provides `threads' when thread builtins
         // are installed.
-        obarray.set_symbol_value("features", initial_features_value());
+        obarray.set_symbol_value("features", initial_features_value(host));
         super::super::xwidget::init_xwidget_variables(obarray);
         obarray.set_symbol_value_id(lexical_binding_symbol(), Value::NIL);
         obarray.set_symbol_value("load-file-name", Value::NIL);
@@ -1211,7 +1218,10 @@ impl Context {
 
     /// Core eval.c / keyboard.c DEFVAR globals plus the standard error
     /// hierarchy and indentation/font variable seeding.
-    pub(super) fn seed_core_eval_variables(obarray: &mut Obarray) {
+    pub(super) fn seed_core_eval_variables(
+        obarray: &mut Obarray,
+        host: neovm_host_abi::HostKind,
+    ) {
         // Core eval variables (stay in eval.rs)
         obarray.set_symbol_value("purify-flag", Value::NIL);
         obarray.make_special("purify-flag");
@@ -1257,7 +1267,7 @@ impl Context {
         super::super::defvar_bool::register_bootstrap_vars(obarray);
         super::super::alloc::register_bootstrap_vars(obarray);
         super::super::load::register_bootstrap_vars(obarray);
-        super::super::fileio::register_bootstrap_vars(obarray);
+        super::super::fileio::register_bootstrap_vars(obarray, host);
         super::super::process::register_bootstrap_vars(obarray);
         super::super::undo::register_bootstrap_vars(obarray);
         super::super::category::register_bootstrap_vars(obarray);
@@ -1950,7 +1960,10 @@ impl Context {
         obarray.define_special_variable("x-show-tooltip-timeout", Value::fixnum(5));
     }
 
-    pub(super) fn new_inner(reset_thread_locals: bool) -> Self {
+    pub(super) fn new_inner(
+        reset_thread_locals: bool,
+        host: neovm_host_abi::HostKind,
+    ) -> Self {
         // Create the heap and set thread-locals so tagged constructors work
         // during evaluator initialization.
         let mut tagged_heap = Box::new(crate::tagged::gc::TaggedHeap::new());
@@ -2042,7 +2055,7 @@ impl Context {
             super::super::category::ensure_standard_category_table_object()
                 .expect("startup seeding requires standard category table");
 
-        Self::seed_startup_platform_variables(&mut obarray, default_directory);
+        Self::seed_startup_platform_variables(&mut obarray, default_directory, host);
         // GNU DEFVAR_LISP variables from eval.c / keyboard.c.
         let core_eval_symbols = install_core_eval_symbols(&mut obarray, true);
         Self::seed_reader_keyboard_variables(
@@ -2075,7 +2088,7 @@ impl Context {
         // per terminal, so model it as a dynamically scoped runtime variable.
         obarray.make_special("keyboard-translate-table");
 
-        Self::seed_core_eval_variables(&mut obarray);
+        Self::seed_core_eval_variables(&mut obarray, host);
         let mut custom = CustomManager::new();
         Self::seed_c_level_defvars(&mut obarray, &mut custom);
 
@@ -2104,6 +2117,7 @@ impl Context {
             obarray.symbol_value_id_or_nil(core_eval_symbols.throw_on_input_symbol);
 
         let mut ev = Self {
+            host_kind: host,
             tagged_heap,
             pdump_image: None,
             after_pdump_load_hook_pending: false,
@@ -2130,7 +2144,7 @@ impl Context {
             symbols_with_pos_enabled,
             print_symbols_bare_symbol: core_eval_symbols.print_symbols_bare_symbol,
             print_symbols_bare,
-            features: initial_feature_ids(),
+            features: initial_feature_ids(host),
             require_stack: Vec::new(),
             loads_in_progress: Vec::new(),
             load_read_cursors: Vec::new(),
@@ -2245,7 +2259,9 @@ impl Context {
             fringe_bitmaps: super::super::builtins::fringe_bitmap::FringeBitmapRegistry::new(),
         };
         super::super::runtime_identity::install(&mut ev);
-        if let Some(subfeatures) = super::super::process::make_network_process_subfeatures() {
+        if host != neovm_host_abi::HostKind::Wasm
+            && let Some(subfeatures) = super::super::process::make_network_process_subfeatures()
+        {
             ev.provide_value(Value::symbol("make-network-process"), Some(subfeatures))
                 .expect("startup make-network-process provide should succeed");
         }
