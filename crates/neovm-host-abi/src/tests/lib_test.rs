@@ -194,10 +194,6 @@ fn wasm_profile_rejects_native_process_facilities() {
     let profile = HostProfile::WASM;
 
     assert_eq!(profile.kind(), HostKind::Wasm);
-    assert_eq!(
-        profile.kind().process_environment(),
-        ProcessEnvironmentModel::Empty,
-    );
     assert_eq!(profile.processes(), ProcessModel::Unavailable);
     assert_eq!(
         profile.require(HostOperation::SpawnProcess),
@@ -220,10 +216,6 @@ fn android_profile_distinguishes_sandbox_restriction_from_absence() {
     let profile = HostProfile::android();
 
     assert_eq!(profile.kind(), HostKind::Android);
-    assert_eq!(
-        profile.kind().process_environment(),
-        ProcessEnvironmentModel::InheritedNative,
-    );
     assert_eq!(profile.processes(), ProcessModel::AndroidRestricted);
     assert_eq!(
         profile.require(HostOperation::SpawnProcess),
@@ -233,4 +225,25 @@ fn android_profile_distinguishes_sandbox_restriction_from_absence() {
         })
     );
     assert!(profile.require(HostOperation::MapRuntimeImage).is_ok());
+}
+
+#[test]
+fn process_environment_model_is_selected_by_the_compile_target() {
+    let expected = std::cfg_select! {
+        target_family = "wasm" => { ProcessEnvironmentModel::Empty }
+        _ => { ProcessEnvironmentModel::InheritedNative }
+    };
+
+    assert_eq!(ProcessEnvironmentModel::CURRENT, expected);
+}
+
+#[test]
+fn current_host_kind_is_selected_by_the_compile_target() {
+    let expected = std::cfg_select! {
+        target_family = "wasm" => { HostKind::Wasm }
+        target_os = "android" => { HostKind::Android }
+        _ => { HostKind::Desktop }
+    };
+
+    assert_eq!(HostKind::CURRENT, expected);
 }
