@@ -2453,17 +2453,34 @@ pub(crate) enum MinibufferInputSource {
     StandardInput,
 }
 
-/// Whether a character/event reader can obtain input from the command runtime.
+/// The deadline policy for one command-event read.
 ///
-/// Unlike minibuffer readers, `read-char`, `read-event`, and
-/// `read-char-exclusive` never fall back to standard input.  They can still
-/// read without a live frontend when a keyboard macro is executing or a
-/// low-level event is queued.  Centralizing that distinction prevents each
-/// builtin from recognizing a different subset of GNU `read_char`'s sources.
+/// GNU's `read_filtered_event` always enters `read_char`, with or without a
+/// terminal.  The low-level unified wait is the sole authority on whether
+/// input can still arrive because it sees every source: keyboard input,
+/// timers, processes, and file notifications.  This type carries only the
+/// caller's deadline policy so upper layers cannot prematurely classify that
+/// changing set of sources and bypass part of the wait loop.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CommandEventInputSource {
-    Runtime,
-    Unavailable,
+pub(crate) enum CommandEventReadPlan {
+    Unbounded,
+    Timed { timeout: Duration },
+}
+
+impl CommandEventReadPlan {
+    pub(crate) fn from_seconds(seconds: Option<&Value>) -> Result<Self, Flow> {
+        Ok(match parse_optional_read_seconds_arg(seconds)? {
+            Some(timeout) => Self::Timed { timeout },
+            None => Self::Unbounded,
+        })
+    }
+
+    pub(crate) fn timeout(self) -> Option<Duration> {
+        match self {
+            Self::Unbounded => None,
+            Self::Timed { timeout } => Some(timeout),
+        }
+    }
 }
 
 /// GNU passes `prev_event == t` to its low-level reader when
@@ -2498,23 +2515,6 @@ pub(crate) trait KeyboardInputRuntime {
             MinibufferInputSource::CommandLoop
         } else {
             MinibufferInputSource::StandardInput
-        }
-    }
-    fn has_pending_low_level_events(&self) -> bool {
-        false
-    }
-    fn has_external_command_event_source(&self) -> bool {
-        false
-    }
-    fn command_event_input_source(&self) -> CommandEventInputSource {
-        if self.has_input_receiver()
-            || self.is_executing_keyboard_macro()
-            || self.has_pending_low_level_events()
-            || self.has_external_command_event_source()
-        {
-            CommandEventInputSource::Runtime
-        } else {
-            CommandEventInputSource::Unavailable
         }
     }
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -2576,14 +2576,6 @@ impl KeyboardInputRuntime for super::eval::Context {
         // playback and those scoped callers share one semantic authority.
         self.visible_variable_value_or_nil("executing-kbd-macro")
             .is_truthy()
-    }
-
-    fn has_pending_low_level_events(&self) -> bool {
-        super::eval::Context::has_pending_low_level_events(self)
-    }
-
-    fn has_external_command_event_source(&self) -> bool {
-        super::builtins::has_active_file_notify_watches()
     }
 
     fn read_char_blocking(&mut self) -> Result<Value, Flow> {
@@ -2849,10 +2841,7 @@ pub(crate) fn builtin_read_char_in_runtime(
         return Err(non_character_input_event_error());
     }
 
-    match runtime.command_event_input_source() {
-        CommandEventInputSource::Runtime => Ok(None),
-        CommandEventInputSource::Unavailable => Ok(Some(Value::NIL)),
-    }
+    Ok(None)
 }
 
 pub(crate) fn builtin_read_key_sequence_in_runtime(
@@ -3154,26 +3143,22 @@ pub(crate) fn finish_read_char_interactive_in_runtime(
     runtime: &mut impl KeyboardInputRuntime,
     args: &[Value],
 ) -> EvalResult {
-    match runtime.command_event_input_source() {
-        CommandEventInputSource::Runtime => {
-            let timeout = parse_optional_read_seconds_arg(args.get(2))?;
-            let tty_input_decoding = tty_input_decoding_from_read_args(args);
-            let Some(event) = runtime.read_char_with_timeout(timeout, tty_input_decoding)? else {
-                return Ok(Value::NIL);
-            };
-            let seconds_is_nil_or_omitted = args.get(2).is_none_or(|v| v.is_nil());
-            if let Some(n) = event_to_int(&event) {
-                if runtime.read_command_keys().is_empty() && seconds_is_nil_or_omitted {
-                    runtime.set_read_command_keys(vec![event]);
-                }
-                return Ok(Value::fixnum(n));
-            }
-            runtime.replace_unread_command_event_with_singleton(event);
-            runtime.record_input_event(event);
-            Err(non_character_input_event_error())
+    let read_plan = CommandEventReadPlan::from_seconds(args.get(2))?;
+    let tty_input_decoding = tty_input_decoding_from_read_args(args);
+    let Some(event) = runtime.read_char_with_timeout(read_plan.timeout(), tty_input_decoding)?
+    else {
+        return Ok(Value::NIL);
+    };
+    let seconds_is_nil_or_omitted = args.get(2).is_none_or(|v| v.is_nil());
+    if let Some(n) = event_to_int(&event) {
+        if runtime.read_command_keys().is_empty() && seconds_is_nil_or_omitted {
+            runtime.set_read_command_keys(vec![event]);
         }
-        CommandEventInputSource::Unavailable => Ok(Value::NIL),
+        return Ok(Value::fixnum(n));
     }
+    runtime.replace_unread_command_event_with_singleton(event);
+    runtime.record_input_event(event);
+    Err(non_character_input_event_error())
 }
 
 /// `(read-key &optional PROMPT)`

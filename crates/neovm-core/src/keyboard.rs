@@ -5429,13 +5429,16 @@ impl crate::emacs_core::eval::Context {
                 ));
             }
 
-            if self.input_rx.is_none()
+            if deadline.is_none()
+                && self.input_rx.is_none()
                 && !crate::emacs_core::builtins::has_active_file_notify_watches()
+                && self.processes.live_process_ids().is_empty()
             {
-                // No host input channel means this evaluator cannot block for
-                // future keyboard input. A pending ordinary timer can still
-                // become due and throw - GNU blocks in select with the timer
-                // deadline as its timeout, which is how
+                // With no host input, file-notify watch, or live process, this
+                // evaluator has no external source to keep an unbounded read
+                // alive. A pending ordinary timer can still become due and
+                // throw - GNU blocks in select with the timer deadline as its
+                // timeout, which is how
                 //   (with-timeout (0.01) (read-key-sequence "p"))
                 // returns nil in batch: the timer fires mid-wait and its
                 // handler throws out of the read. Wait out the earliest

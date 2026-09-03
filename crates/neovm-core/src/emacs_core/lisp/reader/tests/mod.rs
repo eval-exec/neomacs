@@ -2465,19 +2465,11 @@ fn minibuffer_input_source_distinguishes_stdin_macros_and_live_input() {
         batch.minibuffer_input_source(),
         MinibufferInputSource::StandardInput
     );
-    assert_eq!(
-        batch.command_event_input_source(),
-        CommandEventInputSource::Unavailable
-    );
 
     batch.begin_executing_kbd_macro_runtime(vec![Value::fixnum(b'a' as i64)]);
     assert_eq!(
         batch.minibuffer_input_source(),
         MinibufferInputSource::CommandLoop
-    );
-    assert_eq!(
-        batch.command_event_input_source(),
-        CommandEventInputSource::Runtime
     );
 
     let mut interactive = Context::new();
@@ -2486,24 +2478,6 @@ fn minibuffer_input_source_distinguishes_stdin_macros_and_live_input() {
     assert_eq!(
         interactive.minibuffer_input_source(),
         MinibufferInputSource::CommandLoop
-    );
-    assert_eq!(
-        interactive.command_event_input_source(),
-        CommandEventInputSource::Runtime
-    );
-
-    let mut queued = Context::new();
-    queued
-        .command_loop
-        .keyboard
-        .unread_event(Value::symbol("file-notify"));
-    assert_eq!(
-        queued.minibuffer_input_source(),
-        MinibufferInputSource::StandardInput
-    );
-    assert_eq!(
-        queued.command_event_input_source(),
-        CommandEventInputSource::Runtime
     );
 }
 
@@ -3911,6 +3885,23 @@ fn read_char_with_interactive_timeout_returns_nil() {
 }
 
 #[test]
+fn read_char_with_timeout_waits_without_input_source() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+
+    let start = std::time::Instant::now();
+    let result = builtin_read_char(
+        &mut ev,
+        vec![Value::NIL, Value::NIL, Value::make_float(0.02)],
+    )
+    .unwrap();
+
+    assert!(result.is_nil());
+    assert!(start.elapsed() >= std::time::Duration::from_millis(10));
+    assert!(start.elapsed() < std::time::Duration::from_millis(500));
+}
+
+#[test]
 fn read_char_preserves_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -4138,6 +4129,39 @@ fn due_gnu_timer(callback: &str) -> Value {
         Value::fixnum(0),
         Value::NIL,
     ])
+}
+
+#[test]
+fn read_event_noninteractive_no_input_waits_for_timers() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    ev.eval_str(
+        r#"(progn
+             (fset 'timer-event-handler
+                   (lambda (timer)
+                     (setq timer-list (delq timer timer-list))
+                     (condition-case nil
+                         (apply (aref timer 5) (aref timer 6))
+                       (error nil))))
+             (fset 'read-event-timeout
+                   (lambda () (throw 'read-event-timeout-tag 'timed-out))))"#,
+    )
+    .expect("install timer-event-handler and timeout callback");
+    ev.set_variable(
+        "timer-list",
+        Value::list(vec![due_gnu_timer("read-event-timeout")]),
+    );
+
+    let result = ev.eval_str(
+        r#"(catch 'read-event-timeout-tag
+             (read-event)
+             'read-returned)"#,
+    );
+
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&result),
+        "OK timed-out"
+    );
 }
 
 #[test]

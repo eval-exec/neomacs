@@ -10287,16 +10287,6 @@ impl Context {
         self.command_loop.keyboard.unread_event(event);
     }
 
-    pub(crate) fn has_pending_low_level_events(&self) -> bool {
-        !self.command_loop.keyboard.kboard.unread_events.is_empty()
-            || self
-                .command_loop
-                .keyboard
-                .kboard
-                .unread_selection_event
-                .is_some()
-    }
-
     pub(crate) fn replace_unread_command_event_with_singleton(&mut self, event: Value) {
         self.assign("unread-command-events", Value::list(vec![event]));
     }

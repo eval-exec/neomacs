@@ -378,6 +378,21 @@ fn oracle_prop_run_with_timer_returns_timer() {
     assert_ok_eq("t", &o, &n);
 }
 
+#[test]
+fn oracle_unbounded_read_event_services_with_timeout_without_keyboard_input() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[r#""OK (timed-out t)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((timer-fired nil))
+             (list
+              (with-timeout (0.02 (setq timer-fired t) 'timed-out)
+                (read-event))
+              timer-fired))"#,
+        expect,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // command-keys and key-description parity
 // ---------------------------------------------------------------------------

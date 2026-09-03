@@ -939,6 +939,23 @@ fn read_event_with_interactive_timeout_returns_nil() {
 }
 
 #[test]
+fn read_event_with_timeout_waits_without_input_source() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+
+    let start = std::time::Instant::now();
+    let result = builtin_read_event(
+        &mut ev,
+        vec![Value::NIL, Value::NIL, Value::make_float(0.02)],
+    )
+    .unwrap();
+
+    assert!(result.is_nil());
+    assert!(start.elapsed() >= std::time::Duration::from_millis(10));
+    assert!(start.elapsed() < std::time::Duration::from_millis(500));
+}
+
+#[test]
 fn read_event_with_non_nil_seconds_preserves_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -1089,6 +1106,23 @@ fn read_char_exclusive_with_seconds_does_not_set_command_keys_when_empty() {
             .unwrap();
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(ev.read_command_keys(), &[]);
+}
+
+#[test]
+fn read_char_exclusive_with_timeout_waits_without_input_source() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+
+    let start = std::time::Instant::now();
+    let result = builtin_read_char_exclusive(
+        &mut ev,
+        vec![Value::NIL, Value::NIL, Value::make_float(0.02)],
+    )
+    .unwrap();
+
+    assert!(result.is_nil());
+    assert!(start.elapsed() >= std::time::Duration::from_millis(10));
+    assert!(start.elapsed() < std::time::Duration::from_millis(500));
 }
 
 #[test]

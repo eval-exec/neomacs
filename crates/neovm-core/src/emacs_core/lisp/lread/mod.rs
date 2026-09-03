@@ -868,24 +868,20 @@ pub(crate) fn finish_read_event_interactive_in_runtime(
     runtime: &mut impl super::reader::KeyboardInputRuntime,
     args: &[Value],
 ) -> EvalResult {
-    match runtime.command_event_input_source() {
-        super::reader::CommandEventInputSource::Runtime => {
-            let timeout = super::reader::parse_optional_read_seconds_arg(args.get(2))?;
-            let tty_input_decoding = super::reader::tty_input_decoding_from_read_args(args);
-            let Some(event) = runtime.read_char_with_timeout(timeout, tty_input_decoding)? else {
-                return Ok(Value::NIL);
-            };
-            let seconds_is_nil_or_omitted = args.get(2).is_none_or(|v| v.is_nil());
-            if runtime.read_command_keys().is_empty() && seconds_is_nil_or_omitted {
-                runtime.set_read_command_keys(vec![event]);
-            }
-            if let Some(n) = event_to_int(&event) {
-                return Ok(Value::fixnum(n));
-            }
-            Ok(event)
-        }
-        super::reader::CommandEventInputSource::Unavailable => Ok(Value::NIL),
+    let read_plan = super::reader::CommandEventReadPlan::from_seconds(args.get(2))?;
+    let tty_input_decoding = super::reader::tty_input_decoding_from_read_args(args);
+    let Some(event) = runtime.read_char_with_timeout(read_plan.timeout(), tty_input_decoding)?
+    else {
+        return Ok(Value::NIL);
+    };
+    let seconds_is_nil_or_omitted = args.get(2).is_none_or(|v| v.is_nil());
+    if runtime.read_command_keys().is_empty() && seconds_is_nil_or_omitted {
+        runtime.set_read_command_keys(vec![event]);
     }
+    if let Some(n) = event_to_int(&event) {
+        return Ok(Value::fixnum(n));
+    }
+    Ok(event)
 }
 
 /// `(read-char-exclusive &optional PROMPT INHERIT-INPUT-METHOD SECONDS)`
@@ -916,28 +912,24 @@ pub(crate) fn finish_read_char_exclusive_interactive_in_runtime(
     runtime: &mut impl super::reader::KeyboardInputRuntime,
     args: &[Value],
 ) -> EvalResult {
-    match runtime.command_event_input_source() {
-        super::reader::CommandEventInputSource::Runtime => {
-            let timeout = super::reader::parse_optional_read_seconds_arg(args.get(2))?;
-            let tty_input_decoding = super::reader::tty_input_decoding_from_read_args(args);
-            let deadline = timeout.map(|timeout| std::time::Instant::now() + timeout);
-            loop {
-                let remaining = deadline
-                    .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()));
-                let Some(event) = runtime.read_char_with_timeout(remaining, tty_input_decoding)?
-                else {
-                    return Ok(Value::NIL);
-                };
-                let seconds_is_nil_or_omitted = args.get(2).is_none_or(|v| v.is_nil());
-                if let Some(n) = event_to_int(&event) {
-                    if runtime.read_command_keys().is_empty() && seconds_is_nil_or_omitted {
-                        runtime.set_read_command_keys(vec![event]);
-                    }
-                    return Ok(Value::fixnum(n));
-                }
+    let read_plan = super::reader::CommandEventReadPlan::from_seconds(args.get(2))?;
+    let tty_input_decoding = super::reader::tty_input_decoding_from_read_args(args);
+    let deadline = read_plan
+        .timeout()
+        .map(|timeout| std::time::Instant::now() + timeout);
+    loop {
+        let remaining =
+            deadline.map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()));
+        let Some(event) = runtime.read_char_with_timeout(remaining, tty_input_decoding)? else {
+            return Ok(Value::NIL);
+        };
+        let seconds_is_nil_or_omitted = args.get(2).is_none_or(|v| v.is_nil());
+        if let Some(n) = event_to_int(&event) {
+            if runtime.read_command_keys().is_empty() && seconds_is_nil_or_omitted {
+                runtime.set_read_command_keys(vec![event]);
             }
+            return Ok(Value::fixnum(n));
         }
-        super::reader::CommandEventInputSource::Unavailable => Ok(Value::NIL),
     }
 }
 
@@ -967,10 +959,7 @@ pub(crate) fn builtin_read_event_in_runtime(
         return Ok(Some(event));
     }
 
-    match runtime.command_event_input_source() {
-        super::reader::CommandEventInputSource::Runtime => Ok(None),
-        super::reader::CommandEventInputSource::Unavailable => Ok(Some(Value::NIL)),
-    }
+    Ok(None)
 }
 
 pub(crate) fn builtin_read_char_exclusive_in_runtime(
@@ -998,10 +987,7 @@ pub(crate) fn builtin_read_char_exclusive_in_runtime(
         }
     }
 
-    match runtime.command_event_input_source() {
-        super::reader::CommandEventInputSource::Runtime => Ok(None),
-        super::reader::CommandEventInputSource::Unavailable => Ok(Some(Value::NIL)),
-    }
+    Ok(None)
 }
 
 // ---------------------------------------------------------------------------
