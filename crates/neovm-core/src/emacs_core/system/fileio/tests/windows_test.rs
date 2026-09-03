@@ -64,3 +64,42 @@ fn windows_file_writable_p_accepts_existing_directory_forms() {
         assert_eq!(result, Value::T);
     }
 }
+
+/// This is the public policy seam behind GNU's file-notify backup oracle:
+/// with copy backups disabled, `backup-buffer` must rename the visited file
+/// and return the metadata needed to finish the save.
+#[test]
+fn windows_backup_buffer_uses_rename_when_copying_is_disabled() {
+    crate::test_utils::init_test_tracing();
+    let directory = workspace_temp_dir();
+    let file = directory.path().join("visited.txt");
+    std::fs::write(&file, "original").expect("create backup fixture");
+
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.set_variable(
+        "neovm-test-backup-file",
+        Value::string(crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&file)),
+    );
+    let result = eval
+        .eval_str(
+            r#"
+            (progn
+              (require 'files)
+              (with-temp-buffer
+                (let ((buffer-file-name neovm-test-backup-file)
+                      (make-backup-files t)
+                      (backup-by-copying nil)
+                      (backup-by-copying-when-mismatch nil)
+                      (kept-new-versions 1)
+                      (delete-old-versions t))
+                  (insert "replacement")
+                  (backup-buffer))))
+            "#,
+        )
+        .expect("run backup-buffer");
+
+    assert!(
+        result.is_cons(),
+        "backup-buffer copied instead of renaming the original: {result:?}"
+    );
+}
