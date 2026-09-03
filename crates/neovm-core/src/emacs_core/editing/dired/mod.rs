@@ -20,6 +20,8 @@ use std::ffi::CStr;
 use std::fs;
 use std::io::ErrorKind;
 
+mod file_identity;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum FileIdFormat {
     #[strum(serialize = "integer")]
@@ -298,26 +300,30 @@ fn build_file_attributes(
     #[cfg(not(unix))]
     let nlinks = Value::fixnum(1);
 
-    // UID / GID.
-    #[cfg(unix)]
-    let (uid_val, gid_val) = {
-        use std::os::unix::fs::MetadataExt;
-        let uid = sym_meta.uid();
-        let gid = sym_meta.gid();
-        if id_format.ids_as_strings() {
-            (
-                Value::string(uid_to_name(uid).unwrap_or_else(|| uid.to_string())),
-                Value::string(gid_to_name(gid).unwrap_or_else(|| gid.to_string())),
-            )
-        } else {
-            (Value::fixnum(uid as i64), Value::fixnum(gid as i64))
-        }
-    };
-    #[cfg(not(unix))]
+    // UID / GID. GNU requests accurate Windows security-descriptor ownership
+    // specifically for file-attributes (src/dired.c:1070-1080); the platform
+    // boundary supplies that without exposing raw SID pointers here.
+    let ownership = file_identity::for_path(&path, &sym_meta);
     let (uid_val, gid_val) = if id_format.ids_as_strings() {
-        (Value::string("0"), Value::string("0"))
+        (
+            Value::string(
+                ownership
+                    .user
+                    .name
+                    .unwrap_or_else(|| ownership.user.id.to_string()),
+            ),
+            Value::string(
+                ownership
+                    .group
+                    .name
+                    .unwrap_or_else(|| ownership.group.id.to_string()),
+            ),
+        )
     } else {
-        (Value::fixnum(0), Value::fixnum(0))
+        (
+            Value::fixnum(ownership.user.id),
+            Value::fixnum(ownership.group.id),
+        )
     };
 
     // Access time.

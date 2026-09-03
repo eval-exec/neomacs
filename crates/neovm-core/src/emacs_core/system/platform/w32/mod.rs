@@ -7,6 +7,8 @@
 //! files can remain direct GNU sources.
 
 #[cfg(windows)]
+pub(crate) mod security;
+#[cfg(windows)]
 mod subrs;
 #[cfg(all(test, windows))]
 pub(crate) use subrs::SUBRS;
