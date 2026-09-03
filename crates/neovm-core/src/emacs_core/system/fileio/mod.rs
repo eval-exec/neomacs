@@ -5,9 +5,15 @@
 
 mod binary_mode;
 pub(crate) mod file_error_class;
+mod filesystem;
 mod runtime_resources;
 
 pub(crate) use binary_mode::builtin_set_binary_mode;
+pub(crate) use filesystem::default_editor_file_system;
+pub use filesystem::{
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, MemoryFileSystem, WriteMode,
+    WriteRequest,
+};
 pub use runtime_resources::{RuntimeResourceNode, RuntimeResourceStore};
 
 use crate::emacs_core::error::LispCondition;
@@ -3708,7 +3714,7 @@ pub(crate) fn builtin_file_exists_p(eval: &mut Context, args: Vec<Value>) -> Eva
     let mounted = eval
         .runtime_resource_store()
         .and_then(|store| store.node(&path));
-    let exists = mounted.is_some() || file_exists_path(&path);
+    let exists = mounted.is_some() || eval.editor_file_system().access(&path, AccessMode::Exists);
     Ok(Value::bool_val(exists))
 }
 
@@ -3725,7 +3731,7 @@ pub(crate) fn builtin_file_readable_p(eval: &mut Context, args: Vec<Value>) -> E
     let mounted = eval
         .runtime_resource_store()
         .and_then(|store| store.node(&path));
-    let readable = mounted.is_some() || file_readable_path(&path);
+    let readable = mounted.is_some() || eval.editor_file_system().access(&path, AccessMode::Read);
     Ok(Value::bool_val(readable))
 }
 
@@ -3743,7 +3749,7 @@ pub(crate) fn builtin_file_writable_p(eval: &mut Context, args: Vec<Value>) -> E
         .and_then(|store| store.node(&path))
     {
         Some(RuntimeResourceNode::File(_) | RuntimeResourceNode::Directory) => false,
-        None => file_writable_path(&path),
+        None => eval.editor_file_system().access(&path, AccessMode::Write),
     };
     Ok(Value::bool_val(writable))
 }
@@ -3768,7 +3774,14 @@ pub(crate) fn builtin_file_accessible_directory_p(
     {
         Some(RuntimeResourceNode::Directory) => true,
         Some(RuntimeResourceNode::File(_)) => false,
-        None => file_accessible_directory_path(&path),
+        None => {
+            eval.editor_file_system()
+                .metadata(&path, true)
+                .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory)
+                && eval
+                    .editor_file_system()
+                    .access(&path, AccessMode::ReadAndSearch)
+        }
     };
     Ok(Value::bool_val(accessible))
 }
@@ -3781,8 +3794,9 @@ pub(crate) fn builtin_file_executable_p(eval: &mut Context, args: Vec<Value>) ->
     if let Some(result) = dispatch_expanded_file_handler(eval, "file-executable-p", &filename)? {
         return Ok(result);
     }
-    Ok(Value::bool_val(file_executable_path(
+    Ok(Value::bool_val(eval.editor_file_system().access(
         &lisp_file_name_to_path_buf(&filename),
+        AccessMode::Execute,
     )))
 }
 
@@ -4828,9 +4842,11 @@ pub(crate) fn builtin_make_directory_internal(eval: &mut Context, args: Vec<Valu
     expect_args("make-directory-internal", &args, 1)?;
     let dir = expect_lisp_string_strict(&args[0])?;
     let resolved = resolve_filename_lisp_for_eval(eval, &dir);
-    fs::create_dir(lisp_file_name_to_path_buf(&resolved)).map_err(|e| {
-        signal_file_action_error_value(e, "Creating directory", Value::heap_string(resolved))
-    })?;
+    eval.editor_file_system()
+        .create_directory(&lisp_file_name_to_path_buf(&resolved), false)
+        .map_err(|e| {
+            signal_file_action_error_value(e, "Creating directory", Value::heap_string(resolved))
+        })?;
     Ok(Value::NIL)
 }
 
