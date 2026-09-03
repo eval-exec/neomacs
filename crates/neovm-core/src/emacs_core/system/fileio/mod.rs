@@ -4555,6 +4555,55 @@ pub(crate) fn builtin_rename_file(eval: &mut Context, args: Vec<Value>) -> EvalR
     Ok(Value::NIL)
 }
 
+/// Timestamp behavior requested by `copy-file`'s KEEP-TIME argument.
+///
+/// Keeping this as policy rather than a platform boolean prevents the native
+/// copy primitive from silently deciding Lisp semantics.  In particular,
+/// Windows CopyFileW preserves modification times by default while Unix copy
+/// loops do not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CopyTimestampPolicy {
+    Refresh,
+    Preserve,
+}
+
+impl CopyTimestampPolicy {
+    fn from_keep_time(value: Option<&Value>) -> Self {
+        if value.is_some_and(|value| value.is_truthy()) {
+            Self::Preserve
+        } else {
+            Self::Refresh
+        }
+    }
+
+    fn apply(self, source: &fs::Metadata, destination: &Path) -> std::io::Result<()> {
+        std::cfg_select! {
+            windows => {
+                let _ = source;
+                match self {
+                    // CopyFileW already preserves the source modification time.
+                    Self::Preserve => Ok(()),
+                    // GNU w32_copy_file explicitly counters CopyFileW's default
+                    // when KEEP-TIME is nil (src/w32.c:6982-7029).
+                    Self::Refresh => set_file_times_path(destination, None, false),
+                }
+            }
+            _ => {
+                match self {
+                    // Writing the destination naturally refreshes its mtime.
+                    Self::Refresh => Ok(()),
+                    Self::Preserve => {
+                        let times = fs::FileTimes::new()
+                            .set_accessed(source.accessed()?)
+                            .set_modified(source.modified()?);
+                        fs::File::open(destination)?.set_times(times)
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// `(copy-file FROM TO &optional OK-IF-EXISTS KEEP-TIME PRESERVE-UID-GID PRESERVE-PERMISSIONS)`
 pub(crate) fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("copy-file", &args, 2)?;
@@ -4588,6 +4637,7 @@ pub(crate) fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
         return Ok(result);
     }
     let ok_if_exists = args.get(2).is_some_and(|value| value.is_truthy());
+    let timestamp_policy = CopyTimestampPolicy::from_keep_time(args.get(3));
     let from_path = lisp_file_name_to_path_buf(&from);
     let to_path = lisp_file_name_to_path_buf(&to);
 
@@ -4635,8 +4685,17 @@ pub(crate) fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
         signal_file_action_error_pair_values(
             err,
             "Copying",
-            Value::heap_string(from),
-            Value::heap_string(to),
+            Value::heap_string(from.clone()),
+            Value::heap_string(to.clone()),
+        )
+    })?;
+    timestamp_policy.apply(&from_meta, &to_path).map_err(|_| {
+        signal(
+            LispCondition::FileDateError,
+            vec![
+                Value::string("Cannot set file date"),
+                Value::heap_string(to),
+            ],
         )
     })?;
     Ok(Value::NIL)

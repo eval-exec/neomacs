@@ -511,6 +511,8 @@ pub(crate) enum LispCondition {
     FileAlreadyExists,
     #[strum(serialize = "file-error")]
     FileError,
+    #[strum(serialize = "file-date-error")]
+    FileDateError,
     #[strum(serialize = "file-missing")]
     FileMissing,
     #[strum(serialize = "invalid-function")]
