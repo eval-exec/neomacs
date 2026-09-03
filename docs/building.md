@@ -63,6 +63,43 @@ Replay a recording with `asciinema play <path>`. Set
 artifact root is resolved from the Cargo workspace. CI explicitly enables
 recording for TUI jobs and uploads the resulting casts.
 
+## Browser WebAssembly (Experimental)
+
+The browser build uses the same editor session as desktop Neomacs, compiled for
+`wasm32-unknown-unknown`. Build its portable runtime image and static
+distribution through `xtask`:
+
+```bash
+cargo xtask fresh-build --release --portable-seed \
+  --portable-runtime-image ./tmp/neomacs.portable
+cargo xtask package-portable-assets \
+  --portable-runtime-image ./tmp/neomacs.portable \
+  --output-dir ./tmp/neomacs-portable-assets
+cargo xtask build-wasm \
+  --portable-assets ./tmp/neomacs-portable-assets \
+  --output-dir ./tmp/neomacs-wasm-dist
+python3 -m http.server 4174 --directory ./tmp/neomacs-wasm-dist
+```
+
+Open <http://127.0.0.1:4174/> in current Chrome. No experimental Chrome flags
+are required. Browser Neomacs exposes `/neomacs-fake` as its home directory;
+that namespace is backed by origin-private file system storage and persists for
+the page origin. `/tmp` is session-local memory and is discarded with the
+editor worker.
+
+With the server running, the real-browser smoke test verifies a visible editor,
+file mutations, temporary files, and persistence across a page reload:
+
+```bash
+nix-shell \
+  -p google-chrome chromedriver python3Packages.selenium python3Packages.cbor2 \
+  --run 'python3 crates/neomacs-wasm/tests/browser_opfs_smoke.py \
+    --headless --url http://127.0.0.1:4174/'
+```
+
+Pass `--chrome PATH` when Chrome is not discoverable on `PATH`, or omit
+`--headless` for an interactive run.
+
 ## Linux (Arch Linux)
 
 ```bash
