@@ -199,7 +199,7 @@ impl TaggedHeap {
         // which is fail-safe: their objects allocate black and whatever the
         // marker meets there defers to the termination.
         let pages = self.page_snapshot_for_mark();
-        let vecsnap_t0 = crate::host::time::Instant::now();
+        let vecsnap_t0 = neomacs_host_runtime::time::Instant::now();
         // Stage 2 Tier B CONCURRENT VECTOR SCAN: snapshot every
         // OWNED/Mapped vector backing AT THIS world-stopped point (same instant the
         // page snapshot is taken and the roots are seeded), so the GC
@@ -289,7 +289,7 @@ impl TaggedHeap {
         self.handshake.last_start_vecsnap_us = vecsnap_t0.elapsed().as_micros() as u64;
         self.handshake.probe_vector_snapshot_len =
             vectors.as_ref().map(|snap| snap.len()).unwrap_or(0);
-        let jobasm_t0 = crate::host::time::Instant::now();
+        let jobasm_t0 = neomacs_host_runtime::time::Instant::now();
         let gray = std::mem::take(&mut self.gray_queue);
         let (exited_tx, exited_rx) = std::sync::mpsc::channel();
         self.gc_done
@@ -346,8 +346,16 @@ impl TaggedHeap {
         launch_background_mark(job);
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
+<<<<<<< HEAD
         self.pace_mark_start = Some(crate::host::time::Instant::now());
         self.pace_mark_start_bytes = self.bytes_since_gc();
+||||||| parent of 7f96c28c80 (refactor: share compile-time host services)
+        self.pace_mark_start = Some(crate::host::time::Instant::now());
+        self.pace_mark_start_bytes = self.bytes_since_gc;
+=======
+        self.pace_mark_start = Some(neomacs_host_runtime::time::Instant::now());
+        self.pace_mark_start_bytes = self.bytes_since_gc;
+>>>>>>> 7f96c28c80 (refactor: share compile-time host services)
     }
 
     /// The ownership snapshot a concurrent mark starting now hands the GC
@@ -418,7 +426,7 @@ impl TaggedHeap {
     /// the caller can finish marking stop-the-world. After this, the heap is
     /// owned exclusively by the mutator again (the GC thread has exited its loop).
     pub(crate) fn join_concurrent_mark(&mut self) {
-        let join_t0 = crate::host::time::Instant::now();
+        let join_t0 = neomacs_host_runtime::time::Instant::now();
         self.gc_stop
             .store(true, std::sync::atomic::Ordering::Release);
         // Task #7 stage 2a (Fix B): wake the GC thread out of its idle nap
@@ -489,7 +497,7 @@ impl TaggedHeap {
         // the caller reseeds roots, then drains to a fixpoint stop-the-world.
         // The fold is timed (`last_termination_fold_us`) so the termination's
         // cheap push half is attributable separately from the mark fixpoint.
-        let fold_t0 = crate::host::time::Instant::now();
+        let fold_t0 = neomacs_host_runtime::time::Instant::now();
         let satb = std::mem::take(&mut *self.satb_shared.lock().unwrap());
         self.last_termination_satb = satb.len();
         self.gray_queue.extend(satb);

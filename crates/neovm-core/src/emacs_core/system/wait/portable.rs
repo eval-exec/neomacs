@@ -19,7 +19,7 @@ mod host_input;
 pub use host_input::{HostInputWaitBackend, HostInputWaitError};
 
 use std::time::Duration;
-use crate::host::time::Instant;
+use neomacs_host_runtime::time::Instant;
 
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::{Context, GnuTimerTimestamp};

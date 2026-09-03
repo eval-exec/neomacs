@@ -194,7 +194,7 @@ fn resolve_env_log_file() -> Option<std::path::PathBuf> {
         .map(|v| v == "1")
         .unwrap_or(false);
     if legacy {
-        let pid = crate::host::process::id();
+        let pid = neomacs_host_runtime::process::id();
         return Some(std::path::PathBuf::from(format!("neomacs-{pid}.log")));
     }
     None

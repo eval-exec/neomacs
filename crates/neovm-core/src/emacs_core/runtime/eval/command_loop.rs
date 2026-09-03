@@ -2107,7 +2107,7 @@ impl Context {
         {
             crate::emacs_core::undo::compact_buffers_for_gc(self);
         }
-        let start = crate::host::time::Instant::now();
+        let start = neomacs_host_runtime::time::Instant::now();
         // These two are the caches keyed on a raw heap address -- the address
         // of a lexical environment's head cons -- so a swept and recycled cons
         // could otherwise be read back as a different environment.  Nothing
@@ -2307,14 +2307,14 @@ impl Context {
         heap_ptr: *mut crate::tagged::gc::TaggedHeap,
     ) -> crate::tagged::gc::RootSeedBreakdown {
         use std::cell::{Cell, RefCell};
-        let seed_t0 = crate::host::time::Instant::now();
+        let seed_t0 = neomacs_host_runtime::time::Instant::now();
         // Per-group recorder shared by the two `trace_roots` closures via
         // interior mutability (both need it: the boundary closure closes the
         // running group, the visit closure counts values).
         let groups: RefCell<Vec<crate::tagged::gc::RootGroup>> =
             RefCell::new(Vec::with_capacity(32));
         let cur_name: Cell<Option<&'static str>> = Cell::new(None);
-        let cur_t0: Cell<crate::host::time::Instant> = Cell::new(seed_t0);
+        let cur_t0: Cell<neomacs_host_runtime::time::Instant> = Cell::new(seed_t0);
         let cur_count: Cell<usize> = Cell::new(0);
         let close_group = || {
             if let Some(name) = cur_name.get() {
@@ -2335,7 +2335,7 @@ impl Context {
                 close_group();
                 cur_name.set(Some(name));
                 cur_count.set(0);
-                cur_t0.set(crate::host::time::Instant::now());
+                cur_t0.set(neomacs_host_runtime::time::Instant::now());
             },
             &mut move |root| {
                 root_count.set(root_count.get() + 1);
@@ -2364,6 +2364,7 @@ impl Context {
         // Context's obarray is not that one (P1.4 §3.6).
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::cache::sync_cache_to_obarray(self.obarray.generation());
+<<<<<<< HEAD
         // Exact GC can finish an older sweep after activation. Read the epoch
         // here, before any TLS cache reconstructs Values from address keys.
         let collection_epoch = unsafe { (*heap_ptr).gc_collections() };
@@ -2378,6 +2379,13 @@ impl Context {
             &mut groups,
         );
         let tl_seed_t0 = crate::host::time::Instant::now();
+||||||| parent of 7f96c28c80 (refactor: share compile-time host services)
+        collect_thread_local_gc_roots(&mut thread_local_roots, heap_identity, &mut groups);
+        let tl_seed_t0 = crate::host::time::Instant::now();
+=======
+        collect_thread_local_gc_roots(&mut thread_local_roots, heap_identity, &mut groups);
+        let tl_seed_t0 = neomacs_host_runtime::time::Instant::now();
+>>>>>>> 7f96c28c80 (refactor: share compile-time host services)
         let tl_seed_count = thread_local_roots.len();
         for (root, origin) in thread_local_roots {
             unsafe {
@@ -2392,7 +2400,7 @@ impl Context {
         // Install per-buffer marker-chain head slots so `unchain_dead_markers`
         // can splice unmarked markers out of every live chain before sweep.
         // Mirrors GNU `sweep_buffer → unchain_dead_markers` (alloc.c).
-        let heads_t0 = crate::host::time::Instant::now();
+        let heads_t0 = neomacs_host_runtime::time::Instant::now();
         // Safety: stop-the-world GC — no concurrent borrows of the buffer
         // storage exist (the pre-refactor body relied on the enclosing
         // `unsafe fn` for this same call).
@@ -2427,7 +2435,7 @@ impl Context {
         &mut self,
         heap_ptr: *mut crate::tagged::gc::TaggedHeap,
     ) {
-        let start_t0 = crate::host::time::Instant::now();
+        let start_t0 = neomacs_host_runtime::time::Instant::now();
         let (obsnap_us, roots_breakdown, ob_slots, ob_chunks);
         unsafe {
             (*heap_ptr).concurrent_begin();
@@ -2440,7 +2448,7 @@ impl Context {
             // scoped to just the seed, keeps the start seed from also pushing the
             // symbol cells the GC thread now owns (the BLV pool + non-obarray roots
             // still seed normally).
-            let obsnap_t0 = crate::host::time::Instant::now();
+            let obsnap_t0 = neomacs_host_runtime::time::Instant::now();
             let snap = self.obarray.scan_snapshot();
             obsnap_us = obsnap_t0.elapsed().as_micros() as u64;
             ob_slots = snap.n_slots();
@@ -2525,7 +2533,7 @@ impl Context {
         &mut self,
         heap_ptr: *mut crate::tagged::gc::TaggedHeap,
     ) {
-        let term_t0 = crate::host::time::Instant::now();
+        let term_t0 = neomacs_host_runtime::time::Instant::now();
         let (roots_us, drain_us);
         let (ctxroots_breakdown, newsyms_us);
         let mut newsyms_roots = 0usize;
@@ -2554,7 +2562,7 @@ impl Context {
             // obarray un-skipped" fallback: it preserves the Stage 1a win (no full
             // ~450k-symbol walk) while staying correct. `None` only if no start
             // snapshot was captured, in which case the residual is skipped.
-            let newsyms_t0 = crate::host::time::Instant::now();
+            let newsyms_t0 = neomacs_host_runtime::time::Instant::now();
             if let Some(start_slots) = (*heap_ptr).take_concurrent_obarray_start_slots() {
                 self.obarray
                     .trace_new_symbol_cells(start_slots, &mut |root| {
@@ -2572,7 +2580,7 @@ impl Context {
             newsyms_us = newsyms_t0.elapsed().as_micros() as u64;
             roots_us = term_t0.elapsed().as_micros();
             let bytes_before = (*heap_ptr).live_bytes();
-            let pause_t0 = crate::host::time::Instant::now();
+            let pause_t0 = neomacs_host_runtime::time::Instant::now();
             (*heap_ptr).incremental_drain_all();
             drain_us = pause_t0.elapsed().as_micros();
             (*heap_ptr).incremental_finish(bytes_before, pause_t0);

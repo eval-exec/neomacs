@@ -1,4 +1,4 @@
-use crate::host::time::Instant;
+use neomacs_host_runtime::time::Instant;
 
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
