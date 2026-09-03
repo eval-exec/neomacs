@@ -131,7 +131,10 @@ pub struct EditorFrontend {
 }
 
 impl EditorFrontend {
-    pub(super) fn new(input: FrontendInputPort, frames: Receiver<SealedFramePresentation>) -> Self {
+    pub(super) fn new(
+        input: FrontendInputPort,
+        frames: Receiver<Box<SealedFramePresentation>>,
+    ) -> Self {
         Self {
             frames: FrontendFrameInbox {
                 frames,
@@ -172,7 +175,7 @@ pub enum FrontendFrameReceive {
 
 /// Frontend-side presentation queue with automatic stale-frame rejection.
 pub struct FrontendFrameInbox {
-    frames: Receiver<SealedFramePresentation>,
+    frames: Receiver<Box<SealedFramePresentation>>,
     input: FrontendInputPort,
 }
 
@@ -202,12 +205,12 @@ impl FrontendFrameInbox {
 /// Presentation which must be activated or discarded exactly once.
 #[must_use = "a pending frontend frame must be activated or discarded"]
 pub struct PendingFrontendFrame {
-    frame: Option<SealedFramePresentation>,
+    frame: Option<Box<SealedFramePresentation>>,
     input: FrontendInputPort,
 }
 
 impl PendingFrontendFrame {
-    fn new(frame: SealedFramePresentation, input: FrontendInputPort) -> Self {
+    fn new(frame: Box<SealedFramePresentation>, input: FrontendInputPort) -> Self {
         Self {
             frame: Some(frame),
             input,
@@ -245,10 +248,8 @@ impl PendingFrontendFrame {
     /// discarded observation, and later retire an activated presentation.
     #[must_use]
     pub fn hand_off_to_remote_frontend(mut self) -> FrameDisplayState {
-        self.frame
-            .take()
-            .expect("pending frame already consumed")
-            .into_state()
+        let frame = self.frame.take().expect("pending frame already consumed");
+        (*frame).into_state()
     }
 
     /// Report successful installation and return its retirement guard.
@@ -273,7 +274,9 @@ impl PendingFrontendFrame {
     }
 
     fn frame(&self) -> &SealedFramePresentation {
-        self.frame.as_ref().expect("pending frame already consumed")
+        self.frame
+            .as_deref()
+            .expect("pending frame already consumed")
     }
 
     fn send_discard(&self) -> Result<FrontendInputSubmission, FrontendInputDisconnected> {
@@ -411,8 +414,8 @@ mod tests {
             frames: frame_rx,
             input,
         };
-        frame_tx.send(sealed_frame(40)).unwrap();
-        frame_tx.send(sealed_frame(41)).unwrap();
+        frame_tx.send(Box::new(sealed_frame(40))).unwrap();
+        frame_tx.send(Box::new(sealed_frame(41))).unwrap();
 
         let FrontendFrameReceive::Frame(pending) = inbox.try_latest() else {
             panic!("latest frame should be ready");
@@ -444,7 +447,7 @@ mod tests {
     fn remote_handoff_transfers_feedback_responsibility_without_discarding() {
         let (input_tx, input_rx) = crossbeam_channel::unbounded();
         let port = FrontendInputPort::new(input_tx, None, Arc::new(AtomicBool::new(false)));
-        let pending = PendingFrontendFrame::new(sealed_frame(17), port);
+        let pending = PendingFrontendFrame::new(Box::new(sealed_frame(17)), port);
 
         assert_eq!(pending.state().presentation_id, PresentationId::new(17));
         let _state = pending.hand_off_to_remote_frontend();
