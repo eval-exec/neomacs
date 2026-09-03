@@ -146,6 +146,7 @@ impl Context {
             command_loop: crate::keyboard::CommandLoop::new(),
             input_rx: None,
             host_input_wait_backend: None,
+            runtime_resource_store: None,
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
