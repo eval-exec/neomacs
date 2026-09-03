@@ -3,8 +3,10 @@ use neomacs_display_protocol::{
     AxisSize, ImageFrameDelay, ImageFrameIndex, ImageRotation, ImageSizeSpec,
 };
 use std::io::Cursor;
+#[cfg(not(target_family = "wasm"))]
 use std::num::NonZeroUsize;
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn toolbar_svg_keeps_alpha_and_symbolic_foreground_without_recoloring_artwork() {
     let data = br##"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="1"><rect width="1" height="1" fill="currentColor"/><rect x="1" width="1" height="1" fill="#123456"/></svg>"##;
@@ -138,6 +140,7 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
     );
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn decoder_worker_survives_a_panicking_request() {
     let (request_tx, request_rx) = mpsc::channel();
