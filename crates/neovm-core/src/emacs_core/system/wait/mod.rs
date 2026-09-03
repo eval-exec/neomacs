@@ -11,7 +11,7 @@ mod host_input;
 pub use host_input::{HostInputWaitBackend, HostInputWaitError};
 
 use std::time::Duration;
-use crate::host_time::Instant;
+use crate::host::time::Instant;
 
 use crate::keyboard::SpecialInputServiceOutcome;
 

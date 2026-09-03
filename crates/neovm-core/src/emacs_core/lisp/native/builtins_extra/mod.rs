@@ -682,7 +682,7 @@ pub(crate) fn builtin_emacs_version(args: Vec<Value>) -> EvalResult {
 /// `(emacs-pid)` -> integer.
 pub(crate) fn builtin_emacs_pid(args: Vec<Value>) -> EvalResult {
     expect_args("emacs-pid", &args, 0)?;
-    Ok(Value::fixnum(std::process::id() as i64))
+    Ok(Value::fixnum(crate::host::process::id() as i64))
 }
 
 fn gc_bucket(name: &str, counts: &[i64]) -> Value {
