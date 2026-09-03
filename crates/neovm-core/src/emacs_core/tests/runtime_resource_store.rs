@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::emacs_core::fileio::{RuntimeResourceNode, RuntimeResourceStore};
+use crate::emacs_core::fileio::{MemoryFileSystem, RuntimeResourceNode, RuntimeResourceStore};
 use crate::{Context, Value};
 
 #[derive(Default)]
@@ -11,6 +11,10 @@ struct MemoryRuntimeResources {
 }
 
 impl RuntimeResourceStore for MemoryRuntimeResources {
+    fn mount_root(&self) -> &Path {
+        Path::new("/neomacs")
+    }
+
     fn node(&self, path: &Path) -> Option<RuntimeResourceNode<'_>> {
         if let Some(contents) = self.files.get(path) {
             Some(RuntimeResourceNode::File(contents))
@@ -51,6 +55,9 @@ fn evaluator_with_files(files: impl IntoIterator<Item = (&'static str, &'static 
 
     let mut evaluator = Context::new();
     evaluator.install_runtime_resource_store(Box::new(resources));
+    // Browser startup restores/finalizes its image with product resources
+    // first, then installs the OPFS/tmp host namespace.
+    evaluator.install_editor_file_system(Box::new(MemoryFileSystem::new()));
     evaluator.set_variable(
         "load-path",
         Value::list(vec![Value::string("/neomacs/lisp")]),
@@ -164,5 +171,43 @@ fn directory_files_enumerates_mounted_resource_children() {
             Value::string("NEWS"),
             Value::string("images"),
         ])
+    );
+}
+
+#[test]
+fn copy_file_reads_an_immutable_runtime_resource_through_the_context_filesystem() {
+    let mut evaluator =
+        evaluator_with_files([("/neomacs/etc/NEWS", b"mounted release notes\n".as_slice())]);
+
+    evaluator
+        .eval_str(r##"(copy-file "/neomacs/etc/NEWS" "/copied-news")"##)
+        .expect("copy-file should read across the immutable resource boundary");
+    let contents = evaluator
+        .eval_str(
+            r##"(progn (erase-buffer) (insert-file-contents "/copied-news") (buffer-string))"##,
+        )
+        .expect("copied runtime data should be readable from mutable storage");
+
+    assert_eq!(contents.as_utf8_str(), Some("mounted release notes\n"));
+}
+
+#[test]
+fn deleting_an_immutable_runtime_resource_is_an_explicit_error() {
+    let mut evaluator =
+        evaluator_with_files([("/neomacs/etc/NEWS", b"mounted release notes\n".as_slice())]);
+
+    let error = evaluator
+        .eval_str(r##"(delete-file-internal "/neomacs/etc/NEWS")"##)
+        .expect_err("immutable runtime resources must not look successfully deleted");
+
+    assert!(matches!(
+        error,
+        crate::emacs_core::error::EvalError::Signal { .. }
+    ));
+    assert_eq!(
+        evaluator
+            .eval_str(r##"(file-exists-p "/neomacs/etc/NEWS")"##)
+            .expect("resource must remain visible after rejected deletion"),
+        Value::T,
     );
 }

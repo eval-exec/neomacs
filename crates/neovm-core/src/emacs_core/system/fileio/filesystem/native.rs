@@ -6,8 +6,8 @@ use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use super::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileMode, FileTimestamp,
-    TemporaryEntry, WriteMode, WriteRequest,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileMode, FileStability,
+    FileSystemSpace, FileTimestamp, TemporaryEntry, WriteMode, WriteRequest,
 };
 
 /// Direct access to the current process's native filesystem namespace.
@@ -32,6 +32,7 @@ fn metadata_from_native(metadata: fs::Metadata) -> FileMetadata {
             .modified()
             .ok()
             .and_then(FileTimestamp::from_system_time),
+        stability: FileStability::Mutable,
         readonly: metadata.permissions().readonly(),
     }
 }
@@ -334,6 +335,70 @@ impl EditorFileSystem for NativeFileSystem {
             .write(true)
             .open(path)?
             .set_times(times)
+    }
+
+    fn file_system_space(&self, path: &Path) -> io::Result<FileSystemSpace> {
+        fn saturating_i64(value: u128) -> i64 {
+            i64::try_from(value).unwrap_or(i64::MAX)
+        }
+
+        std::cfg_select! {
+            unix => {
+                use std::ffi::CString;
+                use std::os::unix::ffi::OsStrExt;
+
+                let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "embedded NUL in file name")
+                })?;
+                let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+                if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let block_size = if stats.f_frsize > 0 {
+                    stats.f_frsize as u128
+                } else {
+                    stats.f_bsize as u128
+                };
+                Ok(FileSystemSpace {
+                    total_bytes: saturating_i64((stats.f_blocks as u128) * block_size),
+                    free_bytes: saturating_i64((stats.f_bfree as u128) * block_size),
+                    available_bytes: saturating_i64((stats.f_bavail as u128) * block_size),
+                })
+            }
+            windows => {
+                use std::os::windows::ffi::OsStrExt;
+                use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+                let mut path = path.as_os_str().encode_wide().collect::<Vec<_>>();
+                path.push(0);
+                let mut available = 0_u64;
+                let mut total = 0_u64;
+                let mut free = 0_u64;
+                if unsafe {
+                    GetDiskFreeSpaceExW(
+                        path.as_ptr(),
+                        &mut available,
+                        &mut total,
+                        &mut free,
+                    )
+                } == 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(FileSystemSpace {
+                    total_bytes: saturating_i64(total as u128),
+                    free_bytes: saturating_i64(free as u128),
+                    available_bytes: saturating_i64(available as u128),
+                })
+            }
+            _ => {
+                let _ = path;
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "filesystem capacity is unsupported on this native platform",
+                ))
+            }
+        }
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {

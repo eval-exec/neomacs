@@ -11,9 +11,12 @@ mod runtime_resources;
 pub(crate) use binary_mode::builtin_set_binary_mode;
 pub use filesystem::{
     AccessMode, BrowserFileSystemLayout, EditorFileSystem, FileEntryKind, FileMetadata, FileMode,
-    FileTimestamp, MemoryFileSystem, MountTableFileSystem, TemporaryEntry, WriteMode, WriteRequest,
+    FileStability, FileSystemSpace, FileTimestamp, MemoryFileSystem, MountTableFileSystem,
+    TemporaryEntry, WriteMode, WriteRequest,
 };
-pub(crate) use filesystem::{NativeFileSystem, default_editor_file_system};
+pub(crate) use filesystem::{
+    EditorFileSystemNamespace, NativeFileSystem, default_editor_file_system,
+};
 pub use runtime_resources::{RuntimeResourceNode, RuntimeResourceStore};
 
 use crate::emacs_core::error::LispCondition;
@@ -1196,51 +1199,6 @@ pub fn file_locked_p(_filename: &crate::heap_types::LispString) -> bool {
     false
 }
 
-/// Return filesystem capacity information for PATH.
-///
-/// The tuple layout matches Emacs `file-system-info`:
-/// `(TOTAL-BYTES FREE-BYTES AVAILABLE-BYTES)`.
-fn file_system_info_path(path: &Path) -> std::io::Result<(i64, i64, i64)> {
-    #[cfg(unix)]
-    {
-        fn saturating_i64(v: u128) -> i64 {
-            if v > i64::MAX as u128 {
-                i64::MAX
-            } else {
-                v as i64
-            }
-        }
-
-        let c_path = path_to_cstring(path).map_err(|_| {
-            std::io::Error::new(ErrorKind::InvalidInput, "embedded NUL in file name")
-        })?;
-        let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(c_path.as_ptr(), &mut stats as *mut libc::statvfs) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        let block_size = if stats.f_frsize > 0 {
-            stats.f_frsize as u128
-        } else {
-            stats.f_bsize as u128
-        };
-        let total = (stats.f_blocks as u128) * block_size;
-        let free = (stats.f_bfree as u128) * block_size;
-        let available = (stats.f_bavail as u128) * block_size;
-        Ok((
-            saturating_i64(total),
-            saturating_i64(free),
-            saturating_i64(available),
-        ))
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Ok((0, 0, 0))
-    }
-}
-
 /// Return true if FILENAME is a directory.
 pub fn file_directory_p(filename: &str) -> bool {
     Path::new(filename).is_dir()
@@ -1486,39 +1444,9 @@ fn write_bytes_to_file_with_mode(
 /// COUNT limits the number of accepted entries during enumeration.
 fn read_directory_names_lisp(
     dir: &crate::heap_types::LispString,
-    runtime_resources: Option<&dyn RuntimeResourceStore>,
     filesystem: &dyn EditorFileSystem,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
     let path = lisp_file_name_to_path_buf(dir);
-    if let Some(store) = runtime_resources {
-        match store.node(&path) {
-            Some(RuntimeResourceNode::Directory) => {
-                let entries = store
-                    .directory_entries(&path)
-                    .expect("mounted directory must enumerate its children");
-                let mut names = vec![
-                    crate::heap_types::LispString::from_unibyte(b".".to_vec()),
-                    crate::heap_types::LispString::from_unibyte(b"..".to_vec()),
-                ];
-                names.extend(
-                    entries
-                        .into_iter()
-                        .map(|name| path_to_lisp_file_name(Path::new(&name))),
-                );
-                return Ok(names);
-            }
-            Some(RuntimeResourceNode::File(_)) => {
-                return Err(DirectoryFilesError::Io {
-                    action: "Opening directory",
-                    err: std::io::Error::new(
-                        ErrorKind::NotADirectory,
-                        "mounted runtime path is not a directory",
-                    ),
-                });
-            }
-            None => {}
-        }
-    }
     let entries = filesystem
         .read_directory(&path)
         .map_err(|e| DirectoryFilesError::Io {
@@ -1558,7 +1486,6 @@ fn directory_files(
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
     directory_files_with_decoder(
         dir,
-        None,
         eval.editor_file_system(),
         full,
         match_regex,
@@ -1574,7 +1501,6 @@ fn directory_files(
 #[allow(clippy::too_many_arguments)] // match-time state stays explicit at the GNU-regexp boundary
 fn directory_files_with_decoder(
     dir: &crate::heap_types::LispString,
-    runtime_resources: Option<&dyn RuntimeResourceStore>,
     filesystem: &dyn EditorFileSystem,
     full: bool,
     match_regex: Option<&crate::heap_types::LispString>,
@@ -1589,7 +1515,7 @@ fn directory_files_with_decoder(
         return Ok(Vec::new());
     }
 
-    let names = read_directory_names_lisp(dir, runtime_resources, filesystem)?;
+    let names = read_directory_names_lisp(dir, filesystem)?;
 
     // Emacs builds this list via `cons` while scanning readdir output.
     // That makes NOSORT results reverse the traversal order and applies COUNT
@@ -3467,12 +3393,7 @@ pub(crate) fn builtin_access_file(eval: &mut Context, args: Vec<Value>) -> EvalR
         return Ok(result);
     }
     let path = lisp_file_name_to_path_buf(&resolved);
-    if eval
-        .runtime_resource_store()
-        .and_then(|store| store.node(&path))
-        .is_some()
-        || eval.editor_file_system().access(&path, AccessMode::Read)
-    {
+    if eval.editor_file_system().access(&path, AccessMode::Read) {
         return Ok(Value::NIL);
     }
     let err = eval
@@ -3493,10 +3414,7 @@ pub(crate) fn builtin_file_exists_p(eval: &mut Context, args: Vec<Value>) -> Eva
         return Ok(result);
     }
     let path = lisp_file_name_to_path_buf(&filename);
-    let mounted = eval
-        .runtime_resource_store()
-        .and_then(|store| store.node(&path));
-    let exists = mounted.is_some() || eval.editor_file_system().access(&path, AccessMode::Exists);
+    let exists = eval.editor_file_system().access(&path, AccessMode::Exists);
     Ok(Value::bool_val(exists))
 }
 
@@ -3510,10 +3428,7 @@ pub(crate) fn builtin_file_readable_p(eval: &mut Context, args: Vec<Value>) -> E
         return Ok(result);
     }
     let path = lisp_file_name_to_path_buf(&filename);
-    let mounted = eval
-        .runtime_resource_store()
-        .and_then(|store| store.node(&path));
-    let readable = mounted.is_some() || eval.editor_file_system().access(&path, AccessMode::Read);
+    let readable = eval.editor_file_system().access(&path, AccessMode::Read);
     Ok(Value::bool_val(readable))
 }
 
@@ -3526,15 +3441,9 @@ pub(crate) fn builtin_file_writable_p(eval: &mut Context, args: Vec<Value>) -> E
         return Ok(result);
     }
     let path = lisp_file_name_to_path_buf(&filename);
-    let writable = match eval
-        .runtime_resource_store()
-        .and_then(|store| store.node(&path))
-    {
-        Some(RuntimeResourceNode::File(_) | RuntimeResourceNode::Directory) => false,
-        None => eval
-            .editor_file_system()
-            .access(&path, AccessMode::WriteOrCreate),
-    };
+    let writable = eval
+        .editor_file_system()
+        .access(&path, AccessMode::WriteOrCreate);
     Ok(Value::bool_val(writable))
 }
 
@@ -3552,21 +3461,13 @@ pub(crate) fn builtin_file_accessible_directory_p(
         return Ok(result);
     }
     let path = lisp_file_name_to_path_buf(&filename);
-    let accessible = match eval
-        .runtime_resource_store()
-        .and_then(|store| store.node(&path))
-    {
-        Some(RuntimeResourceNode::Directory) => true,
-        Some(RuntimeResourceNode::File(_)) => false,
-        None => {
-            eval.editor_file_system()
-                .metadata(&path, true)
-                .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory)
-                && eval
-                    .editor_file_system()
-                    .access(&path, AccessMode::ReadAndSearch)
-        }
-    };
+    let accessible = eval
+        .editor_file_system()
+        .metadata(&path, true)
+        .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory)
+        && eval
+            .editor_file_system()
+            .access(&path, AccessMode::ReadAndSearch);
     Ok(Value::bool_val(accessible))
 }
 
@@ -3668,7 +3569,9 @@ pub(crate) fn builtin_file_system_info(eval: &mut Context, args: Vec<Value>) -> 
     expect_args("file-system-info", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
     let filename = resolve_filename_lisp_for_eval(eval, &filename);
-    let (total, free, avail) = file_system_info_path(&lisp_file_name_to_path_buf(&filename))
+    let space = eval
+        .editor_file_system()
+        .file_system_space(&lisp_file_name_to_path_buf(&filename))
         .map_err(|err| {
             signal_file_action_error_value(
                 err,
@@ -3677,9 +3580,9 @@ pub(crate) fn builtin_file_system_info(eval: &mut Context, args: Vec<Value>) -> 
             )
         })?;
     Ok(Value::list(vec![
-        Value::fixnum(total),
-        Value::fixnum(free),
-        Value::fixnum(avail),
+        Value::fixnum(space.total_bytes),
+        Value::fixnum(space.free_bytes),
+        Value::fixnum(space.available_bytes),
     ]))
 }
 
@@ -3694,17 +3597,10 @@ pub(crate) fn builtin_file_directory_p(eval: &mut Context, args: Vec<Value>) -> 
         return Ok(result);
     }
     let path = lisp_file_name_to_path_buf(&filename);
-    let is_directory = match eval
-        .runtime_resource_store()
-        .and_then(|store| store.node(&path))
-    {
-        Some(RuntimeResourceNode::Directory) => true,
-        Some(RuntimeResourceNode::File(_)) => false,
-        None => eval
-            .editor_file_system()
-            .metadata(&path, true)
-            .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory),
-    };
+    let is_directory = eval
+        .editor_file_system()
+        .metadata(&path, true)
+        .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory);
     Ok(Value::bool_val(is_directory))
 }
 
@@ -3721,17 +3617,10 @@ pub(crate) fn builtin_file_regular_p(eval: &mut Context, args: Vec<Value>) -> Ev
         return Ok(result);
     }
     let path = lisp_file_name_to_path_buf(&filename);
-    let is_regular = match eval
-        .runtime_resource_store()
-        .and_then(|store| store.node(&path))
-    {
-        Some(RuntimeResourceNode::File(_)) => true,
-        Some(RuntimeResourceNode::Directory) => false,
-        None => eval
-            .editor_file_system()
-            .metadata(&path, true)
-            .is_ok_and(|metadata| metadata.kind == FileEntryKind::File),
-    };
+    let is_regular = eval
+        .editor_file_system()
+        .metadata(&path, true)
+        .is_ok_and(|metadata| metadata.kind == FileEntryKind::File);
     Ok(Value::bool_val(is_regular))
 }
 
@@ -4957,7 +4846,6 @@ pub(crate) fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> E
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     let files = directory_files_with_decoder(
         &dir,
-        eval.runtime_resource_store(),
         eval.editor_file_system(),
         full,
         match_pattern.as_ref(),
@@ -6225,17 +6113,7 @@ pub(crate) fn builtin_insert_file_contents(
     }
 
     let resolved_path = lisp_file_name_to_path_buf(&resolved);
-    let contents_result = match eval
-        .runtime_resource_store()
-        .and_then(|store| store.node(&resolved_path))
-    {
-        Some(RuntimeResourceNode::File(contents)) => Ok(contents.to_vec()),
-        Some(RuntimeResourceNode::Directory) => Err(std::io::Error::new(
-            ErrorKind::IsADirectory,
-            "mounted runtime path is a directory",
-        )),
-        None => eval.editor_file_system().read(&resolved_path),
-    };
+    let contents_result = eval.editor_file_system().read(&resolved_path);
     let contents_bytes = match contents_result {
         Ok(contents) => contents,
         Err(err) => {
@@ -6834,12 +6712,8 @@ pub(crate) fn builtin_find_file_noselect(
         eval.switch_current_buffer(buf_id)?;
 
         let exists = eval
-            .runtime_resource_store()
-            .and_then(|store| store.node(&abs_path_buf))
-            .is_some()
-            || eval
-                .editor_file_system()
-                .access(&abs_path_buf, AccessMode::Exists);
+            .editor_file_system()
+            .access(&abs_path_buf, AccessMode::Exists);
         let visit_error = if exists {
             builtin_insert_file_contents(
                 eval,

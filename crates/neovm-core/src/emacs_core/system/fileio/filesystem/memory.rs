@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::virtual_path::VirtualPath;
 use super::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, WriteMode,
-    WriteRequest,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileStability, FileTimestamp,
+    WriteMode, WriteRequest,
 };
 
 #[derive(Clone, Debug)]
@@ -31,12 +31,14 @@ impl MemoryNode {
                 kind: FileEntryKind::Directory,
                 len: 0,
                 modified: Some(*modified),
+                stability: FileStability::Mutable,
                 readonly: false,
             },
             Self::File { contents, modified } => FileMetadata {
                 kind: FileEntryKind::File,
                 len: contents.len() as u64,
                 modified: Some(*modified),
+                stability: FileStability::Mutable,
                 readonly: false,
             },
         }

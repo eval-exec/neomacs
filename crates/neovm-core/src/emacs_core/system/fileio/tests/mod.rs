@@ -2569,6 +2569,19 @@ fn installed_filesystem_reports_unsupported_posix_metadata_explicitly() {
     }
 }
 
+#[test]
+fn installed_filesystem_reports_unsupported_capacity_explicitly() {
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(MemoryFileSystem::new()));
+
+    match builtin_file_system_info(&mut eval, vec![Value::string("/")])
+        .expect_err("unsupported host capacity must be explicit")
+    {
+        Flow::Signal(signal) => assert_eq!(signal.symbol_name(), "file-error"),
+        other => panic!("expected file-error signal, got {other:?}"),
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn builtin_file_modes_treats_any_non_nil_flag_as_nofollow() {

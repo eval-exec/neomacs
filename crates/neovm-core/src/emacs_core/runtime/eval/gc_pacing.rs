@@ -525,13 +525,7 @@ impl Context {
         &mut self,
         store: Box<dyn crate::emacs_core::fileio::RuntimeResourceStore>,
     ) {
-        self.runtime_resource_store = Some(store);
-    }
-
-    pub(crate) fn runtime_resource_store(
-        &self,
-    ) -> Option<&dyn crate::emacs_core::fileio::RuntimeResourceStore> {
-        self.runtime_resource_store.as_deref()
+        self.editor_file_system.install_runtime_resources(store);
     }
 
     /// Replace the target-default mutable filesystem before editor startup.
@@ -539,11 +533,11 @@ impl Context {
         &mut self,
         filesystem: Box<dyn crate::emacs_core::fileio::EditorFileSystem>,
     ) {
-        self.editor_file_system = filesystem;
+        self.editor_file_system.replace_host(filesystem);
     }
 
     pub(crate) fn editor_file_system(&self) -> &dyn crate::emacs_core::fileio::EditorFileSystem {
-        self.editor_file_system.as_ref()
+        &self.editor_file_system
     }
 
     pub(crate) fn has_host_input_wait_backend(&self) -> bool {

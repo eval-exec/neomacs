@@ -79,6 +79,10 @@ impl MountedRuntimeResources {
 }
 
 impl RuntimeResourceStore for MountedRuntimeResources {
+    fn mount_root(&self) -> &Path {
+        &self.mount_root
+    }
+
     fn node(&self, path: &Path) -> Option<RuntimeResourceNode<'_>> {
         if let Some(contents) = self.files.get(path) {
             Some(RuntimeResourceNode::File(contents))

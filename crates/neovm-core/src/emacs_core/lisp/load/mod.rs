@@ -605,7 +605,6 @@ fn prefer_el_only() -> bool {
 
 #[derive(Clone, Copy)]
 struct LoadFileAccess<'a> {
-    runtime_resources: Option<&'a dyn super::fileio::RuntimeResourceStore>,
     filesystem: &'a dyn super::fileio::EditorFileSystem,
 }
 
@@ -635,50 +634,35 @@ impl LoadCandidateFreshness {
 impl<'a> LoadFileAccess<'a> {
     const fn native() -> Self {
         Self {
-            runtime_resources: None,
             filesystem: &NATIVE_LOAD_FILE_SYSTEM,
         }
     }
 
-    const fn with_context(
-        runtime_resources: Option<&'a dyn super::fileio::RuntimeResourceStore>,
-        filesystem: &'a dyn super::fileio::EditorFileSystem,
-    ) -> Self {
-        Self {
-            runtime_resources,
-            filesystem,
-        }
-    }
-
-    fn mounted_contents(self, path: &Path) -> Option<&'a [u8]> {
-        self.runtime_resources?.file_contents(path)
+    const fn with_context(filesystem: &'a dyn super::fileio::EditorFileSystem) -> Self {
+        Self { filesystem }
     }
 
     fn is_file(self, path: &Path) -> bool {
-        self.mounted_contents(path).is_some()
-            || self
-                .filesystem
-                .metadata(path, true)
-                .is_ok_and(|metadata| metadata.kind == super::fileio::FileEntryKind::File)
+        self.filesystem
+            .metadata(path, true)
+            .is_ok_and(|metadata| metadata.kind == super::fileio::FileEntryKind::File)
     }
 
     fn freshness(self, path: &Path) -> Option<LoadCandidateFreshness> {
-        if self.mounted_contents(path).is_some() {
-            return Some(LoadCandidateFreshness::ImmutableResource);
+        let metadata = self.filesystem.metadata(path, true).ok()?;
+        match metadata.stability {
+            super::fileio::FileStability::Immutable => {
+                Some(LoadCandidateFreshness::ImmutableResource)
+            }
+            super::fileio::FileStability::Mutable => metadata
+                .modified
+                .and_then(super::fileio::FileTimestamp::to_system_time)
+                .map(LoadCandidateFreshness::HostModified),
         }
-        self.filesystem
-            .metadata(path, true)
-            .ok()?
-            .modified
-            .and_then(super::fileio::FileTimestamp::to_system_time)
-            .map(LoadCandidateFreshness::HostModified)
     }
 
     fn read(self, path: &Path) -> std::io::Result<Vec<u8>> {
-        self.mounted_contents(path)
-            .map(<[u8]>::to_vec)
-            .map(Ok)
-            .unwrap_or_else(|| self.filesystem.read(path))
+        self.filesystem.read(path)
     }
 }
 
@@ -1026,12 +1010,11 @@ pub fn find_file_in_load_path_with_flags(
 /// Keeping suffix variables, representation suffixes, `load-prefer-newer`,
 /// and the exact-vs-suffixed policy together prevents callers from silently
 /// falling back to the process-startup defaults.
-pub(crate) fn resolve_load_path_file_with_resources(
+pub(crate) fn resolve_load_path_file_with_filesystem(
     obarray: &super::symbol::Obarray,
     buf: Option<&crate::buffer::Buffer>,
     file: &LispString,
     requirement: LoadSuffixRequirement,
-    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
     filesystem: &dyn super::fileio::EditorFileSystem,
 ) -> Result<Option<LispString>, Flow> {
     let candidates = requirement.candidates(obarray, file)?;
@@ -1045,7 +1028,7 @@ pub(crate) fn resolve_load_path_file_with_resources(
     let load_path = get_load_path(obarray, buf);
 
     Ok(find_lisp_file_in_load_path_with_flags(
-        LoadFileAccess::with_context(runtime_resources, filesystem),
+        LoadFileAccess::with_context(filesystem),
         file,
         &load_path,
         exact_name_only,
@@ -1153,14 +1136,13 @@ pub(crate) fn plan_load_in_state(
     nosuffix: Option<Value>,
     must_suffix: Option<Value>,
 ) -> Result<LoadPlan, Flow> {
-    plan_load_with_resources(
+    plan_load_with_filesystem(
         obarray,
         buf,
         file,
         noerror,
         nosuffix,
         must_suffix,
-        None,
         &NATIVE_LOAD_FILE_SYSTEM,
     )
 }
@@ -1172,26 +1154,24 @@ pub(crate) fn plan_load_in_context(
     nosuffix: Option<Value>,
     must_suffix: Option<Value>,
 ) -> Result<LoadPlan, Flow> {
-    plan_load_with_resources(
+    plan_load_with_filesystem(
         &evaluator.obarray,
         evaluator.buffers.current_buffer(),
         file,
         noerror,
         nosuffix,
         must_suffix,
-        evaluator.runtime_resource_store(),
         evaluator.editor_file_system(),
     )
 }
 
-fn plan_load_with_resources(
+fn plan_load_with_filesystem(
     obarray: &super::symbol::Obarray,
     buf: Option<&crate::buffer::Buffer>,
     file: Value,
     noerror: Option<Value>,
     nosuffix: Option<Value>,
     must_suffix: Option<Value>,
-    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
     filesystem: &dyn super::fileio::EditorFileSystem,
 ) -> Result<LoadPlan, Flow> {
     let file = match file.kind() {
@@ -1213,14 +1193,7 @@ fn plan_load_with_resources(
         LoadSuffixRequirement::BareNameAllowed
     };
 
-    match resolve_load_path_file_with_resources(
-        obarray,
-        buf,
-        &file,
-        requirement,
-        runtime_resources,
-        filesystem,
-    )? {
+    match resolve_load_path_file_with_filesystem(obarray, buf, &file, requirement, filesystem)? {
         Some(found) => Ok(LoadPlan::Load {
             requested: file,
             found,
@@ -2790,20 +2763,19 @@ fn load_file_body(
 
     // Read raw bytes and decode (with Emacs-extended UTF-8 for .el,
     // or header-skipping for .elc).
-    let raw_bytes =
-        LoadFileAccess::with_context(eval.runtime_resource_store(), eval.editor_file_system())
-            .read(path)
-            .map_err(|e| {
-                EvalError::signal(
-                    intern("file-error"),
-                    vec![Value::string(format!(
-                        "Cannot read file: {}: {}",
-                        path.display(),
-                        e
-                    ))],
-                    None,
-                )
-            })?;
+    let raw_bytes = LoadFileAccess::with_context(eval.editor_file_system())
+        .read(path)
+        .map_err(|e| {
+            EvalError::signal(
+                intern("file-error"),
+                vec![Value::string(format!(
+                    "Cannot read file: {}: {}",
+                    path.display(),
+                    e
+                ))],
+                None,
+            )
+        })?;
 
     // For .elc: skip the ;ELC magic header and detect lexical-binding from raw bytes.
     // For .el: decode Emacs-extended UTF-8.
@@ -2829,10 +2801,7 @@ fn load_file_body(
             .is_truthy()
             && let CompiledFreshness::SourceNewer { source, .. } = CompiledFreshness::of_compiled(
                 path,
-                LoadFileAccess::with_context(
-                    eval.runtime_resource_store(),
-                    eval.editor_file_system(),
-                ),
+                LoadFileAccess::with_context(eval.editor_file_system()),
             )
         {
             let stale_message = format!(
@@ -5516,7 +5485,7 @@ fn finalize_cached_bootstrap_eval(
     eval.set_variable("gensym-counter", Value::fixnum(0));
 
     let lisp_dir = project_root.join("lisp");
-    let load_path = runtime_load_path_entries(&lisp_dir, eval.runtime_resource_store());
+    let load_path = runtime_load_path_entries(&lisp_dir, eval.editor_file_system());
     eval.set_variable("load-path", Value::list(load_path));
 
     let etc_dir = project_root.join("etc");
@@ -5584,12 +5553,12 @@ fn finalize_cached_bootstrap_eval(
 }
 
 pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
-    bootstrap_load_path_entries_with_resources(lisp_dir, None)
+    bootstrap_load_path_entries_with_filesystem(lisp_dir, None)
 }
 
-fn bootstrap_load_path_entries_with_resources(
+fn bootstrap_load_path_entries_with_filesystem(
     lisp_dir: &Path,
-    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+    filesystem: Option<&dyn super::fileio::EditorFileSystem>,
 ) -> Vec<Value> {
     let mut load_path_entries = Vec::new();
     for sub in BOOTSTRAP_LOAD_PATH_SUBDIRS {
@@ -5598,9 +5567,11 @@ fn bootstrap_load_path_entries_with_resources(
         } else {
             lisp_dir.join(sub)
         };
-        if runtime_resources.is_some_and(|resources| resources.directory_exists(&dir))
-            || dir.is_dir()
-        {
+        let is_directory = filesystem
+            .and_then(|filesystem| filesystem.metadata(&dir, true).ok())
+            .is_some_and(|metadata| metadata.kind == super::fileio::FileEntryKind::Directory)
+            || filesystem.is_none() && dir.is_dir();
+        if is_directory {
             load_path_entries.push(Value::string(
                 crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&dir),
             ));
@@ -5617,12 +5588,12 @@ fn bootstrap_load_path_entries_with_resources(
 /// that appends its versioned Lisp directory to `EMACSLOADPATH`.
 fn runtime_load_path_entries(
     lisp_dir: &Path,
-    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+    filesystem: &dyn super::fileio::EditorFileSystem,
 ) -> Vec<Value> {
-    runtime_load_path_entries_from_os_with_resources(
+    runtime_load_path_entries_from_os_with_filesystem(
         lisp_dir,
         std::env::var_os("EMACSLOADPATH"),
-        runtime_resources,
+        Some(filesystem),
     )
 }
 
@@ -5632,15 +5603,15 @@ pub(crate) fn runtime_load_path_entries_from_os(
     lisp_dir: &Path,
     emacs_load_path: Option<std::ffi::OsString>,
 ) -> Vec<Value> {
-    runtime_load_path_entries_from_os_with_resources(lisp_dir, emacs_load_path, None)
+    runtime_load_path_entries_from_os_with_filesystem(lisp_dir, emacs_load_path, None)
 }
 
-fn runtime_load_path_entries_from_os_with_resources(
+fn runtime_load_path_entries_from_os_with_filesystem(
     lisp_dir: &Path,
     emacs_load_path: Option<std::ffi::OsString>,
-    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+    filesystem: Option<&dyn super::fileio::EditorFileSystem>,
 ) -> Vec<Value> {
-    let default_load_path = bootstrap_load_path_entries_with_resources(lisp_dir, runtime_resources);
+    let default_load_path = bootstrap_load_path_entries_with_filesystem(lisp_dir, filesystem);
     let Some(emacs_load_path) = emacs_load_path else {
         return default_load_path;
     };
