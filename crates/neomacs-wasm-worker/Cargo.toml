@@ -1,0 +1,15 @@
+[package]
+name = "neomacs-wasm-worker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Evaluator Worker artifact for Neomacs WebAssembly"
+
+[lib]
+name = "neomacs_wasm_worker"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
