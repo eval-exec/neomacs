@@ -1,5 +1,6 @@
 //! Evaluator-owned namespace joining immutable product resources to host storage.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -45,6 +46,16 @@ impl EditorFileSystemNamespace {
 
     fn runtime_node(&self, path: &Path) -> Option<RuntimeResourceNode<'_>> {
         self.runtime_store_for(path)?.node(path)
+    }
+
+    fn runtime_mount_child_of(&self, path: &Path) -> Option<OsString> {
+        let store = self.runtime_resources.as_deref()?;
+        let directory = VirtualPath::parse(path).ok()?;
+        let mount_root = VirtualPath::parse(store.mount_root()).ok()?;
+        let relative_mount = mount_root.strip_prefix(&directory)?;
+        (!relative_mount.is_root())
+            .then(|| relative_mount.first_component())
+            .flatten()
     }
 
     fn immutable_error(action: &'static str) -> io::Error {
@@ -120,7 +131,15 @@ impl EditorFileSystem for EditorFileSystemNamespace {
                 RuntimeResourceNode::File(_) => Err(io::Error::from(ErrorKind::NotADirectory)),
             };
         }
-        self.host.read_directory(path)
+        let mut entries = self
+            .host
+            .read_directory(path)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if let Some(mount_child) = self.runtime_mount_child_of(path) {
+            entries.insert(mount_child);
+        }
+        Ok(entries.into_iter().collect())
     }
 
     fn write(
