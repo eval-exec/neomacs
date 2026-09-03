@@ -2,7 +2,10 @@
 
 use std::fmt::{Display, Formatter};
 
-use sha2::{Digest, Sha256};
+std::cfg_select! {
+    target_family = "wasm" => {}
+    _ => { use sha2::{Digest, Sha256}; }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ContentId(String);
@@ -22,12 +25,17 @@ impl ContentId {
         Ok(Self(value.to_owned()))
     }
 
-    pub(crate) fn for_bytes(bytes: &[u8]) -> Self {
-        let value = Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        Self(value)
+    std::cfg_select! {
+        target_family = "wasm" => {}
+        _ => {
+            pub(crate) fn for_bytes(bytes: &[u8]) -> Self {
+                let value = Sha256::digest(bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                Self(value)
+            }
+        }
     }
 
     pub(crate) fn as_str(&self) -> &str {
