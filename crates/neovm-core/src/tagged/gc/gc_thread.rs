@@ -5,14 +5,6 @@
 
 use super::*;
 
-/// A raw `*mut TaggedHeap` that can cross to the GC thread. The heap is `!Send`
-/// (raw pointers), but during a handshake the mutator is BLOCKED waiting for the
-/// GC thread, so the two threads never touch the heap at the same time — the GC
-/// thread has exclusive access for the duration. (Phase 5 makes access genuinely
-/// concurrent via the atomic slots + SATB built in Phases 1-3.)
-pub(super) struct HeapPtr(pub(super) *mut TaggedHeap);
-unsafe impl Send for HeapPtr {}
-
 /// A non-blocking concurrent-mark job (Phase 5). Carries everything the GC
 /// thread needs WITHOUT a `&mut TaggedHeap` — two threads holding `&mut` to the
 /// same heap is UB in Rust's model even with atomic fields. The GC thread marks
@@ -181,53 +173,90 @@ pub(super) struct ConcurrentClaimJob {
     pub(super) subr_dropped: std::sync::Arc<AtomicUsize>,
 }
 
-/// A unit of work handed to the GC thread, plus a oneshot done-channel the GC
-/// thread signals when finished so the mutator can resume.
-///
-/// The variant sizes differ (the mark job carries the per-cycle claim
-/// snapshots), but exactly one request is in flight per GC cycle, so boxing
-/// the large variant would buy nothing.
-#[allow(clippy::large_enum_variant)]
-pub(super) enum GcRequest {
-    /// Drain the gray queue (mark to a fixpoint) on the GC thread.
-    MarkAll(HeapPtr, std::sync::mpsc::Sender<()>),
-    /// Non-blocking concurrent mark (Phase 5): mark conses while the mutator
-    /// runs; defer everything else to the termination handshake.
-    ConcurrentMark(ConcurrentMarkJob),
-}
+std::cfg_select! {
+    target_family = "wasm" => {
+        /// Browser Wasm has no ambient native-thread facility. Its stop-the-world
+        /// collector drains on the editor Worker which already owns the heap.
+        pub(super) fn run_stop_the_world_mark(heap: &mut TaggedHeap) {
+            heap.mark_all();
+        }
 
-pub(super) static GC_THREAD: std::sync::OnceLock<
-    std::sync::Mutex<std::sync::mpsc::Sender<GcRequest>>,
-> = std::sync::OnceLock::new();
+        pub(super) fn launch_background_mark(_job: ConcurrentMarkJob) {
+            unreachable!("background marking is not compiled for browser Wasm")
+        }
+    }
+    _ => {
+        /// A raw `*mut TaggedHeap` that can cross to the GC thread. The heap is
+        /// `!Send` (raw pointers), but during a stop-the-world handshake the
+        /// mutator is blocked, so the GC thread owns the heap exclusively.
+        struct HeapPtr(*mut TaggedHeap);
+        unsafe impl Send for HeapPtr {}
 
-/// Lazily spawn the process-global GC thread and return its request channel.
-/// The thread lives for the process; it loops draining requests.
-pub(super) fn gc_thread() -> std::sync::MutexGuard<'static, std::sync::mpsc::Sender<GcRequest>> {
-    GC_THREAD
-        .get_or_init(|| {
-            let (tx, rx) = std::sync::mpsc::channel::<GcRequest>();
-            std::thread::Builder::new()
-                .name("neovm-gc".to_string())
-                .spawn(move || {
-                    while let Ok(req) = rx.recv() {
-                        match req {
-                            GcRequest::MarkAll(HeapPtr(p), done) => {
-                                // Exclusive access: the mutator is blocked on
-                                // `done` until we signal.
-                                unsafe { (*p).mark_all() };
-                                let _ = done.send(());
+        /// A unit of work handed to the GC thread, plus a oneshot done-channel
+        /// the GC thread signals when finished so the mutator can resume.
+        ///
+        /// The variant sizes differ (the mark job carries the per-cycle claim
+        /// snapshots), but exactly one request is in flight per GC cycle, so
+        /// boxing the large variant would buy nothing.
+        #[allow(clippy::large_enum_variant)]
+        enum GcRequest {
+            /// Drain the gray queue (mark to a fixpoint) on the GC thread.
+            MarkAll(HeapPtr, std::sync::mpsc::Sender<()>),
+            /// Non-blocking concurrent mark (Phase 5): mark conses while the
+            /// mutator runs; defer everything else to the termination handshake.
+            ConcurrentMark(ConcurrentMarkJob),
+        }
+
+        static GC_THREAD: std::sync::OnceLock<
+            std::sync::Mutex<std::sync::mpsc::Sender<GcRequest>>,
+        > = std::sync::OnceLock::new();
+
+        /// Lazily spawn the process-global GC thread and return its request
+        /// channel. The thread lives for the process; it loops draining requests.
+        fn gc_thread() -> std::sync::MutexGuard<'static, std::sync::mpsc::Sender<GcRequest>> {
+            GC_THREAD
+                .get_or_init(|| {
+                    let (tx, rx) = std::sync::mpsc::channel::<GcRequest>();
+                    std::thread::Builder::new()
+                        .name("neovm-gc".to_string())
+                        .spawn(move || {
+                            while let Ok(req) = rx.recv() {
+                                match req {
+                                    GcRequest::MarkAll(HeapPtr(p), done) => {
+                                        // Exclusive access: the mutator is blocked on
+                                        // `done` until we signal.
+                                        unsafe { (*p).mark_all() };
+                                        let _ = done.send(());
+                                    }
+                                    GcRequest::ConcurrentMark(job) => {
+                                        run_concurrent_mark(job);
+                                    }
+                                }
                             }
-                            GcRequest::ConcurrentMark(job) => {
-                                run_concurrent_mark(job);
-                            }
-                        }
-                    }
+                        })
+                        .expect("spawn neovm-gc thread");
+                    std::sync::Mutex::new(tx)
                 })
-                .expect("spawn neovm-gc thread");
-            std::sync::Mutex::new(tx)
-        })
-        .lock()
-        .expect("gc thread channel poisoned")
+                .lock()
+                .expect("gc thread channel poisoned")
+        }
+
+        pub(super) fn run_stop_the_world_mark(heap: &mut TaggedHeap) {
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let ptr = heap as *mut TaggedHeap;
+            gc_thread()
+                .send(GcRequest::MarkAll(HeapPtr(ptr), done_tx))
+                .expect("neovm-gc thread is gone");
+            // Block until the GC thread has finished marking on the shared heap.
+            done_rx.recv().expect("neovm-gc thread did not respond");
+        }
+
+        pub(super) fn launch_background_mark(job: ConcurrentMarkJob) {
+            gc_thread()
+                .send(GcRequest::ConcurrentMark(job))
+                .expect("neovm-gc thread is gone");
+        }
+    }
 }
 
 /// Atomically set an OWNED cons cell's mark bit using only its pointer. The mark
