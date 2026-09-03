@@ -36,7 +36,7 @@ pub enum FileEntryKind {
 }
 
 /// Host-neutral wall-clock timestamp used by filesystem metadata.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct FileTimestamp {
     pub seconds: i64,
     pub nanoseconds: u32,

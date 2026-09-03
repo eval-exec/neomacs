@@ -110,6 +110,86 @@ fn lisp_metadata_and_directory_mutations_share_the_context_filesystem() {
     );
 }
 
+#[test]
+fn lisp_file_metadata_queries_share_the_context_filesystem() {
+    crate::test_utils::init_test_tracing();
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .create_directory(std::path::Path::new("/neomacs-fake"), false)
+        .expect("seed virtual home mount");
+    filesystem
+        .write(
+            std::path::Path::new("/neomacs-fake/older"),
+            b"old",
+            WriteRequest {
+                mode: WriteMode::CreateNew,
+                sync: false,
+            },
+        )
+        .expect("seed older file");
+    filesystem
+        .write(
+            std::path::Path::new("/neomacs-fake/newer"),
+            b"new",
+            WriteRequest {
+                mode: WriteMode::CreateNew,
+                sync: false,
+            },
+        )
+        .expect("seed newer file");
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(filesystem));
+
+    builtin_access_file(
+        &mut eval,
+        vec![
+            Value::string("/neomacs-fake/newer"),
+            Value::string("Reading"),
+        ],
+    )
+    .expect("access-file should see installed filesystem");
+    assert!(
+        builtin_file_newer_than_file_p(
+            &mut eval,
+            vec![
+                Value::string("/neomacs-fake/newer"),
+                Value::string("/neomacs-fake/older"),
+            ],
+        )
+        .expect("compare virtual file timestamps")
+        .is_t()
+    );
+    let overwrite_error = barf_or_query_if_file_exists(
+        &mut eval,
+        &LispString::from_utf8("/neomacs-fake/newer"),
+        false,
+        "overwrite",
+        false,
+        true,
+    )
+    .expect_err("existing virtual file should reject noninteractive overwrite");
+    assert!(matches!(
+        overwrite_error,
+        Flow::Signal(ref signal) if signal.symbol_name() == "file-already-exists"
+    ));
+
+    let found = builtin_find_file_noselect(&mut eval, vec![Value::string("/neomacs-fake/newer")])
+        .expect("visit virtual file");
+    let buffer_id = found.as_buffer_id().expect("find-file returns a buffer");
+    assert_eq!(
+        eval.buffers
+            .get(buffer_id)
+            .expect("visited buffer")
+            .buffer_string(),
+        "new",
+    );
+    assert!(
+        builtin_verify_visited_file_modtime(&mut eval, vec![found])
+            .expect("verify virtual file timestamp")
+            .is_t()
+    );
+}
+
 thread_local! {
     /// Keep ALL test contexts alive across a single #[test] so that
     /// heap-backed return values from earlier `call_fileio_builtin!`
