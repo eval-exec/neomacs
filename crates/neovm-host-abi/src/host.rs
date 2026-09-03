@@ -21,14 +21,6 @@ impl HostKind {
         _ => { Self::Desktop }
     };
 
-    /// Source of the Lisp-visible environment inherited at editor startup.
-    pub const fn process_environment(self) -> ProcessEnvironmentModel {
-        match self {
-            Self::Desktop | Self::Android => ProcessEnvironmentModel::InheritedNative,
-            Self::Wasm => ProcessEnvironmentModel::Empty,
-        }
-    }
-
     const fn product_name(self) -> &'static str {
         match self {
             Self::Desktop => "neomacs",
@@ -45,6 +37,14 @@ pub enum ProcessEnvironmentModel {
     InheritedNative,
     /// The embedding host has no native process environment.
     Empty,
+}
+
+impl ProcessEnvironmentModel {
+    /// Environment model compiled into the current editor executable.
+    pub const CURRENT: Self = std::cfg_select! {
+        target_family = "wasm" => { Self::Empty }
+        _ => { Self::InheritedNative }
+    };
 }
 
 /// How user-visible documents are addressed by the host.
