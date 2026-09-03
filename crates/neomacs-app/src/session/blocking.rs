@@ -1,6 +1,6 @@
 //! Outer GNU command loop entered on the evaluator's owning thread.
 
-use neovm_core::emacs_core::eval::ShutdownRequest;
+use neovm_core::emacs_core::eval::{Context, ShutdownRequest};
 
 use super::EditorSession;
 
@@ -20,13 +20,50 @@ impl EditorSession {
     /// Native hosts block in their OS poller. Browser Workers install a host
     /// wait backend first; JSPI suspends this call without unwinding its Rust
     /// or Lisp stack, while the compatibility path blocks in `Atomics.wait`.
-    pub fn run(mut self) -> EditorSessionExit {
+    pub fn run(self) -> EditorSessionExit {
+        self.run_until_stopped(|_| {}).into_exit()
+    }
+
+    /// Run the outer loop and return evaluator ownership to a native host.
+    ///
+    /// The callback runs after `after-pdump-load-hook` and immediately before
+    /// the first outer-loop dispatch. Native hosts use it for thread-affine
+    /// one-time preparation such as AOT preload installation.
+    pub fn run_until_stopped(
+        mut self,
+        before_command_loop: impl FnOnce(&Context),
+    ) -> StoppedEditorSession {
         self.prepare_to_run();
+        before_command_loop(&self.evaluator);
         let command_loop_error = self.evaluator.recursive_edit().err();
-        EditorSessionExit {
+        let exit = EditorSessionExit {
             command_loop_error,
             shutdown: self.evaluator.shutdown_request(),
+        };
+        StoppedEditorSession {
+            evaluator: self.evaluator,
+            exit,
         }
+    }
+}
+
+/// A session whose command loop has unwound but whose evaluator is still owned.
+pub struct StoppedEditorSession {
+    evaluator: Context,
+    exit: EditorSessionExit,
+}
+
+impl StoppedEditorSession {
+    /// Discard evaluator ownership and retain only the terminal status.
+    #[must_use]
+    pub fn into_exit(self) -> EditorSessionExit {
+        self.exit
+    }
+
+    /// Return terminal status and evaluator state to their native owner.
+    #[must_use]
+    pub fn into_parts(self) -> (EditorSessionExit, Context) {
+        (self.exit, self.evaluator)
     }
 }
 
