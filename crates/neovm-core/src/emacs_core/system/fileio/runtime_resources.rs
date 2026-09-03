@@ -19,6 +19,9 @@ pub enum RuntimeResourceNode<'a> {
 /// user documents, persistence, and directory mutation require separate host
 /// capabilities instead of being made to look like native paths.
 pub trait RuntimeResourceStore {
+    /// Absolute root owned by this immutable store.
+    fn mount_root(&self) -> &Path;
+
     /// Resolve an exact mounted path, or return `None` when it is not owned.
     fn node(&self, path: &Path) -> Option<RuntimeResourceNode<'_>>;
 
