@@ -6,13 +6,13 @@
 //! blocking GNU command loop; browser WASM requires an async suspension
 //! adapter which preserves the recursive Lisp stack.
 
+mod blocking;
 mod transport;
+pub use blocking::EditorSessionExit;
 std::cfg_select! {
     target_family = "wasm" => {}
     _ => {
-        mod blocking;
         mod native_worker;
-        pub use blocking::EditorSessionExit;
         pub use native_worker::{NativeEditorWorker, NativeEditorWorkerEvent};
     }
 }
@@ -45,8 +45,8 @@ impl EditorSession {
     ///
     /// The caller must construct this value on the thread that will run Lisp.
     /// Android therefore calls it inside its evaluator worker, never on the
-    /// Activity thread. Browser WASM will use the same attachment inside its
-    /// Worker once its asynchronous suspension adapter is available.
+    /// Activity thread. Browser WASM uses the same attachment inside its
+    /// dedicated Worker.
     pub fn attach(
         mut evaluator: Context,
         metrics: PresentationMetrics,
