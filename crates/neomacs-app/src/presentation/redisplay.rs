@@ -37,19 +37,6 @@ pub struct PreparedPresentationTicket {
     presentation: PresentationId,
 }
 
-impl crate::thread_comm::SupersededPresentation {
-    /// Retire a revision which the mailbox proves was never acquired by the
-    /// renderer. Run on the evaluator thread, without an input-channel roundtrip.
-    pub fn discard(self, evaluator: &mut Context) -> bool {
-        PreparedPresentationTicket {
-            frame_id: FrameId(self.frame_placement.frame().get()),
-            presentation: PresentationId::try_new(self.presentation().get())
-                .expect("sealed presentations have nonzero revisions"),
-        }
-        .discard(evaluator)
-    }
-}
-
 impl PreparedPresentationTicket {
     pub fn activate(
         self,
