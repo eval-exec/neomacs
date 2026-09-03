@@ -49,6 +49,12 @@ pub enum RuntimeImageSource<'a> {
     LinearMemory(&'a [u8]),
 }
 
+enum RuntimeImageFinalization<'a> {
+    DiscoveredRuntimeRoot,
+    ExplicitRuntimeRoot(&'a Path),
+    MountedRuntimeResources(MountedRuntimeResources),
+}
+
 impl RuntimeImageSource<'_> {
     /// Storage semantics represented by this source.
     #[must_use]
@@ -73,10 +79,7 @@ impl RuntimeImageSource<'_> {
             HostKind::Desktop => {}
         }
 
-        let mut evaluator = self.restore()?;
-        finalize_restored_runtime_image(&mut evaluator, RuntimeImageRole::Final, &[])
-            .map_err(RuntimeImageError::Finalize)?;
-        Ok(evaluator)
+        self.restore_and_finalize(RuntimeImageFinalization::DiscoveredRuntimeRoot)
     }
 
     /// Restore a browser image together with its authenticated virtual runtime
@@ -96,17 +99,7 @@ impl RuntimeImageSource<'_> {
             });
         }
 
-        let runtime_root = resources.mount_root().to_owned();
-        let mut evaluator = self.restore()?;
-        evaluator.install_runtime_resource_store(Box::new(resources));
-        finalize_restored_runtime_image_at_root(
-            &mut evaluator,
-            RuntimeImageRole::Final,
-            &[],
-            &runtime_root,
-        )
-        .map_err(RuntimeImageError::Finalize)?;
-        Ok(evaluator)
+        self.restore_and_finalize(RuntimeImageFinalization::MountedRuntimeResources(resources))
     }
 
     /// Restore using a runtime resource root selected by a sandboxed host.
@@ -120,15 +113,7 @@ impl RuntimeImageSource<'_> {
         runtime_root: &Path,
     ) -> Result<Context, RuntimeImageError> {
         self.validate_model(host)?;
-        let mut evaluator = self.restore()?;
-        finalize_restored_runtime_image_at_root(
-            &mut evaluator,
-            RuntimeImageRole::Final,
-            &[],
-            runtime_root,
-        )
-        .map_err(RuntimeImageError::Finalize)?;
-        Ok(evaluator)
+        self.restore_and_finalize(RuntimeImageFinalization::ExplicitRuntimeRoot(runtime_root))
     }
 
     fn validate_model(self, host: HostProfile) -> Result<(), RuntimeImageError> {
@@ -152,6 +137,38 @@ impl RuntimeImageSource<'_> {
                 load_from_portable_snapshot(bytes).map_err(RuntimeImageError::Load)
             }
         }
+    }
+
+    fn restore_and_finalize(
+        self,
+        finalization: RuntimeImageFinalization<'_>,
+    ) -> Result<Context, RuntimeImageError> {
+        let mut evaluator = self.restore()?;
+        match finalization {
+            RuntimeImageFinalization::DiscoveredRuntimeRoot => {
+                finalize_restored_runtime_image(&mut evaluator, RuntimeImageRole::Final, &[])
+            }
+            RuntimeImageFinalization::ExplicitRuntimeRoot(runtime_root) => {
+                finalize_restored_runtime_image_at_root(
+                    &mut evaluator,
+                    RuntimeImageRole::Final,
+                    &[],
+                    runtime_root,
+                )
+            }
+            RuntimeImageFinalization::MountedRuntimeResources(resources) => {
+                let runtime_root = resources.mount_root().to_owned();
+                evaluator.install_runtime_resource_store(Box::new(resources));
+                finalize_restored_runtime_image_at_root(
+                    &mut evaluator,
+                    RuntimeImageRole::Final,
+                    &[],
+                    &runtime_root,
+                )
+            }
+        }
+        .map_err(RuntimeImageError::Finalize)?;
+        Ok(evaluator)
     }
 }
 
