@@ -100,3 +100,62 @@ fn memory_filesystem_rejects_paths_that_escape_its_root() {
         .expect_err("virtual paths must not escape their root");
     assert_eq!(error.kind(), ErrorKind::InvalidInput);
 }
+
+#[test]
+fn mount_table_routes_isolated_virtual_roots_and_exposes_the_namespace() {
+    let mut filesystem = MountTableFileSystem::new();
+    filesystem
+        .mount(
+            Path::new("/neomacs-fake"),
+            Box::new(MemoryFileSystem::new()),
+        )
+        .expect("mount persistent home");
+    filesystem
+        .mount(Path::new("/tmp"), Box::new(MemoryFileSystem::new()))
+        .expect("mount session temporary storage");
+
+    assert_eq!(
+        filesystem
+            .read_directory(Path::new("/"))
+            .expect("list root"),
+        vec![
+            std::ffi::OsString::from("neomacs-fake"),
+            std::ffi::OsString::from("tmp"),
+        ],
+    );
+    filesystem
+        .write(
+            Path::new("/neomacs-fake/persistent"),
+            b"home",
+            write_request(WriteMode::Truncate),
+        )
+        .expect("write persistent mount");
+    filesystem
+        .write(
+            Path::new("/tmp/session"),
+            b"temporary",
+            write_request(WriteMode::Truncate),
+        )
+        .expect("write temporary mount");
+    assert_eq!(
+        filesystem
+            .read(Path::new("/neomacs-fake/persistent"))
+            .unwrap(),
+        b"home",
+    );
+    assert_eq!(
+        filesystem.read(Path::new("/tmp/session")).unwrap(),
+        b"temporary",
+    );
+    assert_eq!(
+        filesystem
+            .rename(
+                Path::new("/tmp/session"),
+                Path::new("/neomacs-fake/session"),
+                false,
+            )
+            .expect_err("cross-mount rename must be explicit")
+            .kind(),
+        ErrorKind::CrossesDevices,
+    );
+}
