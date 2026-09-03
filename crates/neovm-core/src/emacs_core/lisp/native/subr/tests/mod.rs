@@ -1,4 +1,6 @@
-use super::{FixedMin2, NativeFn, NoEvalPolicy, SubrArity, SubrSpec, no_eval_policy};
+use super::{
+    FixedMin2, NativeFn, NoEvalPolicy, SubrArity, SubrPortability, SubrSpec, no_eval_policy,
+};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::Value;
@@ -42,28 +44,26 @@ fn compiled_subr_batch_is_the_executable_declaration_catalog() {
 #[test]
 fn target_filtered_batch_can_represent_no_subrs_on_this_target() {
     assert!(target_filtered::SUBRS.specs().is_empty());
+    assert_eq!(
+        target_filtered::SUBRS.portability(),
+        SubrPortability::TargetSpecific,
+    );
 
     let mut ctx = Context::new();
     target_filtered::register_subrs(&mut ctx);
 }
 
 #[test]
-fn native_host_batch_follows_the_product_host() {
-    let mut ctx = Context::new_for_host(neovm_host_abi::HostKind::Wasm);
-
-    native_host::register_subrs(&mut ctx, neovm_host_abi::HostKind::Wasm);
-
-    assert!(
-        ctx.eval_str("(fboundp 'test-native-host-zero)")
-            .expect("fboundp should inspect the browser host surface")
-            .is_nil()
+fn native_host_batch_is_compile_target_only() {
+    assert_eq!(
+        native_host::SUBRS.portability(),
+        SubrPortability::TargetSpecific,
     );
-
-    let mut ctx = Context::new_for_host(neovm_host_abi::HostKind::Desktop);
-    native_host::register_subrs(&mut ctx, neovm_host_abi::HostKind::Desktop);
+    let mut ctx = Context::new();
+    native_host::register_subrs(&mut ctx);
     assert!(
         ctx.eval_str("(fboundp 'test-native-host-zero)")
-            .expect("fboundp should inspect the desktop host surface")
+            .expect("fboundp should inspect the compiled target surface")
             .is_truthy()
     );
 }

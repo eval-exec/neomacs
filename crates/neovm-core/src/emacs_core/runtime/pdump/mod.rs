@@ -40,9 +40,11 @@ pub(crate) mod object_extra;
 pub(crate) mod object_starts;
 pub(crate) mod object_value_codec;
 mod portable_snapshot;
+#[cfg(test)]
+pub(crate) use portable_snapshot::portable_required_subr_names;
 pub use portable_snapshot::{
     PORTABLE_RUNTIME_IMAGE_ENV, dump_portable_snapshot_to_file, encode_portable_snapshot,
-    load_from_portable_snapshot, load_from_portable_snapshot_for_host,
+    load_from_portable_snapshot,
 };
 pub(crate) mod roots_image;
 pub mod runtime;
@@ -604,7 +606,6 @@ fn load_from_mapped_image(image: &mut mmap_image::LoadedMmapImage) -> Result<Con
         spans,
         mapped_heap,
         value_fixups_section,
-        neovm_host_abi::HostKind::CURRENT,
     )?;
     drop(_cleanup);
     Ok(eval)
@@ -657,21 +658,12 @@ pub fn restore_snapshot(state: &DumpContextState) -> Result<Context, DumpError> 
     reconstruct_evaluator(state, None)
 }
 
-/// Reconstruct a portable producer or consumer using an explicit product-host
-/// primitive surface rather than the compilation host's surface.
-pub fn restore_snapshot_for_host(
-    state: &DumpContextState,
-    host: neovm_host_abi::HostKind,
-) -> Result<Context, DumpError> {
-    reconstruct_evaluator_for_host(state, None, host)
-}
-
 /// Clone a live evaluator through the pdump conversion pipeline.
 ///
 /// Prefer `snapshot_evaluator` + `restore_snapshot` when cloning the same
 /// template repeatedly; that avoids rebuilding the intermediate dump state.
 pub fn clone_evaluator(eval: &Context) -> Result<Context, DumpError> {
-    restore_snapshot_for_host(&snapshot_evaluator(eval), eval.host_kind)
+    restore_snapshot(&snapshot_evaluator(eval))
 }
 
 /// Clone an evaluator after activating its thread-local runtime bindings.
@@ -679,8 +671,7 @@ pub fn clone_evaluator(eval: &Context) -> Result<Context, DumpError> {
 /// Use this when cloning from a live runtime that shares the current thread
 /// with other `Context`s.
 pub fn clone_active_evaluator(eval: &mut Context) -> Result<Context, DumpError> {
-    let host = eval.host_kind;
-    restore_snapshot_for_host(&snapshot_active_evaluator(eval), host)
+    restore_snapshot(&snapshot_active_evaluator(eval))
 }
 
 /// Reconstruct an `Context` from deserialized dump state.
@@ -688,19 +679,11 @@ fn reconstruct_evaluator(
     state: &DumpContextState,
     mapped_heap: Option<mapped_heap::MappedHeapView>,
 ) -> Result<Context, DumpError> {
-    reconstruct_evaluator_for_host(state, mapped_heap, neovm_host_abi::HostKind::CURRENT)
-}
-
-fn reconstruct_evaluator_for_host(
-    state: &DumpContextState,
-    mapped_heap: Option<mapped_heap::MappedHeapView>,
-    host: neovm_host_abi::HostKind,
-) -> Result<Context, DumpError> {
     // 1. Reconstruct the dump-local symbol table before any values that refer
     // to dump-local `DumpSymId`s are loaded.
     let _cleanup = RestoreCleanup;
     load_symbol_table(&state.symbol_table)?;
-    let eval = reconstruct_evaluator_after_symbol_table(state, mapped_heap, &[], host)?;
+    let eval = reconstruct_evaluator_after_symbol_table(state, mapped_heap, &[])?;
     drop(_cleanup);
     Ok(eval)
 }
@@ -709,14 +692,13 @@ fn reconstruct_evaluator_after_symbol_table(
     state: &DumpContextState,
     mapped_heap: Option<mapped_heap::MappedHeapView>,
     value_fixups: &[value_fixups::RawValueFixup],
-    host: neovm_host_abi::HostKind,
 ) -> Result<Context, DumpError> {
     let decoder = LoadDecoder::new_with_mapped_heap_and_fixups(
         &state.tagged_heap,
         mapped_heap,
         value_fixups.to_vec(),
     );
-    reconstruct_evaluator_after_symbol_table_with_decoder(state, decoder, host)
+    reconstruct_evaluator_after_symbol_table_with_decoder(state, decoder)
 }
 
 fn reconstruct_evaluator_after_symbol_table_with_tagged_heap_parts(
@@ -725,7 +707,6 @@ fn reconstruct_evaluator_after_symbol_table_with_tagged_heap_parts(
     spans: object_starts::LoadedSpans<'_>,
     mapped_heap: Option<mapped_heap::MappedHeapView>,
     value_fixups_section: Option<&[u8]>,
-    host: neovm_host_abi::HostKind,
 ) -> Result<Context, DumpError> {
     let decoder = LoadDecoder::from_file_descriptors_and_spans_with_mapped_heap_and_fixups(
         object_descriptors,
@@ -737,25 +718,20 @@ fn reconstruct_evaluator_after_symbol_table_with_tagged_heap_parts(
         state,
         decoder,
         value_fixups_section,
-        host,
     )
 }
 
 fn reconstruct_evaluator_after_symbol_table_with_decoder(
     state: &DumpContextState,
     decoder: LoadDecoder<'_>,
-    host: neovm_host_abi::HostKind,
 ) -> Result<Context, DumpError> {
-    reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
-        state, decoder, None, host,
-    )
+    reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(state, decoder, None)
 }
 
 fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     state: &DumpContextState,
     mut decoder: LoadDecoder<'_>,
     value_fixups_section: Option<&[u8]>,
-    host: neovm_host_abi::HostKind,
 ) -> Result<Context, DumpError> {
     // 2. Reconstruct the tagged heap before any heap-backed value/object loads
     // so tagged dump references can resolve directly to live tagged objects.
@@ -814,7 +790,6 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         load_register_manager(&mut decoder, &state.registers),
         load_bookmark_manager(&state.bookmarks),
         load_watcher_list(&mut decoder, &state.watchers),
-        host,
     );
 
     // Phase 10E follow-up: re-install BUFFER_OBJFWD forwarders.

@@ -10,7 +10,7 @@ use super::error::{EvalResult, LispCondition, expect_min_args, signal};
 use super::eval::Context;
 use super::value::Value;
 use crate::heap_types::LispString;
-use neovm_host_abi::{HostKind, ProcessEnvironmentModel};
+use neovm_host_abi::ProcessEnvironmentModel;
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
@@ -63,8 +63,8 @@ fn repair_native_process_environment(entries: &mut Vec<(String, String)>) {
     }
 }
 
-fn host_process_environment(host: HostKind) -> Value {
-    let mut entries = match host.process_environment() {
+fn host_process_environment() -> Value {
+    let mut entries = match ProcessEnvironmentModel::CURRENT {
         ProcessEnvironmentModel::InheritedNative => inherited_native_process_environment(),
         ProcessEnvironmentModel::Empty => Vec::new(),
     };
@@ -87,7 +87,7 @@ fn host_process_environment(host: HostKind) -> Value {
 /// operation when it is activated, because its dumped environment belongs to
 /// the process that created the cache rather than the current process.
 pub(crate) fn install_host_environment_snapshot(eval: &mut Context) {
-    let process_environment = host_process_environment(eval.host_kind);
+    let process_environment = host_process_environment();
     {
         let obarray = eval.obarray_mut();
         obarray.make_special("initial-environment");
