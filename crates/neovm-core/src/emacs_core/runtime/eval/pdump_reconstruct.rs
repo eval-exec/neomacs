@@ -207,20 +207,36 @@ impl Context {
         // function cells belong to the image; native subr cells belong to the
         // consumer binary and stay as installed by its registrars.
         builtins::init_builtins(&mut ev);
-        for (sym_id, symbol) in dumped_function_surface.iter_symbols() {
-            if symbol.function.is_subr() {
-                // Native entry points belong to the current binary. A
-                // producer-only primitive must become absent instead of
-                // retaining an uncallable dumped function cell.
-                if lookup_global_subr_entry(sym_id).is_none() {
-                    ev.obarray.fmakunbound_id(sym_id);
+        for (binding_id, _) in dumped_function_surface.iter_symbols() {
+            match dumped_function_surface.function_cell_snapshot(binding_id) {
+                FunctionCellSnapshot::Bound(function) => {
+                    if let Some(implementation_id) = function.as_subr_id() {
+                        // A Lisp alias created with `(symbol-function NAME)'
+                        // copies the primitive object, whose identity is its
+                        // implementation symbol rather than the alias symbol.
+                        // Relink that symbolic identity to this binary's subr;
+                        // never decide availability from `binding_id'.
+                        if lookup_global_subr_entry(implementation_id).is_some() {
+                            ev.obarray.set_symbol_function_id(
+                                binding_id,
+                                Value::subr_from_sym_id(implementation_id),
+                            );
+                        } else {
+                            // Native entry points belong to the consumer. A
+                            // producer-only primitive must not retain an
+                            // uncallable dumped function cell.
+                            ev.obarray.fmakunbound_id(binding_id);
+                        }
+                    } else {
+                        ev.obarray.set_symbol_function_id(binding_id, function);
+                    }
                 }
-            } else if !symbol.function.is_nil() {
-                ev.obarray.set_symbol_function_id(sym_id, symbol.function);
-            } else if dumped_function_surface.is_function_unbound_id(sym_id) {
-                ev.obarray.fmakunbound_id(sym_id);
-            } else {
-                ev.obarray.clear_function_silent_id(sym_id);
+                FunctionCellSnapshot::ExplicitlyUnbound => {
+                    ev.obarray.fmakunbound_id(binding_id);
+                }
+                FunctionCellSnapshot::Empty => {
+                    ev.obarray.clear_function_silent_id(binding_id);
+                }
             }
         }
 
