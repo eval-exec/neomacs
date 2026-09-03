@@ -102,6 +102,17 @@ fn memory_filesystem_rejects_paths_that_escape_its_root() {
 }
 
 #[test]
+fn writable_access_includes_creating_a_missing_child() {
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .create_directory(Path::new("/writable"), false)
+        .expect("create parent directory");
+
+    assert!(filesystem.access(Path::new("/writable/new-file"), AccessMode::WriteOrCreate));
+    assert!(!filesystem.access(Path::new("/missing/new-file"), AccessMode::WriteOrCreate));
+}
+
+#[test]
 fn mount_table_routes_isolated_virtual_roots_and_exposes_the_namespace() {
     let mut filesystem = MountTableFileSystem::new();
     filesystem

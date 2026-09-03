@@ -76,31 +76,44 @@ impl EditorFileSystem for NativeFileSystem {
             use std::ffi::CString;
             use std::os::unix::ffi::OsStrExt;
 
-            let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+            let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
                 return false;
             };
-            let mode = match mode {
+            let native_mode = match mode {
                 AccessMode::Exists => libc::F_OK,
                 AccessMode::Read => libc::R_OK,
-                AccessMode::Write => libc::W_OK,
+                AccessMode::WriteOrCreate => libc::W_OK,
                 AccessMode::Execute => libc::X_OK,
                 AccessMode::ReadAndSearch => libc::R_OK | libc::X_OK,
             };
-            unsafe { libc::access(path.as_ptr(), mode) == 0 }
+            if unsafe { libc::access(c_path.as_ptr(), native_mode) } == 0 {
+                return true;
+            }
+            if mode != AccessMode::WriteOrCreate
+                || io::Error::last_os_error().kind() != io::ErrorKind::NotFound
+            {
+                return false;
+            }
+            let Some(parent) = path.parent() else {
+                return false;
+            };
+            let Ok(parent) = CString::new(parent.as_os_str().as_bytes()) else {
+                return false;
+            };
+            unsafe { libc::access(parent.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
         }
         #[cfg(not(unix))]
         {
             match mode {
                 AccessMode::Exists => path.exists(),
                 AccessMode::Read => self.metadata(path, true).is_ok(),
-                AccessMode::Write => {
+                AccessMode::WriteOrCreate => {
                     if path.exists() {
                         OpenOptions::new().write(true).open(path).is_ok()
                     } else {
                         path.parent().is_some_and(|parent| {
-                            self.metadata(parent, true).is_ok_and(|metadata| {
-                                metadata.kind == FileEntryKind::Directory && !metadata.readonly
-                            })
+                            self.metadata(parent, true)
+                                .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory)
                         })
                     }
                 }
