@@ -98,4 +98,25 @@ pub trait EditorFileSystem {
     fn remove_directory(&self, path: &Path, recursive: bool) -> io::Result<()>;
     fn rename(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()>;
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
+
+    fn same_file(&self, left: &Path, right: &Path) -> io::Result<bool> {
+        Ok(self.canonicalize(left)? == self.canonicalize(right)?)
+    }
+
+    fn copy_file(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()> {
+        let contents = self.read(from)?;
+        self.write(
+            to,
+            &contents,
+            WriteRequest {
+                mode: if replace {
+                    WriteMode::Truncate
+                } else {
+                    WriteMode::CreateNew
+                },
+                sync: false,
+            },
+        )?;
+        Ok(())
+    }
 }
