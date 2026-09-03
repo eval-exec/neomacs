@@ -10,6 +10,7 @@ use super::error::{EvalResult, LispCondition, expect_min_args, signal};
 use super::eval::Context;
 use super::value::Value;
 use crate::heap_types::LispString;
+use neovm_host_abi::{HostKind, ProcessEnvironmentModel};
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
@@ -21,33 +22,53 @@ pub(crate) enum EnvironmentLookup {
     Missing,
 }
 
-fn host_process_environment() -> Value {
-    #[cfg_attr(not(windows), allow(unused_mut))]
-    let mut entries: Vec<(String, String)> = std::env::vars().collect();
-    // Mirror GNU `w32.c init_environment`: guarantee HOME is set on Windows,
-    // where the OS environment provides APPDATA/USERPROFILE but typically not
-    // HOME. Without it `getenv "HOME"` is nil and `~` never expands, so e.g.
-    // `directory-files "~"` fails fatally during startup. GNU defaults HOME to
-    // the roaming AppData folder (CSIDL_APPDATA == %APPDATA%), else "C:/".
-    #[cfg(windows)]
-    if !entries.iter().any(|(k, _)| k.eq_ignore_ascii_case("HOME")) {
-        let home = std::env::var("APPDATA")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| "C:/".to_string());
-        entries.push(("HOME".to_string(), home));
+fn inherited_native_process_environment() -> Vec<(String, String)> {
+    std::cfg_select! {
+        target_family = "wasm" => {
+            panic!("a WebAssembly target cannot inherit a native process environment")
+        }
+        _ => {
+            std::env::vars().collect()
+        }
     }
-    // GNU w32.c init_environment also guarantees SHELL before Lisp snapshots
-    // the process environment. Keep `(getenv "SHELL")` and
-    // `shell-file-name` on the same private cmdproxy path.
-    #[cfg(windows)]
-    if !entries
-        .iter()
-        .any(|(name, value)| name.eq_ignore_ascii_case("SHELL") && !value.is_empty())
-    {
-        let shell = super::shell_file_name::resolve_current();
-        entries.retain(|(name, _)| !name.eq_ignore_ascii_case("SHELL"));
-        entries.push(("SHELL".to_owned(), shell.lisp_name().to_owned()));
+}
+
+fn repair_native_process_environment(entries: &mut Vec<(String, String)>) {
+    std::cfg_select! {
+        windows => {
+            // Mirror GNU `w32.c init_environment`: guarantee HOME is set on
+            // Windows, where the OS environment typically omits it.
+            if !entries.iter().any(|(k, _)| k.eq_ignore_ascii_case("HOME")) {
+                let home = std::env::var("APPDATA")
+                    .or_else(|_| std::env::var("USERPROFILE"))
+                    .unwrap_or_else(|_| "C:/".to_string());
+                entries.push(("HOME".to_string(), home));
+            }
+
+            // GNU also guarantees SHELL before Lisp snapshots the process
+            // environment. Keep it on the same private cmdproxy path as
+            // `shell-file-name`.
+            if !entries
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("SHELL") && !value.is_empty())
+            {
+                let shell = super::shell_file_name::resolve_current();
+                entries.retain(|(name, _)| !name.eq_ignore_ascii_case("SHELL"));
+                entries.push(("SHELL".to_owned(), shell.lisp_name().to_owned()));
+            }
+        }
+        _ => {
+            let _ = entries;
+        }
     }
+}
+
+fn host_process_environment(host: HostKind) -> Value {
+    let mut entries = match host.process_environment() {
+        ProcessEnvironmentModel::InheritedNative => inherited_native_process_environment(),
+        ProcessEnvironmentModel::Empty => Vec::new(),
+    };
+    repair_native_process_environment(&mut entries);
 
     Value::list(
         entries
@@ -66,7 +87,7 @@ fn host_process_environment() -> Value {
 /// operation when it is activated, because its dumped environment belongs to
 /// the process that created the cache rather than the current process.
 pub(crate) fn install_host_environment_snapshot(eval: &mut Context) {
-    let process_environment = host_process_environment();
+    let process_environment = host_process_environment(eval.host_kind);
     {
         let obarray = eval.obarray_mut();
         obarray.make_special("initial-environment");
