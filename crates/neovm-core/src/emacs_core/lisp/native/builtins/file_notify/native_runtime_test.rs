@@ -366,6 +366,75 @@ fn windows_recursive_watch_delivers_an_ordered_rename_pair() {
     reset_file_notify_thread_locals();
 }
 
+/// GNU's w32notify backend forwards the complete parent-directory stream even
+/// when Lisp requested a watch for one file.  `filenotify.el' must see both
+/// rename halves so it can pair OLD with a differently named NEW before it
+/// applies the watched-filename filter (`src/w32term.c:w32_queue_notifications'
+/// and `lisp/filenotify.el:file-notify--handle-event').
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_file_watch_preserves_a_rename_to_a_different_name() {
+    crate::test_utils::init_test_tracing();
+    reset_file_notify_thread_locals();
+    let directory = workspace_temp_dir();
+    let from = directory.path().join("visited.txt");
+    let to = directory.path().join("visited.txt~");
+    std::fs::write(&from, "contents").expect("seed watched file");
+
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let callback = eval
+        .eval_str(
+            r#"
+        (progn
+          (setq neovm-test-w32-file-rename-events nil)
+          (lambda (event)
+            (setq neovm-test-w32-file-rename-events
+                  (cons event neovm-test-w32-file-rename-events))))
+        "#,
+        )
+        .expect("create Windows file-rename callback");
+    let descriptor = w32notify_add_watch(
+        &mut eval,
+        vec![
+            Value::string(from.display().to_string()),
+            Value::list(vec![Value::symbol("file-name")]),
+            callback,
+        ],
+    )
+    .expect("add Windows file watch");
+
+    std::fs::rename(&from, &to).expect("rename watched file to backup name");
+    let events = service_until(&mut eval, "neovm-test-w32-file-rename-events", |events| {
+        events
+            .iter()
+            .filter(|fields| {
+                matches!(
+                    fields.get(1).and_then(|value| value.as_symbol_name()),
+                    Some("renamed-from" | "renamed-to")
+                )
+            })
+            .count()
+            >= 2
+    });
+    let pair: Vec<_> = events
+        .iter()
+        .filter(|fields| {
+            matches!(
+                fields.get(1).and_then(|value| value.as_symbol_name()),
+                Some("renamed-from" | "renamed-to")
+            )
+        })
+        .collect();
+    assert_eq!(pair[0][0], descriptor);
+    assert_eq!(pair[1][0], descriptor);
+    assert_eq!(pair[0][1], Value::symbol("renamed-from"));
+    assert_eq!(pair[1][1], Value::symbol("renamed-to"));
+    assert_eq!(pair[0][2], Value::string("visited.txt"));
+    assert_eq!(pair[1][2], Value::string("visited.txt~"));
+    w32notify_rm_watch(vec![descriptor]).expect("remove Windows file watch");
+    reset_file_notify_thread_locals();
+}
+
 /// GNU's w32notify worker treats deletion of the watched directory as normal
 /// descriptor invalidation: the pending native read ends, `w32notify-valid-p'
 /// becomes nil, and no asynchronous `file-notify-error' escapes through the
