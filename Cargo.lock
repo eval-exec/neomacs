@@ -4059,6 +4059,7 @@ dependencies = [
  "neomacs-layout-engine",
  "neomacs-test-fonts",
  "neomacs-video",
+ "neovm-core",
  "png",
  "pollster",
  "resvg",
