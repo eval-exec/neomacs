@@ -2,7 +2,7 @@ use std::io::Cursor;
 use std::path::Path;
 
 use flate2::{Compression, GzBuilder};
-use neomacs_app::runtime_resources::MountedRuntimeResources;
+use neomacs_app::runtime_resources::{MountedRuntimeResources, RuntimeResourceBundle};
 use sha2::{Digest, Sha256};
 use tar::{Builder, Header};
 
@@ -36,6 +36,8 @@ pub(crate) fn runtime_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
 pub(crate) fn mounted_runtime_resources(entries: &[(&str, &[u8])]) -> MountedRuntimeResources {
     let archive = runtime_archive(entries);
     let id = content_id(&archive);
-    MountedRuntimeResources::from_bundle(Path::new("/neomacs"), &archive, id.as_bytes())
+    let bundle = RuntimeResourceBundle::from_assets(&archive, id.as_bytes())
+        .expect("pair browser runtime bundle assets");
+    MountedRuntimeResources::from_bundle(Path::new("/neomacs"), bundle)
         .expect("mount browser runtime bundle")
 }

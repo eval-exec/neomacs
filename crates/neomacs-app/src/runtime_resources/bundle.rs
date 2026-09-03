@@ -15,6 +15,35 @@ const OWNED_ARCHIVE_ROOTS: [&str; 4] = ["lisp", "etc", "leim", "info"];
 
 pub(super) type RuntimeResourceBundleId = ContentId;
 
+/// Compressed runtime archive paired with a canonical packaged identity.
+///
+/// Constructing this value validates the identity representation. Mounting or
+/// extraction then streams the archive through SHA-256 before publishing any
+/// resources.
+#[derive(Debug)]
+pub struct RuntimeResourceBundle<'a> {
+    archive: &'a [u8],
+    expected: RuntimeResourceBundleId,
+}
+
+impl<'a> RuntimeResourceBundle<'a> {
+    /// Pair archive bytes with their canonical lowercase SHA-256 identity.
+    pub fn from_assets(archive: &'a [u8], bundle_id: &[u8]) -> Result<Self, RuntimeResourceError> {
+        Ok(Self {
+            archive,
+            expected: read_bundle_id(bundle_id)?,
+        })
+    }
+
+    pub(super) fn archive(&self) -> &'a [u8] {
+        self.archive
+    }
+
+    pub(super) fn expected(&self) -> &RuntimeResourceBundleId {
+        &self.expected
+    }
+}
+
 /// Failure to authenticate, validate, or provision packaged runtime resources.
 #[derive(Debug)]
 pub enum RuntimeResourceError {
