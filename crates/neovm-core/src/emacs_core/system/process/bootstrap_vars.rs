@@ -368,7 +368,7 @@ pub(super) fn time_list_from_ticks(ticks: i64, hz: i64) -> Value {
 }
 
 pub(super) fn now_epoch_secs_usecs() -> Option<(i64, i64)> {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
+    match crate::host::time::wall_time_since_unix_epoch() {
         Ok(dur) => Some((dur.as_secs() as i64, dur.subsec_micros() as i64)),
         Err(_) => None,
     }

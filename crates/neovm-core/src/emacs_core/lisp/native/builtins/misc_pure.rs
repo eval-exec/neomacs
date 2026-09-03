@@ -572,10 +572,7 @@ pub(crate) fn builtin_force_mode_line_update(
 pub(crate) fn builtin_get_internal_run_time(args: Vec<Value>) -> EvalResult {
     expect_args("get-internal-run-time", &args, 0)?;
 
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+    let dur = crate::host::time::wall_time_since_unix_epoch().unwrap_or_default();
     let secs = dur.as_secs() as i64;
     let usecs = dur.subsec_micros() as i64;
     Ok(Value::list(vec![

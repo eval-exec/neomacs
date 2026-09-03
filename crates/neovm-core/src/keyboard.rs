@@ -19,7 +19,7 @@ use crate::emacs_core::wait::CommandInputWaitOutcome;
 // decode_storage_char_codes import removed — now using emacs_char directly
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 use crate::heap_types::LispString;
-use crate::host_time::Instant;
+use crate::host::time::Instant;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
@@ -1616,7 +1616,7 @@ pub struct LastMouseClick {
     pub x: f32,
     pub y: f32,
     pub frame_id: u64,
-    pub timestamp: crate::host_time::Instant,
+    pub timestamp: crate::host::time::Instant,
     /// Sequential click count: 1 = single, 2 = double, 3 = triple.
     /// Reset to 1 whenever a click falls outside
     /// `double-click-time` / `double-click-fuzz` of the previous
@@ -2462,9 +2462,9 @@ pub struct CommandLoop {
     /// Inhibit quit (during critical sections).
     pub inhibit_quit: bool,
     /// GNU-style idle timer epoch: when Emacs most recently became idle.
-    idle_start_time: Option<crate::host_time::Instant>,
+    idle_start_time: Option<crate::host::time::Instant>,
     /// Last idle epoch preserved across non-user internal events.
-    last_idle_start_time: Option<crate::host_time::Instant>,
+    last_idle_start_time: Option<crate::host::time::Instant>,
     /// Value of `num_nonmacro_input_events` the last time an
     /// auto-save fired from the command loop. GNU tracks this in
     /// `static intmax_t last_auto_save` (`src/keyboard.c:237`) -- a plain C
@@ -3437,7 +3437,7 @@ impl crate::emacs_core::eval::Context {
     fn delayed_key_echo_deadline(
         &self,
         timeout: Option<std::time::Duration>,
-    ) -> Option<crate::host_time::Instant> {
+    ) -> Option<crate::host::time::Instant> {
         if timeout.is_some()
             || !self.keyboard_input_is_interactive()
             || !matches!(
@@ -3452,7 +3452,7 @@ impl crate::emacs_core::eval::Context {
         let seconds = self
             .lisp_echo_keystrokes_seconds()
             .filter(|seconds| seconds.is_finite() && *seconds > 0.0)?;
-        crate::host_time::Instant::now().checked_add(std::time::Duration::from_secs_f64(seconds))
+        crate::host::time::Instant::now().checked_add(std::time::Duration::from_secs_f64(seconds))
     }
 
     pub(crate) fn cancel_key_echo_state(&mut self) {
@@ -5406,7 +5406,7 @@ impl crate::emacs_core::eval::Context {
         command_input: bool,
         tty_input_decoding: TtyInputDecoding,
     ) -> Result<Option<ReadCharEvent>, crate::emacs_core::error::Flow> {
-        let deadline = timeout.map(|timeout| crate::host_time::Instant::now() + timeout);
+        let deadline = timeout.map(|timeout| crate::host::time::Instant::now() + timeout);
         let mut idle_auto_save_deadline = None;
         let mut key_echo_deadline = self.delayed_key_echo_deadline(timeout);
 
@@ -5439,7 +5439,7 @@ impl crate::emacs_core::eval::Context {
                 ));
             }
 
-            if deadline.is_some_and(|deadline| crate::host_time::Instant::now() >= deadline) {
+            if deadline.is_some_and(|deadline| crate::host::time::Instant::now() >= deadline) {
                 self.timer_stop_idle();
                 return Ok(None);
             }
@@ -5520,7 +5520,7 @@ impl crate::emacs_core::eval::Context {
             if command_input && idle_auto_save_deadline.is_none() {
                 idle_auto_save_deadline = self
                     .command_idle_auto_save_delay()
-                    .and_then(|delay| crate::host_time::Instant::now().checked_add(delay));
+                    .and_then(|delay| crate::host::time::Instant::now().checked_add(delay));
             }
             let wait_deadline = [deadline, idle_auto_save_deadline, key_echo_deadline]
                 .into_iter()
@@ -5534,7 +5534,7 @@ impl crate::emacs_core::eval::Context {
                     continue;
                 }
                 CommandInputWaitOutcome::DeadlineElapsed => {
-                    let now = crate::host_time::Instant::now();
+                    let now = crate::host::time::Instant::now();
                     if deadline.is_some_and(|deadline| now >= deadline) {
                         self.timer_stop_idle();
                         return Ok(None);
@@ -5967,7 +5967,7 @@ impl crate::emacs_core::eval::Context {
         y: f32,
         frame_id: u64,
     ) -> u32 {
-        let now = crate::host_time::Instant::now();
+        let now = crate::host::time::Instant::now();
         let double_click_time_ms = self
             .eval_symbol("double-click-time")
             .ok()
@@ -6852,7 +6852,7 @@ impl crate::emacs_core::eval::Context {
         if self.command_loop.idle_start_time.is_some() {
             return;
         }
-        let now = crate::host_time::Instant::now();
+        let now = crate::host::time::Instant::now();
         self.command_loop.idle_start_time = Some(now);
         self.command_loop.last_idle_start_time = Some(now);
 

@@ -4207,10 +4207,9 @@ fn pgo_atomic_place(
 ) -> Result<std::path::PathBuf, CompileError> {
     use std::sync::atomic::Ordering;
     let final_path = pgo_final_path(dir, content_hash);
-    let pid = std::process::id();
+    let pid = crate::host::process::id();
     let ctr = PGO_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let nanos = crate::host::time::wall_time_since_unix_epoch()
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let tmp_path = dir.join(format!(
