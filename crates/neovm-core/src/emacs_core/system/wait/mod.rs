@@ -1471,6 +1471,14 @@ impl super::eval::Context {
         let wants_input = request.waits_for_host_input();
         let wants_processes = request.services_process_output();
 
+        // An explicitly installed host backend owns input suspension. This is
+        // how a browser Worker replaces an OS poller with JSPI/Atomics while
+        // preserving the same typed input channel. Native sessions do not
+        // install one, so their existing unified poller selection is unchanged.
+        if wants_input && self.has_host_input_wait_backend() {
+            return WaitBlock::HostInputChannel;
+        }
+
         if self.processes.has_wait_notification_backend() {
             use ProcessWaitBackendInterest::{
                 NotificationsAndProcesses, NotificationsOnly, ProcessesOnly,
