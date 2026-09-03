@@ -52,6 +52,7 @@ pub enum RuntimeResourceError {
     InvalidExistingInstallation(PathBuf),
     UnownedArchivePath(PathBuf),
     DuplicateArchivePath(PathBuf),
+    ConflictingArchivePath(PathBuf),
     UnsupportedArchiveEntry(PathBuf),
     ArchiveDigestMismatch { expected: String, actual: String },
     MissingRequiredDirectory(&'static str),
@@ -78,6 +79,11 @@ impl Display for RuntimeResourceError {
             Self::DuplicateArchivePath(path) => write!(
                 formatter,
                 "duplicate runtime resource path in packaged archive: {}",
+                path.display()
+            ),
+            Self::ConflictingArchivePath(path) => write!(
+                formatter,
+                "runtime resource archive uses a file as a directory: {}",
                 path.display()
             ),
             Self::UnsupportedArchiveEntry(path) => write!(
@@ -116,6 +122,47 @@ impl From<io::Error> for RuntimeResourceError {
 pub(super) enum ArchiveEntryKind {
     Directory,
     File,
+}
+
+/// Validates that archive entries describe one coherent directory tree.
+///
+/// Tar entries are ordered, so a file/directory conflict must be rejected
+/// whether the parent file or its descendant appears first.
+#[derive(Default)]
+struct ArchivePathRegistry {
+    entries: BTreeSet<PathBuf>,
+    files: BTreeSet<PathBuf>,
+    parents: BTreeSet<PathBuf>,
+}
+
+impl ArchivePathRegistry {
+    fn insert(&mut self, path: &Path, kind: ArchiveEntryKind) -> Result<(), RuntimeResourceError> {
+        if !self.entries.insert(path.to_owned()) {
+            return Err(RuntimeResourceError::DuplicateArchivePath(path.to_owned()));
+        }
+        if kind == ArchiveEntryKind::File && self.parents.contains(path) {
+            return Err(RuntimeResourceError::ConflictingArchivePath(
+                path.to_owned(),
+            ));
+        }
+
+        let ancestors = || {
+            path.ancestors()
+                .skip(1)
+                .take_while(|ancestor| !ancestor.as_os_str().is_empty())
+        };
+        if let Some(file) = ancestors().find(|ancestor| self.files.contains(*ancestor)) {
+            return Err(RuntimeResourceError::ConflictingArchivePath(
+                file.to_owned(),
+            ));
+        }
+
+        if kind == ArchiveEntryKind::File {
+            self.files.insert(path.to_owned());
+        }
+        self.parents.extend(ancestors().map(Path::to_owned));
+        Ok(())
+    }
 }
 
 pub(super) struct ValidatedArchiveEntry {
@@ -159,16 +206,13 @@ pub(super) fn visit_authenticated_archive(
     let digesting = DigestingReader::new(source);
     let decoder = GzDecoder::new(digesting);
     let mut archive = tar::Archive::new(decoder);
-    let mut seen_paths = BTreeSet::new();
+    let mut archive_paths = ArchivePathRegistry::default();
     let mut seen_required_directories = [false; REQUIRED_DIRECTORIES.len()];
 
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
         validate_archive_path(&path)?;
-        if !seen_paths.insert(path.clone()) {
-            return Err(RuntimeResourceError::DuplicateArchivePath(path));
-        }
         let entry_type = entry.header().entry_type();
         let kind = if entry_type.is_dir() {
             ArchiveEntryKind::Directory
@@ -177,6 +221,7 @@ pub(super) fn visit_authenticated_archive(
         } else {
             return Err(RuntimeResourceError::UnsupportedArchiveEntry(path));
         };
+        archive_paths.insert(&path, kind)?;
         mark_required_directory(&path, kind, &mut seen_required_directories);
         let validated = ValidatedArchiveEntry {
             path,
