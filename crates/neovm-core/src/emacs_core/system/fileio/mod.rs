@@ -3574,6 +3574,32 @@ fn set_file_times_path(
     timestamp: Option<(i64, i64)>,
     nofollow: bool,
 ) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+        };
+
+        // GNU's w32 utimensat replacement requests metadata write access,
+        // not GENERIC_WRITE (src/w32.c:5998-6034).  That distinction lets
+        // `set-file-times' work on a read-only file without racing another
+        // observer by temporarily changing its attributes.  OpenOptionsExt is
+        // a safe wrapper around the same CreateFileW contract.
+        let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
+        if nofollow {
+            flags |= FILE_FLAG_OPEN_REPARSE_POINT;
+        }
+        let file = fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(flags)
+            .open(path)?;
+        return file.set_times(build_file_times(timestamp));
+    }
+
+    #[cfg(not(windows))]
     if nofollow {
         #[cfg(unix)]
         {
@@ -3614,7 +3640,7 @@ fn set_file_times_path(
                 Err(std::io::Error::last_os_error())
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (path, timestamp);
             Err(std::io::Error::new(
