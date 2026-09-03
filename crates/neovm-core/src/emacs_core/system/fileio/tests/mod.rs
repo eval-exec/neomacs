@@ -240,6 +240,71 @@ fn lisp_copy_file_uses_the_context_filesystem() {
     assert!(matches!(same_file_error, Flow::Signal(_)));
 }
 
+#[test]
+fn lisp_temporary_entries_use_the_context_filesystem() {
+    crate::test_utils::init_test_tracing();
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .create_directory(std::path::Path::new("/neomacs-fake"), false)
+        .expect("seed virtual home mount");
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(filesystem));
+
+    let file = builtin_make_temp_file_internal(
+        &mut eval,
+        vec![
+            Value::string("/neomacs-fake/file-"),
+            Value::NIL,
+            Value::string(".txt"),
+            Value::string("temporary contents"),
+        ],
+    )
+    .expect("create temporary file through installed filesystem");
+    let file_name = file.as_utf8_str().expect("temporary file name");
+    assert!(file_name.starts_with("/neomacs-fake/file-"));
+    assert!(file_name.ends_with(".txt"));
+    builtin_insert_file_contents(&mut eval, vec![file]).expect("read temporary file");
+    assert_eq!(
+        eval.buffers
+            .current_buffer()
+            .expect("current buffer")
+            .buffer_string(),
+        "temporary contents",
+    );
+
+    let directory = builtin_make_temp_file_internal(
+        &mut eval,
+        vec![
+            Value::string("/neomacs-fake/directory-"),
+            Value::T,
+            Value::string(""),
+            Value::NIL,
+        ],
+    )
+    .expect("create temporary directory through installed filesystem");
+    assert!(
+        builtin_file_directory_p(&mut eval, vec![directory])
+            .expect("query temporary directory")
+            .is_t()
+    );
+
+    let unused_name = builtin_make_temp_file_internal(
+        &mut eval,
+        vec![
+            Value::string("/neomacs-fake/name-"),
+            Value::fixnum(0),
+            Value::string(""),
+            Value::NIL,
+        ],
+    )
+    .expect("allocate unused name through installed filesystem");
+    assert!(
+        builtin_file_exists_p(&mut eval, vec![unused_name])
+            .expect("query unused temporary name")
+            .is_nil()
+    );
+}
+
 thread_local! {
     /// Keep ALL test contexts alive across a single #[test] so that
     /// heap-backed return values from earlier `call_fileio_builtin!`

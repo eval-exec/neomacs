@@ -12,7 +12,7 @@ pub(crate) use binary_mode::builtin_set_binary_mode;
 pub(crate) use filesystem::default_editor_file_system;
 pub use filesystem::{
     AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, MemoryFileSystem,
-    MountTableFileSystem, WriteMode, WriteRequest,
+    MountTableFileSystem, TemporaryEntry, WriteMode, WriteRequest,
 };
 pub use runtime_resources::{RuntimeResourceNode, RuntimeResourceStore};
 
@@ -2438,43 +2438,6 @@ impl TempCreateKind {
     }
 }
 
-/// Build the `OpenOptions` used to create a temporary file exclusively.
-///
-/// GNU's `make-temp-file-internal` (src/fileio.c) calls gnulib `gen_tempname`
-/// (lib/tempname.c), whose `try_file` opens with
-/// `open(..., O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)`, i.e. mode 0600
-/// before umask.  The docstring guarantees the file is "created with access
-/// mode bits that limit access to the current user."  On Unix we replicate the
-/// explicit 0600 mode so the resulting file is private (subject to umask, just
-/// like GNU); other platforms keep the libstd default.
-fn private_temp_file_open_options() -> fs::OpenOptions {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options
-}
-
-/// Create a temporary directory with GNU's private mode bits.
-///
-/// gnulib `gen_tempname` `try_dir` calls `mkdir(..., S_IRWXU)`, i.e. mode 0700
-/// before umask.  On Unix we mirror that explicit 0700 mode; other platforms
-/// fall back to `fs::create_dir`.
-fn create_private_temp_dir(path: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        fs::DirBuilder::new().mode(0o700).create(path)
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir(path)
-    }
-}
-
 /// GNU `decode_file_name` (`src/coding.c`): decode FNAME's file-name bytes
 /// back to a multibyte string using `file-name-coding-system`, then
 /// `default-file-name-coding-system`, then (when both are nil) identity.
@@ -2557,7 +2520,10 @@ fn make_temp_file_internal_impl(
         // *decoded* multibyte string, so a non-ASCII PREFIX round-trips back to
         // its char form rather than leaking raw file-name bytes.
         match kind {
-            TempCreateKind::Directory => match create_private_temp_dir(&candidate_path) {
+            TempCreateKind::Directory => match eval
+                .editor_file_system()
+                .create_temporary(&candidate_path, TemporaryEntry::Directory)
+            {
                 Ok(()) => {
                     return Ok(decode_file_name_lisp(eval, candidate.as_bytes()));
                 }
@@ -2570,13 +2536,11 @@ fn make_temp_file_internal_impl(
                     ));
                 }
             },
-            TempCreateKind::File => match private_temp_file_open_options().open(&candidate_path) {
-                Ok(mut file) => {
-                    if let Some(contents) = text {
-                        file.write_all(contents).map_err(|err| {
-                            signal_file_io_path(err, "Writing to", &candidate_display)
-                        })?;
-                    }
+            TempCreateKind::File => match eval.editor_file_system().create_temporary(
+                &candidate_path,
+                TemporaryEntry::File(text.unwrap_or_default()),
+            ) {
+                Ok(()) => {
                     return Ok(decode_file_name_lisp(eval, candidate.as_bytes()));
                 }
                 Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
@@ -2588,19 +2552,21 @@ fn make_temp_file_internal_impl(
                     ));
                 }
             },
-            TempCreateKind::NoCreate => match fs::symlink_metadata(&candidate_path) {
-                Ok(_) => continue,
-                Err(err) if err.kind() == ErrorKind::NotFound => {
-                    return Ok(decode_file_name_lisp(eval, candidate.as_bytes()));
+            TempCreateKind::NoCreate => {
+                match eval.editor_file_system().metadata(&candidate_path, false) {
+                    Ok(_) => continue,
+                    Err(err) if err.kind() == ErrorKind::NotFound => {
+                        return Ok(decode_file_name_lisp(eval, candidate.as_bytes()));
+                    }
+                    Err(err) => {
+                        return Err(signal_file_io_path(
+                            err,
+                            kind.error_action(),
+                            &candidate_display,
+                        ));
+                    }
                 }
-                Err(err) => {
-                    return Err(signal_file_io_path(
-                        err,
-                        kind.error_action(),
-                        &candidate_display,
-                    ));
-                }
-            },
+            }
         }
     }
 
