@@ -8,7 +8,7 @@ pub(crate) mod file_error_class;
 mod runtime_resources;
 
 pub(crate) use binary_mode::builtin_set_binary_mode;
-pub use runtime_resources::RuntimeResourceStore;
+pub use runtime_resources::{RuntimeResourceNode, RuntimeResourceStore};
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
@@ -1476,12 +1476,42 @@ fn write_bytes_to_file_with_mode(
 /// COUNT limits the number of accepted entries during enumeration.
 fn read_directory_names_lisp(
     dir: &crate::heap_types::LispString,
+    runtime_resources: Option<&dyn RuntimeResourceStore>,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    let entries =
-        fs::read_dir(lisp_file_name_to_path_buf(dir)).map_err(|e| DirectoryFilesError::Io {
-            action: "Opening directory",
-            err: e,
-        })?;
+    let path = lisp_file_name_to_path_buf(dir);
+    if let Some(store) = runtime_resources {
+        match store.node(&path) {
+            Some(RuntimeResourceNode::Directory) => {
+                let entries = store
+                    .directory_entries(&path)
+                    .expect("mounted directory must enumerate its children");
+                let mut names = vec![
+                    crate::heap_types::LispString::from_unibyte(b".".to_vec()),
+                    crate::heap_types::LispString::from_unibyte(b"..".to_vec()),
+                ];
+                names.extend(
+                    entries
+                        .into_iter()
+                        .map(|name| path_to_lisp_file_name(Path::new(&name))),
+                );
+                return Ok(names);
+            }
+            Some(RuntimeResourceNode::File(_)) => {
+                return Err(DirectoryFilesError::Io {
+                    action: "Opening directory",
+                    err: std::io::Error::new(
+                        ErrorKind::NotADirectory,
+                        "mounted runtime path is not a directory",
+                    ),
+                });
+            }
+            None => {}
+        }
+    }
+    let entries = fs::read_dir(path).map_err(|e| DirectoryFilesError::Io {
+        action: "Opening directory",
+        err: e,
+    })?;
     let mut names = vec![
         crate::heap_types::LispString::from_unibyte(b".".to_vec()),
         crate::heap_types::LispString::from_unibyte(b"..".to_vec()),
@@ -1519,6 +1549,7 @@ fn directory_files(
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
     directory_files_with_decoder(
         dir,
+        None,
         full,
         match_regex,
         nosort,
@@ -1533,6 +1564,7 @@ fn directory_files(
 #[allow(clippy::too_many_arguments)] // match-time state stays explicit at the GNU-regexp boundary
 fn directory_files_with_decoder(
     dir: &crate::heap_types::LispString,
+    runtime_resources: Option<&dyn RuntimeResourceStore>,
     full: bool,
     match_regex: Option<&crate::heap_types::LispString>,
     nosort: bool,
@@ -1546,7 +1578,7 @@ fn directory_files_with_decoder(
         return Ok(Vec::new());
     }
 
-    let names = read_directory_names_lisp(dir)?;
+    let names = read_directory_names_lisp(dir, runtime_resources)?;
 
     // Emacs builds this list via `cons` while scanning readdir output.
     // That makes NOSORT results reverse the traversal order and applies COUNT
@@ -3661,9 +3693,12 @@ pub(crate) fn builtin_file_exists_p(eval: &mut Context, args: Vec<Value>) -> Eva
     if let Some(result) = dispatch_expanded_file_handler(eval, "file-exists-p", &filename)? {
         return Ok(result);
     }
-    Ok(Value::bool_val(file_exists_path(
-        &lisp_file_name_to_path_buf(&filename),
-    )))
+    let path = lisp_file_name_to_path_buf(&filename);
+    let mounted = eval
+        .runtime_resource_store()
+        .and_then(|store| store.node(&path));
+    let exists = mounted.is_some() || file_exists_path(&path);
+    Ok(Value::bool_val(exists))
 }
 
 /// `(file-readable-p FILENAME)` — resolves FILENAME against
@@ -3675,9 +3710,12 @@ pub(crate) fn builtin_file_readable_p(eval: &mut Context, args: Vec<Value>) -> E
     if let Some(result) = dispatch_expanded_file_handler(eval, "file-readable-p", &filename)? {
         return Ok(result);
     }
-    Ok(Value::bool_val(file_readable_path(
-        &lisp_file_name_to_path_buf(&filename),
-    )))
+    let path = lisp_file_name_to_path_buf(&filename);
+    let mounted = eval
+        .runtime_resource_store()
+        .and_then(|store| store.node(&path));
+    let readable = mounted.is_some() || file_readable_path(&path);
+    Ok(Value::bool_val(readable))
 }
 
 /// `(file-writable-p FILENAME)`
@@ -3688,9 +3726,15 @@ pub(crate) fn builtin_file_writable_p(eval: &mut Context, args: Vec<Value>) -> E
     if let Some(result) = dispatch_expanded_file_handler(eval, "file-writable-p", &filename)? {
         return Ok(result);
     }
-    Ok(Value::bool_val(file_writable_path(
-        &lisp_file_name_to_path_buf(&filename),
-    )))
+    let path = lisp_file_name_to_path_buf(&filename);
+    let writable = match eval
+        .runtime_resource_store()
+        .and_then(|store| store.node(&path))
+    {
+        Some(RuntimeResourceNode::File(_) | RuntimeResourceNode::Directory) => false,
+        None => file_writable_path(&path),
+    };
+    Ok(Value::bool_val(writable))
 }
 
 /// `(file-accessible-directory-p FILENAME)`
@@ -3706,9 +3750,16 @@ pub(crate) fn builtin_file_accessible_directory_p(
     {
         return Ok(result);
     }
-    Ok(Value::bool_val(file_accessible_directory_path(
-        &lisp_file_name_to_path_buf(&filename),
-    )))
+    let path = lisp_file_name_to_path_buf(&filename);
+    let accessible = match eval
+        .runtime_resource_store()
+        .and_then(|store| store.node(&path))
+    {
+        Some(RuntimeResourceNode::Directory) => true,
+        Some(RuntimeResourceNode::File(_)) => false,
+        None => file_accessible_directory_path(&path),
+    };
+    Ok(Value::bool_val(accessible))
 }
 
 /// `(file-executable-p FILENAME)`
@@ -3833,9 +3884,16 @@ pub(crate) fn builtin_file_directory_p(eval: &mut Context, args: Vec<Value>) -> 
     if let Some(result) = dispatch_expanded_file_handler(eval, "file-directory-p", &filename)? {
         return Ok(result);
     }
-    Ok(Value::bool_val(file_directory_path(
-        &lisp_file_name_to_path_buf(&filename),
-    )))
+    let path = lisp_file_name_to_path_buf(&filename);
+    let is_directory = match eval
+        .runtime_resource_store()
+        .and_then(|store| store.node(&path))
+    {
+        Some(RuntimeResourceNode::Directory) => true,
+        Some(RuntimeResourceNode::File(_)) => false,
+        None => file_directory_path(&path),
+    };
+    Ok(Value::bool_val(is_directory))
 }
 
 /// Context-aware variant of `file-regular-p` that resolves relative paths
@@ -3850,9 +3908,16 @@ pub(crate) fn builtin_file_regular_p(eval: &mut Context, args: Vec<Value>) -> Ev
     if let Some(result) = dispatch_expanded_file_handler(eval, "file-regular-p", &filename)? {
         return Ok(result);
     }
-    Ok(Value::bool_val(file_regular_path(
-        &lisp_file_name_to_path_buf(&filename),
-    )))
+    let path = lisp_file_name_to_path_buf(&filename);
+    let is_regular = match eval
+        .runtime_resource_store()
+        .and_then(|store| store.node(&path))
+    {
+        Some(RuntimeResourceNode::File(_)) => true,
+        Some(RuntimeResourceNode::Directory) => false,
+        None => file_regular_path(&path),
+    };
+    Ok(Value::bool_val(is_regular))
 }
 
 /// `(file-symlink-p FILENAME)`
@@ -5045,6 +5110,7 @@ pub(crate) fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> E
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     let files = directory_files_with_decoder(
         &dir,
+        eval.runtime_resource_store(),
         full,
         match_pattern.as_ref(),
         nosort,
@@ -6310,7 +6376,19 @@ pub(crate) fn builtin_insert_file_contents(
         }
     }
 
-    let contents_bytes = match fs::read(lisp_file_name_to_path_buf(&resolved)) {
+    let resolved_path = lisp_file_name_to_path_buf(&resolved);
+    let contents_result = match eval
+        .runtime_resource_store()
+        .and_then(|store| store.node(&resolved_path))
+    {
+        Some(RuntimeResourceNode::File(contents)) => Ok(contents.to_vec()),
+        Some(RuntimeResourceNode::Directory) => Err(std::io::Error::new(
+            ErrorKind::IsADirectory,
+            "mounted runtime path is a directory",
+        )),
+        None => fs::read(&resolved_path),
+    };
+    let contents_bytes = match contents_result {
         Ok(contents) => contents,
         Err(err) => {
             if visit {

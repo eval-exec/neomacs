@@ -437,6 +437,9 @@ mod provide_coupled_vars_test;
 #[path = "runtime/eval/tests/quit_regression.rs"]
 mod quit_regression_test;
 #[cfg(test)]
+#[path = "tests/runtime_resource_store.rs"]
+mod runtime_resource_store_test;
+#[cfg(test)]
 #[path = "tests/architecture/runtime_string_guard.rs"]
 mod runtime_string_guard_test;
 #[cfg(test)]
