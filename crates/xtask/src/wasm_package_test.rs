@@ -14,6 +14,7 @@ use super::wasm_package::{
 #[test]
 fn wasm_package_includes_the_browser_text_service_adapter() {
     assert!(WEB_SOURCE_FILES.contains(&"browser-input.mjs"));
+    assert!(WEB_SOURCE_FILES.contains(&"wasm-bootstrap.mjs"));
     assert!(WEB_SOURCE_FILES.contains(&"worker-assets.mjs"));
 }
 
