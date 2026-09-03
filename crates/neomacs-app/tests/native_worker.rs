@@ -1,5 +1,7 @@
 #![cfg(not(target_family = "wasm"))]
 
+mod support;
+
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -10,6 +12,7 @@ use neomacs_app::session::{EditorSession, NativeEditorWorker, NativeEditorWorker
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::pdump::encode_portable_snapshot;
+use support::runtime_resources::mounted_runtime_resources;
 
 #[test]
 fn restored_session_runs_after_pdump_hook_before_top_level() {
@@ -22,8 +25,12 @@ fn restored_session_runs_after_pdump_hook_before_top_level() {
         )
         .expect("prepare portable runtime image");
     let bytes = encode_portable_snapshot(&image).expect("encode portable runtime image");
+    let resources = mounted_runtime_resources(&[
+        ("lisp/loadup.el", b"(provide 'loadup)"),
+        ("etc/NEWS", b"news"),
+    ]);
     let evaluator = RuntimeImageSource::LinearMemory(&bytes)
-        .load_for(HostProfile::WASM)
+        .load_for_with_mounted_runtime_resources(HostProfile::WASM, resources)
         .expect("restore portable runtime image");
 
     let (session, _frontend) =
