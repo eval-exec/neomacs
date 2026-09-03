@@ -6,6 +6,7 @@
 
 std::cfg_select! {
     target_family = "wasm" => {
+        mod browser_filesystem;
         mod browser_host;
         mod editor_session;
     }
