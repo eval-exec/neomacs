@@ -77,7 +77,7 @@ impl TaggedHeap {
         // entry point may flip).
         self.mark_parity = !self.mark_parity;
 
-        let clear_t0 = crate::host::time::Instant::now();
+        let clear_t0 = neomacs_host_runtime::time::Instant::now();
         // The first partition cycle runs a NORMAL full collection (so it traces
         // everything and frees load transients); promotion + blackening happen
         // at the end of that cycle (`complete_collection`). Only once
@@ -88,7 +88,7 @@ impl TaggedHeap {
         for block in &mut self.cons_blocks {
             block.clear_marks();
         }
-        let clear_cons_done = crate::host::time::Instant::now();
+        let clear_cons_done = neomacs_host_runtime::time::Instant::now();
         // -- Mapped (pdump) marks: permanent black region when partitioned --
         if !partitioned {
             for range in &mut self.mapped_cons_ranges {
@@ -104,7 +104,7 @@ impl TaggedHeap {
                 object.marked = false;
             }
         }
-        let clear_mapped_done = crate::host::time::Instant::now();
+        let clear_mapped_done = neomacs_host_runtime::time::Instant::now();
         // -- YOUNG non-cons (heap) marks: NO WALK. The parity flip at the top
         //    of this fn already un-marked the whole young `all_objects` list
         //    in O(1). The tenured old generation lives on a separate list
@@ -119,7 +119,7 @@ impl TaggedHeap {
         // resets / young non-cons segment) sized the parity mark-bit design;
         // the non-cons segment is now the flip (~0), kept as the regression
         // gauge for the removed pointer-chase walk.
-        let clear_end = crate::host::time::Instant::now();
+        let clear_end = neomacs_host_runtime::time::Instant::now();
         self.last_clear_cons_us = (clear_cons_done - clear_t0).as_micros() as u64;
         self.last_clear_mapped_us = (clear_mapped_done - clear_cons_done).as_micros() as u64;
         self.last_clear_noncons_us = (clear_end - clear_mapped_done).as_micros() as u64;
@@ -594,7 +594,7 @@ impl TaggedHeap {
         // the start/termination slot by the caller. The remembered set is
         // append-only (never cleared), so this count is the monotonic-growth
         // probe as well.
-        let seed_t0 = crate::host::time::Instant::now();
+        let seed_t0 = neomacs_host_runtime::time::Instant::now();
         self.last_remembered_seed_roots = self.mapped_remembered.len();
         self.handshake.probe_mapped_remembered = self.mapped_remembered.len();
         if self.mapped_remembered.is_empty() {
@@ -1273,7 +1273,7 @@ impl TaggedHeap {
     }
 
     pub(super) fn seed_internal_runtime_roots(&mut self) {
-        let seed_t0 = crate::host::time::Instant::now();
+        let seed_t0 = neomacs_host_runtime::time::Instant::now();
         // Static subr objects are leaked process/thread runtime objects, matching
         // GNU's static `Lisp_Subr` storage. They are not swept by this heap.
         let roots: Vec<(TaggedValue, &'static str)> = self
@@ -1328,13 +1328,13 @@ impl TaggedHeap {
 
     pub(crate) fn complete_collection(&mut self) {
         let bytes_before = self.live_bytes;
-        let t0 = crate::host::time::Instant::now();
+        let t0 = neomacs_host_runtime::time::Instant::now();
 
         // -- Mark phase: drain the gray queue using the compile-target executor.
         //    Native targets delegate to the GC thread while the mutator blocks;
         //    browser Wasm drains inline on its single editor Worker. Both are
         //    stop-the-world and own the heap exclusively. --
-        let mark_t0 = crate::host::time::Instant::now();
+        let mark_t0 = neomacs_host_runtime::time::Instant::now();
         run_stop_the_world_mark(self);
         // Queue doomed finalizers before the weak sweep (GNU
         // `queue_doomed_finalizers` runs before
@@ -1541,7 +1541,7 @@ impl TaggedHeap {
         &mut self,
         mark_us: u64,
         bytes_before: usize,
-        t0: crate::host::time::Instant,
+        t0: neomacs_host_runtime::time::Instant,
     ) {
         // Dump-partition safety gate: prove no live heap object reachable only
         // through a dumped object was left unmarked (i.e. the write barrier's
@@ -1556,7 +1556,7 @@ impl TaggedHeap {
             self.verify_incremental_tricolor();
         }
 
-        let sweep_t0 = crate::host::time::Instant::now();
+        let sweep_t0 = neomacs_host_runtime::time::Instant::now();
 
         // Unchain dead markers BEFORE `sweep_objects` frees them; the
         // chain would otherwise hold dangling pointers after the sweep.

@@ -1265,7 +1265,7 @@ impl Context {
         } else {
             String::new()
         };
-        let decode_start = trace_toplevel_bytecode.then(crate::host::time::Instant::now);
+        let decode_start = trace_toplevel_bytecode.then(neomacs_host_runtime::time::Instant::now);
 
         let bytecode_str = args[0];
         let constants_vec = self.quote_value_with_bytecode(args[1])?;
@@ -1344,7 +1344,7 @@ impl Context {
         };
 
         let mut vm = super::super::bytecode::Vm::from_context(self);
-        let exec_start = trace_toplevel_bytecode.then(crate::host::time::Instant::now);
+        let exec_start = trace_toplevel_bytecode.then(neomacs_host_runtime::time::Instant::now);
         let result = vm.execute(&bc, vec![]);
         if let Some(start) = exec_start {
             tracing::info!(

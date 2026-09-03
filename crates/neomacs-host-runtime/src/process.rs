@@ -1,4 +1,4 @@
-//! Compile-target-selected identity for the current Emacs process.
+//! Compile-target-selected identity for the current editor process.
 //!
 //! Native builds expose the operating-system process ID. A browser Worker is
 //! already an isolated editor process but has no OS PID, so its Lisp-visible
