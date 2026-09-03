@@ -240,6 +240,67 @@ jobs:
           cargo nextest run -p neovm-core --lib
           -E 'test(native_runtime_test)'
 
+  # The native Rust tests above isolate backend/thread/lifecycle failures.  A
+  # release Neomacs is still required to prove the public Lisp API, special
+  # event dispatch, timers, auto-revert, and backend agree as one system.  The
+  # Linux release runtime is already built below; build only the two other
+  # native products here instead of paying for a second Linux release link.
+  file-notify-public-ert:
+    name: GNU file notification ERT (${{ matrix.label }})
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            label: macos-aarch64
+            binary: target/release/neomacs
+          - runner: windows-latest
+            label: windows-msvc-x86_64
+            binary: target/release/neomacs.exe
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      RUST_LOG: warn
+    steps:
+      - *checkout
+
+      - name: Install macOS system dependencies
+        if: runner.os == 'macOS'
+        run: brew install pkg-config
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-file-notify-ert-${{ matrix.label }}
+          cache-shared-key: ${{ matrix.label }}-release
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build fresh release runtime
+        shell: bash
+        run: cargo xtask fresh-build --release
+
+      - name: Run unchanged upstream GNU file-notify ERT suite
+        shell: bash
+        run: |
+          set -euxo pipefail
+          task_tmp="$PWD/target/file-notify-ert-tmp"
+          mkdir -p "$task_tmp"
+          if [ "$RUNNER_OS" = Windows ]; then
+            task_tmp="$(cygpath -w "$task_tmp")"
+            export REMOTE_TEMPORARY_FILE_DIRECTORY=NUL
+            export TEMP="$task_tmp"
+            export TMP="$task_tmp"
+          else
+            export REMOTE_TEMPORARY_FILE_DIRECTORY=/dev/null
+          fi
+          export TMPDIR="$task_tmp"
+          "${{ matrix.binary }}" --batch -Q \
+            -l test/lisp/filenotify-tests.el \
+            -f ert-run-tests-batch-and-exit
+
   linux-no-gstreamer-startup:
     name: startup without GStreamer (linux x86_64)
     if: github.event_name != 'schedule'
@@ -408,6 +469,16 @@ jobs:
           --batch -Q
           -l test/src/sqlite-tests.el
           -f ert-run-tests-batch-and-exit
+
+      - name: Run unchanged upstream GNU file-notify ERT suite
+        env:
+          REMOTE_TEMPORARY_FILE_DIRECTORY: /dev/null
+        run: |
+          mkdir -p "$PWD/target/file-notify-ert-tmp"
+          TMPDIR="$PWD/target/file-notify-ert-tmp" \
+            target/release/neomacs --batch -Q \
+              -l test/lisp/filenotify-tests.el \
+              -f ert-run-tests-batch-and-exit
 
       # The standing detector for the missing-GC-root class (DIVERGENCES.md
       # 161/162). This collector is precise, so a Lisp value that rides Rust
