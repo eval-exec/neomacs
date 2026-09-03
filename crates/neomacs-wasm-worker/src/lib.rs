@@ -42,6 +42,9 @@ pub extern "C" fn neomacs_wasm_worker_probe(timeout_milliseconds: f64) -> u32 {
 #[cfg(target_family = "wasm")]
 #[unsafe(no_mangle)]
 pub extern "C" fn neomacs_wasm_worker_run() -> u32 {
+    std::panic::set_hook(Box::new(|panic| {
+        browser_host::report_failure(&format!("editor Worker panicked: {panic}"));
+    }));
     match editor_session::run() {
         Ok(exit) if exit.is_success() => {
             browser_host::report_status("editor session exited");
