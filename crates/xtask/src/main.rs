@@ -4,6 +4,7 @@ mod gc_stress;
 mod pin_reference;
 mod portable_assets;
 mod production_capabilities;
+mod wasm_package;
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
 // build generates by running one of GNU's own awk scripts.  The same file is
@@ -493,6 +494,11 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     ) {
         args.next();
         android_package::run(&repo_root, args)?;
+        return Ok(());
+    }
+    if matches!(args.peek().and_then(|arg| arg.to_str()), Some("build-wasm")) {
+        args.next();
+        wasm_package::run(&repo_root, args)?;
         return Ok(());
     }
     let options = FreshBuildOptions::parse(repo_root, args)?;
@@ -4747,6 +4753,7 @@ Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [-
        cargo xtask package-portable-assets --portable-runtime-image PATH --output-dir DIR [--runtime-root DIR]
        cargo xtask check-dependency-coherence
        cargo xtask verify-android-apk --apk PATH --portable-assets DIR [--android-sdk DIR]
+       cargo xtask build-wasm --portable-assets DIR --output-dir DIR [--skip-build]
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
        cargo xtask perf compare SCENARIO --baseline-editor PATH --candidate-editor PATH [--samples N>=3]
@@ -4846,3 +4853,7 @@ Environment:
 #[cfg(test)]
 #[path = "main_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "wasm_package_test.rs"]
+mod wasm_package_tests;

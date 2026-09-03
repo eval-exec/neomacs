@@ -319,6 +319,8 @@ static_assertions = "1.1"
 which = "7.0"
 bindgen = "0.72"
 pkg-config = "0.3"
+wasm-bindgen = "=0.2.127"
+wasm-bindgen-cli-support = "=0.2.127"
 
 # OS pipe
 os_pipe = "1.2.3"
