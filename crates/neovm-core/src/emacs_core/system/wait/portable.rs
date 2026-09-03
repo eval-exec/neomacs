@@ -14,6 +14,10 @@
 //! `thread::sleep` abort loudly rather than returning fake progress, which is
 //! the intended failure mode until that adapter exists.
 
+#[path = "host_input.rs"]
+mod host_input;
+pub use host_input::{HostInputWaitBackend, HostInputWaitError};
+
 use std::time::{Duration, Instant};
 
 use crate::emacs_core::error::Flow;

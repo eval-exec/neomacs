@@ -3,8 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
-use neovm_core::emacs_core::{Context, format_eval_result};
-use neovm_core::keyboard::{HostInputWaitBackend, HostInputWaitError, InputEvent, KeyEvent};
+
+use crate::emacs_core::wait::{HostInputWaitBackend, HostInputWaitError};
+use crate::emacs_core::{Context, format_eval_result};
+use crate::keyboard::{InputEvent, KeyEvent};
 
 struct OneShotHostInputWait {
     input: Sender<InputEvent>,
