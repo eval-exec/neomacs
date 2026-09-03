@@ -2869,7 +2869,7 @@ fn presentation_retirement_does_not_preempt_timer_batches() {
     ev.input_rx = Some(rx);
 
     let outcome = ev
-        .wait_for_command_input(Some(std::time::Instant::now() + Duration::from_millis(50)))
+        .wait_for_command_input(Some(crate::host_time::Instant::now() + Duration::from_millis(50)))
         .expect("wait should reach its deadline");
 
     assert_eq!(
@@ -18241,7 +18241,7 @@ fn jit_bench_min(
     );
     let mut best = std::time::Duration::MAX;
     for _ in 0..iters {
-        let t = std::time::Instant::now();
+        let t = crate::host_time::Instant::now();
         let r = ev
             .funcall_general_untraced(f, vec![Value::make_int(arg)])
             .unwrap();
@@ -18588,7 +18588,7 @@ fn aot_bench_compute_loop() {
     let aot_min = {
         let mut best = std::time::Duration::MAX;
         for _ in 0..9 {
-            let t = std::time::Instant::now();
+            let t = crate::host_time::Instant::now();
             let r = crate::emacs_core::jit::cache::try_run_compiled(
                 ctx,
                 &aot_fn,
@@ -18768,7 +18768,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
         );
         let mut best = std::time::Duration::MAX;
         for _ in 0..iters {
-            let t = std::time::Instant::now();
+            let t = crate::host_time::Instant::now();
             let r = ev.funcall_general_untraced(f, vec![]).unwrap();
             best = best.min(t.elapsed());
             assert_eq!(r.bits(), want.bits());
@@ -18862,7 +18862,7 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
     let bench = |ev: &mut Context, f: Value, want: Value, iters: u32| -> std::time::Duration {
         let mut best = std::time::Duration::MAX;
         for _ in 0..iters {
-            let t = std::time::Instant::now();
+            let t = crate::host_time::Instant::now();
             let r = ev
                 .funcall_general_untraced(f, vec![Value::make_int(n)])
                 .unwrap();
@@ -19043,7 +19043,7 @@ fn aot_bench_real_algorithm() {
             let aot_min = {
                 let mut best = std::time::Duration::MAX;
                 for _ in 0..9 {
-                    let t = std::time::Instant::now();
+                    let t = crate::host_time::Instant::now();
                     let mut acc = 0i64;
                     for _ in 0..reps {
                         for &n in calls {
@@ -19066,7 +19066,7 @@ fn aot_bench_real_algorithm() {
             let int_min = {
                 let mut best = std::time::Duration::MAX;
                 for _ in 0..9 {
-                    let t = std::time::Instant::now();
+                    let t = crate::host_time::Instant::now();
                     let mut acc = 0i64;
                     for _ in 0..reps {
                         for &n in calls {
@@ -19498,7 +19498,7 @@ fn vm_bench_min_call(
     );
     let mut best = std::time::Duration::MAX;
     for _ in 0..iters {
-        let t = std::time::Instant::now();
+        let t = crate::host_time::Instant::now();
         let r = ev
             .funcall_general_untraced(f, vec![Value::make_int(n)])
             .unwrap();
@@ -22907,7 +22907,7 @@ fn bench_jit_vs_vm_loop() {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use crate::emacs_core::value::LambdaParams;
-    use std::time::Instant;
+    use crate::host_time::Instant;
 
     // sum := 0; i := 0; while (i < N) { sum := sum + i; i := i + 1 }; return sum
     //
@@ -23083,7 +23083,7 @@ fn jit_bench_threshold_economics() {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use crate::emacs_core::value::LambdaParams;
-    use std::time::Instant;
+    use crate::host_time::Instant;
 
     const N: i64 = 100;
     let ops = vec![
@@ -23874,7 +23874,7 @@ fn alloc_class_profile(pdump: bool) {
     )
     .expect("probe setup");
     alloc_probe::reset();
-    let churn_t0 = std::time::Instant::now();
+    let churn_t0 = crate::host_time::Instant::now();
     for _ in 0..100 {
         ev.eval_str("(drain-probe--step 200)").expect("churn step");
     }
@@ -23896,7 +23896,7 @@ fn alloc_class_profile(pdump: bool) {
     );
     ev.eval_str(&defun).expect("defun sm-work");
     alloc_probe::reset();
-    let bc_t0 = std::time::Instant::now();
+    let bc_t0 = crate::host_time::Instant::now();
     for _ in 0..3 {
         ev.eval_str(&defun).expect("re-defun sm-work");
         ev.eval_str("(progn (byte-compile 'sm-work) t)")

@@ -22,6 +22,8 @@ use neovm_core::window::FrameDisplayIdentity;
 use crate::browser_host::{self, HostWake};
 
 pub(crate) fn run() -> Result<EditorSessionExit, String> {
+    neovm_core::host_time::install_monotonic_clock(browser_host::monotonic_time_milliseconds)
+        .map_err(|error| error.to_string())?;
     browser_host::report_status("restoring portable runtime image");
     let startup = decode_startup(browser_host::startup_bytes()?)?;
     let runtime_image = browser_host::runtime_image_bytes()?;
