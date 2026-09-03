@@ -12,7 +12,7 @@ use neomacs_display_protocol::types::Color;
 /// Emit cursor glow effect vertices.
 pub(super) fn emit_cursor_glow(
     ctx: &EffectCtx,
-    cursor_pulse_start: &crate::clock::Instant,
+    cursor_pulse_start: &neomacs_host_runtime::time::Instant,
 ) -> Vec<RectVertex> {
     if !ctx.effects.cursor_glow.enabled || !ctx.cursor_visible {
         return Vec::new();
@@ -108,12 +108,12 @@ pub(super) fn emit_cursor_crosshair(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_magnetism(
     ctx: &EffectCtx,
-    entries: &mut Vec<(f32, f32, crate::clock::Instant)>,
+    entries: &mut Vec<(f32, f32, neomacs_host_runtime::time::Instant)>,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.cursor_magnetism.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let dur = std::time::Duration::from_millis(ctx.effects.cursor_magnetism.duration_ms as u64);
 
     // Detect cursor jump (large movement) and record
@@ -210,7 +210,7 @@ pub(super) fn emit_line_number_pulse(ctx: &EffectCtx) -> (Vec<RectVertex>, bool)
     let mut verts = Vec::new();
     let mut needs_redraw = false;
     if let Some(anim) = ctx.animated_cursor {
-        let now = crate::clock::Instant::now();
+        let now = neomacs_host_runtime::time::Instant::now();
         let cycle = ctx.effects.line_number_pulse.cycle_ms as f64 / 1000.0;
         let elapsed = now.elapsed().as_secs_f64();
         let phase = (elapsed % cycle) / cycle;
@@ -270,12 +270,12 @@ pub(super) fn emit_cursor_spotlight(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_comet(
     ctx: &EffectCtx,
-    positions: &mut Vec<(f32, f32, f32, f32, crate::clock::Instant)>,
+    positions: &mut Vec<(f32, f32, f32, f32, neomacs_host_runtime::time::Instant)>,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.cursor_comet.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let fade_dur = std::time::Duration::from_millis(ctx.effects.cursor_comet.fade_ms as u64);
 
     // Record cursor position
@@ -335,7 +335,7 @@ pub(super) fn emit_cursor_particles(
     if !ctx.effects.cursor_particles.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let lifetime =
         std::time::Duration::from_millis(ctx.effects.cursor_particles.lifetime_ms as u64);
 
@@ -412,7 +412,9 @@ pub(super) fn emit_matrix_rain(
     let fw = ctx.surface_width as f32 / ctx.scale_factor;
     let fh = ctx.surface_height as f32 / ctx.scale_factor;
     let dt = 1.0 / 60.0_f32;
-    let now_ns = crate::clock::Instant::now().elapsed().subsec_nanos() as u64;
+    let now_ns = neomacs_host_runtime::time::Instant::now()
+        .elapsed()
+        .subsec_nanos() as u64;
 
     // Spawn columns if needed
     while columns.len() < ctx.effects.matrix_rain.column_count as usize {
@@ -559,7 +561,7 @@ pub(super) fn emit_cursor_ripple_wave(
     if !ctx.effects.cursor_ripple_wave.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
 
     // Detect cursor movement and spawn ripple
     if let Some(anim) = ctx.animated_cursor {
@@ -637,7 +639,7 @@ pub(super) fn emit_cursor_lighthouse_beam(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = crate::clock::Instant::now()
+        let now = neomacs_host_runtime::time::Instant::now()
             .duration_since(ctx.aurora_start)
             .as_secs_f32();
         let center_x = anim.x + anim.width / 2.0;
@@ -676,7 +678,7 @@ pub(super) fn emit_cursor_sonar_ping(
     if !ctx.effects.cursor_sonar_ping.enabled {
         return (verts, needs_redraw);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     entries.retain(|e| now.duration_since(e.started) < e.duration);
     let (pr, pg, pb) = ctx.effects.cursor_sonar_ping.color;
     let ring_count = ctx.effects.cursor_sonar_ping.ring_count;
@@ -721,7 +723,7 @@ pub(super) fn emit_cursor_sonar_ping(
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_lightning_bolt(
     ctx: &EffectCtx,
-    last: &mut crate::clock::Instant,
+    last: &mut neomacs_host_runtime::time::Instant,
     segments: &mut Vec<(f32, f32, f32, f32)>,
     age: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -729,7 +731,7 @@ pub(super) fn emit_lightning_bolt(
     if !ctx.effects.lightning_bolt.enabled {
         return (verts, false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let dt = now.duration_since(*last).as_secs_f32();
     *last = now;
     *age += dt;
@@ -790,7 +792,7 @@ pub(super) fn emit_cursor_orbit_particles(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = crate::clock::Instant::now()
+        let now = neomacs_host_runtime::time::Instant::now()
             .duration_since(ctx.aurora_start)
             .as_secs_f32();
         let cx = anim.x + anim.width / 2.0;
@@ -831,7 +833,7 @@ pub(super) fn emit_cursor_heartbeat_pulse(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = crate::clock::Instant::now()
+        let now = neomacs_host_runtime::time::Instant::now()
             .duration_since(ctx.aurora_start)
             .as_secs_f32();
         let cx = anim.x + anim.width / 2.0;
@@ -876,7 +878,7 @@ pub(super) fn emit_cursor_metronome_tick(
     ctx: &EffectCtx,
     last_x: &mut f32,
     last_y: &mut f32,
-    tick_start: &mut Option<crate::clock::Instant>,
+    tick_start: &mut Option<neomacs_host_runtime::time::Instant>,
 ) -> (Vec<RectVertex>, bool) {
     let mut verts = Vec::new();
     let mut needs_redraw = false;
@@ -888,7 +890,7 @@ pub(super) fn emit_cursor_metronome_tick(
         let cy = anim.y;
         // Detect cursor move
         if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-            *tick_start = Some(crate::clock::Instant::now());
+            *tick_start = Some(neomacs_host_runtime::time::Instant::now());
             *last_x = cx;
             *last_y = cy;
         }
@@ -939,7 +941,7 @@ pub(super) fn emit_cursor_radar_sweep(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = crate::clock::Instant::now()
+        let now = neomacs_host_runtime::time::Instant::now()
             .duration_since(ctx.aurora_start)
             .as_secs_f32();
         let cx = anim.x + anim.width / 2.0;
@@ -996,7 +998,7 @@ pub(super) fn emit_cursor_radar_sweep(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_ripple_ring(
     ctx: &EffectCtx,
-    start: &mut Option<crate::clock::Instant>,
+    start: &mut Option<neomacs_host_runtime::time::Instant>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1010,7 +1012,7 @@ pub(super) fn emit_cursor_ripple_ring(
         let cy = anim.y + anim.height / 2.0;
         // Detect cursor move
         if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-            *start = Some(crate::clock::Instant::now());
+            *start = Some(neomacs_host_runtime::time::Instant::now());
             *last_x = cx;
             *last_y = cy;
         }
@@ -1103,7 +1105,7 @@ pub(super) fn emit_cursor_scope(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_shockwave(
     ctx: &EffectCtx,
-    start: &mut Option<crate::clock::Instant>,
+    start: &mut Option<neomacs_host_runtime::time::Instant>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1117,7 +1119,7 @@ pub(super) fn emit_cursor_shockwave(
         let cy = anim.y + anim.height / 2.0;
         // Detect cursor move
         if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-            *start = Some(crate::clock::Instant::now());
+            *start = Some(neomacs_host_runtime::time::Instant::now());
             *last_x = cx;
             *last_y = cy;
         }
@@ -1179,7 +1181,7 @@ pub(super) fn emit_cursor_gravity_well(ctx: &EffectCtx) -> Vec<RectVertex> {
         let gop = ctx.effects.cursor_gravity_well.opacity;
         let field_r = ctx.effects.cursor_gravity_well.field_radius;
         let lines = ctx.effects.cursor_gravity_well.line_count.clamp(4, 24);
-        let now = crate::clock::Instant::now()
+        let now = neomacs_host_runtime::time::Instant::now()
             .duration_since(ctx.aurora_start)
             .as_secs_f32();
         for line in 0..lines {
@@ -1210,7 +1212,7 @@ pub(super) fn emit_cursor_portal(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = crate::clock::Instant::now()
+        let now = neomacs_host_runtime::time::Instant::now()
             .duration_since(ctx.aurora_start)
             .as_secs_f32();
         let cx = anim.x + anim.width / 2.0;
@@ -1252,7 +1254,7 @@ pub(super) fn emit_cursor_portal(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_bubble(
     ctx: &EffectCtx,
-    spawn_time: &mut Option<crate::clock::Instant>,
+    spawn_time: &mut Option<neomacs_host_runtime::time::Instant>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1266,7 +1268,7 @@ pub(super) fn emit_cursor_bubble(
         let cy = anim.y + anim.height / 2.0;
         // Detect cursor move
         if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-            *spawn_time = Some(crate::clock::Instant::now());
+            *spawn_time = Some(neomacs_host_runtime::time::Instant::now());
             *last_x = cx;
             *last_y = cy;
         }
@@ -1317,7 +1319,7 @@ pub(super) fn emit_cursor_bubble(
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_firework(
     ctx: &EffectCtx,
-    start: &mut Option<crate::clock::Instant>,
+    start: &mut Option<neomacs_host_runtime::time::Instant>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1333,7 +1335,7 @@ pub(super) fn emit_cursor_firework(
         let dx = cx - *last_x;
         let dy = cy - *last_y;
         if dx.abs() > 1.0 || dy.abs() > 1.0 {
-            *start = Some(crate::clock::Instant::now());
+            *start = Some(neomacs_host_runtime::time::Instant::now());
             *last_x = cx;
             *last_y = cy;
         }
@@ -1378,7 +1380,7 @@ pub(super) fn emit_cursor_tornado(ctx: &EffectCtx) -> Vec<RectVertex> {
     if let Some(ref anim) = *ctx.animated_cursor {
         let cx = anim.x + anim.width / 2.0;
         let cy = anim.y + anim.height / 2.0;
-        let now = crate::clock::Instant::now()
+        let now = neomacs_host_runtime::time::Instant::now()
             .duration_since(ctx.aurora_start)
             .as_secs_f32();
         let (cr, cg, cb) = ctx.effects.cursor_tornado.color;
@@ -1421,7 +1423,7 @@ pub(super) fn emit_cursor_tornado(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_lightning(
     ctx: &EffectCtx,
-    start: &mut Option<crate::clock::Instant>,
+    start: &mut Option<neomacs_host_runtime::time::Instant>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1436,7 +1438,7 @@ pub(super) fn emit_cursor_lightning(
         let dx = cx - *last_x;
         let dy = cy - *last_y;
         if dx.abs() > 1.0 || dy.abs() > 1.0 {
-            *start = Some(crate::clock::Instant::now());
+            *start = Some(neomacs_host_runtime::time::Instant::now());
             *last_x = cx;
             *last_y = cy;
         }
@@ -1494,7 +1496,7 @@ pub(super) fn emit_cursor_lightning(
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_snowflake(
     ctx: &EffectCtx,
-    start: &mut Option<crate::clock::Instant>,
+    start: &mut Option<neomacs_host_runtime::time::Instant>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1509,7 +1511,7 @@ pub(super) fn emit_cursor_snowflake(
         let dx = cx - *last_x;
         let dy = cy - *last_y;
         if dx.abs() > 1.0 || dy.abs() > 1.0 {
-            *start = Some(crate::clock::Instant::now());
+            *start = Some(neomacs_host_runtime::time::Instant::now());
             *last_x = cx;
             *last_y = cy;
         }
@@ -1565,7 +1567,7 @@ pub(super) fn emit_cursor_flame(ctx: &EffectCtx) -> Vec<RectVertex> {
     if let Some(ref anim) = *ctx.animated_cursor {
         let cx = anim.x + anim.width / 2.0;
         let cy = anim.y;
-        let now = crate::clock::Instant::now()
+        let now = neomacs_host_runtime::time::Instant::now()
             .duration_since(ctx.aurora_start)
             .as_secs_f32();
         let (cr, cg, cb) = ctx.effects.cursor_flame.color;
@@ -1602,7 +1604,7 @@ pub(super) fn emit_cursor_crystal(ctx: &EffectCtx) -> Vec<RectVertex> {
     };
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.cursor_crystal.color;
@@ -1649,7 +1651,7 @@ pub(super) fn emit_cursor_water_drop(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (wr, wg, wb) = ctx.effects.cursor_water_drop.color;
@@ -1687,7 +1689,7 @@ pub(super) fn emit_cursor_pixel_dust(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (pr, pg, pb) = ctx.effects.cursor_pixel_dust.color;
@@ -1735,7 +1737,7 @@ pub(super) fn emit_cursor_candle_flame(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (fr, fg, fb) = ctx.effects.cursor_candle_flame.color;
@@ -1795,7 +1797,7 @@ pub(super) fn emit_cursor_moth_flame(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (mr, mg, mb) = ctx.effects.cursor_moth_flame.color;
@@ -1845,7 +1847,7 @@ pub(super) fn emit_cursor_sparkler(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (sr, sg, sb) = ctx.effects.cursor_sparkler.color;
@@ -1886,7 +1888,7 @@ pub(super) fn emit_cursor_plasma_ball(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (pr, pg, pb) = ctx.effects.cursor_plasma_ball.color;
@@ -1935,7 +1937,7 @@ pub(super) fn emit_cursor_quill_pen(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (qr, qg, qb) = ctx.effects.cursor_quill_pen.color;
@@ -1993,7 +1995,7 @@ pub(super) fn emit_cursor_aurora_borealis(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (ar, ag, ab) = ctx.effects.cursor_aurora_borealis.color;
@@ -2042,7 +2044,7 @@ pub(super) fn emit_cursor_feather(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
@@ -2092,7 +2094,7 @@ pub(super) fn emit_cursor_stardust(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
@@ -2126,7 +2128,7 @@ pub(super) fn emit_cursor_compass_needle(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
@@ -2170,7 +2172,7 @@ pub(super) fn emit_cursor_galaxy(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
@@ -2206,7 +2208,7 @@ pub(super) fn emit_cursor_prism(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
@@ -2249,7 +2251,7 @@ pub(super) fn emit_cursor_moth(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
@@ -2322,11 +2324,15 @@ pub(super) fn emit_cursor_sparkle_burst(
             .wrapping_mul(31)
             .wrapping_add(cy as u32)
             .wrapping_mul(17)
-            .wrapping_add(crate::clock::Instant::now().elapsed().subsec_nanos());
+            .wrapping_add(
+                neomacs_host_runtime::time::Instant::now()
+                    .elapsed()
+                    .subsec_nanos(),
+            );
         entries.push(SparkleBurstEntry {
             cx,
             cy,
-            started: crate::clock::Instant::now(),
+            started: neomacs_host_runtime::time::Instant::now(),
             seed,
         });
         if entries.len() > 20 {
@@ -2371,7 +2377,7 @@ pub(super) fn emit_cursor_compass_rose(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
@@ -2435,7 +2441,7 @@ pub(super) fn emit_cursor_dna_helix(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = crate::clock::Instant::now()
+    let now = neomacs_host_runtime::time::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
@@ -2500,7 +2506,7 @@ pub(super) fn emit_cursor_pendulum(
     ctx: &EffectCtx,
     last_x: &mut f32,
     last_y: &mut f32,
-    swing_start: &mut Option<crate::clock::Instant>,
+    swing_start: &mut Option<neomacs_host_runtime::time::Instant>,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.cursor_pendulum.enabled || !ctx.cursor_visible {
         return (Vec::new(), false);
@@ -2513,7 +2519,7 @@ pub(super) fn emit_cursor_pendulum(
     let cy = anim.y + anim.height / 2.0;
     // Detect cursor move
     if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-        *swing_start = Some(crate::clock::Instant::now());
+        *swing_start = Some(neomacs_host_runtime::time::Instant::now());
         *last_x = cx;
         *last_y = cy;
     }
@@ -2588,13 +2594,13 @@ pub(super) fn emit_cursor_drop_shadow(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// `fade_duration` controls how long each afterimage lasts.
 pub(super) fn emit_cursor_trail_fade(
     ctx: &EffectCtx,
-    positions: &mut Vec<(f32, f32, f32, f32, crate::clock::Instant)>,
+    positions: &mut Vec<(f32, f32, f32, f32, neomacs_host_runtime::time::Instant)>,
     fade_duration: &std::time::Duration,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.cursor_trail_fade.enabled || positions.is_empty() {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let fade_dur = *fade_duration;
 
     // Remove expired positions

@@ -153,7 +153,7 @@ pub(super) fn emit_typing_heatmap(
     if !ctx.effects.typing_heatmap.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let fade_dur = std::time::Duration::from_millis(ctx.effects.typing_heatmap.fade_ms as u64);
 
     // Detect cursor movement and record heat entry
@@ -437,7 +437,7 @@ pub(super) fn emit_window_breathing_border(ctx: &EffectCtx) -> (Vec<RectVertex>,
     if !ctx.effects.breathing_border.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let cycle = ctx.effects.breathing_border.cycle_ms as f64 / 1000.0;
     let elapsed = now.elapsed().as_secs_f64();
     let phase = (elapsed % cycle) / cycle;
@@ -505,7 +505,7 @@ pub(super) fn emit_cursor_ghost(
     if !ctx.effects.cursor_ghost.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let fade_dur = std::time::Duration::from_millis(ctx.effects.cursor_ghost.fade_ms as u64);
 
     // Detect cursor movement and spawn ghost
@@ -568,7 +568,7 @@ pub(super) fn emit_edge_glow(
     if !ctx.effects.edge_glow.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     edge_glow_entries.retain(|e| now.duration_since(e.started) < e.duration);
 
     let mut verts: Vec<RectVertex> = Vec::new();
@@ -618,7 +618,7 @@ pub(super) fn emit_rain_effect(
     if !ctx.effects.rain_effect.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let fw = ctx.logical_w;
     let fh = ctx.logical_h;
     let dt = 1.0 / 60.0_f32;
@@ -674,7 +674,7 @@ pub(super) fn emit_aurora_overlay(ctx: &EffectCtx) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.aurora.enabled {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let elapsed =
         now.duration_since(ctx.aurora_start).as_secs_f64() * ctx.effects.aurora.speed as f64;
     let fw = ctx.logical_w;
@@ -821,7 +821,7 @@ pub(super) fn emit_window_mode_tint(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_focus_ring(
     ctx: &EffectCtx,
-    focus_ring_start: crate::clock::Instant,
+    focus_ring_start: neomacs_host_runtime::time::Instant,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.focus_ring.enabled {
         return (Vec::new(), false);
@@ -968,14 +968,14 @@ pub(super) fn emit_window_padding_gradient(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_border_transition(
     ctx: &EffectCtx,
-    border_transitions: &mut Vec<(i64, bool, crate::clock::Instant)>,
+    border_transitions: &mut Vec<(i64, bool, neomacs_host_runtime::time::Instant)>,
     prev_border_selected: &mut i64,
     border_transition_duration: std::time::Duration,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.border_transition.enabled || ctx.frame_glyphs.window_infos.len() <= 1 {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let (ar, ag, ab) = ctx.effects.border_transition.active_color;
     let duration = border_transition_duration;
 
@@ -1311,12 +1311,12 @@ pub(super) fn emit_focus_mode(ctx: &EffectCtx) -> Vec<RectVertex> {
 pub(super) fn emit_inactive_window_dimming(
     ctx: &EffectCtx,
     per_window_dim: &mut HashMap<i64, f32>,
-    last_dim_tick: &mut crate::clock::Instant,
+    last_dim_tick: &mut neomacs_host_runtime::time::Instant,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.inactive_dim.enabled || ctx.frame_glyphs.window_infos.len() <= 1 {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let dt = now.duration_since(*last_dim_tick).as_secs_f32().min(0.1);
     *last_dim_tick = now;
     let fade_speed = 8.0;
@@ -1437,7 +1437,7 @@ pub(super) fn emit_zen_mode(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_search_highlight(
     ctx: &EffectCtx,
-    search_pulse_start: crate::clock::Instant,
+    search_pulse_start: neomacs_host_runtime::time::Instant,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.search_pulse.enabled || ctx.effects.search_pulse.face_id == FaceId::new(0) {
         return (Vec::new(), false);
@@ -1589,13 +1589,13 @@ pub(super) fn emit_selection_glow(
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_typing_ripple(
     ctx: &EffectCtx,
-    active_ripples: &mut Vec<(f32, f32, crate::clock::Instant)>,
+    active_ripples: &mut Vec<(f32, f32, neomacs_host_runtime::time::Instant)>,
     typing_ripple_duration: f32,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.typing_ripple.enabled || active_ripples.is_empty() {
         return (Vec::new(), false);
     }
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
     let duration = typing_ripple_duration;
     let max_r = ctx.effects.typing_ripple.max_radius;
 
@@ -2328,7 +2328,7 @@ pub(super) fn emit_scroll_momentum(
     }
     let bar_w = ctx.effects.scroll_momentum.width.max(1.0);
     let mut verts: Vec<RectVertex> = Vec::new();
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
 
     for entry in active_scroll_momentums {
         let elapsed = now.duration_since(entry.started);
@@ -2427,7 +2427,7 @@ pub(super) fn emit_window_switch_fade(
         return (Vec::new(), false);
     }
     let mut verts: Vec<RectVertex> = Vec::new();
-    let now = crate::clock::Instant::now();
+    let now = neomacs_host_runtime::time::Instant::now();
 
     for fade in active_window_fades.iter() {
         let elapsed = now.duration_since(fade.started);

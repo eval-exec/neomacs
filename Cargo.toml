@@ -9,6 +9,7 @@ members = [
     "crates/neomacs-display-runtime",
     "crates/neomacs-font-materializer",
     "crates/neomacs-gui-tests",
+    "crates/neomacs-host-runtime",
     "crates/neomacs-layout-engine",
     "crates/neomacs-melpa-test-support",
     "crates/neomacs-melpa-tests",
@@ -106,6 +107,7 @@ neomacs-melpa-test-support = { path = "crates/neomacs-melpa-test-support" }
 neomacs-parity-reference = { path = "crates/neomacs-parity-reference" }
 neomacs-tui-tests = { path = "crates/neomacs-tui-tests" }
 neomacs-gui-tests = { path = "crates/neomacs-gui-tests" }
+neomacs-host-runtime = { path = "crates/neomacs-host-runtime" }
 
 # Native build glue
 glib = "0.22"

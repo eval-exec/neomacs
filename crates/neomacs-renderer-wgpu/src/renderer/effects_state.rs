@@ -33,7 +33,7 @@ impl WgpuRenderer {
             window_bounds,
             edit_y,
             initial_offset: offset,
-            started: crate::clock::Instant::now(),
+            started: neomacs_host_runtime::time::Instant::now(),
             duration: std::time::Duration::from_millis(duration_ms as u64),
         });
     }
@@ -58,7 +58,7 @@ impl WgpuRenderer {
             }
         }
         // Scroll line spacing accordion effect
-        let now = crate::clock::Instant::now();
+        let now = neomacs_host_runtime::time::Instant::now();
         for entry in &self.fx.scroll_spacing.active {
             let b = &entry.bounds;
             if gx >= b.x && gx < b.x + b.width && gy >= b.y && gy < b.y + b.height {
@@ -82,7 +82,7 @@ impl WgpuRenderer {
     }
 
     /// Trigger a cursor wake animation
-    pub fn trigger_cursor_wake(&mut self, now: crate::clock::Instant) {
+    pub fn trigger_cursor_wake(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.primary_frame_effects_mut().trigger_cursor_wake(now);
     }
 
@@ -93,7 +93,7 @@ impl WgpuRenderer {
         mode_line_height: f32,
         at_top: bool,
         at_bottom: bool,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         let duration_ms = self.effects.edge_snap.duration_ms;
         self.primary_frame_effects_mut().trigger_edge_snap(
@@ -125,7 +125,7 @@ impl WgpuRenderer {
     }
 
     /// Trigger click halo at position
-    pub fn trigger_click_halo(&mut self, x: f32, y: f32, now: crate::clock::Instant) {
+    pub fn trigger_click_halo(&mut self, x: f32, y: f32, now: neomacs_host_runtime::time::Instant) {
         let duration_ms = self.effects.click_halo.duration_ms;
         self.primary_frame_effects_mut()
             .trigger_click_halo(x, y, now, duration_ms);
@@ -137,7 +137,7 @@ impl WgpuRenderer {
         window_id: i64,
         bounds: Rect,
         delta: f32,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         // Replace existing entry for this window
         self.fx
@@ -154,7 +154,7 @@ impl WgpuRenderer {
     }
 
     /// Trigger resize padding animation
-    pub fn trigger_resize_padding(&mut self, now: crate::clock::Instant) {
+    pub fn trigger_resize_padding(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.primary_frame_effects_mut().trigger_resize_padding(now);
     }
 
@@ -175,7 +175,7 @@ impl WgpuRenderer {
     }
 
     /// Trigger a cursor error pulse
-    pub fn trigger_cursor_error_pulse(&mut self, now: crate::clock::Instant) {
+    pub fn trigger_cursor_error_pulse(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.primary_frame_effects_mut()
             .trigger_cursor_error_pulse(now);
     }
@@ -185,7 +185,7 @@ impl WgpuRenderer {
         effects: &mut RendererFrameEffects,
         x: f32,
         y: f32,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         effects.trigger_click_halo(x, y, now, self.effects.click_halo.duration_ms);
     }
@@ -197,7 +197,7 @@ impl WgpuRenderer {
         mode_line_height: f32,
         at_top: bool,
         at_bottom: bool,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         effects.trigger_edge_snap(
             bounds,
@@ -212,7 +212,7 @@ impl WgpuRenderer {
     pub fn trigger_transient_cursor_error_pulse(
         &self,
         effects: &mut RendererFrameEffects,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         effects.trigger_cursor_error_pulse(now);
     }
@@ -220,7 +220,7 @@ impl WgpuRenderer {
     pub fn trigger_transient_cursor_wake(
         &self,
         effects: &mut RendererFrameEffects,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         effects.trigger_cursor_wake(now);
     }
@@ -228,7 +228,7 @@ impl WgpuRenderer {
     pub fn trigger_transient_resize_padding(
         &self,
         effects: &mut RendererFrameEffects,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         effects.trigger_resize_padding(now);
     }
@@ -313,7 +313,7 @@ impl WgpuRenderer {
         window_id: i64,
         bounds: Rect,
         direction: i32,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         self.fx
             .scroll_momentum
@@ -367,7 +367,7 @@ impl WgpuRenderer {
         window_id: i64,
         bounds: Rect,
         at_top: bool,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         self.fx
             .edge_glow
@@ -383,7 +383,12 @@ impl WgpuRenderer {
     }
 
     /// Trigger a sonar ping at cursor position
-    pub fn trigger_sonar_ping(&mut self, cx: f32, cy: f32, now: crate::clock::Instant) {
+    pub fn trigger_sonar_ping(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        now: neomacs_host_runtime::time::Instant,
+    ) {
         self.fx.sonar_ping.entries.push(SonarPingEntry {
             cx,
             cy,
@@ -399,7 +404,7 @@ impl WgpuRenderer {
         if !self.effects.mode_line_transition.enabled || self.fx.mode_line_fade.active.is_empty() {
             return 1.0;
         }
-        let now = crate::clock::Instant::now();
+        let now = neomacs_host_runtime::time::Instant::now();
         for entry in &self.fx.mode_line_fade.active {
             if gx >= entry.bounds_x
                 && gx < entry.bounds_x + entry.bounds_w
@@ -422,7 +427,7 @@ impl WgpuRenderer {
         &mut self,
         window_id: i64,
         bounds: Rect,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         // Replace existing animation for this window
         self.fx
@@ -445,7 +450,7 @@ impl WgpuRenderer {
         if !self.effects.text_fade_in.enabled || self.fx.text_fade.active.is_empty() {
             return 1.0;
         }
-        let now = crate::clock::Instant::now();
+        let now = neomacs_host_runtime::time::Instant::now();
         for entry in &self.fx.text_fade.active {
             let b = &entry.bounds;
             if gx >= b.x && gx < b.x + b.width && gy >= b.y && gy < b.y + b.height {
@@ -467,7 +472,7 @@ impl WgpuRenderer {
         window_id: i64,
         bounds: Rect,
         direction: i32,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
     ) {
         // Replace existing animation for this window
         self.fx
@@ -510,7 +515,7 @@ impl WgpuRenderer {
         self.fx.window_fade.active.push(WindowFadeEntry {
             window_id,
             bounds,
-            started: crate::clock::Instant::now(),
+            started: neomacs_host_runtime::time::Instant::now(),
             duration: std::time::Duration::from_millis(
                 self.effects.window_switch_fade.duration_ms as u64,
             ),
@@ -573,7 +578,13 @@ struct RendererFrameEffectsRef<'a> {
 }
 
 impl RendererFrameEffectsRef<'_> {
-    fn trigger_click_halo(&mut self, x: f32, y: f32, now: crate::clock::Instant, duration_ms: u32) {
+    fn trigger_click_halo(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: neomacs_host_runtime::time::Instant,
+        duration_ms: u32,
+    ) {
         self.renderer.fx.click_halo.halos.push(ClickHaloEntry {
             x,
             y,
@@ -588,7 +599,7 @@ impl RendererFrameEffectsRef<'_> {
         mode_line_height: f32,
         at_top: bool,
         at_bottom: bool,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
         duration_ms: u32,
     ) {
         self.renderer.fx.edge_snap.snaps.push(EdgeSnapEntry {
@@ -601,24 +612,24 @@ impl RendererFrameEffectsRef<'_> {
         });
     }
 
-    fn trigger_cursor_error_pulse(&mut self, now: crate::clock::Instant) {
+    fn trigger_cursor_error_pulse(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.renderer.fx.error_pulse.started = Some(now);
     }
 
-    fn trigger_cursor_wake(&mut self, now: crate::clock::Instant) {
+    fn trigger_cursor_wake(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.renderer.fx.cursor_wake.started = Some(now);
     }
 
-    fn trigger_resize_padding(&mut self, now: crate::clock::Instant) {
+    fn trigger_resize_padding(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.renderer.fx.resize_padding.started = Some(now);
     }
 
     fn spawn_ripple(&mut self, cx: f32, cy: f32) {
-        self.renderer
-            .fx
-            .typing_ripple
-            .active
-            .push((cx, cy, crate::clock::Instant::now()));
+        self.renderer.fx.typing_ripple.active.push((
+            cx,
+            cy,
+            neomacs_host_runtime::time::Instant::now(),
+        ));
     }
 
     fn record_cursor_trail(&mut self, x: f32, y: f32, w: f32, h: f32, length: usize) {
@@ -629,7 +640,7 @@ impl RendererFrameEffectsRef<'_> {
         }
         trail
             .positions
-            .push((x, y, w, h, crate::clock::Instant::now()));
+            .push((x, y, w, h, neomacs_host_runtime::time::Instant::now()));
         trail.last_pos = (x, y);
         while trail.positions.len() > length {
             trail.positions.remove(0);

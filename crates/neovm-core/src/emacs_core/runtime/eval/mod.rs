@@ -1224,7 +1224,7 @@ pub(crate) struct GnuTimerTimestamp {
 
 impl GnuTimerTimestamp {
     pub(crate) fn now() -> Self {
-        let (secs, usecs) = match crate::host::time::wall_time_since_unix_epoch() {
+        let (secs, usecs) = match neomacs_host_runtime::time::wall_time_since_unix_epoch() {
             Ok(dur) => (dur.as_secs() as i64, dur.subsec_micros() as i64),
             Err(err) => {
                 let dur = err.duration();
@@ -1814,7 +1814,7 @@ fn collect_thread_local_gc_roots(
     ) {
         // GC handshake instrumentation: per-side-table build cost + volume
         // (the JIT reloc walk in particular scales with the COMPILED cache).
-        let t0 = crate::host::time::Instant::now();
+        let t0 = neomacs_host_runtime::time::Instant::now();
         let mut group = Vec::new();
         collect(&mut group);
         stats.push((origin, t0.elapsed().as_micros() as u64, group.len()));
@@ -1903,7 +1903,7 @@ fn collect_thread_local_gc_roots(
     collect_group(roots, "symbol-name-thread-local", stats, |group| {
         super::intern::collect_symbol_name_gc_roots(group, heap_id)
     });
-    let scratch_t0 = crate::host::time::Instant::now();
+    let scratch_t0 = neomacs_host_runtime::time::Instant::now();
     let mut scratch_count = 0usize;
     SCRATCH_GC_ROOTS.with(|scratch| {
         let scratch = scratch.borrow();

@@ -12,7 +12,7 @@ fn make_ctx<'a>(effects: &'a EffectsConfig, fgb: &'a FrameGlyphBuffer) -> Effect
         mouse_pos: (0.0, 0.0),
         surface_width: 800,
         surface_height: 600,
-        aurora_start: crate::clock::Instant::now(),
+        aurora_start: neomacs_host_runtime::time::Instant::now(),
         scale_factor: 1.0,
         logical_w: 800.0,
         logical_h: 600.0,

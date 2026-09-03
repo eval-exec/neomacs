@@ -19,7 +19,7 @@ fn make_ctx<'a>(
         mouse_pos: (400.0, 300.0),
         surface_width: 800,
         surface_height: 600,
-        aurora_start: crate::clock::Instant::now(),
+        aurora_start: neomacs_host_runtime::time::Instant::now(),
         scale_factor: 1.0,
         logical_w: 800.0,
         logical_h: 600.0,
@@ -122,7 +122,7 @@ fn test_cursor_glow_disabled() {
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
-    let cursor_pulse_start = crate::clock::Instant::now();
+    let cursor_pulse_start = neomacs_host_runtime::time::Instant::now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     assert_eq!(verts.len(), 0, "disabled glow should produce no vertices");
@@ -137,7 +137,7 @@ fn test_cursor_glow_cursor_not_visible() {
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, false);
-    let cursor_pulse_start = crate::clock::Instant::now();
+    let cursor_pulse_start = neomacs_host_runtime::time::Instant::now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     assert_eq!(verts.len(), 0, "invisible cursor should produce no glow");
@@ -152,7 +152,7 @@ fn test_cursor_glow_no_cursor() {
     let anim_cursor = None;
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
-    let cursor_pulse_start = crate::clock::Instant::now();
+    let cursor_pulse_start = neomacs_host_runtime::time::Instant::now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     assert_eq!(verts.len(), 0, "no cursor should produce no glow");
@@ -170,7 +170,7 @@ fn test_cursor_glow_with_animated_cursor() {
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
-    let cursor_pulse_start = crate::clock::Instant::now();
+    let cursor_pulse_start = neomacs_host_runtime::time::Instant::now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
 
@@ -196,7 +196,7 @@ fn test_cursor_glow_with_pulse() {
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
-    let cursor_pulse_start = crate::clock::Instant::now();
+    let cursor_pulse_start = neomacs_host_runtime::time::Instant::now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
 
@@ -376,7 +376,7 @@ fn test_cursor_magnetism_expired_entries_pruned() {
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
 
     // Add an old entry at a different position
-    let old_time = crate::clock::Instant::now() - std::time::Duration::from_secs(10);
+    let old_time = neomacs_host_runtime::time::Instant::now() - std::time::Duration::from_secs(10);
     let mut entries = vec![(50.0, 50.0, old_time)];
 
     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -586,7 +586,7 @@ fn test_cursor_trail_fade_prunes_old_positions() {
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
 
     // Add old position
-    let old_time = crate::clock::Instant::now() - std::time::Duration::from_secs(10);
+    let old_time = neomacs_host_runtime::time::Instant::now() - std::time::Duration::from_secs(10);
     let mut positions = vec![(50.0, 50.0, 10.0, 20.0, old_time)];
     let fade_dur = std::time::Duration::from_millis(100);
 
@@ -623,7 +623,7 @@ fn test_all_effects_produce_valid_vertices() {
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
 
     // Test cursor_glow
-    let cursor_pulse_start = crate::clock::Instant::now();
+    let cursor_pulse_start = neomacs_host_runtime::time::Instant::now();
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     validate_vertex_count(&verts);
     validate_vertices(&verts);
@@ -652,7 +652,7 @@ fn test_effects_respect_cursor_visible_flag() {
     // Test with cursor_visible = false
     let ctx = make_ctx(&config, &fgb, &anim_cursor, false);
 
-    let cursor_pulse_start = crate::clock::Instant::now();
+    let cursor_pulse_start = neomacs_host_runtime::time::Instant::now();
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     assert_eq!(verts.len(), 0, "glow should respect cursor_visible=false");
 
@@ -671,7 +671,7 @@ fn test_cursor_glow_layer_count_calculation() {
 
     let fgb = FrameGlyphBuffer::default();
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
-    let cursor_pulse_start = crate::clock::Instant::now();
+    let cursor_pulse_start = neomacs_host_runtime::time::Instant::now();
 
     // Test different radius values
     for radius in [10.0_f32, 20.0, 30.0, 50.0, 100.0] {

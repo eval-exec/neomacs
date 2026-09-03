@@ -4207,9 +4207,9 @@ fn pgo_atomic_place(
 ) -> Result<std::path::PathBuf, CompileError> {
     use std::sync::atomic::Ordering;
     let final_path = pgo_final_path(dir, content_hash);
-    let pid = crate::host::process::id();
+    let pid = neomacs_host_runtime::process::id();
     let ctr = PGO_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = crate::host::time::wall_time_since_unix_epoch()
+    let nanos = neomacs_host_runtime::time::wall_time_since_unix_epoch()
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let tmp_path = dir.join(format!(

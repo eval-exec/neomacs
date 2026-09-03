@@ -1701,8 +1701,8 @@ fn emacs_seed_random(seed: &[u8]) {
 }
 
 fn emacs_init_random() {
-    let seed = crate::host::process::id()
-        ^ (crate::host::time::wall_time_since_unix_epoch()
+    let seed = neomacs_host_runtime::process::id()
+        ^ (neomacs_host_runtime::time::wall_time_since_unix_epoch()
             .map(|d| (d.as_secs() as u32) ^ d.subsec_nanos())
             .unwrap_or(0));
     emacs_seed_random(&seed.to_ne_bytes());

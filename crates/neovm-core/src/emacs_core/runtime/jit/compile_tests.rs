@@ -3710,7 +3710,7 @@ fn jit_matches_interpreter_with_args() {
 fn jit_bench_countdown_loop() {
     use crate::emacs_core::bytecode::Vm;
     use crate::emacs_core::eval::Context;
-    use crate::host::time::Instant;
+    use neomacs_host_runtime::time::Instant;
 
     // (lambda (n) (while (> n 0) (setq n (1- n))) n)
     let ops = [

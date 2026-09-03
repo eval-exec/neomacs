@@ -1,0 +1,13 @@
+[package]
+name = "neomacs-host-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Compile-target-selected host services shared by Neomacs runtimes"
+
+[dependencies]
+
+[lints]
+workspace = true

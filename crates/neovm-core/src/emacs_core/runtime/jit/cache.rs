@@ -16,7 +16,7 @@
 //!   dead functions linger until thread exit (a bounded leak), never a
 //!   use-after-free.
 
-use crate::host::time::Instant;
+use neomacs_host_runtime::time::Instant;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;

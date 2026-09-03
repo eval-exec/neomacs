@@ -197,7 +197,7 @@ pub struct WgpuRenderer {
     /// target presentation time). Set by the runtime before each render so
     /// time-driven effects sample one consistent instant instead of reading
     /// the wall clock mid-draw.
-    pub(super) frame_sample_time: crate::clock::Instant,
+    pub(super) frame_sample_time: neomacs_host_runtime::time::Instant,
 }
 
 impl WgpuRenderer {
@@ -1176,7 +1176,7 @@ impl WgpuRenderer {
             ambient: AmbientClocks::default(),
             row_reuse: row_reuse::RowReuseCache::default(),
             glyph_stats: GlyphRenderStats::new(),
-            frame_sample_time: crate::clock::Instant::now(),
+            frame_sample_time: neomacs_host_runtime::time::Instant::now(),
         }
     }
 
@@ -1342,7 +1342,7 @@ impl WgpuRenderer {
 
     /// Set the absolute time this frame's animation samples target
     /// (the frame tick's target presentation time).
-    pub fn set_frame_sample_time(&mut self, at: crate::clock::Instant) {
+    pub fn set_frame_sample_time(&mut self, at: neomacs_host_runtime::time::Instant) {
         self.frame_sample_time = at;
     }
 

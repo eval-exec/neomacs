@@ -1,8 +1,8 @@
 use super::*;
-use crate::clock::Instant;
 use crate::effect_config::EffectsConfig;
 use neomacs_display_protocol::frame_glyphs::{FrameGlyphBuffer, WindowInfo};
 use neomacs_display_protocol::types::Rect;
+use neomacs_host_runtime::time::Instant;
 
 /// Helper to create a test EffectCtx
 fn test_ctx<'a>(effects: &'a EffectsConfig, frame_glyphs: &'a FrameGlyphBuffer) -> EffectCtx<'a> {

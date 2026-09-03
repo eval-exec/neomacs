@@ -1551,7 +1551,7 @@ impl WgpuRenderer {
                         bounds: info.bounds,
                         old_text,
                         new_text: new_text.clone(),
-                        started: crate::clock::Instant::now(),
+                        started: neomacs_host_runtime::time::Instant::now(),
                         duration: std::time::Duration::from_millis(
                             self.effects.title_fade.duration_ms as u64,
                         ),

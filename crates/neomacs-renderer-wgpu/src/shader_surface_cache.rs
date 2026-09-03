@@ -12,7 +12,7 @@
 //! view resumes the clock. This is deliberately stricter than video's
 //! process-wide demand.
 
-use crate::clock::Instant;
+use neomacs_host_runtime::time::Instant;
 use std::collections::HashMap;
 use std::time::Duration;
 

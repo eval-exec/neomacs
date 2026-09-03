@@ -36,7 +36,7 @@ simplecss.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-font-materializer.workspace = true
 neomacs-layout-engine.workspace = true
-neovm-core.workspace = true
+neomacs-host-runtime.workspace = true
 neomacs-video = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
