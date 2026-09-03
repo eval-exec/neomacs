@@ -11,5 +11,13 @@ description = "Evaluator Worker artifact for Neomacs WebAssembly"
 name = "neomacs_wasm_worker"
 crate-type = ["cdylib", "rlib"]
 
+[dependencies]
+ciborium.workspace = true
+neomacs-app.workspace = true
+neomacs-layout-engine.workspace = true
+neomacs-wasm-protocol.workspace = true
+neovm-core.workspace = true
+serde_json.workspace = true
+
 [lints]
 workspace = true
