@@ -161,6 +161,14 @@ async function start() {
     type: "start",
     wasmUrl: new URL("./neomacs_wasm_worker.wasm", import.meta.url).href,
     runtimeImageUrl: new URL("./assets/neomacs.portable", import.meta.url).href,
+    runtimeResourceBundleUrl: new URL(
+      "./assets/neomacs-runtime.bundle",
+      import.meta.url,
+    ).href,
+    runtimeResourceIdUrl: new URL(
+      "./assets/neomacs-runtime.sha256",
+      import.meta.url,
+    ).href,
     mailbox,
     startup: {
       protocol_version: worker_protocol_version(),

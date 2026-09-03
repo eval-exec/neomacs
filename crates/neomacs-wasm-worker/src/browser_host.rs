@@ -7,6 +7,8 @@ use neomacs_wasm_protocol::InputBatchSequence;
 const MAX_STARTUP_BYTES: usize = 64 * 1024;
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_RUNTIME_IMAGE_BYTES: usize = 512 * 1024 * 1024;
+const MAX_RUNTIME_RESOURCE_BUNDLE_BYTES: usize = 512 * 1024 * 1024;
+const MAX_RUNTIME_RESOURCE_ID_BYTES: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HostWake {
@@ -22,6 +24,10 @@ unsafe extern "C" {
     safe fn copy_startup(destination: *mut u8, capacity: u32) -> u32;
     safe fn runtime_image_len() -> u32;
     safe fn copy_runtime_image(destination: *mut u8, capacity: u32) -> u32;
+    safe fn runtime_resource_bundle_len() -> u32;
+    safe fn copy_runtime_resource_bundle(destination: *mut u8, capacity: u32) -> u32;
+    safe fn runtime_resource_id_len() -> u32;
+    safe fn copy_runtime_resource_id(destination: *mut u8, capacity: u32) -> u32;
     safe fn input_len() -> u32;
     safe fn copy_input(destination: *mut u8, capacity: u32) -> u32;
     #[link_name = "acknowledge_input"]
@@ -55,6 +61,24 @@ pub(crate) fn runtime_image_bytes() -> Result<Vec<u8>, String> {
         runtime_image_len(),
         MAX_RUNTIME_IMAGE_BYTES,
         |buffer| copy_runtime_image(buffer.as_mut_ptr(), buffer.len() as u32),
+    )
+}
+
+pub(crate) fn runtime_resource_bundle_bytes() -> Result<Vec<u8>, String> {
+    copy_host_bytes(
+        "runtime resource bundle",
+        runtime_resource_bundle_len(),
+        MAX_RUNTIME_RESOURCE_BUNDLE_BYTES,
+        |buffer| copy_runtime_resource_bundle(buffer.as_mut_ptr(), buffer.len() as u32),
+    )
+}
+
+pub(crate) fn runtime_resource_id_bytes() -> Result<Vec<u8>, String> {
+    copy_host_bytes(
+        "runtime resource bundle ID",
+        runtime_resource_id_len(),
+        MAX_RUNTIME_RESOURCE_ID_BYTES,
+        |buffer| copy_runtime_resource_id(buffer.as_mut_ptr(), buffer.len() as u32),
     )
 }
 
