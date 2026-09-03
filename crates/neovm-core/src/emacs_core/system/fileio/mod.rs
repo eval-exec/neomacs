@@ -5,8 +5,10 @@
 
 mod binary_mode;
 pub(crate) mod file_error_class;
+mod runtime_resources;
 
 pub(crate) use binary_mode::builtin_set_binary_mode;
+pub use runtime_resources::RuntimeResourceStore;
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
