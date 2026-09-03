@@ -181,14 +181,23 @@ impl EditorFileSystem for BrowserOpfsFileSystem {
     }
 
     fn access(&self, path: &Path, mode: AccessMode) -> bool {
-        let Ok(metadata) = self.metadata(path, true) else {
-            return false;
-        };
-        match mode {
-            AccessMode::Exists | AccessMode::Read | AccessMode::Write => true,
-            AccessMode::Execute | AccessMode::ReadAndSearch => {
-                metadata.kind == FileEntryKind::Directory
+        match self.metadata(path, true) {
+            Ok(metadata) => match mode {
+                AccessMode::Exists | AccessMode::Read | AccessMode::WriteOrCreate => true,
+                AccessMode::Execute | AccessMode::ReadAndSearch => {
+                    metadata.kind == FileEntryKind::Directory
+                }
+            },
+            Err(error)
+                if error.kind() == ErrorKind::NotFound
+                    && mode == AccessMode::WriteOrCreate =>
+            {
+                path.parent().is_some_and(|parent| {
+                    self.metadata(parent, true)
+                        .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory)
+                })
             }
+            Err(_) => false,
         }
     }
 
