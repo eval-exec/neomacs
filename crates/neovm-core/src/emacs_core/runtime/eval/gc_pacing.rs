@@ -534,6 +534,18 @@ impl Context {
         self.runtime_resource_store.as_deref()
     }
 
+    /// Replace the target-default mutable filesystem before editor startup.
+    pub fn install_editor_file_system(
+        &mut self,
+        filesystem: Box<dyn crate::emacs_core::fileio::EditorFileSystem>,
+    ) {
+        self.editor_file_system = filesystem;
+    }
+
+    pub(crate) fn editor_file_system(&self) -> &dyn crate::emacs_core::fileio::EditorFileSystem {
+        self.editor_file_system.as_ref()
+    }
+
     pub(crate) fn has_host_input_wait_backend(&self) -> bool {
         self.host_input_wait_backend.is_some()
     }

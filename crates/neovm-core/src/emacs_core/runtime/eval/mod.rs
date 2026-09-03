@@ -2834,6 +2834,10 @@ pub struct Context {
     /// embedded product rather than a native filesystem.
     pub(crate) runtime_resource_store:
         Option<Box<dyn crate::emacs_core::fileio::RuntimeResourceStore>>,
+    /// Host-selected mutable filesystem used by synchronous Lisp file
+    /// primitives. The compile target supplies the native default; sandboxed
+    /// products replace it once with their mounted adapter before startup.
+    pub(crate) editor_file_system: Box<dyn crate::emacs_core::fileio::EditorFileSystem>,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
     eval_task_rx: Option<crossbeam_channel::Receiver<EvalThreadTask>>,
