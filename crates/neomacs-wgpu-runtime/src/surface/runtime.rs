@@ -150,8 +150,12 @@ impl SurfaceRuntime {
                 apply_limit_buckets: false,
             })
             .await?;
-        let required_limits =
-            device_limits_for_backend(adapter.get_info().backend, adapter.limits());
+        let required_limits = std::cfg_select! {
+            target_family = "wasm" => {
+                browser_device_limits(adapter.get_info().backend, adapter.limits())
+            }
+            _ => { wgpu::Limits::default() }
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Neomacs portable surface device"),
@@ -356,7 +360,8 @@ impl SurfaceRuntime {
     }
 }
 
-fn device_limits_for_backend(backend: wgpu::Backend, adapter_limits: wgpu::Limits) -> wgpu::Limits {
+#[cfg(any(target_family = "wasm", test))]
+fn browser_device_limits(backend: wgpu::Backend, adapter_limits: wgpu::Limits) -> wgpu::Limits {
     let portable_limits = match backend {
         wgpu::Backend::Gl => wgpu::Limits::downlevel_webgl2_defaults(),
         _ => wgpu::Limits::default(),
@@ -366,7 +371,7 @@ fn device_limits_for_backend(backend: wgpu::Backend, adapter_limits: wgpu::Limit
 
 #[cfg(test)]
 mod tests {
-    use super::device_limits_for_backend;
+    use super::browser_device_limits;
 
     #[test]
     fn webgl_adapter_keeps_its_supported_surface_resolution() {
@@ -378,7 +383,7 @@ mod tests {
         };
 
         assert_eq!(
-            device_limits_for_backend(wgpu::Backend::Gl, adapter_limits.clone()),
+            browser_device_limits(wgpu::Backend::Gl, adapter_limits.clone()),
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits)
         );
     }
@@ -393,7 +398,7 @@ mod tests {
         };
 
         assert_eq!(
-            device_limits_for_backend(wgpu::Backend::BrowserWebGpu, adapter_limits.clone()),
+            browser_device_limits(wgpu::Backend::BrowserWebGpu, adapter_limits.clone()),
             wgpu::Limits::default().using_resolution(adapter_limits)
         );
     }
