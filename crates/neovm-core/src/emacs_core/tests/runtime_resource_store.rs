@@ -175,6 +175,25 @@ fn directory_files_enumerates_mounted_resource_children() {
 }
 
 #[test]
+fn root_directory_lists_the_immutable_runtime_mount() {
+    let mut evaluator =
+        evaluator_with_files([("/neomacs/etc/NEWS", b"mounted release notes\n".as_slice())]);
+
+    let names = evaluator
+        .eval_str(r##"(directory-files "/")"##)
+        .expect("enumerate the unified filesystem root");
+
+    assert_eq!(
+        names,
+        Value::list(vec![
+            Value::string("."),
+            Value::string(".."),
+            Value::string("neomacs"),
+        ])
+    );
+}
+
+#[test]
 fn copy_file_reads_an_immutable_runtime_resource_through_the_context_filesystem() {
     let mut evaluator =
         evaluator_with_files([("/neomacs/etc/NEWS", b"mounted release notes\n".as_slice())]);
