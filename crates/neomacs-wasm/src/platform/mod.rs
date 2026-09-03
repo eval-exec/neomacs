@@ -22,6 +22,8 @@ extern "C" {
     fn browser_monotonic_time_milliseconds() -> f64;
     #[wasm_bindgen(js_namespace = Date, js_name = now)]
     fn browser_wall_time_milliseconds() -> f64;
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn browser_console_error(message: &str);
 }
 
 thread_local! {
@@ -235,6 +237,9 @@ pub fn install_worker_presentation(bytes: &[u8]) -> Result<WorkerPresentationRec
 /// Start the browser frontend without emulating a never-returning native loop.
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
+    std::panic::set_hook(Box::new(|panic| {
+        browser_console_error(&format!("Neomacs frontend panicked: {panic}"));
+    }));
     neovm_core::host::time::install_browser_clocks(
         browser_monotonic_time_milliseconds,
         browser_wall_time_milliseconds,
