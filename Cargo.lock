@@ -4082,6 +4082,8 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-layout-engine",
  "neomacs-wgpu-runtime",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "winit",
