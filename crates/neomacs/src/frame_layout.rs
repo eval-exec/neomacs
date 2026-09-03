@@ -32,18 +32,31 @@ thread_local! {
 
 // ── Layout helpers ────────────────────────────────────────────────────────
 
+#[cfg(test)]
 pub(crate) fn current_layout_frame_id(evaluator: &Context) -> Option<FrameId> {
     REDISPLAY_RUNTIME.with(|runtime| runtime.current_frame_id(evaluator))
 }
 
+#[cfg(test)]
 pub fn layout_frame_display_state(
     evaluator: &mut Context,
     frame_id: FrameId,
     purpose: FrameLayoutPurpose,
 ) -> Option<PreparedFrameDisplay> {
-    REDISPLAY_RUNTIME.with(|runtime| runtime.prepare_frame(evaluator, frame_id, purpose))
+    REDISPLAY_RUNTIME
+        .with(|runtime| layout_frame_display_state_with(runtime, evaluator, frame_id, purpose))
 }
 
+pub fn layout_frame_display_state_with(
+    runtime: &EditorPresentationRuntime,
+    evaluator: &mut Context,
+    frame_id: FrameId,
+    purpose: FrameLayoutPurpose,
+) -> Option<PreparedFrameDisplay> {
+    runtime.prepare_frame(evaluator, frame_id, purpose)
+}
+
+#[cfg(test)]
 pub fn publish_visible_frames(
     evaluator: &mut Context,
     try_publish: impl FnMut(SealedFramePresentation) -> bool,
@@ -74,7 +87,14 @@ pub fn install_window_layout_query_fn(evaluator: &mut Context) {
 pub fn run_tty_layout_tree(
     evaluator: &mut Context,
 ) -> Option<(SealedFramePresentation, Vec<SealedFramePresentation>)> {
-    let selected = current_layout_frame_id(evaluator)?;
+    REDISPLAY_RUNTIME.with(|runtime| run_tty_layout_tree_with(runtime, evaluator))
+}
+
+pub fn run_tty_layout_tree_with(
+    runtime: &EditorPresentationRuntime,
+    evaluator: &mut Context,
+) -> Option<(SealedFramePresentation, Vec<SealedFramePresentation>)> {
+    let selected = runtime.current_frame_id(evaluator)?;
     let root_id = evaluator
         .frame_manager()
         .root_frame_id(selected)
@@ -83,18 +103,26 @@ pub fn run_tty_layout_tree(
         .frame_manager()
         .frames_in_reverse_z_order(root_id, RenderFrameVisibility::VisibleOnly);
 
-    let root_state = layout_frame_display_state(evaluator, root_id, FrameLayoutPurpose::Redisplay)?
-        .activate(evaluator)
-        .ok()?;
+    let root_state = layout_frame_display_state_with(
+        runtime,
+        evaluator,
+        root_id,
+        FrameLayoutPurpose::Redisplay,
+    )?
+    .activate(evaluator)
+    .ok()?;
 
     let mut child_states = Vec::new();
     for frame_id in frame_order {
         if frame_id == root_id {
             continue;
         }
-        let Some(prepared) =
-            layout_frame_display_state(evaluator, frame_id, FrameLayoutPurpose::Redisplay)
-        else {
+        let Some(prepared) = layout_frame_display_state_with(
+            runtime,
+            evaluator,
+            frame_id,
+            FrameLayoutPurpose::Redisplay,
+        ) else {
             continue;
         };
         let Ok(state) = prepared.activate(evaluator) else {
