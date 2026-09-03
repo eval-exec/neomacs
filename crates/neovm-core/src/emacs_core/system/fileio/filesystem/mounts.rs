@@ -6,7 +6,10 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
 use super::virtual_path::VirtualPath;
-use super::{AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, WriteRequest};
+use super::{
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileMode, FileTimestamp,
+    WriteRequest,
+};
 
 struct Mount {
     path: VirtualPath,
@@ -189,6 +192,28 @@ impl EditorFileSystem for MountTableFileSystem {
         from_mount
             .filesystem
             .rename(&from_relative, &to_relative, replace)
+    }
+
+    fn mode(&self, path: &Path, follow_links: bool) -> io::Result<FileMode> {
+        let (mount, relative) = self.route(path)?;
+        mount.filesystem.mode(&relative, follow_links)
+    }
+
+    fn set_mode(&self, path: &Path, mode: FileMode, follow_links: bool) -> io::Result<()> {
+        let (mount, relative) = self.route(path)?;
+        mount.filesystem.set_mode(&relative, mode, follow_links)
+    }
+
+    fn set_times(
+        &self,
+        path: &Path,
+        timestamp: Option<FileTimestamp>,
+        follow_links: bool,
+    ) -> io::Result<()> {
+        let (mount, relative) = self.route(path)?;
+        mount
+            .filesystem
+            .set_times(&relative, timestamp, follow_links)
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {

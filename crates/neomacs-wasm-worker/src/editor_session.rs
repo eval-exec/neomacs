@@ -17,7 +17,9 @@ use neomacs_app::startup::{InteractiveGuiStartup, configure_interactive_gui_star
 use neomacs_layout_engine::font::sizing::FontSizing;
 use neomacs_wasm_protocol::{BrowserColorScheme, BrowserEditorStartup, BrowserInputBatch};
 use neovm_core::emacs_core::wait::{HostInputWaitBackend, HostInputWaitError};
-use neovm_core::emacs_core::fileio::{MemoryFileSystem, MountTableFileSystem};
+use neovm_core::emacs_core::fileio::{
+    BrowserFileSystemLayout as BrowserPaths, MemoryFileSystem, MountTableFileSystem,
+};
 use neovm_core::window::FrameDisplayIdentity;
 
 use crate::browser_host::{self, HostWake};
@@ -47,7 +49,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     )
     .map_err(|error| format!("invalid browser runtime resource assets: {error}"))?;
     let runtime_resources = MountedRuntimeResources::from_bundle(
-        Path::new("/neomacs"),
+        Path::new(BrowserPaths::RUNTIME_ROOT),
         runtime_resource_bundle,
     )
     .map_err(|error| format!("failed to mount browser runtime resources: {error}"))?;
@@ -60,12 +62,15 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     let mut filesystem = MountTableFileSystem::new();
     filesystem
         .mount(
-            Path::new("/neomacs-fake"),
+            Path::new(BrowserPaths::HOME),
             Box::new(crate::browser_filesystem::BrowserOpfsFileSystem),
         )
         .map_err(|error| format!("failed to mount browser home storage: {error}"))?;
     filesystem
-        .mount(Path::new("/tmp"), Box::new(MemoryFileSystem::new()))
+        .mount(
+            Path::new(BrowserPaths::TEMPORARY),
+            Box::new(MemoryFileSystem::new()),
+        )
         .map_err(|error| format!("failed to mount browser temporary storage: {error}"))?;
     evaluator.install_editor_file_system(Box::new(filesystem));
     let (width, height) = startup.physical_extent();
@@ -94,8 +99,8 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     );
     let invocation = InteractiveGuiStartup::new(
         "neomacs-wasm",
-        Path::new("/neomacs/bin"),
-        Path::new("/neomacs-fake"),
+        Path::new(BrowserPaths::RUNTIME_ROOT).join("bin"),
+        Path::new(BrowserPaths::HOME),
     )
     .with_arguments(["--quick", "--no-splash"]);
     configure_interactive_gui_startup(&mut evaluator, surface, &invocation)
