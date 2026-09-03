@@ -2,7 +2,6 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(not(target_family = "wasm"))]
 mod content_id;
 
 pub mod evaluator_input;
