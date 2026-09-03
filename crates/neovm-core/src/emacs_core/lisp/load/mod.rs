@@ -606,7 +606,10 @@ fn prefer_el_only() -> bool {
 #[derive(Clone, Copy)]
 struct LoadFileAccess<'a> {
     runtime_resources: Option<&'a dyn super::fileio::RuntimeResourceStore>,
+    filesystem: &'a dyn super::fileio::EditorFileSystem,
 }
+
+static NATIVE_LOAD_FILE_SYSTEM: super::fileio::NativeFileSystem = super::fileio::NativeFileSystem;
 
 /// Provenance of a candidate's freshness information.
 ///
@@ -615,16 +618,16 @@ struct LoadFileAccess<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LoadCandidateFreshness {
     ImmutableResource,
-    NativeModified(std::time::SystemTime),
+    HostModified(std::time::SystemTime),
 }
 
 impl LoadCandidateFreshness {
     fn is_strictly_newer_than(self, other: Self) -> bool {
         match (self, other) {
-            (Self::NativeModified(candidate), Self::NativeModified(current)) => candidate > current,
+            (Self::HostModified(candidate), Self::HostModified(current)) => candidate > current,
             (Self::ImmutableResource, Self::ImmutableResource)
-            | (Self::ImmutableResource, Self::NativeModified(_))
-            | (Self::NativeModified(_), Self::ImmutableResource) => false,
+            | (Self::ImmutableResource, Self::HostModified(_))
+            | (Self::HostModified(_), Self::ImmutableResource) => false,
         }
     }
 }
@@ -633,13 +636,18 @@ impl<'a> LoadFileAccess<'a> {
     const fn native() -> Self {
         Self {
             runtime_resources: None,
+            filesystem: &NATIVE_LOAD_FILE_SYSTEM,
         }
     }
 
-    const fn with_runtime_resources(
+    const fn with_context(
         runtime_resources: Option<&'a dyn super::fileio::RuntimeResourceStore>,
+        filesystem: &'a dyn super::fileio::EditorFileSystem,
     ) -> Self {
-        Self { runtime_resources }
+        Self {
+            runtime_resources,
+            filesystem,
+        }
     }
 
     fn mounted_contents(self, path: &Path) -> Option<&'a [u8]> {
@@ -647,25 +655,30 @@ impl<'a> LoadFileAccess<'a> {
     }
 
     fn is_file(self, path: &Path) -> bool {
-        self.mounted_contents(path).is_some() || path.is_file()
+        self.mounted_contents(path).is_some()
+            || self
+                .filesystem
+                .metadata(path, true)
+                .is_ok_and(|metadata| metadata.kind == super::fileio::FileEntryKind::File)
     }
 
     fn freshness(self, path: &Path) -> Option<LoadCandidateFreshness> {
         if self.mounted_contents(path).is_some() {
             return Some(LoadCandidateFreshness::ImmutableResource);
         }
-        fs::metadata(path)
+        self.filesystem
+            .metadata(path, true)
             .ok()?
-            .modified()
-            .ok()
-            .map(LoadCandidateFreshness::NativeModified)
+            .modified
+            .and_then(super::fileio::FileTimestamp::to_system_time)
+            .map(LoadCandidateFreshness::HostModified)
     }
 
     fn read(self, path: &Path) -> std::io::Result<Vec<u8>> {
         self.mounted_contents(path)
             .map(<[u8]>::to_vec)
             .map(Ok)
-            .unwrap_or_else(|| fs::read(path))
+            .unwrap_or_else(|| self.filesystem.read(path))
     }
 }
 
@@ -1019,6 +1032,7 @@ pub(crate) fn resolve_load_path_file_with_resources(
     file: &LispString,
     requirement: LoadSuffixRequirement,
     runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+    filesystem: &dyn super::fileio::EditorFileSystem,
 ) -> Result<Option<LispString>, Flow> {
     let candidates = requirement.candidates(obarray, file)?;
     let (exact_name_only, suffixes) = match candidates {
@@ -1031,7 +1045,7 @@ pub(crate) fn resolve_load_path_file_with_resources(
     let load_path = get_load_path(obarray, buf);
 
     Ok(find_lisp_file_in_load_path_with_flags(
-        LoadFileAccess::with_runtime_resources(runtime_resources),
+        LoadFileAccess::with_context(runtime_resources, filesystem),
         file,
         &load_path,
         exact_name_only,
@@ -1139,7 +1153,16 @@ pub(crate) fn plan_load_in_state(
     nosuffix: Option<Value>,
     must_suffix: Option<Value>,
 ) -> Result<LoadPlan, Flow> {
-    plan_load_with_resources(obarray, buf, file, noerror, nosuffix, must_suffix, None)
+    plan_load_with_resources(
+        obarray,
+        buf,
+        file,
+        noerror,
+        nosuffix,
+        must_suffix,
+        None,
+        &NATIVE_LOAD_FILE_SYSTEM,
+    )
 }
 
 pub(crate) fn plan_load_in_context(
@@ -1157,6 +1180,7 @@ pub(crate) fn plan_load_in_context(
         nosuffix,
         must_suffix,
         evaluator.runtime_resource_store(),
+        evaluator.editor_file_system(),
     )
 }
 
@@ -1168,6 +1192,7 @@ fn plan_load_with_resources(
     nosuffix: Option<Value>,
     must_suffix: Option<Value>,
     runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+    filesystem: &dyn super::fileio::EditorFileSystem,
 ) -> Result<LoadPlan, Flow> {
     let file = match file.kind() {
         ValueKind::String => file.as_lisp_string().expect("checked string").clone(),
@@ -1194,6 +1219,7 @@ fn plan_load_with_resources(
         &file,
         requirement,
         runtime_resources,
+        filesystem,
     )? {
         Some(found) => Ok(LoadPlan::Load {
             requested: file,
@@ -2447,8 +2473,8 @@ impl CompiledFreshness {
             return Self::Current;
         };
         let (
-            LoadCandidateFreshness::NativeModified(compiled_mtime),
-            LoadCandidateFreshness::NativeModified(source_mtime),
+            LoadCandidateFreshness::HostModified(compiled_mtime),
+            LoadCandidateFreshness::HostModified(source_mtime),
         ) = (compiled_freshness, source_freshness)
         else {
             // Packaged resources have no live source freshness to compare.
@@ -2764,19 +2790,20 @@ fn load_file_body(
 
     // Read raw bytes and decode (with Emacs-extended UTF-8 for .el,
     // or header-skipping for .elc).
-    let raw_bytes = LoadFileAccess::with_runtime_resources(eval.runtime_resource_store())
-        .read(path)
-        .map_err(|e| {
-            EvalError::signal(
-                intern("file-error"),
-                vec![Value::string(format!(
-                    "Cannot read file: {}: {}",
-                    path.display(),
-                    e
-                ))],
-                None,
-            )
-        })?;
+    let raw_bytes =
+        LoadFileAccess::with_context(eval.runtime_resource_store(), eval.editor_file_system())
+            .read(path)
+            .map_err(|e| {
+                EvalError::signal(
+                    intern("file-error"),
+                    vec![Value::string(format!(
+                        "Cannot read file: {}: {}",
+                        path.display(),
+                        e
+                    ))],
+                    None,
+                )
+            })?;
 
     // For .elc: skip the ;ELC magic header and detect lexical-binding from raw bytes.
     // For .el: decode Emacs-extended UTF-8.
@@ -2802,7 +2829,10 @@ fn load_file_body(
             .is_truthy()
             && let CompiledFreshness::SourceNewer { source, .. } = CompiledFreshness::of_compiled(
                 path,
-                LoadFileAccess::with_runtime_resources(eval.runtime_resource_store()),
+                LoadFileAccess::with_context(
+                    eval.runtime_resource_store(),
+                    eval.editor_file_system(),
+                ),
             )
         {
             let stale_message = format!(

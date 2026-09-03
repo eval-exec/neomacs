@@ -9,11 +9,11 @@ mod filesystem;
 mod runtime_resources;
 
 pub(crate) use binary_mode::builtin_set_binary_mode;
-pub(crate) use filesystem::default_editor_file_system;
 pub use filesystem::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, MemoryFileSystem,
-    MountTableFileSystem, TemporaryEntry, WriteMode, WriteRequest,
+    AccessMode, BrowserFileSystemLayout, EditorFileSystem, FileEntryKind, FileMetadata, FileMode,
+    FileTimestamp, MemoryFileSystem, MountTableFileSystem, TemporaryEntry, WriteMode, WriteRequest,
 };
+pub(crate) use filesystem::{NativeFileSystem, default_editor_file_system};
 pub use runtime_resources::{RuntimeResourceNode, RuntimeResourceStore};
 
 use crate::emacs_core::error::LispCondition;
@@ -49,7 +49,7 @@ use file_error_class::{FileErrorClass, FileErrorReport};
 pub(crate) fn host_temporary_directory() -> PathBuf {
     std::cfg_select! {
         target_family = "wasm" => {
-            PathBuf::from("/tmp")
+            PathBuf::from(BrowserFileSystemLayout::TEMPORARY)
         }
         _ => {
             std::env::temp_dir()
@@ -3427,163 +3427,6 @@ fn file_name_case_insensitive_path(path: &Path) -> bool {
     }
 }
 
-fn file_modes_path(path: &Path, nofollow: bool) -> Option<u32> {
-    let meta = if nofollow {
-        fs::symlink_metadata(path).ok()?
-    } else {
-        fs::metadata(path).ok()?
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        Some(meta.permissions().mode() & 0o7777)
-    }
-    #[cfg(not(unix))]
-    {
-        Some(if meta.permissions().readonly() {
-            0o444
-        } else {
-            0o644
-        })
-    }
-}
-
-fn set_file_modes_path(path: &Path, mode: i64, nofollow: bool) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if nofollow {
-            let c_path = path_to_cstring(path).map_err(|err| {
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("embedded NUL in file name: {err}"),
-                )
-            })?;
-            let result = unsafe {
-                libc::fchmodat(
-                    libc::AT_FDCWD,
-                    c_path.as_ptr(),
-                    (mode as libc::mode_t) & 0o7777,
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
-            if result == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        } else {
-            fs::set_permissions(path, fs::Permissions::from_mode((mode as u32) & 0o7777))
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = nofollow;
-        let mut perms = fs::metadata(path)?.permissions();
-        let writable = (mode & 0o222) != 0;
-        perms.set_readonly(!writable);
-        fs::set_permissions(path, perms)
-    }
-}
-
-fn build_file_times(timestamp: Option<(i64, i64)>) -> std::fs::FileTimes {
-    let mut times = std::fs::FileTimes::new();
-    let t = if let Some((secs, nanos)) = timestamp {
-        std::time::UNIX_EPOCH + std::time::Duration::new(secs as u64, nanos as u32)
-    } else {
-        std::time::SystemTime::now()
-    };
-    times = times.set_accessed(t).set_modified(t);
-    times
-}
-
-fn set_file_times_path(
-    path: &Path,
-    timestamp: Option<(i64, i64)>,
-    nofollow: bool,
-) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
-            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
-        };
-
-        // GNU's w32 utimensat replacement requests metadata write access,
-        // not GENERIC_WRITE (src/w32.c:5998-6034).  That distinction lets
-        // `set-file-times' work on a read-only file without racing another
-        // observer by temporarily changing its attributes.  OpenOptionsExt is
-        // a safe wrapper around the same CreateFileW contract.
-        let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
-        if nofollow {
-            flags |= FILE_FLAG_OPEN_REPARSE_POINT;
-        }
-        let file = fs::OpenOptions::new()
-            .access_mode(FILE_WRITE_ATTRIBUTES)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .custom_flags(flags)
-            .open(path)?;
-        return file.set_times(build_file_times(timestamp));
-    }
-
-    #[cfg(not(windows))]
-    if nofollow {
-        #[cfg(unix)]
-        {
-            let c_path = path_to_cstring(path).map_err(|_| {
-                std::io::Error::new(ErrorKind::InvalidInput, "embedded NUL in file name")
-            })?;
-
-            let mut ts = [
-                libc::timespec {
-                    tv_sec: 0,
-                    tv_nsec: 0,
-                },
-                libc::timespec {
-                    tv_sec: 0,
-                    tv_nsec: 0,
-                },
-            ];
-            if let Some((secs, nanos)) = timestamp {
-                ts[0].tv_sec = secs as libc::time_t;
-                ts[1].tv_sec = secs as libc::time_t;
-                ts[0].tv_nsec = nanos as libc::c_long;
-                ts[1].tv_nsec = nanos as libc::c_long;
-            } else {
-                ts[0].tv_nsec = libc::UTIME_NOW as libc::c_long;
-                ts[1].tv_nsec = libc::UTIME_NOW as libc::c_long;
-            }
-            let result = unsafe {
-                libc::utimensat(
-                    libc::AT_FDCWD,
-                    c_path.as_ptr(),
-                    ts.as_ptr(),
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
-            if result == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = (path, timestamp);
-            Err(std::io::Error::new(
-                ErrorKind::Unsupported,
-                "nofollow set-file-times is unsupported on this platform",
-            ))
-        }
-    } else {
-        let file = fs::OpenOptions::new().write(true).open(path)?;
-        let times = build_file_times(timestamp);
-        file.set_times(times)
-    }
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn delete_file_compat(filename: &str) -> Result<(), Flow> {
     match delete_file(filename) {
@@ -3988,9 +3831,19 @@ pub(crate) fn builtin_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalRe
     if !handler.is_nil() {
         return eval.funcall_general(handler, vec![operation, Value::heap_string(absname), flag]);
     }
-    match file_modes_path(&lisp_file_name_to_path_buf(&absname), nofollow) {
-        Some(mode) => Ok(Value::fixnum(mode as i64)),
-        None => Ok(Value::NIL),
+    match eval
+        .editor_file_system()
+        .mode(&lisp_file_name_to_path_buf(&absname), !nofollow)
+    {
+        Ok(mode) => Ok(Value::fixnum(i64::from(mode.bits()))),
+        Err(error) if error.kind() == ErrorKind::Unsupported => {
+            Err(signal_file_action_error_value(
+                error,
+                "Reading file modes",
+                Value::heap_string(absname),
+            ))
+        }
+        Err(_) => Ok(Value::NIL),
     }
 }
 
@@ -4019,9 +3872,15 @@ pub(crate) fn builtin_set_file_modes(eval: &mut Context, args: Vec<Value>) -> Ev
             vec![operation, Value::heap_string(absname), args[1], flag],
         );
     }
-    set_file_modes_path(&lisp_file_name_to_path_buf(&absname), mode, nofollow).map_err(|err| {
-        signal_file_action_error_value(err, "Doing chmod", Value::heap_string(absname))
-    })?;
+    eval.editor_file_system()
+        .set_mode(
+            &lisp_file_name_to_path_buf(&absname),
+            FileMode::from_bits_truncate(mode as u32),
+            !nofollow,
+        )
+        .map_err(|err| {
+            signal_file_action_error_value(err, "Doing chmod", Value::heap_string(absname))
+        })?;
     Ok(Value::NIL)
 }
 
@@ -4041,7 +3900,11 @@ pub(crate) fn builtin_set_file_times(eval: &mut Context, args: Vec<Value>) -> Ev
     let timestamp_arg = args.get(1).copied().unwrap_or(Value::NIL);
     let flag_arg = args.get(2).copied().unwrap_or(Value::NIL);
     let timestamp = if !timestamp_arg.is_nil() {
-        Some(parse_timestamp_arg(&timestamp_arg)?)
+        let (seconds, nanoseconds) = parse_timestamp_arg(&timestamp_arg)?;
+        Some(FileTimestamp {
+            seconds,
+            nanoseconds: nanoseconds as u32,
+        })
     } else {
         None
     };
@@ -4061,11 +3924,11 @@ pub(crate) fn builtin_set_file_times(eval: &mut Context, args: Vec<Value>) -> Ev
     )? {
         return Ok(result);
     }
-    set_file_times_path(&lisp_file_name_to_path_buf(&filename), timestamp, nofollow).map_err(
-        |err| {
+    eval.editor_file_system()
+        .set_times(&lisp_file_name_to_path_buf(&filename), timestamp, !nofollow)
+        .map_err(|err| {
             signal_file_action_error_value(err, "Setting file times", Value::heap_string(filename))
-        },
-    )?;
+        })?;
     Ok(Value::T)
 }
 
@@ -4600,28 +4463,25 @@ impl CopyTimestampPolicy {
         }
     }
 
-    fn apply(self, source: &fs::Metadata, destination: &Path) -> std::io::Result<()> {
-        std::cfg_select! {
-            windows => {
-                let _ = source;
-                match self {
-                    // CopyFileW already preserves the source modification time.
-                    Self::Preserve => Ok(()),
-                    // GNU w32_copy_file explicitly counters CopyFileW's default
-                    // when KEEP-TIME is nil (src/w32.c:6982-7029).
-                    Self::Refresh => set_file_times_path(destination, None, false),
-                }
+    fn apply(
+        self,
+        filesystem: &dyn EditorFileSystem,
+        source: FileMetadata,
+        destination: &Path,
+    ) -> std::io::Result<()> {
+        match self {
+            Self::Preserve => {
+                let modified = source.modified.ok_or_else(|| {
+                    std::io::Error::other("filesystem did not provide a modification time")
+                })?;
+                filesystem.set_times(destination, Some(modified), true)
             }
-            _ => {
-                match self {
-                    // Writing the destination naturally refreshes its mtime.
-                    Self::Refresh => Ok(()),
-                    Self::Preserve => {
-                        let times = fs::FileTimes::new()
-                            .set_accessed(source.accessed()?)
-                            .set_modified(source.modified()?);
-                        fs::File::open(destination)?.set_times(times)
-                    }
+            // CopyFileW preserves the source timestamp by default, while the
+            // other storage adapters naturally timestamp their destination.
+            Self::Refresh => {
+                std::cfg_select! {
+                    windows => filesystem.set_times(destination, None, true),
+                    _ => Ok(()),
                 }
             }
         }
@@ -4668,7 +4528,8 @@ pub(crate) fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
     // GNU opens the input first; a failure here is reported as
     // `report_file_error ("Opening input file", file)` — only the source
     // filename, before the destination is even considered (fileio.c:2346).
-    eval.editor_file_system()
+    let source_metadata = eval
+        .editor_file_system()
         .metadata(&from_path, true)
         .map_err(|err| {
             signal_file_action_error_value(
@@ -4717,7 +4578,17 @@ pub(crate) fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
                 Value::heap_string(to.clone()),
             )
         })?;
-    let _ = timestamp_policy;
+    timestamp_policy
+        .apply(eval.editor_file_system(), source_metadata, &to_path)
+        .map_err(|_| {
+            signal(
+                LispCondition::FileDateError,
+                vec![
+                    Value::string("Cannot set file date"),
+                    Value::heap_string(to),
+                ],
+            )
+        })?;
     Ok(Value::NIL)
 }
 

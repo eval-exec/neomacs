@@ -8800,6 +8800,50 @@ fn builtin_load_dispatches_file_name_handlers_before_search() {
 }
 
 #[test]
+fn builtin_load_reads_from_the_installed_editor_filesystem() {
+    use crate::emacs_core::fileio::{
+        EditorFileSystem, MemoryFileSystem, MountTableFileSystem, WriteMode, WriteRequest,
+    };
+
+    crate::test_utils::init_test_tracing();
+    let persistent = MemoryFileSystem::new();
+    persistent
+        .write(
+            std::path::Path::new("/loadable.el"),
+            b"(setq vm-mounted-load-ran t)\n",
+            WriteRequest {
+                mode: WriteMode::Truncate,
+                sync: true,
+            },
+        )
+        .expect("write mounted Lisp fixture");
+    let mut filesystem = MountTableFileSystem::new();
+    filesystem
+        .mount(std::path::Path::new("/neomacs-fake"), Box::new(persistent))
+        .expect("mount editor home");
+
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(filesystem));
+
+    let loaded = crate::emacs_core::builtins::builtin_load(
+        &mut eval,
+        vec![
+            Value::string("/neomacs-fake/loadable.el"),
+            Value::NIL,
+            Value::T,
+            Value::T,
+        ],
+    )
+    .expect("load Lisp source through the installed editor filesystem");
+
+    assert_eq!(loaded, Value::T);
+    assert_eq!(
+        eval.obarray().symbol_value("vm-mounted-load-ran").copied(),
+        Some(Value::T),
+    );
+}
+
+#[test]
 fn find_file_with_suffix_flags() {
     crate::test_utils::init_test_tracing();
     let unique = SystemTime::now()

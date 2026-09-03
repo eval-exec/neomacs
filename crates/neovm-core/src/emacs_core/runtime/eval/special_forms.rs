@@ -1651,6 +1651,7 @@ impl Context {
             &self.obarray,
             self.buffers.current_buffer(),
             self.runtime_resource_store.as_deref(),
+            self.editor_file_system.as_ref(),
             &mut self.features,
             &self.require_stack,
             feature,

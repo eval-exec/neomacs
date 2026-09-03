@@ -3189,6 +3189,7 @@ pub(crate) fn plan_require_in_state(
     obarray: &Obarray,
     buf: Option<&crate::buffer::Buffer>,
     runtime_resources: Option<&dyn crate::emacs_core::fileio::RuntimeResourceStore>,
+    filesystem: &dyn crate::emacs_core::fileio::EditorFileSystem,
     features: &mut Vec<SymId>,
     require_stack: &[SymId],
     feature: Value,
@@ -3257,6 +3258,7 @@ pub(crate) fn plan_require_in_state(
         &filename,
         requirement,
         runtime_resources,
+        filesystem,
     )? {
         Some(path) => Ok(RequirePlan::Load {
             sym_id,

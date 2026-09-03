@@ -8,6 +8,20 @@ fn write_request(mode: WriteMode) -> WriteRequest {
 }
 
 #[test]
+fn host_metadata_types_normalize_modes_and_round_trip_pre_epoch_times() {
+    assert_eq!(FileMode::from_bits_truncate(0o106755).bits(), 0o6755);
+
+    let half_second_before_epoch = std::time::UNIX_EPOCH
+        .checked_sub(std::time::Duration::from_millis(500))
+        .expect("represent pre-epoch test time");
+    let timestamp = FileTimestamp::from_system_time(half_second_before_epoch)
+        .expect("encode pre-epoch timestamp");
+    assert_eq!(timestamp.seconds, -1);
+    assert_eq!(timestamp.nanoseconds, 500_000_000);
+    assert_eq!(timestamp.to_system_time(), Some(half_second_before_epoch));
+}
+
+#[test]
 fn memory_filesystem_preserves_complete_editor_write_semantics() {
     let filesystem = MemoryFileSystem::new();
     filesystem
