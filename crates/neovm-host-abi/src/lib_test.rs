@@ -230,7 +230,7 @@ fn android_profile_distinguishes_sandbox_restriction_from_absence() {
 #[test]
 fn process_environment_model_is_selected_by_the_compile_target() {
     let expected = std::cfg_select! {
-        target_family = "wasm" => { ProcessEnvironmentModel::Empty }
+        target_family = "wasm" => { ProcessEnvironmentModel::BrowserVirtualPaths }
         _ => { ProcessEnvironmentModel::InheritedNative }
     };
 

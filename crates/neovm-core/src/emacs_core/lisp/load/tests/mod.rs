@@ -220,18 +220,21 @@ fn startup_environment_snapshot_is_independent_from_process_policy() {
 
 #[test]
 #[cfg(target_family = "wasm")]
-fn wasm_startup_has_no_native_process_environment() {
+fn wasm_startup_uses_browser_virtual_paths() {
     let mut eval = Context::new();
 
     crate::emacs_core::environment::install_host_environment_snapshot(&mut eval);
 
-    let environments_are_empty = eval
-        .eval_str("(and (null initial-environment) (null process-environment))")
+    let paths = eval
+        .eval_str(
+            r##"(mapcar #'getenv-internal
+                        '("HOME" "XDG_CONFIG_HOME" "XDG_CACHE_HOME"
+                          "XDG_DATA_HOME" "XDG_STATE_HOME" "TMPDIR"))"##,
+        )
         .expect("read the browser startup environments");
     assert_eq!(
-        environments_are_empty,
-        Value::T,
-        "a browser host has no native process environment to inherit",
+        format_eval_result(&Ok(paths)),
+        r##"("/neomacs-fake" "/neomacs-fake/.config" "/neomacs-fake/.cache" "/neomacs-fake/.local/share" "/neomacs-fake/.local/state" "/tmp")"##,
     );
 }
 
