@@ -1,8 +1,9 @@
-//! Async image loading and caching for wgpu renderer
+//! Target-aware image loading and caching for the wgpu renderer.
 //!
-//! Provides non-blocking image loading:
+//! Provides:
 //! - Dimension queries for pending-image placeholders
-//! - Background decoding in thread pool
+//! - A bounded background decoder pool on native targets
+//! - Inline decoding on browser Wasm, which has no ambient native threads
 //! - GPU texture upload when ready
 //! - LRU cache with memory limits
 
@@ -17,11 +18,16 @@ use neomacs_display_protocol::{
 };
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
+#[cfg(not(target_family = "wasm"))]
+use std::num::NonZeroUsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, mpsc};
+#[cfg(not(target_family = "wasm"))]
 use std::thread;
 
 use crate::image_bands::{
@@ -96,6 +102,7 @@ pub(crate) fn realized_geometry(
 /// Maximum total cache memory in bytes (64MB)
 const MAX_CACHE_MEMORY: usize = 64 * 1024 * 1024;
 
+#[cfg(not(target_family = "wasm"))]
 const MAX_IMAGE_DECODER_THREADS: usize = 4;
 
 /// A deliberately small, non-empty pool of persistent image decoders.
@@ -107,8 +114,10 @@ const MAX_IMAGE_DECODER_THREADS: usize = 4;
 /// asynchronous workers retain useful parallelism without making GUI startup
 /// resources proportional to machine size.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(not(target_family = "wasm"))]
 struct ImageDecoderPoolSize(NonZeroUsize);
 
+#[cfg(not(target_family = "wasm"))]
 impl ImageDecoderPoolSize {
     fn detected() -> Self {
         Self::from_available_parallelism(std::thread::available_parallelism().ok())
@@ -608,7 +617,7 @@ pub struct ImageMetadata {
     pub embedded: ImageEmbeddedMetadata,
 }
 
-/// Async image cache
+/// Image cache with a compile-target-selected decode executor.
 pub struct ImageCache {
     /// Budget accounting events since the last drain (texture create/free).
     accounting: Vec<crate::media_budget::MediaAccounting>,
@@ -627,8 +636,8 @@ pub struct ImageCache {
     pending_dimensions: HashMap<ImageId, ImageLayoutExtent>,
     /// Channel to receive decoded images
     decoded_rx: mpsc::Receiver<WorkerDecodeOutcome>,
-    /// Channel to send decode requests
-    decode_tx: mpsc::Sender<DecodeRequest>,
+    /// Compile-target-selected image decode executor.
+    decoder: ImageDecodeExecutor,
     /// CPU decoder/compositor state shared across all frames of an animation.
     sequence_cache: Arc<ImageSequenceCache>,
     /// Bind group layout for image textures
@@ -789,6 +798,72 @@ enum ImageSource {
     },
 }
 
+std::cfg_select! {
+    target_family = "wasm" => {
+        /// Browser Wasm has no ambient native threads. Decode requests run on
+        /// the presentation event loop and publish through the same completion
+        /// channel as the native pool, keeping the cache state machine shared.
+        struct ImageDecodeExecutor {
+            completed: mpsc::Sender<WorkerDecodeOutcome>,
+            sequence_cache: Arc<ImageSequenceCache>,
+        }
+
+        impl ImageDecodeExecutor {
+            fn new(
+                completed: mpsc::Sender<WorkerDecodeOutcome>,
+                sequence_cache: Arc<ImageSequenceCache>,
+            ) -> Self {
+                Self {
+                    completed,
+                    sequence_cache,
+                }
+            }
+
+            fn submit(&self, request: DecodeRequest) {
+                let outcome = ImageCache::decode_request(request, &self.sequence_cache);
+                let _ = self.completed.send(outcome);
+            }
+        }
+    }
+    _ => {
+        /// Native image decoding is isolated from presentation by a bounded
+        /// persistent thread pool.
+        struct ImageDecodeExecutor {
+            requests: mpsc::Sender<DecodeRequest>,
+        }
+
+        impl ImageDecodeExecutor {
+            fn new(
+                completed: mpsc::Sender<WorkerDecodeOutcome>,
+                sequence_cache: Arc<ImageSequenceCache>,
+            ) -> Self {
+                let (requests, receiver) = mpsc::channel::<DecodeRequest>();
+                let receiver = Arc::new(Mutex::new(receiver));
+                let pool_size = ImageDecoderPoolSize::detected();
+                tracing::info!("Starting {} image decoder threads", pool_size.get());
+                for thread_id in 0..pool_size.get() {
+                    let receiver = Arc::clone(&receiver);
+                    let completed = completed.clone();
+                    let sequence_cache = Arc::clone(&sequence_cache);
+                    thread::spawn(move || {
+                        ImageCache::decoder_thread_pooled(
+                            thread_id,
+                            receiver,
+                            completed,
+                            sequence_cache,
+                        );
+                    });
+                }
+                Self { requests }
+            }
+
+            fn submit(&self, request: DecodeRequest) {
+                let _ = self.requests.send(request);
+            }
+        }
+    }
+}
+
 impl ImageCache {
     /// Create a new image cache
     pub fn new(device: &wgpu::Device) -> Self {
@@ -827,24 +902,10 @@ impl ImageCache {
             ..Default::default()
         });
 
-        // Create channels for async decoding
-        let (decode_tx, decode_rx) = mpsc::channel::<DecodeRequest>();
+        // All target executors publish through one completion channel.
         let (decoded_tx, decoded_rx) = mpsc::channel::<WorkerDecodeOutcome>();
         let sequence_cache = Arc::new(ImageSequenceCache::new());
-
-        // Wrap receiver in Arc<Mutex> for sharing across threads
-        let decode_rx = Arc::new(Mutex::new(decode_rx));
-
-        let pool_size = ImageDecoderPoolSize::detected();
-        tracing::info!("Starting {} image decoder threads", pool_size.get());
-        for i in 0..pool_size.get() {
-            let rx = Arc::clone(&decode_rx);
-            let tx = decoded_tx.clone();
-            let sequence_cache = Arc::clone(&sequence_cache);
-            thread::spawn(move || {
-                Self::decoder_thread_pooled(i, rx, tx, sequence_cache);
-            });
-        }
+        let decoder = ImageDecodeExecutor::new(decoded_tx, Arc::clone(&sequence_cache));
 
         Self {
             next_id: AtomicU32::new(1),
@@ -855,7 +916,7 @@ impl ImageCache {
             retained_images: RetainedImageSet::default(),
             pending_dimensions: HashMap::new(),
             decoded_rx,
-            decode_tx,
+            decoder,
             sequence_cache,
             bind_group_layout,
             accounting: Vec::new(),
@@ -902,7 +963,8 @@ impl ImageCache {
         ImageId::new(raw)
     }
 
-    /// Background decoder thread (pooled version)
+    #[cfg(not(target_family = "wasm"))]
+    /// Background decoder thread (pooled version).
     fn decoder_thread_pooled(
         thread_id: usize,
         rx: Arc<Mutex<mpsc::Receiver<DecodeRequest>>>,
@@ -1034,6 +1096,83 @@ impl ImageCache {
                     tracing::debug!("Decoder thread {} exiting", thread_id);
                     break;
                 }
+            }
+        }
+    }
+
+    fn decode_request(
+        request: DecodeRequest,
+        sequence_cache: &ImageSequenceCache,
+    ) -> WorkerDecodeOutcome {
+        let DecodeRequest {
+            load,
+            source,
+            size,
+            rotation,
+            realization,
+            colors,
+            mask,
+            frame,
+        } = request;
+        let result = catch_unwind(AssertUnwindSafe(|| match source {
+            #[cfg(test)]
+            ImageSource::Panic => panic!("injected decoder panic"),
+            ImageSource::File { path, sequence } => Self::decode_file(
+                &path,
+                size,
+                rotation,
+                colors,
+                realization,
+                mask,
+                frame,
+                sequence_cache,
+                sequence,
+                None,
+            ),
+            ImageSource::Data {
+                data,
+                resources,
+                sequence,
+            } => Self::decode_data(
+                &data,
+                size,
+                rotation,
+                colors,
+                realization,
+                mask,
+                frame,
+                resources,
+                sequence_cache,
+                sequence,
+                None,
+            ),
+            ImageSource::RawArgb32 {
+                data,
+                width,
+                height,
+                stride,
+            } => Self::convert_argb32_to_rgba(&data, width, height, stride)
+                .map(NativePixels::from_raster_tuple)
+                .and_then(|pixels| pixels.realize_bitmap(size, rotation, realization, mask)),
+            ImageSource::RawRgb24 {
+                data,
+                width,
+                height,
+                stride,
+            } => Self::convert_rgb24_to_rgba(&data, width, height, stride)
+                .map(NativePixels::from_raster_tuple)
+                .and_then(|pixels| pixels.realize_bitmap(size, rotation, realization, mask)),
+        }));
+
+        match result {
+            Ok(Some(pixels)) => WorkerDecodeOutcome::Ready(Self::decoded_image(load, pixels)),
+            Ok(None) => WorkerDecodeOutcome::Failed(load),
+            Err(_) => {
+                tracing::warn!(
+                    image = %load.image(),
+                    "image decoder recovered from a panic"
+                );
+                WorkerDecodeOutcome::Failed(load)
             }
         }
     }
@@ -1719,9 +1858,9 @@ impl ImageCache {
             );
         }
 
-        // Queue for async decode
+        // Submit to the target-selected decoder.
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.submit(DecodeRequest {
             load,
             source: ImageSource::Data {
                 data,
@@ -1763,9 +1902,9 @@ impl ImageCache {
             );
         }
 
-        // Queue for async decode
+        // Submit to the target-selected decoder.
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.submit(DecodeRequest {
             load,
             source: ImageSource::File {
                 path: path.to_string(),
@@ -1822,9 +1961,9 @@ impl ImageCache {
             );
         }
 
-        // Queue for async decode
+        // Submit to the target-selected decoder.
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.submit(DecodeRequest {
             load,
             source: ImageSource::Data {
                 data: EncodedBytes::copy_of(data),
@@ -1868,9 +2007,9 @@ impl ImageCache {
                 .layout(),
         );
 
-        // Queue for async conversion
+        // Submit to the target-selected decoder.
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.submit(DecodeRequest {
             load,
             source: ImageSource::RawArgb32 {
                 data: data.to_vec(),
@@ -1914,9 +2053,9 @@ impl ImageCache {
                 .layout(),
         );
 
-        // Queue for async conversion
+        // Submit to the target-selected decoder.
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.submit(DecodeRequest {
             load,
             source: ImageSource::RawRgb24 {
                 data: data.to_vec(),
@@ -1950,7 +2089,7 @@ impl ImageCache {
         self.pending_dimensions
             .insert(image, ImageLayoutExtent::new(width, height));
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.submit(DecodeRequest {
             rotation: ImageRotation::None,
             load,
             source: ImageSource::RawArgb32 {
@@ -1982,7 +2121,7 @@ impl ImageCache {
         self.pending_dimensions
             .insert(image, ImageLayoutExtent::new(width, height));
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.submit(DecodeRequest {
             rotation: ImageRotation::None,
             load,
             source: ImageSource::RawRgb24 {
