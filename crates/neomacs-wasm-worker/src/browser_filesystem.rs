@@ -5,8 +5,8 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
 use neovm_core::emacs_core::fileio::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, WriteMode,
-    WriteRequest,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileStability, FileTimestamp,
+    WriteMode, WriteRequest,
 };
 
 use crate::browser_host;
@@ -153,6 +153,7 @@ fn current_metadata() -> io::Result<FileMetadata> {
         kind,
         len: result_len()?,
         modified,
+        stability: FileStability::Mutable,
         readonly: false,
     })
 }
