@@ -3,13 +3,13 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 mod memory;
 mod mounts;
 mod native;
 #[cfg(test)]
 mod tests;
+mod virtual_path;
 
 pub use memory::MemoryFileSystem;
 pub use mounts::MountTableFileSystem;
@@ -35,12 +35,19 @@ pub enum FileEntryKind {
     Other,
 }
 
+/// Host-neutral wall-clock timestamp used by filesystem metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileTimestamp {
+    pub seconds: i64,
+    pub nanoseconds: u32,
+}
+
 /// Metadata shared by native and sandboxed storage adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileMetadata {
     pub kind: FileEntryKind,
     pub len: u64,
-    pub modified: Option<SystemTime>,
+    pub modified: Option<FileTimestamp>,
     pub readonly: bool,
 }
 
