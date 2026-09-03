@@ -6,33 +6,9 @@ use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use super::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, TemporaryEntry,
-    WriteMode, WriteRequest,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileMode, FileTimestamp,
+    TemporaryEntry, WriteMode, WriteRequest,
 };
-
-fn timestamp_from_native(time: std::time::SystemTime) -> Option<FileTimestamp> {
-    match time.duration_since(std::time::UNIX_EPOCH) {
-        Ok(duration) => Some(FileTimestamp {
-            seconds: i64::try_from(duration.as_secs()).ok()?,
-            nanoseconds: duration.subsec_nanos(),
-        }),
-        Err(error) => {
-            let duration = error.duration();
-            let seconds = i64::try_from(duration.as_secs()).ok()?;
-            if duration.subsec_nanos() == 0 {
-                Some(FileTimestamp {
-                    seconds: -seconds,
-                    nanoseconds: 0,
-                })
-            } else {
-                Some(FileTimestamp {
-                    seconds: seconds.checked_neg()?.checked_sub(1)?,
-                    nanoseconds: 1_000_000_000 - duration.subsec_nanos(),
-                })
-            }
-        }
-    }
-}
 
 /// Direct access to the current process's native filesystem namespace.
 #[derive(Clone, Copy, Debug, Default)]
@@ -52,7 +28,10 @@ fn metadata_from_native(metadata: fs::Metadata) -> FileMetadata {
     FileMetadata {
         kind,
         len: metadata.len(),
-        modified: metadata.modified().ok().and_then(timestamp_from_native),
+        modified: metadata
+            .modified()
+            .ok()
+            .and_then(FileTimestamp::from_system_time),
         readonly: metadata.permissions().readonly(),
     }
 }
@@ -220,6 +199,141 @@ impl EditorFileSystem for NativeFileSystem {
         super::super::rename_path_with_cross_device_fallback(from, to, replace, |from, to| {
             fs::rename(from, to)
         })
+    }
+
+    fn mode(&self, path: &Path, follow_links: bool) -> io::Result<FileMode> {
+        let metadata = if follow_links {
+            fs::metadata(path)
+        } else {
+            fs::symlink_metadata(path)
+        }?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            Ok(FileMode::from_bits_truncate(metadata.permissions().mode()))
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(FileMode::from_bits_truncate(
+                if metadata.permissions().readonly() {
+                    0o444
+                } else {
+                    0o644
+                },
+            ))
+        }
+    }
+
+    fn set_mode(&self, path: &Path, mode: FileMode, follow_links: bool) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            use std::os::unix::fs::PermissionsExt;
+
+            if !follow_links {
+                let path =
+                    std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("embedded NUL in file name: {error}"),
+                        )
+                    })?;
+                let result = unsafe {
+                    libc::fchmodat(
+                        libc::AT_FDCWD,
+                        path.as_ptr(),
+                        mode.bits() as libc::mode_t,
+                        libc::AT_SYMLINK_NOFOLLOW,
+                    )
+                };
+                return if result == 0 {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                };
+            }
+            fs::set_permissions(path, fs::Permissions::from_mode(mode.bits()))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = follow_links;
+            let mut permissions = fs::metadata(path)?.permissions();
+            permissions.set_readonly(mode.bits() & 0o222 == 0);
+            fs::set_permissions(path, permissions)
+        }
+    }
+
+    fn set_times(
+        &self,
+        path: &Path,
+        timestamp: Option<FileTimestamp>,
+        follow_links: bool,
+    ) -> io::Result<()> {
+        if !follow_links {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt;
+
+                let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "embedded NUL in file name")
+                })?;
+                let mut times = [
+                    libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    },
+                    libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    },
+                ];
+                if let Some(timestamp) = timestamp {
+                    for time in &mut times {
+                        time.tv_sec = timestamp.seconds as libc::time_t;
+                        time.tv_nsec = timestamp.nanoseconds as libc::c_long;
+                    }
+                } else {
+                    for time in &mut times {
+                        time.tv_nsec = libc::UTIME_NOW as libc::c_long;
+                    }
+                }
+                let result = unsafe {
+                    libc::utimensat(
+                        libc::AT_FDCWD,
+                        path.as_ptr(),
+                        times.as_ptr(),
+                        libc::AT_SYMLINK_NOFOLLOW,
+                    )
+                };
+                return if result == 0 {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                };
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "nofollow set-file-times is unsupported on this platform",
+                ));
+            }
+        }
+
+        let time = match timestamp {
+            Some(timestamp) => timestamp.to_system_time().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "file timestamp is out of range",
+                )
+            })?,
+            None => std::time::SystemTime::now(),
+        };
+        let times = fs::FileTimes::new().set_accessed(time).set_modified(time);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .set_times(times)
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
