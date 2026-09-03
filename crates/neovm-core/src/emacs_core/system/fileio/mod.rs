@@ -2416,9 +2416,10 @@ fn temp_file_absolute_prefix(
     prefix: &crate::heap_types::LispString,
 ) -> crate::heap_types::LispString {
     // A non-absolute PREFIX is resolved against `temporary-file-directory`;
-    // `lisp_file_name_to_path_buf().is_absolute()` mirrors the old
-    // `Path::new(prefix).is_absolute()` check while keeping raw bytes intact.
-    if lisp_file_name_to_path_buf(prefix).is_absolute() {
+    // use Emacs filename syntax rather than the Rust target's path parser.
+    // In particular, wasm32's host path semantics do not define the editor's
+    // virtual POSIX namespace.
+    if lisp_file_name_absolute_system_p(prefix) {
         prefix.clone()
     } else {
         lisp_file_name_as_directory(temp_dir).concat(prefix)
@@ -2622,22 +2623,22 @@ pub(crate) fn builtin_make_temp_file_internal(
 fn split_nearby_temp_prefix(
     prefix: &crate::heap_types::LispString,
 ) -> Option<(crate::heap_types::LispString, crate::heap_types::LispString)> {
-    let path = lisp_file_name_to_path_buf(prefix);
-    if !path.is_absolute() {
+    if !lisp_file_name_absolute_system_p(prefix) {
         return None;
     }
-    let file_name = path.file_name()?;
-    if file_name.is_empty() {
+
+    let file_name = lisp_file_name_nondirectory(prefix);
+    if file_name.as_bytes().is_empty() {
         return None;
     }
-    let parent = path.parent()?;
-    if parent.as_os_str().is_empty() || parent == Path::new(".") {
+
+    let parent = lisp_file_name_directory(prefix)?;
+    let parent = lisp_directory_file_name(&parent);
+    if parent.as_bytes().is_empty() || lisp_file_name_is_ascii_text(&parent, b".") {
         return None;
     }
-    Some((
-        path_to_lisp_file_name(parent),
-        path_to_lisp_file_name(Path::new(file_name)),
-    ))
+
+    Some((parent, file_name))
 }
 
 fn make_temp_name_suffix() -> String {
