@@ -17,7 +17,13 @@ use super::portable_assets::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-const WEB_SOURCE_FILES: [&str; 4] = ["editor-worker.js", "index.html", "main.js", "style.css"];
+pub(super) const WEB_SOURCE_FILES: [&str; 5] = [
+    "browser-input.mjs",
+    "editor-worker.js",
+    "index.html",
+    "main.js",
+    "style.css",
+];
 const EDITOR_WORKER_WASM: &str = "neomacs_wasm_worker.wasm";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
