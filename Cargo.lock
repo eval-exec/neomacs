@@ -4108,6 +4108,7 @@ dependencies = [
 name = "neomacs-wasm"
 version = "0.0.16"
 dependencies = [
+ "ciborium",
  "neomacs-app",
  "neomacs-display-protocol",
  "neomacs-layout-engine",
@@ -4130,6 +4131,14 @@ dependencies = [
 [[package]]
 name = "neomacs-wasm-worker"
 version = "0.0.16"
+dependencies = [
+ "ciborium",
+ "neomacs-app",
+ "neomacs-layout-engine",
+ "neomacs-wasm-protocol",
+ "neovm-core",
+ "serde_json",
+]
 
 [[package]]
 name = "neomacs-webview"
