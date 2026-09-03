@@ -582,7 +582,10 @@ See `tramp-process-attributes-ps-format'.")
 		    'tramp-connection-local-darwin-ps-profile)
 		   ;; ... Add other system types here.
 		   )))
-  (dolist (local-host tramp-local-host-names)
+  ;; `tramp-compat.el' deliberately tolerates a missing `tramp-loaddefs'
+  ;; while loaddefs-gen loads Tramp sources to expand custom autoload macros.
+  ;; In that bootstrap state this variable is not defined yet.
+  (dolist (local-host (bound-and-true-p tramp-local-host-names))
     (connection-local-set-profiles
      `(:application tramp :machine ,local-host)
      local-profile)))
