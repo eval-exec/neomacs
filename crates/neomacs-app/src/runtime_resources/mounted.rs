@@ -1,6 +1,6 @@
 //! Read-only runtime resources mounted in an evaluator's virtual root.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +17,8 @@ use super::bundle::{
 /// belong to a separate host storage capability.
 #[derive(Debug)]
 pub struct MountedRuntimeResources {
+    mount_root: PathBuf,
+    directories: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, Vec<u8>>,
 }
 
@@ -28,26 +30,57 @@ impl MountedRuntimeResources {
         bundle_id: &[u8],
     ) -> Result<Self, RuntimeResourceError> {
         let expected = read_bundle_id(Cursor::new(bundle_id))?;
+        let mut directories = BTreeSet::new();
         let mut files = BTreeMap::new();
         visit_authenticated_archive(Cursor::new(archive), &expected, |entry, contents| {
-            if entry.kind() == ArchiveEntryKind::File {
-                let capacity = usize::try_from(entry.size()).map_err(|_| {
-                    RuntimeResourceError::Io(std::io::Error::other(
-                        "runtime resource entry does not fit address space",
-                    ))
-                })?;
-                let mut bytes = Vec::with_capacity(capacity);
-                contents.read_to_end(&mut bytes)?;
-                files.insert(mount_root.join(entry.path()), bytes);
+            let mounted_path = mount_root.join(entry.path());
+            if entry.kind() == ArchiveEntryKind::Directory {
+                directories.insert(mounted_path);
+                return Ok(());
             }
+
+            let capacity = usize::try_from(entry.size()).map_err(|_| {
+                RuntimeResourceError::Io(std::io::Error::other(
+                    "runtime resource entry does not fit address space",
+                ))
+            })?;
+            let mut bytes = Vec::with_capacity(capacity);
+            contents.read_to_end(&mut bytes)?;
+            let mut parent = mounted_path.parent();
+            while let Some(directory) = parent {
+                if !directory.starts_with(mount_root) {
+                    break;
+                }
+                directories.insert(directory.to_owned());
+                if directory == mount_root {
+                    break;
+                }
+                parent = directory.parent();
+            }
+            files.insert(mounted_path, bytes);
             Ok(())
         })?;
-        Ok(Self { files })
+        Ok(Self {
+            mount_root: mount_root.to_owned(),
+            directories,
+            files,
+        })
+    }
+
+    /// Virtual parent of the mounted `lisp/`, `etc/`, `leim/`, and `info/`
+    /// trees.
+    #[must_use]
+    pub fn mount_root(&self) -> &Path {
+        &self.mount_root
     }
 }
 
 impl RuntimeResourceStore for MountedRuntimeResources {
     fn file_contents(&self, path: &Path) -> Option<&[u8]> {
         self.files.get(path).map(Vec::as_slice)
+    }
+
+    fn directory_exists(&self, path: &Path) -> bool {
+        self.directories.contains(path)
     }
 }

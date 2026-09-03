@@ -20,8 +20,7 @@ use neovm_core::emacs_core::load::{
 use neovm_core::emacs_core::pdump::{DumpError, load_from_dump, load_from_portable_snapshot};
 
 use crate::host::{HostKind, HostProfile, RuntimeImageModel};
-
-const WASM_RUNTIME_ROOT: &str = "/neomacs";
+use crate::runtime_resources::MountedRuntimeResources;
 
 /// Target-independent final image bundled by portable product adapters.
 ///
@@ -62,23 +61,48 @@ impl RuntimeImageSource<'_> {
     /// Validate this source against the host profile and restore its evaluator.
     pub fn load_for(self, host: HostProfile) -> Result<Context, RuntimeImageError> {
         self.validate_model(host)?;
-        if host.kind() == HostKind::Android {
-            return Err(RuntimeImageError::RuntimeRootRequired { host: host.kind() });
+        match host.kind() {
+            HostKind::Android => {
+                return Err(RuntimeImageError::RuntimeRootRequired { host: host.kind() });
+            }
+            HostKind::Wasm => {
+                return Err(RuntimeImageError::RuntimeResourceMountRequired { host: host.kind() });
+            }
+            HostKind::Desktop => {}
         }
 
         let mut evaluator = self.restore()?;
-        match host.kind() {
-            HostKind::Desktop => {
-                finalize_restored_runtime_image(&mut evaluator, RuntimeImageRole::Final, &[])
-            }
-            HostKind::Wasm => finalize_restored_runtime_image_at_root(
-                &mut evaluator,
-                RuntimeImageRole::Final,
-                &[],
-                Path::new(WASM_RUNTIME_ROOT),
-            ),
-            HostKind::Android => unreachable!("Android runtime root checked above"),
+        finalize_restored_runtime_image(&mut evaluator, RuntimeImageRole::Final, &[])
+            .map_err(RuntimeImageError::Finalize)?;
+        Ok(evaluator)
+    }
+
+    /// Restore a browser image together with its authenticated virtual runtime
+    /// resource tree.
+    ///
+    /// The store is installed before image finalization, so every load during
+    /// finalization and the subsequent editor session sees the same root.
+    pub fn load_for_with_mounted_runtime_resources(
+        self,
+        host: HostProfile,
+        resources: MountedRuntimeResources,
+    ) -> Result<Context, RuntimeImageError> {
+        self.validate_model(host)?;
+        if host.kind() != HostKind::Wasm {
+            return Err(RuntimeImageError::MountedRuntimeResourcesUnsupported {
+                host: host.kind(),
+            });
         }
+
+        let runtime_root = resources.mount_root().to_owned();
+        let mut evaluator = self.restore()?;
+        evaluator.install_runtime_resource_store(Box::new(resources));
+        finalize_restored_runtime_image_at_root(
+            &mut evaluator,
+            RuntimeImageRole::Final,
+            &[],
+            &runtime_root,
+        )
         .map_err(RuntimeImageError::Finalize)?;
         Ok(evaluator)
     }
@@ -145,6 +169,18 @@ pub enum RuntimeImageError {
         /// Host which omitted its runtime resource root.
         host: HostKind,
     },
+    /// Browser images require the authenticated resource bundle which owns
+    /// their virtual runtime root.
+    RuntimeResourceMountRequired {
+        /// Host which omitted its runtime resource mount.
+        host: HostKind,
+    },
+    /// In-memory resource mounts belong only to browser hosts; native
+    /// sandboxed hosts use app-private extracted directories.
+    MountedRuntimeResourcesUnsupported {
+        /// Host which was paired with the wrong resource storage model.
+        host: HostKind,
+    },
     /// The selected image failed validation or reconstruction.
     Load(DumpError),
     /// Deserialization succeeded but the live Rust/host surface could not be
@@ -162,6 +198,13 @@ impl Display for RuntimeImageError {
             Self::RuntimeRootRequired { host } => {
                 write!(formatter, "{host:?} must provide an explicit runtime root")
             }
+            Self::RuntimeResourceMountRequired { host } => {
+                write!(formatter, "{host:?} must provide mounted runtime resources")
+            }
+            Self::MountedRuntimeResourcesUnsupported { host } => write!(
+                formatter,
+                "{host:?} cannot use an in-memory runtime resource mount"
+            ),
             Self::Load(error) => Display::fmt(error, formatter),
             Self::Finalize(error) => {
                 write!(formatter, "runtime image finalization failed: {error}")
@@ -175,6 +218,8 @@ impl std::error::Error for RuntimeImageError {
         match self {
             Self::ModelMismatch { .. } => None,
             Self::RuntimeRootRequired { .. } => None,
+            Self::RuntimeResourceMountRequired { .. }
+            | Self::MountedRuntimeResourcesUnsupported { .. } => None,
             Self::Load(error) => Some(error),
             Self::Finalize(error) => Some(error),
         }

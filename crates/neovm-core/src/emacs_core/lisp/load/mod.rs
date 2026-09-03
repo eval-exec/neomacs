@@ -5452,10 +5452,8 @@ fn finalize_cached_bootstrap_eval(
     eval.set_variable("gensym-counter", Value::fixnum(0));
 
     let lisp_dir = project_root.join("lisp");
-    eval.set_variable(
-        "load-path",
-        Value::list(runtime_load_path_entries(&lisp_dir)),
-    );
+    let load_path = runtime_load_path_entries(&lisp_dir, eval.runtime_resource_store());
+    eval.set_variable("load-path", Value::list(load_path));
 
     let etc_dir = project_root.join("etc");
     eval.set_variable(
@@ -5522,6 +5520,13 @@ fn finalize_cached_bootstrap_eval(
 }
 
 pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
+    bootstrap_load_path_entries_with_resources(lisp_dir, None)
+}
+
+fn bootstrap_load_path_entries_with_resources(
+    lisp_dir: &Path,
+    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+) -> Vec<Value> {
     let mut load_path_entries = Vec::new();
     for sub in BOOTSTRAP_LOAD_PATH_SUBDIRS {
         let dir = if sub.is_empty() {
@@ -5529,7 +5534,9 @@ pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
         } else {
             lisp_dir.join(sub)
         };
-        if dir.is_dir() {
+        if runtime_resources.is_some_and(|resources| resources.directory_exists(&dir))
+            || dir.is_dir()
+        {
             load_path_entries.push(Value::string(
                 crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&dir),
             ));
@@ -5544,16 +5551,32 @@ pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
 /// directory.  If there is no empty element, keep the defaults at the end:
 /// unlike an installed GNU Emacs, Neomacs currently has no launcher wrapper
 /// that appends its versioned Lisp directory to `EMACSLOADPATH`.
-fn runtime_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
-    runtime_load_path_entries_from_os(lisp_dir, std::env::var_os("EMACSLOADPATH"))
+fn runtime_load_path_entries(
+    lisp_dir: &Path,
+    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+) -> Vec<Value> {
+    runtime_load_path_entries_from_os_with_resources(
+        lisp_dir,
+        std::env::var_os("EMACSLOADPATH"),
+        runtime_resources,
+    )
 }
 
 /// Testable core of [`runtime_load_path_entries`].
+#[cfg(test)]
 pub(crate) fn runtime_load_path_entries_from_os(
     lisp_dir: &Path,
     emacs_load_path: Option<std::ffi::OsString>,
 ) -> Vec<Value> {
-    let default_load_path = bootstrap_load_path_entries(lisp_dir);
+    runtime_load_path_entries_from_os_with_resources(lisp_dir, emacs_load_path, None)
+}
+
+fn runtime_load_path_entries_from_os_with_resources(
+    lisp_dir: &Path,
+    emacs_load_path: Option<std::ffi::OsString>,
+    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
+) -> Vec<Value> {
+    let default_load_path = bootstrap_load_path_entries_with_resources(lisp_dir, runtime_resources);
     let Some(emacs_load_path) = emacs_load_path else {
         return default_load_path;
     };
