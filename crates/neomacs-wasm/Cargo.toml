@@ -16,6 +16,7 @@ neomacs-app.workspace = true
 neomacs-wasm-protocol.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
+ciborium.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-layout-engine.workspace = true
 neomacs-wgpu-runtime.workspace = true

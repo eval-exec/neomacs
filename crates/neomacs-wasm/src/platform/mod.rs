@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
 use neomacs_display_protocol::FrameGlyphBuffer;
+use neomacs_display_protocol::{FrameDisplayState, SealedFramePresentation};
 use neomacs_layout_engine::bootstrap_frame::PortableBootstrapFrameBuilder;
 use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow};
 use wasm_bindgen::prelude::*;
@@ -14,6 +15,11 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 use winit::window::{Window, WindowId};
+
+thread_local! {
+    static WORKER_FRAME: RefCell<Option<FrameGlyphBuffer>> = const { RefCell::new(None) };
+    static WORKER_WINDOW: RefCell<Option<SurfaceWindow>> = const { RefCell::new(None) };
+}
 
 struct BrowserFrontend {
     lifecycle: FrontendLifecycle,
@@ -93,6 +99,7 @@ impl ApplicationHandler for BrowserFrontend {
                     surface_window.request_redraw();
                 });
                 self.window = Some(window);
+                WORKER_WINDOW.with(|slot| *slot.borrow_mut() = self.window.clone());
             }
             Err(error) => panic!("failed to create the browser canvas window: {error}"),
         }
@@ -146,6 +153,9 @@ impl ApplicationHandler for BrowserFrontend {
                 let Some(presented) = presented.as_mut() else {
                     return;
                 };
+                if let Some(frame) = WORKER_FRAME.with(|slot| slot.borrow_mut().take()) {
+                    presented.frame = Some(frame);
+                }
                 let Some(frame) = presented.frame.as_ref() else {
                     return;
                 };
@@ -162,6 +172,26 @@ impl ApplicationHandler for BrowserFrontend {
             _ => {}
         }
     }
+}
+
+/// Validate and install one evaluator presentation transferred by the editor
+/// Worker. The returned receipt is sent back through the typed input protocol.
+#[wasm_bindgen]
+pub fn install_worker_presentation(bytes: &[u8]) -> Result<String, JsValue> {
+    let state: FrameDisplayState = ciborium::de::from_reader(bytes)
+        .map_err(|error| JsValue::from_str(&format!("invalid Worker presentation: {error}")))?;
+    let sealed = SealedFramePresentation::seal(state).map_err(|error| {
+        JsValue::from_str(&format!("unsealable Worker presentation: {error:?}"))
+    })?;
+    let presentation = sealed.presentation().get();
+    let target = sealed.frame_placement.frame().get();
+    WORKER_FRAME.with(|slot| *slot.borrow_mut() = Some(sealed.materialize()));
+    WORKER_WINDOW.with(|slot| {
+        if let Some(window) = slot.borrow().as_ref() {
+            window.request_redraw();
+        }
+    });
+    Ok(format!("{presentation},{target}"))
 }
 
 /// Start the browser frontend without emulating a never-returning native loop.
