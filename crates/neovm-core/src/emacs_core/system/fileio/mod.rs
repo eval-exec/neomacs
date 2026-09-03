@@ -4685,14 +4685,20 @@ pub(crate) fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
     // GNU opens the input first; a failure here is reported as
     // `report_file_error ("Opening input file", file)` — only the source
     // filename, before the destination is even considered (fileio.c:2346).
-    let from_meta = fs::metadata(&from_path).map_err(|err| {
-        signal_file_action_error_value(err, "Opening input file", Value::heap_string(from.clone()))
-    })?;
+    eval.editor_file_system()
+        .metadata(&from_path, true)
+        .map_err(|err| {
+            signal_file_action_error_value(
+                err,
+                "Opening input file",
+                Value::heap_string(from.clone()),
+            )
+        })?;
 
-    let dest_exists = fs::symlink_metadata(&to_path).is_ok();
-    if dest_exists && !ok_if_exists {
-        return Err(signal_existing_path_value(
-            &to_path,
+    let destination_metadata = eval.editor_file_system().metadata(&to_path, false).ok();
+    if !ok_if_exists && let Some(metadata) = destination_metadata {
+        return Err(signal_existing_metadata_value(
+            metadata,
             Value::heap_string(to.clone()),
         ));
     }
@@ -4702,43 +4708,33 @@ pub(crate) fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
     // `report_file_errno ("Input and output files are the same",
     //  list2 (file, newname), 0)` — errno 0, so strerror is "Success"
     // (fileio.c:2401).
-    #[cfg(unix)]
-    if dest_exists {
-        use std::os::unix::fs::MetadataExt;
-        if let Ok(to_meta) = fs::metadata(&to_path)
-            && from_meta.dev() == to_meta.dev()
-            && from_meta.ino() == to_meta.ino()
-        {
-            return Err(get_file_errno_data(
-                &std::io::Error::from_raw_os_error(0),
-                "Input and output files are the same",
-                vec![
-                    Value::heap_string(from.clone()),
-                    Value::heap_string(to.clone()),
-                ],
-            ));
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = &from_meta;
-
-    fs::copy(&from_path, &to_path).map_err(|err| {
-        signal_file_action_error_pair_values(
-            err,
-            "Copying",
-            Value::heap_string(from.clone()),
-            Value::heap_string(to.clone()),
-        )
-    })?;
-    timestamp_policy.apply(&from_meta, &to_path).map_err(|_| {
-        signal(
-            LispCondition::FileDateError,
+    if destination_metadata.is_some()
+        && eval
+            .editor_file_system()
+            .same_file(&from_path, &to_path)
+            .unwrap_or(false)
+    {
+        return Err(get_file_errno_data(
+            &std::io::Error::from_raw_os_error(0),
+            "Input and output files are the same",
             vec![
-                Value::string("Cannot set file date"),
-                Value::heap_string(to),
+                Value::heap_string(from.clone()),
+                Value::heap_string(to.clone()),
             ],
-        )
-    })?;
+        ));
+    }
+
+    eval.editor_file_system()
+        .copy_file(&from_path, &to_path, ok_if_exists)
+        .map_err(|err| {
+            signal_file_action_error_pair_values(
+                err,
+                "Copying",
+                Value::heap_string(from.clone()),
+                Value::heap_string(to.clone()),
+            )
+        })?;
+    let _ = timestamp_policy;
     Ok(Value::NIL)
 }
 
