@@ -67,7 +67,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         || {},
     );
     let (input, frames) = frontend.split();
-    session.install_host_input_wait_backend(BrowserInputWait { input, frames });
+    session.install_host_input_wait_backend(BrowserWorkerTransport { input, frames });
     browser_host::report_status("entering editor command loop");
     Ok(session.run())
 }
@@ -81,12 +81,12 @@ fn decode_startup(bytes: Vec<u8>) -> Result<BrowserEditorStartup, String> {
     Ok(startup)
 }
 
-struct BrowserInputWait {
+struct BrowserWorkerTransport {
     input: FrontendInputPort,
     frames: FrontendFrameInbox,
 }
 
-impl BrowserInputWait {
+impl BrowserWorkerTransport {
     fn publish_latest_frame(&mut self) -> Result<(), HostInputWaitError> {
         let pending = match self.frames.try_latest() {
             FrontendFrameReceive::Empty => return Ok(()),
@@ -114,16 +114,18 @@ impl BrowserInputWait {
         let batch = batch.try_into_frontend_batch().map_err(|error| {
             HostInputWaitError::new(format!("invalid browser input batch: {error}"))
         })?;
+        let sequence = batch.sequence();
         for event in batch.into_events() {
             self.input.submit(&event).map_err(|error| {
                 HostInputWaitError::new(format!("failed to submit browser input: {error}"))
             })?;
         }
+        browser_host::acknowledge_input(sequence).map_err(HostInputWaitError::new)?;
         Ok(())
     }
 }
 
-impl HostInputWaitBackend for BrowserInputWait {
+impl HostInputWaitBackend for BrowserWorkerTransport {
     fn wait_for_input(&mut self, timeout: Duration) -> Result<(), HostInputWaitError> {
         self.publish_latest_frame()?;
         match browser_host::wait(timeout).map_err(HostInputWaitError::new)? {

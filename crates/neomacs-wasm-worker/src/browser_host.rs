@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use neomacs_wasm_protocol::InputBatchSequence;
+
 const MAX_STARTUP_BYTES: usize = 64 * 1024;
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_RUNTIME_IMAGE_BYTES: usize = 512 * 1024 * 1024;
@@ -22,7 +24,8 @@ unsafe extern "C" {
     safe fn copy_runtime_image(destination: *mut u8, capacity: u32) -> u32;
     safe fn input_len() -> u32;
     safe fn copy_input(destination: *mut u8, capacity: u32) -> u32;
-    safe fn release_input();
+    #[link_name = "acknowledge_input"]
+    safe fn imported_acknowledge_input(source: *const u8, length: u32) -> u32;
     safe fn publish_frame(source: *const u8, length: u32) -> u32;
     safe fn post_status(source: *const u8, length: u32);
     safe fn post_failure(source: *const u8, length: u32);
@@ -56,11 +59,21 @@ pub(crate) fn runtime_image_bytes() -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn take_input_bytes() -> Result<Vec<u8>, String> {
-    let result = copy_host_bytes("browser input batch", input_len(), MAX_INPUT_BYTES, |buffer| {
+    copy_host_bytes("browser input batch", input_len(), MAX_INPUT_BYTES, |buffer| {
         copy_input(buffer.as_mut_ptr(), buffer.len() as u32)
-    });
-    release_input();
-    result
+    })
+}
+
+pub(crate) fn acknowledge_input(sequence: InputBatchSequence) -> Result<(), String> {
+    let wire = sequence.get().to_string();
+    if imported_acknowledge_input(wire.as_ptr(), wire.len() as u32) == 1 {
+        Ok(())
+    } else {
+        Err(format!(
+            "browser host rejected input acknowledgement {}",
+            sequence.get()
+        ))
+    }
 }
 
 fn copy_host_bytes(

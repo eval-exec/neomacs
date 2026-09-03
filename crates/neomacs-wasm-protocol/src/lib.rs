@@ -11,7 +11,7 @@ use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
     FrontendModifiers, FrontendPresentationId, FrontendViewport,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Wire contract understood by this browser frontend and editor Worker.
 pub const WORKER_PROTOCOL_VERSION: u16 = 1;
@@ -160,8 +160,7 @@ impl Display for InvalidBrowserEditorStartup {
 impl std::error::Error for InvalidBrowserEditorStartup {}
 
 /// Monotonic identity echoed by the Worker after accepting an input batch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InputBatchSequence(NonZeroU64);
 
 impl InputBatchSequence {
@@ -191,6 +190,46 @@ impl Display for InvalidInputBatchSequence {
 }
 
 impl std::error::Error for InvalidInputBatchSequence {}
+
+impl Serialize for InputBatchSequence {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.get().to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for InputBatchSequence {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = String::deserialize(deserializer)?;
+        let value = wire.parse::<u64>().map_err(serde::de::Error::custom)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+mod decimal_u64 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
 
 /// Modifier state sampled with one browser key event.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -246,27 +285,53 @@ pub enum BrowserInputEvent {
         symbol: u32,
         modifiers: BrowserModifiers,
         state: BrowserKeyState,
+        #[serde(with = "decimal_u64")]
         target: u64,
     },
     /// Unicode text committed by the browser's input method.
-    TextCommitted { text: String, target: u64 },
+    TextCommitted {
+        text: String,
+        #[serde(with = "decimal_u64")]
+        target: u64,
+    },
     /// Physical canvas extent paired with its logical/device scale.
     ViewportChanged {
         width: u32,
         height: u32,
         scale_factor: f64,
+        #[serde(with = "decimal_u64")]
         target: u64,
     },
     /// Browser focus changed.
-    FocusChanged { focused: bool, target: u64 },
+    FocusChanged {
+        focused: bool,
+        #[serde(with = "decimal_u64")]
+        target: u64,
+    },
     /// The page requested editor shutdown.
-    CloseRequested { target: u64 },
+    CloseRequested {
+        #[serde(with = "decimal_u64")]
+        target: u64,
+    },
     /// The renderer installed an immutable presentation.
-    PresentationActivated { presentation: u64, target: u64 },
+    PresentationActivated {
+        #[serde(with = "decimal_u64")]
+        presentation: u64,
+        #[serde(with = "decimal_u64")]
+        target: u64,
+    },
     /// The renderer rejected a presentation before installation.
-    PresentationDiscarded { presentation: u64, target: u64 },
+    PresentationDiscarded {
+        #[serde(with = "decimal_u64")]
+        presentation: u64,
+        #[serde(with = "decimal_u64")]
+        target: u64,
+    },
     /// A formerly visible presentation can no longer produce input hits.
-    PresentationRetired { presentation: u64 },
+    PresentationRetired {
+        #[serde(with = "decimal_u64")]
+        presentation: u64,
+    },
 }
 
 impl BrowserInputEvent {
