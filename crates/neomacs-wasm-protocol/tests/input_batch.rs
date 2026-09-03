@@ -1,7 +1,7 @@
 use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyState, FrontendKeySymbol, FrontendPresentationId,
 };
-use neomacs_wasm::worker_protocol::{
+use neomacs_wasm_protocol::{
     BrowserInputBatch, BrowserInputEvent, BrowserKeyState, BrowserModifiers, InputBatchSequence,
     InvalidBrowserInputBatch,
 };
