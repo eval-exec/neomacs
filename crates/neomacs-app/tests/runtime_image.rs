@@ -7,9 +7,9 @@ use std::io::Cursor;
 
 use neomacs_app::host::{ExecutionEngine, HostKind, HostProfile, RuntimeImageModel};
 use neomacs_app::runtime_image::{
-    ExtractedRuntimeImage, PORTABLE_FINAL_RUNTIME_IMAGE_ASSET,
-    PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET, RuntimeImageError, RuntimeImageInstall,
-    RuntimeImageProvisionError, RuntimeImageSource,
+    AuthenticatedPortableRuntimeImage, ExtractedRuntimeImage, PORTABLE_FINAL_RUNTIME_IMAGE_ASSET,
+    PORTABLE_FINAL_RUNTIME_IMAGE_ID_ASSET, PortableRuntimeImageError, RuntimeImageError,
+    RuntimeImageInstall, RuntimeImageProvisionError, RuntimeImageSource,
 };
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::pdump::{dump_to_file, encode_portable_snapshot, load_from_dump};
@@ -27,7 +27,9 @@ fn browser_profile_loads_linear_memory_snapshot() {
         ("etc/NEWS", b"news"),
     ]);
 
-    let mut loaded = RuntimeImageSource::LinearMemory(&bytes)
+    let image_id = content_id(&bytes);
+    let mut loaded = AuthenticatedPortableRuntimeImage::from_assets(&bytes, image_id.as_bytes())
+        .expect("authenticate portable image")
         .load_for_with_mounted_runtime_resources(HostProfile::WASM, resources)
         .expect("load browser runtime image");
 
@@ -57,6 +59,22 @@ fn browser_profile_loads_linear_memory_snapshot() {
 }
 
 #[test]
+fn browser_portable_image_rejects_bytes_that_do_not_match_the_packaged_id() {
+    let image = encode_portable_snapshot(&Context::new()).expect("encode portable image");
+    let different_image = b"not the packaged image";
+    let image_id = content_id(&image);
+
+    let error =
+        AuthenticatedPortableRuntimeImage::from_assets(different_image, image_id.as_bytes())
+            .unwrap_err();
+
+    assert!(matches!(
+        error,
+        PortableRuntimeImageError::DigestMismatch { .. }
+    ));
+}
+
+#[test]
 fn browser_image_load_installs_its_authenticated_runtime_resource_mount() {
     let image = encode_portable_snapshot(&Context::new()).expect("encode portable image");
     let resources = mounted_runtime_resources(&[
@@ -67,7 +85,9 @@ fn browser_image_load_installs_its_authenticated_runtime_resource_mount() {
         ("etc/NEWS", b"news"),
     ]);
 
-    let mut loaded = RuntimeImageSource::LinearMemory(&image)
+    let image_id = content_id(&image);
+    let mut loaded = AuthenticatedPortableRuntimeImage::from_assets(&image, image_id.as_bytes())
+        .expect("authenticate portable image")
         .load_for_with_mounted_runtime_resources(HostProfile::WASM, resources)
         .expect("load browser image with mounted resources");
 
