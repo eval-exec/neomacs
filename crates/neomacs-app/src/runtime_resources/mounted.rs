@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use neovm_core::emacs_core::fileio::{RuntimeResourceNode, RuntimeResourceStore};
 
 use super::bundle::{
-    ArchiveEntryKind, RuntimeResourceError, read_bundle_id, visit_authenticated_archive,
+    ArchiveEntryKind, RuntimeResourceBundle, RuntimeResourceError, visit_authenticated_archive,
 };
 
 /// An authenticated runtime resource bundle expanded into linear memory.
@@ -27,40 +27,42 @@ impl MountedRuntimeResources {
     /// Authenticate and mount a deterministic runtime resource bundle.
     pub fn from_bundle(
         mount_root: &Path,
-        archive: &[u8],
-        bundle_id: &[u8],
+        bundle: RuntimeResourceBundle<'_>,
     ) -> Result<Self, RuntimeResourceError> {
-        let expected = read_bundle_id(Cursor::new(bundle_id))?;
         let mut directories = BTreeSet::from([mount_root.to_owned()]);
         let mut files = BTreeMap::new();
-        visit_authenticated_archive(Cursor::new(archive), &expected, |entry, contents| {
-            let mounted_path = mount_root.join(entry.path());
-            if entry.kind() == ArchiveEntryKind::Directory {
-                directories.insert(mounted_path);
-                return Ok(());
-            }
+        visit_authenticated_archive(
+            Cursor::new(bundle.archive()),
+            bundle.expected(),
+            |entry, contents| {
+                let mounted_path = mount_root.join(entry.path());
+                if entry.kind() == ArchiveEntryKind::Directory {
+                    directories.insert(mounted_path);
+                    return Ok(());
+                }
 
-            let capacity = usize::try_from(entry.size()).map_err(|_| {
-                RuntimeResourceError::Io(std::io::Error::other(
-                    "runtime resource entry does not fit address space",
-                ))
-            })?;
-            let mut bytes = Vec::with_capacity(capacity);
-            contents.read_to_end(&mut bytes)?;
-            let mut parent = mounted_path.parent();
-            while let Some(directory) = parent {
-                if !directory.starts_with(mount_root) {
-                    break;
+                let capacity = usize::try_from(entry.size()).map_err(|_| {
+                    RuntimeResourceError::Io(std::io::Error::other(
+                        "runtime resource entry does not fit address space",
+                    ))
+                })?;
+                let mut bytes = Vec::with_capacity(capacity);
+                contents.read_to_end(&mut bytes)?;
+                let mut parent = mounted_path.parent();
+                while let Some(directory) = parent {
+                    if !directory.starts_with(mount_root) {
+                        break;
+                    }
+                    directories.insert(directory.to_owned());
+                    if directory == mount_root {
+                        break;
+                    }
+                    parent = directory.parent();
                 }
-                directories.insert(directory.to_owned());
-                if directory == mount_root {
-                    break;
-                }
-                parent = directory.parent();
-            }
-            files.insert(mounted_path, bytes);
-            Ok(())
-        })?;
+                files.insert(mounted_path, bytes);
+                Ok(())
+            },
+        )?;
         Ok(Self {
             mount_root: mount_root.to_owned(),
             directories,

@@ -1,10 +1,21 @@
 use std::path::Path;
 
-use neomacs_app::runtime_resources::{MountedRuntimeResources, RuntimeResourceError};
+use neomacs_app::runtime_resources::{
+    MountedRuntimeResources, RuntimeResourceBundle, RuntimeResourceError,
+};
 use neovm_core::emacs_core::fileio::RuntimeResourceStore;
 use support::runtime_resources::{content_id, mounted_runtime_resources, runtime_archive};
 
 mod support;
+
+#[test]
+fn runtime_resource_bundle_rejects_a_noncanonical_identity() {
+    let archive = runtime_archive(&[("lisp/loadup.el", b"lisp"), ("etc/NEWS", b"etc")]);
+
+    let error = RuntimeResourceBundle::from_assets(&archive, b"NOT-A-SHA-256-ID").unwrap_err();
+
+    assert!(matches!(error, RuntimeResourceError::InvalidBundleId));
+}
 
 #[test]
 fn authenticated_bundle_mounts_runtime_files_beneath_the_selected_root() {
@@ -33,8 +44,8 @@ fn authenticated_bundle_mounts_runtime_files_beneath_the_selected_root() {
 fn mounted_runtime_resources_reject_a_digest_mismatch() {
     let archive = runtime_archive(&[("lisp/loadup.el", b"lisp"), ("etc/NEWS", b"etc")]);
 
-    let error = MountedRuntimeResources::from_bundle(Path::new("/neomacs"), &archive, &[b'0'; 64])
-        .unwrap_err();
+    let bundle = RuntimeResourceBundle::from_assets(&archive, &[b'0'; 64]).unwrap();
+    let error = MountedRuntimeResources::from_bundle(Path::new("/neomacs"), bundle).unwrap_err();
 
     assert!(matches!(
         error,
@@ -51,9 +62,8 @@ fn mounted_runtime_resources_reject_paths_outside_owned_runtime_roots() {
     ]);
     let id = content_id(&archive);
 
-    let error =
-        MountedRuntimeResources::from_bundle(Path::new("/neomacs"), &archive, id.as_bytes())
-            .unwrap_err();
+    let bundle = RuntimeResourceBundle::from_assets(&archive, id.as_bytes()).unwrap();
+    let error = MountedRuntimeResources::from_bundle(Path::new("/neomacs"), bundle).unwrap_err();
 
     assert!(matches!(
         error,
@@ -66,9 +76,8 @@ fn mounted_runtime_resources_require_lisp_and_data_trees() {
     let archive = runtime_archive(&[("lisp/loadup.el", b"lisp")]);
     let id = content_id(&archive);
 
-    let error =
-        MountedRuntimeResources::from_bundle(Path::new("/neomacs"), &archive, id.as_bytes())
-            .unwrap_err();
+    let bundle = RuntimeResourceBundle::from_assets(&archive, id.as_bytes()).unwrap();
+    let error = MountedRuntimeResources::from_bundle(Path::new("/neomacs"), bundle).unwrap_err();
 
     assert!(matches!(
         error,
@@ -81,9 +90,8 @@ fn files_named_after_required_roots_do_not_count_as_runtime_trees() {
     let archive = runtime_archive(&[("lisp", b"not a tree"), ("etc", b"not a tree")]);
     let id = content_id(&archive);
 
-    let error =
-        MountedRuntimeResources::from_bundle(Path::new("/neomacs"), &archive, id.as_bytes())
-            .unwrap_err();
+    let bundle = RuntimeResourceBundle::from_assets(&archive, id.as_bytes()).unwrap();
+    let error = MountedRuntimeResources::from_bundle(Path::new("/neomacs"), bundle).unwrap_err();
 
     assert!(matches!(
         error,

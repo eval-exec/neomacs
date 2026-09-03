@@ -3,7 +3,7 @@
 mod bundle;
 mod mounted;
 
-pub use bundle::RuntimeResourceError;
+pub use bundle::{RuntimeResourceBundle, RuntimeResourceError};
 pub use mounted::MountedRuntimeResources;
 
 std::cfg_select! {
