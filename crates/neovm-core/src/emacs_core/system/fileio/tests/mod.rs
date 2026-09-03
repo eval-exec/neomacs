@@ -190,6 +190,56 @@ fn lisp_file_metadata_queries_share_the_context_filesystem() {
     );
 }
 
+#[test]
+fn lisp_copy_file_uses_the_context_filesystem() {
+    crate::test_utils::init_test_tracing();
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .create_directory(std::path::Path::new("/neomacs-fake"), false)
+        .expect("seed virtual home mount");
+    filesystem
+        .write(
+            std::path::Path::new("/neomacs-fake/source"),
+            b"copied through host storage",
+            WriteRequest {
+                mode: WriteMode::CreateNew,
+                sync: false,
+            },
+        )
+        .expect("seed source file");
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(filesystem));
+
+    builtin_copy_file(
+        &mut eval,
+        vec![
+            Value::string("/neomacs-fake/source"),
+            Value::string("/neomacs-fake/copy"),
+        ],
+    )
+    .expect("copy through installed filesystem");
+    builtin_insert_file_contents(&mut eval, vec![Value::string("/neomacs-fake/copy")])
+        .expect("read copied file");
+    assert_eq!(
+        eval.buffers
+            .current_buffer()
+            .expect("current buffer")
+            .buffer_string(),
+        "copied through host storage",
+    );
+
+    let same_file_error = builtin_copy_file(
+        &mut eval,
+        vec![
+            Value::string("/neomacs-fake/copy"),
+            Value::string("/neomacs-fake/copy"),
+            Value::T,
+        ],
+    )
+    .expect_err("copying a file onto itself must fail");
+    assert!(matches!(same_file_error, Flow::Signal(_)));
+}
+
 thread_local! {
     /// Keep ALL test contexts alive across a single #[test] so that
     /// heap-backed return values from earlier `call_fileio_builtin!`
