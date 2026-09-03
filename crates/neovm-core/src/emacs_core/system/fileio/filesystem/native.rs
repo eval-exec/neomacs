@@ -177,7 +177,9 @@ impl EditorFileSystem for NativeFileSystem {
         if !replace && fs::symlink_metadata(to).is_ok() {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        fs::rename(from, to)
+        super::super::rename_path_with_cross_device_fallback(from, to, replace, |from, to| {
+            fs::rename(from, to)
+        })
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
