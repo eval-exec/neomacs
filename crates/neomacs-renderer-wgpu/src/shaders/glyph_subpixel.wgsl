@@ -20,6 +20,7 @@ struct VertexOutput {
 
 struct Uniforms {
     screen_size: vec2<f32>,
+    _padding: vec2<f32>,
 }
 
 @group(0) @binding(0)

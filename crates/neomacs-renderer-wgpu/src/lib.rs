@@ -24,6 +24,10 @@ pub mod vertex;
 pub mod xbm;
 pub mod xpm;
 
+#[cfg(test)]
+#[path = "shader_layout_test.rs"]
+mod shader_layout_tests;
+
 #[cfg(feature = "video")]
 pub mod video_cache;
 
