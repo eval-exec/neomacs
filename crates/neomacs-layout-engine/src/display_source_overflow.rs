@@ -140,7 +140,9 @@ impl WindowLocalRowExtent {
 ///
 /// - **`LeaveWhole` drops the glyph.** In GNU a narrow mid-row widget that
 ///   does not fit is continued onto the next row or truncated by
-///   `display_line` (src/xdisp.c:26223-26310); this row builder has no
+///   `display_line` (the test at src/xdisp.c:26221-26224, the branch that
+///   restores the position and emits the continuation glyph at
+///   :26416-26434); this row builder has no
 ///   remainder for a media replacement, so the row's
 ///   `RejectOverflowingGlyph` policy consumes the covered text and emits
 ///   nothing.  The pre-existing behavior, narrowed by this rule to widgets
@@ -150,7 +152,7 @@ impl WindowLocalRowExtent {
 ///   (`clip_to_bounds (-1, …)`, :32600); here `visible_width_px > 0.0`
 ///   guards the crop and such a glyph is dropped instead.
 /// - **Box line widths.** GNU adds `box_vertical_line_width` to
-///   `it->pixel_width` before computing `crop` (:32556-32570); the width
+///   `it->pixel_width` before computing `crop` (:32557-32571); the width
 ///   passed here is the widget's, so a boxed widget's threshold and advance
 ///   are narrower than GNU's by the box.  Xwidgets have no positive-box
 ///   expansion in this port yet (only images do).
@@ -158,7 +160,22 @@ impl WindowLocalRowExtent {
 ///   carry `first_visible_x` (src/xdisp.c:3507); this port scrolls by
 ///   skipping columns, so [`WindowLocalRowExtent`] is hscroll-free.  The
 ///   remaining width agrees; the quarter-width threshold is smaller than
-///   GNU's by a quarter of the scrolled-off pixels.
+///   GNU's by a quarter of the scrolled-off pixels.  A widget that
+///   straddles `first_visible_x` is produced by GNU and kept with a
+///   negative `row->x`; here the skip phase consumes the character that
+///   carries it as a plain glyph (`consume_step_char` in
+///   `buffer_source/row_lifecycle.rs`), so it never reaches this rule and
+///   is not shown at all.
+/// - **`it->hpos == 0` under horizontal scrolling.** GNU's `hpos` counts
+///   only glyphs past `first_visible_x` (`maybe_produce_line_number`,
+///   :25705-25706); `at_row_start` here means "nothing written before this
+///   glyph", which agrees only because the skip phase writes nothing before
+///   the first visible glyph.
+/// - **Ascent and descent.** The same GNU function splits the widget's
+///   height evenly (`it->ascent = it->descent = xw->height/2`,
+///   :32546-32547); this port gives a media replacement a full-height
+///   ascent (`display_replacement_ascent`).  Not a crop matter, listed
+///   because it is in the function this rule is taken from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DisplayXwidgetOverflowAction {
     Fits,

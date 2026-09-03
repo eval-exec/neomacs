@@ -14319,8 +14319,9 @@ fn layout_frame_rust_measures_the_quarter_width_rule_from_the_text_area_not_the_
         "the line-number prefix moves the glyph right: {cropped:?}"
     );
     // The layout pen reaches the widget at frame x 1456 (text area at 800,
-    // the border cell, four line-number cells, 75 cells of text), so GNU's
-    // crop is 200 - (1592 - 1456).
+    // the border cell, the six-cell line-number prefix -- two digits plus
+    // GNU's `lnum_width + 2` padding -- and 75 cells of text: 82 cells of
+    // 8 px), so GNU's crop is 200 - (1592 - 1456).
     assert_eq!(
         cropped.width, 136.0,
         "GNU: pixel_width -= crop; {cropped:?}"
