@@ -64,3 +64,48 @@ fn windows_file_writable_p_accepts_existing_directory_forms() {
         assert_eq!(result, Value::T);
     }
 }
+
+/// CopyFileW preserves the source modification time.  GNU explicitly resets
+/// both destination timestamps to now when copy-file's KEEP-TIME argument is
+/// nil (`src/w32.c:w32_copy_file`), so the default copy must not retain an old
+/// source timestamp.
+#[test]
+fn windows_copy_file_without_keep_time_refreshes_timestamps() {
+    crate::test_utils::init_test_tracing();
+    let directory = workspace_temp_dir();
+    let source = directory.path().join("source.txt");
+    let destination = directory.path().join("destination.txt");
+    std::fs::write(&source, "contents").expect("create copy source");
+
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(86_400);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .expect("open copy source")
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_accessed(old)
+                .set_modified(old),
+        )
+        .expect("age copy source");
+
+    let mut eval = Context::new();
+    builtin_copy_file(
+        &mut eval,
+        vec![
+            Value::string(source.display().to_string()),
+            Value::string(destination.display().to_string()),
+        ],
+    )
+    .expect("copy file without KEEP-TIME");
+
+    let destination_modified = std::fs::metadata(&destination)
+        .expect("stat copied file")
+        .modified()
+        .expect("copied file modification time");
+    assert!(
+        destination_modified > old + std::time::Duration::from_secs(86_400),
+        "copy-file retained the source timestamp despite nil KEEP-TIME: \
+         source={old:?}, destination={destination_modified:?}"
+    );
+}
