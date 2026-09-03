@@ -12,8 +12,9 @@
 //! view resumes the clock. This is deliberately stricter than video's
 //! process-wide demand.
 
+use crate::clock::Instant;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::shader_surface::{
     SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceChannelSource, SurfaceShaderLanguage,

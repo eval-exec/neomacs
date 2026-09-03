@@ -19,7 +19,7 @@ pub(super) struct EffectCtx<'a> {
     pub mouse_pos: (f32, f32),
     pub surface_width: u32,
     pub surface_height: u32,
-    pub aurora_start: std::time::Instant,
+    pub aurora_start: crate::clock::Instant,
     pub scale_factor: f32,
     /// Logical frame width (frame_glyphs.width or surface_width/scale_factor)
     pub logical_w: f32,

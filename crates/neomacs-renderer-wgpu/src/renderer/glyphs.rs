@@ -1866,7 +1866,7 @@ impl WgpuRenderer {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let now_ml = std::time::Instant::now();
+        let now_ml = crate::clock::Instant::now();
         for info in &frame_glyphs.window_infos {
             if info.mode_line_height < 1.0 || info.is_minibuffer {
                 continue;
@@ -1931,7 +1931,7 @@ impl WgpuRenderer {
     }
 
     fn refresh_scroll_spacing_state(&mut self) {
-        let now_spacing = std::time::Instant::now();
+        let now_spacing = crate::clock::Instant::now();
         self.fx
             .scroll_spacing
             .active

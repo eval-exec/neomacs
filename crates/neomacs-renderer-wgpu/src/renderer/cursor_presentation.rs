@@ -39,7 +39,7 @@ pub(super) enum CursorColorPolicy<'a> {
     Inherit,
     Cycle {
         config: &'a CursorColorCycleConfig,
-        origin: std::time::Instant,
+        origin: crate::clock::Instant,
     },
     Override(Color),
 }
@@ -57,7 +57,7 @@ impl PresentedCursorPaint {
     pub(super) fn resolve(
         resolved: ResolvedCursorPaint,
         policy: CursorColorPolicy<'_>,
-        sample_time: std::time::Instant,
+        sample_time: crate::clock::Instant,
     ) -> Self {
         let body_background = match policy {
             CursorColorPolicy::Inherit => resolved.box_background,
@@ -76,8 +76,8 @@ impl PresentedCursorPaint {
 pub(super) fn cursor_color_cycle_color_at(
     resolved_background: Color,
     cycle: &CursorColorCycleConfig,
-    sample_time: std::time::Instant,
-    cycle_start: std::time::Instant,
+    sample_time: crate::clock::Instant,
+    cycle_start: crate::clock::Instant,
 ) -> Color {
     let elapsed = sample_time
         .saturating_duration_since(cycle_start)

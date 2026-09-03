@@ -729,7 +729,7 @@ fn default_effects_config() {
 #[test]
 fn line_anim_entry_fields() {
     let bounds = Rect::new(10.0, 20.0, 400.0, 300.0);
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let entry = LineAnimEntry {
         window_bounds: bounds,
         edit_y: 100.0,
@@ -745,7 +745,7 @@ fn line_anim_entry_fields() {
 
 #[test]
 fn click_halo_entry_fields() {
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let entry = ClickHaloEntry {
         x: 150.0,
         y: 200.0,
@@ -760,7 +760,7 @@ fn click_halo_entry_fields() {
 #[test]
 fn scroll_spacing_entry_fields() {
     let bounds = Rect::new(0.0, 0.0, 800.0, 600.0);
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let entry = ScrollSpacingEntry {
         window_id: 42,
         bounds,
@@ -776,7 +776,7 @@ fn scroll_spacing_entry_fields() {
 #[test]
 fn text_fade_entry_fields() {
     let bounds = Rect::new(5.0, 10.0, 500.0, 400.0);
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let entry = TextFadeEntry {
         window_id: 7,
         bounds,
@@ -791,7 +791,7 @@ fn text_fade_entry_fields() {
 #[test]
 fn edge_snap_entry_fields() {
     let bounds = Rect::new(0.0, 0.0, 800.0, 600.0);
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let entry = EdgeSnapEntry {
         bounds,
         mode_line_height: 22.0,
@@ -807,7 +807,7 @@ fn edge_snap_entry_fields() {
 
 #[test]
 fn sonar_ping_entry_fields() {
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let entry = SonarPingEntry {
         cx: 100.0,
         cy: 200.0,
@@ -821,7 +821,7 @@ fn sonar_ping_entry_fields() {
 
 #[test]
 fn edge_glow_entry_fields() {
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let bounds = Rect::new(0.0, 0.0, 400.0, 300.0);
     let entry = EdgeGlowEntry {
         window_id: 99,
@@ -837,7 +837,7 @@ fn edge_glow_entry_fields() {
 
 #[test]
 fn window_fade_entry_fields() {
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let bounds = Rect::new(10.0, 10.0, 300.0, 250.0);
     let entry = WindowFadeEntry {
         window_id: 3,
@@ -852,7 +852,7 @@ fn window_fade_entry_fields() {
 
 #[test]
 fn scroll_momentum_entry_fields() {
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let bounds = Rect::new(0.0, 0.0, 600.0, 400.0);
     let entry = ScrollMomentumEntry {
         window_id: 11,
@@ -867,7 +867,7 @@ fn scroll_momentum_entry_fields() {
 
 #[test]
 fn scroll_velocity_fade_entry_fields() {
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let bounds = Rect::new(0.0, 0.0, 800.0, 600.0);
     let entry = ScrollVelocityFadeEntry {
         window_id: 5,
@@ -882,7 +882,7 @@ fn scroll_velocity_fade_entry_fields() {
 
 #[test]
 fn mode_line_fade_entry_fields() {
-    let now = std::time::Instant::now();
+    let now = crate::clock::Instant::now();
     let entry = ModeLineFadeEntry {
         window_id: 1,
         mode_line_y: 580.0,

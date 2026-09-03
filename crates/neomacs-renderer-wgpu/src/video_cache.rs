@@ -1,5 +1,6 @@
 //! Renderer-facing facade over the cross-platform native video subsystem.
 
+use crate::clock::Instant;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use neomacs_display_protocol::types::VideoId;
@@ -90,7 +91,7 @@ const PRESENTATION_TIMING_WINDOW: usize = 4096;
 
 #[derive(Default)]
 struct PresentationTimingState {
-    last_presented_at: Option<std::time::Instant>,
+    last_presented_at: Option<Instant>,
     intervals_us: VecDeque<u64>,
     interval_samples: u64,
     interval_total_us: u64,
@@ -99,7 +100,7 @@ struct PresentationTimingState {
 }
 
 impl PresentationTimingState {
-    fn record(&mut self, presented_at: std::time::Instant) {
+    fn record(&mut self, presented_at: Instant) {
         let Some(previous) = self.last_presented_at.replace(presented_at) else {
             return;
         };
@@ -174,10 +175,10 @@ impl VideoPresentationTracker {
     }
 
     fn finish_presented_surface(&mut self) {
-        self.finish_presented_surface_at(std::time::Instant::now());
+        self.finish_presented_surface_at(Instant::now());
     }
 
-    fn finish_presented_surface_at(&mut self, presented_at: std::time::Instant) {
+    fn finish_presented_surface_at(&mut self, presented_at: Instant) {
         let SurfacePresentationState::Recording(pending) = std::mem::take(&mut self.surface) else {
             return;
         };

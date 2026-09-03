@@ -21,7 +21,7 @@ pub(crate) struct ScrollMomentumEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
     pub(crate) direction: i32, // 1 = down, -1 = up
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -39,21 +39,21 @@ pub(crate) struct CursorGhostEntry {
     pub(crate) y: f32,
     pub(crate) width: f32,
     pub(crate) height: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
 }
 
 /// Entry for cursor sonar ping
 pub(crate) struct SonarPingEntry {
     pub(crate) cx: f32,
     pub(crate) cy: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
 pub(crate) struct SparkleBurstEntry {
     pub(crate) cx: f32,
     pub(crate) cy: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     /// Random seed for particle directions
     pub(crate) seed: u32,
 }
@@ -63,7 +63,7 @@ pub(crate) struct EdgeGlowEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
     pub(crate) at_top: bool,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -80,7 +80,7 @@ pub(crate) struct RainDrop {
 pub(crate) struct RippleWaveEntry {
     pub(crate) x: f32,
     pub(crate) y: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -90,7 +90,7 @@ pub(crate) struct CursorParticle {
     pub(crate) y: f32,
     pub(crate) vx: f32,
     pub(crate) vy: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) lifetime: std::time::Duration,
 }
 
@@ -100,7 +100,7 @@ pub(crate) struct HeatMapEntry {
     pub(crate) y: f32,
     pub(crate) width: f32,
     pub(crate) height: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
 }
 
 /// Entry for window edge snap indicator
@@ -109,7 +109,7 @@ pub(crate) struct EdgeSnapEntry {
     pub(crate) mode_line_height: f32,
     pub(crate) at_top: bool,
     pub(crate) at_bottom: bool,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -117,7 +117,7 @@ pub(crate) struct EdgeSnapEntry {
 pub(crate) struct ClickHaloEntry {
     pub(crate) x: f32,
     pub(crate) y: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -127,7 +127,7 @@ pub(crate) struct ScrollVelocityFadeEntry {
     pub(crate) bounds: Rect,
     /// Scroll delta magnitude (characters scrolled)
     pub(crate) velocity: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -135,7 +135,7 @@ pub(crate) struct ScrollVelocityFadeEntry {
 pub(crate) struct WindowFadeEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
     pub(crate) intensity: f32,
 }
@@ -148,7 +148,7 @@ pub(crate) struct TitleFadeEntry {
     pub(crate) old_text: String,
     #[allow(dead_code)]
     pub(crate) new_text: String,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -161,7 +161,7 @@ pub(crate) struct LineAnimEntry {
     /// Initial Y offset (negative=insertion slide-down, positive=deletion slide-up)
     pub(crate) initial_offset: f32,
     /// When the animation started
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     /// Duration of the animation
     pub(crate) duration: std::time::Duration,
 }
@@ -174,7 +174,7 @@ pub(crate) struct ModeLineFadeEntry {
     pub(crate) mode_line_h: f32,
     pub(crate) bounds_x: f32,
     pub(crate) bounds_w: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -182,7 +182,7 @@ pub(crate) struct ModeLineFadeEntry {
 pub(crate) struct TextFadeEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -192,7 +192,7 @@ pub(crate) struct ScrollSpacingEntry {
     pub(crate) bounds: Rect,
     /// +1 = scroll down (content moves up), -1 = scroll up
     pub(crate) direction: i32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: crate::clock::Instant,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -208,7 +208,7 @@ pub(crate) struct WindowDimState {
 /// Typing ripple state: active ripples as (center_x, center_y, spawn_instant).
 #[derive(Default)]
 pub(crate) struct TypingRippleState {
-    pub(crate) active: Vec<(f32, f32, std::time::Instant)>,
+    pub(crate) active: Vec<(f32, f32, crate::clock::Instant)>,
 }
 
 /// Line insertion/deletion slide animations.
@@ -235,7 +235,7 @@ pub(crate) struct TitleFadeState {
 #[derive(Default)]
 pub(crate) struct BorderTransitionState {
     /// Per-window border transition state: (window_id, is_becoming_active, start_time)
-    pub(crate) transitions: Vec<(i64, bool, std::time::Instant)>,
+    pub(crate) transitions: Vec<(i64, bool, crate::clock::Instant)>,
     /// Previous selected window for border transition detection
     pub(crate) prev_selected: i64,
 }
@@ -263,7 +263,7 @@ pub(crate) struct ScrollSpacingState {
 /// Cursor trail state: recent positions as (x, y, w, h, instant).
 #[derive(Default)]
 pub(crate) struct CursorTrailState {
-    pub(crate) positions: Vec<(f32, f32, f32, f32, std::time::Instant)>,
+    pub(crate) positions: Vec<(f32, f32, f32, f32, crate::clock::Instant)>,
     pub(crate) last_pos: (f32, f32),
 }
 
@@ -276,19 +276,19 @@ pub(crate) struct NoiseGrainState {
 /// Cursor wake animation trigger time.
 #[derive(Default)]
 pub(crate) struct CursorWakeState {
-    pub(crate) started: Option<std::time::Instant>,
+    pub(crate) started: Option<crate::clock::Instant>,
 }
 
 /// Cursor magnetism entries as (x, y, time).
 #[derive(Default)]
 pub(crate) struct CursorMagnetismState {
-    pub(crate) entries: Vec<(f32, f32, std::time::Instant)>,
+    pub(crate) entries: Vec<(f32, f32, crate::clock::Instant)>,
 }
 
 /// Cursor comet positions as (x, y, w, h, time).
 #[derive(Default)]
 pub(crate) struct CursorCometState {
-    pub(crate) positions: Vec<(f32, f32, f32, f32, std::time::Instant)>,
+    pub(crate) positions: Vec<(f32, f32, f32, f32, crate::clock::Instant)>,
 }
 
 /// Cursor particle system state.
@@ -314,7 +314,7 @@ pub(crate) struct ScrollVelocityState {
 /// Resize padding animation trigger time.
 #[derive(Default)]
 pub(crate) struct ResizePaddingState {
-    pub(crate) started: Option<std::time::Instant>,
+    pub(crate) started: Option<crate::clock::Instant>,
 }
 
 /// Scroll momentum indicators.
@@ -354,7 +354,7 @@ pub(crate) struct LightningBoltState {
 pub(crate) struct CursorPendulumState {
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
-    pub(crate) swing_start: Option<std::time::Instant>,
+    pub(crate) swing_start: Option<crate::clock::Instant>,
 }
 
 /// Cursor sparkle bursts.
@@ -368,13 +368,13 @@ pub(crate) struct SparkleBurstState {
 pub(crate) struct CursorMetronomeState {
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
-    pub(crate) tick_start: Option<std::time::Instant>,
+    pub(crate) tick_start: Option<crate::clock::Instant>,
 }
 
 /// Cursor ripple ring state.
 #[derive(Default)]
 pub(crate) struct RippleRingState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<crate::clock::Instant>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -382,7 +382,7 @@ pub(crate) struct RippleRingState {
 /// Cursor shockwave state.
 #[derive(Default)]
 pub(crate) struct ShockwaveState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<crate::clock::Instant>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -390,7 +390,7 @@ pub(crate) struct ShockwaveState {
 /// Cursor bubble state.
 #[derive(Default)]
 pub(crate) struct BubbleState {
-    pub(crate) spawn_time: Option<std::time::Instant>,
+    pub(crate) spawn_time: Option<crate::clock::Instant>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -398,7 +398,7 @@ pub(crate) struct BubbleState {
 /// Cursor firework state.
 #[derive(Default)]
 pub(crate) struct FireworkState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<crate::clock::Instant>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -406,7 +406,7 @@ pub(crate) struct FireworkState {
 /// Cursor lightning strike state.
 #[derive(Default)]
 pub(crate) struct CursorLightningState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<crate::clock::Instant>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -414,7 +414,7 @@ pub(crate) struct CursorLightningState {
 /// Cursor snowflake state.
 #[derive(Default)]
 pub(crate) struct SnowflakeState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<crate::clock::Instant>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -453,7 +453,7 @@ pub(crate) struct EdgeSnapState {
 /// Cursor error pulse trigger time.
 #[derive(Default)]
 pub(crate) struct ErrorPulseState {
-    pub(crate) started: Option<std::time::Instant>,
+    pub(crate) started: Option<crate::clock::Instant>,
 }
 
 /// All per-effect animation state transferred between the renderer and a
@@ -508,22 +508,22 @@ pub(crate) struct EffectsState {
 #[derive(Clone, Copy)]
 pub(crate) struct EffectClocks {
     /// Last dim update time for smooth interpolation
-    pub(crate) last_dim_tick: std::time::Instant,
+    pub(crate) last_dim_tick: crate::clock::Instant,
     /// Start time for pulse phase calculation
-    pub(crate) cursor_pulse_start: std::time::Instant,
+    pub(crate) cursor_pulse_start: crate::clock::Instant,
     /// Search pulse start time
-    pub(crate) search_pulse_start: std::time::Instant,
-    pub(crate) cursor_color_cycle_start: std::time::Instant,
-    pub(crate) focus_ring_start: std::time::Instant,
+    pub(crate) search_pulse_start: crate::clock::Instant,
+    pub(crate) cursor_color_cycle_start: crate::clock::Instant,
+    pub(crate) focus_ring_start: crate::clock::Instant,
     /// Last lightning bolt regeneration time
-    pub(crate) lightning_bolt_last: std::time::Instant,
+    pub(crate) lightning_bolt_last: crate::clock::Instant,
     #[allow(dead_code)]
-    pub(crate) rain_last_spawn: std::time::Instant,
+    pub(crate) rain_last_spawn: crate::clock::Instant,
 }
 
 impl Default for EffectClocks {
     fn default() -> Self {
-        let now = std::time::Instant::now();
+        let now = crate::clock::Instant::now();
         Self {
             last_dim_tick: now,
             cursor_pulse_start: now,
@@ -561,14 +561,14 @@ impl Default for EffectDurations {
 /// frame-effects swaps): a child frame's effects read the same aurora phase
 /// and render epoch as the primary frame.
 pub(crate) struct AmbientClocks {
-    pub(crate) aurora_start: std::time::Instant,
+    pub(crate) aurora_start: crate::clock::Instant,
     /// Start time for elapsed time calculation (used by fancy border effects)
-    pub(crate) render_start_time: std::time::Instant,
+    pub(crate) render_start_time: crate::clock::Instant,
 }
 
 impl Default for AmbientClocks {
     fn default() -> Self {
-        let now = std::time::Instant::now();
+        let now = crate::clock::Instant::now();
         Self {
             aurora_start: now,
             render_start_time: now,
@@ -672,7 +672,7 @@ impl RendererFrameEffects {
         &mut self,
         x: f32,
         y: f32,
-        now: std::time::Instant,
+        now: crate::clock::Instant,
         duration_ms: u32,
     ) {
         self.fx.click_halo.halos.push(ClickHaloEntry {
@@ -683,11 +683,11 @@ impl RendererFrameEffects {
         });
     }
 
-    pub fn trigger_cursor_wake(&mut self, now: std::time::Instant) {
+    pub fn trigger_cursor_wake(&mut self, now: crate::clock::Instant) {
         self.fx.cursor_wake.started = Some(now);
     }
 
-    pub fn trigger_resize_padding(&mut self, now: std::time::Instant) {
+    pub fn trigger_resize_padding(&mut self, now: crate::clock::Instant) {
         self.fx.resize_padding.started = Some(now);
     }
 
@@ -695,7 +695,7 @@ impl RendererFrameEffects {
         self.fx
             .typing_ripple
             .active
-            .push((cx, cy, std::time::Instant::now()));
+            .push((cx, cy, crate::clock::Instant::now()));
     }
 
     pub fn record_cursor_trail(&mut self, x: f32, y: f32, w: f32, h: f32, length: usize) {
@@ -708,7 +708,7 @@ impl RendererFrameEffects {
         self.fx
             .cursor_trail
             .positions
-            .push((x, y, w, h, std::time::Instant::now()));
+            .push((x, y, w, h, crate::clock::Instant::now()));
         self.fx.cursor_trail.last_pos = (x, y);
         while self.fx.cursor_trail.positions.len() > length {
             self.fx.cursor_trail.positions.remove(0);
@@ -721,7 +721,7 @@ impl RendererFrameEffects {
         mode_line_height: f32,
         at_top: bool,
         at_bottom: bool,
-        now: std::time::Instant,
+        now: crate::clock::Instant,
         duration_ms: u32,
     ) {
         self.fx.edge_snap.snaps.push(EdgeSnapEntry {
@@ -734,7 +734,7 @@ impl RendererFrameEffects {
         });
     }
 
-    pub fn trigger_cursor_error_pulse(&mut self, now: std::time::Instant) {
+    pub fn trigger_cursor_error_pulse(&mut self, now: crate::clock::Instant) {
         self.fx.error_pulse.started = Some(now);
     }
 }
@@ -742,7 +742,8 @@ impl RendererFrameEffects {
 #[cfg(test)]
 mod effect_category_tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use crate::clock::Instant;
+    use std::time::Duration;
 
     #[test]
     fn default_effects_are_quiet() {

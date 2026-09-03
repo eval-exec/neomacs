@@ -16,8 +16,8 @@
 //! composes the accessor functions into the module, this side only keeps the
 //! name -> slot table so [`FramePost::set_uniform`] can update values live.
 
+use crate::clock::Instant;
 use std::collections::HashMap;
-use std::time::Instant;
 
 use crate::shader_surface::{
     SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceShaderLanguage, SurfaceUniformInit,

@@ -99,7 +99,7 @@ pub(super) fn emit_heat_distortion(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.heat_distortion.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let ew = ctx.effects.heat_distortion.edge_width;
@@ -140,7 +140,7 @@ pub(super) fn emit_neon_border(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.neon_border.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (nr, ng, nb) = ctx.effects.neon_border.color;
@@ -181,7 +181,7 @@ pub(super) fn emit_plasma_border(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.plasma_border.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (r1, g1, b1) = ctx.effects.plasma_border.color1;
@@ -248,7 +248,7 @@ pub(super) fn emit_topographic_contour(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.topo_contour.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (tr, tg, tb) = ctx.effects.topo_contour.color;
@@ -287,7 +287,7 @@ pub(super) fn emit_constellation(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.constellation.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (sr, sg, sb) = ctx.effects.constellation.color;
@@ -342,7 +342,7 @@ pub(super) fn emit_kaleidoscope(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.kaleidoscope.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (kr, kg, kb) = ctx.effects.kaleidoscope.color;
@@ -382,7 +382,7 @@ pub(super) fn emit_noise_field(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.noise_field.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (nr, ng, nb) = ctx.effects.noise_field.color;
@@ -422,7 +422,7 @@ pub(super) fn emit_spiral_vortex(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.spiral_vortex.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (vr, vg, vb) = ctx.effects.spiral_vortex.color;
@@ -461,7 +461,7 @@ pub(super) fn emit_diamond_lattice(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.diamond_lattice.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (dr, dg, db) = ctx.effects.diamond_lattice.color;
@@ -511,7 +511,7 @@ pub(super) fn emit_wave_interference(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.wave_interference.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (wr, wg, wb) = ctx.effects.wave_interference.color;
@@ -566,7 +566,7 @@ pub(super) fn emit_chevron(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.chevron_pattern.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.chevron_pattern.color;
@@ -615,7 +615,7 @@ pub(super) fn emit_sunburst(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.sunburst_pattern.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.sunburst_pattern.color;
@@ -668,7 +668,7 @@ pub(super) fn emit_honeycomb_dissolve(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.honeycomb_dissolve.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.honeycomb_dissolve.color;
@@ -718,7 +718,7 @@ pub(super) fn emit_moire(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.moire_pattern.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.moire_pattern.color;
@@ -772,7 +772,7 @@ pub(super) fn emit_dot_matrix(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.dot_matrix.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.dot_matrix.color;
@@ -813,7 +813,7 @@ pub(super) fn emit_concentric_rings(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.concentric_rings.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.concentric_rings.color;
@@ -866,7 +866,7 @@ pub(super) fn emit_zigzag(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.zigzag_pattern.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.zigzag_pattern.color;
@@ -1000,7 +1000,7 @@ pub(super) fn emit_guilloche(ctx: &EffectCtx) -> Vec<RectVertex> {
     }
     let width = ctx.renderer_width;
     let height = ctx.renderer_height;
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (gr, gg, gb) = ctx.effects.guilloche.color;
@@ -1046,7 +1046,7 @@ pub(super) fn emit_celtic_knot(ctx: &EffectCtx) -> Vec<RectVertex> {
     }
     let width = ctx.renderer_width;
     let height = ctx.renderer_height;
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (kr, kg, kb) = ctx.effects.celtic_knot.color;
@@ -1267,7 +1267,7 @@ pub(super) fn emit_trefoil_knot(ctx: &EffectCtx) -> Vec<RectVertex> {
     }
     let width = ctx.renderer_width;
     let height = ctx.renderer_height;
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (kr, kg, kb) = ctx.effects.trefoil_knot.color;
@@ -1386,7 +1386,7 @@ pub(super) fn emit_target_reticle(ctx: &EffectCtx) -> Vec<RectVertex> {
     }
     let width = ctx.renderer_width;
     let height = ctx.renderer_height;
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (tr, tg, tb) = ctx.effects.target_reticle.color;
@@ -1491,7 +1491,7 @@ pub(super) fn emit_sine_wave(ctx: &EffectCtx) -> Vec<RectVertex> {
     }
     let width = ctx.renderer_width;
     let height = ctx.renderer_height;
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (sr, sg, sb) = ctx.effects.sine_wave.color;
@@ -1527,7 +1527,7 @@ pub(super) fn emit_rotating_gear(ctx: &EffectCtx) -> Vec<RectVertex> {
     }
     let width = ctx.renderer_width;
     let height = ctx.renderer_height;
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (gr, gg, gb) = ctx.effects.rotating_gear.color;
@@ -1578,7 +1578,7 @@ pub(super) fn emit_crosshatch(ctx: &EffectCtx) -> Vec<RectVertex> {
     }
     let width = ctx.renderer_width;
     let height = ctx.renderer_height;
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.crosshatch_pattern.color;
@@ -1643,7 +1643,7 @@ pub(super) fn emit_hex_grid(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.hex_grid.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (hr, hg, hb) = ctx.effects.hex_grid.color;
@@ -1695,7 +1695,7 @@ pub(super) fn emit_circuit_board(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.circuit_trace.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.circuit_trace.color;
@@ -1765,7 +1765,7 @@ pub(super) fn emit_warp_grid(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.warp_grid.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let (wr, wg, wb) = ctx.effects.warp_grid.color;
@@ -1817,7 +1817,7 @@ pub(super) fn emit_prism_rainbow_edge(ctx: &EffectCtx) -> Vec<RectVertex> {
     if !ctx.effects.prism_edge.enabled {
         return Vec::new();
     }
-    let now = std::time::Instant::now()
+    let now = crate::clock::Instant::now()
         .duration_since(ctx.aurora_start)
         .as_secs_f32();
     let pw = ctx.effects.prism_edge.width;
