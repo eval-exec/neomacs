@@ -41,7 +41,7 @@ use super::process::ProcessManager;
 use super::rect::RectangleState;
 use super::regex::MatchData;
 use super::register::RegisterManager;
-use super::symbol::{ConstantWrite, Obarray};
+use super::symbol::{ConstantWrite, FunctionCellSnapshot, Obarray};
 use super::terminal::pure::TtyFrameHostFactory;
 use super::threads::ThreadManager;
 use super::value::*;
