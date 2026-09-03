@@ -28,30 +28,99 @@ fn portable_snapshot_round_trips_evaluator_state() {
     assert!(!take_after_pdump_load_hook_pending(&mut loaded));
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
-fn native_portable_seed_uses_the_browser_host_surface() {
-    let mut producer = Context::new_for_host(neovm_host_abi::HostKind::Wasm);
+fn native_producer_excludes_target_only_subrs_from_the_portable_contract() {
+    let producer = Context::new();
+    let target_only_subr = std::cfg_select! {
+        any(target_os = "linux", target_os = "android") => { "inotify-add-watch" }
+        target_os = "macos" => { "kqueue-add-watch" }
+        windows => { "w32-short-file-name" }
+        _ => { return }
+    };
+    assert!(
+        producer
+            .obarray()
+            .symbol_function(target_only_subr)
+            .is_some(),
+        "the fixture must be compiled into this native producer",
+    );
 
-    for expression in [
-        "(featurep 'inotify)",
-        "(featurep 'threads)",
-        "(featurep 'make-network-process)",
-        "(fboundp 'inotify-add-watch)",
-    ] {
-        assert_eq!(
-            producer
-                .eval_str(expression)
-                .expect("inspect portable seed surface"),
-            Value::NIL,
-            "portable seed advertised {expression}",
-        );
-    }
+    let image = encode_portable_snapshot(&producer).expect("encode native-produced image");
+    let requirements = portable_required_subr_names(&image);
 
-    let image = encode_portable_snapshot(&producer).expect("encode browser portable seed");
+    assert!(
+        !requirements.iter().any(|name| name == target_only_subr),
+        "portable ABI contract leaked compile-target-only subr {target_only_subr}",
+    );
+}
+
+#[test]
+fn portable_restore_discards_a_producer_only_subr_cell() {
+    let mut producer = Context::new();
+    let spec =
+        crate::emacs_core::subr::SubrSpec::fixed0("portable-target-only-subr", producer_only_subr);
+    producer.register_subrs_with_portability(
+        &[spec],
+        crate::emacs_core::subr::SubrPortability::TargetSpecific,
+    );
+    let image = encode_portable_snapshot(&producer).expect("encode producer image");
+
+    // Model a consumer binary that did not compile the producer's primitive.
     crate::emacs_core::eval::clear_global_subr_table();
+    let loaded = load_from_portable_snapshot(&image).expect("load portable image");
 
-    load_from_portable_snapshot_for_host(&image, neovm_host_abi::HostKind::Wasm)
-        .expect("browser host must accept its portable seed");
+    assert!(
+        !loaded.obarray().fboundp("portable-target-only-subr"),
+        "the consumer must not retain an uncallable producer subr object",
+    );
+}
+
+#[test]
+fn portable_restore_rebinds_compiled_target_identity() {
+    let unavailable_feature = crate::emacs_core::c_features::gnu_c_features()
+        .into_iter()
+        .find(|feature| !feature.here.provided())
+        .expect("the test build should omit at least one GNU C feature")
+        .name;
+    let user_feature = "portable-user-feature";
+    let mut producer = Context::new();
+    producer.set_variable("system-type", Value::symbol("producer-system"));
+    producer.set_variable(
+        "features",
+        Value::list(vec![
+            Value::symbol(unavailable_feature),
+            Value::symbol(user_feature),
+        ]),
+    );
+    producer.refresh_features_from_variable();
+
+    let image = encode_portable_snapshot(&producer).expect("encode producer image");
+    let loaded = load_from_portable_snapshot(&image).expect("load portable image");
+    let expected_system_type = std::cfg_select! {
+        target_family = "wasm" => { "wasm" }
+        target_os = "android" => { "android" }
+        target_os = "windows" => { "windows-nt" }
+        target_os = "macos" => { "darwin" }
+        target_os = "linux" => { "gnu/linux" }
+        _ => { std::env::consts::OS }
+    };
+
+    assert_eq!(
+        loaded.obarray().symbol_value("system-type"),
+        Some(&Value::symbol(expected_system_type)),
+    );
+    assert!(
+        loaded
+            .features
+            .contains(&crate::emacs_core::intern::intern(user_feature))
+    );
+    assert!(
+        !loaded
+            .features
+            .contains(&crate::emacs_core::intern::intern(unavailable_feature)),
+        "the producer's unavailable C feature must not survive restore",
+    );
 }
 
 #[test]

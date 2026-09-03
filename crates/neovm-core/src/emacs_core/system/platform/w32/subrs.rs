@@ -4,6 +4,7 @@ use super::*;
 use crate::emacs_core::subr::{FixedMin1, NativeFn, SubrArity, SubrSpec};
 
 crate::emacs_core::subr::define_subrs! {
+    native_host;
     SubrSpec::fixed1("w32-short-file-name", w32_short_file_name, FixedMin1::One),
     SubrSpec::fixed1("w32-long-file-name", w32_long_file_name, FixedMin1::One),
     SubrSpec::fixed0("w32-get-valid-codepages", w32_get_valid_codepages),

@@ -74,16 +74,13 @@ pub(crate) enum HereDecision {
 
 impl HereDecision {
     /// Whether this build puts the feature on `features`.
-    #[cfg(test)]
     pub(crate) const fn provided(self) -> bool {
-        self.provided_on(neovm_host_abi::HostKind::CURRENT)
-    }
-
-    const fn provided_on(self, host: neovm_host_abi::HostKind) -> bool {
         match self {
             Self::UnconditionalInGnu => true,
-            Self::Implemented { hosts, .. } => hosts.includes(host),
-            Self::DetectedAtBuildTime { present, hosts, .. } => present && hosts.includes(host),
+            Self::Implemented { hosts, .. } => hosts.included_in_current_target(),
+            Self::DetectedAtBuildTime { present, hosts, .. } => {
+                present && hosts.included_in_current_target()
+            }
             Self::NotBuilt { .. } => false,
         }
     }
@@ -98,8 +95,11 @@ pub(crate) struct HostAvailability {
 impl HostAvailability {
     const NATIVE: Self = Self { wasm: false };
 
-    const fn includes(self, host: neovm_host_abi::HostKind) -> bool {
-        !matches!(host, neovm_host_abi::HostKind::Wasm) || self.wasm
+    const fn included_in_current_target(self) -> bool {
+        std::cfg_select! {
+            target_family = "wasm" => { self.wasm }
+            _ => { true }
+        }
     }
 }
 
@@ -455,16 +455,10 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
 
 /// The C-level features this build advertises, newest-provided first, which is
 /// the order `features` reads in.
-#[cfg(test)]
 pub(crate) fn initial_feature_names() -> Vec<&'static str> {
-    initial_feature_names_for(neovm_host_abi::HostKind::CURRENT)
-}
-
-/// C-level features backed by the requested product host.
-pub(crate) fn initial_feature_names_for(host: neovm_host_abi::HostKind) -> Vec<&'static str> {
     gnu_c_features()
         .into_iter()
-        .filter(|feature| feature.here.provided_on(host))
+        .filter(|feature| feature.here.provided())
         .map(|feature| feature.name)
         .collect()
 }

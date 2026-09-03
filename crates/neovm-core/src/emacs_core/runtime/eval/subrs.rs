@@ -189,6 +189,17 @@ impl Context {
     /// This is the only path that installs native metadata, so call sites must
     /// construct a typed [`SubrSpec`] rather than passing loose parallel fields.
     pub(crate) fn register_subr(&mut self, spec: SubrSpec) {
+        self.register_subr_with_portability(
+            spec,
+            crate::emacs_core::subr::SubrPortability::AllTargets,
+        );
+    }
+
+    fn register_subr_with_portability(
+        &mut self,
+        spec: SubrSpec,
+        portability: crate::emacs_core::subr::SubrPortability,
+    ) {
         crate::emacs_core::subr::record_no_eval_policy(spec.name(), spec.no_eval_policy());
         let arity = spec.arity();
         self.install_subr(
@@ -197,6 +208,7 @@ impl Context {
             arity,
             spec.dispatch_kind(),
             spec.interactive_spec(),
+            portability,
         );
 
         if spec.command_default() == crate::emacs_core::subr::CommandDefault::Disabled {
@@ -212,6 +224,16 @@ impl Context {
         }
     }
 
+    pub(crate) fn register_subrs_with_portability(
+        &mut self,
+        specs: &[SubrSpec],
+        portability: crate::emacs_core::subr::SubrPortability,
+    ) {
+        for &spec in specs {
+            self.register_subr_with_portability(spec, portability);
+        }
+    }
+
     fn install_subr(
         &mut self,
         name: &str,
@@ -219,6 +241,7 @@ impl Context {
         arity: SubrArity,
         dispatch_kind: SubrDispatchKind,
         interactive_spec: Option<crate::emacs_core::interactive::BuiltinInteractiveSpec>,
+        portability: crate::emacs_core::subr::SubrPortability,
     ) {
         let sym_id = intern(name);
         let name_id = symbol_name_id(sym_id);
@@ -232,6 +255,7 @@ impl Context {
                 dispatch_kind,
                 name_id,
                 interactive_spec,
+                portability,
             },
         );
 
