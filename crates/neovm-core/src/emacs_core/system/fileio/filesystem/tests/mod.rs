@@ -107,6 +107,33 @@ fn memory_filesystem_renames_trees_and_enumerates_immediate_children() {
 }
 
 #[test]
+fn memory_filesystem_same_path_rename_is_a_checked_noop() {
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .write(
+            Path::new("/note"),
+            b"preserved",
+            write_request(WriteMode::Truncate),
+        )
+        .expect("create source");
+
+    filesystem
+        .rename(Path::new("/note"), Path::new("/note"), true)
+        .expect("renaming a file to itself should be a no-op");
+    assert_eq!(
+        filesystem.read(Path::new("/note")).expect("read source"),
+        b"preserved",
+    );
+    assert_eq!(
+        filesystem
+            .rename(Path::new("/missing"), Path::new("/missing"), true)
+            .expect_err("a same-path rename must still verify the source")
+            .kind(),
+        ErrorKind::NotFound,
+    );
+}
+
+#[test]
 fn memory_filesystem_rejects_paths_that_escape_its_root() {
     let filesystem = MemoryFileSystem::new();
     let error = filesystem
