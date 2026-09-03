@@ -22,6 +22,8 @@ pub enum SurfaceFrameInitError {
     Surface(#[from] SurfaceInitError),
     #[error("the host reported an invalid device scale: {0}")]
     InvalidDeviceScale(f64),
+    #[error("renderer initialization failed: {0}")]
+    RendererValidation(String),
 }
 
 /// Failure while updating the host's logical-to-physical scale.
@@ -62,6 +64,7 @@ impl SurfaceFrameRenderer {
         let (width, height) = surface.extent().dimensions().unwrap_or((1, 1));
         let device = Arc::new(surface.device());
         let queue = Arc::new(surface.queue());
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let renderer = WgpuRenderer::with_device(
             Arc::clone(&device),
             queue,
@@ -71,6 +74,9 @@ impl SurfaceFrameRenderer {
             device_scale.get(),
         );
         let glyph_atlas = WgpuGlyphAtlas::new_with_scale(&device, device_scale.get());
+        if let Some(error) = validation_scope.pop().await {
+            return Err(SurfaceFrameInitError::RendererValidation(error.to_string()));
+        }
 
         Ok(Self {
             surface,
@@ -219,6 +225,16 @@ mod tests {
                 &frame,
             ),
             Err(GeometryError::InvalidGeometry)
+        );
+    }
+
+    #[test]
+    fn renderer_validation_is_an_initialization_error() {
+        let error = SurfaceFrameInitError::RendererValidation("invalid pipeline".into());
+
+        assert_eq!(
+            error.to_string(),
+            "renderer initialization failed: invalid pipeline"
         );
     }
 }
