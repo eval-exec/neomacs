@@ -2831,6 +2831,10 @@ pub struct Context {
     /// use the unified OS input/process poller.
     pub(crate) host_input_wait_backend:
         Option<Box<dyn crate::emacs_core::wait::HostInputWaitBackend>>,
+    /// Read-only `lisp/`, `etc/`, `leim/`, and `info/` files supplied by an
+    /// embedded product rather than a native filesystem.
+    pub(crate) runtime_resource_store:
+        Option<Box<dyn crate::emacs_core::fileio::RuntimeResourceStore>>,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
     eval_task_rx: Option<crossbeam_channel::Receiver<EvalThreadTask>>,
@@ -3181,6 +3185,7 @@ pub(crate) enum RequirePlan {
 pub(crate) fn plan_require_in_state(
     obarray: &Obarray,
     buf: Option<&crate::buffer::Buffer>,
+    runtime_resources: Option<&dyn crate::emacs_core::fileio::RuntimeResourceStore>,
     features: &mut Vec<SymId>,
     require_stack: &[SymId],
     feature: Value,
@@ -3243,7 +3248,13 @@ pub(crate) fn plan_require_in_state(
     // which otherwise shadowed org's `org-capture.el` and was read as Lisp.
     let requirement = super::load::LoadSuffixRequirement::for_require(filename_given);
     let filename = crate::heap_types::LispString::from_utf8(&filename);
-    match super::load::resolve_load_path_file_in_state(obarray, buf, &filename, requirement)? {
+    match super::load::resolve_load_path_file_with_resources(
+        obarray,
+        buf,
+        &filename,
+        requirement,
+        runtime_resources,
+    )? {
         Some(path) => Ok(RequirePlan::Load {
             sym_id,
             name,

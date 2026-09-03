@@ -516,6 +516,24 @@ impl Context {
         self.host_input_wait_backend = Some(Box::new(backend));
     }
 
+    /// Mount product-owned runtime resources for ordinary Lisp loading.
+    ///
+    /// This mount is read-only and scoped to this evaluator. Browser and
+    /// sandboxed application adapters use it for packaged editor libraries;
+    /// user files remain governed by the host's separate storage capability.
+    pub fn install_runtime_resource_store(
+        &mut self,
+        store: Box<dyn crate::emacs_core::fileio::RuntimeResourceStore>,
+    ) {
+        self.runtime_resource_store = Some(store);
+    }
+
+    pub(crate) fn runtime_resource_store(
+        &self,
+    ) -> Option<&dyn crate::emacs_core::fileio::RuntimeResourceStore> {
+        self.runtime_resource_store.as_deref()
+    }
+
     pub(crate) fn has_host_input_wait_backend(&self) -> bool {
         self.host_input_wait_backend.is_some()
     }

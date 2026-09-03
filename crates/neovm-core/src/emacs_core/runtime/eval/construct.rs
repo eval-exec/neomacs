@@ -85,6 +85,7 @@ impl Context {
         ev.command_loop = crate::keyboard::CommandLoop::default();
         ev.input_rx = None;
         ev.host_input_wait_backend = None;
+        ev.runtime_resource_store = None;
         ev.eval_task_rx = None;
         ev.redisplay_fn = None;
         ev.frame_snapshot_fn = None;
@@ -2178,6 +2179,7 @@ impl Context {
             command_loop,
             input_rx: None,
             host_input_wait_backend: None,
+            runtime_resource_store: None,
             eval_task_rx: None,
             quit_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             redisplay_fn: None,

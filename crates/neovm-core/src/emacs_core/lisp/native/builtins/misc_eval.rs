@@ -674,9 +674,8 @@ pub(crate) fn builtin_load(eval: &mut super::eval::Context, args: Vec<Value>) ->
     if let Some(result) = super::fileio::dispatch_file_handler(eval, "load", &args)? {
         return Ok(result);
     }
-    match super::load::plan_load_in_state(
-        &eval.obarray,
-        eval.buffers.current_buffer(),
+    match super::load::plan_load_in_context(
+        eval,
         args[0],
         args.get(1).copied(),
         args.get(3).copied(),

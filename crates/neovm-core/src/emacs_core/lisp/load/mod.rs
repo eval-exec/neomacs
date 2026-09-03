@@ -603,8 +603,48 @@ fn prefer_el_only() -> bool {
     std::env::var("NEOVM_PREFER_EL").is_ok()
 }
 
-fn candidate_mtime(path: &Path) -> Option<std::time::SystemTime> {
-    fs::metadata(path).ok()?.modified().ok()
+#[derive(Clone, Copy)]
+struct LoadFileAccess<'a> {
+    runtime_resources: Option<&'a dyn super::fileio::RuntimeResourceStore>,
+}
+
+impl<'a> LoadFileAccess<'a> {
+    const fn native() -> Self {
+        Self {
+            runtime_resources: None,
+        }
+    }
+
+    const fn with_runtime_resources(
+        runtime_resources: Option<&'a dyn super::fileio::RuntimeResourceStore>,
+    ) -> Self {
+        Self { runtime_resources }
+    }
+
+    fn mounted_contents(self, path: &Path) -> Option<&'a [u8]> {
+        self.runtime_resources?.file_contents(path)
+    }
+
+    fn is_file(self, path: &Path) -> bool {
+        self.mounted_contents(path).is_some() || path.is_file()
+    }
+
+    fn modified(self, path: &Path) -> Option<std::time::SystemTime> {
+        if self.mounted_contents(path).is_some() {
+            // Packaged runtime archives are deterministic and carry no live
+            // source mtimes. Treat every mounted entry as the same epoch so
+            // GNU's suffix order breaks `.elc`/`.el` ties.
+            return Some(std::time::UNIX_EPOCH);
+        }
+        fs::metadata(path).ok()?.modified().ok()
+    }
+
+    fn read(self, path: &Path) -> std::io::Result<Vec<u8>> {
+        self.mounted_contents(path)
+            .map(<[u8]>::to_vec)
+            .map(Ok)
+            .unwrap_or_else(|| fs::read(path))
+    }
 }
 
 /// One validated snapshot of GNU's live load-suffix variables.
@@ -737,7 +777,12 @@ fn default_load_suffixes() -> Vec<Vec<u8>> {
     default_load_suffixes_for_os(std::env::consts::OS)
 }
 
-fn pick_suffixed(base: &Path, prefer_newer: bool, suffixes: &[Vec<u8>]) -> Option<PathBuf> {
+fn pick_suffixed(
+    access: LoadFileAccess<'_>,
+    base: &Path,
+    prefer_newer: bool,
+    suffixes: &[Vec<u8>],
+) -> Option<PathBuf> {
     let skip_elc = prefer_el_only();
     // Compressed candidates are not loadable (no jka-compr); they are
     // excluded here and surfaced by the explicit unsupported-artifact check
@@ -747,7 +792,7 @@ fn pick_suffixed(base: &Path, prefer_newer: bool, suffixes: &[Vec<u8>]) -> Optio
         .filter(|suffix| !suffix.ends_with(b".gz"))
         .filter(|suffix| !(skip_elc && suffix.ends_with(b".elc")))
         .map(|suffix| append_load_suffix(base, suffix))
-        .filter(|path| path.is_file());
+        .filter(|path| access.is_file(path));
 
     if prefer_newer {
         // GNU `openp` replaces its saved candidate only when the next one is
@@ -762,7 +807,7 @@ fn pick_suffixed(base: &Path, prefer_newer: bool, suffixes: &[Vec<u8>]) -> Optio
         // for every image build, where a tie is one coarse filesystem
         // timestamp away.
         return candidates
-            .filter_map(|path| candidate_mtime(&path).map(|mtime| (mtime, path)))
+            .filter_map(|path| access.modified(&path).map(|mtime| (mtime, path)))
             .reduce(|best, next| if next.0 > best.0 { next } else { best })
             .map(|(_, path)| path);
     }
@@ -770,26 +815,27 @@ fn pick_suffixed(base: &Path, prefer_newer: bool, suffixes: &[Vec<u8>]) -> Optio
 }
 
 fn find_for_base(
+    access: LoadFileAccess<'_>,
     base: &Path,
     no_suffix: bool,
     prefer_newer: bool,
     suffixes: &[Vec<u8>],
 ) -> Option<PathBuf> {
     if no_suffix {
-        if base.is_file() {
+        if access.is_file(base) {
             return Some(base.to_path_buf());
         }
         return None;
     }
 
-    if let Some(suffixed) = pick_suffixed(base, prefer_newer, suffixes) {
+    if let Some(suffixed) = pick_suffixed(access, base, prefer_newer, suffixes) {
         return Some(suffixed);
     }
 
     // Surface unsupported compressed compiled artifacts explicitly.
     unsupported_compiled_suffixed_paths(base)
         .into_iter()
-        .find(|compiled| compiled.exists())
+        .find(|compiled| access.is_file(compiled))
 }
 
 fn expand_tilde_path_buf(path: &LispString) -> PathBuf {
@@ -922,8 +968,15 @@ pub fn find_file_in_load_path_with_flags(
     if !must_suffix {
         suffixes.push(Vec::new());
     }
-    find_lisp_file_in_load_path_with_flags(&name, load_path, no_suffix, prefer_newer, &suffixes)
-        .map(|found| load_path_buf(&found))
+    find_lisp_file_in_load_path_with_flags(
+        LoadFileAccess::native(),
+        &name,
+        load_path,
+        no_suffix,
+        prefer_newer,
+        &suffixes,
+    )
+    .map(|found| load_path_buf(&found))
 }
 
 /// Resolve FILE against the evaluator's live load state.
@@ -932,11 +985,12 @@ pub fn find_file_in_load_path_with_flags(
 /// Keeping suffix variables, representation suffixes, `load-prefer-newer`,
 /// and the exact-vs-suffixed policy together prevents callers from silently
 /// falling back to the process-startup defaults.
-pub(crate) fn resolve_load_path_file_in_state(
+pub(crate) fn resolve_load_path_file_with_resources(
     obarray: &super::symbol::Obarray,
     buf: Option<&crate::buffer::Buffer>,
     file: &LispString,
     requirement: LoadSuffixRequirement,
+    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
 ) -> Result<Option<LispString>, Flow> {
     let candidates = requirement.candidates(obarray, file)?;
     let (exact_name_only, suffixes) = match candidates {
@@ -949,6 +1003,7 @@ pub(crate) fn resolve_load_path_file_in_state(
     let load_path = get_load_path(obarray, buf);
 
     Ok(find_lisp_file_in_load_path_with_flags(
+        LoadFileAccess::with_runtime_resources(runtime_resources),
         file,
         &load_path,
         exact_name_only,
@@ -958,6 +1013,7 @@ pub(crate) fn resolve_load_path_file_in_state(
 }
 
 fn find_lisp_file_in_load_path_with_flags(
+    access: LoadFileAccess<'_>,
     name: &LispString,
     load_path: &[LispString],
     no_suffix: bool,
@@ -966,7 +1022,7 @@ fn find_lisp_file_in_load_path_with_flags(
 ) -> Option<LispString> {
     let path = expand_tilde_path_buf(name);
     if path.is_absolute() {
-        return find_for_base(&path, no_suffix, prefer_newer, suffixes)
+        return find_for_base(access, &path, no_suffix, prefer_newer, suffixes)
             .map(|found| load_path_lisp_string(&found));
     }
 
@@ -974,7 +1030,7 @@ fn find_lisp_file_in_load_path_with_flags(
     // is evaluated within each directory.
     for dir in load_path {
         let full = expand_tilde_path_buf(dir).join(load_path_buf(name));
-        if let Some(found) = find_for_base(&full, no_suffix, prefer_newer, suffixes) {
+        if let Some(found) = find_for_base(access, &full, no_suffix, prefer_newer, suffixes) {
             return Some(load_path_lisp_string(&found));
         }
     }
@@ -1046,6 +1102,7 @@ pub(crate) enum LoadPlan {
     },
 }
 
+#[cfg(test)]
 pub(crate) fn plan_load_in_state(
     obarray: &super::symbol::Obarray,
     buf: Option<&crate::buffer::Buffer>,
@@ -1053,6 +1110,36 @@ pub(crate) fn plan_load_in_state(
     noerror: Option<Value>,
     nosuffix: Option<Value>,
     must_suffix: Option<Value>,
+) -> Result<LoadPlan, Flow> {
+    plan_load_with_resources(obarray, buf, file, noerror, nosuffix, must_suffix, None)
+}
+
+pub(crate) fn plan_load_in_context(
+    evaluator: &super::eval::Context,
+    file: Value,
+    noerror: Option<Value>,
+    nosuffix: Option<Value>,
+    must_suffix: Option<Value>,
+) -> Result<LoadPlan, Flow> {
+    plan_load_with_resources(
+        &evaluator.obarray,
+        evaluator.buffers.current_buffer(),
+        file,
+        noerror,
+        nosuffix,
+        must_suffix,
+        evaluator.runtime_resource_store(),
+    )
+}
+
+fn plan_load_with_resources(
+    obarray: &super::symbol::Obarray,
+    buf: Option<&crate::buffer::Buffer>,
+    file: Value,
+    noerror: Option<Value>,
+    nosuffix: Option<Value>,
+    must_suffix: Option<Value>,
+    runtime_resources: Option<&dyn super::fileio::RuntimeResourceStore>,
 ) -> Result<LoadPlan, Flow> {
     let file = match file.kind() {
         ValueKind::String => file.as_lisp_string().expect("checked string").clone(),
@@ -1073,7 +1160,13 @@ pub(crate) fn plan_load_in_state(
         LoadSuffixRequirement::BareNameAllowed
     };
 
-    match resolve_load_path_file_in_state(obarray, buf, &file, requirement)? {
+    match resolve_load_path_file_with_resources(
+        obarray,
+        buf,
+        &file,
+        requirement,
+        runtime_resources,
+    )? {
         Some(found) => Ok(LoadPlan::Load {
             requested: file,
             found,
@@ -1088,6 +1181,7 @@ pub(crate) fn plan_load_in_state(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_autoload_load_path_in_state(
     obarray: &super::symbol::Obarray,
     buf: Option<&crate::buffer::Buffer>,
@@ -1117,9 +1211,8 @@ pub(crate) fn builtin_load_in_vm_runtime(
         ));
     }
 
-    match plan_load_in_state(
-        &shared.obarray,
-        shared.buffers.current_buffer(),
+    match plan_load_in_context(
+        shared,
         args[0],
         args.get(1).copied(),
         args.get(3).copied(),
@@ -2317,12 +2410,11 @@ enum CompiledFreshness {
 impl CompiledFreshness {
     /// Stat the `.el` beside PATH the way GNU does, by replacing the trailing
     /// `c` (`src/lread.c:1366,1374`).
-    fn of_compiled(path: &Path) -> Self {
+    fn of_compiled(path: &Path, access: LoadFileAccess<'_>) -> Self {
         let source = path.with_extension("el");
-        let (Ok(compiled_mtime), Ok(source_mtime)) = (
-            fs::metadata(path).and_then(|m| m.modified()),
-            fs::metadata(&source).and_then(|m| m.modified()),
-        ) else {
+        let (Some(compiled_mtime), Some(source_mtime)) =
+            (access.modified(path), access.modified(&source))
+        else {
             // GNU only warns when BOTH stats succeed (`result == 0` twice).
             return Self::Current;
         };
@@ -2636,17 +2728,19 @@ fn load_file_body(
 
     // Read raw bytes and decode (with Emacs-extended UTF-8 for .el,
     // or header-skipping for .elc).
-    let raw_bytes = std::fs::read(path).map_err(|e| {
-        EvalError::signal(
-            intern("file-error"),
-            vec![Value::string(format!(
-                "Cannot read file: {}: {}",
-                path.display(),
-                e
-            ))],
-            None,
-        )
-    })?;
+    let raw_bytes = LoadFileAccess::with_runtime_resources(eval.runtime_resource_store())
+        .read(path)
+        .map_err(|e| {
+            EvalError::signal(
+                intern("file-error"),
+                vec![Value::string(format!(
+                    "Cannot read file: {}: {}",
+                    path.display(),
+                    e
+                ))],
+                None,
+            )
+        })?;
 
     // For .elc: skip the ;ELC magic header and detect lexical-binding from raw bytes.
     // For .el: decode Emacs-extended UTF-8.
@@ -2670,8 +2764,10 @@ fn load_file_body(
         if !eval
             .visible_variable_value_or_nil("load-prefer-newer")
             .is_truthy()
-            && let CompiledFreshness::SourceNewer { source, .. } =
-                CompiledFreshness::of_compiled(path)
+            && let CompiledFreshness::SourceNewer { source, .. } = CompiledFreshness::of_compiled(
+                path,
+                LoadFileAccess::with_runtime_resources(eval.runtime_resource_store()),
+            )
         {
             let stale_message = format!(
                 "Source file `{}' newer than byte-compiled file; using older file",
