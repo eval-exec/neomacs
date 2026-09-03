@@ -218,7 +218,9 @@ self.onmessage = (event) => {
   }
   if (message?.type === "start") {
     start(message).catch((error) => {
-      post("failed", { message: error instanceof Error ? error.message : String(error) });
+      post("failed", {
+        message: error instanceof Error ? (error.stack ?? error.message) : String(error),
+      });
     });
   }
 };
