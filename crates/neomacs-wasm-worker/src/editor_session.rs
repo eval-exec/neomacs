@@ -9,7 +9,7 @@ use neomacs_app::initial_surface::{
 };
 use neomacs_app::presentation::PresentationMetrics;
 use neomacs_app::runtime_image::AuthenticatedPortableRuntimeImage;
-use neomacs_app::runtime_resources::MountedRuntimeResources;
+use neomacs_app::runtime_resources::{MountedRuntimeResources, RuntimeResourceBundle};
 use neomacs_app::session::{
     EditorSession, EditorSessionExit, FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort,
 };
@@ -34,10 +34,14 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     browser_host::report_status("mounting authenticated runtime resources");
     let runtime_resource_bundle = browser_host::runtime_resource_bundle_bytes()?;
     let runtime_resource_id = browser_host::runtime_resource_id_bytes()?;
-    let runtime_resources = MountedRuntimeResources::from_bundle(
-        Path::new("/neomacs"),
+    let runtime_resource_bundle = RuntimeResourceBundle::from_assets(
         &runtime_resource_bundle,
         &runtime_resource_id,
+    )
+    .map_err(|error| format!("invalid browser runtime resource assets: {error}"))?;
+    let runtime_resources = MountedRuntimeResources::from_bundle(
+        Path::new("/neomacs"),
+        runtime_resource_bundle,
     )
     .map_err(|error| format!("failed to mount browser runtime resources: {error}"))?;
     let mut evaluator = runtime_image
