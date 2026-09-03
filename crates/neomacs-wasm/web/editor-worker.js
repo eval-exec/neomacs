@@ -1,3 +1,5 @@
+import { fetchEditorWorkerAssets } from "./worker-assets.mjs";
+
 const INPUT_WAKE = 1;
 const TIMEOUT_WAKE = 2;
 const RESUMED_INPUT = 0x4e450001;
@@ -8,6 +10,8 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 let memory = null;
 let runtimeImage = null;
+let runtimeResourceBundle = null;
+let runtimeResourceId = null;
 let startup = null;
 let mailbox = null;
 let queuedInput = null;
@@ -117,6 +121,12 @@ function hostImports(waitForInput) {
       copy_startup: (destination, capacity) => copyToMemory(startup, destination, capacity),
       runtime_image_len: () => runtimeImage?.byteLength ?? 0,
       copy_runtime_image: (destination, capacity) => copyToMemory(runtimeImage, destination, capacity),
+      runtime_resource_bundle_len: () => runtimeResourceBundle?.byteLength ?? 0,
+      copy_runtime_resource_bundle: (destination, capacity) =>
+        copyToMemory(runtimeResourceBundle, destination, capacity),
+      runtime_resource_id_len: () => runtimeResourceId?.byteLength ?? 0,
+      copy_runtime_resource_id: (destination, capacity) =>
+        copyToMemory(runtimeResourceId, destination, capacity),
       input_len: () => currentInput()?.byteLength ?? 0,
       copy_input: (destination, capacity) => copyToMemory(currentInput(), destination, capacity),
       acknowledge_input: acknowledgeInput,
@@ -155,20 +165,13 @@ async function start(message) {
   const jspi = supportsJspi();
   mailbox = message.mailbox;
   startup = encoder.encode(JSON.stringify(message.startup));
-  const [wasmResponse, imageResponse] = await Promise.all([
-    fetch(message.wasmUrl),
-    fetch(message.runtimeImageUrl),
-  ]);
-  if (!wasmResponse.ok) {
-    throw new Error(`failed to fetch editor Worker Wasm: ${wasmResponse.status}`);
-  }
-  if (!imageResponse.ok) {
-    throw new Error(`failed to fetch portable runtime image: ${imageResponse.status}`);
-  }
-  runtimeImage = new Uint8Array(await imageResponse.arrayBuffer());
+  const assets = await fetchEditorWorkerAssets(message);
+  runtimeImage = assets.runtimeImage;
+  runtimeResourceBundle = assets.runtimeResourceBundle;
+  runtimeResourceId = assets.runtimeResourceId;
 
   const waitForInput = jspi ? createJspiWait() : createAtomicsWait();
-  const { instance } = await instantiate(wasmResponse, hostImports(waitForInput));
+  const { instance } = await instantiate(assets.wasmResponse, hostImports(waitForInput));
   memory = instance.exports.memory;
   const probe = instance.exports.neomacs_wasm_worker_probe;
   const run = instance.exports.neomacs_wasm_worker_run;
