@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 ciborium.workspace = true
 neomacs-app.workspace = true
+neomacs-host-runtime.workspace = true
 neomacs-layout-engine.workspace = true
 neomacs-wasm-protocol.workspace = true
 neovm-core.workspace = true

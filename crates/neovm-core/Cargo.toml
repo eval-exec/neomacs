@@ -11,6 +11,7 @@ description = "Core runtime structures for NeoVM"
 autotests = false
 
 [dependencies]
+neomacs-host-runtime.workspace = true
 neovm-host-abi.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true

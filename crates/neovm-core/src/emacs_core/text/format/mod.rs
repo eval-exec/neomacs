@@ -293,7 +293,7 @@ pub(crate) fn builtin_format_time_string(args: Vec<Value>) -> EvalResult {
 
 /// Get the current Unix timestamp from the compile-target wall clock.
 fn current_unix_timestamp() -> i64 {
-    crate::host::time::wall_time_since_unix_epoch()
+    neomacs_host_runtime::time::wall_time_since_unix_epoch()
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }

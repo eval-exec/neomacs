@@ -393,7 +393,7 @@ fn sweep_live_bytes_track_variable_payload_sizes() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert_eq!(
         heap.live_bytes(),
