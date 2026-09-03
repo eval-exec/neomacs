@@ -608,6 +608,27 @@ struct LoadFileAccess<'a> {
     runtime_resources: Option<&'a dyn super::fileio::RuntimeResourceStore>,
 }
 
+/// Provenance of a candidate's freshness information.
+///
+/// Mounted product resources are immutable peers with deterministic suffix
+/// order, not native files with a fabricated timestamp.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoadCandidateFreshness {
+    ImmutableResource,
+    NativeModified(std::time::SystemTime),
+}
+
+impl LoadCandidateFreshness {
+    fn is_strictly_newer_than(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::NativeModified(candidate), Self::NativeModified(current)) => candidate > current,
+            (Self::ImmutableResource, Self::ImmutableResource)
+            | (Self::ImmutableResource, Self::NativeModified(_))
+            | (Self::NativeModified(_), Self::ImmutableResource) => false,
+        }
+    }
+}
+
 impl<'a> LoadFileAccess<'a> {
     const fn native() -> Self {
         Self {
@@ -629,14 +650,15 @@ impl<'a> LoadFileAccess<'a> {
         self.mounted_contents(path).is_some() || path.is_file()
     }
 
-    fn modified(self, path: &Path) -> Option<std::time::SystemTime> {
+    fn freshness(self, path: &Path) -> Option<LoadCandidateFreshness> {
         if self.mounted_contents(path).is_some() {
-            // Packaged runtime archives are deterministic and carry no live
-            // source mtimes. Treat every mounted entry as the same epoch so
-            // GNU's suffix order breaks `.elc`/`.el` ties.
-            return Some(std::time::UNIX_EPOCH);
+            return Some(LoadCandidateFreshness::ImmutableResource);
         }
-        fs::metadata(path).ok()?.modified().ok()
+        fs::metadata(path)
+            .ok()?
+            .modified()
+            .ok()
+            .map(LoadCandidateFreshness::NativeModified)
     }
 
     fn read(self, path: &Path) -> std::io::Result<Vec<u8>> {
@@ -807,8 +829,14 @@ fn pick_suffixed(
         // for every image build, where a tie is one coarse filesystem
         // timestamp away.
         return candidates
-            .filter_map(|path| access.modified(&path).map(|mtime| (mtime, path)))
-            .reduce(|best, next| if next.0 > best.0 { next } else { best })
+            .filter_map(|path| access.freshness(&path).map(|freshness| (freshness, path)))
+            .reduce(|best, next| {
+                if next.0.is_strictly_newer_than(best.0) {
+                    next
+                } else {
+                    best
+                }
+            })
             .map(|(_, path)| path);
     }
     candidates.into_iter().next()
@@ -2412,10 +2440,18 @@ impl CompiledFreshness {
     /// `c` (`src/lread.c:1366,1374`).
     fn of_compiled(path: &Path, access: LoadFileAccess<'_>) -> Self {
         let source = path.with_extension("el");
-        let (Some(compiled_mtime), Some(source_mtime)) =
-            (access.modified(path), access.modified(&source))
+        let (Some(compiled_freshness), Some(source_freshness)) =
+            (access.freshness(path), access.freshness(&source))
         else {
             // GNU only warns when BOTH stats succeed (`result == 0` twice).
+            return Self::Current;
+        };
+        let (
+            LoadCandidateFreshness::NativeModified(compiled_mtime),
+            LoadCandidateFreshness::NativeModified(source_mtime),
+        ) = (compiled_freshness, source_freshness)
+        else {
+            // Packaged resources have no live source freshness to compare.
             return Self::Current;
         };
         if source_mtime <= compiled_mtime {
