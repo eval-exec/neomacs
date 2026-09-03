@@ -239,7 +239,8 @@ jobs:
         run: >-
           cargo nextest run -p neovm-core --lib
           -E 'test(native_runtime_test) |
-          test(windows_set_file_times_does_not_require_content_write_access)'
+          test(windows_set_file_times_does_not_require_content_write_access) |
+          test(windows_file_writable_p_accepts_an_existing_directory)'
 
   # The native Rust tests above isolate backend/thread/lifecycle failures.  A
   # release Neomacs is still required to prove the public Lisp API, special

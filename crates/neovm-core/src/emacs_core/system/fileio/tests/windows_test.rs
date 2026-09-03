@@ -43,3 +43,22 @@ fn windows_set_file_times_does_not_require_content_write_access() {
     .expect("restore fixture writability");
     assert_eq!(result.expect("set times on read-only file"), Value::T);
 }
+
+/// GNU's Windows implementation treats an existing directory as writable
+/// even though opening that directory as a regular file for content writes is
+/// invalid (`src/fileio.c:Ffile_writable_p`).  `backup-buffer` relies on this
+/// contract to select rename-based backups.
+#[test]
+fn windows_file_writable_p_accepts_an_existing_directory() {
+    crate::test_utils::init_test_tracing();
+    let directory = workspace_temp_dir();
+    let mut eval = Context::new();
+
+    let result = builtin_file_writable_p(
+        &mut eval,
+        vec![Value::string(directory.path().display().to_string())],
+    )
+    .expect("query directory writability");
+
+    assert_eq!(result, Value::T);
+}
