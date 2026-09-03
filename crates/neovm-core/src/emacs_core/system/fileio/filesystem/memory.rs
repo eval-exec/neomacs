@@ -323,7 +323,19 @@ impl EditorFileSystem for MemoryFileSystem {
     fn rename(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()> {
         let from = VirtualPath::parse(from)?;
         let to = VirtualPath::parse(to)?;
-        if from.is_root() || to.is_root() || to.starts_with(&from) {
+        if from.is_root() || to.is_root() {
+            return Err(invalid_path("invalid virtual filesystem rename"));
+        }
+        if from == to {
+            return self
+                .nodes
+                .read()
+                .expect("memory filesystem read lock poisoned")
+                .contains_key(&from)
+                .then_some(())
+                .ok_or_else(|| io::Error::from(ErrorKind::NotFound));
+        }
+        if to.starts_with(&from) {
             return Err(invalid_path("invalid virtual filesystem rename"));
         }
         let mut nodes = self
