@@ -185,4 +185,26 @@ impl EditorFileSystem for NativeFileSystem {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         fs::canonicalize(path)
     }
+
+    fn same_file(&self, left: &Path, right: &Path) -> io::Result<bool> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            let left = fs::metadata(left)?;
+            let right = fs::metadata(right)?;
+            Ok(left.dev() == right.dev() && left.ino() == right.ino())
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(fs::canonicalize(left)? == fs::canonicalize(right)?)
+        }
+    }
+
+    fn copy_file(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()> {
+        if !replace && fs::symlink_metadata(to).is_ok() {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        fs::copy(from, to).map(|_| ())
+    }
 }
