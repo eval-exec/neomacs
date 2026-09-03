@@ -17,11 +17,12 @@ use super::portable_assets::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-pub(super) const WEB_SOURCE_FILES: [&str; 7] = [
+pub(super) const WEB_SOURCE_FILES: [&str; 8] = [
     "browser-input.mjs",
     "editor-worker.js",
     "index.html",
     "main.js",
+    "opfs-storage.mjs",
     "style.css",
     "wasm-bootstrap.mjs",
     "worker-assets.mjs",
