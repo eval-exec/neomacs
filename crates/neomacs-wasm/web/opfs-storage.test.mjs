@@ -166,3 +166,51 @@ test("unsupported rename preserves an existing destination", async () => {
     "destination",
   );
 });
+
+test("failed replacement rename preserves both source and destination", async () => {
+  const filesystem = await OriginPrivateFileSystem.open({
+    getDirectory: async () => new FakeDirectoryHandle(),
+  });
+  const encoder = new TextEncoder();
+  await filesystem.write("/source", encoder.encode("source"), {
+    mode: WRITE_MODE.TRUNCATE,
+    offset: 0,
+    sync: false,
+  });
+  await filesystem.write("/destination", encoder.encode("destination"), {
+    mode: WRITE_MODE.TRUNCATE,
+    offset: 0,
+    sync: false,
+  });
+  const source = await filesystem.lookup("/source");
+  source.move = async () => {
+    throw domError("NoModificationAllowedError");
+  };
+
+  await assert.rejects(filesystem.rename("/source", "/destination", true));
+
+  assert.equal(new TextDecoder().decode(await filesystem.read("/source")), "source");
+  assert.equal(
+    new TextDecoder().decode(await filesystem.read("/destination")),
+    "destination",
+  );
+});
+
+test("rename to the same path is a checked no-op", async () => {
+  const filesystem = await OriginPrivateFileSystem.open({
+    getDirectory: async () => new FakeDirectoryHandle(),
+  });
+  await filesystem.write("/same", new TextEncoder().encode("unchanged"), {
+    mode: WRITE_MODE.TRUNCATE,
+    offset: 0,
+    sync: false,
+  });
+  const source = await filesystem.lookup("/same");
+  source.move = async () => {
+    throw new Error("a self-rename must not call move");
+  };
+
+  await filesystem.rename("/same", "/same", true);
+
+  assert.equal(new TextDecoder().decode(await filesystem.read("/same")), "unchanged");
+});
