@@ -66,13 +66,12 @@ impl Worker {
         activity: WatchActivity,
         events: DeliverySender<WorkerMessage, WorkerTermination>,
     ) -> Result<Self, String> {
-        let (directory, watched_name) = if path.is_dir() {
-            (path.to_path_buf(), None)
+        let directory = if path.is_dir() {
+            path.to_path_buf()
         } else {
-            let parent = path
-                .parent()
-                .ok_or_else(|| "watched file has no parent directory".to_owned())?;
-            (parent.to_path_buf(), path.file_name().map(PathBuf::from))
+            path.parent()
+                .ok_or_else(|| "watched file has no parent directory".to_owned())?
+                .to_path_buf()
         };
         let directory_handle = open_directory(&directory)?;
         let io_event = create_event()?;
@@ -88,7 +87,6 @@ impl Worker {
                         directory_handle,
                         io_event,
                         worker_stop_event,
-                        watched_name,
                         recursive,
                         native_filter,
                         watch_id,
@@ -130,7 +128,6 @@ fn run(
     directory: OwnedHandle,
     io_event: OwnedHandle,
     stop_event: OwnedHandle,
-    watched_name: Option<PathBuf>,
     recursive: bool,
     native_filter: u32,
     watch_id: WatchId,
@@ -219,10 +216,12 @@ fn run(
                 continue;
             }
         };
+        // ReadDirectoryChangesW watches the directory, not an individual
+        // child.  Preserve that complete ordered stream exactly as GNU's
+        // w32notify backend does.  In particular, a rename's new name may not
+        // equal the originally requested file name; filenotify.el must receive
+        // both halves before it can pair and select the high-level event.
         for (action, path) in decoded {
-            if watched_name.as_ref().is_some_and(|name| *name != path) {
-                continue;
-            }
             if events.publish(WorkerMessage::Event(W32Event {
                 watch_id: watch_id.clone(),
                 action,
