@@ -15,7 +15,7 @@ use neomacs_app::session::{
 use neomacs_app::startup::{InteractiveGuiStartup, configure_interactive_gui_startup};
 use neomacs_layout_engine::font::sizing::FontSizing;
 use neomacs_wasm_protocol::{BrowserColorScheme, BrowserEditorStartup, BrowserInputBatch};
-use neovm_core::keyboard::{HostInputWaitBackend, HostInputWaitError};
+use neovm_core::emacs_core::wait::{HostInputWaitBackend, HostInputWaitError};
 use neovm_core::window::FrameDisplayIdentity;
 
 use crate::browser_host::{self, HostWake};

@@ -6,6 +6,10 @@
 //! and what should complete the wait; lower-level process/input code only
 //! performs the service pass.
 
+#[path = "host_input.rs"]
+mod host_input;
+pub use host_input::{HostInputWaitBackend, HostInputWaitError};
+
 use std::time::{Duration, Instant};
 
 use crate::keyboard::SpecialInputServiceOutcome;
