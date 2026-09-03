@@ -33,7 +33,7 @@ mod host;
 
 pub use host::{
     ExecutionEngine, HostKind, HostOperation, HostOperationError, HostProfile, NativeModuleModel,
-    ProcessModel, RuntimeImageModel, StorageModel,
+    ProcessEnvironmentModel, ProcessModel, RuntimeImageModel, StorageModel,
 };
 
 /// Opaque identifier for a VM-side object handle exposed across the

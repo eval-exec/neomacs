@@ -19,7 +19,9 @@ use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::load::{
     RuntimeImageRole, finalize_restored_runtime_image, finalize_restored_runtime_image_at_root,
 };
-use neovm_core::emacs_core::pdump::{DumpError, load_from_dump, load_from_portable_snapshot};
+use neovm_core::emacs_core::pdump::{
+    DumpError, load_from_dump, load_from_portable_snapshot_for_host,
+};
 
 use crate::host::{HostKind, HostProfile, RuntimeImageModel};
 use crate::runtime_resources::MountedRuntimeResources;
@@ -79,7 +81,7 @@ impl RuntimeImageSource<'_> {
             HostKind::Desktop => {}
         }
 
-        self.restore_and_finalize(RuntimeImageFinalization::DiscoveredRuntimeRoot)
+        self.restore_and_finalize(host, RuntimeImageFinalization::DiscoveredRuntimeRoot)
     }
 
     /// Restore a browser image together with its authenticated virtual runtime
@@ -99,7 +101,10 @@ impl RuntimeImageSource<'_> {
             });
         }
 
-        self.restore_and_finalize(RuntimeImageFinalization::MountedRuntimeResources(resources))
+        self.restore_and_finalize(
+            host,
+            RuntimeImageFinalization::MountedRuntimeResources(resources),
+        )
     }
 
     /// Restore using a runtime resource root selected by a sandboxed host.
@@ -113,7 +118,10 @@ impl RuntimeImageSource<'_> {
         runtime_root: &Path,
     ) -> Result<Context, RuntimeImageError> {
         self.validate_model(host)?;
-        self.restore_and_finalize(RuntimeImageFinalization::ExplicitRuntimeRoot(runtime_root))
+        self.restore_and_finalize(
+            host,
+            RuntimeImageFinalization::ExplicitRuntimeRoot(runtime_root),
+        )
     }
 
     fn validate_model(self, host: HostProfile) -> Result<(), RuntimeImageError> {
@@ -128,22 +136,22 @@ impl RuntimeImageSource<'_> {
         Ok(())
     }
 
-    fn restore(self) -> Result<Context, RuntimeImageError> {
+    fn restore(self, host: HostProfile) -> Result<Context, RuntimeImageError> {
         match self {
             Self::MappedFile(path) | Self::ExtractedFile(path) => {
                 load_from_dump(path).map_err(RuntimeImageError::Load)
             }
-            Self::LinearMemory(bytes) => {
-                load_from_portable_snapshot(bytes).map_err(RuntimeImageError::Load)
-            }
+            Self::LinearMemory(bytes) => load_from_portable_snapshot_for_host(bytes, host.kind())
+                .map_err(RuntimeImageError::Load),
         }
     }
 
     fn restore_and_finalize(
         self,
+        host: HostProfile,
         finalization: RuntimeImageFinalization<'_>,
     ) -> Result<Context, RuntimeImageError> {
-        let mut evaluator = self.restore()?;
+        let mut evaluator = self.restore(host)?;
         match finalization {
             RuntimeImageFinalization::DiscoveredRuntimeRoot => {
                 finalize_restored_runtime_image(&mut evaluator, RuntimeImageRole::Final, &[])

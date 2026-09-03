@@ -6,7 +6,7 @@ use super::*;
 use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 
 crate::emacs_core::subr::define_subrs! {
-    target_filtered;
+    native_host;
     #[cfg(all(neomacs_have_lcms2, not(target_family = "wasm")))]
     SubrSpec::new(
         "lcms-cie-de2000",

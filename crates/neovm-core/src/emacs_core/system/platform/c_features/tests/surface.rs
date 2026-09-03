@@ -125,7 +125,7 @@ fn every_provided_feature_names_what_backs_it() {
                  every build, but its own row says GNU guards it",
                 row.name
             ),
-            HereDecision::Implemented { by } => assert!(
+            HereDecision::Implemented { by, .. } => assert!(
                 by.len() > 20 && by.contains(".rs"),
                 "{} claims an implementation but does not cite one: {by:?}",
                 row.name
