@@ -3738,6 +3738,39 @@ fn test_insert_file_contents_and_write_region() {
 }
 
 #[test]
+fn lisp_read_and_write_primitives_share_the_context_filesystem() {
+    crate::test_utils::init_test_tracing();
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .create_directory(std::path::Path::new("/neomacs-fake"), false)
+        .expect("seed virtual home mount");
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(filesystem));
+    eval.buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert("persistent text");
+
+    builtin_write_region(
+        &mut eval,
+        vec![Value::NIL, Value::NIL, Value::string("/neomacs-fake/note")],
+    )
+    .expect("write through installed filesystem");
+    eval.eval_str("(erase-buffer)")
+        .expect("erase current buffer");
+    builtin_insert_file_contents(&mut eval, vec![Value::string("/neomacs-fake/note")])
+        .expect("read through installed filesystem");
+
+    assert_eq!(
+        eval.buffers
+            .current_buffer()
+            .expect("current buffer")
+            .buffer_string(),
+        "persistent text",
+    );
+}
+
+#[test]
 fn insert_file_contents_non_visit_change_hooks_match_gnu() {
     crate::test_utils::init_test_tracing();
 
