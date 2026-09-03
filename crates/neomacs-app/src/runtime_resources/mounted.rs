@@ -1,10 +1,11 @@
 //! Read-only runtime resources mounted in an evaluator's virtual root.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use neovm_core::emacs_core::fileio::RuntimeResourceStore;
+use neovm_core::emacs_core::fileio::{RuntimeResourceNode, RuntimeResourceStore};
 
 use super::bundle::{
     ArchiveEntryKind, RuntimeResourceError, read_bundle_id, visit_authenticated_archive,
@@ -30,7 +31,7 @@ impl MountedRuntimeResources {
         bundle_id: &[u8],
     ) -> Result<Self, RuntimeResourceError> {
         let expected = read_bundle_id(Cursor::new(bundle_id))?;
-        let mut directories = BTreeSet::new();
+        let mut directories = BTreeSet::from([mount_root.to_owned()]);
         let mut files = BTreeMap::new();
         visit_authenticated_archive(Cursor::new(archive), &expected, |entry, contents| {
             let mounted_path = mount_root.join(entry.path());
@@ -76,11 +77,32 @@ impl MountedRuntimeResources {
 }
 
 impl RuntimeResourceStore for MountedRuntimeResources {
-    fn file_contents(&self, path: &Path) -> Option<&[u8]> {
-        self.files.get(path).map(Vec::as_slice)
+    fn node(&self, path: &Path) -> Option<RuntimeResourceNode<'_>> {
+        if let Some(contents) = self.files.get(path) {
+            Some(RuntimeResourceNode::File(contents))
+        } else if self.directories.contains(path) {
+            Some(RuntimeResourceNode::Directory)
+        } else {
+            None
+        }
     }
 
-    fn directory_exists(&self, path: &Path) -> bool {
-        self.directories.contains(path)
+    fn directory_entries(&self, path: &Path) -> Option<Vec<OsString>> {
+        if !self.directories.contains(path) {
+            return None;
+        }
+        let entries = self
+            .directories
+            .iter()
+            .chain(self.files.keys())
+            .filter_map(|entry| {
+                (entry.parent() == Some(path))
+                    .then(|| entry.file_name().map(ToOwned::to_owned))
+                    .flatten()
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Some(entries)
     }
 }
