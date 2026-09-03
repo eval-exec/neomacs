@@ -22,5 +22,8 @@ winit = { workspace = true, features = ["x11", "wayland", "wayland-dlopen", "way
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { workspace = true, features = ["android-game-activity"] }
 
+[target.'cfg(target_family = "wasm")'.dependencies]
+wgpu = { workspace = true, features = ["webgl"] }
+
 [lints]
 workspace = true
