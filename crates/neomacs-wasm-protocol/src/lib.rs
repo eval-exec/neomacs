@@ -13,6 +13,152 @@ use neomacs_app::frontend_event::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Wire contract understood by this browser frontend and editor Worker.
+pub const WORKER_PROTOCOL_VERSION: u16 = 1;
+
+/// Browser color preference sampled for the initial editor frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BrowserColorScheme {
+    Light,
+    Dark,
+}
+
+/// Complete initial-surface facts delivered before the Worker restores Lisp.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BrowserEditorStartup {
+    protocol_version: u16,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+    character_width: f32,
+    character_height: f32,
+    font_pixel_size: f32,
+    color_scheme: BrowserColorScheme,
+}
+
+impl BrowserEditorStartup {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        character_width: f32,
+        character_height: f32,
+        font_pixel_size: f32,
+        color_scheme: BrowserColorScheme,
+    ) -> Result<Self, InvalidBrowserEditorStartup> {
+        let startup = Self {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            width,
+            height,
+            scale_factor,
+            character_width,
+            character_height,
+            font_pixel_size,
+            color_scheme,
+        };
+        startup.validate()?;
+        Ok(startup)
+    }
+
+    /// Reject stale wire versions and geometry that cannot form a frame.
+    pub fn validate(&self) -> Result<(), InvalidBrowserEditorStartup> {
+        if self.protocol_version != WORKER_PROTOCOL_VERSION {
+            return Err(InvalidBrowserEditorStartup::UnsupportedProtocol {
+                found: self.protocol_version,
+            });
+        }
+        if self.width == 0 || self.height == 0 {
+            return Err(InvalidBrowserEditorStartup::EmptyExtent);
+        }
+        if !self.scale_factor.is_finite() || self.scale_factor <= 0.0 {
+            return Err(InvalidBrowserEditorStartup::ScaleFactor);
+        }
+        if !positive_finite(self.character_width) {
+            return Err(InvalidBrowserEditorStartup::CharacterWidth);
+        }
+        if !positive_finite(self.character_height) {
+            return Err(InvalidBrowserEditorStartup::CharacterHeight);
+        }
+        if !positive_finite(self.font_pixel_size) {
+            return Err(InvalidBrowserEditorStartup::FontPixelSize);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn protocol_version(&self) -> u16 {
+        self.protocol_version
+    }
+
+    #[must_use]
+    pub const fn physical_extent(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    #[must_use]
+    pub const fn scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
+
+    #[must_use]
+    pub const fn character_size(&self) -> (f32, f32) {
+        (self.character_width, self.character_height)
+    }
+
+    #[must_use]
+    pub const fn font_pixel_size(&self) -> f32 {
+        self.font_pixel_size
+    }
+
+    #[must_use]
+    pub const fn color_scheme(&self) -> BrowserColorScheme {
+        self.color_scheme
+    }
+}
+
+const fn positive_finite(value: f32) -> bool {
+    value.is_finite() && value > 0.0
+}
+
+/// Invalid browser facts rejected before restoring the runtime image.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvalidBrowserEditorStartup {
+    UnsupportedProtocol { found: u16 },
+    EmptyExtent,
+    ScaleFactor,
+    CharacterWidth,
+    CharacterHeight,
+    FontPixelSize,
+}
+
+impl Display for InvalidBrowserEditorStartup {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedProtocol { found } => write!(
+                formatter,
+                "unsupported browser Worker protocol {found}; expected {WORKER_PROTOCOL_VERSION}"
+            ),
+            Self::EmptyExtent => formatter.write_str("browser frame extent must be nonzero"),
+            Self::ScaleFactor => {
+                formatter.write_str("browser scale factor must be finite and positive")
+            }
+            Self::CharacterWidth => {
+                formatter.write_str("browser character width must be finite and positive")
+            }
+            Self::CharacterHeight => {
+                formatter.write_str("browser character height must be finite and positive")
+            }
+            Self::FontPixelSize => {
+                formatter.write_str("browser font size must be finite and positive")
+            }
+        }
+    }
+}
+
+impl std::error::Error for InvalidBrowserEditorStartup {}
+
 /// Monotonic identity echoed by the Worker after accepting an input batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
