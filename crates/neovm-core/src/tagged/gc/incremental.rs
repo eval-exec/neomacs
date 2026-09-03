@@ -40,7 +40,7 @@ impl TaggedHeap {
     /// stopped. A single `mark_all` reaches the fixpoint: `mark_value` re-pushes
     /// each marked object's children, so the gray queue drains completely.
     pub(crate) fn incremental_drain_all(&mut self) {
-        let t0 = crate::host_time::Instant::now();
+        let t0 = crate::host::time::Instant::now();
         self.mark_all();
         self.incremental_mark_us += t0.elapsed().as_micros() as u64;
     }
@@ -55,7 +55,7 @@ impl TaggedHeap {
     pub(crate) fn incremental_finish(
         &mut self,
         bytes_before: usize,
-        _pause_t0: crate::host_time::Instant,
+        _pause_t0: crate::host::time::Instant,
     ) {
         // Before anything else: the free list is reset below, and a
         // free-list region closed after that would push its cells onto the
@@ -70,7 +70,7 @@ impl TaggedHeap {
         // here would mean finalizers silently never run under the concurrent
         // collector). The main mark has drained — the termination handshake
         // already traced the deferred veclikes — so marks are final.
-        let finalizer_t0 = crate::host_time::Instant::now();
+        let finalizer_t0 = crate::host::time::Instant::now();
         self.mark_and_queue_doomed_finalizers();
         self.handshake.last_term_finalizer_us = finalizer_t0.elapsed().as_micros() as u64;
         // Resolve weak hash tables (GNU mark_and_sweep_weak_table_contents): mark
@@ -79,7 +79,7 @@ impl TaggedHeap {
         // termination too — otherwise a weak table's only-weakly-reachable entries
         // are neither marked nor removed, so they are swept while still referenced
         // by the table (UAF). The main mark has already drained at this point.
-        let weak_t0 = crate::host_time::Instant::now();
+        let weak_t0 = crate::host::time::Instant::now();
         self.mark_and_sweep_weak_tables();
         self.handshake.last_term_weak_us = weak_t0.elapsed().as_micros() as u64;
 
@@ -242,7 +242,7 @@ impl TaggedHeap {
         // Collector code never sees an open allocation region
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
-        let t0 = crate::host_time::Instant::now();
+        let t0 = crate::host::time::Instant::now();
         // -- cons: reclaim up to `budget` blocks (each ~64KB of cells) --
         let mut swept_blocks = 0usize;
         while swept_blocks < budget && self.sweep_cons_cursor < self.sweep_cons_end {

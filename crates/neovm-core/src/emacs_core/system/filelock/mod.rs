@@ -56,7 +56,7 @@ fn lock_host_name(eval: &super::eval::Context) -> String {
 }
 
 fn current_lock_info_string(user: &str, host: &str) -> String {
-    let prefix = format!("{}@{}.{}", user, host, std::process::id());
+    let prefix = format!("{}@{}.{}", user, host, crate::host::process::id());
     let boot_time = system_boot_time_sec();
     if boot_time == 0 {
         prefix
@@ -241,7 +241,7 @@ fn current_lock_owner(lock_path: &Path, host: &str) -> Result<LockOwner, io::Err
     if info.host != host {
         return Ok(LockOwner::Other(clasher));
     }
-    if info.pid == std::process::id() {
+    if info.pid == crate::host::process::id() {
         return Ok(LockOwner::Current);
     }
     let pid_alive = process_is_alive(info.pid);

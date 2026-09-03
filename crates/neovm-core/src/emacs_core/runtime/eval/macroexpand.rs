@@ -11,7 +11,7 @@ impl Context {
         f: impl FnOnce(&mut Self) -> EvalResult,
     ) -> EvalResult {
         self.macro_expansion_scope_depth += 1;
-        let scope_enter_start = self.macro_perf_enabled.then(crate::host_time::Instant::now);
+        let scope_enter_start = self.macro_perf_enabled.then(crate::host::time::Instant::now);
         let state = match self.begin_macro_expansion_scope_frame() {
             Ok(state) => state,
             Err(flow) => {
@@ -26,7 +26,7 @@ impl Context {
                 .note_duration(start.elapsed());
         }
         let result = f(self);
-        let scope_exit_start = self.macro_perf_enabled.then(crate::host_time::Instant::now);
+        let scope_exit_start = self.macro_perf_enabled.then(crate::host::time::Instant::now);
         let result = self.finish_macro_expansion_scope_frame(state, result);
         if let Some(start) = scope_exit_start {
             self.macro_perf_stats
@@ -133,7 +133,7 @@ impl Context {
         callable: Value,
         args: Vec<Value>,
     ) -> Result<Value, Flow> {
-        let perf_start = self.macro_perf_enabled.then(crate::host_time::Instant::now);
+        let perf_start = self.macro_perf_enabled.then(crate::host::time::Instant::now);
         // GNU Fmacroexpand applies the macro expander directly.  The
         // eval.c macro-call path specbinds `lexical-binding`, but the
         // Fmacroexpand path does not; bytecomp relies on the current
@@ -154,8 +154,8 @@ impl Context {
         args: Vec<Value>,
         environment: Option<Value>,
     ) -> Result<Value, Flow> {
-        let perf_start = self.macro_perf_enabled.then(crate::host_time::Instant::now);
-        let expand_start = crate::host_time::Instant::now();
+        let perf_start = self.macro_perf_enabled.then(crate::host::time::Instant::now);
+        let expand_start = crate::host::time::Instant::now();
         let specpdl_root_scope = self.save_specpdl_roots();
         self.push_specpdl_root(form);
         self.push_specpdl_root(definition);

@@ -19,7 +19,6 @@ use crate::emacs_core::error::expect_args;
 use crate::emacs_core::error::expect_min_args;
 use std::collections::HashMap;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::error::{EvalResult, Flow, signal};
 use super::value::{Value, ValueKind};
@@ -756,9 +755,7 @@ fn bookmark_timestamp_file(eval: &super::eval::Context) -> Option<LispString> {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn bookmark_save_stamp(path: &LispString) -> Value {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+    let now = crate::host::time::wall_time_since_unix_epoch().unwrap_or_default();
     Value::list(vec![
         Value::heap_string(path.clone()),
         Value::fixnum(now.as_secs() as i64),

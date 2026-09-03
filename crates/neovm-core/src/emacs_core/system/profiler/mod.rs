@@ -1,4 +1,4 @@
-use crate::host_time::Instant;
+use crate::host::time::Instant;
 
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
