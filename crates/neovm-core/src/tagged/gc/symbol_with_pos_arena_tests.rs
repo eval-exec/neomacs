@@ -23,7 +23,7 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
 }
@@ -152,7 +152,7 @@ fn parity_two_cycle_symbol_with_pos_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         heap.owns_non_cons_object(b_ptr),
@@ -180,7 +180,7 @@ fn parity_two_cycle_symbol_with_pos_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(b);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         !heap.owns_non_cons_object(g1_ptr),
@@ -262,7 +262,7 @@ fn deferred_symbol_with_pos_resolves_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     for (i, b) in swps.iter().enumerate() {
@@ -401,7 +401,7 @@ fn symbol_with_pos_reuse_within_one_cooperative_sweep_window() {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     assert!(heap.sweep_in_progress());
     assert!(!heap.incremental_sweep_slice(1), "3 pages need >1 slice");
 
@@ -454,7 +454,7 @@ fn symbol_with_pos_sweep_live_bytes_fixed_size_both_sites() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert_eq!(heap.live_bytes(), expected, "incremental site");
 }

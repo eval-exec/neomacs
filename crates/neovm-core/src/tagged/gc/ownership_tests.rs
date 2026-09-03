@@ -177,7 +177,7 @@ fn concurrent_mark_overlaps_mutation_and_retains_live_set() {
     heap.seed_root(pivot);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // The whole list (N) + pivot + D survive; `head` is retained as floating
@@ -229,7 +229,7 @@ fn deferred_sweep_aggregates_slice_stats() {
     heap.seed_root(rooted);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     assert!(heap.sweep_in_progress());
     let mut slices = 1usize;
     while !heap.incremental_sweep_slice(8) {
@@ -298,7 +298,7 @@ fn concurrent_termination_records_deferred_drain_size() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
     assert_eq!(heap.sweep_stats().noncons_freed, 0, "all records are live");
@@ -338,7 +338,7 @@ fn concurrent_handshake_records_heap_side_phases() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     let hs = heap.handshake_stats();
@@ -520,7 +520,7 @@ fn concurrent_termination_classifies_deferred_kinds() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
     assert_eq!(heap.sweep_stats().noncons_freed, 0, "everything is rooted");
@@ -555,7 +555,7 @@ fn finish_concurrent_cycle(heap: &mut TaggedHeap, root: TaggedValue) {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
 }
@@ -667,7 +667,7 @@ fn concurrent_mark_born_string_interval_child_survives() {
     heap.seed_root(s);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // C survived its birth-cycle severing (SATB), S survived (born-at-
@@ -695,7 +695,7 @@ fn concurrent_mark_born_string_interval_child_survives() {
     heap.seed_root(s);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(heap.owns_non_cons_object(s.as_string_ptr().unwrap() as *const u8));
     assert_eq!(
@@ -852,7 +852,7 @@ fn concurrent_mark_defers_mapped_strings_and_marks_their_interval_children() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // Termination marked it on the mapped path and traced the child.
@@ -935,7 +935,7 @@ fn concurrent_leaked_subr_dropped_from_defer_path() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // Subr payload intact after the full cycle (permanently live; the
@@ -1002,7 +1002,7 @@ fn concurrent_mapped_subr_still_deferred_and_side_table_marked() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // The termination marked it via the mapped side table.
@@ -1066,7 +1066,7 @@ fn concurrent_vector_header_claimed_children_survive_garbage_freed() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // Children survived via the Tier-B backing scan (the claimed header
@@ -1163,7 +1163,7 @@ fn concurrent_mid_cycle_vector_in_reused_slot_keeps_child_alive() {
     heap.incremental_drain_all();
     // Runs verify_dump_partition + verify_incremental_tricolor (armed
     // above): a black v_new with a white C would panic here.
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // C survived its birth-cycle severing (SATB), with payload intact.
@@ -1188,7 +1188,7 @@ fn concurrent_mid_cycle_vector_in_reused_slot_keeps_child_alive() {
     heap.seed_root(v_new);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert_eq!(
         unsafe { (*c.xcons_ptr()).load_car() }.0,
@@ -1509,7 +1509,7 @@ fn concurrent_mapped_vector_still_deferred_and_traced() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // Termination marked it on the mapped path and traced its child.
@@ -1742,7 +1742,7 @@ fn concurrent_claim_reaches_vector_slot_strings() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     assert!(heap.owns_non_cons_object(s_free.as_string_ptr().unwrap() as *const u8));
@@ -1850,7 +1850,7 @@ fn dumpless_heap_enables_concurrent_after_bootstrap_and_collects() {
     heap.seed_root(rooted_head);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // The unrooted churn was reclaimed...
@@ -1899,7 +1899,7 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
 }
@@ -1946,7 +1946,7 @@ fn parity_allocate_black_object_survives_two_cycles() {
     heap.seed_root(spine); // v/s deliberately NOT seeded this cycle
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         heap.owns_non_cons_object(v_ptr),
@@ -2008,7 +2008,7 @@ fn parity_reclaims_garbage_within_two_cycles() {
     heap.seed_root(spine);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         !heap.owns_non_cons_object(g1_ptr),
@@ -2526,7 +2526,7 @@ fn vector_registry_matches_full_filter_across_cycles() {
     heap.seed_root(keep_vec);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert_snapshots_match(&heap);
     assert_eq!(registry_entries(&heap).len(), 1);
@@ -2565,7 +2565,7 @@ fn immediate_join_mid_drain_hands_residual_work_to_termination() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     assert_eq!(
@@ -2811,7 +2811,7 @@ fn concurrent_mark_dedup_retains_hash_table_live_set() {
     heap.seed_root(table);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     // (1) The overwritten OLD value (live at snapshot time, then unlinked) must
@@ -2955,7 +2955,7 @@ fn finalizer_doomed_on_concurrent_termination_queues_and_keeps_function() {
     heap.seed_root(live_fin);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish(bytes_before, crate::host_time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     assert!(

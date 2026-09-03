@@ -383,7 +383,7 @@ pub struct TaggedHeap {
     forced_termination_pending: bool,
     /// Wall-clock start of the in-flight concurrent mark (stamped at
     /// `launch_concurrent_mark`, consumed at `incremental_finish`).
-    pace_mark_start: Option<std::time::Instant>,
+    pace_mark_start: Option<crate::host_time::Instant>,
     /// `bytes_since_gc` at the in-flight mark's start handshake.
     pace_mark_start_bytes: usize,
     /// EWMA (alpha 1/2) of bytes/sec allocated during recent mark windows.

@@ -16,10 +16,10 @@
 //!   dead functions linger until thread exit (a bounded leak), never a
 //!   use-after-free.
 
+use crate::host_time::Instant;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Instant;
 
 use super::compile::{
     CompiledLeaf, NativeRun, compile_bytecode_function_with, stash_pending_flow, take_pending_flow,

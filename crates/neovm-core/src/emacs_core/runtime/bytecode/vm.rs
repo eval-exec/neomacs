@@ -7807,7 +7807,7 @@ impl<'a> crate::emacs_core::builtins::symbols::MacroexpandRuntime for Vm<'a> {
         args: Vec<Value>,
         environment: Option<Value>,
     ) -> Result<Value, Flow> {
-        let expand_start = std::time::Instant::now();
+        let expand_start = crate::host_time::Instant::now();
         self.with_dynamic_vm_roots(move |vm| {
             vm.push_dynamic_vm_root(form);
             vm.push_dynamic_vm_root(function);

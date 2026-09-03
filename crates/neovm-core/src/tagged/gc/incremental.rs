@@ -40,7 +40,7 @@ impl TaggedHeap {
     /// stopped. A single `mark_all` reaches the fixpoint: `mark_value` re-pushes
     /// each marked object's children, so the gray queue drains completely.
     pub(crate) fn incremental_drain_all(&mut self) {
-        let t0 = std::time::Instant::now();
+        let t0 = crate::host_time::Instant::now();
         self.mark_all();
         self.incremental_mark_us += t0.elapsed().as_micros() as u64;
     }
@@ -55,13 +55,13 @@ impl TaggedHeap {
     pub(crate) fn incremental_finish(
         &mut self,
         bytes_before: usize,
-        _pause_t0: std::time::Instant,
+        _pause_t0: crate::host_time::Instant,
     ) {
         // Queue doomed finalizers first (mirrors `complete_collection`; a miss
         // here would mean finalizers silently never run under the concurrent
         // collector). The main mark has drained — the termination handshake
         // already traced the deferred veclikes — so marks are final.
-        let finalizer_t0 = std::time::Instant::now();
+        let finalizer_t0 = crate::host_time::Instant::now();
         self.mark_and_queue_doomed_finalizers();
         self.handshake.last_term_finalizer_us = finalizer_t0.elapsed().as_micros() as u64;
         // Resolve weak hash tables (GNU mark_and_sweep_weak_table_contents): mark
@@ -70,7 +70,7 @@ impl TaggedHeap {
         // termination too — otherwise a weak table's only-weakly-reachable entries
         // are neither marked nor removed, so they are swept while still referenced
         // by the table (UAF). The main mark has already drained at this point.
-        let weak_t0 = std::time::Instant::now();
+        let weak_t0 = crate::host_time::Instant::now();
         self.mark_and_sweep_weak_tables();
         self.handshake.last_term_weak_us = weak_t0.elapsed().as_micros() as u64;
 
@@ -85,7 +85,7 @@ impl TaggedHeap {
         }
         // Unchain dead markers before the sweep frees them (mirrors GNU
         // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
-        let unchain_t0 = std::time::Instant::now();
+        let unchain_t0 = crate::host_time::Instant::now();
         self.unchain_dead_markers();
         self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
 
@@ -189,7 +189,7 @@ impl TaggedHeap {
     /// allocated meanwhile are born black (see `alloc_cons`), so an unswept
     /// block never reclaims a live new cell.
     pub(crate) fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
-        let t0 = std::time::Instant::now();
+        let t0 = crate::host_time::Instant::now();
         // -- cons: reclaim up to `budget` blocks (each ~64KB of cells) --
         let mut swept_blocks = 0usize;
         while swept_blocks < budget && self.sweep_cons_cursor < self.cons_blocks.len() {
