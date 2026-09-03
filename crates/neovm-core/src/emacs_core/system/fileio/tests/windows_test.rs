@@ -80,7 +80,7 @@ fn windows_backup_buffer_uses_rename_when_copying_is_disabled() {
         "neovm-test-backup-file",
         Value::string(crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&file)),
     );
-    let result = eval
+    let diagnostics = eval
         .eval_str(
             r#"
             (progn
@@ -93,13 +93,32 @@ fn windows_backup_buffer_uses_rename_when_copying_is_disabled() {
                       (kept-new-versions 1)
                       (delete-old-versions t))
                   (insert "replacement")
-                  (backup-buffer))))
+                  (let* ((attributes
+                          (file-attributes buffer-file-name 'integer))
+                         (decision (backup-buffer)))
+                    (list
+                     (file-writable-p
+                      (file-name-directory buffer-file-name))
+                     (file-modes buffer-file-name)
+                     (file-attribute-link-number attributes)
+                     (file-attribute-user-id attributes)
+                     (file-attribute-group-id attributes)
+                     (user-uid)
+                     (group-gid)
+                     (file-ownership-preserved-p
+                      neovm-test-backup-file t)
+                     decision)))))
             "#,
         )
         .expect("run backup-buffer");
+    let fields = crate::emacs_core::value::list_to_vec(&diagnostics)
+        .expect("backup policy diagnostics list");
+    let decision = fields.last().expect("backup decision field");
 
     assert!(
-        result.is_cons(),
-        "backup-buffer copied instead of renaming the original: {result:?}"
+        decision.is_cons(),
+        "backup-buffer copied instead of renaming the original; \
+         diagnostics=(directory-writable modes links file-uid file-gid user-uid group-gid \
+         ownership-preserved decision) {fields:?}"
     );
 }
