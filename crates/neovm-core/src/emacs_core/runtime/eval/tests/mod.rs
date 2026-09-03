@@ -6,7 +6,7 @@ fn test_ob() -> crate::emacs_core::symbol::Obarray {
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::{ConditionFrame, ResumeTarget, SpecBinding};
 use crate::emacs_core::format_eval_result;
-use crate::emacs_core::subr::{FixedMin1, NativeFn, SubrArity, SubrSpec};
+use crate::emacs_core::subr::{FixedMin1, NativeFn, SubrArity, SubrPortability, SubrSpec};
 use crate::heap_types::LispString;
 use crate::test_utils::{
     eval_with_ldefs_boot_autoloads, load_minimal_gnu_backquote_runtime, runtime_startup_context,
@@ -28,6 +28,22 @@ fn eval_one_lexical(src: &str) -> String {
     ev.set_lexical_binding(true);
     let result = ev.eval_str(src);
     format_eval_result(&result)
+}
+
+#[test]
+fn materializing_a_subr_entry_reads_the_registry_once() {
+    let ev = Context::new();
+    let function = ev
+        .obarray()
+        .symbol_function("forward-char")
+        .expect("forward-char must have a primitive function cell");
+
+    reset_global_subr_lookup_count();
+    let (_, entry) = subr_entry_from_value(function).expect("function cell must be a subr");
+
+    assert!(entry.interactive_spec.is_some());
+    assert_eq!(entry.portability, SubrPortability::AllTargets);
+    assert_eq!(global_subr_lookup_count(), 1);
 }
 
 fn install_global_map_for_test(ev: &mut Context, global_map: Value) {

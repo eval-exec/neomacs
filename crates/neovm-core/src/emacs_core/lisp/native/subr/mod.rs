@@ -319,18 +319,10 @@ impl SubrBatch {
         Self::new_inner(owner, specs, false, SubrPortability::AllTargets)
     }
 
-    /// Construct a batch whose declarations may all be removed by target
-    /// configuration.
+    /// Construct a batch backed only by native product hosts.
     ///
-    /// The explicit constructor keeps an accidentally empty unconditional
-    /// catalog a compile-time error while representing a subsystem that owns
-    /// native subrs on only some target families.
-    #[track_caller]
-    pub const fn target_filtered(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
-        Self::new_inner(owner, specs, true, SubrPortability::TargetSpecific)
-    }
-
-    /// Construct a target-filtered batch backed only by native product hosts.
+    /// Such a catalog may be empty after target filtering. Its function cells
+    /// may appear in a portable image, but a Wasm consumer cannot require them.
     #[track_caller]
     pub const fn native_host(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
         Self::new_inner(owner, specs, true, SubrPortability::TargetSpecific)
@@ -429,19 +421,6 @@ macro_rules! define_subrs {
             );
 
         pub(crate) fn register_subrs(ctx: &mut $crate::emacs_core::eval::Context) {
-            SUBRS.install(ctx);
-        }
-    };
-    (target_filtered; $($spec:expr),+ $(,)?) => {
-        pub(crate) const SUBRS: $crate::emacs_core::subr::SubrBatch =
-            $crate::emacs_core::subr::SubrBatch::target_filtered(
-                module_path!(),
-                &[$($spec),+],
-            );
-
-        pub(crate) fn register_subrs(
-            ctx: &mut $crate::emacs_core::eval::Context,
-        ) {
             SUBRS.install(ctx);
         }
     };

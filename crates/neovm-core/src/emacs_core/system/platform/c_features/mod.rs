@@ -88,17 +88,20 @@ impl HereDecision {
 
 /// Product hosts on which an implemented C-level feature has real backing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct HostAvailability {
-    wasm: bool,
+pub(crate) enum HostAvailability {
+    /// The implementation requires services unavailable to browser Wasm.
+    NativeOnly,
 }
 
 impl HostAvailability {
-    const NATIVE: Self = Self { wasm: false };
-
     const fn included_in_current_target(self) -> bool {
-        std::cfg_select! {
-            target_family = "wasm" => { self.wasm }
-            _ => { true }
+        match self {
+            Self::NativeOnly => {
+                std::cfg_select! {
+                    target_family = "wasm" => { false }
+                    _ => { true }
+                }
+            }
         }
     }
 }
@@ -124,7 +127,7 @@ pub(crate) struct GnuCFeature {
 pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
     use GnuGuard::{BuildOption, Unconditional};
     use HereDecision::{DetectedAtBuildTime, Implemented, NotBuilt, UnconditionalInGnu};
-    const NATIVE: HostAvailability = HostAvailability::NATIVE;
+    use HostAvailability::NativeOnly;
 
     /// This port has no X, GTK, PGTK, W32, NS, Haiku or Android terminal: it
     /// has its own `neo` backend.  Ledger 189 measured that whole branch and
@@ -141,7 +144,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             here: Implemented {
                 by: "crates/neovm-core/src/emacs_core/runtime/threads/mod.rs -- real OS threads, \
                      make-thread/make-mutex/condition-variable",
-                hosts: NATIVE,
+                hosts: NativeOnly,
             },
         },
         GnuCFeature {
@@ -177,7 +180,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                       crates/neomacs-webview/src/platform/macos (a real WKWebView placed \
                       with GNU's own algorithm from src/xwidget.c); see issue 300",
                 present: cfg!(neomacs_have_wkwebview),
-                hosts: NATIVE,
+                hosts: NativeOnly,
             },
         },
         GnuCFeature {
@@ -189,7 +192,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                     by: "crates/neovm-core/src/emacs_core/lisp/native/builtins/file_notify/platform/windows -- \
                          w32notify-add-watch/-rm-watch/-valid-p over an explicit \
                          ReadDirectoryChangesW adapter, with GNU-compatible event shapes",
-                    hosts: NATIVE,
+                    hosts: NativeOnly,
                 }
             } else {
                 NotBuilt {
@@ -230,7 +233,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                          vnode flags plus GNU-style directory snapshot diffs; GNU's macOS default is \
                          --with-file-notification=kqueue, so this is the feature \
                          `filenotify.el' expects to find there",
-                    hosts: NATIVE,
+                    hosts: NativeOnly,
                 }
             } else {
                 NotBuilt {
@@ -248,7 +251,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                     by: "crates/neovm-core/src/emacs_core/lisp/native/builtins/file_notify/platform/linux -- \
                          direct typed inotify masks through the `inotify' crate; \
                          inotify-add-watch/-rm-watch/-valid-p",
-                    hosts: NATIVE,
+                    hosts: NativeOnly,
                 }
             } else {
                 NotBuilt {
@@ -328,7 +331,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                       pkg-config exactly as `configure.ac' does, and \
                       builtins/lcms/mod.rs dlopens liblcms2 for the eight subrs",
                 present: cfg!(neomacs_have_lcms2),
-                hosts: NATIVE,
+                hosts: NativeOnly,
             },
         },
         GnuCFeature {
@@ -425,7 +428,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                 by: "crates/neovm-core/src/emacs_core/system/process/mod.rs -- real sockets, and \
                      `make_network_process_subfeatures' supplies GNU's SUBFEATURES \
                      list rather than nil",
-                hosts: NATIVE,
+                hosts: NativeOnly,
             },
         },
         GnuCFeature {
