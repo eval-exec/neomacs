@@ -11,6 +11,7 @@ let runtimeImage = null;
 let startup = null;
 let mailbox = null;
 let queuedInput = null;
+let queuedInputSequence = null;
 let pendingJspiWake = null;
 let probing = true;
 
@@ -82,14 +83,30 @@ function decodeMemoryString(source, length) {
   return decoder.decode(new Uint8Array(memory.buffer, source, length));
 }
 
-function releaseInput() {
+function currentInputSequence() {
+  if (queuedInput !== null) return queuedInputSequence;
+  const input = mailboxInput();
+  if (input === null) return null;
+  try {
+    const sequence = JSON.parse(decoder.decode(input))?.sequence;
+    return typeof sequence === "string" ? sequence : null;
+  } catch {
+    return null;
+  }
+}
+
+function acknowledgeInput(source, length) {
+  const acknowledged = decodeMemoryString(source, length);
+  if (currentInputSequence() !== acknowledged) return 0;
   queuedInput = null;
+  queuedInputSequence = null;
   const state = mailboxState();
   if (state) {
     Atomics.store(state, 1, 0);
     Atomics.store(state, 0, 0);
   }
-  post("input-accepted");
+  post("input-accepted", { sequence: acknowledged });
+  return 1;
 }
 
 function hostImports(waitForInput) {
@@ -102,7 +119,7 @@ function hostImports(waitForInput) {
       copy_runtime_image: (destination, capacity) => copyToMemory(runtimeImage, destination, capacity),
       input_len: () => currentInput()?.byteLength ?? 0,
       copy_input: (destination, capacity) => copyToMemory(currentInput(), destination, capacity),
-      release_input: releaseInput,
+      acknowledge_input: acknowledgeInput,
       publish_frame: (source, length) => {
         try {
           const payload = new Uint8Array(memory.buffer, source, length).slice().buffer;
@@ -185,6 +202,9 @@ self.onmessage = (event) => {
   }
   if (message?.type === "input") {
     queuedInput = encoder.encode(JSON.stringify(message.batch));
+    queuedInputSequence = typeof message.batch?.sequence === "string"
+      ? message.batch.sequence
+      : null;
     pendingJspiWake?.();
     return;
   }
