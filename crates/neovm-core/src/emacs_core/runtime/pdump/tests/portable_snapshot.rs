@@ -77,6 +77,48 @@ fn portable_restore_discards_a_producer_only_subr_cell() {
 }
 
 #[test]
+fn portable_restore_relinks_an_alias_to_an_available_target_subr() {
+    const IMPLEMENTATION: &str = "portable-target-subr-with-alias";
+    const ALIAS: &str = "portable-target-subr-alias";
+
+    let spec = crate::emacs_core::subr::SubrSpec::fixed0(IMPLEMENTATION, producer_only_subr);
+    let mut producer = Context::new();
+    producer.register_subrs_with_portability(
+        &[spec],
+        crate::emacs_core::subr::SubrPortability::TargetSpecific,
+    );
+    let implementation = producer
+        .obarray()
+        .symbol_function(IMPLEMENTATION)
+        .expect("producer target subr");
+    producer
+        .obarray_mut()
+        .set_symbol_function(ALIAS, implementation);
+    let image = encode_portable_snapshot(&producer).expect("encode producer image");
+
+    // Model a consumer that compiles the same target-owned primitive. The
+    // alias has no registrar of its own: like GNU's `search-forward-regexp',
+    // its function cell is a copy of the implementation's subr object.
+    crate::emacs_core::eval::clear_global_subr_table();
+    let mut consumer = Context::new();
+    consumer.register_subrs_with_portability(
+        &[spec],
+        crate::emacs_core::subr::SubrPortability::TargetSpecific,
+    );
+
+    let loaded = load_from_portable_snapshot(&image).expect("load portable image");
+    let restored_alias = loaded
+        .obarray()
+        .symbol_function(ALIAS)
+        .expect("available target subr alias must remain bound");
+
+    assert_eq!(
+        restored_alias.as_subr_id(),
+        Some(crate::emacs_core::intern::intern(IMPLEMENTATION)),
+    );
+}
+
+#[test]
 fn portable_restore_rebinds_compiled_target_identity() {
     let unavailable_feature = crate::emacs_core::c_features::gnu_c_features()
         .into_iter()
