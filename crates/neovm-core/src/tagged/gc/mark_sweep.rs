@@ -1267,12 +1267,12 @@ impl TaggedHeap {
         let bytes_before = self.live_bytes;
         let t0 = crate::host_time::Instant::now();
 
-        // -- Mark phase: drain the gray queue on the GC thread. This is the STW
-        //    full/bootstrap path (first cycle, no-dump heaps, explicit
-        //    garbage-collect); the mutator blocks until the GC thread finishes,
-        //    so heap access is exclusive (no concurrency hazard here). --
+        // -- Mark phase: drain the gray queue using the compile-target executor.
+        //    Native targets delegate to the GC thread while the mutator blocks;
+        //    browser Wasm drains inline on its single editor Worker. Both are
+        //    stop-the-world and own the heap exclusively. --
         let mark_t0 = crate::host_time::Instant::now();
-        self.mark_all_on_gc_thread();
+        run_stop_the_world_mark(self);
         // Queue doomed finalizers before the weak sweep (GNU
         // `queue_doomed_finalizers` runs before
         // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
@@ -1662,20 +1662,5 @@ impl TaggedHeap {
         while let Some(val) = self.gray_queue.pop() {
             self.mark_value(val);
         }
-    }
-
-    /// Drain the gray queue on the background GC thread (Phase 4). The mutator
-    /// blocks on the done-channel until the GC thread finishes, so heap access
-    /// is exclusive (no concurrency hazard yet). This proves the thread +
-    /// heap-sharing + handshake; the pause is not yet reduced. Phase 5 removes
-    /// the block so marking actually overlaps mutator execution.
-    pub(super) fn mark_all_on_gc_thread(&mut self) {
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let ptr = self as *mut TaggedHeap;
-        gc_thread()
-            .send(GcRequest::MarkAll(HeapPtr(ptr), done_tx))
-            .expect("neovm-gc thread is gone");
-        // Block until the GC thread has finished marking on the shared heap.
-        done_rx.recv().expect("neovm-gc thread did not respond");
     }
 }
