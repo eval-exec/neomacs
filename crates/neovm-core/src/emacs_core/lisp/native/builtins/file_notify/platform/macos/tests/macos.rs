@@ -2,7 +2,7 @@ use super::{
     DirectoryChange, DirectoryEntrySnapshot, DirectorySnapshot, overflow_recovery_action,
     requested_vnode_actions, vnode_actions,
 };
-use super::{KqueueAction, KqueueVnodeAction};
+use super::super::{KqueueAction, KqueueVnodeAction};
 use enumflags2::BitFlags;
 use std::path::PathBuf;
 
