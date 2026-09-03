@@ -1650,6 +1650,7 @@ impl Context {
         match plan_require_in_state(
             &self.obarray,
             self.buffers.current_buffer(),
+            self.runtime_resource_store.as_deref(),
             &mut self.features,
             &self.require_stack,
             feature,
