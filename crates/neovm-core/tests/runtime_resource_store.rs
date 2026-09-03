@@ -13,6 +13,10 @@ impl RuntimeResourceStore for MemoryRuntimeResources {
     fn file_contents(&self, path: &Path) -> Option<&[u8]> {
         self.files.get(path).map(Vec::as_slice)
     }
+
+    fn directory_exists(&self, path: &Path) -> bool {
+        self.files.keys().any(|file| file.starts_with(path))
+    }
 }
 
 fn evaluator_with_files(files: impl IntoIterator<Item = (&'static str, &'static [u8])>) -> Context {
