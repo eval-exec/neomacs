@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 neomacs-app.workspace = true
-serde.workspace = true
+neomacs-wasm-protocol.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 neomacs-display-protocol.workspace = true
@@ -22,9 +22,6 @@ neomacs-wgpu-runtime.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures = "0.4"
 winit.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

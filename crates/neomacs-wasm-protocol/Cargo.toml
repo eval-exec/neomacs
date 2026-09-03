@@ -1,0 +1,18 @@
+[package]
+name = "neomacs-wasm-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Typed browser/Worker transport protocol for Neomacs WebAssembly"
+
+[dependencies]
+neomacs-app.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
