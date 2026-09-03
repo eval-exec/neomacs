@@ -93,6 +93,24 @@ function domError(name) {
   return Object.assign(new Error(name), { name });
 }
 
+async function renameFixture() {
+  const filesystem = await OriginPrivateFileSystem.open({
+    getDirectory: async () => new FakeDirectoryHandle(),
+  });
+  const encoder = new TextEncoder();
+  for (const [path, contents] of [
+    ["/source", "source"],
+    ["/destination", "destination"],
+  ]) {
+    await filesystem.write(path, encoder.encode(contents), {
+      mode: WRITE_MODE.TRUNCATE,
+      offset: 0,
+      sync: false,
+    });
+  }
+  return filesystem;
+}
+
 test("OPFS adapter persists complete writes across editor sessions", async () => {
   const root = new FakeDirectoryHandle();
   const storage = { getDirectory: async () => root };
@@ -143,19 +161,7 @@ test("OPFS adapter rejects paths outside its virtual root", async () => {
 });
 
 test("unsupported rename preserves an existing destination", async () => {
-  const filesystem = await OriginPrivateFileSystem.open({
-    getDirectory: async () => new FakeDirectoryHandle(),
-  });
-  await filesystem.write("/source", new TextEncoder().encode("source"), {
-    mode: WRITE_MODE.TRUNCATE,
-    offset: 0,
-    sync: false,
-  });
-  await filesystem.write("/destination", new TextEncoder().encode("destination"), {
-    mode: WRITE_MODE.TRUNCATE,
-    offset: 0,
-    sync: false,
-  });
+  const filesystem = await renameFixture();
 
   await assert.rejects(
     filesystem.rename("/source", "/destination", true),
@@ -168,20 +174,7 @@ test("unsupported rename preserves an existing destination", async () => {
 });
 
 test("failed replacement rename preserves both source and destination", async () => {
-  const filesystem = await OriginPrivateFileSystem.open({
-    getDirectory: async () => new FakeDirectoryHandle(),
-  });
-  const encoder = new TextEncoder();
-  await filesystem.write("/source", encoder.encode("source"), {
-    mode: WRITE_MODE.TRUNCATE,
-    offset: 0,
-    sync: false,
-  });
-  await filesystem.write("/destination", encoder.encode("destination"), {
-    mode: WRITE_MODE.TRUNCATE,
-    offset: 0,
-    sync: false,
-  });
+  const filesystem = await renameFixture();
   const source = await filesystem.lookup("/source");
   source.move = async () => {
     throw domError("NoModificationAllowedError");
