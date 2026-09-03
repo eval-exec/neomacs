@@ -3269,10 +3269,10 @@ fn stale_bytecode_count(root: &Path) -> usize {
 /// **`--no-byte-compile` must not delete bytecode nothing will recompile.**
 ///
 /// `remove_stale_lisp_bytecode`, the bootstrap-clean sweep, has always been
-/// behind `if !options.no_byte_compile`.  The two loaddefs steps were written
-/// later and were not: `remove_primary_loaddefs_for_regeneration` and
-/// `remove_stale_secondary_loaddefs` deleted their `.elc` unconditionally,
-/// while `run_compile_main` -- the only thing that recreates them -- is gated.
+/// behind `if !options.no_byte_compile`.  Two loaddefs cleanup steps were
+/// written later and were not: primary and secondary loaddefs had their `.elc`
+/// deleted unconditionally, while `run_compile_main` -- the only thing that
+/// recreates them -- is gated.
 /// So a `--no-byte-compile` run left the whole generated loaddefs set as `.el`
 /// with no `.elc`, permanently, and every later `load` of one of them takes
 /// `load-with-code-conversion` and rewrites `last-coding-system-used` under
@@ -3341,8 +3341,6 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
         &lisp.join("theme-loaddefs.el"),
     )
     .unwrap();
-    remove_stale_secondary_loaddefs(plan, &options, &paths).unwrap();
-
     let orphaned = pairs
         .iter()
         .filter(|stem| !lisp.join(format!("{stem}.elc")).is_file())
@@ -3359,13 +3357,13 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
     fs::remove_dir_all(&repo).ok();
 }
 
-/// The same two steps on a run that WILL recompile: the `.elc` must go, or the
-/// guard above would pass by doing nothing at all.
+/// On a run that WILL recompile, primary `.elc` files must go, while secondary
+/// loaddefs remain as inputs until the scrape has completed.
 ///
 /// Green before ledger 207 -- it states the behaviour the guard must not
 /// break, and without it "never delete anything" would satisfy both.
 #[test]
-fn a_recompiling_run_still_clears_the_loaddefs_bytecode_it_regenerates() {
+fn a_recompiling_run_clears_primary_but_keeps_secondary_loaddefs_bytecode() {
     let repo = tempdir();
     let lisp = repo.join("lisp");
     fs::create_dir_all(lisp.join("emacs-lisp")).unwrap();
@@ -3405,11 +3403,79 @@ fn a_recompiling_run_still_clears_the_loaddefs_bytecode_it_regenerates() {
         &lisp.join("theme-loaddefs.el"),
     )
     .unwrap();
-    remove_stale_secondary_loaddefs(plan, &options, &paths).unwrap();
-
     assert!(!lisp.join("loaddefs.elc").is_file());
     assert!(!lisp.join("emacs-lisp/cl-loaddefs.elc").is_file());
-    assert!(!lisp.join("org/org-loaddefs.elc").is_file());
+    assert!(lisp.join("org/org-loaddefs.elc").is_file());
+    fs::remove_dir_all(&repo).ok();
+}
+
+/// **Secondary loaddefs are inputs to the full autoload scrape, not merely
+/// stale outputs.**
+///
+/// GNU's `autoloads-force` removes only `lisp/loaddefs.el`.  In particular it
+/// leaves `net/tramp-loaddefs.el` loadable because `tramp-compat.el` requires
+/// that generated seed while the scraper loads Tramp to expand its custom
+/// autoload macros.  On Darwin, deleting the seed makes the load reach
+/// `tramp-integration.el` before `tramp-local-host-names` has been defined and
+/// fail with `(void-variable tramp-local-host-names)`.
+///
+/// Keep both source and bytecode until the producer has completed.  If stale
+/// secondary outputs ever need pruning, that must be a post-success operation
+/// driven by the producer's output manifest, never a pre-scrape filename scan.
+///
+/// RED before the loaddefs lifecycle fix.
+#[test]
+fn full_loaddefs_regeneration_keeps_secondary_bootstrap_seeds_loadable() {
+    let repo = tempdir();
+    let lisp = repo.join("lisp");
+    fs::create_dir_all(lisp.join("net")).unwrap();
+    fs::write(lisp.join("loaddefs.el"), ";; generated primary\n").unwrap();
+    fs::write(lisp.join("loaddefs.elc"), ";ELC\n").unwrap();
+    fs::write(
+        lisp.join("net/tramp-loaddefs.el"),
+        "(defvar tramp-local-host-names nil)\n",
+    )
+    .unwrap();
+    fs::write(lisp.join("net/tramp-loaddefs.elc"), ";ELC\n").unwrap();
+
+    let options = FreshBuildOptions {
+        repo_root: repo.clone(),
+        runtime_root: repo.clone(),
+        bin_dir: repo.join("target/release"),
+        profile: BuildProfile::Release,
+        production_capabilities: ProductionCapabilities::for_host().unwrap(),
+        cargo_jobs: CargoJobBudget::Inherit,
+        dry_run: false,
+        native_comp: false,
+        skip_build: false,
+        product_variant: ProductVariant::Full,
+        no_byte_compile: false,
+        features: Vec::new(),
+        aot_preload: false,
+    };
+    let paths = PipelinePaths {
+        lisp_root: lisp.clone(),
+        ..pipeline_paths(&options)
+    };
+    let plan = BytecodePlan::of(&options);
+
+    remove_primary_loaddefs_for_regeneration(
+        plan,
+        &options,
+        &paths,
+        &lisp.join("loaddefs.el"),
+        &lisp.join("theme-loaddefs.el"),
+    )
+    .unwrap();
+    assert!(!lisp.join("loaddefs.el").exists());
+    assert!(
+        lisp.join("net/tramp-loaddefs.el").is_file(),
+        "the source seed must remain loadable throughout the scrape"
+    );
+    assert!(
+        lisp.join("net/tramp-loaddefs.elc").is_file(),
+        "the compiled seed must remain loadable throughout the scrape"
+    );
     fs::remove_dir_all(&repo).ok();
 }
 

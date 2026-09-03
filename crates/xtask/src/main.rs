@@ -1060,9 +1060,17 @@ fn run_fresh_build_inner(
         &loaddefs_el,
         &theme_loaddefs_el,
     )?;
-    // Remove secondary loaddefs from previous builds at the same phase as the
-    // full regeneration, so stale generated files cannot influence the new set.
-    remove_stale_secondary_loaddefs(bytecode_plan, options, &paths)?;
+    // GNU's `autoloads-force` removes only the primary `loaddefs.el` here.
+    // Secondary loaddefs are also bootstrap inputs: custom autoload macros
+    // can require their previous generated definitions while this full scrape
+    // loads source files.  In particular, `tramp-compat.el` deliberately
+    // requires `tramp-loaddefs` as its autoload-generation guard.  Keep every
+    // secondary source and its bytecode loadable until the producer succeeds.
+    //
+    // A pre-generation filename sweep cannot distinguish a stale output from
+    // a required seed.  If obsolete secondary outputs ever need pruning, the
+    // generator must first expose a manifest and pruning must consume a
+    // successful-generation proof after this command returns.
     run_command(
         options,
         &options.repo_root,
@@ -2878,67 +2886,6 @@ fn collect_lisp_bytecode_files(current: &Path, out: &mut Vec<PathBuf>) -> Result
     Ok(())
 }
 
-fn remove_stale_secondary_loaddefs(
-    plan: BytecodePlan,
-    options: &FreshBuildOptions,
-    paths: &PipelinePaths,
-) -> Result<()> {
-    let files = generated_secondary_loaddefs_files(&paths.lisp_root)?;
-    if files.is_empty() {
-        return Ok(());
-    }
-    let proof = plan.will_recompile();
-
-    print_synthetic_step("remove stale secondary loaddefs");
-    if options.dry_run {
-        for file in &files {
-            println!("  would remove: {}", file.display());
-            if proof.is_some() {
-                println!("  would remove: {}", file.with_extension("elc").display());
-            } else {
-                println!(
-                    "  would KEEP (--no-byte-compile): {}",
-                    file.with_extension("elc").display()
-                );
-            }
-        }
-        return Ok(());
-    }
-
-    let mut removed = 0usize;
-    let mut kept = 0usize;
-    for file in &files {
-        if remove_file_if_exists(file)? {
-            removed += 1;
-        }
-        // Ledger 207: the `.elc` only goes if `compile-main` will put it back.
-        // A `--no-byte-compile` run that deleted these left the generated
-        // loaddefs set as source-only for good, and `cl-loaddefs.el` is on the
-        // require chain of the very first `display-warning` -- so the coding
-        // system that any load reports became a function of build flags.
-        match proof {
-            Some(proof) => {
-                if remove_generated_bytecode(proof, &file.with_extension("elc"))? {
-                    removed += 1;
-                }
-            }
-            None => {
-                if file.with_extension("elc").is_file() {
-                    kept += 1;
-                }
-            }
-        }
-    }
-    println!("  INFO  removed {removed} stale secondary loaddefs artifacts");
-    if kept > 0 {
-        println!(
-            "  INFO  kept {kept} secondary loaddefs .elc: --no-byte-compile has \
-             nothing that would recompile them"
-        );
-    }
-    Ok(())
-}
-
 fn remove_lisp_bytecode_without_source(
     options: &FreshBuildOptions,
     paths: &PipelinePaths,
@@ -3053,57 +3000,6 @@ fn remove_primary_loaddefs_for_regeneration(
         }
     }
     Ok(())
-}
-
-fn generated_secondary_loaddefs_files(lisp_root: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    collect_secondary_loaddefs_files(lisp_root, lisp_root, &mut files)?;
-    files.sort();
-    Ok(files)
-}
-
-fn collect_secondary_loaddefs_files(
-    lisp_root: &Path,
-    current: &Path,
-    out: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let entries = match fs::read_dir(current) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_secondary_loaddefs_files(lisp_root, &path, out)?;
-        } else if is_generated_secondary_loaddefs_file(lisp_root, &path) {
-            out.push(path);
-        }
-    }
-
-    Ok(())
-}
-
-fn is_generated_secondary_loaddefs_file(lisp_root: &Path, path: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(lisp_root) else {
-        return false;
-    };
-
-    if matches!(
-        relative,
-        rel if rel == Path::new("loaddefs.el")
-            || rel == Path::new("ldefs-boot.el")
-            || rel == Path::new("theme-loaddefs.el")
-            || rel == Path::new("emacs-lisp/cl-loaddefs.el")
-    ) {
-        return false;
-    }
-
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    file_name == "loaddefs.el" || file_name.ends_with("-loaddefs.el")
 }
 
 fn remove_file_if_exists(path: &Path) -> Result<bool> {
