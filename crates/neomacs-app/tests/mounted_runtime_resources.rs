@@ -72,6 +72,34 @@ fn mounted_runtime_resources_reject_paths_outside_owned_runtime_roots() {
 }
 
 #[test]
+fn mounted_runtime_resources_reject_file_directory_path_conflicts() {
+    for entries in [
+        [
+            ("lisp/pkg", b"file".as_slice()),
+            ("lisp/pkg/load.el", b"child".as_slice()),
+            ("etc/NEWS", b"etc".as_slice()),
+        ],
+        [
+            ("lisp/pkg/load.el", b"child".as_slice()),
+            ("lisp/pkg", b"file".as_slice()),
+            ("etc/NEWS", b"etc".as_slice()),
+        ],
+    ] {
+        let archive = runtime_archive(&entries);
+        let id = content_id(&archive);
+        let bundle = RuntimeResourceBundle::from_assets(&archive, id.as_bytes()).unwrap();
+
+        let error =
+            MountedRuntimeResources::from_bundle(Path::new("/neomacs"), bundle).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeResourceError::ConflictingArchivePath(path) if path == Path::new("lisp/pkg")
+        ));
+    }
+}
+
+#[test]
 fn mounted_runtime_resources_require_lisp_and_data_trees() {
     let archive = runtime_archive(&[("lisp/loadup.el", b"lisp")]);
     let id = content_id(&archive);
