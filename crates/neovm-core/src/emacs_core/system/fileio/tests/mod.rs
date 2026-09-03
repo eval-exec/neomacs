@@ -7,6 +7,7 @@ use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
+mod backup_test;
 #[cfg(target_os = "windows")]
 mod windows_test;
 
