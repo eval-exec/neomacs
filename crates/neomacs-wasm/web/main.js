@@ -1,4 +1,7 @@
-import init, { install_worker_presentation } from "./neomacs_wasm.js";
+import init, {
+  install_worker_presentation,
+  worker_protocol_version,
+} from "./neomacs_wasm.js";
 
 const MAILBOX_CAPACITY = 1024 * 1024;
 const MAILBOX_HEADER_BYTES = 16;
@@ -8,10 +11,10 @@ const status = document.querySelector("#browser-status");
 let worker = null;
 let workerStrategy = null;
 let mailbox = null;
-let inputSequence = 1;
+let inputSequence = 1n;
 let inputInFlight = false;
 let inputQueue = [];
-let targetFrame = 0;
+let targetFrame = "0";
 let activePresentation = null;
 
 function showFailure(error) {
@@ -22,7 +25,7 @@ function showFailure(error) {
 
 function enqueueInput(events) {
   if (events.length === 0) return;
-  inputQueue.push({ sequence: inputSequence++, events });
+  inputQueue.push({ sequence: (inputSequence++).toString(), events });
   flushInput();
 }
 
@@ -47,15 +50,22 @@ function flushInput() {
   inputInFlight = true;
 }
 
-function inputAccepted() {
-  if (inputInFlight) inputQueue.shift();
+function inputAccepted(sequence) {
+  const expected = inputQueue[0]?.sequence;
+  if (!inputInFlight || expected !== sequence) {
+    throw new Error(
+      `editor Worker acknowledged input ${String(sequence)}; expected ${String(expected)}`,
+    );
+  }
+  inputQueue.shift();
   inputInFlight = false;
   flushInput();
 }
 
 function installFrame(payload) {
   const receipt = install_worker_presentation(new Uint8Array(payload));
-  const [presentation, target] = receipt.split(",").map(Number);
+  const presentation = receipt.presentation;
+  const target = receipt.target;
   const events = [{ type: "presentation-activated", presentation, target }];
   if (activePresentation !== null) {
     events.push({ type: "presentation-retired", presentation: activePresentation });
@@ -180,7 +190,12 @@ async function start() {
       sendViewport();
       flushInput();
     } else if (message?.type === "input-accepted") {
-      inputAccepted();
+      try {
+        inputAccepted(message.sequence);
+      } catch (error) {
+        showFailure(error);
+        worker.terminate();
+      }
     } else if (message?.type === "frame") {
       try {
         installFrame(message.payload);
@@ -192,6 +207,7 @@ async function start() {
       status.textContent = message.message;
     } else if (message?.type === "failed") {
       showFailure(new Error(message.message));
+      worker.terminate();
     } else if (message?.type === "exited") {
       showFailure(new Error(`editor Worker exited with status ${message.exitCode}`));
     }
@@ -205,7 +221,7 @@ async function start() {
     runtimeImageUrl: new URL("./assets/neomacs.portable", import.meta.url).href,
     mailbox,
     startup: {
-      protocol_version: 1,
+      protocol_version: worker_protocol_version(),
       width: Math.max(1, Math.round(globalThis.innerWidth * scale)),
       height: Math.max(1, Math.round(globalThis.innerHeight * scale)),
       scale_factor: scale,
