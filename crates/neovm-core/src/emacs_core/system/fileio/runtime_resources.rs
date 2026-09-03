@@ -12,4 +12,7 @@ pub trait RuntimeResourceStore {
     /// Return the complete bytes of one mounted file, or `None` when this
     /// store does not own the path.
     fn file_contents(&self, path: &Path) -> Option<&[u8]>;
+
+    /// Whether `path` names a directory owned by this store.
+    fn directory_exists(&self, path: &Path) -> bool;
 }
