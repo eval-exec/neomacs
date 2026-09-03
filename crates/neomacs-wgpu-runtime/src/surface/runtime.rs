@@ -135,7 +135,12 @@ impl SurfaceRuntime {
         window: SurfaceWindow,
     ) -> Result<Self, SurfaceInitError> {
         let descriptor = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
-        let instance = wgpu::Instance::new(descriptor);
+        let instance = std::cfg_select! {
+            target_family = "wasm" => {
+                wgpu::util::new_instance_with_webgpu_detection(descriptor).await
+            }
+            _ => { wgpu::Instance::new(descriptor) }
+        };
         let surface = instance.create_surface(window.clone())?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -145,11 +150,13 @@ impl SurfaceRuntime {
                 apply_limit_buckets: false,
             })
             .await?;
+        let required_limits =
+            device_limits_for_backend(adapter.get_info().backend, adapter.limits());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Neomacs portable surface device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
@@ -346,5 +353,48 @@ impl SurfaceRuntime {
         }
 
         Ok(AcquiredFrame::Skip(PresentationSkipReason::SurfaceChanged))
+    }
+}
+
+fn device_limits_for_backend(backend: wgpu::Backend, adapter_limits: wgpu::Limits) -> wgpu::Limits {
+    let portable_limits = match backend {
+        wgpu::Backend::Gl => wgpu::Limits::downlevel_webgl2_defaults(),
+        _ => wgpu::Limits::default(),
+    };
+    portable_limits.using_resolution(adapter_limits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::device_limits_for_backend;
+
+    #[test]
+    fn webgl_adapter_keeps_its_supported_surface_resolution() {
+        let adapter_limits = wgpu::Limits {
+            max_texture_dimension_1d: 8_192,
+            max_texture_dimension_2d: 8_192,
+            max_texture_dimension_3d: 2_048,
+            ..wgpu::Limits::default()
+        };
+
+        assert_eq!(
+            device_limits_for_backend(wgpu::Backend::Gl, adapter_limits.clone()),
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits)
+        );
+    }
+
+    #[test]
+    fn webgpu_adapter_keeps_standard_limits_and_adapter_resolution() {
+        let adapter_limits = wgpu::Limits {
+            max_texture_dimension_1d: 16_384,
+            max_texture_dimension_2d: 16_384,
+            max_texture_dimension_3d: 4_096,
+            ..wgpu::Limits::default()
+        };
+
+        assert_eq!(
+            device_limits_for_backend(wgpu::Backend::BrowserWebGpu, adapter_limits.clone()),
+            wgpu::Limits::default().using_resolution(adapter_limits)
+        );
     }
 }
