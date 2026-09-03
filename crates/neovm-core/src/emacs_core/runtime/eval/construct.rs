@@ -86,6 +86,7 @@ impl Context {
         ev.input_rx = None;
         ev.host_input_wait_backend = None;
         ev.runtime_resource_store = None;
+        ev.editor_file_system = crate::emacs_core::fileio::default_editor_file_system();
         ev.eval_task_rx = None;
         ev.redisplay_fn = None;
         ev.display_idle_maintenance_fn = None;
@@ -2245,6 +2246,7 @@ impl Context {
             input_rx: None,
             host_input_wait_backend: None,
             runtime_resource_store: None,
+            editor_file_system: crate::emacs_core::fileio::default_editor_file_system(),
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
