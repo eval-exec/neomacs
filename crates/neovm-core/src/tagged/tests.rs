@@ -673,8 +673,8 @@ fn debug_format() {
 #[ignore = "profiling aid; run explicitly in release with --no-capture"]
 fn alloc_roundtrip_cost_probe() {
     use crate::heap_types::LispString;
+    use crate::host_time::Instant;
     use crate::tagged::gc::TaggedHeap;
-    use std::time::Instant;
 
     fn run_case(
         label: &str,

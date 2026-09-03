@@ -18,11 +18,11 @@
 
 use super::compile::lowering::{RegallocChoice, RegallocPolicy, RegallocScope, forced_regalloc};
 use super::compile::{CompileError, CompileRequest, compile_bytecode_function_requested};
+use crate::host_time::Instant;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 use super::compile::{
     CompiledLeaf, NativeRun, compile_bytecode_function_with, stash_pending_flow, take_pending_flow,
