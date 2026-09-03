@@ -299,7 +299,15 @@ export class OriginPrivateFileSystem {
   }
 
   async rename(from, to, replace) {
+    const fromComponents = normalizePath(from);
+    const toComponents = normalizePath(to);
     const source = await this.lookup(from);
+    if (
+      fromComponents.length === toComponents.length &&
+      fromComponents.every((component, index) => component === toComponents[index])
+    ) {
+      return;
+    }
     if (typeof source.move !== "function") {
       throw new HostFileSystemError(
         HOST_STATUS.UNSUPPORTED,
@@ -315,12 +323,13 @@ export class OriginPrivateFileSystem {
           `OPFS destination already exists: ${to}`,
         );
       }
-      await destination.parent.removeEntry(destination.name, { recursive: true });
     } catch (error) {
       if (!(error instanceof HostFileSystemError) || error.status !== HOST_STATUS.NOT_FOUND) {
         throw error;
       }
     }
+    // Let the browser perform replacement as part of the move. Removing the
+    // destination first would make a rejected move irreversibly destructive.
     await source.move(destination.parent, destination.name);
   }
 
