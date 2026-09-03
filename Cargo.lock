@@ -4111,12 +4111,22 @@ dependencies = [
  "neomacs-app",
  "neomacs-display-protocol",
  "neomacs-layout-engine",
+ "neomacs-wasm-protocol",
  "neomacs-wgpu-runtime",
  "serde",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "winit",
+]
+
+[[package]]
+name = "neomacs-wasm-protocol"
+version = "0.0.16"
+dependencies = [
+ "neomacs-app",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

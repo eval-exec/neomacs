@@ -21,6 +21,7 @@ members = [
     "crates/neomacs-video",
     "crates/neomacs-video-model",
     "crates/neomacs-wasm",
+    "crates/neomacs-wasm-protocol",
     "crates/neomacs-webview",
     "crates/neomacs-wgpu-runtime",
     "crates/neovm-core",
@@ -94,6 +95,7 @@ neomacs-layout-engine = { path = "crates/neomacs-layout-engine", default-feature
 neomacs-video = { path = "crates/neomacs-video", default-features = false }
 neomacs-video-model = { path = "crates/neomacs-video-model" }
 neomacs-webview = { path = "crates/neomacs-webview", default-features = false }
+neomacs-wasm-protocol = { path = "crates/neomacs-wasm-protocol" }
 neomacs-renderer-wgpu = { path = "crates/neomacs-renderer-wgpu", default-features = false }
 neomacs-wgpu-runtime = { path = "crates/neomacs-wgpu-runtime" }
 neomacs-diagnostics = { path = "crates/neomacs-diagnostics", default-features = false }
