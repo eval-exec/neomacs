@@ -213,6 +213,10 @@ impl EditorFileSystem for NativeFileSystem {
         fs::canonicalize(path)
     }
 
+    fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
+        fs::read_link(path)
+    }
+
     fn same_file(&self, left: &Path, right: &Path) -> io::Result<bool> {
         #[cfg(unix)]
         {
