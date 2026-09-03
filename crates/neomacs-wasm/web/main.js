@@ -2,6 +2,7 @@ import init, {
   install_worker_presentation,
   worker_protocol_version,
 } from "./neomacs_wasm.js";
+import { installBrowserInput } from "./browser-input.mjs";
 
 const MAILBOX_CAPACITY = 1024 * 1024;
 const MAILBOX_HEADER_BYTES = 16;
@@ -77,57 +78,6 @@ function installFrame(payload) {
   status.dataset.state = "ready";
 }
 
-function modifierSample(event) {
-  return {
-    shift: event.shiftKey,
-    control: event.ctrlKey,
-    meta: event.altKey,
-    super_: event.metaKey,
-  };
-}
-
-const NAMED_KEY_SYMBOLS = new Map([
-  ["Backspace", 0xff08],
-  ["Tab", 0xff09],
-  ["Enter", 0xff0d],
-  ["Escape", 0xff1b],
-  ["Home", 0xff50],
-  ["ArrowLeft", 0xff51],
-  ["ArrowUp", 0xff52],
-  ["ArrowRight", 0xff53],
-  ["ArrowDown", 0xff54],
-  ["PageUp", 0xff55],
-  ["PageDown", 0xff56],
-  ["End", 0xff57],
-  ["Insert", 0xff63],
-  ["Delete", 0xffff],
-]);
-
-function keySymbol(event) {
-  if (NAMED_KEY_SYMBOLS.has(event.key)) return NAMED_KEY_SYMBOLS.get(event.key);
-  if (event.key.length === 1) return event.key.codePointAt(0);
-  const functionKey = /^F(\d{1,2})$/.exec(event.key);
-  if (functionKey) {
-    const number = Number(functionKey[1]);
-    if (number >= 1 && number <= 35) return 0xffbd + number;
-  }
-  return null;
-}
-
-function sendKey(event, state) {
-  if (event.isComposing) return;
-  const symbol = keySymbol(event);
-  if (symbol === null) return;
-  event.preventDefault();
-  enqueueInput([{
-    type: "key",
-    symbol,
-    modifiers: modifierSample(event),
-    state,
-    target: targetFrame,
-  }]);
-}
-
 function sendViewport() {
   const scale = globalThis.devicePixelRatio || 1;
   enqueueInput([{
@@ -137,22 +87,6 @@ function sendViewport() {
     scale_factor: scale,
     target: targetFrame,
   }]);
-}
-
-function installBrowserInput() {
-  globalThis.addEventListener("keydown", (event) => sendKey(event, "pressed"), true);
-  globalThis.addEventListener("keyup", (event) => sendKey(event, "released"), true);
-  globalThis.addEventListener("resize", sendViewport);
-  globalThis.addEventListener("focus", () => enqueueInput([{
-    type: "focus-changed",
-    focused: true,
-    target: targetFrame,
-  }]));
-  globalThis.addEventListener("blur", () => enqueueInput([{
-    type: "focus-changed",
-    focused: false,
-    target: targetFrame,
-  }]));
 }
 
 async function start() {
@@ -186,7 +120,13 @@ async function start() {
     } else if (message?.type === "ready") {
       workerStrategy = message.strategy;
       status.textContent = "Restoring Neomacs editor session…";
-      installBrowserInput();
+      installBrowserInput({
+        root: globalThis,
+        textInput: document.querySelector("#browser-text-input"),
+        enqueueInput,
+        targetFrame: () => targetFrame,
+        sendViewport,
+      });
       sendViewport();
       flushInput();
     } else if (message?.type === "input-accepted") {
@@ -209,7 +149,9 @@ async function start() {
       showFailure(new Error(message.message));
       worker.terminate();
     } else if (message?.type === "exited") {
-      showFailure(new Error(`editor Worker exited with status ${message.exitCode}`));
+      status.dataset.state = message.exitCode === 0 ? "stopped" : "failed";
+      status.textContent = `Neomacs stopped (status ${message.exitCode})`;
+      worker = null;
     }
   };
   worker.onerror = (event) => showFailure(new Error(event.message));
