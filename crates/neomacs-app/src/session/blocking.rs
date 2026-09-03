@@ -1,4 +1,4 @@
-//! Native worker entry point for GNU's blocking outer command loop.
+//! Outer GNU command loop entered on the evaluator's owning thread.
 
 use neovm_core::emacs_core::eval::ShutdownRequest;
 
@@ -15,11 +15,11 @@ impl EditorSession {
         neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut self.evaluator);
     }
 
-    /// Enter GNU's blocking outer command loop on the current worker thread.
+    /// Enter GNU's outer command loop on the current evaluator worker.
     ///
-    /// This API is absent on WASM targets. Browser Workers require a separate
-    /// JSPI or Asyncify adapter which can suspend without unwinding the
-    /// recursive Lisp stack.
+    /// Native hosts block in their OS poller. Browser Workers install a host
+    /// wait backend first; JSPI suspends this call without unwinding its Rust
+    /// or Lisp stack, while the compatibility path blocks in `Atomics.wait`.
     pub fn run(mut self) -> EditorSessionExit {
         self.prepare_to_run();
         let command_loop_error = self.evaluator.recursive_edit().err();
