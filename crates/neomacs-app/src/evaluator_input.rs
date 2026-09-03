@@ -16,13 +16,33 @@ pub struct EvaluatorInputBatch<'a> {
 }
 
 #[derive(Debug)]
+// The inline variant deliberately owns at most two events so the hot input
+// path does not allocate. Its size is bounded below with a compile-time check.
+#[allow(clippy::large_enum_variant)]
 enum EvaluatorInputBatchInner<'a> {
-    Inline(std::iter::Flatten<std::array::IntoIter<Option<InputEvent>, 2>>),
+    Inline(InlineInputEvents),
     CommittedText {
         chars: std::str::Chars<'a>,
         target_frame_id: u64,
     },
 }
+
+#[derive(Debug)]
+struct InlineInputEvents {
+    events: [Option<InputEvent>; 2],
+}
+
+impl Iterator for InlineInputEvents {
+    type Item = InputEvent;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.events[0].take().or_else(|| self.events[1].take())
+    }
+}
+
+// Prevent future InputEvent growth from silently turning every translated
+// host observation into a disproportionately large stack value.
+const _: () = assert!(std::mem::size_of::<EvaluatorInputBatch<'static>>() <= 384);
 
 impl<'a> EvaluatorInputBatch<'a> {
     /// Translate one host-neutral frontend event.
@@ -99,7 +119,7 @@ impl<'a> EvaluatorInputBatch<'a> {
 
     fn inline(events: [Option<InputEvent>; 2]) -> Self {
         Self {
-            inner: EvaluatorInputBatchInner::Inline(events.into_iter().flatten()),
+            inner: EvaluatorInputBatchInner::Inline(InlineInputEvents { events }),
         }
     }
 }
