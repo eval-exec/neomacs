@@ -146,3 +146,14 @@ impl FrameReceiver {
         &self.available
     }
 }
+
+impl SupersededPresentation {
+    /// Retire a replaced revision on the evaluator thread.
+    pub fn discard(self, evaluator: &mut neovm_core::emacs_core::eval::Context) -> bool {
+        let presentation = neovm_core::window::geometry::PresentationId::try_new(self.presentation().get())
+            .expect("sealed presentations have nonzero revisions");
+        evaluator.retire_interaction_presentation(presentation.get());
+        evaluator.frame_manager_mut().get_mut(neovm_core::window::FrameId(self.frame_placement.frame().get()))
+            .is_some_and(|frame| frame.discard_display_presentation(presentation))
+    }
+}

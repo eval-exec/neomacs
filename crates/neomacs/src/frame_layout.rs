@@ -32,18 +32,31 @@ thread_local! {
 
 // ── Layout helpers ────────────────────────────────────────────────────────
 
+#[cfg(test)]
 pub(crate) fn current_layout_frame_id(evaluator: &Context) -> Option<FrameId> {
     REDISPLAY_RUNTIME.with(|runtime| runtime.current_frame_id(evaluator))
 }
 
+#[cfg(test)]
 pub fn layout_frame_display_state(
     evaluator: &mut Context,
     frame_id: FrameId,
     purpose: FrameLayoutPurpose,
 ) -> Option<PreparedFrameDisplay> {
-    REDISPLAY_RUNTIME.with(|runtime| runtime.prepare_frame(evaluator, frame_id, purpose))
+    REDISPLAY_RUNTIME
+        .with(|runtime| layout_frame_display_state_with(runtime, evaluator, frame_id, purpose))
 }
 
+pub fn layout_frame_display_state_with(
+    runtime: &EditorPresentationRuntime,
+    evaluator: &mut Context,
+    frame_id: FrameId,
+    purpose: FrameLayoutPurpose,
+) -> Option<PreparedFrameDisplay> {
+    runtime.prepare_frame(evaluator, frame_id, purpose)
+}
+
+#[cfg(test)]
 pub fn publish_visible_frames(
     evaluator: &mut Context,
     try_publish: impl FnMut(SealedFramePresentation) -> bool,
@@ -88,7 +101,14 @@ pub fn install_window_layout_query_fn(evaluator: &mut Context) {
 pub fn run_tty_layout_tree(
     evaluator: &mut Context,
 ) -> Option<(SealedFramePresentation, Vec<SealedFramePresentation>)> {
-    let selected = current_layout_frame_id(evaluator)?;
+    REDISPLAY_RUNTIME.with(|runtime| run_tty_layout_tree_with(runtime, evaluator))
+}
+
+pub fn run_tty_layout_tree_with(
+    runtime: &EditorPresentationRuntime,
+    evaluator: &mut Context,
+) -> Option<(SealedFramePresentation, Vec<SealedFramePresentation>)> {
+    let selected = runtime.current_frame_id(evaluator)?;
     let root_id = evaluator
         .frame_manager()
         .root_frame_id(selected)
@@ -98,12 +118,17 @@ pub fn run_tty_layout_tree(
         .frames_in_reverse_z_order(root_id, RenderFrameVisibility::VisibleOnly);
 
     if neovm_core::emacs_core::xdisp::mode_line_flow_enabled() {
-        return prepare_tty_tree_before_activation(evaluator, root_id, frame_order);
+        return prepare_tty_tree_before_activation(runtime, evaluator, root_id, frame_order);
     }
 
-    let root_state = layout_frame_display_state(evaluator, root_id, FrameLayoutPurpose::Redisplay)?
-        .activate(evaluator)
-        .ok()?;
+    let root_state = layout_frame_display_state_with(
+        runtime,
+        evaluator,
+        root_id,
+        FrameLayoutPurpose::Redisplay,
+    )?
+    .activate(evaluator)
+    .ok()?;
 
     let mut child_states = Vec::new();
     for frame_id in frame_order {
@@ -111,7 +136,7 @@ pub fn run_tty_layout_tree(
             continue;
         }
         let prepared =
-            layout_frame_display_state(evaluator, frame_id, FrameLayoutPurpose::Redisplay);
+            layout_frame_display_state_with(runtime, evaluator, frame_id, FrameLayoutPurpose::Redisplay);
         if evaluator.has_mode_line_display_flow() {
             // The redisplay driver returns the Context-owned exit. Neither
             // primary nor auxiliary TTY may rasterize a partial frame tree.
@@ -133,17 +158,20 @@ pub fn run_tty_layout_tree(
 /// intact. This call-local staging belongs to the Context's current mutator;
 /// no prepared ticket is activated until every child has finished evaluation.
 fn prepare_tty_tree_before_activation(
+    runtime: &EditorPresentationRuntime,
     evaluator: &mut Context,
     root_id: FrameId,
     frame_order: Vec<FrameId>,
 ) -> Option<(SealedFramePresentation, Vec<SealedFramePresentation>)> {
-    let root = layout_frame_display_state(evaluator, root_id, FrameLayoutPurpose::Redisplay)?;
+    let root =
+        layout_frame_display_state_with(runtime, evaluator, root_id, FrameLayoutPurpose::Redisplay)?;
     let mut children: Vec<PreparedFrameDisplay> = Vec::new();
     for frame_id in frame_order {
         if frame_id == root_id {
             continue;
         }
-        let child = layout_frame_display_state(evaluator, frame_id, FrameLayoutPurpose::Redisplay);
+        let child =
+            layout_frame_display_state_with(runtime, evaluator, frame_id, FrameLayoutPurpose::Redisplay);
         if evaluator.has_mode_line_display_flow() {
             // Discard all tickets before the driver returns the original Flow.
             // Both primary and auxiliary TTYs use this tree producer.

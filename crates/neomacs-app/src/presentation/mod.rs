@@ -244,8 +244,14 @@ impl EditorPresentationRuntime {
         self.runtime.maintain_scroll_coverage(evaluator)
     }
 
+    pub fn resolved_scroll_preview(&self, evaluator: &Context, frame: FrameId, window: neovm_core::window::WindowId, inputs: Vec<neomacs_display_protocol::input_progress::InputReceipt>) -> Option<neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent> {
+        self.runtime.resolved_scroll_preview(evaluator, frame, window, inputs)
+    }
+
     /// Install the synchronous window-layout query adapter on an evaluator.
     pub fn install_window_layout_query_hook(&self, evaluator: &mut Context) {
+        let maintenance = self.clone();
+        evaluator.display_idle_maintenance_fn = Some(Box::new(move |eval| maintenance.maintain_scroll_coverage(eval)));
         let queries = self.clone();
         evaluator.install_window_layout_query(move |eval, frame_id, window_id, scope| {
             queries.runtime.query_window(eval, frame_id, window_id, scope)
@@ -268,6 +274,15 @@ impl EditorPresentationRuntime {
         evaluator: &mut Context,
         mut try_publish: impl FnMut(SealedFramePresentation) -> bool,
     ) -> FramePublishResult {
+        self.publish_visible_frames_with_evaluator(evaluator, |_, frame| try_publish(frame))
+    }
+
+    /// Publish with access to the VM owner for immediate retirement of replaced frames.
+    pub fn publish_visible_frames_with_evaluator(
+        &self,
+        evaluator: &mut Context,
+        mut try_publish: impl FnMut(&mut Context, SealedFramePresentation) -> bool,
+    ) -> FramePublishResult {
         let forest = evaluator.frame_manager().render_frame_forest(
             RenderFrameScope::AllNativeWindowTrees,
             RenderFrameVisibility::VisibleOnly,
@@ -283,7 +298,7 @@ impl EditorPresentationRuntime {
                 continue;
             };
             let (ticket, presentation) = prepared.into_submission();
-            if try_publish(presentation) {
+            if try_publish(evaluator, presentation) {
                 result.published += 1;
             } else {
                 ticket.discard(evaluator);
