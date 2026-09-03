@@ -34,8 +34,9 @@ emacs_core/
   physical layout. Use `define_subrs!` so the const `SubrBatch` and its
   registrar are generated from the same typed declarations (plus typed
   dispatch metadata when the evaluator requires it). Mark a batch
-  `target_filtered` when every declaration can legitimately be compiled out;
-  unconditional batches remain compile-time nonempty.
+  `native_host` when its declarations depend on native host services and may
+  all be compiled out for browser Wasm; unconditional batches remain
+  compile-time nonempty.
 - Treat `emacs_core/mod.rs` as wiring and a compatibility facade. Physical moves
   must not force callers to change stable paths such as
   `crate::emacs_core::eval`.
