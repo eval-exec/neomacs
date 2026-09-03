@@ -56,7 +56,8 @@ pub struct FileMetadata {
 pub enum AccessMode {
     Exists,
     Read,
-    Write,
+    /// The entry is writable, or a missing entry can be created in its parent.
+    WriteOrCreate,
     Execute,
     ReadAndSearch,
 }

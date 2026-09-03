@@ -122,15 +122,26 @@ impl EditorFileSystem for MemoryFileSystem {
     }
 
     fn access(&self, path: &Path, mode: AccessMode) -> bool {
-        let Ok(metadata) = self.metadata(path, true) else {
+        let Ok(path) = VirtualPath::parse(path) else {
             return false;
         };
-        match mode {
-            AccessMode::Exists | AccessMode::Read => true,
-            AccessMode::Write => !metadata.readonly,
-            AccessMode::Execute | AccessMode::ReadAndSearch => {
-                metadata.kind == FileEntryKind::Directory
+        let nodes = self
+            .nodes
+            .read()
+            .expect("memory filesystem read lock poisoned");
+        match nodes.get(&path) {
+            Some(node) => {
+                let metadata = node.metadata();
+                match mode {
+                    AccessMode::Exists | AccessMode::Read => true,
+                    AccessMode::WriteOrCreate => !metadata.readonly,
+                    AccessMode::Execute | AccessMode::ReadAndSearch => {
+                        metadata.kind == FileEntryKind::Directory
+                    }
+                }
             }
+            None if mode == AccessMode::WriteOrCreate => parent_directory(&nodes, &path).is_ok(),
+            None => false,
         }
     }
 
