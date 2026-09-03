@@ -1324,27 +1324,6 @@ pub fn file_newer_than_file_p(file1: &str, file2: &str) -> bool {
     mtime1 > mtime2
 }
 
-fn file_newer_than_file_path(file1: &Path, file2: &Path) -> bool {
-    let meta1 = match fs::metadata(file1) {
-        Ok(meta) => meta,
-        Err(_) => return false,
-    };
-    let meta2 = match fs::metadata(file2) {
-        Ok(meta) => meta,
-        Err(_) => return true,
-    };
-
-    let mtime1 = match meta1.modified() {
-        Ok(time) => time,
-        Err(_) => return false,
-    };
-    let mtime2 = match meta2.modified() {
-        Ok(time) => time,
-        Err(_) => return true,
-    };
-    mtime1 > mtime2
-}
-
 // ===========================================================================
 // File I/O operations
 // ===========================================================================
@@ -3278,8 +3257,8 @@ fn barf_or_query_if_file_exists(
     // non-symlink-following stat so a dangling symlink still counts as
     // existing, and so a directory is reported distinctly.
     let mut exists = known_to_exist;
-    if !known_to_exist && let Ok(metadata) = fs::symlink_metadata(&path) {
-        if metadata.is_dir() {
+    if !known_to_exist && let Ok(metadata) = eval.editor_file_system().metadata(&path, false) {
+        if metadata.kind == FileEntryKind::Directory {
             return Err(signal(
                 LispCondition::FileError,
                 vec![Value::string("File is a directory"), absname_value],
@@ -3374,10 +3353,6 @@ fn path_to_cstring(path: &Path) -> Result<CString, std::ffi::NulError> {
     CString::new(path.as_os_str().as_bytes())
 }
 
-fn file_exists_path(path: &Path) -> bool {
-    path.exists()
-}
-
 fn file_readable_path(path: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -3434,7 +3409,6 @@ fn file_writable_path(path: &Path) -> bool {
         }
     }
 }
-
 pub(crate) fn file_accessible_directory_path(path: &Path) -> bool {
     if !path.is_dir() {
         return false;
@@ -3452,43 +3426,6 @@ pub(crate) fn file_accessible_directory_path(path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         fs::read_dir(path).is_ok()
-    }
-}
-
-fn file_executable_path(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        let Ok(c_path) = path_to_cstring(path) else {
-            return false;
-        };
-        unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
-    }
-
-    #[cfg(not(unix))]
-    {
-        path.exists()
-    }
-}
-
-fn access_file_path(path: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        let c_path = path_to_cstring(path).map_err(|err| {
-            std::io::Error::new(
-                ErrorKind::InvalidInput,
-                format!("embedded NUL in file name: {err}"),
-            )
-        })?;
-        if unsafe { libc::access(c_path.as_ptr(), libc::R_OK) == 0 } {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        fs::File::open(path).map(|_| ())
     }
 }
 
@@ -3706,10 +3643,20 @@ pub(crate) fn builtin_access_file(eval: &mut Context, args: Vec<Value>) -> EvalR
         return Ok(result);
     }
     let path = lisp_file_name_to_path_buf(&resolved);
-    match access_file_path(&path) {
-        Ok(_) => Ok(Value::NIL),
-        Err(err) => Err(signal_file_action_error_value(err, &operation, args[0])),
+    if eval
+        .runtime_resource_store()
+        .and_then(|store| store.node(&path))
+        .is_some()
+        || eval.editor_file_system().access(&path, AccessMode::Read)
+    {
+        return Ok(Value::NIL);
     }
+    let err = eval
+        .editor_file_system()
+        .metadata(&path, true)
+        .map(|_| std::io::Error::from(ErrorKind::PermissionDenied))
+        .unwrap_or_else(|err| err);
+    Err(signal_file_action_error_value(err, &operation, args[0]))
 }
 
 /// Context-aware variant of `file-exists-p` that resolves relative paths
@@ -4018,10 +3965,22 @@ pub(crate) fn builtin_file_newer_than_file_p(eval: &mut Context, args: Vec<Value
     )? {
         return Ok(result);
     }
-    Ok(Value::bool_val(file_newer_than_file_path(
-        &lisp_file_name_to_path_buf(&file1),
-        &lisp_file_name_to_path_buf(&file2),
-    )))
+    let file1_metadata = eval
+        .editor_file_system()
+        .metadata(&lisp_file_name_to_path_buf(&file1), true);
+    let file2_metadata = eval
+        .editor_file_system()
+        .metadata(&lisp_file_name_to_path_buf(&file2), true);
+    let is_newer = match (file1_metadata, file2_metadata) {
+        (Err(_), _) => false,
+        (Ok(_), Err(_)) => true,
+        (Ok(file1), Ok(file2)) => match (file1.modified, file2.modified) {
+            (Some(file1), Some(file2)) => file1 > file2,
+            (None, _) => false,
+            (Some(_), None) => true,
+        },
+    };
+    Ok(Value::bool_val(is_newer))
 }
 
 /// `(file-modes FILENAME &optional FLAG)` — returns the file's
@@ -4238,21 +4197,17 @@ pub(crate) fn builtin_verify_visited_file_modtime(
     // succeeds and `time_error_value (errno)` when it does not — so a buffer
     // that recorded "this file does not exist" still matches while the file is
     // still missing, and stops matching the moment it appears.
-    let (disk_modtime, disk_size) = match std::fs::metadata(&path) {
-        Ok(meta) => {
-            let modtime = match meta.modified() {
-                Ok(mtime) => {
-                    let dur = mtime
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default();
+    let (disk_modtime, disk_size) = match eval.editor_file_system().metadata(&path, true) {
+        Ok(metadata) => {
+            let modtime = metadata
+                .modified
+                .map_or(VisitedFileModtime::Unknown, |mtime| {
                     VisitedFileModtime::Known {
-                        sec: dur.as_secs() as i64,
-                        nsec: dur.subsec_nanos() as i32,
+                        sec: mtime.seconds,
+                        nsec: mtime.nanoseconds as i32,
                     }
-                }
-                Err(_) => VisitedFileModtime::Unknown,
-            };
-            (modtime, Some(meta.len() as i64))
+                });
+            (modtime, Some(metadata.len as i64))
         }
         Err(err) => (VisitedFileModtime::from_open_error(&err), None),
     };
@@ -4362,20 +4317,17 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
         return eval.funcall_general(handler, vec![operation, Value::NIL]);
     }
     let path = lisp_file_name_to_path_buf(&expanded);
-    if let Ok(meta) = std::fs::metadata(&path) {
+    if let Ok(metadata) = eval.editor_file_system().metadata(&path, true) {
         let buf = eval
             .buffers
             .current_buffer_mut()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        if let Ok(mtime) = meta.modified() {
-            let dur = mtime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
+        if let Some(mtime) = metadata.modified {
             buf.set_visited_file_modtime(VisitedFileModtime::Known {
-                sec: dur.as_secs() as i64,
-                nsec: dur.subsec_nanos() as i32,
+                sec: mtime.seconds,
+                nsec: mtime.nanoseconds as i32,
             });
-            buf.modtime_size = Some(meta.len() as i64);
+            buf.modtime_size = Some(metadata.len as i64);
         }
     }
     Ok(Value::NIL)
@@ -7031,7 +6983,14 @@ pub(crate) fn builtin_find_file_noselect(
     let open_result = (|| -> EvalResult {
         eval.switch_current_buffer(buf_id)?;
 
-        let visit_error = if file_exists_path(&abs_path_buf) {
+        let exists = eval
+            .runtime_resource_store()
+            .and_then(|store| store.node(&abs_path_buf))
+            .is_some()
+            || eval
+                .editor_file_system()
+                .access(&abs_path_buf, AccessMode::Exists);
+        let visit_error = if exists {
             builtin_insert_file_contents(
                 eval,
                 vec![Value::heap_string(abs_path.clone()), Value::T],
