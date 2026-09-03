@@ -4,7 +4,7 @@
 //! `time-less-p`, `time-equal-p`, `current-time-string`, `current-time-zone`,
 //! `encode-time`, `decode-time`, `time-convert`, and `set-time-zone-rule`.
 //!
-//! Uses `std::time::SystemTime`/`UNIX_EPOCH` for time operations.
+//! Uses the compile-target wall clock for current-time operations.
 
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
@@ -20,7 +20,6 @@ use std::cell::RefCell;
 use std::ffi::c_int;
 use std::ffi::{CStr, OsString};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum TimeConvertSymbolForm {
@@ -135,7 +134,7 @@ impl TimeMicros {
         // (`src/timefns.c` timespec_to_lisp / decode_lisp_time). Keeping the
         // nanosecond remainder matters observably: timer vectors built by
         // `run-at-time` carry a nonzero PSEC field in GNU.
-        match SystemTime::now().duration_since(UNIX_EPOCH) {
+        match crate::host::time::wall_time_since_unix_epoch() {
             Ok(dur) => {
                 let nanos = dur.subsec_nanos() as i64;
                 TimeMicros {
