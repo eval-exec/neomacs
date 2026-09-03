@@ -5,7 +5,34 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use super::{AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, WriteMode, WriteRequest};
+use super::{
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, WriteMode,
+    WriteRequest,
+};
+
+fn timestamp_from_native(time: std::time::SystemTime) -> Option<FileTimestamp> {
+    match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => Some(FileTimestamp {
+            seconds: i64::try_from(duration.as_secs()).ok()?,
+            nanoseconds: duration.subsec_nanos(),
+        }),
+        Err(error) => {
+            let duration = error.duration();
+            let seconds = i64::try_from(duration.as_secs()).ok()?;
+            if duration.subsec_nanos() == 0 {
+                Some(FileTimestamp {
+                    seconds: -seconds,
+                    nanoseconds: 0,
+                })
+            } else {
+                Some(FileTimestamp {
+                    seconds: seconds.checked_neg()?.checked_sub(1)?,
+                    nanoseconds: 1_000_000_000 - duration.subsec_nanos(),
+                })
+            }
+        }
+    }
+}
 
 /// Direct access to the current process's native filesystem namespace.
 #[derive(Clone, Copy, Debug, Default)]
@@ -25,7 +52,7 @@ fn metadata_from_native(metadata: fs::Metadata) -> FileMetadata {
     FileMetadata {
         kind,
         len: metadata.len(),
-        modified: metadata.modified().ok(),
+        modified: metadata.modified().ok().and_then(timestamp_from_native),
         readonly: metadata.permissions().readonly(),
     }
 }
