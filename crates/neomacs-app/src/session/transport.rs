@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use neomacs_display_protocol::FrameDisplayState;
 use neomacs_display_protocol::{FrameGlyphBuffer, SealedFramePresentation};
 use neovm_core::emacs_core::process::WaitNotifier;
 use neovm_core::keyboard::InputEvent;
@@ -231,6 +232,25 @@ impl PendingFrontendFrame {
         self.frame().materialize()
     }
 
+    /// Immutable retained display state to encode for a remote renderer.
+    #[must_use]
+    pub fn state(&self) -> &FrameDisplayState {
+        self.frame().state()
+    }
+
+    /// Transfer renderer-feedback responsibility to a remote frontend.
+    ///
+    /// Unlike [`Self::activate`] or [`Self::discard`], this sends no immediate
+    /// feedback. The receiver must eventually submit exactly one activated or
+    /// discarded observation, and later retire an activated presentation.
+    #[must_use]
+    pub fn hand_off_to_remote_frontend(mut self) -> FrameDisplayState {
+        self.frame
+            .take()
+            .expect("pending frame already consumed")
+            .into_state()
+    }
+
     /// Report successful installation and return its retirement guard.
     pub fn activate(mut self) -> Result<ActiveFrontendPresentation, FrontendInputDisconnected> {
         self.input.submit(&FrontendEvent::PresentationActivated {
@@ -419,5 +439,16 @@ mod tests {
             input_rx.try_recv().unwrap(),
             InputEvent::PresentationRetired { presentation: 41 }
         ));
+    }
+    #[test]
+    fn remote_handoff_transfers_feedback_responsibility_without_discarding() {
+        let (input_tx, input_rx) = crossbeam_channel::unbounded();
+        let port = FrontendInputPort::new(input_tx, None, Arc::new(AtomicBool::new(false)));
+        let pending = PendingFrontendFrame::new(sealed_frame(17), port);
+
+        assert_eq!(pending.state().presentation_id, PresentationId::new(17));
+        let _state = pending.hand_off_to_remote_frontend();
+
+        assert!(input_rx.try_recv().is_err());
     }
 }
