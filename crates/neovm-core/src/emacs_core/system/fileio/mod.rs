@@ -11,7 +11,7 @@ mod runtime_resources;
 pub(crate) use binary_mode::builtin_set_binary_mode;
 pub(crate) use filesystem::default_editor_file_system;
 pub use filesystem::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, MemoryFileSystem,
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, MemoryFileSystem,
     MountTableFileSystem, WriteMode, WriteRequest,
 };
 pub use runtime_resources::{RuntimeResourceNode, RuntimeResourceStore};
@@ -6574,13 +6574,10 @@ pub(crate) fn builtin_insert_file_contents(
         if let Ok(meta) = eval.editor_file_system().metadata(&resolved_path, true)
             && let Some(mtime) = meta.modified
         {
-            let dur = mtime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
             if let Some(buf) = eval.buffers.get_mut(current_id) {
                 buf.set_visited_file_modtime(VisitedFileModtime::Known {
-                    sec: dur.as_secs() as i64,
-                    nsec: dur.subsec_nanos() as i32,
+                    sec: mtime.seconds,
+                    nsec: mtime.nanoseconds as i32,
                 });
                 buf.modtime_size = Some(meta.len as i64);
             }
@@ -6916,14 +6913,7 @@ pub(crate) fn builtin_write_region(
                     Value::heap_string(resolved.clone()),
                 )
             })?;
-            let dur = mtime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
-            Some((
-                dur.as_secs() as i64,
-                dur.subsec_nanos() as i32,
-                metadata.len as i64,
-            ))
+            Some((mtime.seconds, mtime.nanoseconds as i32, metadata.len as i64))
         } else {
             None
         };

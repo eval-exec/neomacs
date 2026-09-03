@@ -3,20 +3,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::{self, ErrorKind};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicI64, Ordering};
 
-use super::{AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, WriteMode, WriteRequest};
+use super::virtual_path::VirtualPath;
+use super::{
+    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileTimestamp, WriteMode,
+    WriteRequest,
+};
 
 #[derive(Clone, Debug)]
 enum MemoryNode {
     Directory {
-        modified: SystemTime,
+        modified: FileTimestamp,
     },
     File {
         contents: Vec<u8>,
-        modified: SystemTime,
+        modified: FileTimestamp,
     },
 }
 
@@ -42,17 +46,23 @@ impl MemoryNode {
 /// A rooted, path-safe filesystem kept entirely in memory.
 #[derive(Debug)]
 pub struct MemoryFileSystem {
-    nodes: RwLock<BTreeMap<PathBuf, MemoryNode>>,
+    nodes: RwLock<BTreeMap<VirtualPath, MemoryNode>>,
+    next_timestamp: AtomicI64,
 }
 
 impl Default for MemoryFileSystem {
     fn default() -> Self {
-        let now = SystemTime::now();
         Self {
             nodes: RwLock::new(BTreeMap::from([(
-                PathBuf::from("/"),
-                MemoryNode::Directory { modified: now },
+                VirtualPath::parse(Path::new("/")).expect("virtual root must parse"),
+                MemoryNode::Directory {
+                    modified: FileTimestamp {
+                        seconds: 0,
+                        nanoseconds: 0,
+                    },
+                },
             )])),
+            next_timestamp: AtomicI64::new(1),
         }
     }
 }
@@ -62,50 +72,34 @@ impl MemoryFileSystem {
     pub fn new() -> Self {
         Self::default()
     }
+
+    fn timestamp(&self) -> FileTimestamp {
+        FileTimestamp {
+            seconds: self.next_timestamp.fetch_add(1, Ordering::Relaxed),
+            nanoseconds: 0,
+        }
+    }
 }
 
 fn invalid_path(message: &'static str) -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, message)
 }
 
-fn normalize(path: &Path) -> io::Result<PathBuf> {
-    if !path.is_absolute() {
-        return Err(invalid_path("virtual filesystem paths must be absolute"));
-    }
-    let mut normalized = PathBuf::from("/");
-    for component in path.components() {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(component) => normalized.push(component),
-            Component::ParentDir => {
-                if normalized == Path::new("/") {
-                    return Err(invalid_path("virtual filesystem path escapes its root"));
-                }
-                normalized.pop();
-            }
-            Component::Prefix(_) => {
-                return Err(invalid_path("virtual filesystem path has a native prefix"));
-            }
-        }
-    }
-    Ok(normalized)
-}
-
 fn parent_directory<'a>(
-    nodes: &'a BTreeMap<PathBuf, MemoryNode>,
-    path: &Path,
+    nodes: &'a BTreeMap<VirtualPath, MemoryNode>,
+    path: &VirtualPath,
 ) -> io::Result<&'a MemoryNode> {
     let parent = path
         .parent()
         .ok_or_else(|| invalid_path("virtual filesystem root has no parent"))?;
-    match nodes.get(parent) {
+    match nodes.get(&parent) {
         Some(node @ MemoryNode::Directory { .. }) => Ok(node),
         Some(MemoryNode::File { .. }) => Err(io::Error::from(ErrorKind::NotADirectory)),
         None => Err(io::Error::from(ErrorKind::NotFound)),
     }
 }
 
-fn remove_tree(nodes: &mut BTreeMap<PathBuf, MemoryNode>, root: &Path) {
+fn remove_tree(nodes: &mut BTreeMap<VirtualPath, MemoryNode>, root: &VirtualPath) {
     let descendants = nodes
         .keys()
         .filter(|candidate| *candidate == root || candidate.starts_with(root))
@@ -118,7 +112,7 @@ fn remove_tree(nodes: &mut BTreeMap<PathBuf, MemoryNode>, root: &Path) {
 
 impl EditorFileSystem for MemoryFileSystem {
     fn metadata(&self, path: &Path, _follow_links: bool) -> io::Result<FileMetadata> {
-        let path = normalize(path)?;
+        let path = VirtualPath::parse(path)?;
         self.nodes
             .read()
             .expect("memory filesystem read lock poisoned")
@@ -141,7 +135,7 @@ impl EditorFileSystem for MemoryFileSystem {
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        let path = normalize(path)?;
+        let path = VirtualPath::parse(path)?;
         match self
             .nodes
             .read()
@@ -155,7 +149,7 @@ impl EditorFileSystem for MemoryFileSystem {
     }
 
     fn read_directory(&self, path: &Path) -> io::Result<Vec<OsString>> {
-        let path = normalize(path)?;
+        let path = VirtualPath::parse(path)?;
         let nodes = self
             .nodes
             .read()
@@ -168,8 +162,8 @@ impl EditorFileSystem for MemoryFileSystem {
         Ok(nodes
             .keys()
             .filter_map(|candidate| {
-                (candidate.parent() == Some(path.as_path()))
-                    .then(|| candidate.file_name().map(ToOwned::to_owned))
+                (candidate.parent().as_ref() == Some(&path))
+                    .then(|| candidate.file_name())
                     .flatten()
             })
             .collect::<BTreeSet<_>>()
@@ -183,8 +177,8 @@ impl EditorFileSystem for MemoryFileSystem {
         contents: &[u8],
         request: WriteRequest,
     ) -> io::Result<FileMetadata> {
-        let path = normalize(path)?;
-        if path == Path::new("/") {
+        let path = VirtualPath::parse(path)?;
+        if path.is_root() {
             return Err(io::Error::from(ErrorKind::IsADirectory));
         }
         let mut nodes = self
@@ -226,7 +220,7 @@ impl EditorFileSystem for MemoryFileSystem {
         }
         let node = MemoryNode::File {
             contents: next,
-            modified: SystemTime::now(),
+            modified: self.timestamp(),
         };
         let metadata = node.metadata();
         nodes.insert(path, node);
@@ -234,8 +228,8 @@ impl EditorFileSystem for MemoryFileSystem {
     }
 
     fn create_directory(&self, path: &Path, parents: bool) -> io::Result<()> {
-        let path = normalize(path)?;
-        if path == Path::new("/") {
+        let path = VirtualPath::parse(path)?;
+        if path.is_root() {
             return if parents {
                 Ok(())
             } else {
@@ -253,12 +247,9 @@ impl EditorFileSystem for MemoryFileSystem {
                 Err(io::Error::from(ErrorKind::AlreadyExists))
             };
         }
-        let now = SystemTime::now();
+        let now = self.timestamp();
         if parents {
-            let mut ancestors = path.ancestors().take_while(|path| *path != Path::new("/"));
-            let mut missing = ancestors.by_ref().map(Path::to_owned).collect::<Vec<_>>();
-            missing.reverse();
-            for directory in missing {
+            for directory in path.ancestors_without_root() {
                 if matches!(nodes.get(&directory), Some(MemoryNode::File { .. })) {
                     return Err(io::Error::from(ErrorKind::NotADirectory));
                 }
@@ -274,7 +265,7 @@ impl EditorFileSystem for MemoryFileSystem {
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
-        let path = normalize(path)?;
+        let path = VirtualPath::parse(path)?;
         let mut nodes = self
             .nodes
             .write()
@@ -290,8 +281,8 @@ impl EditorFileSystem for MemoryFileSystem {
     }
 
     fn remove_directory(&self, path: &Path, recursive: bool) -> io::Result<()> {
-        let path = normalize(path)?;
-        if path == Path::new("/") {
+        let path = VirtualPath::parse(path)?;
+        if path.is_root() {
             return Err(io::Error::new(
                 ErrorKind::PermissionDenied,
                 "cannot remove virtual filesystem root",
@@ -308,7 +299,7 @@ impl EditorFileSystem for MemoryFileSystem {
         }
         let has_children = nodes
             .keys()
-            .any(|candidate| candidate.parent() == Some(&path));
+            .any(|candidate| candidate.parent().as_ref() == Some(&path));
         if has_children && !recursive {
             return Err(io::Error::from(ErrorKind::DirectoryNotEmpty));
         }
@@ -317,9 +308,9 @@ impl EditorFileSystem for MemoryFileSystem {
     }
 
     fn rename(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()> {
-        let from = normalize(from)?;
-        let to = normalize(to)?;
-        if from == Path::new("/") || to == Path::new("/") || to.starts_with(&from) {
+        let from = VirtualPath::parse(from)?;
+        let to = VirtualPath::parse(to)?;
+        if from.is_root() || to.is_root() || to.starts_with(&from) {
             return Err(invalid_path("invalid virtual filesystem rename"));
         }
         let mut nodes = self
@@ -348,14 +339,14 @@ impl EditorFileSystem for MemoryFileSystem {
             let suffix = old_path
                 .strip_prefix(&from)
                 .expect("selected rename descendant has source prefix");
-            nodes.insert(to.join(suffix), node);
+            nodes.insert(to.join(&suffix), node);
         }
         Ok(())
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        let path = normalize(path)?;
-        self.metadata(&path, true)?;
-        Ok(path)
+        let path = VirtualPath::parse(path)?;
+        self.metadata(&path.to_path_buf(), true)?;
+        Ok(path.to_path_buf())
     }
 }
