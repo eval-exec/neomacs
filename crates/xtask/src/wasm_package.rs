@@ -26,6 +26,10 @@ pub(super) const WEB_SOURCE_FILES: [&str; 7] = [
     "wasm-bootstrap.mjs",
     "worker-assets.mjs",
 ];
+pub(super) const WEB_REPOSITORY_ASSETS: [(&str, &str); 1] = [(
+    "crates/neomacs-display-runtime/assets/window-icon.svg",
+    "favicon.svg",
+)];
 const EDITOR_WORKER_WASM: &str = "neomacs_wasm_worker.wasm";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -261,6 +265,13 @@ fn copy_web_sources(repo_root: &Path, output: &Path) -> Result<()> {
             &source_root.join(filename),
             &output.join(filename),
             "browser harness source",
+        )?;
+    }
+    for (source, destination) in WEB_REPOSITORY_ASSETS {
+        copy_nonempty_file(
+            &repo_root.join(source),
+            &output.join(destination),
+            "browser repository asset",
         )?;
     }
     Ok(())
