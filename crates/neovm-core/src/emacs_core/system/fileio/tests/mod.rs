@@ -7,6 +7,9 @@ use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
+#[cfg(target_os = "windows")]
+mod windows_test;
+
 fn bootstrap_eval(src: &str) -> Vec<String> {
     runtime_startup_eval_all(src)
 }

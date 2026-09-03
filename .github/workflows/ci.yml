@@ -234,11 +234,12 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: "true"
 
-      - name: Test native file notifications
+      - name: Test native runtime contracts
         shell: bash
         run: >-
           cargo nextest run -p neovm-core --lib
-          -E 'test(native_runtime_test)'
+          -E 'test(native_runtime_test) |
+          test(windows_set_file_times_does_not_require_content_write_access)'
 
   # The native Rust tests above isolate backend/thread/lifecycle failures.  A
   # release Neomacs is still required to prove the public Lisp API, special
