@@ -177,7 +177,34 @@ impl ApplicationHandler for BrowserFrontend {
 /// Validate and install one evaluator presentation transferred by the editor
 /// Worker. The returned receipt is sent back through the typed input protocol.
 #[wasm_bindgen]
-pub fn install_worker_presentation(bytes: &[u8]) -> Result<String, JsValue> {
+pub struct WorkerPresentationReceipt {
+    presentation: String,
+    target: String,
+}
+
+#[wasm_bindgen]
+impl WorkerPresentationReceipt {
+    #[wasm_bindgen(getter)]
+    pub fn presentation(&self) -> String {
+        self.presentation.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn target(&self) -> String {
+        self.target.clone()
+    }
+}
+
+/// Return the protocol version compiled into the Rust browser boundary.
+#[wasm_bindgen]
+pub fn worker_protocol_version() -> u16 {
+    neomacs_wasm_protocol::WORKER_PROTOCOL_VERSION
+}
+
+/// Validate and install one evaluator presentation transferred by the editor
+/// Worker. Its typed receipt keeps 64-bit identities lossless in JavaScript.
+#[wasm_bindgen]
+pub fn install_worker_presentation(bytes: &[u8]) -> Result<WorkerPresentationReceipt, JsValue> {
     let state: FrameDisplayState = ciborium::de::from_reader(bytes)
         .map_err(|error| JsValue::from_str(&format!("invalid Worker presentation: {error}")))?;
     let sealed = SealedFramePresentation::seal(state).map_err(|error| {
@@ -191,7 +218,10 @@ pub fn install_worker_presentation(bytes: &[u8]) -> Result<String, JsValue> {
             window.request_redraw();
         }
     });
-    Ok(format!("{presentation},{target}"))
+    Ok(WorkerPresentationReceipt {
+        presentation: presentation.to_string(),
+        target: target.to_string(),
+    })
 }
 
 /// Start the browser frontend without emulating a never-returning native loop.
