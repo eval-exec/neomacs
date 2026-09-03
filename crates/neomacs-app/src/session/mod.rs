@@ -22,7 +22,7 @@ use std::rc::Rc;
 use crossbeam_channel::{Sender, unbounded};
 use neomacs_display_protocol::SealedFramePresentation;
 use neovm_core::emacs_core::eval::Context;
-use neovm_core::keyboard::HostInputWaitBackend;
+use neovm_core::emacs_core::wait::HostInputWaitBackend;
 
 use crate::presentation::{EditorPresentationRuntime, FramePublishResult, PresentationMetrics};
 
