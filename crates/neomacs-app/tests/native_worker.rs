@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use neomacs_app::host::HostProfile;
 use neomacs_app::presentation::PresentationMetrics;
-use neomacs_app::runtime_image::RuntimeImageSource;
+use neomacs_app::runtime_image::AuthenticatedPortableRuntimeImage;
 use neomacs_app::session::{EditorSession, NativeEditorWorker, NativeEditorWorkerEvent};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::pdump::encode_portable_snapshot;
-use support::runtime_resources::mounted_runtime_resources;
+use support::runtime_resources::{content_id, mounted_runtime_resources};
 
 #[test]
 fn restored_session_runs_after_pdump_hook_before_top_level() {
@@ -29,7 +29,9 @@ fn restored_session_runs_after_pdump_hook_before_top_level() {
         ("lisp/loadup.el", b"(provide 'loadup)"),
         ("etc/NEWS", b"news"),
     ]);
-    let evaluator = RuntimeImageSource::LinearMemory(&bytes)
+    let image_id = content_id(&bytes);
+    let evaluator = AuthenticatedPortableRuntimeImage::from_assets(&bytes, image_id.as_bytes())
+        .expect("authenticate portable image")
         .load_for_with_mounted_runtime_resources(HostProfile::WASM, resources)
         .expect("restore portable runtime image");
 

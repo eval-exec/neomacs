@@ -8,7 +8,7 @@ use neomacs_app::initial_surface::{
     InitialFrameMetrics, prepare_initial_editor_surface,
 };
 use neomacs_app::presentation::PresentationMetrics;
-use neomacs_app::runtime_image::RuntimeImageSource;
+use neomacs_app::runtime_image::AuthenticatedPortableRuntimeImage;
 use neomacs_app::runtime_resources::MountedRuntimeResources;
 use neomacs_app::session::{
     EditorSession, EditorSessionExit, FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort,
@@ -25,6 +25,12 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     browser_host::report_status("restoring portable runtime image");
     let startup = decode_startup(browser_host::startup_bytes()?)?;
     let runtime_image = browser_host::runtime_image_bytes()?;
+    let runtime_image_id = browser_host::runtime_image_id_bytes()?;
+    let runtime_image = AuthenticatedPortableRuntimeImage::from_assets(
+        &runtime_image,
+        &runtime_image_id,
+    )
+    .map_err(|error| format!("failed to authenticate browser runtime image: {error}"))?;
     browser_host::report_status("mounting authenticated runtime resources");
     let runtime_resource_bundle = browser_host::runtime_resource_bundle_bytes()?;
     let runtime_resource_id = browser_host::runtime_resource_id_bytes()?;
@@ -34,7 +40,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         &runtime_resource_id,
     )
     .map_err(|error| format!("failed to mount browser runtime resources: {error}"))?;
-    let mut evaluator = RuntimeImageSource::LinearMemory(&runtime_image)
+    let mut evaluator = runtime_image
         .load_for_with_mounted_runtime_resources(
             neomacs_app::host::HostProfile::WASM,
             runtime_resources,
