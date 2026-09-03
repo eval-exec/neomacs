@@ -51,11 +51,11 @@ fn browser_batch_becomes_one_ordered_editor_input_batch() {
 fn browser_batch_rejects_invalid_viewport_before_exposing_any_editor_events() {
     let batch: BrowserInputBatch = serde_json::from_str(
         r#"{
-            "sequence": 8,
+            "sequence": "8",
             "events": [
-                {"type":"focus-changed", "focused":true, "target":1},
+                {"type":"focus-changed", "focused":true, "target":"1"},
                 {"type":"viewport-changed", "width":800, "height":600,
-                 "scale_factor":0.0, "target":1}
+                 "scale_factor":0.0, "target":"1"}
             ]
         }"#,
     )
@@ -110,5 +110,48 @@ fn browser_editor_startup_rejects_invalid_geometry_before_worker_boot() {
             BrowserColorScheme::Light,
         ),
         Err(InvalidBrowserEditorStartup::ScaleFactor),
+    );
+}
+
+#[test]
+fn browser_wire_preserves_identities_beyond_javascript_safe_integers() {
+    const BEYOND_JS_SAFE_INTEGER: u64 = 9_007_199_254_740_993;
+    let batch = BrowserInputBatch::new(
+        InputBatchSequence::new(BEYOND_JS_SAFE_INTEGER).expect("positive sequence"),
+        vec![
+            BrowserInputEvent::key(
+                0xff51,
+                BrowserModifiers::default(),
+                BrowserKeyState::Pressed,
+                BEYOND_JS_SAFE_INTEGER + 1,
+            ),
+            BrowserInputEvent::presentation_retired(BEYOND_JS_SAFE_INTEGER + 2),
+        ],
+    )
+    .expect("nonempty browser batch");
+
+    let json = serde_json::to_string(&batch).expect("serializable browser batch");
+    assert!(json.contains(r#""sequence":"9007199254740993""#));
+    assert!(json.contains(r#""target":"9007199254740994""#));
+    assert!(json.contains(r#""presentation":"9007199254740995""#));
+
+    let restored: BrowserInputBatch =
+        serde_json::from_str(&json).expect("lossless browser batch round trip");
+    assert_eq!(restored, batch);
+}
+
+#[test]
+fn browser_wire_rejects_numeric_identifiers_that_javascript_could_round() {
+    assert!(
+        serde_json::from_str::<BrowserInputBatch>(
+            r#"{"sequence":1,"events":[{"type":"close-requested","target":"1"}]}"#,
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<BrowserInputBatch>(
+            r#"{"sequence":"1","events":[{"type":"close-requested","target":1}]}"#,
+        )
+        .is_err()
     );
 }
