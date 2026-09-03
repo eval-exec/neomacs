@@ -25,7 +25,7 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
 }
@@ -164,7 +164,7 @@ fn parity_two_cycle_lambda_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         heap.owns_non_cons_object(b_ptr),
@@ -196,7 +196,7 @@ fn parity_two_cycle_lambda_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(b);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert!(
         !heap.owns_non_cons_object(g1_ptr),
@@ -280,7 +280,7 @@ fn deferred_lambda_resolves_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
 
     for (i, b) in lambdas.iter().enumerate() {
@@ -444,7 +444,7 @@ fn lambda_reuse_within_one_cooperative_sweep_window() {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     assert!(heap.sweep_in_progress());
 
     // Slice 1 (budget 1): sweeps lambda page 0 only.
@@ -522,7 +522,7 @@ fn lambda_sweep_live_bytes_track_variable_payload_sizes() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, crate::host::time::Instant::now());
+    heap.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     heap.finish_incremental_sweep_now();
     assert_eq!(
         heap.live_bytes(),

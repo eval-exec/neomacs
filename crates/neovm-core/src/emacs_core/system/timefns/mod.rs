@@ -134,7 +134,7 @@ impl TimeMicros {
         // (`src/timefns.c` timespec_to_lisp / decode_lisp_time). Keeping the
         // nanosecond remainder matters observably: timer vectors built by
         // `run-at-time` carry a nonzero PSEC field in GNU.
-        match crate::host::time::wall_time_since_unix_epoch() {
+        match neomacs_host_runtime::time::wall_time_since_unix_epoch() {
             Ok(dur) => {
                 let nanos = dur.subsec_nanos() as i64;
                 TimeMicros {

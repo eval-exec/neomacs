@@ -31,7 +31,8 @@
 //! `EventTime::now()` and no `EventTime::elapsed()` — `elapsed()` is exactly
 //! the hidden clock read this module exists to remove.
 
-use std::time::{Duration, Instant};
+use neomacs_host_runtime::time::Instant;
+use std::time::Duration;
 
 /// Read the platform clock and mint an observation.
 ///

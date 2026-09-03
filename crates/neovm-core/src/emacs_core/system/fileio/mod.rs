@@ -2678,7 +2678,7 @@ fn split_nearby_temp_prefix(
 fn make_temp_name_suffix() -> String {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let nonce = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let now = crate::host::time::wall_time_since_unix_epoch()
+    let now = neomacs_host_runtime::time::wall_time_since_unix_epoch()
         .unwrap_or_default()
         .as_nanos() as u64;
     let mut value = now ^ nonce.rotate_left(7);

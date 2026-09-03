@@ -240,10 +240,11 @@ pub fn start() -> Result<(), JsValue> {
     std::panic::set_hook(Box::new(|panic| {
         browser_console_error(&format!("Neomacs frontend panicked: {panic}"));
     }));
-    neovm_core::host::time::install_browser_clocks(
+    neomacs_host_runtime::time::BrowserClocks::new(
         browser_monotonic_time_milliseconds,
         browser_wall_time_milliseconds,
     )
+    .install()
     .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let event_loop = EventLoop::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
     event_loop.spawn_app(BrowserFrontend::default());

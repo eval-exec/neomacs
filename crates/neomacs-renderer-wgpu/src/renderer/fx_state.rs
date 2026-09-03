@@ -659,7 +659,7 @@ impl RendererFrameEffects {
         &mut self,
         x: f32,
         y: f32,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
         duration_ms: u32,
     ) {
         self.fx.click_halo.halos.push(ClickHaloEntry {
@@ -674,7 +674,7 @@ impl RendererFrameEffects {
     // raw `Instant` only because `neomacs-display-runtime` bridges its own
     // `EventTime` through `into_instant()` at the call site; once that crate
     // passes the `EventTime` straight through, drop the re-wrap below.
-    pub fn trigger_cursor_wake(&mut self, now: crate::clock::Instant) {
+    pub fn trigger_cursor_wake(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.fx.cursor_wake.started = Some(EventTime::from_observed_instant(now));
     }
 
@@ -682,7 +682,7 @@ impl RendererFrameEffects {
     // raw `Instant` only because `neomacs-display-runtime` bridges its own
     // `EventTime` through `into_instant()` at the call site; once that crate
     // passes the `EventTime` straight through, drop the re-wrap below.
-    pub fn trigger_resize_padding(&mut self, now: crate::clock::Instant) {
+    pub fn trigger_resize_padding(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.fx.resize_padding.started = Some(EventTime::from_observed_instant(now));
     }
 
@@ -727,7 +727,7 @@ impl RendererFrameEffects {
         mode_line_height: f32,
         at_top: bool,
         at_bottom: bool,
-        now: crate::clock::Instant,
+        now: neomacs_host_runtime::time::Instant,
         duration_ms: u32,
     ) {
         self.fx.edge_snap.snaps.push(EdgeSnapEntry {
@@ -744,7 +744,7 @@ impl RendererFrameEffects {
     // raw `Instant` only because `neomacs-display-runtime` bridges its own
     // `EventTime` through `into_instant()` at the call site; once that crate
     // passes the `EventTime` straight through, drop the re-wrap below.
-    pub fn trigger_cursor_error_pulse(&mut self, now: crate::clock::Instant) {
+    pub fn trigger_cursor_error_pulse(&mut self, now: neomacs_host_runtime::time::Instant) {
         self.fx.error_pulse.started = Some(EventTime::from_observed_instant(now));
     }
 }

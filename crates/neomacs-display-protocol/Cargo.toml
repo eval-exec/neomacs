@@ -12,6 +12,7 @@ default = []
 neo-term = []
 
 [dependencies]
+neomacs-host-runtime.workspace = true
 rustc-hash.workspace = true
 bitflags.workspace = true
 num_enum.workspace = true

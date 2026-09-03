@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use crate::host::time::Instant;
+use neomacs_host_runtime::time::Instant;
 use strum::{EnumString, IntoStaticStr};
 
 use super::tls::{

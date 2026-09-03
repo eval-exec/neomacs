@@ -755,7 +755,7 @@ fn bookmark_timestamp_file(eval: &super::eval::Context) -> Option<LispString> {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn bookmark_save_stamp(path: &LispString) -> Value {
-    let now = crate::host::time::wall_time_since_unix_epoch().unwrap_or_default();
+    let now = neomacs_host_runtime::time::wall_time_since_unix_epoch().unwrap_or_default();
     Value::list(vec![
         Value::heap_string(path.clone()),
         Value::fixnum(now.as_secs() as i64),
