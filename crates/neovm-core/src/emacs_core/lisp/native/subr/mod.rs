@@ -300,32 +300,23 @@ pub struct SubrBatch {
     #[cfg(test)]
     owner: &'static str,
     specs: &'static [SubrSpec],
-    hosts: SubrHosts,
+    portability: SubrPortability,
 }
 
-/// Product hosts on which every declaration in a batch has an implementation.
-///
-/// Keeping this on the batch makes host filtering part of the subsystem-owned
-/// declaration instead of a name-based exception in the central sequencer.
-#[derive(Clone, Copy)]
-enum SubrHosts {
-    All,
-    Native,
-}
-
-impl SubrHosts {
-    const fn includes(self, host: neovm_host_abi::HostKind) -> bool {
-        match self {
-            Self::All => true,
-            Self::Native => !matches!(host, neovm_host_abi::HostKind::Wasm),
-        }
-    }
+/// Whether a compiled primitive may be required by a cross-target image.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SubrPortability {
+    /// Every supported target compiles a compatible implementation.
+    AllTargets,
+    /// Availability or ABI varies by compilation target, so a portable image
+    /// may carry the function cell but cannot require it from every consumer.
+    TargetSpecific,
 }
 
 impl SubrBatch {
     #[track_caller]
     pub const fn new(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
-        Self::new_inner(owner, specs, false, SubrHosts::All)
+        Self::new_inner(owner, specs, false, SubrPortability::AllTargets)
     }
 
     /// Construct a batch whose declarations may all be removed by target
@@ -336,17 +327,13 @@ impl SubrBatch {
     /// native subrs on only some target families.
     #[track_caller]
     pub const fn target_filtered(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
-        Self::new_inner(owner, specs, true, SubrHosts::All)
+        Self::new_inner(owner, specs, true, SubrPortability::TargetSpecific)
     }
 
     /// Construct a target-filtered batch backed only by native product hosts.
     #[track_caller]
     pub const fn native_host(owner: &'static str, specs: &'static [SubrSpec]) -> Self {
-        let batch = Self::target_filtered(owner, specs);
-        Self {
-            hosts: SubrHosts::Native,
-            ..batch
-        }
+        Self::new_inner(owner, specs, true, SubrPortability::TargetSpecific)
     }
 
     #[track_caller]
@@ -354,7 +341,7 @@ impl SubrBatch {
         owner: &'static str,
         specs: &'static [SubrSpec],
         permit_empty: bool,
-        hosts: SubrHosts,
+        portability: SubrPortability,
     ) -> Self {
         let source_file = std::panic::Location::caller().file();
         assert!(
@@ -372,7 +359,7 @@ impl SubrBatch {
             #[cfg(test)]
             owner,
             specs,
-            hosts,
+            portability,
         }
     }
 
@@ -391,20 +378,15 @@ impl SubrBatch {
         self.specs
     }
 
+    #[cfg(test)]
+    pub(crate) const fn portability(self) -> SubrPortability {
+        self.portability
+    }
+
     pub(crate) fn install(self, ctx: &mut crate::emacs_core::eval::Context) {
         #[cfg(test)]
         INSTALLED_SUBR_BATCHES.with(|installed| installed.borrow_mut().push(self.owner));
-        ctx.register_subrs(self.specs);
-    }
-
-    pub(crate) fn install_for_host(
-        self,
-        ctx: &mut crate::emacs_core::eval::Context,
-        host: neovm_host_abi::HostKind,
-    ) {
-        if self.hosts.includes(host) {
-            self.install(ctx);
-        }
+        ctx.register_subrs_with_portability(self.specs, self.portability);
     }
 }
 
@@ -446,11 +428,8 @@ macro_rules! define_subrs {
                 &[$($spec),+],
             );
 
-        pub(crate) fn register_subrs(
-            ctx: &mut $crate::emacs_core::eval::Context,
-            host: neovm_host_abi::HostKind,
-        ) {
-            SUBRS.install_for_host(ctx, host);
+        pub(crate) fn register_subrs(ctx: &mut $crate::emacs_core::eval::Context) {
+            SUBRS.install(ctx);
         }
     };
     (target_filtered; $($spec:expr),+ $(,)?) => {

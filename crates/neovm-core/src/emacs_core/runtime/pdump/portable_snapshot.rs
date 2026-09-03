@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::types::DumpContextState;
-use super::{Context, DumpError, mark_after_pdump_load_hook_pending, restore_snapshot_for_host};
+use super::{Context, DumpError, mark_after_pdump_load_hook_pending, restore_snapshot};
 use crate::emacs_core::eval::{SubrEntry, registered_global_subr_entries};
 use crate::emacs_core::intern::resolve_name;
 use crate::tagged::header::SubrDispatchKind;
@@ -89,6 +89,7 @@ impl PortableSubrAbi {
 fn compiled_subr_contract() -> Vec<PortableSubrAbi> {
     let mut entries = registered_global_subr_entries()
         .into_iter()
+        .filter(|entry| entry.portability == crate::emacs_core::subr::SubrPortability::AllTargets)
         .map(PortableSubrAbi::from_entry)
         .collect::<Vec<_>>();
     entries.sort();
@@ -157,6 +158,18 @@ pub fn encode_portable_snapshot(eval: &Context) -> Result<Vec<u8>, DumpError> {
     Ok(image)
 }
 
+#[cfg(test)]
+pub(crate) fn portable_required_subr_names(image: &[u8]) -> Vec<String> {
+    let mut reader = Cursor::new(&image[CHECKSUM_END..]);
+    let payload: PortableSnapshotPayload =
+        ciborium::de::from_reader(&mut reader).expect("decode test portable snapshot");
+    payload
+        .required_subrs
+        .into_iter()
+        .map(|subr| subr.name)
+        .collect()
+}
+
 /// Atomically publish a target-independent runtime image.
 ///
 /// Release tooling calls this from the same dump-time evaluator state used by
@@ -187,16 +200,6 @@ pub fn dump_portable_snapshot_to_file(eval: &Context, path: &Path) -> Result<(),
 /// bytes. Restoration marks the normal `after-pdump-load-hook` as pending, so
 /// host startup can share the same post-image initialization path as native.
 pub fn load_from_portable_snapshot(image: &[u8]) -> Result<Context, DumpError> {
-    load_from_portable_snapshot_for_host(image, neovm_host_abi::HostKind::CURRENT)
-}
-
-/// Restore a portable image against an explicit product-host primitive
-/// catalog. Native release tooling uses this same boundary to prove that the
-/// image it produces can be consumed by browser WebAssembly.
-pub fn load_from_portable_snapshot_for_host(
-    image: &[u8],
-    host: neovm_host_abi::HostKind,
-) -> Result<Context, DumpError> {
     if image.len() < CHECKSUM_END {
         return Err(DumpError::ImageFormatError(
             "portable snapshot header is truncated".into(),
@@ -244,7 +247,8 @@ pub fn load_from_portable_snapshot_for_host(
         )));
     }
 
-    let mut eval = restore_snapshot_for_host(&payload.state, host)?;
+    let mut eval = restore_snapshot(&payload.state)?;
+    eval.rebind_compiled_target_identity();
     validate_subr_contract(&payload.required_subrs)?;
     mark_after_pdump_load_hook_pending(&mut eval);
     Ok(eval)

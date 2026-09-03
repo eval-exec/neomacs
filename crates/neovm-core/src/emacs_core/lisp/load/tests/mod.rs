@@ -219,8 +219,9 @@ fn startup_environment_snapshot_is_independent_from_process_policy() {
 }
 
 #[test]
+#[cfg(target_family = "wasm")]
 fn wasm_startup_has_no_native_process_environment() {
-    let mut eval = Context::new_for_host(neovm_host_abi::HostKind::Wasm);
+    let mut eval = Context::new();
 
     crate::emacs_core::environment::install_host_environment_snapshot(&mut eval);
 
@@ -235,9 +236,10 @@ fn wasm_startup_has_no_native_process_environment() {
 }
 
 #[test]
+#[cfg(target_family = "wasm")]
 fn wasm_startup_uses_a_virtual_temporary_directory() {
     assert_eq!(
-        crate::emacs_core::fileio::host_temporary_directory(neovm_host_abi::HostKind::Wasm),
+        crate::emacs_core::fileio::host_temporary_directory(),
         PathBuf::from("/tmp"),
     );
 }

@@ -36,7 +36,6 @@ impl Context {
         registers: RegisterManager,
         bookmarks: BookmarkManager,
         watchers: VariableWatcherList,
-        host: neovm_host_abi::HostKind,
     ) -> Self {
         let dumped_function_surface = obarray.clone();
         let mut obarray = obarray;
@@ -61,7 +60,6 @@ impl Context {
             obarray.symbol_value_id_or_nil(core_eval_symbols.throw_on_input_symbol);
 
         let mut ev = Self {
-            host_kind: host,
             tagged_heap,
             pdump_image: None,
             after_pdump_load_hook_pending: false,
@@ -204,12 +202,19 @@ impl Context {
         };
         ev.setup_thread_locals();
 
-        // Rebuild the builtin subr registry after pdump restore. The dumped
-        // obarray already carries the authoritative runtime function-cell
-        // surface, so restore that surface immediately afterward.
-        builtins::init_builtins(&mut ev, host);
+        // Rebuild the builtin subr registry after pdump restore. Lisp-defined
+        // function cells belong to the image; native subr cells belong to the
+        // consumer binary and stay as installed by its registrars.
+        builtins::init_builtins(&mut ev);
         for (sym_id, symbol) in dumped_function_surface.iter_symbols() {
-            if !symbol.function.is_nil() {
+            if symbol.function.is_subr() {
+                // Native entry points belong to the current binary. A
+                // producer-only primitive must become absent instead of
+                // retaining an uncallable dumped function cell.
+                if lookup_global_subr_entry(sym_id).is_none() {
+                    ev.obarray.fmakunbound_id(sym_id);
+                }
+            } else if !symbol.function.is_nil() {
                 ev.obarray.set_symbol_function_id(sym_id, symbol.function);
             } else if dumped_function_surface.is_function_unbound_id(sym_id) {
                 ev.obarray.fmakunbound_id(sym_id);
@@ -218,11 +223,14 @@ impl Context {
             }
         }
 
-        if host != neovm_host_abi::HostKind::Wasm
-            && let Some(subfeatures) = super::super::process::make_network_process_subfeatures()
-        {
-            ev.provide_value(Value::symbol("make-network-process"), Some(subfeatures))
-                .expect("startup make-network-process provide should succeed");
+        std::cfg_select! {
+            target_family = "wasm" => {}
+            _ => {
+                if let Some(subfeatures) = super::super::process::make_network_process_subfeatures() {
+                    ev.provide_value(Value::symbol("make-network-process"), Some(subfeatures))
+                        .expect("startup make-network-process provide should succeed");
+                }
+            }
         }
 
         // The fringe-bitmap registry is reconstructed empty by `from_dump` (it

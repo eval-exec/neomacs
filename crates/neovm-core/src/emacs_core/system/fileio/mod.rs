@@ -39,22 +39,13 @@ use super::value::{
 };
 use file_error_class::{FileErrorClass, FileErrorReport};
 
-fn native_temporary_directory() -> PathBuf {
+pub(crate) fn host_temporary_directory() -> PathBuf {
     std::cfg_select! {
         target_family = "wasm" => {
-            panic!("a WebAssembly target has no native temporary directory")
+            PathBuf::from("/tmp")
         }
         _ => {
             std::env::temp_dir()
-        }
-    }
-}
-
-pub(crate) fn host_temporary_directory(host: neovm_host_abi::HostKind) -> PathBuf {
-    match host {
-        neovm_host_abi::HostKind::Wasm => PathBuf::from("/tmp"),
-        neovm_host_abi::HostKind::Desktop | neovm_host_abi::HostKind::Android => {
-            native_temporary_directory()
         }
     }
 }
@@ -2853,7 +2844,7 @@ pub(crate) fn builtin_make_temp_file(eval: &mut Context, args: Vec<Value>) -> Ev
         Some(_) => None,
     };
     let temp_dir = temporary_file_directory_for_eval(eval)
-        .unwrap_or_else(|| path_to_lisp_file_name(&host_temporary_directory(eval.host_kind)));
+        .unwrap_or_else(|| path_to_lisp_file_name(&host_temporary_directory()));
 
     let path = make_temp_file_impl(
         eval,
@@ -2890,7 +2881,7 @@ pub(crate) fn builtin_make_nearby_temp_file(eval: &mut Context, args: Vec<Value>
         Some(value) => expect_lisp_string_strict(value)?,
     };
     let fallback_temp_dir = temporary_file_directory_for_eval(eval)
-        .unwrap_or_else(|| path_to_lisp_file_name(&host_temporary_directory(eval.host_kind)));
+        .unwrap_or_else(|| path_to_lisp_file_name(&host_temporary_directory()));
     let (temp_dir, file_prefix) =
         split_nearby_temp_prefix(&prefix).unwrap_or_else(|| (fallback_temp_dir, prefix.clone()));
 
@@ -7279,11 +7270,8 @@ pub(crate) fn builtin_do_auto_save(
 // Bootstrap variables
 // ===========================================================================
 
-pub fn register_bootstrap_vars(
-    obarray: &mut crate::emacs_core::symbol::Obarray,
-    host: neovm_host_abi::HostKind,
-) {
-    let temporary_file_directory = host_temporary_directory(host).to_string_lossy().to_string();
+pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
+    let temporary_file_directory = host_temporary_directory().to_string_lossy().to_string();
     obarray.set_symbol_value("file-name-coding-system", Value::NIL);
     obarray.make_special("file-name-coding-system");
     obarray.set_symbol_value("default-file-name-coding-system", Value::NIL);

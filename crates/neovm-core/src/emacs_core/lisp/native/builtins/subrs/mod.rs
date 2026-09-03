@@ -118,15 +118,12 @@ impl EvaluatorCompatibility<EvaluatorCompatibilityComplete> {
 /// initialization point. The remaining declarations are typed compatibility
 /// entries awaiting localization; every path installs a [`SubrSpec`] in the
 /// same static registry.
-pub(crate) fn register_subrs(
-    ctx: &mut crate::emacs_core::eval::Context,
-    host: neovm_host_abi::HostKind,
-) {
+pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     use crate::emacs_core::value::*;
 
     #[cfg(windows)]
     crate::emacs_core::w32::register_subrs(ctx);
-    lcms::register_subrs(ctx, host);
+    lcms::register_subrs(ctx);
     // Diagnostics-only VM-profiler control subrs (feature `vm-profile`).
     #[cfg(feature = "vm-profile")]
     {
@@ -5285,7 +5282,7 @@ pub(crate) fn register_subrs(
         )
         .placeholder(NoEvalPlaceholder::Nil),
     );
-    file_notify::register_subrs(ctx, host);
+    file_notify::register_subrs(ctx);
     ctx.register_subr(SubrSpec::new(
         "lock-buffer",
         NativeFn::ContextVec(crate::emacs_core::filelock::builtin_lock_buffer),

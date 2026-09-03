@@ -4328,20 +4328,10 @@ fn run_temacs_dump_mode(dump_mode: LoadupDumpMode, startup: &StartupOptions) {
     );
 
     let invocation = raw_dump_loadup_invocation(startup, dump_mode);
-    let portable_seed =
-        std::env::var_os(neovm_core::emacs_core::pdump::PORTABLE_RUNTIME_IMAGE_ENV).is_some();
-    let eval = if portable_seed {
-        neovm_core::emacs_core::load::create_bootstrap_evaluator_for_loadup_on_host(
-            BOOTSTRAP_CORE_FEATURES,
-            &invocation,
-            neomacs_app::host::HostKind::Wasm,
-        )
-    } else {
-        neovm_core::emacs_core::load::create_bootstrap_evaluator_for_loadup(
-            BOOTSTRAP_CORE_FEATURES,
-            &invocation,
-        )
-    }
+    let eval = neovm_core::emacs_core::load::create_bootstrap_evaluator_for_loadup(
+        BOOTSTRAP_CORE_FEATURES,
+        &invocation,
+    )
     .expect("temacs bootstrap dump should succeed");
 
     if let Some(request) = eval.shutdown_request()
