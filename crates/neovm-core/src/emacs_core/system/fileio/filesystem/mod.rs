@@ -121,6 +121,9 @@ pub trait EditorFileSystem {
     fn remove_directory(&self, path: &Path, recursive: bool) -> io::Result<()>;
     fn rename(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()>;
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
+    fn read_link(&self, _path: &Path) -> io::Result<PathBuf> {
+        Err(io::Error::from(io::ErrorKind::InvalidInput))
+    }
 
     fn same_file(&self, left: &Path, right: &Path) -> io::Result<bool> {
         Ok(self.canonicalize(left)? == self.canonicalize(right)?)
