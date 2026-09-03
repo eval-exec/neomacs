@@ -3,6 +3,7 @@ import init, {
   worker_protocol_version,
 } from "./neomacs_wasm.js";
 import { installBrowserInput } from "./browser-input.mjs";
+import { initializeWasmFrontend } from "./wasm-bootstrap.mjs";
 
 const MAILBOX_CAPACITY = 1024 * 1024;
 const MAILBOX_HEADER_BYTES = 16;
@@ -103,7 +104,10 @@ async function start() {
     throw new Error("this browser needs JSPI or cross-origin isolation for Atomics input waits");
   }
 
-  await init();
+  await initializeWasmFrontend(
+    init,
+    new URL("./neomacs_wasm_bg.wasm", import.meta.url),
+  );
   mailbox = globalThis.crossOriginIsolated
     ? new SharedArrayBuffer(MAILBOX_HEADER_BYTES + MAILBOX_CAPACITY)
     : null;
