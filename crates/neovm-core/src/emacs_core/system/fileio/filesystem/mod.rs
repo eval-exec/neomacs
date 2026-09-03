@@ -77,6 +77,13 @@ pub struct WriteRequest {
     pub sync: bool,
 }
 
+/// Kind and initial contents of an exclusively created temporary entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TemporaryEntry<'a> {
+    File(&'a [u8]),
+    Directory,
+}
+
 /// Filesystem operations whose synchronous semantics are observable by Lisp.
 ///
 /// Browser implementations may suspend the Wasm stack while the Worker awaits
@@ -94,6 +101,22 @@ pub trait EditorFileSystem {
         request: WriteRequest,
     ) -> io::Result<FileMetadata>;
     fn create_directory(&self, path: &Path, parents: bool) -> io::Result<()>;
+    fn create_temporary(&self, path: &Path, entry: TemporaryEntry<'_>) -> io::Result<()> {
+        match entry {
+            TemporaryEntry::File(contents) => {
+                self.write(
+                    path,
+                    contents,
+                    WriteRequest {
+                        mode: WriteMode::CreateNew,
+                        sync: false,
+                    },
+                )?;
+                Ok(())
+            }
+            TemporaryEntry::Directory => self.create_directory(path, false),
+        }
+    }
     fn remove_file(&self, path: &Path) -> io::Result<()>;
     fn remove_directory(&self, path: &Path, recursive: bool) -> io::Result<()>;
     fn rename(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()>;
