@@ -147,6 +147,7 @@ impl Context {
             input_rx: None,
             host_input_wait_backend: None,
             runtime_resource_store: None,
+            editor_file_system: crate::emacs_core::fileio::default_editor_file_system(),
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
