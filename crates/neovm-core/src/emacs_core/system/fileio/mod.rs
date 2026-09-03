@@ -6413,7 +6413,7 @@ pub(crate) fn builtin_insert_file_contents(
             ErrorKind::IsADirectory,
             "mounted runtime path is a directory",
         )),
-        None => fs::read(&resolved_path),
+        None => eval.editor_file_system().read(&resolved_path),
     };
     let contents_bytes = match contents_result {
         Ok(contents) => contents,
@@ -6571,8 +6571,8 @@ pub(crate) fn builtin_insert_file_contents(
         let _ = eval.buffers.set_buffer_modified_flag(current_id, false);
         // Store file modification time (GNU: insert-file-contents stores
         // current_buffer->modtime = mtime; current_buffer->modtime_size = st_size).
-        if let Ok(meta) = std::fs::metadata(lisp_file_name_to_path_buf(&resolved))
-            && let Ok(mtime) = meta.modified()
+        if let Ok(meta) = eval.editor_file_system().metadata(&resolved_path, true)
+            && let Some(mtime) = meta.modified
         {
             let dur = mtime
                 .duration_since(std::time::UNIX_EPOCH)
@@ -6582,7 +6582,7 @@ pub(crate) fn builtin_insert_file_contents(
                     sec: dur.as_secs() as i64,
                     nsec: dur.subsec_nanos() as i32,
                 });
-                buf.modtime_size = Some(meta.len() as i64);
+                buf.modtime_size = Some(meta.len as i64);
             }
         }
         if empty_undo_list_p {
@@ -6873,8 +6873,26 @@ pub(crate) fn builtin_write_region(
     super::filelock::lock_file(eval, &lock_name)?;
 
     // --- Write encoded bytes and handle fsync ---
+    let inhibit_fsync = eval
+        .visible_variable_value_or_nil("write-region-inhibit-fsync")
+        .is_truthy();
     let write_result = (|| {
-        let file = write_bytes_to_file_with_mode(&encoded.bytes, &resolved_path, append_mode)
+        let write_mode = match append_mode {
+            FileWriteMode::Truncate => WriteMode::Truncate,
+            FileWriteMode::Append => WriteMode::Append,
+            FileWriteMode::Seek(offset) => WriteMode::At(offset),
+            FileWriteMode::Excl => WriteMode::CreateNew,
+        };
+        let metadata = eval
+            .editor_file_system()
+            .write(
+                &resolved_path,
+                &encoded.bytes,
+                WriteRequest {
+                    mode: write_mode,
+                    sync: !inhibit_fsync,
+                },
+            )
             .map_err(|err| {
                 // GNU `Fwrite_region` reports *any* open failure via
                 // `report_file_errno ("Opening output file", filename, open_errno)`
@@ -6890,32 +6908,10 @@ pub(crate) fn builtin_write_region(
                 )
             })?;
 
-        // fsync after write unless write-region-inhibit-fsync is non-nil.
-        let inhibit_fsync = eval
-            .visible_variable_value_or_nil("write-region-inhibit-fsync")
-            .is_truthy();
-        if !inhibit_fsync {
-            file.sync_all().map_err(|err| {
-                signal_file_action_error_value(
-                    err,
-                    "Writing to",
-                    Value::heap_string(resolved.clone()),
-                )
-            })?;
-        }
-        drop(file);
-
         let visiting_modtime = if visit.visited_file().is_some() {
-            let meta = std::fs::metadata(&resolved_path).map_err(|err| {
+            let mtime = metadata.modified.ok_or_else(|| {
                 signal_file_action_error_value(
-                    err,
-                    "Writing to",
-                    Value::heap_string(resolved.clone()),
-                )
-            })?;
-            let mtime = meta.modified().map_err(|err| {
-                signal_file_action_error_value(
-                    err,
+                    std::io::Error::other("filesystem did not provide a modification time"),
                     "Writing to",
                     Value::heap_string(resolved.clone()),
                 )
@@ -6926,7 +6922,7 @@ pub(crate) fn builtin_write_region(
             Some((
                 dur.as_secs() as i64,
                 dur.subsec_nanos() as i32,
-                meta.len() as i64,
+                metadata.len as i64,
             ))
         } else {
             None
