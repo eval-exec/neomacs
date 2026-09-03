@@ -7,8 +7,8 @@ use crate::emacs_core::value::Value;
 use crate::tagged::header::SubrFn;
 
 mod native_host;
+mod native_host_empty;
 mod subrs;
-mod target_filtered;
 
 fn zero(_ctx: &mut Context) -> crate::emacs_core::error::EvalResult {
     Ok(Value::NIL)
@@ -42,15 +42,15 @@ fn compiled_subr_batch_is_the_executable_declaration_catalog() {
 }
 
 #[test]
-fn target_filtered_batch_can_represent_no_subrs_on_this_target() {
-    assert!(target_filtered::SUBRS.specs().is_empty());
+fn native_host_batch_can_be_empty_after_target_filtering() {
+    assert!(native_host_empty::SUBRS.specs().is_empty());
     assert_eq!(
-        target_filtered::SUBRS.portability(),
+        native_host_empty::SUBRS.portability(),
         SubrPortability::TargetSpecific,
     );
 
     let mut ctx = Context::new();
-    target_filtered::register_subrs(&mut ctx);
+    native_host_empty::register_subrs(&mut ctx);
 }
 
 #[test]
