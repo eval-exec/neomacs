@@ -23,10 +23,15 @@ impl TaggedHeap {
     /// the dump rule: the first partition cycle must be the STW full trace
     /// that promotes + blackens the image, regardless of earlier bootstraps.
     pub fn should_run_concurrent(&self) -> bool {
-        if self.partition_dump {
-            self.dump_blackened
-        } else {
-            self.bootstrap_collected
+        std::cfg_select! {
+            target_family = "wasm" => { false }
+            _ => {
+                if self.partition_dump {
+                    self.dump_blackened
+                } else {
+                    self.bootstrap_collected
+                }
+            }
         }
     }
 
@@ -36,7 +41,10 @@ impl TaggedHeap {
     /// `concurrent_begin`/`launch_concurrent_mark` instead of the STW
     /// bootstrap.
     pub fn is_partition_first_cycle(&self) -> bool {
-        self.partition_dump && !self.dump_blackened
+        std::cfg_select! {
+            target_family = "wasm" => { false }
+            _ => { self.partition_dump && !self.dump_blackened }
+        }
     }
 
     /// Arm the concurrent first partition cycle (see the field doc).
@@ -337,9 +345,7 @@ impl TaggedHeap {
             mapped_cons_ranges: self.staged_mapped_cons_scan.take(),
             mapped_veclikes: self.staged_mapped_veclikes.take(),
         };
-        gc_thread()
-            .send(GcRequest::ConcurrentMark(job))
-            .expect("neovm-gc thread is gone");
+        launch_background_mark(job);
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
         self.pace_mark_start = Some(crate::host_time::Instant::now());
