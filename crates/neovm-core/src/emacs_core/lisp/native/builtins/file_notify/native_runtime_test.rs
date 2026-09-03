@@ -365,3 +365,44 @@ fn windows_recursive_watch_delivers_an_ordered_rename_pair() {
     w32notify_rm_watch(vec![descriptor]).expect("remove Windows rename watch");
     reset_file_notify_thread_locals();
 }
+
+/// GNU's w32notify worker treats deletion of the watched directory as normal
+/// descriptor invalidation: the pending native read ends, `w32notify-valid-p'
+/// becomes nil, and no asynchronous `file-notify-error' escapes through the
+/// command loop (src/w32notify.c:257-274, 686-700).
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_deleted_directory_invalidates_watch_without_a_lisp_error() {
+    crate::test_utils::init_test_tracing();
+    reset_file_notify_thread_locals();
+    let root = workspace_temp_dir();
+    let watched = root.path().join("watched");
+    std::fs::create_dir(&watched).expect("create watched directory");
+
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let callback = eval
+        .eval_str("(lambda (_event))")
+        .expect("create Windows watch callback");
+    let descriptor = w32notify_add_watch(
+        &mut eval,
+        vec![
+            Value::string(watched.display().to_string()),
+            Value::list(vec![Value::symbol("file-name")]),
+            callback,
+        ],
+    )
+    .expect("add Windows directory watch");
+    assert!(native_watch_is_valid(descriptor));
+
+    std::fs::remove_dir(&watched).expect("delete watched directory");
+    let read = eval.eval_str("(read-event nil nil 5)");
+    assert!(
+        read.is_ok(),
+        "watch invalidation must not escape as a Lisp error: {read:?}"
+    );
+    assert!(
+        !native_watch_is_valid(descriptor),
+        "the descriptor remained valid after its directory was deleted"
+    );
+    reset_file_notify_thread_locals();
+}
