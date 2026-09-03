@@ -461,9 +461,10 @@ fn windows_callback_change_is_observed_by_an_already_rearmed_watch() {
           (lambda (event)
             (setq neovm-test-w32-rearm-events
                   (cons event neovm-test-w32-rearm-events))
-            (when neovm-test-w32-rearm-trigger
-              (setq neovm-test-w32-rearm-trigger nil)
-              (set-file-times neovm-test-w32-rearm-file 0 'nofollow))))
+            (if neovm-test-w32-rearm-trigger
+                (progn
+                  (setq neovm-test-w32-rearm-trigger nil)
+                  (set-file-times neovm-test-w32-rearm-file 0 'nofollow)))))
         "#,
         )
         .expect("create callback that immediately changes the watched file");
