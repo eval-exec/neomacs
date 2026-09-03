@@ -1108,30 +1108,8 @@ pub fn file_readable_p(filename: &str) -> bool {
 }
 
 /// Return true if FILENAME is writable.
-/// Checks if the file can be opened for writing, or if it doesn't exist,
-/// whether the parent directory is writable.
 pub fn file_writable_p(filename: &str) -> bool {
-    let path = Path::new(filename);
-    if path.exists() {
-        fs::OpenOptions::new().write(true).open(filename).is_ok()
-    } else {
-        // File doesn't exist; check if parent directory is writable
-        match path.parent() {
-            Some(parent) if parent.exists() => {
-                // Try to check write permission on the parent directory
-                // by attempting to create a temp file
-                let test_path = parent.join(".neovm_write_test");
-                match fs::File::create(&test_path) {
-                    Ok(_) => {
-                        let _ = fs::remove_file(&test_path);
-                        true
-                    }
-                    Err(_) => false,
-                }
-            }
-            _ => false,
-        }
-    }
+    file_writable_path(Path::new(filename))
 }
 
 /// Return true if FILENAME is an accessible directory.
@@ -3396,22 +3374,18 @@ fn file_writable_path(path: &Path) -> bool {
 
     #[cfg(not(unix))]
     {
-        if path.exists() {
-            fs::OpenOptions::new().write(true).open(path).is_ok()
-        } else {
-            match path.parent() {
-                Some(parent) if parent.exists() => {
-                    let test_path = parent.join(".neovm_write_test");
-                    match fs::File::create(&test_path) {
-                        Ok(_) => {
-                            let _ = fs::remove_file(&test_path);
-                            true
-                        }
-                        Err(_) => false,
-                    }
-                }
-                _ => false,
+        match fs::metadata(path) {
+            // GNU's Windows faccessat(W_OK) is an attribute query: content
+            // writability is denied only by FILE_ATTRIBUTE_READONLY.  In
+            // particular, a directory must not be opened as a regular file.
+            Ok(metadata) => !metadata.permissions().readonly(),
+            // If FILENAME does not exist, GNU asks whether its parent is a
+            // directory.  The parent's read-only attribute does not control
+            // whether entries can be created within a Windows directory.
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                path.parent().is_some_and(Path::is_dir)
             }
+            Err(_) => false,
         }
     }
 }
