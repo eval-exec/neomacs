@@ -1,0 +1,38 @@
+:root {
+  color: #d8dee9;
+  background: #20242c;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+html,
+body,
+#browser-shell {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#browser-status {
+  position: fixed;
+  z-index: 1;
+  margin: 0;
+  padding: 0.65rem 0.8rem;
+  color: #aeb7c6;
+  pointer-events: none;
+}
+
+#browser-status[data-state="ready"] {
+  opacity: 0;
+  transition: opacity 200ms ease-out 500ms;
+}
+
+#browser-status[data-state="failed"] {
+  color: #ff8080;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
