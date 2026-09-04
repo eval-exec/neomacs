@@ -1155,3 +1155,94 @@ fn a_ripe_at_demand_does_not_leave_its_old_deadline_behind() {
         "the deadline that just fired must not stay in the schedule"
     );
 }
+
+// =======================================================================
+// One observation per about_to_wait pass
+// =======================================================================
+//
+// The event loop used to read the clock four separate times in a single pass:
+// once for stats, once for video, once for cursor ticks, once for scheduling.
+// Servicing now happens at the pass's own timestamp, which is earlier than the
+// separate read it replaced. These tests pin the consequence: a deadline that
+// falls inside the collapsed window is deferred by exactly one pass and the
+// loop is armed to wake for it — it is never dropped, and the loop never spins.
+
+#[test]
+fn a_deadline_just_after_the_service_time_defers_and_arms_the_wake() {
+    let mut c = FrameCoordinator::new();
+    let now = t0();
+    let deadline = now.plus(ms(5));
+
+    c.submit_demand(
+        win(1),
+        FrameDemand {
+            invalidation: Invalidation::CompositeOnly {
+                layers: LayerMask::CURSOR_EFFECTS,
+            },
+            cadence: Cadence::At(deadline),
+            reason: DemandReason::CursorAnimation,
+        },
+        now,
+    );
+
+    // Serviced before it is due: no redraw, but the loop is told to wake at
+    // exactly the deadline rather than sleeping past it.
+    let service = c.service_deadlines(now.plus(ms(4)));
+    assert!(service.redraw.is_empty(), "not ripe yet");
+    assert_eq!(service.wake, LoopWake::At(FutureDeadline(deadline)));
+}
+
+#[test]
+fn the_deferred_deadline_is_serviced_on_the_next_pass() {
+    let mut c = FrameCoordinator::new();
+    let now = t0();
+    let deadline = now.plus(ms(5));
+
+    c.submit_demand(
+        win(1),
+        FrameDemand {
+            invalidation: Invalidation::CompositeOnly {
+                layers: LayerMask::CURSOR_EFFECTS,
+            },
+            cadence: Cadence::At(deadline),
+            reason: DemandReason::CursorAnimation,
+        },
+        now,
+    );
+
+    let early = c.service_deadlines(now.plus(ms(4)));
+    assert!(early.redraw.is_empty());
+
+    let ripe = c.service_deadlines(deadline);
+    assert_eq!(ripe.redraw, vec![win(1)], "deferred, never dropped");
+    assert_eq!(ripe.wake, LoopWake::Idle, "and not rearmed once consumed");
+}
+
+#[test]
+fn servicing_twice_at_one_timestamp_is_idempotent() {
+    // The pass services, runs the video producer, then services again at the
+    // *same* timestamp. The second call must find nothing ripe, which is what
+    // lets the debug_assert in that path hold.
+    let mut c = FrameCoordinator::new();
+    let now = t0();
+
+    c.submit_demand(
+        win(1),
+        FrameDemand {
+            invalidation: Invalidation::CompositeOnly {
+                layers: LayerMask::CURSOR_EFFECTS,
+            },
+            cadence: Cadence::At(now.plus(ms(5))),
+            reason: DemandReason::CursorAnimation,
+        },
+        now,
+    );
+
+    let first = c.service_deadlines(now.plus(ms(5)));
+    assert_eq!(first.redraw, vec![win(1)]);
+    let second = c.service_deadlines(now.plus(ms(5)));
+    assert!(
+        second.redraw.is_empty(),
+        "nothing ripe survives one service"
+    );
+}
