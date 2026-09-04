@@ -24001,6 +24001,35 @@ fn bytecode_backtrace_span_is_checked_and_round_trips_both_indices() {
 }
 
 #[test]
+fn oversized_bytecode_backtrace_defers_reading_an_unpublished_cursor_span() {
+    let mut ev = Context::new();
+    let args_start = 17;
+    let nargs = BytecodeBacktraceSpan::LEN_MASK + 1;
+    let side_stack_base = ev.backtrace_args_stack.len();
+
+    // The iterative interpreter keeps its logical top in StackCursor until a
+    // safe point. Installing GNU's pointer/count-shaped backtrace must only
+    // remember that live range, even when it does not fit the packed word.
+    let backtrace =
+        ev.push_backtrace_frame_from_bc_stack(Value::symbol("callee"), args_start, nargs);
+    assert_eq!(ev.backtrace_args_stack.len(), side_stack_base + 1);
+
+    // Backtrace inspection happens after the cursor has been published.
+    ev.bc_buf.resize(args_start + nargs, Value::NIL);
+    let args = match ev.specpdl.last() {
+        Some(SpecBinding::Backtrace { args, .. }) => args,
+        other => panic!("expected bytecode backtrace frame, got {other:?}"),
+    };
+    assert_eq!(ev.backtrace_args_len(args), nargs);
+
+    assert!(matches!(
+        ev.pop_fast_bytecode_backtrace_frame(backtrace),
+        crate::emacs_core::eval::FastBytecodePop::Popped
+    ));
+    assert_eq!(ev.backtrace_args_stack.len(), side_stack_base);
+}
+
+#[test]
 fn compact_saved_binding_options_round_trip_none_and_live_values() {
     let value = Value::fixnum(42);
     assert_eq!(SavedBindingValue::from_option(None).get(), None);

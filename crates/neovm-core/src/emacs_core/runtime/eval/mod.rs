@@ -915,14 +915,23 @@ pub(crate) struct NativeUnwindToken {
 /// GNU stores a pointer and a count in its four-word backtrace entry.  Neomacs
 /// indexes a relocating `Vec<Value>` instead, so the equivalent identity is a
 /// `(start, len)` pair.  The checked packed form fits in the payload of
-/// [`BacktraceArgs`]; callers that cannot be represented fall back to the
-/// owned argument stack, so this type never imposes a semantic limit.
+/// [`BacktraceArgs`]; callers that cannot be represented store full-width
+/// indices in the side stack, so this type never imposes a semantic limit.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BytecodeBacktraceSpan(usize);
 
 impl BytecodeBacktraceSpan {
-    const LEN_BITS: u32 = u16::BITS;
+    // A 32-bit tagged word has only 27 descriptor payload bits. Reserving a
+    // full u16 for the arity would cap the inline stack start at 2047, which
+    // ordinary browser workloads exceed. Calls above the arity limit use the
+    // lossless side-stack representation below, so bias the inline layout
+    // toward the overwhelmingly larger stack-position domain on 32-bit hosts.
+    const LEN_BITS: u32 = if usize::BITS == 32 {
+        u8::BITS
+    } else {
+        u16::BITS
+    };
     const LEN_MASK: usize = (1usize << Self::LEN_BITS) - 1;
     const START_BITS: u32 = BacktraceArgs::PAYLOAD_BITS - Self::LEN_BITS;
     const START_MAX: usize = (1usize << Self::START_BITS) - 1;
@@ -941,6 +950,43 @@ impl BytecodeBacktraceSpan {
     #[inline]
     fn len(self) -> usize {
         self.0 & Self::LEN_MASK
+    }
+}
+
+/// An unpacked bytecode argument span stored outside [`BacktraceArgs`].
+///
+/// The interpreter may hold the current `bc_buf` length in its stack cursor
+/// while installing a call frame. Consequently this records indices only;
+/// it must not dereference `Context::bc_buf` until a GC or backtrace safe point
+/// has published the cursor, matching GNU's live pointer/count backtrace.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BytecodeBacktraceRange {
+    start: usize,
+    len: usize,
+}
+
+impl BytecodeBacktraceRange {
+    fn new(start: usize, len: usize) -> Self {
+        start
+            .checked_add(len)
+            .expect("a bytecode backtrace range must not overflow usize");
+        Self { start, len }
+    }
+}
+
+/// Cold storage addressed by an evaluated [`BacktraceArgs`] descriptor.
+///
+/// Generic calls own copied values. A bytecode span that does not fit the
+/// one-word inline encoding owns only its full-width indices, preserving GNU's
+/// zero-copy pointer/count semantics without imposing a target-width limit.
+enum BacktraceArgStorage {
+    Values(LispArgVec),
+    BytecodeStack(BytecodeBacktraceRange),
+}
+
+impl BacktraceArgStorage {
+    fn clear(&mut self) {
+        *self = Self::Values(LispArgVec::new());
     }
 }
 
@@ -2986,10 +3032,11 @@ pub struct Context {
     /// single save/truncate side vector by keeping VM dynamic roots in explicit
     /// nested frames.
     vm_root_frames: Vec<VmRootFrame>,
-    /// Evaluated arguments for active backtrace frames. GNU backtrace entries
+    /// Out-of-line storage for active backtrace frames. GNU backtrace entries
     /// store an argument pointer/count; keep Neomacs' hot specpdl entry
-    /// similarly compact while this side stack owns the exact-GC roots.
-    backtrace_args_stack: Vec<LispArgVec>,
+    /// similarly compact while this side stack owns copied generic-call roots
+    /// or full-width bytecode-stack ranges.
+    backtrace_args_stack: Vec<BacktraceArgStorage>,
     /// Exact-GC mirror of GNU eval.c's transient C stack Lisp_Object slots.
     /// Examples include a sequence frame seeing the previous evaluated call's
     /// argument array while it evaluates the next form, and `Flet` retaining
