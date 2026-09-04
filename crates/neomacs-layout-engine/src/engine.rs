@@ -41,10 +41,10 @@ use crate::display_cursor::{CursorSlotWidthRequest, VisualCursorGeometryContext}
 use crate::display_frame_output::{
     FrameContentTransitionHintRenderRequest, FrameLineAnimationHintsRenderRequest,
     FrameOutputIdentity, FrameOutputOwner, FrameOutputStateRenderRequest,
-    FrameThemeTransitionHintRenderRequest, FrameWindowSwitchHintRenderRequest,
-    NavigationIntentObservation, WindowContentTransitionMode, WindowFrameDecorationsRenderRequest,
-    WindowFrameGeometry, WindowFrameGeometryRequest, WindowFrameInfoEffectsRenderRequest,
-    WindowFrameInfoRenderRequest, WindowFrameMetadata,
+    FrameThemeTransitionHintRenderRequest, NavigationIntentObservation,
+    WindowContentTransitionMode, WindowFrameDecorationsRenderRequest, WindowFrameGeometry,
+    WindowFrameGeometryRequest, WindowFrameInfoEffectsRenderRequest, WindowFrameInfoRenderRequest,
+    WindowFrameMetadata,
 };
 use crate::display_mock_frame::layout_mock_frame_content;
 use crate::display_origin::DisplayOrigin;
@@ -1304,10 +1304,6 @@ impl LayoutEngine {
             .render_line_animation_hints(FrameLineAnimationHintsRenderRequest::new(
                 prev_window_infos,
                 curr_window_infos,
-            ));
-        self.frame_output
-            .render_window_switch_hint(FrameWindowSwitchHintRenderRequest::new(
-                previous.selected_text_window(),
             ));
         self.frame_output
             .render_theme_transition_hint(FrameThemeTransitionHintRenderRequest::new(

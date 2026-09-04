@@ -14,7 +14,6 @@ use rustc_hash::FxHashMap;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FrameVisualHistory {
     window_infos: FxHashMap<DisplayWindowId, WindowInfo>,
-    selected_text_window: Option<DisplayWindowId>,
     background: Option<Color>,
 }
 
@@ -23,23 +22,14 @@ impl FrameVisualHistory {
         window_infos: FxHashMap<DisplayWindowId, WindowInfo>,
         background: Color,
     ) -> Self {
-        let selected_text_window = window_infos
-            .values()
-            .find(|info| info.selected && !info.is_minibuffer)
-            .map(|info| info.window_id);
         Self {
             window_infos,
-            selected_text_window,
             background: Some(background),
         }
     }
 
     pub(crate) fn window_infos(&self) -> &FxHashMap<DisplayWindowId, WindowInfo> {
         &self.window_infos
-    }
-
-    pub(crate) const fn selected_text_window(&self) -> Option<DisplayWindowId> {
-        self.selected_text_window
     }
 
     pub(crate) const fn background(&self) -> Option<Color> {
