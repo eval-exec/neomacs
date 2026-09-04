@@ -29,7 +29,11 @@ mod terminal_commands;
 mod terminal_expansion;
 #[cfg(test)]
 mod tests;
+
 mod thread_handle;
+#[cfg(test)]
+#[path = "time_discipline_test.rs"]
+mod time_discipline_test;
 mod transitions;
 mod ui_commands;
 mod window_commands;
