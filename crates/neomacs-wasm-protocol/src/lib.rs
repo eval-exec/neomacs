@@ -15,9 +15,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Wire contract understood by this browser frontend and editor Worker.
 ///
-/// Version 2 defines viewport and font measurements as logical pixels; device
-/// scale remains an independent observation applied by the renderer.
-pub const WORKER_PROTOCOL_VERSION: u16 = 2;
+/// Version 3 keeps browser-observed viewport geometry separate from
+/// editor-owned font-cell measurement. Device scale remains an independent
+/// observation applied by the renderer.
+pub const WORKER_PROTOCOL_VERSION: u16 = 3;
 
 /// Browser color preference sampled for the initial editor frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -34,8 +35,6 @@ pub struct BrowserEditorStartup {
     width: u32,
     height: u32,
     scale_factor: f64,
-    character_width: f32,
-    character_height: f32,
     font_pixel_size: f32,
     color_scheme: BrowserColorScheme,
 }
@@ -45,8 +44,6 @@ impl BrowserEditorStartup {
     pub fn new(
         logical_extent: FrontendLogicalExtent,
         scale_factor: f64,
-        character_width: f32,
-        character_height: f32,
         font_pixel_size: f32,
         color_scheme: BrowserColorScheme,
     ) -> Result<Self, InvalidBrowserEditorStartup> {
@@ -57,8 +54,6 @@ impl BrowserEditorStartup {
             width,
             height,
             scale_factor,
-            character_width,
-            character_height,
             font_pixel_size,
             color_scheme,
         };
@@ -78,12 +73,6 @@ impl BrowserEditorStartup {
         }
         if !self.scale_factor.is_finite() || self.scale_factor <= 0.0 {
             return Err(InvalidBrowserEditorStartup::ScaleFactor);
-        }
-        if !positive_finite(self.character_width) {
-            return Err(InvalidBrowserEditorStartup::CharacterWidth);
-        }
-        if !positive_finite(self.character_height) {
-            return Err(InvalidBrowserEditorStartup::CharacterHeight);
         }
         if !positive_finite(self.font_pixel_size) {
             return Err(InvalidBrowserEditorStartup::FontPixelSize);
@@ -108,11 +97,6 @@ impl BrowserEditorStartup {
     }
 
     #[must_use]
-    pub const fn character_size(&self) -> (f32, f32) {
-        (self.character_width, self.character_height)
-    }
-
-    #[must_use]
     pub const fn font_pixel_size(&self) -> f32 {
         self.font_pixel_size
     }
@@ -133,8 +117,6 @@ pub enum InvalidBrowserEditorStartup {
     UnsupportedProtocol { found: u16 },
     EmptyExtent,
     ScaleFactor,
-    CharacterWidth,
-    CharacterHeight,
     FontPixelSize,
 }
 
@@ -148,12 +130,6 @@ impl Display for InvalidBrowserEditorStartup {
             Self::EmptyExtent => formatter.write_str("browser frame extent must be nonzero"),
             Self::ScaleFactor => {
                 formatter.write_str("browser scale factor must be finite and positive")
-            }
-            Self::CharacterWidth => {
-                formatter.write_str("browser character width must be finite and positive")
-            }
-            Self::CharacterHeight => {
-                formatter.write_str("browser character height must be finite and positive")
             }
             Self::FontPixelSize => {
                 formatter.write_str("browser font size must be finite and positive")
