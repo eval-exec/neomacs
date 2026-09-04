@@ -278,41 +278,37 @@ class BrowserEditorHarness:
             f"worker messages={messages!r}; frame={self.frame_text()!r}"
         )
 
+    def capture_failure_artifacts(self, directory: str) -> None:
+        output = Path(directory)
+        output.mkdir(parents=True, exist_ok=True)
 
-def capture_failure_artifacts(
-    editor: BrowserEditorHarness,
-    directory: str,
-) -> None:
-    output = Path(directory)
-    output.mkdir(parents=True, exist_ok=True)
-
-    errors: list[str] = []
-    try:
-        editor.driver.save_screenshot(str(output / "browser.png"))
-    except Exception as error:  # noqa: BLE001 - diagnostics must not mask the failure
-        errors.append(f"screenshot: {error}")
-    try:
-        (output / "page.html").write_text(editor.driver.page_source, encoding="utf-8")
-    except Exception as error:  # noqa: BLE001 - diagnostics must not mask the failure
-        errors.append(f"page source: {error}")
-    try:
-        state = {
-            "frame_text": editor.frame_text(),
-            "worker_messages": editor.driver.execute_script(
-                "return globalThis.__neomacsMessages || []"
-            ),
-        }
-        (output / "browser-state.json").write_text(
-            json.dumps(state, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-    except Exception as error:  # noqa: BLE001 - diagnostics must not mask the failure
-        errors.append(f"browser state: {error}")
-    if errors:
-        (output / "artifact-errors.txt").write_text(
-            "\n".join(errors) + "\n",
-            encoding="utf-8",
-        )
+        errors: list[str] = []
+        try:
+            self.driver.save_screenshot(str(output / "browser.png"))
+        except Exception as error:  # noqa: BLE001 - preserve the original failure
+            errors.append(f"screenshot: {error}")
+        try:
+            (output / "page.html").write_text(self.driver.page_source, encoding="utf-8")
+        except Exception as error:  # noqa: BLE001 - preserve the original failure
+            errors.append(f"page source: {error}")
+        try:
+            state = {
+                "frame_text": self.frame_text(),
+                "worker_messages": self.driver.execute_script(
+                    "return globalThis.__neomacsMessages || []"
+                ),
+            }
+            (output / "browser-state.json").write_text(
+                json.dumps(state, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception as error:  # noqa: BLE001 - preserve the original failure
+            errors.append(f"browser state: {error}")
+        if errors:
+            (output / "artifact-errors.txt").write_text(
+                "\n".join(errors) + "\n",
+                encoding="utf-8",
+            )
 
 
 def main() -> None:
@@ -403,7 +399,7 @@ def main() -> None:
         print(f"PASS: browser filesystem persisted {token} across reload")
     except Exception:
         if args.artifacts_dir:
-            capture_failure_artifacts(editor, args.artifacts_dir)
+            editor.capture_failure_artifacts(args.artifacts_dir)
         raise
     finally:
         driver.quit()
