@@ -420,7 +420,10 @@ impl RenderApp {
     /// those one-shot targets; the decoder's next PTS becomes a coordinator-
     /// owned service wake rather than parallel lifecycle state.
     #[cfg(feature = "video")]
-    pub(super) fn process_video_frames(&mut self, now: std::time::Instant) {
+    pub(super) fn process_video_frames(
+        &mut self,
+        now: neomacs_display_protocol::frame_time::EventTime,
+    ) {
         tracing::trace!("process_video_frames called");
         let presentations = self
             .frame_windows
@@ -446,15 +449,20 @@ impl RenderApp {
                     .presented_video_ids()
                     .map(move |id| (id, interval))
             });
-        let request = video_service_request(now, presentations);
+        // `neomacs-video` keeps its own `Instant` clock domain; bridge explicitly
+        // rather than leaking EventTime into that crate's API.
+        let request = video_service_request(now.into_instant(), presentations);
         let Some(renderer) = self.renderer.as_mut() else {
             self.frame_coordinator
                 .reconcile_video_service_deadline(None);
             return;
         };
         let service = renderer.process_pending_videos(request).clone();
-        self.frame_coordinator
-            .reconcile_video_service_deadline(service.next_deadline);
+        self.frame_coordinator.reconcile_video_service_deadline(
+            service
+                .next_deadline
+                .map(neomacs_display_protocol::frame_time::EventTime::from_observed_instant),
+        );
         for ready in service.ready_frames {
             for (key, window_state) in &self.frame_windows.windows {
                 let native_id = match key {
@@ -478,7 +486,11 @@ impl RenderApp {
     }
 
     #[cfg(not(feature = "video"))]
-    pub(super) fn process_video_frames(&mut self, _now: std::time::Instant) {}
+    pub(super) fn process_video_frames(
+        &mut self,
+        _now: neomacs_display_protocol::frame_time::EventTime,
+    ) {
+    }
 
     /// Render pending shader-surface passes (call each frame before the main
     /// pass samples the surface textures).

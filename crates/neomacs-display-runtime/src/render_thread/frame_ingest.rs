@@ -504,7 +504,9 @@ impl RenderApp {
             let mut deferred = std::collections::HashMap::new();
             let mut made_progress = false;
             while let Some(display_state) = queued.pop_front() {
-                super::frame_stats::note_scene_commit(std::time::Instant::now());
+                super::frame_stats::note_scene_commit(
+                    neomacs_display_protocol::frame_time::observe_platform_now(),
+                );
                 let frame_id = display_state.frame_placement.frame();
                 let parent_id = display_state
                     .frame_placement
