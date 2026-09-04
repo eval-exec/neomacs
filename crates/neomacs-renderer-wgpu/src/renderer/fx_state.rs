@@ -8,12 +8,13 @@
 //! is a whole-struct move instead of a per-field copy list.
 //!
 //! The seven free-running animation clocks in [`EffectClocks`] are the one
-//! exception: the renderer always holds valid `Instant`s while a fresh
+//! exception: the renderer always holds valid `EventTime`s while a fresh
 //! (default) `RendererFrameEffects` holds `None`, which on apply preserves
 //! the renderer's current clocks. Fields deliberately NOT transferred
 //! (`aurora_start`, `render_start_time`, and the effect duration settings)
 //! live directly on `WgpuRenderer`, outside these structs.
 
+use neomacs_display_protocol::frame_time::{EventTime, observe_platform_now};
 use neomacs_display_protocol::types::Rect;
 
 /// Entry for an active scroll momentum indicator
@@ -21,7 +22,7 @@ pub(crate) struct ScrollMomentumEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
     pub(crate) direction: i32, // 1 = down, -1 = up
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -39,21 +40,21 @@ pub(crate) struct CursorGhostEntry {
     pub(crate) y: f32,
     pub(crate) width: f32,
     pub(crate) height: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
 }
 
 /// Entry for cursor sonar ping
 pub(crate) struct SonarPingEntry {
     pub(crate) cx: f32,
     pub(crate) cy: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
 pub(crate) struct SparkleBurstEntry {
     pub(crate) cx: f32,
     pub(crate) cy: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     /// Random seed for particle directions
     pub(crate) seed: u32,
 }
@@ -63,7 +64,7 @@ pub(crate) struct EdgeGlowEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
     pub(crate) at_top: bool,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -80,7 +81,7 @@ pub(crate) struct RainDrop {
 pub(crate) struct RippleWaveEntry {
     pub(crate) x: f32,
     pub(crate) y: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -90,7 +91,7 @@ pub(crate) struct CursorParticle {
     pub(crate) y: f32,
     pub(crate) vx: f32,
     pub(crate) vy: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) lifetime: std::time::Duration,
 }
 
@@ -100,7 +101,7 @@ pub(crate) struct HeatMapEntry {
     pub(crate) y: f32,
     pub(crate) width: f32,
     pub(crate) height: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
 }
 
 /// Entry for window edge snap indicator
@@ -109,7 +110,7 @@ pub(crate) struct EdgeSnapEntry {
     pub(crate) mode_line_height: f32,
     pub(crate) at_top: bool,
     pub(crate) at_bottom: bool,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -117,7 +118,7 @@ pub(crate) struct EdgeSnapEntry {
 pub(crate) struct ClickHaloEntry {
     pub(crate) x: f32,
     pub(crate) y: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -127,7 +128,7 @@ pub(crate) struct ScrollVelocityFadeEntry {
     pub(crate) bounds: Rect,
     /// Scroll delta magnitude (characters scrolled)
     pub(crate) velocity: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -135,7 +136,7 @@ pub(crate) struct ScrollVelocityFadeEntry {
 pub(crate) struct WindowFadeEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
     pub(crate) intensity: f32,
 }
@@ -148,7 +149,7 @@ pub(crate) struct TitleFadeEntry {
     pub(crate) old_text: String,
     #[allow(dead_code)]
     pub(crate) new_text: String,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -161,7 +162,7 @@ pub(crate) struct LineAnimEntry {
     /// Initial Y offset (negative=insertion slide-down, positive=deletion slide-up)
     pub(crate) initial_offset: f32,
     /// When the animation started
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     /// Duration of the animation
     pub(crate) duration: std::time::Duration,
 }
@@ -174,7 +175,7 @@ pub(crate) struct ModeLineFadeEntry {
     pub(crate) mode_line_h: f32,
     pub(crate) bounds_x: f32,
     pub(crate) bounds_w: f32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -182,7 +183,7 @@ pub(crate) struct ModeLineFadeEntry {
 pub(crate) struct TextFadeEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -192,7 +193,7 @@ pub(crate) struct ScrollSpacingEntry {
     pub(crate) bounds: Rect,
     /// +1 = scroll down (content moves up), -1 = scroll up
     pub(crate) direction: i32,
-    pub(crate) started: std::time::Instant,
+    pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
 
@@ -208,7 +209,7 @@ pub(crate) struct WindowDimState {
 /// Typing ripple state: active ripples as (center_x, center_y, spawn_instant).
 #[derive(Default)]
 pub(crate) struct TypingRippleState {
-    pub(crate) active: Vec<(f32, f32, std::time::Instant)>,
+    pub(crate) active: Vec<(f32, f32, EventTime)>,
 }
 
 /// Line insertion/deletion slide animations.
@@ -235,7 +236,7 @@ pub(crate) struct TitleFadeState {
 #[derive(Default)]
 pub(crate) struct BorderTransitionState {
     /// Per-window border transition state: (window_id, is_becoming_active, start_time)
-    pub(crate) transitions: Vec<(i64, bool, std::time::Instant)>,
+    pub(crate) transitions: Vec<(i64, bool, EventTime)>,
     /// Previous selected window for border transition detection
     pub(crate) prev_selected: i64,
 }
@@ -263,7 +264,7 @@ pub(crate) struct ScrollSpacingState {
 /// Cursor trail state: recent positions as (x, y, w, h, instant).
 #[derive(Default)]
 pub(crate) struct CursorTrailState {
-    pub(crate) positions: Vec<(f32, f32, f32, f32, std::time::Instant)>,
+    pub(crate) positions: Vec<(f32, f32, f32, f32, EventTime)>,
     pub(crate) last_pos: (f32, f32),
 }
 
@@ -276,19 +277,19 @@ pub(crate) struct NoiseGrainState {
 /// Cursor wake animation trigger time.
 #[derive(Default)]
 pub(crate) struct CursorWakeState {
-    pub(crate) started: Option<std::time::Instant>,
+    pub(crate) started: Option<EventTime>,
 }
 
 /// Cursor magnetism entries as (x, y, time).
 #[derive(Default)]
 pub(crate) struct CursorMagnetismState {
-    pub(crate) entries: Vec<(f32, f32, std::time::Instant)>,
+    pub(crate) entries: Vec<(f32, f32, EventTime)>,
 }
 
 /// Cursor comet positions as (x, y, w, h, time).
 #[derive(Default)]
 pub(crate) struct CursorCometState {
-    pub(crate) positions: Vec<(f32, f32, f32, f32, std::time::Instant)>,
+    pub(crate) positions: Vec<(f32, f32, f32, f32, EventTime)>,
 }
 
 /// Cursor particle system state.
@@ -314,7 +315,7 @@ pub(crate) struct ScrollVelocityState {
 /// Resize padding animation trigger time.
 #[derive(Default)]
 pub(crate) struct ResizePaddingState {
-    pub(crate) started: Option<std::time::Instant>,
+    pub(crate) started: Option<EventTime>,
 }
 
 /// Scroll momentum indicators.
@@ -354,7 +355,7 @@ pub(crate) struct LightningBoltState {
 pub(crate) struct CursorPendulumState {
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
-    pub(crate) swing_start: Option<std::time::Instant>,
+    pub(crate) swing_start: Option<EventTime>,
 }
 
 /// Cursor sparkle bursts.
@@ -368,13 +369,13 @@ pub(crate) struct SparkleBurstState {
 pub(crate) struct CursorMetronomeState {
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
-    pub(crate) tick_start: Option<std::time::Instant>,
+    pub(crate) tick_start: Option<EventTime>,
 }
 
 /// Cursor ripple ring state.
 #[derive(Default)]
 pub(crate) struct RippleRingState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<EventTime>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -382,7 +383,7 @@ pub(crate) struct RippleRingState {
 /// Cursor shockwave state.
 #[derive(Default)]
 pub(crate) struct ShockwaveState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<EventTime>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -390,7 +391,7 @@ pub(crate) struct ShockwaveState {
 /// Cursor bubble state.
 #[derive(Default)]
 pub(crate) struct BubbleState {
-    pub(crate) spawn_time: Option<std::time::Instant>,
+    pub(crate) spawn_time: Option<EventTime>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -398,7 +399,7 @@ pub(crate) struct BubbleState {
 /// Cursor firework state.
 #[derive(Default)]
 pub(crate) struct FireworkState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<EventTime>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -406,7 +407,7 @@ pub(crate) struct FireworkState {
 /// Cursor lightning strike state.
 #[derive(Default)]
 pub(crate) struct CursorLightningState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<EventTime>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -414,7 +415,7 @@ pub(crate) struct CursorLightningState {
 /// Cursor snowflake state.
 #[derive(Default)]
 pub(crate) struct SnowflakeState {
-    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) start: Option<EventTime>,
     pub(crate) last_x: f32,
     pub(crate) last_y: f32,
 }
@@ -453,7 +454,7 @@ pub(crate) struct EdgeSnapState {
 /// Cursor error pulse trigger time.
 #[derive(Default)]
 pub(crate) struct ErrorPulseState {
-    pub(crate) started: Option<std::time::Instant>,
+    pub(crate) started: Option<EventTime>,
 }
 
 /// All per-effect animation state transferred between the renderer and a
@@ -508,22 +509,24 @@ pub(crate) struct EffectsState {
 #[derive(Clone, Copy)]
 pub(crate) struct EffectClocks {
     /// Last dim update time for smooth interpolation
-    pub(crate) last_dim_tick: std::time::Instant,
+    pub(crate) last_dim_tick: EventTime,
     /// Start time for pulse phase calculation
-    pub(crate) cursor_pulse_start: std::time::Instant,
+    pub(crate) cursor_pulse_start: EventTime,
     /// Search pulse start time
-    pub(crate) search_pulse_start: std::time::Instant,
-    pub(crate) cursor_color_cycle_start: std::time::Instant,
-    pub(crate) focus_ring_start: std::time::Instant,
+    pub(crate) search_pulse_start: EventTime,
+    pub(crate) cursor_color_cycle_start: EventTime,
+    pub(crate) focus_ring_start: EventTime,
     /// Last lightning bolt regeneration time
-    pub(crate) lightning_bolt_last: std::time::Instant,
+    pub(crate) lightning_bolt_last: EventTime,
     #[allow(dead_code)]
-    pub(crate) rain_last_spawn: std::time::Instant,
+    pub(crate) rain_last_spawn: EventTime,
 }
 
 impl Default for EffectClocks {
     fn default() -> Self {
-        let now = std::time::Instant::now();
+        // Adapter read: the renderer minting its own epoch at construction,
+        // before any frame sample exists to date it to.
+        let now = observe_platform_now();
         Self {
             last_dim_tick: now,
             cursor_pulse_start: now,
@@ -561,14 +564,15 @@ impl Default for EffectDurations {
 /// frame-effects swaps): a child frame's effects read the same aurora phase
 /// and render epoch as the primary frame.
 pub(crate) struct AmbientClocks {
-    pub(crate) aurora_start: std::time::Instant,
+    pub(crate) aurora_start: EventTime,
     /// Start time for elapsed time calculation (used by fancy border effects)
-    pub(crate) render_start_time: std::time::Instant,
+    pub(crate) render_start_time: EventTime,
 }
 
 impl Default for AmbientClocks {
     fn default() -> Self {
-        let now = std::time::Instant::now();
+        // Adapter read: the render epoch, minted once at construction.
+        let now = observe_platform_now();
         Self {
             aurora_start: now,
             render_start_time: now,
@@ -668,6 +672,10 @@ impl RendererFrameEffects {
             || self.fx.error_pulse.started.is_some()
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`. It still takes a
+    // raw `Instant` only because `neomacs-display-runtime` bridges its own
+    // `EventTime` through `into_instant()` at the call site; once that crate
+    // passes the `EventTime` straight through, drop the re-wrap below.
     pub fn trigger_click_halo(
         &mut self,
         x: f32,
@@ -678,26 +686,41 @@ impl RendererFrameEffects {
         self.fx.click_halo.halos.push(ClickHaloEntry {
             x,
             y,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(duration_ms as u64),
         });
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`. It still takes a
+    // raw `Instant` only because `neomacs-display-runtime` bridges its own
+    // `EventTime` through `into_instant()` at the call site; once that crate
+    // passes the `EventTime` straight through, drop the re-wrap below.
     pub fn trigger_cursor_wake(&mut self, now: std::time::Instant) {
-        self.fx.cursor_wake.started = Some(now);
+        self.fx.cursor_wake.started = Some(EventTime::from_observed_instant(now));
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`. It still takes a
+    // raw `Instant` only because `neomacs-display-runtime` bridges its own
+    // `EventTime` through `into_instant()` at the call site; once that crate
+    // passes the `EventTime` straight through, drop the re-wrap below.
     pub fn trigger_resize_padding(&mut self, now: std::time::Instant) {
-        self.fx.resize_padding.started = Some(now);
+        self.fx.resize_padding.started = Some(EventTime::from_observed_instant(now));
     }
 
+    /// TRIGGER SIGNATURE: this should take an `EventTime` for when the keypress
+    /// happened. It has no time parameter at all today, so it has to mint its
+    /// own observation — the trigger moment is genuinely "now" here, not a
+    /// frame's visuals, so the adapter read is honest, just less precise than
+    /// the originating input event's stamp would be.
     pub fn spawn_ripple(&mut self, cx: f32, cy: f32) {
         self.fx
             .typing_ripple
             .active
-            .push((cx, cy, std::time::Instant::now()));
+            .push((cx, cy, observe_platform_now()));
     }
 
+    /// TRIGGER SIGNATURE: this should take an `EventTime` for when the cursor
+    /// reached this position; with no time parameter it mints its own.
     pub fn record_cursor_trail(&mut self, x: f32, y: f32, w: f32, h: f32, length: usize) {
         let dist = ((x - self.fx.cursor_trail.last_pos.0).powi(2)
             + (y - self.fx.cursor_trail.last_pos.1).powi(2))
@@ -708,13 +731,17 @@ impl RendererFrameEffects {
         self.fx
             .cursor_trail
             .positions
-            .push((x, y, w, h, std::time::Instant::now()));
+            .push((x, y, w, h, observe_platform_now()));
         self.fx.cursor_trail.last_pos = (x, y);
         while self.fx.cursor_trail.positions.len() > length {
             self.fx.cursor_trail.positions.remove(0);
         }
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`. It still takes a
+    // raw `Instant` only because `neomacs-display-runtime` bridges its own
+    // `EventTime` through `into_instant()` at the call site; once that crate
+    // passes the `EventTime` straight through, drop the re-wrap below.
     pub fn trigger_edge_snap(
         &mut self,
         bounds: Rect,
@@ -729,20 +756,24 @@ impl RendererFrameEffects {
             mode_line_height,
             at_top,
             at_bottom,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(duration_ms as u64),
         });
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`. It still takes a
+    // raw `Instant` only because `neomacs-display-runtime` bridges its own
+    // `EventTime` through `into_instant()` at the call site; once that crate
+    // passes the `EventTime` straight through, drop the re-wrap below.
     pub fn trigger_cursor_error_pulse(&mut self, now: std::time::Instant) {
-        self.fx.error_pulse.started = Some(now);
+        self.fx.error_pulse.started = Some(EventTime::from_observed_instant(now));
     }
 }
 
 #[cfg(test)]
 mod effect_category_tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     #[test]
     fn default_effects_are_quiet() {
@@ -758,7 +789,7 @@ mod effect_category_tests {
 
     #[test]
     fn each_category_drives_needs_redraw() {
-        let now = Instant::now();
+        let now = observe_platform_now();
 
         // Cursor: wake.
         let mut fx = RendererFrameEffects::default();

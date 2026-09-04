@@ -1002,11 +1002,7 @@ impl WgpuRenderer {
         } else {
             CursorColorPolicy::Inherit
         };
-        PresentedCursorPaint::resolve(
-            resolved,
-            policy,
-            self.frame_sample.presentation_time().into_instant(),
-        )
+        PresentedCursorPaint::resolve(resolved, policy, self.frame_sample.presentation_time())
     }
 
     fn active_cursor_inverse_video(
@@ -1046,7 +1042,7 @@ impl WgpuRenderer {
             return 1.0;
         }
         if let Some(started) = self.fx.cursor_wake.started {
-            let elapsed = started.elapsed().as_millis() as f32;
+            let elapsed = self.frame_sample.since_at_presentation(started).as_millis() as f32;
             let duration = effects.cursor_wake.duration_ms as f32;
             if elapsed >= duration {
                 return 1.0;
@@ -1694,6 +1690,8 @@ impl WgpuRenderer {
                 surface_width,
                 surface_height,
                 aurora_start: self.ambient.aurora_start,
+                frame_sample: self.frame_sample,
+                frame_seq: self.frame_seq,
                 scale_factor: self.scale_factor,
                 logical_w,
                 logical_h,
@@ -1854,14 +1852,14 @@ impl WgpuRenderer {
         self.fx
             .line_anim
             .active
-            .retain(|a| a.started.elapsed() < a.duration);
+            .retain(|a| self.frame_sample.since_at_presentation(a.started) < a.duration);
     }
 
     fn refresh_mode_line_transition_state(&mut self, frame_glyphs: &FrameGlyphBuffer) {
         self.fx
             .mode_line_fade
             .active
-            .retain(|e| e.started.elapsed() < e.duration);
+            .retain(|e| self.frame_sample.since_at_presentation(e.started) < e.duration);
 
         if !self.effects.mode_line_transition.enabled {
             return;
@@ -1870,7 +1868,9 @@ impl WgpuRenderer {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let now_ml = std::time::Instant::now();
+        // Detected while building this frame, so the transition is anchored
+        // to the moment this frame's pixels appear.
+        let now_ml = self.frame_sample.presentation_time();
         for info in &frame_glyphs.window_infos {
             if info.mode_line_height < 1.0 || info.is_minibuffer {
                 continue;
@@ -1931,21 +1931,20 @@ impl WgpuRenderer {
         self.fx
             .text_fade
             .active
-            .retain(|e| e.started.elapsed() < e.duration);
+            .retain(|e| self.frame_sample.since_at_presentation(e.started) < e.duration);
     }
 
     fn refresh_scroll_spacing_state(&mut self) {
-        let now_spacing = std::time::Instant::now();
         self.fx
             .scroll_spacing
             .active
-            .retain(|e| now_spacing.duration_since(e.started) < e.duration);
+            .retain(|e| self.frame_sample.since_at_presentation(e.started) < e.duration);
     }
 
     fn refresh_cursor_wake_state(&mut self) {
         if let Some(started) = self.fx.cursor_wake.started {
             let dur = std::time::Duration::from_millis(self.effects.cursor_wake.duration_ms as u64);
-            if started.elapsed() >= dur {
+            if self.frame_sample.since_at_presentation(started) >= dur {
                 self.fx.cursor_wake.started = None;
             }
         }
@@ -1956,7 +1955,7 @@ impl WgpuRenderer {
             let dur = std::time::Duration::from_millis(
                 self.effects.cursor_error_pulse.duration_ms as u64,
             );
-            if started.elapsed() >= dur {
+            if self.frame_sample.since_at_presentation(started) >= dur {
                 self.fx.error_pulse.started = None;
             }
         }
@@ -1966,7 +1965,7 @@ impl WgpuRenderer {
         self.fx
             .scroll_momentum
             .active
-            .retain(|e| e.started.elapsed() < e.duration);
+            .retain(|e| self.frame_sample.since_at_presentation(e.started) < e.duration);
     }
 
     fn prepare_frame_uniforms(
@@ -1980,7 +1979,10 @@ impl WgpuRenderer {
         let logical_size = mapping.surface_logical_size();
         let logical_w = logical_size.width();
         let logical_h = logical_size.height();
-        let elapsed = self.ambient.render_start_time.elapsed().as_secs_f32();
+        let elapsed = self
+            .frame_sample
+            .since_at_presentation(self.ambient.render_start_time)
+            .as_secs_f32();
         let uniforms = Uniforms {
             screen_size: [logical_w, logical_h],
             time: elapsed,

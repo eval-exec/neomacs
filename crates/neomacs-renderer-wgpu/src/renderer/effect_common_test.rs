@@ -223,3 +223,44 @@ fn test_find_cursor_pos_empty() {
 
     assert_eq!(result, None);
 }
+
+#[test]
+fn entity_seeds_differ_within_one_frame() {
+    // The property the old `Instant::now().elapsed().subsec_nanos()` seed was
+    // there for: every entity spawned in one frame gets its own value. A
+    // frame-constant time sample would have made these all equal.
+    let frame_seq = 42;
+    let seeds: Vec<u64> = (0..64).map(|i| effect_entity_seed(frame_seq, i)).collect();
+
+    let mut unique = seeds.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        seeds.len(),
+        "entities in one frame must not share a seed"
+    );
+}
+
+#[test]
+fn entity_seed_varies_across_frames() {
+    // ...and the same entity must not be frozen at one value forever, or a
+    // respawning rain column would fall down the identical track every time.
+    let seeds: Vec<u64> = (0..64).map(|f| effect_entity_seed(f, 7)).collect();
+
+    let mut unique = seeds.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        seeds.len(),
+        "one entity must vary as the frame counter advances"
+    );
+}
+
+#[test]
+fn entity_seed_is_reproducible() {
+    // Same frame, same entity, same value: a replayed frame paints the same
+    // scatter. This is what the clock read could never give.
+    assert_eq!(effect_entity_seed(9, 3), effect_entity_seed(9, 3));
+}

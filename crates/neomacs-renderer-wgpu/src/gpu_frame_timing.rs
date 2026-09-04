@@ -290,6 +290,10 @@ fn read_timestamp_sample(
     slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = mapped_tx.send(result);
     });
+    // IO TIMEOUT, NOT A VISUAL PHASE: this bounds a blocking wait for the GPU
+    // to finish a submission, on a worker thread with no frame in hand. A
+    // frame-constant sample would make the remaining time never shrink and the
+    // loop never time out.
     let deadline = Instant::now() + GPU_WAIT_TIMEOUT;
     let submitted = wait_until(deadline, cancelled, |quantum| {
         match device.poll(wgpu::PollType::Wait {
@@ -340,6 +344,8 @@ fn wait_until<T>(
         if cancelled.load(Ordering::Acquire) {
             return None;
         }
+        // Real clock read on purpose: the whole point is that this shrinks
+        // between iterations. See `read_timestamp_sample`.
         let remaining = deadline.checked_duration_since(Instant::now())?;
         let quantum = remaining.min(GPU_WAIT_QUANTUM);
         match wait_once(quantum) {

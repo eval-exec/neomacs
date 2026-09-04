@@ -574,6 +574,7 @@ impl WgpuRenderer {
     /// transparent black inside the surface cache.
     pub fn process_shader_surfaces(&mut self) {
         use crate::shader_surface::SurfaceChannelSource;
+        let sample = self.frame_sample;
         self.reconcile_media_budget();
         let sources = self.caches.surface.external_channel_sources();
         #[cfg(feature = "video")]
@@ -609,7 +610,7 @@ impl WgpuRenderer {
         }
         self.caches
             .surface
-            .render_pending(&self.device, &self.queue, &external);
+            .render_pending(&self.device, &self.queue, &external, sample);
     }
 
     /// Whether any animated shader surface was composited recently — drives
@@ -699,6 +700,7 @@ impl WgpuRenderer {
             (mouse.0 * scale).clamp(0.0, width_px as f32),
             (height_px as f32 - mouse.1 * scale).clamp(0.0, height_px as f32),
         );
+        let sample = self.frame_sample;
         if let Some(post) = self.frame_post.as_mut() {
             post.run(
                 &self.device,
@@ -709,6 +711,7 @@ impl WgpuRenderer {
                 height_px,
                 scale,
                 mouse_px,
+                sample,
             );
         }
     }
