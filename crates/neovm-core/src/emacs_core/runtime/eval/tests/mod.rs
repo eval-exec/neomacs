@@ -21824,69 +21824,63 @@ fn command_loop_test_context() -> Context {
     ev
 }
 
-/// GNU `command_loop_2' catches an unhandled command signal with `cmd_error',
-/// which delegates to the current buffer's `command-error-function'.  This is
-/// load-bearing in an active minibuffer: `minibuffer-error-initialize' installs
-/// a buffer-local handler that renders the diagnostic as an EOB overlay instead
-/// of replacing the prompt in the echo area.
-#[test]
-fn command_loop_error_uses_buffer_local_command_error_function() {
-    crate::test_utils::init_test_tracing();
+fn stop_command_loop_error_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    assert!(args.is_empty(), "stop helper should not receive arguments");
+    ctx.command_loop.running = false;
+    Ok(Value::NIL)
+}
+
+/// Build the minimal interactive state shared by command-error recovery tests.
+fn command_loop_error_test_context() -> (Context, Value) {
     let mut ev = Context::new();
-    let scratch = ev.buffers.create_buffer("*command-error-function*");
+    let scratch = ev.buffers.create_buffer("*command-loop-error-test*");
     ev.buffers.set_current(scratch);
     let frame = ev.frames.create_frame("F1", 80, 24, scratch);
     assert!(ev.frames.select_frame(frame), "test needs a selected frame");
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
-    fn stop_command_loop_after_error_probe(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-        assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
-        Ok(Value::NIL)
-    }
     ev.register_subr(SubrSpec::new(
-        "neo-stop-command-loop-after-error-probe",
-        NativeFn::ContextVec(stop_command_loop_after_error_probe),
+        "neo-stop-command-loop-error-test",
+        NativeFn::ContextVec(stop_command_loop_error_test),
         SubrArity::new(0, Some(0)),
     ));
     ev.eval_str(
         r#"(progn
-             (setq neo-command-error-observation nil)
-             (set (make-local-variable 'command-error-function)
-                  (lambda (data context caller)
-                    (setq neo-command-error-observation
-                          (list data context caller))))
-             (fset 'neo-signaling-command
-                   (lambda () (interactive) (signal 'error '("boom"))))
-             (fset 'neo-stop-after-error-command
+             (fset 'neo-stop-command-loop-error-test-command
                    (lambda ()
                      (interactive)
-                     (neo-stop-command-loop-after-error-probe)))
+                     (neo-stop-command-loop-error-test)))
              (fset 'command-execute
                    (lambda (cmd &optional _record _keys _special)
                      (funcall cmd))))"#,
     )
-    .expect("install command-error dispatch probe");
+    .expect("install command-loop error test harness");
+    (ev, global_map)
+}
 
-    crate::emacs_core::keymap::list_keymap_define_seq(
-        global_map,
-        &[Value::symbol("f9")],
-        Value::symbol("neo-signaling-command"),
-    )
-    .expect("define signaling command");
+/// Queue commands behind synthetic function keys, then a final command that
+/// stops the recursive edit after every signal has passed through recovery.
+fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands: &[(&str, &str)]) {
+    for &(key, command) in commands {
+        crate::emacs_core::keymap::list_keymap_define_seq(
+            global_map,
+            &[Value::symbol(key)],
+            Value::symbol(command),
+        )
+        .expect("define signaling command");
+        ev.command_loop
+            .keyboard
+            .kboard
+            .unread_events
+            .push_back(Value::symbol(key));
+    }
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
         &[Value::fixnum('q' as i64)],
-        Value::symbol("neo-stop-after-error-command"),
+        Value::symbol("neo-stop-command-loop-error-test-command"),
     )
     .expect("define stop command");
-
-    ev.command_loop
-        .keyboard
-        .kboard
-        .unread_events
-        .push_back(Value::symbol("f9"));
     ev.command_loop
         .keyboard
         .kboard
@@ -21896,6 +21890,30 @@ fn command_loop_error_uses_buffer_local_command_error_function() {
 
     ev.recursive_edit_inner()
         .expect("command loop should recover and run the stop command");
+}
+
+/// GNU `command_loop_2' catches an unhandled command signal with `cmd_error',
+/// which delegates to the current buffer's `command-error-function'.  This is
+/// load-bearing in an active minibuffer: `minibuffer-error-initialize' installs
+/// a buffer-local handler that renders the diagnostic as an EOB overlay instead
+/// of replacing the prompt in the echo area.
+#[test]
+fn command_loop_error_uses_buffer_local_command_error_function() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    ev.eval_str(
+        r#"(progn
+             (setq neo-command-error-observation nil)
+             (set (make-local-variable 'command-error-function)
+                  (lambda (data context caller)
+                    (setq neo-command-error-observation
+                          (list data context caller))))
+             (fset 'neo-signaling-command
+                   (lambda () (interactive) (signal 'error '("boom")))))"#,
+    )
+    .expect("install command-error dispatch probe");
+
+    run_command_loop_error_commands(&mut ev, global_map, &[("f9", "neo-signaling-command")]);
 
     assert_eq!(
         ev.eval_symbol("neo-command-error-observation")
@@ -21916,24 +21934,7 @@ fn command_loop_error_uses_buffer_local_command_error_function() {
 #[tracing_test::traced_test]
 #[test]
 fn command_loop_captures_ignored_error_severity_before_presentation() {
-    let mut ev = Context::new();
-    let scratch = ev.buffers.create_buffer("*command-error-severity*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
-    assert!(ev.frames.select_frame(frame), "test needs a selected frame");
-    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
-    install_global_map_for_test(&mut ev, global_map);
-
-    fn stop_command_loop_after_severity_probe(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-        assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
-        Ok(Value::NIL)
-    }
-    ev.register_subr(SubrSpec::new(
-        "neo-stop-command-loop-after-severity-probe",
-        NativeFn::ContextVec(stop_command_loop_after_severity_probe),
-        SubrArity::new(0, Some(0)),
-    ));
+    let (mut ev, global_map) = command_loop_error_test_context();
     ev.eval_str(
         r#"(progn
              (put 'end-of-line 'error-conditions '(end-of-line error))
@@ -21945,44 +21946,15 @@ fn command_loop_captures_ignored_error_severity_before_presentation() {
                     (setq neo-command-error-observation data
                           debug-ignored-errors nil)))
              (fset 'neo-ignored-signaling-command
-                   (lambda () (interactive) (signal 'end-of-line nil)))
-             (fset 'neo-stop-after-severity-command
-                   (lambda ()
-                     (interactive)
-                     (neo-stop-command-loop-after-severity-probe)))
-             (fset 'command-execute
-                   (lambda (cmd &optional _record _keys _special)
-                     (funcall cmd))))"#,
+                   (lambda () (interactive) (signal 'end-of-line nil))))"#,
     )
     .expect("install ignored-error severity probe");
 
-    crate::emacs_core::keymap::list_keymap_define_seq(
+    run_command_loop_error_commands(
+        &mut ev,
         global_map,
-        &[Value::symbol("f9")],
-        Value::symbol("neo-ignored-signaling-command"),
-    )
-    .expect("define ignored signaling command");
-    crate::emacs_core::keymap::list_keymap_define_seq(
-        global_map,
-        &[Value::fixnum('q' as i64)],
-        Value::symbol("neo-stop-after-severity-command"),
-    )
-    .expect("define stop command");
-
-    ev.command_loop
-        .keyboard
-        .kboard
-        .unread_events
-        .push_back(Value::symbol("f9"));
-    ev.command_loop
-        .keyboard
-        .kboard
-        .unread_events
-        .push_back(Value::fixnum('q' as i64));
-    ev.command_loop.running = true;
-
-    ev.recursive_edit_inner()
-        .expect("command loop should recover and run the stop command");
+        &[("f9", "neo-ignored-signaling-command")],
+    );
 
     assert_eq!(
         ev.eval_symbol("neo-command-error-observation")
@@ -22014,24 +21986,7 @@ fn command_loop_captures_ignored_error_severity_before_presentation() {
 #[tracing_test::traced_test]
 #[test]
 fn command_loop_emits_typed_diagnostics_for_error_and_quit() {
-    let mut ev = Context::new();
-    let scratch = ev.buffers.create_buffer("*command-loop-diagnostics*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
-    assert!(ev.frames.select_frame(frame), "test needs a selected frame");
-    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
-    install_global_map_for_test(&mut ev, global_map);
-
-    fn stop_command_loop_after_diagnostic_probe(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-        assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
-        Ok(Value::NIL)
-    }
-    ev.register_subr(SubrSpec::new(
-        "neo-stop-command-loop-after-diagnostic-probe",
-        NativeFn::ContextVec(stop_command_loop_after_diagnostic_probe),
-        SubrArity::new(0, Some(0)),
-    ));
+    let (mut ev, global_map) = command_loop_error_test_context();
     ev.eval_str(
         r#"(progn
              (setq debug-ignored-errors nil
@@ -22045,48 +22000,18 @@ fn command_loop_emits_typed_diagnostics_for_error_and_quit() {
              (fset 'neo-diagnostic-signaling-command
                    (lambda () (interactive) (neo-no-such-command)))
              (fset 'neo-quit-signaling-command
-                   (lambda () (interactive) (signal 'quit nil)))
-             (fset 'neo-stop-after-diagnostic-command
-                   (lambda ()
-                     (interactive)
-                     (neo-stop-command-loop-after-diagnostic-probe)))
-             (fset 'command-execute
-                   (lambda (cmd &optional _record _keys _special)
-                     (funcall cmd))))"#,
+                   (lambda () (interactive) (signal 'quit nil))))"#,
     )
     .expect("install command-loop diagnostic probe");
 
-    for (key, command) in [
-        ("f10", "neo-diagnostic-signaling-command"),
-        ("f11", "neo-quit-signaling-command"),
-    ] {
-        crate::emacs_core::keymap::list_keymap_define_seq(
-            global_map,
-            &[Value::symbol(key)],
-            Value::symbol(command),
-        )
-        .expect("define signaling command");
-        ev.command_loop
-            .keyboard
-            .kboard
-            .unread_events
-            .push_back(Value::symbol(key));
-    }
-    crate::emacs_core::keymap::list_keymap_define_seq(
+    run_command_loop_error_commands(
+        &mut ev,
         global_map,
-        &[Value::fixnum('q' as i64)],
-        Value::symbol("neo-stop-after-diagnostic-command"),
-    )
-    .expect("define stop command");
-    ev.command_loop
-        .keyboard
-        .kboard
-        .unread_events
-        .push_back(Value::fixnum('q' as i64));
-    ev.command_loop.running = true;
-
-    ev.recursive_edit_inner()
-        .expect("command loop should recover from both signals");
+        &[
+            ("f10", "neo-diagnostic-signaling-command"),
+            ("f11", "neo-quit-signaling-command"),
+        ],
+    );
 
     assert_eq!(
         ev.eval_symbol("neo-command-error-observations")
