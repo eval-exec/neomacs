@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use super::super::{RuntimeResourceNode, RuntimeResourceStore};
 use super::virtual_path::VirtualPath;
@@ -19,7 +20,7 @@ use super::{
 /// primitives from learning which product host supplied a path.
 pub(crate) struct EditorFileSystemNamespace {
     host: Box<dyn EditorFileSystem>,
-    runtime_resources: Option<Box<dyn RuntimeResourceStore>>,
+    runtime_resources: Option<Rc<dyn RuntimeResourceStore>>,
 }
 
 impl EditorFileSystemNamespace {
@@ -34,8 +35,12 @@ impl EditorFileSystemNamespace {
         self.host = host;
     }
 
-    pub(crate) fn install_runtime_resources(&mut self, store: Box<dyn RuntimeResourceStore>) {
+    pub(crate) fn install_runtime_resources(&mut self, store: Rc<dyn RuntimeResourceStore>) {
         self.runtime_resources = Some(store);
+    }
+
+    pub(crate) fn runtime_resources(&self) -> Option<Rc<dyn RuntimeResourceStore>> {
+        self.runtime_resources.clone()
     }
 
     fn runtime_store_for(&self, path: &Path) -> Option<&dyn RuntimeResourceStore> {
