@@ -359,7 +359,37 @@ impl WpeRuntime {
         mailbox: Arc<ReactorMailbox>,
         wake: WebViewWake,
     ) -> Result<Self, String> {
-        let backend = WpeBackend::new(std::ptr::null_mut()).map_err(|error| error.to_string())?;
+        // WebKit's headless backend infers a DRM device when none is given,
+        // and on multi-GPU machines it can pick the node whose buffers the
+        // web process's importer cannot import (gbm_bo_import failure in
+        // AcceleratedBackingStore, then a WebKit crash).  Honor the same
+        // override WebKit documents for that inference: WPE_DRM_DEVICE.
+        let backend = match std::env::var_os("WPE_DRM_DEVICE") {
+            Some(path) => {
+                let path = path.to_string_lossy().into_owned();
+                tracing::info!("WpeRuntime: using WPE_DRM_DEVICE={path}");
+                WpeBackend::new_with_device(std::ptr::null_mut(), Some(&path))
+            }
+            None => {
+                if let Ok(entries) = std::fs::read_dir("/dev/dri") {
+                    let nodes = entries
+                        .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+                        .filter(|name| name.to_string_lossy().starts_with("renderD"))
+                        .count();
+                    if nodes > 1 {
+                        tracing::warn!(
+                            "WpeRuntime: {nodes} render nodes found in /dev/dri; \
+                             WebKit will infer one and may pick a device whose \
+                             buffers cannot be imported (a crash inside \
+                             AcceleratedBackingStore). Set WPE_DRM_DEVICE to \
+                             select the working node explicitly."
+                        );
+                    }
+                }
+                WpeBackend::new(std::ptr::null_mut())
+            }
+        }
+        .map_err(|error| error.to_string())?;
         let frame_transport = WpeFrameTransport::resolve(config.frame_transport);
         Ok(Self {
             profile_root: config.profile_root,
