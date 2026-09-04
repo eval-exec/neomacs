@@ -1263,7 +1263,7 @@ impl WgpuRenderer {
         surface_width: u32,
         surface_height: u32,
     ) {
-        use neomacs_display_protocol::scroll_animation::page_curl_transform;
+        use super::deform::page_curl_transform;
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
                 Some(v) => v,
@@ -1615,7 +1615,7 @@ impl WgpuRenderer {
         surface_width: u32,
         surface_height: u32,
     ) {
-        use neomacs_display_protocol::scroll_animation::wobbly_deform;
+        use super::deform::wobbly_deform;
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
                 Some(v) => v,
@@ -1900,7 +1900,7 @@ impl WgpuRenderer {
         surface_width: u32,
         surface_height: u32,
     ) {
-        use neomacs_display_protocol::scroll_animation::liquid_deform;
+        use super::deform::liquid_deform;
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
                 Some(v) => v,
