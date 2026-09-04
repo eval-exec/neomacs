@@ -77,6 +77,7 @@ class BrowserEditorHarness:
     def __init__(self, driver: webdriver.Chrome, timeout: float) -> None:
         self.driver = driver
         self.timeout = timeout
+        self.completed_startup_frame_texts: list[str] = []
 
     def install_frame_observer(self) -> None:
         self.driver.execute_cdp_cmd(
@@ -84,7 +85,7 @@ class BrowserEditorHarness:
             {
                 "source": """
                 globalThis.__neomacsLastFrame = null;
-                globalThis.__neomacsFrames = [];
+                globalThis.__neomacsStartupFrames = [];
                 globalThis.__neomacsMessages = [];
                 const NativeWorker = globalThis.Worker;
                 globalThis.Worker = class extends NativeWorker {
@@ -99,9 +100,8 @@ class BrowserEditorHarness:
                       if (event.data?.type === "frame") {
                         const frame = event.data.payload.slice(0);
                         globalThis.__neomacsLastFrame = frame;
-                        globalThis.__neomacsFrames.push(frame);
-                        if (globalThis.__neomacsFrames.length > 64) {
-                          globalThis.__neomacsFrames.shift();
+                        if (globalThis.__neomacsStartupFrames !== null) {
+                          globalThis.__neomacsStartupFrames.push(frame);
                         }
                       }
                     });
@@ -145,12 +145,25 @@ class BrowserEditorHarness:
         )
         return self.decode_frame_text(values)
 
-    def frame_texts(self) -> list[str]:
+    def finish_startup_frame_capture(self) -> list[str]:
         frames = self.driver.execute_script(
-            "return (globalThis.__neomacsFrames || []).map("
+            "const frames = globalThis.__neomacsStartupFrames || [];"
+            "globalThis.__neomacsStartupFrames = null;"
+            "return frames.map(frame => Array.from(new Uint8Array(frame)))"
+        )
+        self.completed_startup_frame_texts = [
+            self.decode_frame_text(values) for values in frames
+        ]
+        return self.completed_startup_frame_texts
+
+    def observed_startup_frame_texts(self) -> list[str]:
+        active = self.driver.execute_script(
+            "return (globalThis.__neomacsStartupFrames || []).map("
             "frame => Array.from(new Uint8Array(frame)))"
         )
-        return [self.decode_frame_text(values) for values in frames]
+        return self.completed_startup_frame_texts + [
+            self.decode_frame_text(values) for values in active
+        ]
 
     def wait_for_presentation(self) -> str:
         deadline = time.monotonic() + self.timeout
@@ -323,7 +336,7 @@ class BrowserEditorHarness:
         try:
             state = {
                 "frame_text": self.frame_text(),
-                "frame_texts": self.frame_texts(),
+                "startup_frame_texts": self.observed_startup_frame_texts(),
                 "worker_messages": self.driver.execute_script(
                     "return globalThis.__neomacsMessages || []"
                 ),
@@ -359,7 +372,7 @@ def main() -> None:
         driver.get(args.url)
         editor.wait_ready()
         editor.wait_for_presentation()
-        if startup_warning_rendered(editor.frame_texts()):
+        if startup_warning_rendered(editor.finish_startup_frame_capture()):
             raise RuntimeError("startup rendered the user-emacs-directory warning")
 
         if not args.persistence_only:
@@ -406,7 +419,7 @@ def main() -> None:
         driver.refresh()
         editor.wait_ready()
         editor.wait_for_presentation()
-        if startup_warning_rendered(editor.frame_texts()):
+        if startup_warning_rendered(editor.finish_startup_frame_capture()):
             raise RuntimeError("reload rendered the user-emacs-directory warning")
 
         persisted_marker = f"OPFS-PERSISTED:{token}"
