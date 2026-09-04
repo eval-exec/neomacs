@@ -23,6 +23,9 @@ from selenium import webdriver
 from browser_test_support import chrome_options
 
 
+RELEASE_ASSET_FILENAMES = ("main.js", "editor-worker.js", "editor.wasm")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -147,7 +150,7 @@ def release_asset_path(path: str) -> tuple[str, str] | None:
     parts = path.strip("/").split("/")
     if len(parts) != 3 or parts[0] != "builds" or parts[1] not in {"a", "b"}:
         return None
-    if parts[2] not in {"main.js", "editor-worker.js", "editor.wasm"}:
+    if parts[2] not in RELEASE_ASSET_FILENAMES:
         return None
     return parts[1], parts[2]
 
@@ -218,12 +221,30 @@ def validate_distribution(distribution: Path) -> bytes:
 
 
 def capture_failure(driver: webdriver.Chrome, directory: Path) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    driver.save_screenshot(str(directory / "browser-release-upgrade.png"))
-    directory.joinpath("browser-release-upgrade.html").write_text(
-        driver.page_source,
-        encoding="utf-8",
-    )
+    errors: list[str] = []
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001 - preserve the original failure
+        return
+    try:
+        driver.save_screenshot(str(directory / "browser-release-upgrade.png"))
+    except Exception as error:  # noqa: BLE001 - preserve the original failure
+        errors.append(f"screenshot: {error}")
+    try:
+        directory.joinpath("browser-release-upgrade.html").write_text(
+            driver.page_source,
+            encoding="utf-8",
+        )
+    except Exception as error:  # noqa: BLE001 - preserve the original failure
+        errors.append(f"page source: {error}")
+    if errors:
+        try:
+            directory.joinpath("browser-release-upgrade-artifact-errors.txt").write_text(
+                "\n".join(errors) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001 - preserve the original failure
+            pass
 
 
 def main() -> None:
@@ -248,7 +269,7 @@ def main() -> None:
         if server.requests["/manifest.json"] < 2:
             raise RuntimeError("ordinary reload reused the cached release manifest")
         for release in ("a", "b"):
-            for filename in ("main.js", "editor-worker.js", "editor.wasm"):
+            for filename in RELEASE_ASSET_FILENAMES:
                 entry = f"/builds/{release}/{filename}"
                 if server.requests[entry] != 1:
                     raise RuntimeError(

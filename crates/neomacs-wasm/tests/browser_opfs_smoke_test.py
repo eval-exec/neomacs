@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,6 +12,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from browser_opfs_smoke import startup_warning_rendered  # noqa: E402
+from browser_release_upgrade import capture_failure as capture_upgrade_failure  # noqa: E402
+
+
+class BrokenDiagnosticsDriver:
+    def save_screenshot(self, path: str) -> None:
+        raise RuntimeError("screenshot unavailable")
+
+    @property
+    def page_source(self) -> str:
+        raise RuntimeError("page source unavailable")
 
 
 class StartupWarningDetectionTest(unittest.TestCase):
@@ -42,6 +53,16 @@ class StartupWarningDetectionTest(unittest.TestCase):
                 ["Loading Neomacs", "Welcome to Neomacs *scratch*"]
             )
         )
+
+
+class UpgradeDiagnosticTest(unittest.TestCase):
+    def test_artifact_failure_does_not_replace_the_browser_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            capture_upgrade_failure(BrokenDiagnosticsDriver(), Path(directory))
+
+            errors = Path(directory, "browser-release-upgrade-artifact-errors.txt")
+            self.assertIn("screenshot unavailable", errors.read_text())
+            self.assertIn("page source unavailable", errors.read_text())
 
 
 if __name__ == "__main__":
