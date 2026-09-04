@@ -87,6 +87,24 @@ const EVAL_STACK_RED_ZONE: usize = 128 * 1024;
 const EVAL_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 const STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
 const STACK_GROWTH_PROBE_INTERVAL: usize = 16;
+
+/// Install GNU's target-width fixnum limit constants (`src/data.c`).
+///
+/// These values cannot come from `i64`'s width: a portable image produced on
+/// a 64-bit host is also restored by wasm32, whose immediate fixnums have a
+/// different range. Keep construction behind this one target-compiled seam
+/// so bootstrap, test harnesses, and post-image normalization cannot diverge.
+pub(crate) fn install_fixnum_limit_variables(obarray: &mut Obarray) {
+    for (name, limit) in [
+        ("most-positive-fixnum", Value::MOST_POSITIVE_FIXNUM),
+        ("most-negative-fixnum", Value::MOST_NEGATIVE_FIXNUM),
+    ] {
+        obarray.set_symbol_value(name, Value::fixnum(limit));
+        obarray.make_special(name);
+        obarray.set_constant(name);
+    }
+}
+
 /// Capacity of the per-Context cache mapping symbol → resolved call
 /// target.  The cache is keyed by `function_epoch` and invalidated
 /// whenever the obarray's function cells change.  GNU Emacs has no such

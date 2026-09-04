@@ -44,14 +44,7 @@ impl Context {
         let mut ev = Self::new_inner(true);
         ev.obarray = Obarray::new();
         super::super::errors::init_standard_errors(&mut ev.obarray);
-        ev.obarray
-            .set_symbol_value("most-positive-fixnum", Value::fixnum(i64::MAX >> 2));
-        ev.obarray.make_special("most-positive-fixnum");
-        ev.obarray.set_constant("most-positive-fixnum");
-        ev.obarray
-            .set_symbol_value("most-negative-fixnum", Value::fixnum(-(i64::MAX >> 2) - 1));
-        ev.obarray.make_special("most-negative-fixnum");
-        ev.obarray.set_constant("most-negative-fixnum");
+        install_fixnum_limit_variables(&mut ev.obarray);
         ev.specpdl.clear();
         ev.backtrace_args_stack.clear();
         ev.lexenv = Value::NIL;
@@ -131,12 +124,7 @@ impl Context {
         // Set up standard global variables
         // Match GNU data.c: DEFVAR_LISP marks these symbols declared-special,
         // then make_symbol_constant installs the SYMBOL_NOWRITE trap.
-        obarray.set_symbol_value("most-positive-fixnum", Value::fixnum(i64::MAX >> 2));
-        obarray.make_special("most-positive-fixnum");
-        obarray.set_constant("most-positive-fixnum");
-        obarray.set_symbol_value("most-negative-fixnum", Value::fixnum(-(i64::MAX >> 2) - 1));
-        obarray.make_special("most-negative-fixnum");
-        obarray.set_constant("most-negative-fixnum");
+        install_fixnum_limit_variables(obarray);
         // Mathematical constants (defconst in float-sup.el)
         obarray.set_symbol_value("float-e", Value::make_float(std::f64::consts::E));
         obarray.set_symbol_value("float-pi", Value::make_float(std::f64::consts::PI));
