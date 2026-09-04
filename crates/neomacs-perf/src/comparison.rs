@@ -363,6 +363,18 @@ pub enum ComparisonRejection {
 }
 
 /// Aggregate outcome. Statistics exist only when every underlying run is valid.
+///
+/// **`Valid` means the runs completed and the workload checksums matched. It
+/// does NOT mean the number is trustworthy.** A wall- or CPU-time metric is
+/// hostage to whatever else the machine is doing; only instruction counts and
+/// cycles (`--hardware-counters`) are deterministic. Gate on those and read
+/// time as a secondary signal.
+///
+/// The comparison interleaves baseline and candidate samples, which makes the
+/// BASELINE a control worth reading before believing any delta: if both sides
+/// inflated and both MADs blew out, the machine was loaded and the run should
+/// be discarded; if the baseline sat in its usual band and only the candidate
+/// moved, the effect is real. See the crate README, "Which number decides".
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ComparisonVerdict {

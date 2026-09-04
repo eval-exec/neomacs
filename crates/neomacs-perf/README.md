@@ -5,6 +5,46 @@ microbenchmarks and profilers: a profiler finds hot code, while this harness
 replays the same realistic work and records whether a change made that work
 faster without changing editor behavior.
 
+## Which number decides
+
+**Wall and CPU time are not verdicts. Gate on instruction counts and CPU
+cycles; read wall time as a secondary signal.**
+
+Wall time is hostage to whatever else the machine is doing -- another session's
+build, a browser, a second perf run, the concurrent GC and renderer threads
+competing for the pinned core. `--cpu N` pins the editor to one logical CPU but
+does NOT isolate it: other work still schedules there, and last-level cache and
+memory bandwidth are shared machine-wide regardless of pinning. Instruction
+counts are deterministic and immune to all of it. Collect them with
+`--hardware-counters`.
+
+This is not theoretical. In a single day of campaign work, timing runs produced
+three confident wrong conclusions that instruction counts would have settled
+immediately:
+
+- a change was called a 52% regression and reverted, on a comparison that
+  straddled a rebase -- the regression was upstream's, not the change's;
+- a real 53% regression was first dismissed as machine noise;
+- a genuinely contended run was reported as a valid measurement.
+
+**How to tell a real regression from a loaded machine.** `perf compare`
+INTERLEAVES the two editors, which makes the baseline a control:
+
+| symptom | reading |
+|---|---|
+| baseline in its usual band, tight MAD; only the candidate moved | real effect |
+| BOTH sides inflated and both MADs blown out | contention -- discard the run |
+| structural counters identical but timing moved a lot | look outside the subsystem you edited, including at what you merged |
+
+Also: `cat /proc/loadavg` before and after every timing run, and never compare a
+number against one taken from a different merge-base. Re-establish the baseline
+immediately after a rebase, before measuring anything else.
+
+Structural counters -- `LayoutStats` frame classes, `composition_bytes_scanned`,
+`buffer_snapshots_built` -- are load-insensitive too, and answer a different and
+often better question: did the code path change at all? Check those before
+believing a timing delta.
+
 Run the catalogued workloads through `xtask`:
 
 ```sh
