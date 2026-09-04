@@ -34,7 +34,7 @@ use super::focus::{
     KeyRoute, focus_transition, key_down_message, route_key,
 };
 use crate::backend::NavigationMilestone;
-use crate::load_state::PageLoadState;
+use crate::load_state::{NativeNavigation, PageLoadState};
 use crate::{
     FocusIntent, HistoryAction, HostWindowId, NavigationTarget, ResolvedWebViewPlacement,
     ScriptError, ScriptRequest, ScriptWorld, WebContentSize, WebProcessFailure, WebValue,
@@ -91,9 +91,9 @@ define_class!(
         unsafe fn webView_didStartProvisionalNavigation(
             &self,
             _web_view: &WKWebView,
-            _navigation: Option<&WKNavigation>,
+            navigation: Option<&WKNavigation>,
         ) {
-            self.publish_navigation(NavigationMilestone::Started);
+            self.publish_navigation(navigation, NavigationMilestone::Started);
         }
 
         #[unsafe(method(webView:didReceiveServerRedirectForProvisionalNavigation:))]
@@ -101,9 +101,9 @@ define_class!(
         unsafe fn webView_didReceiveServerRedirectForProvisionalNavigation(
             &self,
             _web_view: &WKWebView,
-            _navigation: Option<&WKNavigation>,
+            navigation: Option<&WKNavigation>,
         ) {
-            self.publish_navigation(NavigationMilestone::Redirected);
+            self.publish_navigation(navigation, NavigationMilestone::Redirected);
         }
 
         #[unsafe(method(webView:didCommitNavigation:))]
@@ -111,9 +111,9 @@ define_class!(
         unsafe fn webView_didCommitNavigation(
             &self,
             _web_view: &WKWebView,
-            _navigation: Option<&WKNavigation>,
+            navigation: Option<&WKNavigation>,
         ) {
-            self.publish_navigation(NavigationMilestone::Committed);
+            self.publish_navigation(navigation, NavigationMilestone::Committed);
         }
 
         #[unsafe(method(webView:didFinishNavigation:))]
@@ -121,9 +121,9 @@ define_class!(
         unsafe fn webView_didFinishNavigation(
             &self,
             _web_view: &WKWebView,
-            _navigation: Option<&WKNavigation>,
+            navigation: Option<&WKNavigation>,
         ) {
-            self.publish_navigation(NavigationMilestone::Finished);
+            self.publish_navigation(navigation, NavigationMilestone::Finished);
         }
 
         // GNU's NS delegate has no failure methods (nsxwidget.m:104-133: a
@@ -136,10 +136,10 @@ define_class!(
         unsafe fn webView_didFailProvisionalNavigation_withError(
             &self,
             _web_view: &WKWebView,
-            _navigation: Option<&WKNavigation>,
+            navigation: Option<&WKNavigation>,
             _error: &NSError,
         ) {
-            self.publish_navigation(NavigationMilestone::Finished);
+            self.publish_navigation(navigation, NavigationMilestone::Finished);
         }
 
         #[unsafe(method(webView:didFailNavigation:withError:))]
@@ -147,10 +147,10 @@ define_class!(
         unsafe fn webView_didFailNavigation_withError(
             &self,
             _web_view: &WKWebView,
-            _navigation: Option<&WKNavigation>,
+            navigation: Option<&WKNavigation>,
             _error: &NSError,
         ) {
-            self.publish_navigation(NavigationMilestone::Finished);
+            self.publish_navigation(navigation, NavigationMilestone::Finished);
         }
 
         #[unsafe(method(webViewWebContentProcessDidTerminate:))]
@@ -172,16 +172,25 @@ define_class!(
 );
 
 impl WebViewNavigationDelegate {
-    fn publish_navigation(&self, milestone: NavigationMilestone) {
+    fn publish_navigation(
+        &self,
+        navigation: Option<&WKNavigation>,
+        milestone: NavigationMilestone,
+    ) {
         // Objective-C delegate entry points are an FFI boundary.  Hand the
         // backend-neutral milestone to the load state, which decides what it
         // means next to the progress the observer already reported.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let ivars = self.ivars();
-            let events = ivars
-                .state
-                .borrow_mut()
-                .milestone(ivars.id, ivars.generation, milestone);
+            let navigation = navigation
+                .map(NativeNavigation::of)
+                .unwrap_or(NativeNavigation::Unidentified);
+            let events = ivars.state.borrow_mut().milestone(
+                ivars.id,
+                ivars.generation,
+                navigation,
+                milestone,
+            );
             ivars.events.borrow_mut().extend(events);
             ivars.wake.notify();
         }));

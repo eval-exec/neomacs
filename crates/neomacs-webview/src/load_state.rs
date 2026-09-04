@@ -22,6 +22,8 @@
 //! load is in flight, so nothing follows the terminal `1.0` until the next
 //! load starts.
 
+use std::num::NonZeroUsize;
+
 use neomacs_display_protocol::WebViewId;
 
 use crate::backend::NavigationMilestone;
@@ -40,6 +42,37 @@ enum LoadStatus {
     Finished,
 }
 
+/// Identity of the native navigation whose delegate callback is being folded
+/// into [`PageLoadState`].
+///
+/// WebKit supplies the same `WKNavigation` object to every callback for one
+/// operation.  Keeping that identity separate from the logical WebView
+/// generation prevents a late failure or completion from an older operation
+/// from terminalizing the navigation currently loading in the same view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) enum NativeNavigation {
+    Identified(NonZeroUsize),
+    Unidentified,
+}
+
+impl NativeNavigation {
+    /// Derive an opaque identity from a native navigation object.  A live
+    /// reference is necessarily non-null and its address is used only for
+    /// equality while WebKit owns the object.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn of<T>(navigation: &T) -> Self {
+        let address = NonZeroUsize::new(std::ptr::from_ref(navigation).addr())
+            .expect("a reference has a non-null address");
+        Self::Identified(address)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn identified(address: usize) -> Self {
+        Self::Identified(NonZeroUsize::new(address).expect("test navigation ids are non-zero"))
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct PageLoadState {
     /// The last title reported to the frontend; a page without one is `""`,
@@ -49,6 +82,7 @@ pub(crate) struct PageLoadState {
     uri: String,
     progress: f64,
     status: LoadStatus,
+    navigation: Option<NativeNavigation>,
 }
 
 impl PageLoadState {
@@ -63,8 +97,34 @@ impl PageLoadState {
         &mut self,
         id: WebViewId,
         generation: WebViewGeneration,
+        navigation: NativeNavigation,
         milestone: NavigationMilestone,
     ) -> Vec<WebViewEvent> {
+        let accepted = match milestone {
+            NavigationMilestone::Started => {
+                self.navigation = Some(navigation);
+                true
+            }
+            NavigationMilestone::Redirected | NavigationMilestone::Committed => {
+                match self.navigation {
+                    None => {
+                        self.navigation = Some(navigation);
+                        true
+                    }
+                    Some(active) => active == navigation && self.status != LoadStatus::Finished,
+                }
+            }
+            NavigationMilestone::Finished => match self.navigation {
+                None => {
+                    self.navigation = Some(navigation);
+                    true
+                }
+                Some(active) => active == navigation && self.status != LoadStatus::Finished,
+            },
+        };
+        if !accepted {
+            return Vec::new();
+        }
         let mut events = Vec::new();
         self.status = match milestone {
             NavigationMilestone::Started => LoadStatus::Loading,

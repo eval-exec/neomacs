@@ -1,11 +1,15 @@
 use neomacs_display_protocol::WebViewId;
 
-use super::PageLoadState;
+use super::{NativeNavigation, PageLoadState};
 use crate::backend::NavigationMilestone;
 use crate::{LoadPhase, WebViewEvent, WebViewGeneration};
 
 fn ids() -> (WebViewId, WebViewGeneration) {
     (WebViewId::new(3), WebViewGeneration::new(5))
+}
+
+fn navigation() -> NativeNavigation {
+    NativeNavigation::identified(1)
 }
 
 fn progress(progress: f64) -> WebViewEvent {
@@ -42,7 +46,7 @@ fn finished() -> WebViewEvent {
 fn observed_state_reports_each_value_once_per_change() {
     let (id, generation) = ids();
     let mut state = PageLoadState::new();
-    let _ = state.milestone(id, generation, NavigationMilestone::Started);
+    let _ = state.milestone(id, generation, navigation(), NavigationMilestone::Started);
 
     let first = state.observe(id, generation, Some("A".into()), Some("u1".into()), 0.1);
     assert_eq!(
@@ -140,7 +144,7 @@ fn a_title_or_uri_that_goes_away_is_reported_as_empty_not_kept() {
 fn observed_progress_is_clamped_to_the_unit_interval() {
     let (id, generation) = ids();
     let mut state = PageLoadState::new();
-    let _ = state.milestone(id, generation, NavigationMilestone::Started);
+    let _ = state.milestone(id, generation, navigation(), NavigationMilestone::Started);
     assert_eq!(
         state.observe(id, generation, None, None, 1.5),
         vec![progress(1.0)]
@@ -160,7 +164,7 @@ fn milestones_and_readings_publish_one_progress_sequence() {
     let mut state = PageLoadState::new();
 
     assert_eq!(
-        state.milestone(id, generation, NavigationMilestone::Started),
+        state.milestone(id, generation, navigation(), NavigationMilestone::Started),
         vec![phase(LoadPhase::Started)],
         "a fresh view is already at 0.0: only the phase is news"
     );
@@ -169,7 +173,7 @@ fn milestones_and_readings_publish_one_progress_sequence() {
         vec![progress(0.3)]
     );
     assert_eq!(
-        state.milestone(id, generation, NavigationMilestone::Committed),
+        state.milestone(id, generation, navigation(), NavigationMilestone::Committed),
         vec![phase(LoadPhase::Committed)]
     );
     assert_eq!(
@@ -177,18 +181,18 @@ fn milestones_and_readings_publish_one_progress_sequence() {
         vec![progress(1.0)]
     );
     assert_eq!(
-        state.milestone(id, generation, NavigationMilestone::Finished),
+        state.milestone(id, generation, navigation(), NavigationMilestone::Finished),
         vec![phase(LoadPhase::Finished), finished()],
         "the observer already published 1.0"
     );
 
     // A second load starts from 1.0, so its start is a progress change.
     assert_eq!(
-        state.milestone(id, generation, NavigationMilestone::Started),
+        state.milestone(id, generation, navigation(), NavigationMilestone::Started),
         vec![progress(0.0), phase(LoadPhase::Started)]
     );
     assert_eq!(
-        state.milestone(id, generation, NavigationMilestone::Finished),
+        state.milestone(id, generation, navigation(), NavigationMilestone::Finished),
         vec![progress(1.0), phase(LoadPhase::Finished), finished()],
         "a finish the observer did not see publishes the terminal 1.0"
     );
@@ -206,8 +210,8 @@ fn progress_readings_count_only_while_a_load_is_in_flight() {
         state.observe(id, generation, None, None, 0.4).is_empty(),
         "no load has started"
     );
-    let _ = state.milestone(id, generation, NavigationMilestone::Started);
-    let _ = state.milestone(id, generation, NavigationMilestone::Finished);
+    let _ = state.milestone(id, generation, navigation(), NavigationMilestone::Started);
+    let _ = state.milestone(id, generation, navigation(), NavigationMilestone::Finished);
     assert!(
         state.observe(id, generation, None, None, 0.6).is_empty(),
         "a failed or finished load stays at 1.0"
@@ -222,7 +226,7 @@ fn progress_readings_count_only_while_a_load_is_in_flight() {
         "title and URI are still live after the load"
     );
     assert_eq!(
-        state.milestone(id, generation, NavigationMilestone::Started),
+        state.milestone(id, generation, navigation(), NavigationMilestone::Started),
         vec![progress(0.0), phase(LoadPhase::Started)]
     );
     assert_eq!(
@@ -238,7 +242,7 @@ fn a_finish_from_idle_publishes_the_terminal_progress() {
     let (id, generation) = ids();
     let mut state = PageLoadState::new();
     assert_eq!(
-        state.milestone(id, generation, NavigationMilestone::Finished),
+        state.milestone(id, generation, navigation(), NavigationMilestone::Finished),
         vec![progress(1.0), phase(LoadPhase::Finished), finished()]
     );
     assert!(state.observe(id, generation, None, None, 0.3).is_empty());
@@ -251,11 +255,50 @@ fn a_redirect_or_commit_opens_a_load_for_progress_readings() {
     let (id, generation) = ids();
     let mut state = PageLoadState::new();
     assert_eq!(
-        state.milestone(id, generation, NavigationMilestone::Redirected),
+        state.milestone(
+            id,
+            generation,
+            navigation(),
+            NavigationMilestone::Redirected
+        ),
         vec![phase(LoadPhase::Redirected)]
     );
     assert_eq!(
         state.observe(id, generation, None, None, 0.2),
         vec![progress(0.2)]
+    );
+}
+
+/// WKNavigationDelegate identifies the navigation associated with each
+/// callback.  Completion of an older request must not terminalize the newer
+/// request whose progress is currently being observed.
+#[test]
+fn an_older_navigation_cannot_finish_the_active_navigation() {
+    let (id, generation) = ids();
+    let older = NativeNavigation::identified(1);
+    let active = NativeNavigation::identified(2);
+    let mut state = PageLoadState::new();
+
+    let _ = state.milestone(id, generation, older, NavigationMilestone::Started);
+    let _ = state.observe(id, generation, None, None, 0.4);
+    assert_eq!(
+        state.milestone(id, generation, active, NavigationMilestone::Started),
+        vec![progress(0.0), phase(LoadPhase::Started)]
+    );
+
+    assert!(
+        state
+            .milestone(id, generation, older, NavigationMilestone::Finished)
+            .is_empty(),
+        "a stale completion does not finish the active navigation"
+    );
+    assert_eq!(
+        state.observe(id, generation, None, None, 0.6),
+        vec![progress(0.6)],
+        "the active navigation still accepts measured progress"
+    );
+    assert_eq!(
+        state.milestone(id, generation, active, NavigationMilestone::Finished),
+        vec![progress(1.0), phase(LoadPhase::Finished), finished()]
     );
 }
