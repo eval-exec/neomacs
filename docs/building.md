@@ -89,9 +89,9 @@ editor worker.
 
 With the server running, the real-browser smoke tests verify logical editor
 geometry across non-integer device scale factors and live viewport changes, as
-well as a visible editor, `M-x switch-to-buffer`, browser text input, buffer
-contents across switches, file mutations, temporary files, and OPFS
-persistence across a page reload:
+well as a visible editor, native Chrome text input, `C-x 2`, `C-x 3`,
+`M-x switch-to-buffer`, buffer contents across switches, file mutations,
+temporary files, and OPFS persistence across a page reload:
 
 ```bash
 nix-shell \
