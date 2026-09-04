@@ -211,32 +211,50 @@ pub(crate) fn reject_command(command: ClipboardCommand, error: String) {
 /// GNU Emacs never rejects PRIMARY on a non-X platform.  The NS port maps it
 /// to a private pasteboard named "Selection" (emacs-31.0.90 src/nsselect.m:56
 /// and :547, `symbol_to_nsstring` / `nxatoms_of_nsselect`), which
-/// `ns-own-selection-internal` (:397-446) writes and `ns-get-selection`
-/// (:514-541) reads back, and the w32 port keeps it as a Lisp property
-/// (lisp/term/w32-win.el:364-367, :417-447).  Both are only visible to this
-/// Emacs, which is what this store reproduces.
+/// `ns-own-selection-internal` (:397-446) writes, `ns-get-selection`
+/// (:514-541) reads back and `ns-disown-selection-internal` (:449-466)
+/// clears; the w32 port keeps it as a Lisp property
+/// (lisp/term/w32-win.el:364-367, :417-447).  Neither value ever reaches
+/// another application, which is what this store reproduces.
 ///
-/// Ledgered divergence: GNU NS also declares `ns_send_types` on the
-/// pasteboard and compares change counts to detect a foreign owner, since a
-/// named NSPasteboard is reachable by other processes that know its name.
-/// Neomacs does not expose that pasteboard, so a foreign owner cannot arise
-/// and the value lives in this process only.
+/// Ownership (`ns-selection-owner-p`, nsselect.m:494-511; w32-win.el:449-451)
+/// is answered on the Lisp side by `lisp/term/neo-win.el`, which records the
+/// selections it set through this backend; the store itself only knows
+/// whether a value is present.
+///
+/// Ledgered divergences: GNU NS declares `ns_send_types` on the pasteboard
+/// (:131-134, :418) and compares change counts to detect a foreign owner
+/// (:459-461, :528-529), because a named NSPasteboard is reachable by any
+/// process that knows its name.  Neomacs never exposes such a pasteboard,
+/// so a foreign owner cannot arise and the in-process value is
+/// authoritative.  `ns-sent-selection-hooks` (:438-443) is not run, and the
+/// "Selection value may not be nil" error (:413-414) has no counterpart
+/// because neo-win.el routes nil to a disown before reaching this backend.
 #[cfg(not(target_os = "linux"))]
-#[derive(Debug, Default)]
-struct PrivatePasteboard {
-    text: Option<String>,
+#[derive(Debug, Default, PartialEq, Eq)]
+enum PrivatePasteboard {
+    /// Nobody owns the selection: `ns-get-selection` returns nil.
+    #[default]
+    Disowned,
+    /// This process owns the selection with the given text.
+    Owned(String),
 }
 
 #[cfg(not(target_os = "linux"))]
 impl PrivatePasteboard {
-    /// Own the selection with `text`, or disown it with `None`
-    /// (`ns-disown-selection-internal`, nsselect.m:449-466).
+    /// Own the selection with `text`, or disown it with `None`.
     fn store(&mut self, text: Option<&str>) {
-        self.text = text.map(str::to_owned);
+        *self = match text {
+            Some(text) => Self::Owned(text.to_owned()),
+            None => Self::Disowned,
+        };
     }
 
     fn load(&self) -> Option<String> {
-        self.text.clone()
+        match self {
+            Self::Owned(text) => Some(text.clone()),
+            Self::Disowned => None,
+        }
     }
 }
 

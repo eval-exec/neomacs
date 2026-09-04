@@ -21,7 +21,12 @@ pub use neomacs_display_protocol::{
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_core::window::GuiFrameGeometryHints;
 
-/// Native selection owned by the display server.
+/// Selection addressed by a clipboard request.
+///
+/// `Clipboard` is always the system clipboard.  `Primary` is the X11 or
+/// Wayland primary selection on Linux and a process-local store elsewhere,
+/// matching GNU's NS private pasteboard and w32 Lisp property (see
+/// `clipboard::PrivatePasteboard`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ClipboardSelection {
     Clipboard,
