@@ -1100,11 +1100,6 @@ impl InterpreterFrameAuxStack {
     }
 }
 
-struct SuspendedInterpreterFrame {
-    frame: InterpreterFrame,
-    continuation: BytecodeCallContinuation,
-}
-
 /// A bytecode callee proven eligible for GNU's iterative `setup_frame` path.
 ///
 /// `value` is the exact GC-visible Lisp identity installed in the consumed call
@@ -1173,7 +1168,11 @@ const _: () = {
     assert!(std::mem::size_of::<InterpreterFunction>() == std::mem::size_of::<Value>());
     assert!(std::mem::size_of::<PreparedInterpreterCallee>() == 2 * std::mem::size_of::<Value>());
     assert!(std::mem::size_of::<InterpreterFrame>() <= 56);
-    assert!(std::mem::size_of::<SuspendedInterpreterFrame>() <= 72);
+    // A suspended caller costs a frame plus its continuation, in two parallel
+    // stacks. Neither is ever COPIED any more -- a call writes the callee's
+    // frame once and a return pops -- so these bound footprint, not per-call
+    // traffic, which is the whole point of the split.
+    assert!(std::mem::size_of::<BytecodeCallContinuation>() <= 16);
 };
 
 struct BytecodeCallContinuation {
@@ -1181,100 +1180,92 @@ struct BytecodeCallContinuation {
     backtrace: BytecodeBacktraceFrame,
 }
 
-/// GNU-shaped storage for suspended Tier-0 register snapshots.
+/// The interpreter's frame stack. **The ACTIVE frame is the last element** of
+/// `frames`; everything below it is a suspended caller.
 ///
-/// `Vec::push`/`pop` materialize a whole 64-byte value before and after the
-/// capacity branch.  This wrapper keeps that branch at one boundary and lets
-/// LLVM copy directly between the active frame and the already-proven spare
-/// slot.  The register snapshot is `Copy`, while the deliberately non-`Copy`
-/// backtrace token is moved exactly once during restore.
+/// The active frame used to be a local in `run_loop`, with ONE slot reused for
+/// every callee. That is why entering a call had to copy the caller out (48
+/// bytes) and returning had to copy it back: the slot the caller lived in was
+/// about to be overwritten. `perf annotate` on `bytecode-call-loop` put
+/// **18.82% of the entire dispatch loop** on that single `ptr::write`.
+///
+/// Giving every frame its own slot removes both copies. A call writes the
+/// callee's frame once, built from values already in registers; a return is a
+/// pop. GNU gets the same property for free by recursing on the C stack
+/// (`exec_byte_code` calling itself) -- at the cost of overflowing that stack
+/// on deep Lisp recursion, which is exactly what this iterative driver exists
+/// to prevent. This keeps the safety and drops the copies.
+///
+/// `continuations` is parallel and one shorter: a continuation exists for
+/// exactly the SUSPENDED frames, so the active frame cannot carry a stale one
+/// and nothing has to invent a placeholder for it. That matters because
+/// `BytecodeBacktraceFrame` is `#[must_use]` and must be consumed by a matching
+/// pop; a sentinel would be a lie the type is specifically built to prevent.
+///
+/// No `&mut` into either vector may be held across a push -- a reallocation
+/// moves every slot. The driver re-derives the active frame at the head of each
+/// `'frame` iteration, which is exactly where a push has just happened.
 struct InterpreterCallerStack {
-    frames: Vec<SuspendedInterpreterFrame>,
+    frames: Vec<InterpreterFrame>,
+    continuations: Vec<BytecodeCallContinuation>,
 }
 
 impl InterpreterCallerStack {
-    fn new() -> Self {
-        Self { frames: Vec::new() }
+    fn new(entry: InterpreterFrame) -> Self {
+        let mut frames = Vec::with_capacity(8);
+        frames.push(entry);
+        Self {
+            frames,
+            continuations: Vec::with_capacity(8),
+        }
+    }
+
+    /// The frame currently executing.
+    #[inline(always)]
+    fn active(&self) -> &InterpreterFrame {
+        let last = self.frames.len() - 1;
+        // SAFETY: constructed with one frame; `leave_callee` refuses to pop the
+        // last one, so the stack is never empty.
+        unsafe { self.frames.get_unchecked(last) }
     }
 
     #[inline(always)]
-    fn is_empty(&self) -> bool {
-        self.frames.is_empty()
+    fn active_mut(&mut self) -> &mut InterpreterFrame {
+        let last = self.frames.len() - 1;
+        // SAFETY: as `active`.
+        unsafe { self.frames.get_unchecked_mut(last) }
     }
 
+    /// How many callers are suspended beneath the active frame.
     #[inline(always)]
-    fn len(&self) -> usize {
-        self.frames.len()
+    fn suspended_len(&self) -> usize {
+        self.continuations.len()
     }
 
-    /// Suspend `current` onto the caller stack.
+    /// Whether the active frame is the outermost one.
+    #[inline(always)]
+    fn has_no_suspended_callers(&self) -> bool {
+        self.continuations.is_empty()
+    }
+
+    /// Suspend the active frame with `continuation` and make `callee` active.
     ///
-    /// The caller must immediately install the child frame into `current`
-    /// (GNU's `setup_frame` writes the new frame in place); until then the
-    /// frame register still holds the suspended caller.
+    /// `callee` arrives BY VALUE, built from registers, so this is one write of
+    /// a frame rather than a copy of one already in memory.
     #[inline(always)]
-    fn suspend_caller(
-        &mut self,
-        current: &InterpreterFrame,
-        continuation: BytecodeCallContinuation,
-    ) {
-        if self.frames.len() == self.frames.capacity() {
-            self.reserve_one_slow();
-        }
-
-        let len = self.frames.len();
-        // SAFETY: the capacity check above proves slot `len` is allocated.
-        // The vector length is published only after the complete suspended
-        // frame has been initialized.
-        unsafe {
-            self.frames
-                .as_mut_ptr()
-                .add(len)
-                .write(SuspendedInterpreterFrame {
-                    frame: *current,
-                    continuation,
-                });
-            self.frames.set_len(len + 1);
-        }
+    fn enter_callee(&mut self, continuation: BytecodeCallContinuation, callee: InterpreterFrame) {
+        self.continuations.push(continuation);
+        self.frames.push(callee);
     }
 
-    #[cold]
-    #[inline(never)]
-    fn reserve_one_slow(&mut self) {
-        self.frames.reserve(1);
-    }
-
+    /// Discard the active frame and resume its caller, returning the
+    /// continuation recorded when that caller suspended. `None` when the active
+    /// frame is the outermost one, which is the driver's exit condition.
     #[inline(always)]
-    fn restore_current(
-        &mut self,
-        current: &mut InterpreterFrame,
-    ) -> Option<BytecodeCallContinuation> {
-        if self.is_empty() {
-            return None;
-        }
-        // SAFETY: the nonempty check above proves a suspended caller exists.
-        Some(unsafe { self.restore_current_unchecked(current) })
-    }
-
-    /// Restore one caller after a separate nonempty proof.
-    ///
-    /// # Safety
-    /// `self` must contain at least one suspended frame.
-    #[inline(always)]
-    unsafe fn restore_current_unchecked(
-        &mut self,
-        current: &mut InterpreterFrame,
-    ) -> BytecodeCallContinuation {
-        let new_len = self.frames.len() - 1;
-        // SAFETY: required by this method's contract.  Copy the register
-        // snapshot, move the single-use backtrace token, then remove the fully
-        // moved slot without running a destructor for it.
-        let suspended = unsafe { self.frames.as_ptr().add(new_len) };
-        let frame = unsafe { (*suspended).frame };
-        let continuation = unsafe { std::ptr::read(&(*suspended).continuation) };
-        unsafe { self.frames.set_len(new_len) };
-        *current = frame;
-        continuation
+    fn leave_callee(&mut self) -> Option<BytecodeCallContinuation> {
+        let continuation = self.continuations.pop()?;
+        self.frames.pop();
+        Some(continuation)
     }
 }
 
@@ -2666,14 +2657,15 @@ impl<'a> Vm<'a> {
     // every Bcall pays a call/ret + register marshalling (measured +58
     // Ir/call when the driver split landed).
     #[inline(always)]
+    /// Set up the callee's operand frame and RETURN its interpreter frame; the
+    /// caller pushes it onto the frame stack.
     fn install_iterative_interpreter_frame(
         &mut self,
         cursor: &mut StackCursor,
-        current: &mut InterpreterFrame,
         callee: PreparedInterpreterCallee,
         root_slot: ConsumedCallOperandRootSlot,
         nargs: usize,
-    ) {
+    ) -> InterpreterFrame {
         // Every stack mutation below goes through the LIVE cursor (GNU's
         // setup_frame works on its register `top` the same way); the context
         // is only consulted for capacity and, on the cold growth branch,
@@ -2746,26 +2738,25 @@ impl<'a> Vm<'a> {
             }
         }
 
-        // Field-wise stores keep the freshly computed values register-resident
-        // instead of materializing a frame temporary and copying it over.
-        current.function = callee.function;
-        current.frame_base = frame_base;
-        current.frame_limit = frame_limit;
-        #[cfg(feature = "jit")]
-        {
-            current.resume = InterpreterResumePoint::new(0, false);
-        }
-        #[cfg(not(feature = "jit"))]
-        {
-            current.pc = 0;
-        }
-        current.cleanup = InterpreterFrameCleanup {
-            condition_stack_base,
-            specpdl_base,
-        };
-        #[cfg(debug_assertions)]
-        {
-            current.entry_lexenv = self.ctx.lexenv;
+        // Built and RETURNED rather than written through a `&mut` into the
+        // frame stack: every value here was just computed and is already in a
+        // register, and handing the frame back by value lets the caller move it
+        // into its own fresh slot. The old shape wrote into the caller's slot,
+        // which is why entering a call first had to copy the caller out of it.
+        InterpreterFrame {
+            function: callee.function,
+            frame_base,
+            frame_limit,
+            #[cfg(feature = "jit")]
+            resume: InterpreterResumePoint::new(0, false),
+            #[cfg(not(feature = "jit"))]
+            pc: 0,
+            cleanup: InterpreterFrameCleanup {
+                condition_stack_base,
+                specpdl_base,
+            },
+            #[cfg(debug_assertions)]
+            entry_lexenv: self.ctx.lexenv,
         }
     }
 
@@ -2798,15 +2789,15 @@ impl<'a> Vm<'a> {
     /// unwind is represented as data rather than host-stack control flow.
     fn complete_interpreter_frame_chain(
         &mut self,
-        current: &mut InterpreterFrame,
         callers: &mut InterpreterCallerStack,
         aux_stack: &mut InterpreterFrameAuxStack,
         mut result: EvalResult,
     ) -> InterpreterFrameCompletion {
         loop {
-            result = self.finish_interpreter_frame(current, callers.is_empty(), result);
+            let outermost = callers.has_no_suspended_callers();
+            result = self.finish_interpreter_frame(callers.active_mut(), outermost, result);
 
-            let Some(continuation) = callers.restore_current(current) else {
+            let Some(continuation) = callers.leave_callee() else {
                 return InterpreterFrameCompletion::Exit(result);
             };
 
@@ -2836,20 +2827,23 @@ impl<'a> Vm<'a> {
                 }
             }
             aux_stack.restore_current(InterpreterDriverDepth::from_suspended_callers(
-                callers.len(),
+                callers.suspended_len(),
             ));
 
             match result {
                 Ok(value) => {
                     self.ctx.bc_buf.truncate(continuation.stack_after_call);
+                    let current = callers.active_mut();
                     debug_assert!(self.ctx.bc_buf.len() < current.frame_limit);
                     self.ctx.bc_buf.push(value);
                     return InterpreterFrameCompletion::Resume;
                 }
                 Err(flow) => {
-                    let func = current.function.code();
+                    let (func, mut resume_pc) = {
+                        let current = callers.active();
+                        (current.function.code(), current.pc())
+                    };
                     let aux = aux_stack.current_mut();
-                    let mut resume_pc = current.pc();
                     let resume = self.resume_nonlocal(
                         func,
                         &mut resume_pc,
@@ -2857,7 +2851,7 @@ impl<'a> Vm<'a> {
                         &mut aux.bind_stack,
                         flow,
                     );
-                    current.set_pc(resume_pc);
+                    callers.active_mut().set_pc(resume_pc);
                     match resume {
                         Ok(()) => return InterpreterFrameCompletion::Resume,
                         Err(flow) => result = Err(flow),
@@ -2883,19 +2877,25 @@ impl<'a> Vm<'a> {
     fn complete_interpreter_frame_value(
         &mut self,
         cursor: &mut StackCursor,
-        current: &mut InterpreterFrame,
         callers: &mut InterpreterCallerStack,
         aux_stack: &mut InterpreterFrameAuxStack,
         value: Value,
     ) -> InterpreterValueCompletion {
-        if callers.is_empty() {
+        if callers.has_no_suspended_callers() {
             return InterpreterValueCompletion::Exit(value);
         }
 
-        let cleanup = current.cleanup;
+        // Read everything needed from the ACTIVE frame before popping it: after
+        // `leave_callee` the top of the stack is the caller, not this frame.
+        let (cleanup, frame_base) = {
+            let current = callers.active();
+            (current.cleanup, current.frame_base)
+        };
+        #[cfg(debug_assertions)]
+        let entry_lexenv = callers.active().entry_lexenv;
         #[cfg(debug_assertions)]
         debug_assert!(
-            lexenv_tail_reachable(self.ctx.lexenv, current.entry_lexenv),
+            lexenv_tail_reachable(self.ctx.lexenv, entry_lexenv),
             "env-less iterative bytecode frame changed ctx.lexenv beyond defvar markers"
         );
 
@@ -2919,12 +2919,18 @@ impl<'a> Vm<'a> {
             return InterpreterValueCompletion::NeedsSlowCleanup(value);
         }
 
-        cursor.truncate(current.frame_base);
+        cursor.truncate(frame_base);
 
         // SAFETY: the empty caller stack returned `Exit` above, and no code
         // between that proof and this pop can mutate `callers`.  GNU's
         // `Breturn` likewise restores its already-proven saved frame directly.
-        let continuation = unsafe { callers.restore_current_unchecked(current) };
+        // SAFETY-equivalent by construction now: `leave_callee` returns `None`
+        // only when there is no suspended caller, which the guard above already
+        // rejected. The old unchecked pop existed because the caller frame had
+        // to be COPIED back into `current`; there is nothing to copy any more.
+        let continuation = callers
+            .leave_callee()
+            .expect("a suspended caller was proven above");
         self.leave_bytecode_call_depth();
         // The eligibility gate above asked `backtrace_debug_on_exit` about
         // exactly this index, so the checking pop would ask a second time on
@@ -2932,7 +2938,7 @@ impl<'a> Vm<'a> {
         self.ctx
             .pop_fast_bytecode_backtrace_frame_unchecked(continuation.backtrace);
         aux_stack.restore_current(InterpreterDriverDepth::from_suspended_callers(
-            callers.len(),
+            callers.suspended_len(),
         ));
         // GNU Breturn value delivery on the live cursor: the result lands in
         // the consumed function-operand slot, everything above is discarded.
@@ -2944,7 +2950,7 @@ impl<'a> Vm<'a> {
             *cursor.base.add(after) = value;
         }
         cursor.len = after + 1;
-        debug_assert!(cursor.len <= current.frame_limit);
+        debug_assert!(cursor.len <= callers.active().frame_limit);
         InterpreterValueCompletion::Resume
     }
 
@@ -3102,7 +3108,7 @@ impl<'a> Vm<'a> {
             return Err(invalid_bytecode_flow());
         }
 
-        let mut current = InterpreterFrame {
+        let entry_frame = InterpreterFrame {
             function: InterpreterFunction::new(entry_func),
             frame_base,
             frame_limit,
@@ -3121,7 +3127,7 @@ impl<'a> Vm<'a> {
         // allocating. The first iterative Bcall grows this once and thereafter
         // gets Vec's single-representation push/pop path; SmallVec's repeated
         // inline-vs-spilled branch was measurable on every Bcall/Breturn.
-        let mut callers = InterpreterCallerStack::new();
+        let mut callers = InterpreterCallerStack::new(entry_frame);
         // GNU bytecode.c keeps one unsigned quit counter for the whole
         // exec_byte_code driver. setup_frame/Breturn do not save or reset it.
         let mut quitcounter = 1;
@@ -3133,21 +3139,11 @@ impl<'a> Vm<'a> {
         // `verify_stack_effects` proof; everything else runs the checked
         // instance with today's exact behavior. Chosen once per driver entry.
         let result = if entry_func.executes_verified_ops() {
-            self.run_interpreter_driver::<true>(
-                &mut current,
-                &mut callers,
-                &mut aux_stack,
-                &mut quitcounter,
-            )
+            self.run_interpreter_driver::<true>(&mut callers, &mut aux_stack, &mut quitcounter)
         } else {
-            self.run_interpreter_driver::<false>(
-                &mut current,
-                &mut callers,
-                &mut aux_stack,
-                &mut quitcounter,
-            )
+            self.run_interpreter_driver::<false>(&mut callers, &mut aux_stack, &mut quitcounter)
         };
-        *pc = current.pc();
+        *pc = callers.active().pc();
         let (entry_handlers, entry_bind_stack) = aux_stack.take_entry();
         *handlers = entry_handlers;
         *bind_stack = entry_bind_stack;
@@ -3164,7 +3160,6 @@ impl<'a> Vm<'a> {
     #[inline(always)]
     fn run_interpreter_driver<const VERIFIED: bool>(
         &mut self,
-        current: &mut InterpreterFrame,
         callers: &mut InterpreterCallerStack,
         aux_stack: &mut InterpreterFrameAuxStack,
         driver_quitcounter: &mut u8,
@@ -3176,14 +3171,23 @@ impl<'a> Vm<'a> {
         // the cursor live.
         let mut cursor = StackCursor::acquire(self.ctx);
         'frame: loop {
-            let func = current.function.code();
-            let frame_base = current.frame_base;
-            let frame_limit = current.frame_limit;
+            // Unpack the ACTIVE frame into locals and let the borrow end: the
+            // body pushes and pops `callers`, so nothing may hold a reference
+            // into it across those. This is also where a `continue 'frame`
+            // lands, which is exactly where a push has just happened.
+            let (func, frame_base, frame_limit) = {
+                let current = callers.active();
+                (
+                    current.function.code(),
+                    current.frame_base,
+                    current.frame_limit,
+                )
+            };
             let ops = func.executable_ops();
             let constants = &func.constants;
             let ops_len = ops.len();
             let ops_ptr = ops.as_ptr();
-            let mut pc_local = current.pc();
+            let mut pc_local = callers.active().pc();
             let mut quitcounter = *driver_quitcounter;
             // OSR (on-stack replacement): once a hot loop is detected at a backward
             // branch, transfer the rest of this interpreted call into native code at
@@ -3195,7 +3199,7 @@ impl<'a> Vm<'a> {
             // (measured; the tax persisted under `NEOVM_JIT=0`, which is what pinned
             // it to the interpreter path rather than to compile-time analysis).
             #[cfg(feature = "jit")]
-            let mut osr_tried = current.resume.osr_tried();
+            let mut osr_tried = callers.active().resume.osr_tried();
             #[cfg(not(feature = "jit"))]
             let osr_tried = false;
 
@@ -3227,10 +3231,11 @@ impl<'a> Vm<'a> {
                             continue;
                         }
                         Err(flow) => {
-                            current.save_execution_state(pc_local, osr_tried);
+                            callers
+                                .active_mut()
+                                .save_execution_state(pc_local, osr_tried);
                             *driver_quitcounter = quitcounter;
                             match self.complete_interpreter_frame_chain(
-                                current,
                                 callers,
                                 aux_stack,
                                 Err(flow),
@@ -3249,14 +3254,15 @@ impl<'a> Vm<'a> {
             macro_rules! complete_value {
                 ($value:expr) => {{
                     let value = $value;
-                    current.save_execution_state(pc_local, osr_tried);
+                    callers
+                        .active_mut()
+                        .save_execution_state(pc_local, osr_tried);
                     *driver_quitcounter = quitcounter;
                     // The fast Breturn keeps the cursor live; only leaving the
                     // driver (Exit) or entering the generic unwind machinery
                     // (chain) publishes, and a chain Resume reacquires.
                     match self.complete_interpreter_frame_value(
                         &mut cursor,
-                        current,
                         callers,
                         aux_stack,
                         value,
@@ -3269,7 +3275,6 @@ impl<'a> Vm<'a> {
                         InterpreterValueCompletion::NeedsSlowCleanup(value) => {
                             cursor.publish(self.ctx);
                             match self.complete_interpreter_frame_chain(
-                                current,
                                 callers,
                                 aux_stack,
                                 Ok(value),
@@ -3869,24 +3874,26 @@ impl<'a> Vm<'a> {
                                 let backtrace = self
                                     .ctx
                                     .push_backtrace_frame_from_bc_stack(func_val, args_start, n);
-                                current.save_execution_state(pc_local, osr_tried);
+                                callers
+                                    .active_mut()
+                                    .save_execution_state(pc_local, osr_tried);
                                 *driver_quitcounter = quitcounter;
-                                let caller_depth =
-                                    InterpreterDriverDepth::from_suspended_callers(callers.len());
+                                let caller_depth = InterpreterDriverDepth::from_suspended_callers(
+                                    callers.suspended_len(),
+                                );
                                 aux_stack.suspend_current(caller_depth);
-                                callers.suspend_caller(
-                                    current,
+                                let callee_frame = self.install_iterative_interpreter_frame(
+                                    &mut cursor,
+                                    PreparedInterpreterCallee::new(callee_value, callee_code),
+                                    ConsumedCallOperandRootSlot::from_args_start(args_start),
+                                    n,
+                                );
+                                callers.enter_callee(
                                     BytecodeCallContinuation {
                                         stack_after_call,
                                         backtrace,
                                     },
-                                );
-                                self.install_iterative_interpreter_frame(
-                                    &mut cursor,
-                                    current,
-                                    PreparedInterpreterCallee::new(callee_value, callee_code),
-                                    ConsumedCallOperandRootSlot::from_args_start(args_start),
-                                    n,
+                                    callee_frame,
                                 );
                                 continue 'frame;
                             }
@@ -3910,26 +3917,27 @@ impl<'a> Vm<'a> {
                                     // it and take the same live-cursor
                                     // installation as the cached fast path.
                                     cursor = StackCursor::acquire(self.ctx);
-                                    current.save_execution_state(pc_local, osr_tried);
+                                    callers
+                                        .active_mut()
+                                        .save_execution_state(pc_local, osr_tried);
                                     *driver_quitcounter = quitcounter;
                                     let caller_depth =
                                         InterpreterDriverDepth::from_suspended_callers(
-                                            callers.len(),
+                                            callers.suspended_len(),
                                         );
                                     aux_stack.suspend_current(caller_depth);
-                                    callers.suspend_caller(
-                                        current,
+                                    let callee_frame = self.install_iterative_interpreter_frame(
+                                        &mut cursor,
+                                        callee,
+                                        root_slot,
+                                        nargs,
+                                    );
+                                    callers.enter_callee(
                                         BytecodeCallContinuation {
                                             stack_after_call,
                                             backtrace,
                                         },
-                                    );
-                                    self.install_iterative_interpreter_frame(
-                                        &mut cursor,
-                                        current,
-                                        callee,
-                                        root_slot,
-                                        nargs,
+                                        callee_frame,
                                     );
                                     continue 'frame;
                                 }

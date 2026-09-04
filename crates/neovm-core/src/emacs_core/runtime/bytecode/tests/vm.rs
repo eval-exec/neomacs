@@ -2350,9 +2350,16 @@ fn interpreter_driver_frame_layout_stays_compact() {
         std::mem::size_of::<InterpreterFrame>() <= 64,
         "an active interpreter frame must stay register-snapshot sized"
     );
+    // A suspended caller is a frame in one stack plus a continuation in a
+    // parallel one. Neither is COPIED on a call any more -- entering writes the
+    // callee's frame once from registers and returning is a pop -- so this
+    // bounds footprint rather than per-call traffic. The old assertion bounded
+    // a `SuspendedInterpreterFrame` that no longer exists, and its stated
+    // reason ("must not copy ... on every Bcall") is exactly what the frame
+    // stack retired.
     assert!(
-        std::mem::size_of::<SuspendedInterpreterFrame>() <= 80,
-        "a suspended frame must not copy enum/Option padding on every Bcall"
+        std::mem::size_of::<BytecodeCallContinuation>() <= 16,
+        "a continuation is pushed per call and must stay two words"
     );
 }
 
