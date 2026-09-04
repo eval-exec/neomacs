@@ -428,16 +428,21 @@ fn secondary_frame_cursor_target_uses_top_level_frame_identity() {
 
 #[test]
 fn secondary_frame_cursor_state_clears_when_no_target_remains() {
-    let mut state = crate::render_thread::cursor::CursorState::default();
-    state.set_target(crate::render_thread::cursor::CursorTarget {
-        window_id: 7,
-        x: 10.0,
-        y: 20.0,
-        width: 8.0,
-        height: 16.0,
-        style: CursorStyle::Bar(2.0),
-        frame_id: 0x42,
-    });
+    let mut state = crate::render_thread::cursor::CursorState::new(
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    state.set_target(
+        crate::render_thread::cursor::CursorTarget {
+            window_id: 7,
+            x: 10.0,
+            y: 20.0,
+            width: 8.0,
+            height: 16.0,
+            style: CursorStyle::Bar(2.0),
+            frame_id: 0x42,
+        },
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
 
     state.clear_target();
 
@@ -458,19 +463,26 @@ fn frame_render_state_syncs_visual_cursor_config_from_defaults() {
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     render.compositor.visual_cursors.insert(7, {
-        let mut cursor = crate::render_thread::cursor::CursorState::default();
-        cursor.set_target(CursorTarget {
-            window_id: 7,
-            x: 1.0,
-            y: 2.0,
-            width: 3.0,
-            height: 4.0,
-            style: CursorStyle::Bar(1.0),
-            frame_id: 0x42,
-        });
+        let mut cursor = crate::render_thread::cursor::CursorState::new(
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        );
+        cursor.set_target(
+            CursorTarget {
+                window_id: 7,
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+                style: CursorStyle::Bar(1.0),
+                frame_id: 0x42,
+            },
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        );
         cursor
     });
-    let mut defaults = crate::render_thread::cursor::CursorState::default();
+    let mut defaults = crate::render_thread::cursor::CursorState::new(
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     defaults.anim_enabled = false;
     defaults.trail_size = 17.0;
     defaults.size_transition_enabled = false;
@@ -583,16 +595,21 @@ fn frame_render_state_applies_visual_cursor_animation_rects() {
         active: false,
     });
     render.compositor.current_frame = Some(frame);
-    let mut visual = crate::render_thread::cursor::CursorState::default();
-    visual.set_target(CursorTarget {
-        window_id: -7,
-        x: 11.0,
-        y: 12.0,
-        width: 13.0,
-        height: 14.0,
-        style: CursorStyle::Hollow,
-        frame_id: 0x42,
-    });
+    let mut visual = crate::render_thread::cursor::CursorState::new(
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    visual.set_target(
+        CursorTarget {
+            window_id: -7,
+            x: 11.0,
+            y: 12.0,
+            width: 13.0,
+            height: 14.0,
+            style: CursorStyle::Hollow,
+            frame_id: 0x42,
+        },
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.compositor.visual_cursors.insert(-7, visual);
 
     render.apply_visual_cursor_animations();
@@ -973,15 +990,18 @@ fn frame_render_state_remove_child_cursor_clears_preedit() {
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.cursor.set_target(CursorTarget {
-        window_id: 7,
-        x: 1.0,
-        y: 2.0,
-        width: 3.0,
-        height: 4.0,
-        style: CursorStyle::Bar(1.0),
-        frame_id: 0x99,
-    });
+    render.cursor.set_target(
+        CursorTarget {
+            window_id: 7,
+            x: 1.0,
+            y: 2.0,
+            width: 3.0,
+            height: 4.0,
+            style: CursorStyle::Bar(1.0),
+            frame_id: 0x99,
+        },
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_ime_preedit("preedit".to_string(), Some((7, 7)));
 
     assert!(render.remove_child_frame(0x99));
@@ -1450,9 +1470,8 @@ fn cursor_blink_toggle_asks_for_a_cursor_frame_not_a_repaint() {
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
-    render
-        .cursor
-        .set_target(crate::render_thread::cursor::CursorTarget {
+    render.cursor.set_target(
+        crate::render_thread::cursor::CursorTarget {
             window_id: 7,
             x: 10.0,
             y: 20.0,
@@ -1460,14 +1479,17 @@ fn cursor_blink_toggle_asks_for_a_cursor_frame_not_a_repaint() {
             height: 16.0,
             style: CursorStyle::Bar(2.0),
             frame_id: 0x42,
-        });
+        },
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.cursor.blink_enabled = true;
     render.cursor.blink_interval = std::time::Duration::from_millis(1);
     render.begin_presentable_render();
     assert!(!render.has_presentable_dirty_content());
 
     let toggled = render.tick_cursor_blink(
-        std::time::Instant::now() + std::time::Duration::from_millis(500),
+        neomacs_display_protocol::frame_time::observe_platform_now()
+            .plus(std::time::Duration::from_millis(500)),
         false,
         None,
     );

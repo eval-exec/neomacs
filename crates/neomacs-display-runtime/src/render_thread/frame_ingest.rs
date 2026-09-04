@@ -327,10 +327,15 @@ impl RenderApp {
         if frame.frame_chrome.band(FrameChromeKind::TabBar).is_none() {
             render.chrome.interaction.clear_tab_bar();
         }
-        render.cursor.reset_blink();
+        render
+            .cursor
+            .reset_blink(neomacs_display_protocol::frame_time::observe_platform_now());
         let presentation = render.set_current_frame(Some(frame), Some(row_damage));
         let cursor_sync = Self::sync_render_cursor(render, cursor_config);
-        render.sync_visual_cursors_from_current_frame(|cursor| cursor.apply_config(cursor_config));
+        render.sync_visual_cursors_from_current_frame(
+            |cursor| cursor.apply_config(cursor_config),
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        );
         render.mark_dirty();
         FrameIngestOutcome {
             cursor: cursor_sync,
@@ -383,7 +388,10 @@ impl RenderApp {
                 render.cursor.current_w,
                 render.cursor.current_h,
             );
-            let (had_target, target_moved) = render.cursor.set_target(new_target.clone());
+            let (had_target, target_moved) = render.cursor.set_target(
+                new_target.clone(),
+                neomacs_display_protocol::frame_time::observe_platform_now(),
+            );
             if target_moved {
                 render.mark_dirty();
             }
@@ -976,9 +984,10 @@ impl RenderApp {
             .map(|ws| &mut ws.render)
         {
             let cursor_sync = Self::sync_render_cursor(primary_frame, cursor_config);
-            primary_frame.sync_visual_cursors_from_current_frame(|cursor| {
-                cursor.apply_config(cursor_config)
-            });
+            primary_frame.sync_visual_cursors_from_current_frame(
+                |cursor| cursor.apply_config(cursor_config),
+                neomacs_display_protocol::frame_time::observe_platform_now(),
+            );
             if let Some(cursor_sync) = cursor_sync {
                 self.update_ime_cursor_area_if_needed(&cursor_sync.target);
             } else {

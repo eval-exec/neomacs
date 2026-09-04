@@ -273,14 +273,15 @@ impl RenderApp {
         self.pump_glib();
 
         self.frame_windows.tick_top_level_cursor_blinks(
-            now.into_instant(),
+            now,
             self.effects.cursor_wake.enabled,
             self.renderer.as_ref(),
         );
 
-        self.frame_windows.tick_top_level_cursor_animations();
+        self.frame_windows.tick_top_level_cursor_animations(now);
 
-        self.frame_windows.tick_top_level_cursor_size_animations();
+        self.frame_windows
+            .tick_top_level_cursor_size_animations(now);
 
         if self.effects.idle_dim.enabled {
             let idle_dim_config = self.effects.idle_dim.clone();
@@ -620,7 +621,7 @@ impl RenderApp {
                             invalidation: Invalidation::CompositeOnly {
                                 layers: LayerMask::CURSOR_EFFECTS,
                             },
-                            cadence: Cadence::At(EventTime::from_observed_instant(blink)),
+                            cadence: Cadence::At(blink),
                             reason: DemandReason::CursorAnimation,
                         },
                         now,
