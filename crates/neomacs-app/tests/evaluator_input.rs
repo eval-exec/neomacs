@@ -1,7 +1,8 @@
 use neomacs_app::evaluator_input::EvaluatorInputBatch;
 use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendLogicalExtent, FrontendModifiers, FrontendPresentationId, FrontendViewport,
+    FrontendLogicalExtent, FrontendModifiers, FrontendPresentationId, FrontendTerminalExtent,
+    FrontendTerminalViewport, FrontendViewport,
 };
 use neovm_core::keyboard::{self, InputEvent};
 
@@ -104,6 +105,24 @@ fn viewport_focus_and_close_preserve_frame_identity() {
     assert!(matches!(
         one(&close),
         Some(InputEvent::WindowClose { emacs_frame_id: 9 })
+    ));
+}
+
+#[test]
+fn terminal_viewport_preserves_grid_units_without_claiming_pixel_geometry() {
+    let viewport = FrontendEvent::TerminalViewportChanged(FrontendTerminalViewport::new(
+        FrontendTerminalExtent::new(132, 43),
+        FrontendFrameId::new(9),
+    ));
+
+    assert!(matches!(
+        one(&viewport),
+        Some(InputEvent::Resize {
+            width: 132,
+            height: 43,
+            scale_factor: 1.0,
+            emacs_frame_id: 9,
+        })
     ));
 }
 

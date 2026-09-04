@@ -7,6 +7,7 @@ use neomacs_app::initial_surface::{
     InitialBackgroundMode, InitialDisplayType, InitialEditorSurfaceSpec, InitialFrameFont,
     InitialFrameMetrics, prepare_initial_editor_surface,
 };
+use neomacs_app::frontend_event::FrontendScaleFactor;
 use neomacs_app::presentation::PresentationMetrics;
 use neomacs_app::runtime_image::AuthenticatedPortableRuntimeImage;
 use neomacs_app::runtime_resources::{MountedRuntimeResources, RuntimeResourceBundle};
@@ -91,6 +92,8 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         &mut evaluator,
         InitialEditorSurfaceSpec::gui(
             metrics,
+            FrontendScaleFactor::new(startup.scale_factor())
+                .map_err(|error| format!("invalid browser opening scale: {error}"))?,
             FrameDisplayIdentity::default(),
             InitialDisplayType::Color,
             background,

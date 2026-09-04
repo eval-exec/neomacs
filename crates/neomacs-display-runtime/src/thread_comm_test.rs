@@ -7,7 +7,9 @@ use neomacs_display_protocol::{
 use neomacs_video_model::{
     InitialPlayback, LoopMode, PlaybackAction, VideoOpenRequest, VideoSource,
 };
-use neovm_host_abi::frontend_event::{FrontendEvent, FrontendKeyState};
+use neovm_host_abi::frontend_event::{
+    FrontendEvent, FrontendKeyState, FrontendLogicalExtent, FrontendTerminalExtent,
+};
 use std::path::PathBuf;
 
 fn test_image_load(image: u32, attempt: u64) -> ImageLoadToken {
@@ -482,13 +484,27 @@ fn input_event_pixel_scroll_uses_a_distinct_delta_variant() {
 
 #[test]
 fn input_event_window_resize_construction() {
-    let event = InputEvent::viewport_changed(1920, 1080, 1.0, 0).unwrap();
+    let event =
+        InputEvent::viewport_changed(FrontendLogicalExtent::new(1920, 1080), 1.0, 0).unwrap();
     match event {
         InputEvent::Frontend(FrontendEvent::ViewportChanged(viewport)) => {
             assert_eq!(viewport.logical_extent().width(), 1920);
             assert_eq!(viewport.logical_extent().height(), 1080);
             assert_eq!(viewport.scale().get(), 1.0);
             assert_eq!(viewport.target().get(), 0);
+        }
+        _ => panic!("Wrong variant"),
+    }
+}
+
+#[test]
+fn input_event_terminal_resize_keeps_character_cell_units_distinct() {
+    let event = InputEvent::terminal_viewport_changed(FrontendTerminalExtent::new(132, 43), 7);
+    match event {
+        InputEvent::Frontend(FrontendEvent::TerminalViewportChanged(viewport)) => {
+            assert_eq!(viewport.extent().columns(), 132);
+            assert_eq!(viewport.extent().rows(), 43);
+            assert_eq!(viewport.target().get(), 7);
         }
         _ => panic!("Wrong variant"),
     }
@@ -1444,7 +1460,7 @@ fn channel_sends_multiple_input_events_in_order() {
         InputEvent::key(2, 0, true, 0),
         InputEvent::key(3, 0, true, 0),
         unpresented_pointer(10.0, 20.0, 0, PointerAction::Move { modifiers: 0 }),
-        InputEvent::viewport_changed(800, 600, 1.0, 0).unwrap(),
+        InputEvent::viewport_changed(FrontendLogicalExtent::new(800, 600), 1.0, 0).unwrap(),
     ];
 
     for e in &events {
@@ -1521,7 +1537,9 @@ fn cross_thread_input_event_delivery() {
 
     let handle = std::thread::spawn(move || {
         render.send_input(InputEvent::key(0x61, 0, true, 0));
-        render.send_input(InputEvent::viewport_changed(1920, 1080, 1.0, 0).unwrap());
+        render.send_input(
+            InputEvent::viewport_changed(FrontendLogicalExtent::new(1920, 1080), 1.0, 0).unwrap(),
+        );
     });
 
     handle.join().unwrap();

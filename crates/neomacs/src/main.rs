@@ -4567,6 +4567,7 @@ fn bootstrap_buffers(
     let spec = match display.frontend() {
         FrontendKind::Gui => InitialEditorSurfaceSpec::gui(
             metrics,
+            neomacs_app::frontend_event::FrontendScaleFactor::ONE,
             host_gui_display_identity(),
             if display.color_cells > 0 {
                 InitialDisplayType::Color

@@ -11,6 +11,7 @@ use winit::keyboard::{Key, NamedKey};
 // `key_without_modifiers` (the layout base key, before macOS Option composition
 // / shift): the winit equivalent of GNU's `charactersIgnoringModifiers`.
 // Available on macOS, X11, and Wayland — the platforms neomacs targets.
+use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::WindowId;
 
@@ -194,8 +195,12 @@ impl RenderApp {
                     let (emacs_w, emacs_h) =
                         emacs_pixels_from_window_size(size.width, size.height, scale_factor);
                     self.comms.send_input(
-                        InputEvent::viewport_changed(emacs_w, emacs_h, scale_factor, emacs_fid)
-                            .expect("winit supplies a valid display scale"),
+                        InputEvent::viewport_changed(
+                            FrontendLogicalExtent::new(emacs_w, emacs_h),
+                            scale_factor,
+                            emacs_fid,
+                        )
+                        .expect("winit supplies a valid display scale"),
                     );
                 }
             }
@@ -703,8 +708,7 @@ impl RenderApp {
                         emacs_pixels_from_window_size(native_width, native_height, effective_scale);
                     self.comms.send_input(
                         InputEvent::viewport_changed(
-                            width,
-                            height,
+                            FrontendLogicalExtent::new(width, height),
                             effective_scale,
                             ws.render.emacs_frame_id,
                         )

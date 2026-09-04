@@ -22,7 +22,8 @@ use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_core::window::GuiFrameGeometryHints;
 use neovm_host_abi::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendLogicalExtent, FrontendModifiers, FrontendViewport, InvalidFrontendScaleFactor,
+    FrontendLogicalExtent, FrontendModifiers, FrontendTerminalExtent, FrontendTerminalViewport,
+    FrontendViewport, InvalidFrontendScaleFactor,
 };
 
 /// Native selection owned by the display server.
@@ -235,18 +236,27 @@ impl InputEvent {
     }
 
     pub fn viewport_changed(
-        logical_width: u32,
-        logical_height: u32,
+        logical_extent: FrontendLogicalExtent,
         scale_factor: f64,
         emacs_frame_id: u64,
     ) -> Result<Self, InvalidFrontendScaleFactor> {
         Ok(Self::Frontend(FrontendEvent::ViewportChanged(
             FrontendViewport::new(
-                FrontendLogicalExtent::new(logical_width, logical_height),
+                logical_extent,
                 scale_factor,
                 FrontendFrameId::new(emacs_frame_id),
             )?,
         )))
+    }
+
+    #[must_use]
+    pub const fn terminal_viewport_changed(
+        extent: FrontendTerminalExtent,
+        emacs_frame_id: u64,
+    ) -> Self {
+        Self::Frontend(FrontendEvent::TerminalViewportChanged(
+            FrontendTerminalViewport::new(extent, FrontendFrameId::new(emacs_frame_id)),
+        ))
     }
 
     #[must_use]
@@ -1036,6 +1046,7 @@ impl RenderComms {
             event,
             InputEvent::Frontend(
                 FrontendEvent::ViewportChanged(_)
+                    | FrontendEvent::TerminalViewportChanged(_)
                     | FrontendEvent::CloseRequested { .. }
                     | FrontendEvent::FocusChanged { .. }
             ) | InputEvent::MonitorsChanged { .. }
@@ -1049,6 +1060,7 @@ impl RenderComms {
                 FrontendEvent::Key(_) => "key",
                 FrontendEvent::TextCommitted { .. } => "text-committed",
                 FrontendEvent::ViewportChanged(_) => "viewport-changed",
+                FrontendEvent::TerminalViewportChanged(_) => "terminal-viewport-changed",
                 FrontendEvent::CloseRequested { .. } => "close-requested",
                 FrontendEvent::FocusChanged { .. } => "focus-changed",
                 FrontendEvent::PresentationActivated { .. } => "presentation-activated",
