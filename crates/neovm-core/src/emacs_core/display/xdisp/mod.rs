@@ -39,6 +39,47 @@ use std::ops::ControlFlow;
 use strum::{EnumString, IntoStaticStr};
 
 impl super::eval::Context {
+    /// Choose a redisplay start by moving backward from point in display rows.
+    ///
+    /// GNU's `recenter:` branch initializes its display iterator at point and
+    /// calls `move_it_vertically_backward` (src/xdisp.c:21191-21212).  Keep
+    /// that operation behind the core display-motion seam so layout callers
+    /// never substitute raw buffer-newline arithmetic for display rows that
+    /// can wrap, fold, or be replaced. `None` leaves the caller's semantic
+    /// viewport unchanged; a failed motion must never turn into a jump to
+    /// `point-min`.
+    pub fn redisplay_start_before_point_by_display_rows(
+        &mut self,
+        buffer_id: BufferId,
+        window_id: WindowId,
+        point: CharPos0,
+        rows: i64,
+    ) -> Option<CharPos0> {
+        let Some(point_byte) = self
+            .buffers
+            .get(buffer_id)
+            .map(|buffer| buffer.char_pos_to_emacs_byte_pos_clamped(point))
+        else {
+            return None;
+        };
+        let start_byte = match super::indent::scan_screen_line_motion_target(
+            self,
+            buffer_id,
+            point_byte,
+            Some(Value::make_window(window_id.0)),
+            -rows.max(0),
+        ) {
+            Ok(motion) => motion.target,
+            Err(flow) => {
+                tracing::debug!("display-row viewport placement failed: {flow:?}");
+                return None;
+            }
+        };
+        self.buffers
+            .get(buffer_id)
+            .map(|buffer| buffer.emacs_byte_pos_to_char_pos_clamped(start_byte))
+    }
+
     /// Whether redisplay of `window_id` can enter Lisp through
     /// `window-scroll-functions`.
     ///

@@ -23,6 +23,7 @@ use crate::hit_test::HitRow;
 use crate::neovm_bridge::{LayoutBufferView, ResolvedFace, RustBufferAccess};
 use crate::scroll_policy::ScrollPolicy;
 use crate::types::WindowParams;
+use crate::viewport_resolution::ForwardViewportMeasurement;
 use crate::window_layout::WindowChromeMetrics;
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::window::{
@@ -57,6 +58,7 @@ pub(crate) struct BufferSourceTailRequestContext<'a> {
     char_height: f32,
     row_limit: DisplayRowLimit,
     retry_bounds: BufferSourceRetryBounds,
+    forward_viewport_measurement: Option<ForwardViewportMeasurement>,
     body_install_context: BufferSourceBodyInstallContext,
     reserve_right_special_col: bool,
     reserve_right_border_col: bool,
@@ -66,7 +68,7 @@ pub(crate) struct BufferSourceTailRequestContext<'a> {
     regions: PresentedWindowRegions,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BufferSourcePostLoopRenderOutcome {
     pub(crate) retry: TextWindowVisibilityRetryOutcome,
     pub(crate) rendered_rows_len: usize,
@@ -157,6 +159,7 @@ impl<'a> BufferSourceTailRequestContext<'a> {
         char_height: f32,
         row_limit: DisplayRowLimit,
         retry_bounds: BufferSourceRetryBounds,
+        forward_viewport_measurement: Option<ForwardViewportMeasurement>,
         body_install_context: BufferSourceBodyInstallContext,
         reserve_right_special_col: bool,
         reserve_right_border_col: bool,
@@ -180,6 +183,7 @@ impl<'a> BufferSourceTailRequestContext<'a> {
             char_height,
             row_limit,
             retry_bounds,
+            forward_viewport_measurement,
             body_install_context,
             reserve_right_special_col,
             reserve_right_border_col,
@@ -215,7 +219,7 @@ impl<'a> BufferSourceTailRequestContext<'a> {
     }
 
     pub(crate) fn visibility_retry_request<'rows, 'buf, B>(
-        &self,
+        &'rows self,
         rows: &'rows [DisplayRowSnapshot],
         charpos: i64,
         point_is_visible_eob: bool,
@@ -236,6 +240,7 @@ impl<'a> BufferSourceTailRequestContext<'a> {
             self.retry_bounds.text_area_bottom(),
             ScrollPolicy::from_window_params(self.params),
             self.params.scroll_margin,
+            self.forward_viewport_measurement.as_ref(),
             buf_access,
         )
     }

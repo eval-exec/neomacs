@@ -8531,6 +8531,7 @@ fn buffer_text_window_visibility_retry_request_scrolls_down_from_visible_rows() 
         48,
         ScrollPolicy::Unlimited,
         0,
+        None,
         &access,
     )
     .decide();
@@ -8578,6 +8579,7 @@ fn buffer_text_window_visibility_retry_request_detects_partially_visible_point_r
         60,
         ScrollPolicy::Unlimited,
         0,
+        None,
         &access,
     )
     .decide();
@@ -8620,6 +8622,7 @@ fn buffer_text_window_visibility_retry_request_detects_point_line_continuation()
         48,
         ScrollPolicy::Unlimited,
         0,
+        None,
         &access,
     )
     .decide();

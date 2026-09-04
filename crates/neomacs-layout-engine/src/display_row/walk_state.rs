@@ -1270,7 +1270,7 @@ fn row_end_charpos(row: &DisplayRowSnapshot) -> Option<i64> {
 }
 
 #[inline]
-fn row_next_window_start_charpos(row: &DisplayRowSnapshot) -> Option<i64> {
+pub(crate) fn row_next_window_start_charpos(row: &DisplayRowSnapshot) -> Option<i64> {
     row.end_buffer_pos
         .map(LispCharPos1::as_i64)
         .or_else(|| row_start_charpos(row))

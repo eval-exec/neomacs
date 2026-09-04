@@ -9467,6 +9467,156 @@ fn visibility_retry_never_places_window_start_inside_unmeasured_fold() {
     );
 }
 
+/// GNU keeps row measurement separate from the viewport decision: a replacing
+/// `display` property can force xdisp to walk real display rows, but it does not
+/// change what `scroll-conservatively` means.  Telega exercises this whenever
+/// sending a message replaces its prompt/message cells between the retained
+/// visible end and point.
+#[test]
+fn replacing_display_measurement_preserves_conservative_bottom_scroll() {
+    let layout_after_tail_insert = |with_replacement: bool| {
+        let mut eval = Context::new();
+        let buf_id = eval
+            .buffer_manager()
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        let history = (0..120)
+            .map(|index| format!("message {index:03}\n"))
+            .collect::<String>();
+        let prompt = ">>> ";
+        let text = format!("{history}{prompt}");
+        {
+            let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+            buf.insert(&text);
+            buf.set_buffer_local("scroll-conservatively", Value::fixnum(101));
+            buf.goto_emacs_byte_pos(EmacsBytePos::new(text.len()));
+        }
+        let frame_id = eval.frame_manager_mut().create_frame(
+            "conservative-scroll-across-display-replacement",
+            640,
+            224,
+            buf_id,
+        );
+        let selected_window = eval
+            .frame_manager()
+            .get(frame_id)
+            .expect("frame")
+            .selected_window;
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        let neovm_core::window::Window::Leaf { point, .. } = frame
+            .find_window_mut(selected_window)
+            .expect("selected window")
+        else {
+            panic!("selected window is not a leaf");
+        };
+        *point = LispCharPos1::from_one_based_usize(text.len() + 1);
+        let mut engine = LayoutEngine::new();
+        engine.layout_frame_rust(&mut eval, frame_id);
+
+        let insert_at = history.len();
+        let inserted = "sent message\n";
+        let target = text.len() + inserted.len();
+        if with_replacement {
+            eval.eval_str(
+                "(progn
+                   (setq neomacs-viewport-scroll-log nil)
+                   (make-local-variable 'window-scroll-functions)
+                   (setq window-scroll-functions
+                         (list (lambda (_window start)
+                                 (setq neomacs-viewport-scroll-log
+                                       (cons start neomacs-viewport-scroll-log))))))",
+            )
+            .expect("install viewport publication observer");
+            assert!(
+                eval.window_scroll_functions_may_run(selected_window),
+                "the buffer-local observer must be visible to redisplay"
+            );
+        }
+        {
+            let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+            buf.goto_emacs_byte_pos(EmacsBytePos::new(insert_at));
+            buf.insert(inserted);
+            if with_replacement {
+                assert!(buf.put_text_property(
+                    insert_at,
+                    insert_at + inserted.len(),
+                    Value::symbol("display"),
+                    Value::string(inserted),
+                ));
+            }
+            buf.goto_emacs_byte_pos(EmacsBytePos::new(target));
+        }
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        let neovm_core::window::Window::Leaf { point, .. } = frame
+            .find_window_mut(selected_window)
+            .expect("selected window")
+        else {
+            panic!("selected window is not a leaf");
+        };
+        *point = LispCharPos1::from_one_based_usize(target + 1);
+
+        engine.layout_frame_rust(&mut eval, frame_id);
+        let trace = selected_window_layout_trace(&eval, &engine, frame_id);
+        if with_replacement {
+            let hook_count = eval
+                .eval_str("(length neomacs-viewport-scroll-log)")
+                .expect("read viewport publication count")
+                .as_fixnum()
+                .expect("publication count");
+            let published_starts = eval
+                .eval_str("(format \"%S\" neomacs-viewport-scroll-log)")
+                .expect("read published viewport starts")
+                .as_str_owned()
+                .expect("published starts");
+            assert_eq!(
+                hook_count, 1,
+                "measurement probes must not run window-scroll-functions"
+            );
+            assert_eq!(
+                published_starts,
+                format!("({})", trace.window_start.as_i64()),
+                "only the final policy-approved viewport may be published"
+            );
+        }
+        trace
+    };
+
+    let plain = layout_after_tail_insert(false);
+    let replacing = layout_after_tail_insert(true);
+
+    assert_eq!(
+        replacing.window_start, plain.window_start,
+        "measurement uncertainty must not turn into a page-sized viewport commit"
+    );
+    let plain_cursor = plain.phys_cursor.as_ref().expect("plain cursor");
+    let replacing_cursor = replacing.phys_cursor.as_ref().expect("replacement cursor");
+    let plain_last_row = plain
+        .output_rows
+        .iter()
+        .map(|row| row.row)
+        .max()
+        .expect("plain body rows");
+    let replacing_last_row = replacing
+        .output_rows
+        .iter()
+        .map(|row| row.row)
+        .max()
+        .expect("replacement body rows");
+    assert!(
+        plain_last_row - plain_cursor.row <= 1,
+        "control cursor should occupy the last fully visible row"
+    );
+    assert!(
+        replacing_last_row - replacing_cursor.row <= 1,
+        "replacement cursor should occupy the last fully visible row"
+    );
+    assert_eq!(
+        replacing_cursor.row, plain_cursor.row,
+        "scroll-conservatively > 100 should keep point on the bottom row"
+    );
+}
+
 #[test]
 fn distant_point_with_unrelated_overlay_does_not_exhaust_visibility_retries() {
     let mut eval = Context::new();

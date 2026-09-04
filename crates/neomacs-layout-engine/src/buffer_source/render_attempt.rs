@@ -19,6 +19,7 @@ use crate::incremental_layout::ReusedMatrixRows;
 use crate::layout_effect::{LayoutEffect, WindowScrollEffect, WindowScrollHookSite};
 use crate::neovm_bridge::FaceResolver;
 use crate::types::WindowParams;
+use crate::viewport_resolution::ViewportDecision;
 use crate::window_output::{
     TextWindowOutputRetryCheckpoint, TextWindowOutputTarget, TextWindowRedisplayPositions,
     WindowOutputEmitter, capture_text_window_retry_checkpoint,
@@ -139,6 +140,12 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     Retry {
         window_start: i64,
     },
+    /// Resolve a viewport decision that cannot finish inside the row producer:
+    /// either measure more display rows from a transient, unpublished probe or
+    /// place the final start relative to point through core display motion.
+    ResolveViewport {
+        decision: ViewportDecision,
+    },
     /// The window start is forced (GNU `w->force_start`): keep it and re-lay
     /// with POINT moved to the last fully-visible position instead of
     /// recomputing the start around point (GNU redisplay_window's
@@ -172,7 +179,7 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BufferSourceRetryPlan {
     window_id: i64,
     window_start: i64,
@@ -384,7 +391,7 @@ impl BufferSourceRetryPlan {
         }
     }
 
-    pub(crate) fn log_visibility_adjustments(self) {
+    pub(crate) fn log_visibility_adjustments(&self) {
         if self.retry.scroll_down_window_start().is_some() {
             tracing::debug!(
                 "layout_window_rust: point={} beyond visible_end={:?} (charpos_end={}), visible_rows={}, new_window_start={:?}",
@@ -413,27 +420,52 @@ impl BufferSourceRetryPlan {
         }
     }
 
-    pub(crate) fn retry_window_start(self) -> Option<i64> {
+    pub(crate) fn retry_window_start(&self) -> Option<i64> {
         self.retry.retry_window_start()
+    }
+
+    pub(crate) fn viewport_resolution(
+        &self,
+        remaining_visibility_retries: usize,
+    ) -> Option<ViewportDecision> {
+        match self.retry.viewport_decision() {
+            ViewportDecision::NeedMoreMeasurement(measurement)
+                if remaining_visibility_retries > 0 =>
+            {
+                Some(ViewportDecision::NeedMoreMeasurement(measurement))
+            }
+            ViewportDecision::NeedMoreMeasurement(measurement) => {
+                Some(measurement.fallback_placement())
+            }
+            decision @ ViewportDecision::PlaceRelativeToPoint { .. }
+                if remaining_visibility_retries > 0 =>
+            {
+                Some(decision)
+            }
+            ViewportDecision::Keep
+            | ViewportDecision::Commit { .. }
+            | ViewportDecision::PlaceRelativeToPoint { .. } => None,
+        }
     }
 
     /// Target for GNU's force_start point move: the last fully-visible
     /// buffer position of the attempt just laid out (layout 0-based), i.e.
     /// point lands on the final visible row of the kept window start.
-    pub(crate) fn forced_start_point_target(self) -> Option<i64> {
+    pub(crate) fn forced_start_point_target(&self) -> Option<i64> {
         self.retry
             .visible_end_lisp()
             .map(|pos| pos.as_i64() - 1)
             .filter(|charpos| *charpos >= 0)
     }
 
-    pub(crate) fn should_retry(self, remaining_visibility_retries: usize) -> Option<i64> {
+    pub(crate) fn should_retry(&self, remaining_visibility_retries: usize) -> Option<i64> {
         self.retry_window_start().filter(|new_window_start| {
-            remaining_visibility_retries > 0 && *new_window_start > self.window_start
+            remaining_visibility_retries > 0
+                && *new_window_start > self.retry.semantic_window_start()
         })
     }
 
-    pub(crate) fn log_retry(self, new_window_start: i64, remaining_visibility_retries: usize) {
+    pub(crate) fn log_retry(&self, new_window_start: i64, remaining_visibility_retries: usize) {
         tracing::debug!(
             "layout_window_rust: retrying window {} with adjusted window_start {} -> {} (remaining={})",
             self.window_id,

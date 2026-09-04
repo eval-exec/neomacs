@@ -19,6 +19,7 @@ use crate::display_status_line::{
 };
 use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess};
 use crate::types::{FrameParams, WindowParams};
+use crate::viewport_resolution::ForwardViewportMeasurement;
 use crate::window_layout::WindowLayoutBox;
 use neovm_core::buffer::BufferId;
 use neovm_core::window::{FrameId, WindowId};
@@ -38,6 +39,7 @@ where
     reserve_right_border_col: bool,
     position_publication: WindowPositionPublication,
     resolved_window_start: ResolvedWindowStart,
+    forward_viewport_measurement: Option<ForwardViewportMeasurement>,
 }
 
 impl<'a, B> BufferWindowRenderRequest<'a, B>
@@ -68,6 +70,7 @@ where
             reserve_right_border_col,
             position_publication: WindowPositionPublication::Redisplay,
             resolved_window_start,
+            forward_viewport_measurement: None,
         }
     }
 
@@ -76,6 +79,14 @@ where
         publication: WindowPositionPublication,
     ) -> Self {
         self.position_publication = publication;
+        self
+    }
+
+    pub(crate) fn with_forward_viewport_measurement(
+        mut self,
+        measurement: Option<ForwardViewportMeasurement>,
+    ) -> Self {
+        self.forward_viewport_measurement = measurement;
         self
     }
 
@@ -99,6 +110,7 @@ where
             reserve_right_border_col,
             position_publication,
             resolved_window_start,
+            forward_viewport_measurement,
         } = self;
         let mut state = context;
         let buf_access = RustBufferAccess::new(buffer);
@@ -285,6 +297,7 @@ where
                 buffer_name,
             ),
             remaining_visibility_retries,
+            forward_viewport_measurement,
             local_display_policy,
             line_number_field,
             &geometry,

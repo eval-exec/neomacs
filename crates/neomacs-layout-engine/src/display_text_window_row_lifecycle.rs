@@ -29,6 +29,7 @@ use crate::scroll_policy::{
     line_start_below,
 };
 use crate::types::WindowParams;
+use crate::viewport_resolution::{ForwardViewportMeasurement, ViewportDecision};
 use crate::window_output::{
     DisplayTextRowBegin, TextWindowBegin, TextWindowBodyOutputInstall, TextWindowCursorEffects,
     TextWindowOutputTarget, TextWindowPendingRowFinish, TextWindowRedisplayPositions,
@@ -305,6 +306,7 @@ pub(crate) struct TextWindowVisibilityRetryRequest<'a, 'buf, B: LayoutBufferView
     text_area_bottom: i64,
     scroll_policy: ScrollPolicy,
     scroll_margin: i64,
+    forward_viewport_measurement: Option<&'a ForwardViewportMeasurement>,
     buf_access: &'a RustBufferAccess<'buf, B>,
 }
 
@@ -333,12 +335,13 @@ impl TextWindowFinishOutput {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TextWindowVisibilityRetryOutcome {
+    semantic_window_start: i64,
     visible_end_lisp: Option<LispCharPos1>,
     visible_progress: i64,
     point_beyond_visible_span: bool,
-    scroll_down_window_start: Option<i64>,
+    scroll_down: ViewportDecision,
     point_row_window_start: Option<i64>,
     point_line_window_start: Option<i64>,
 }
@@ -771,6 +774,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         text_area_bottom: i64,
         scroll_policy: ScrollPolicy,
         scroll_margin: i64,
+        forward_viewport_measurement: Option<&'a ForwardViewportMeasurement>,
         buf_access: &'a RustBufferAccess<'buf, B>,
     ) -> Self {
         Self {
@@ -785,11 +789,17 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
             text_area_bottom,
             scroll_policy,
             scroll_margin,
+            forward_viewport_measurement,
             buf_access,
         }
     }
 
     pub(crate) fn decide(self) -> TextWindowVisibilityRetryOutcome {
+        let semantic_window_start = self
+            .forward_viewport_measurement
+            .map_or(self.window_start, |measurement| {
+                measurement.origin_window_start().get()
+            });
         let point_lisp = layout_i64_char_pos_to_lisp_char_pos(self.point_charpos);
         let visible_end_lisp = self.rows.iter().rev().find_map(|row| row.end_buffer_pos);
         let visible_end_lisp = if self.point_is_visible_eob {
@@ -811,10 +821,12 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         // minibuffer is no longer excluded.  An inactive echo-area mini-window
         // has point reset to BEGV, so `point_beyond_visible_span` is false and
         // it never scrolls.
-        let scroll_down_window_start = if visible_progress > self.window_start {
-            self.scroll_down_start(point_lisp, visible_end_lisp, point_beyond_visible_span)
+        let scroll_down = if self.forward_viewport_measurement.is_some()
+            || visible_progress > self.window_start
+        {
+            self.scroll_down_decision(point_lisp, visible_end_lisp, point_beyond_visible_span)
         } else {
-            None
+            ViewportDecision::Keep
         };
         let point_row_window_start = next_window_start_for_partially_visible_point_row(
             self.rows,
@@ -832,10 +844,11 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         );
 
         TextWindowVisibilityRetryOutcome {
+            semantic_window_start,
             visible_end_lisp,
             visible_progress,
             point_beyond_visible_span,
-            scroll_down_window_start,
+            scroll_down,
             point_row_window_start,
             point_line_window_start,
         }
@@ -849,22 +862,21 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
     /// Scrolling to `visible_end` (a whole windowful) is what GNU never does:
     /// it is the "arbitrary page break" users see when walking down a buffer
     /// one line at a time.
-    fn scroll_down_start(
+    fn scroll_down_decision(
         &self,
         point_lisp: LispCharPos1,
         visible_end_lisp: Option<LispCharPos1>,
         point_beyond_visible_span: bool,
-    ) -> Option<i64> {
+    ) -> ViewportDecision {
         let byte_at_charpos = |charpos: i64| {
             self.buf_access
                 .byte_at(self.buf_access.charpos_to_bytepos(charpos))
         };
-        // Rows already laid out below the start, and the lowest one point may
-        // occupy once the bottom scroll-margin is honored (GNU's
-        // `scroll_margin_y`, xdisp.c:19420).
-        let laid_out_rows = visible_rows_below(self.rows, self.window_start);
-        let bottom_row = last_usable_row(laid_out_rows as usize, self.scroll_margin);
-
+        if let Some(measurement) = self.forward_viewport_measurement {
+            return measurement
+                .clone()
+                .observe(self.rows, point_lisp, point_beyond_visible_span);
+        }
         // A point below the measured rows can be extrapolated in source lines
         // only when source and display progress monotonically together.  If an
         // intervening property may consume source text, advance solely through
@@ -879,12 +891,41 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 .forward_scroll_measurement(first_unmeasured, self.point_charpos)
         });
         if forward_measurement == Some(ForwardScrollMeasurement::DisplayRowsRequired) {
-            return next_window_start_from_visible_rows(
+            return ForwardViewportMeasurement::begin(
                 self.rows,
-                self.window_start,
-                laid_out_rows,
+                crate::buffer_source::window_source::ResolvedWindowStart::from_layout_charpos(
+                    self.window_start,
+                ),
+                self.scroll_policy,
+                self.scroll_margin,
             );
         }
+
+        self.scroll_down_from_available_rows(
+            point_lisp,
+            visible_end_lisp,
+            point_beyond_visible_span,
+            &byte_at_charpos,
+        )
+        .map_or(ViewportDecision::Keep, |window_start| {
+            ViewportDecision::Commit {
+                window_start:
+                    crate::buffer_source::window_source::ResolvedWindowStart::from_layout_charpos(
+                        window_start,
+                    ),
+            }
+        })
+    }
+
+    fn scroll_down_from_available_rows(
+        &self,
+        point_lisp: LispCharPos1,
+        visible_end_lisp: Option<LispCharPos1>,
+        point_beyond_visible_span: bool,
+        byte_at_charpos: &impl Fn(i64) -> Option<u8>,
+    ) -> Option<i64> {
+        let laid_out_rows = visible_rows_below(self.rows, self.window_start);
+        let bottom_row = last_usable_row(laid_out_rows as usize, self.scroll_margin);
 
         // Which display row point landed on. Inside the laid-out rows this is
         // exact — it accounts for wrapped lines and for text the display hides.
@@ -896,24 +937,18 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         });
         let (point_row, bounded) = match point_row_in_rows {
             Some(row) => (row as i64, true),
-            // Point is off the bottom: nothing measured it, so estimate one row
-            // per newline below the visible end.
             None if point_beyond_visible_span => {
                 let first_hidden = visible_end_lisp.map_or(self.point_charpos, |end| end.as_i64());
                 let (extra_lines, bounded) = count_lines_bounded(
                     first_hidden,
                     self.point_charpos,
                     self.scroll_policy.search_limit_lines(),
-                    &byte_at_charpos,
+                    byte_at_charpos,
                 );
                 (laid_out_rows + extra_lines, bounded)
             }
-            // Point is not on any row and not below them — it is ABOVE the
-            // window, which this branch must never answer for.
             None => return None,
         };
-        // GNU's `dy`. Zero or less means point is already where the margin
-        // allows, and `try_scrolling` leaves the window alone.
         let dy = point_row - bottom_row;
         if dy <= 0 {
             return None;
@@ -928,7 +963,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 start,
                 unsatisfied,
                 self.accessible_end,
-                &byte_at_charpos,
+                byte_at_charpos,
             ))
         };
 
@@ -948,7 +983,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 self.point_charpos,
                 lines_above_point,
                 self.accessible_start,
-                &byte_at_charpos,
+                byte_at_charpos,
             ))
             .filter(|start| *start > self.window_start)
             .or_else(|| advance(dy)),
@@ -989,29 +1024,42 @@ impl TextWindowFinishRequest {
 }
 
 impl TextWindowVisibilityRetryOutcome {
-    pub(crate) fn visible_end_lisp(self) -> Option<LispCharPos1> {
+    pub(crate) fn semantic_window_start(&self) -> i64 {
+        self.semantic_window_start
+    }
+
+    pub(crate) fn visible_end_lisp(&self) -> Option<LispCharPos1> {
         self.visible_end_lisp
     }
 
     #[cfg(test)]
-    pub(crate) fn point_beyond_visible_span(self) -> bool {
+    pub(crate) fn point_beyond_visible_span(&self) -> bool {
         self.point_beyond_visible_span
     }
 
-    pub(crate) fn scroll_down_window_start(self) -> Option<i64> {
-        self.scroll_down_window_start
+    pub(crate) fn scroll_down_window_start(&self) -> Option<i64> {
+        match self.scroll_down {
+            ViewportDecision::Commit { window_start } => Some(window_start.get()),
+            ViewportDecision::Keep
+            | ViewportDecision::NeedMoreMeasurement(_)
+            | ViewportDecision::PlaceRelativeToPoint { .. } => None,
+        }
     }
 
-    pub(crate) fn point_row_window_start(self) -> Option<i64> {
+    pub(crate) fn viewport_decision(&self) -> ViewportDecision {
+        self.scroll_down.clone()
+    }
+
+    pub(crate) fn point_row_window_start(&self) -> Option<i64> {
         self.point_row_window_start
     }
 
-    pub(crate) fn point_line_window_start(self) -> Option<i64> {
+    pub(crate) fn point_line_window_start(&self) -> Option<i64> {
         self.point_line_window_start
     }
 
-    pub(crate) fn retry_window_start(self) -> Option<i64> {
-        self.scroll_down_window_start
+    pub(crate) fn retry_window_start(&self) -> Option<i64> {
+        self.scroll_down_window_start()
             .or(self.point_row_window_start)
             .or(self.point_line_window_start)
     }

@@ -40,6 +40,7 @@ use crate::incremental_layout::{
 };
 use crate::neovm_bridge::{FaceResolver, LayoutBufferView, ResolvedFace, RustBufferAccess};
 use crate::types::WindowParams;
+use crate::viewport_resolution::ForwardViewportMeasurement;
 use crate::window_layout::{WindowChromeMetrics, WindowLayoutBox};
 use crate::window_output::{
     TextWindowCursor, TextWindowCursorRole, TextWindowCursorSlots, TextWindowOutputTarget,
@@ -642,6 +643,7 @@ impl BufferSourceOutputSetup {
         state: BufferSourceRenderAttemptContext<'_, '_>,
         chrome_request: WindowChromeRowsRenderRequest<'_, '_>,
         remaining_visibility_retries: usize,
+        forward_viewport_measurement: Option<ForwardViewportMeasurement>,
         local_display_policy: BufferWindowLocalDisplayPolicy,
         line_number_field: LineNumberFieldLayout,
         geometry: &BufferWindowGeometry,
@@ -737,6 +739,7 @@ impl BufferSourceOutputSetup {
             geometry.char_height,
             self.row_limit,
             self.retry_bounds,
+            forward_viewport_measurement,
             self.body_install_context,
             reserve_right_special_col,
             reserve_right_border_col,
@@ -1243,6 +1246,12 @@ impl BufferSourceOutputSetup {
         } else {
             remaining_visibility_retries
         };
+        if !params.force_start {
+            if let Some(decision) = retry_plan.viewport_resolution(retry_budget) {
+                output.restore_retry_checkpoint(retry_checkpoint);
+                return BufferSourceRenderAttemptOutcome::ResolveViewport { decision };
+            }
+        }
         if let Some(window_start) = retry_plan.should_retry(retry_budget) {
             // GNU `w->force_start` (redisplay_window force_start branch): an
             // explicitly scrolled/set start is kept, and POINT moves into the

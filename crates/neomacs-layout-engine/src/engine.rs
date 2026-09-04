@@ -85,6 +85,7 @@ use crate::incremental_layout::{
 };
 use crate::layout_effect::{LayoutEffect, WindowScrollHookSite};
 use crate::redisplay_fontification::VisibleFontificationCoverage;
+use crate::viewport_resolution::{ForwardViewportMeasurement, ViewportDecision};
 use crate::window_layout::{
     WindowChromeMetrics, WindowDividerLayout, WindowLayoutBox, WindowLayoutOutcome,
 };
@@ -836,6 +837,18 @@ enum LeafLayoutAttempt {
     },
     Effect(LayoutEffect),
     LogicalInputsChanged,
+}
+
+/// Whether this leaf is choosing, measuring, or committing its viewport.
+///
+/// A measurement start drives the display iterator but is never Lisp-visible.
+/// A committed start has already been selected from measured rows and bypasses
+/// the preflight estimator on its final rendering pass.
+#[derive(Clone, Debug)]
+enum ViewportResolutionPhase {
+    Resolve,
+    Measure(ForwardViewportMeasurement),
+    Commit(ResolvedWindowStart),
 }
 
 /// Affine live-window publications accumulated by one speculative frame walk.
@@ -2063,6 +2076,7 @@ impl LayoutEngine {
                         } else {
                             MAX_WINDOW_VISIBILITY_RETRIES
                         },
+                        ViewportResolutionPhase::Resolve,
                         cursor_only_replay.take(),
                         scroll_replay.take(),
                         is_edit,
@@ -3357,6 +3371,7 @@ impl LayoutEngine {
         face_resolver: &super::neovm_bridge::FaceResolver,
         reserve_right_border_col: bool,
         remaining_visibility_retries: usize,
+        viewport_resolution: ViewportResolutionPhase,
         // Phase A (gather) classified this window's incremental fast path against
         // the *original* params (before any echo-buffer swap below), reading the
         // same retained key the predicate was snapshotted from. Phase B (here)
@@ -3372,18 +3387,24 @@ impl LayoutEngine {
     ) -> LeafLayoutAttempt {
         let window_id = neovm_core::window::WindowId(params.window_id as u64);
         let live_window_start = ResolvedWindowStart::from_layout_charpos(params.window_start);
-        let resolved_window_start = lisp_ledger
-            .exact_hook_resume(window_id, live_window_start)
-            .unwrap_or_else(|| {
-                resolve_leaf_window_start(
-                    evaluator,
-                    params,
-                    frame_params,
-                    layout_box,
-                    position_publication,
-                    scroll_replay.is_some(),
-                )
-            });
+        let resolved_window_start = match &viewport_resolution {
+            ViewportResolutionPhase::Resolve => lisp_ledger
+                .exact_hook_resume(window_id, live_window_start)
+                .unwrap_or_else(|| {
+                    resolve_leaf_window_start(
+                        evaluator,
+                        params,
+                        frame_params,
+                        layout_box,
+                        position_publication,
+                        scroll_replay.is_some(),
+                    )
+                }),
+            ViewportResolutionPhase::Measure(measurement) => {
+                ResolvedWindowStart::from_layout_charpos(measurement.probe_window_start().get())
+            }
+            ViewportResolutionPhase::Commit(window_start) => *window_start,
+        };
         let resolved_params;
         let params = if resolved_window_start.get() == params.window_start {
             params
@@ -3398,12 +3419,14 @@ impl LayoutEngine {
         let scroll_hook_site = WindowScrollHookSite::new(window_id, resolved_window_start);
         let site_publication =
             lisp_ledger.publication_for_site(position_publication, scroll_hook_site);
-        if let Some(effect) = site_publication.publish_window_start(
-            evaluator,
-            frame_id,
-            window_id,
-            resolved_window_start,
-        ) {
+        if !matches!(&viewport_resolution, ViewportResolutionPhase::Measure(_))
+            && let Some(effect) = site_publication.publish_window_start(
+                evaluator,
+                frame_id,
+                window_id,
+                resolved_window_start,
+            )
+        {
             return LeafLayoutAttempt::Effect(effect);
         }
         let buf_id = neovm_core::buffer::BufferId(params.buffer_id);
@@ -3512,6 +3535,10 @@ impl LayoutEngine {
             resolved_window_start,
         )
         .with_position_publication(site_publication)
+        .with_forward_viewport_measurement(match &viewport_resolution {
+            ViewportResolutionPhase::Measure(measurement) => Some(measurement.clone()),
+            ViewportResolutionPhase::Resolve | ViewportResolutionPhase::Commit(_) => None,
+        })
         .render_into(
             BufferSourceRenderAttemptContext::from_frame_output_owner(
                 &mut self.frame_output,
@@ -3658,6 +3685,7 @@ impl LayoutEngine {
                     face_resolver,
                     reserve_right_border_col,
                     remaining_visibility_retries,
+                    viewport_resolution.clone(),
                     None,
                     None,
                     false,
@@ -3667,6 +3695,98 @@ impl LayoutEngine {
                     face_attempt,
                 );
             }
+            BufferSourceRenderAttemptOutcome::ResolveViewport {
+                decision: ViewportDecision::NeedMoreMeasurement(measurement),
+            } => {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                let mut measurement_params = params.clone();
+                measurement_params.window_start = measurement.probe_window_start().get();
+                measurement_params.previous_visible_end = None;
+                return self.layout_window_rust(
+                    evaluator,
+                    frame_id,
+                    &measurement_params,
+                    frame_params,
+                    layout_box,
+                    face_resolver,
+                    reserve_right_border_col,
+                    remaining_visibility_retries.saturating_sub(1),
+                    ViewportResolutionPhase::Measure(measurement),
+                    None,
+                    None,
+                    false,
+                    position_publication,
+                    lisp_ledger,
+                    topology_generation,
+                    face_attempt,
+                );
+            }
+            BufferSourceRenderAttemptOutcome::ResolveViewport {
+                decision:
+                    ViewportDecision::PlaceRelativeToPoint {
+                        lines_above_point,
+                        fallback_window_start,
+                    },
+            } => {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                let freshness_before_motion =
+                    evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id);
+                let point = neovm_core::buffer::CharPos0::new(params.point.max(0) as usize);
+                let resolved_start = evaluator
+                    .redisplay_start_before_point_by_display_rows(
+                        buf_id,
+                        window_id,
+                        point,
+                        lines_above_point,
+                    )
+                    .map_or(fallback_window_start, |start| {
+                        ResolvedWindowStart::from_layout_charpos(start.get() as i64)
+                    });
+                // A display-motion error, or a motion engine that cannot
+                // represent a better start for this display span, preserves
+                // the semantic viewport. Do not spend the remaining budget
+                // rediscovering the same no-op placement.
+                let next_visibility_retries = if resolved_start == fallback_window_start {
+                    0
+                } else {
+                    remaining_visibility_retries.saturating_sub(1)
+                };
+                if evaluator.frame_manager().window_topology_generation() != topology_generation
+                    || evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id)
+                        != freshness_before_motion
+                {
+                    return LeafLayoutAttempt::LogicalInputsChanged;
+                }
+                lisp_ledger.finish_hook_resume(window_id);
+                let mut retry_params = params.clone();
+                retry_params.window_start = resolved_start.get();
+                retry_params.previous_visible_end = None;
+                return self.layout_window_rust(
+                    evaluator,
+                    frame_id,
+                    &retry_params,
+                    frame_params,
+                    layout_box,
+                    face_resolver,
+                    reserve_right_border_col,
+                    next_visibility_retries,
+                    ViewportResolutionPhase::Commit(resolved_start),
+                    None,
+                    None,
+                    false,
+                    position_publication,
+                    lisp_ledger,
+                    topology_generation,
+                    face_attempt,
+                );
+            }
+            BufferSourceRenderAttemptOutcome::ResolveViewport {
+                decision: ViewportDecision::Keep | ViewportDecision::Commit { .. },
+            } => unreachable!("only unresolved viewport decisions leave the row producer"),
             BufferSourceRenderAttemptOutcome::Retry { window_start } => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
@@ -3691,6 +3811,9 @@ impl LayoutEngine {
                     face_resolver,
                     reserve_right_border_col,
                     remaining_visibility_retries.saturating_sub(1),
+                    ViewportResolutionPhase::Commit(ResolvedWindowStart::from_layout_charpos(
+                        window_start,
+                    )),
                     None,
                     None,
                     false,
@@ -3739,6 +3862,7 @@ impl LayoutEngine {
                     face_resolver,
                     reserve_right_border_col,
                     remaining_visibility_retries.saturating_sub(1),
+                    ViewportResolutionPhase::Commit(resolved_window_start),
                     None,
                     None,
                     false,

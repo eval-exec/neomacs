@@ -5020,6 +5020,22 @@ fn test_vertical_motion_eval_uses_live_redisplay_rows() {
 }
 
 #[test]
+fn redisplay_point_relative_motion_reports_failure_without_inventing_a_start() {
+    let mut eval = interactive_context();
+
+    assert_eq!(
+        eval.redisplay_start_before_point_by_display_rows(
+            crate::buffer::BufferId(u64::MAX),
+            crate::window::WindowId(u64::MAX),
+            CharPos0::new(42),
+            10,
+        ),
+        None,
+        "a failed display-row motion must let redisplay preserve its semantic viewport"
+    );
+}
+
+#[test]
 fn test_vertical_motion_eval_uses_live_redisplay_goal_column() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();

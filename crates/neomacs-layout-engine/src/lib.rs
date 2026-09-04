@@ -68,6 +68,7 @@ pub mod text_shaper;
 pub mod tty_menu_bar;
 pub mod types;
 pub mod unicode;
+pub(crate) mod viewport_resolution;
 pub(crate) mod window_layout;
 pub mod window_output;
 
