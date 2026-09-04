@@ -257,7 +257,6 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
         character_height,
         font_pixel_size,
     } = spec.metrics;
-    let gui = matches!(spec.kind, InitialEditorSurfaceKind::Gui { .. });
 
     let find_or_create_buffer = |evaluator: &mut Context, name: &str| {
         evaluator
@@ -336,31 +335,13 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
             .retain(|buffer| *buffer != scratch_buffer);
     }
 
-    let (initial_tty_frame, device_scale, display_identity, display_type, background_mode, font) =
-        match spec.kind {
-            InitialEditorSurfaceKind::Gui {
-                device_scale,
-                display_identity,
-                display_type,
-                background_mode,
-                font,
-            } => (
-                false,
-                Some(device_scale),
-                display_identity,
-                Some(display_type),
-                Some(background_mode),
-                font,
-            ),
-            InitialEditorSurfaceKind::Tty { initial_frame } => (
-                initial_frame,
-                None,
-                FrameDisplayIdentity::default(),
-                None,
-                None,
-                InitialFrameFont::new(Value::NIL, Value::string("fixed")),
-            ),
-        };
+    let kind = spec.kind;
+    let font = match &kind {
+        InitialEditorSurfaceKind::Gui { font, .. } => *font,
+        InitialEditorSurfaceKind::Tty { .. } => {
+            InitialFrameFont::new(Value::NIL, Value::string("fixed"))
+        }
+    };
     let font_snapshot = font
         .parameter
         .as_vector_data()
@@ -370,7 +351,7 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
     neovm_core::emacs_core::eval::push_scratch_gc_root(font_snapshot);
     neovm_core::emacs_core::eval::push_scratch_gc_root(font.name);
 
-    if !gui {
+    if let InitialEditorSurfaceKind::Tty { .. } = &kind {
         let assigned = evaluator
             .frame_manager_mut()
             .assign_initial_tty_frame_name(frame);
@@ -378,52 +359,55 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
     }
 
     if let Some(frame_state) = evaluator.frame_manager_mut().get_mut(frame) {
-        if gui {
-            frame_state.set_generated_name_value(Value::string("F1"));
-        }
         frame_state.clear_title();
         frame_state.icon_name = Value::NIL;
-        frame_state.initial = initial_tty_frame;
         frame_state.width = width;
         frame_state.height = height;
         frame_state.visibility = FrameVisibility::Visible;
-        if gui {
-            frame_state.device_scale_factor = device_scale.expect("GUI device scale").get();
-            frame_state.set_window_system(Some(Value::symbol(gui_window_system_symbol())));
-            frame_state.install_gnu_gui_default_parameters();
-            frame_state.set_display_identity(display_identity);
-            frame_state.set_parameter(
-                Value::symbol("display-type"),
-                Value::symbol(display_type.expect("GUI display type").symbol()),
-            );
-            frame_state.set_parameter(
-                Value::symbol("background-mode"),
-                Value::symbol(background_mode.expect("GUI background mode").symbol()),
-            );
-        } else {
-            frame_state.set_window_system(None);
-            frame_state.set_display_identity(FrameDisplayIdentity::default());
-            frame_state.remove_parameter(Value::symbol("display-type"));
-            frame_state.remove_parameter(Value::symbol("background-mode"));
+        match &kind {
+            InitialEditorSurfaceKind::Gui {
+                device_scale,
+                display_identity,
+                display_type,
+                background_mode,
+                ..
+            } => {
+                frame_state.set_generated_name_value(Value::string("F1"));
+                frame_state.initial = false;
+                frame_state.device_scale_factor = device_scale.get();
+                frame_state.set_window_system(Some(Value::symbol(gui_window_system_symbol())));
+                frame_state.install_gnu_gui_default_parameters();
+                frame_state.set_display_identity(display_identity.clone());
+                frame_state.set_parameter(
+                    Value::symbol("display-type"),
+                    Value::symbol(display_type.symbol()),
+                );
+                frame_state.set_parameter(
+                    Value::symbol("background-mode"),
+                    Value::symbol(background_mode.symbol()),
+                );
+                frame_state.char_width = character_width;
+                frame_state.char_height = character_height;
+            }
+            InitialEditorSurfaceKind::Tty { initial_frame } => {
+                frame_state.initial = *initial_frame;
+                frame_state.set_window_system(None);
+                frame_state.set_display_identity(FrameDisplayIdentity::default());
+                frame_state.remove_parameter(Value::symbol("display-type"));
+                frame_state.remove_parameter(Value::symbol("background-mode"));
+                frame_state.char_width = 1.0;
+                frame_state.char_height = 1.0;
+                frame_state.set_parameter(FrameParam::MenuBarLines.symbol(), Value::fixnum(1));
+                if let Some(minibuffer_window) = frame_state.minibuffer_leaf.as_mut() {
+                    let bounds = *minibuffer_window.bounds();
+                    minibuffer_window.set_bounds(Rect::new(bounds.x, bounds.y, bounds.width, 1.0));
+                }
+            }
         }
         frame_state.set_known_parameter(FrameParam::Font, font.name);
         frame_state.set_parameter(Value::symbol("font-parameter"), font.parameter);
         frame_state.font_pixel_size = font_pixel_size;
-        if gui {
-            frame_state.char_width = character_width;
-            frame_state.char_height = character_height;
-        } else {
-            frame_state.char_width = 1.0;
-            frame_state.char_height = 1.0;
-            if let Some(minibuffer_window) = frame_state.minibuffer_leaf.as_mut() {
-                let bounds = *minibuffer_window.bounds();
-                minibuffer_window.set_bounds(Rect::new(bounds.x, bounds.y, bounds.width, 1.0));
-            }
-        }
         frame_state.sync_tab_bar_height_from_parameters();
-        if !gui {
-            frame_state.set_parameter(FrameParam::MenuBarLines.symbol(), Value::fixnum(1));
-        }
         frame_state.sync_menu_bar_height_from_parameters();
         frame_state.sync_tool_bar_height_from_parameters();
         if let Window::Leaf {
@@ -440,22 +424,33 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
     }
     evaluator.create_window_markers_for_root(frame, scratch_buffer);
 
-    if gui {
-        gui_setup(evaluator, frame);
-        if let Some(frame_state) = evaluator.frame_manager_mut().get_mut(frame) {
-            frame_state.set_known_parameter(FrameParam::Font, font.name);
-            frame_state.set_parameter(Value::symbol("font-parameter"), font_snapshot);
-            frame_state.font_pixel_size = font_pixel_size;
-            frame_state.char_width = character_width;
-            frame_state.char_height = character_height;
+    match kind {
+        InitialEditorSurfaceKind::Gui { .. } => {
+            gui_setup(evaluator, frame);
+            if let Some(frame_state) = evaluator.frame_manager_mut().get_mut(frame) {
+                frame_state.set_known_parameter(FrameParam::Font, font.name);
+                frame_state.set_parameter(Value::symbol("font-parameter"), font_snapshot);
+                frame_state.font_pixel_size = font_pixel_size;
+                frame_state.char_width = character_width;
+                frame_state.char_height = character_height;
+            }
+            neovm_core::emacs_core::font::seed_live_frame_default_face_from_font_parameter(
+                evaluator, frame,
+            );
+            evaluator.sync_runtime_faces_for_frame(frame);
         }
-        neovm_core::emacs_core::font::seed_live_frame_default_face_from_font_parameter(
-            evaluator, frame,
-        );
-        evaluator.sync_runtime_faces_for_frame(frame);
-    } else {
-        evaluator.set_face_attribute("default", LFaceAttr::Foreground, FaceAttrValue::Unspecified);
-        evaluator.set_face_attribute("default", LFaceAttr::Background, FaceAttrValue::Unspecified);
+        InitialEditorSurfaceKind::Tty { .. } => {
+            evaluator.set_face_attribute(
+                "default",
+                LFaceAttr::Foreground,
+                FaceAttrValue::Unspecified,
+            );
+            evaluator.set_face_attribute(
+                "default",
+                LFaceAttr::Background,
+                FaceAttrValue::Unspecified,
+            );
+        }
     }
     neovm_core::emacs_core::eval::restore_scratch_gc_roots(root_scope);
 
