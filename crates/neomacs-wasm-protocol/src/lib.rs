@@ -9,12 +9,15 @@ use std::num::NonZeroU64;
 
 use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendModifiers, FrontendPresentationId, FrontendViewport,
+    FrontendLogicalExtent, FrontendModifiers, FrontendPresentationId, FrontendViewport,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Wire contract understood by this browser frontend and editor Worker.
-pub const WORKER_PROTOCOL_VERSION: u16 = 1;
+///
+/// Version 2 defines viewport and font measurements as logical pixels; device
+/// scale remains an independent observation applied by the renderer.
+pub const WORKER_PROTOCOL_VERSION: u16 = 2;
 
 /// Browser color preference sampled for the initial editor frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -38,16 +41,17 @@ pub struct BrowserEditorStartup {
 }
 
 impl BrowserEditorStartup {
-    #[allow(clippy::too_many_arguments)]
+    /// Construct and validate the browser's opening logical geometry.
     pub fn new(
-        width: u32,
-        height: u32,
+        logical_extent: FrontendLogicalExtent,
         scale_factor: f64,
         character_width: f32,
         character_height: f32,
         font_pixel_size: f32,
         color_scheme: BrowserColorScheme,
     ) -> Result<Self, InvalidBrowserEditorStartup> {
+        let width = logical_extent.width();
+        let height = logical_extent.height();
         let startup = Self {
             protocol_version: WORKER_PROTOCOL_VERSION,
             width,
@@ -93,8 +97,9 @@ impl BrowserEditorStartup {
     }
 
     #[must_use]
-    pub const fn physical_extent(&self) -> (u32, u32) {
-        (self.width, self.height)
+    /// Logical editor extent, before applying device scale.
+    pub const fn logical_extent(&self) -> FrontendLogicalExtent {
+        FrontendLogicalExtent::new(self.width, self.height)
     }
 
     #[must_use]
@@ -294,7 +299,7 @@ pub enum BrowserInputEvent {
         #[serde(with = "decimal_u64")]
         target: u64,
     },
-    /// Physical canvas extent paired with its logical/device scale.
+    /// Logical browser viewport extent paired with its logical-to-device scale.
     ViewportChanged {
         width: u32,
         height: u32,
@@ -388,8 +393,12 @@ impl BrowserInputEvent {
                 scale_factor,
                 target,
             } => FrontendEvent::ViewportChanged(
-                FrontendViewport::new(width, height, scale_factor, FrontendFrameId::new(target))
-                    .map_err(|_| InvalidFrontendObservation::InvalidScaleFactor)?,
+                FrontendViewport::new(
+                    FrontendLogicalExtent::new(width, height),
+                    scale_factor,
+                    FrontendFrameId::new(target),
+                )
+                .map_err(|_| InvalidFrontendObservation::InvalidScaleFactor)?,
             ),
             Self::FocusChanged { focused, target } => FrontendEvent::FocusChanged {
                 focused,

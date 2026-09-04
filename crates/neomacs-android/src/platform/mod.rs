@@ -3,7 +3,9 @@
 mod evaluator;
 mod presentation;
 
-use neomacs_app::frontend_event::{FrontendEvent, FrontendFrameId, FrontendViewport};
+use neomacs_app::frontend_event::{
+    FrontendEvent, FrontendFrameId, FrontendLogicalExtent, FrontendViewport,
+};
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
 use neomacs_app::session::{
     FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort, NativeEditorWorker,
@@ -85,13 +87,19 @@ impl AndroidFrontend {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        let size = window.inner_size();
-        if size.width == 0 || size.height == 0 {
+        let Some(size) = self
+            .presented
+            .as_ref()
+            .and_then(|presented| presented.logical_size().ok().flatten())
+        else {
             return;
-        }
-        let viewport =
-            FrontendViewport::new(size.width, size.height, window.scale_factor(), self.target)
-                .expect("winit supplied an invalid Android scale factor");
+        };
+        let logical_extent = FrontendLogicalExtent::new(
+            size.width().round().max(1.0) as u32,
+            size.height().round().max(1.0) as u32,
+        );
+        let viewport = FrontendViewport::new(logical_extent, window.scale_factor(), self.target)
+            .expect("winit supplied an invalid Android scale factor");
         self.submit(FrontendEvent::ViewportChanged(viewport));
     }
 

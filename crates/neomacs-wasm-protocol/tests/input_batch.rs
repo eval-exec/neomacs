@@ -1,3 +1,4 @@
+use neomacs_app::frontend_event::FrontendLogicalExtent;
 use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyState, FrontendKeySymbol, FrontendPresentationId,
 };
@@ -81,12 +82,21 @@ fn browser_batch_requires_a_nonzero_sequence_and_at_least_one_event() {
 
 #[test]
 fn browser_editor_startup_validates_the_complete_initial_surface() {
-    let startup =
-        BrowserEditorStartup::new(1280, 720, 2.0, 8.0, 16.0, 16.0, BrowserColorScheme::Dark)
-            .expect("valid browser startup");
+    let startup = BrowserEditorStartup::new(
+        FrontendLogicalExtent::new(1280, 720),
+        2.0,
+        8.0,
+        16.0,
+        16.0,
+        BrowserColorScheme::Dark,
+    )
+    .expect("valid browser startup");
 
     assert_eq!(startup.protocol_version(), WORKER_PROTOCOL_VERSION);
-    assert_eq!(startup.physical_extent(), (1280, 720));
+    assert_eq!(
+        startup.logical_extent(),
+        FrontendLogicalExtent::new(1280, 720)
+    );
     assert_eq!(startup.scale_factor(), 2.0);
     assert_eq!(startup.character_size(), (8.0, 16.0));
     assert_eq!(startup.font_pixel_size(), 16.0);
@@ -96,13 +106,19 @@ fn browser_editor_startup_validates_the_complete_initial_surface() {
 #[test]
 fn browser_editor_startup_rejects_invalid_geometry_before_worker_boot() {
     assert_eq!(
-        BrowserEditorStartup::new(1280, 0, 2.0, 8.0, 16.0, 16.0, BrowserColorScheme::Light,),
+        BrowserEditorStartup::new(
+            FrontendLogicalExtent::new(1280, 0),
+            2.0,
+            8.0,
+            16.0,
+            16.0,
+            BrowserColorScheme::Light,
+        ),
         Err(InvalidBrowserEditorStartup::EmptyExtent),
     );
     assert_eq!(
         BrowserEditorStartup::new(
-            1280,
-            720,
+            FrontendLogicalExtent::new(1280, 720),
             f64::NAN,
             8.0,
             16.0,
