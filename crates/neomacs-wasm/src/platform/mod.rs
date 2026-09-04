@@ -8,7 +8,9 @@ use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent}
 use neomacs_display_protocol::FrameGlyphBuffer;
 use neomacs_display_protocol::{FrameDisplayState, SealedFramePresentation};
 use neomacs_layout_engine::bootstrap_frame::PortableBootstrapFrameBuilder;
-use neomacs_wgpu_runtime::{PresentationOutcome, SurfaceFrameRenderer, SurfaceWindow};
+use neomacs_wgpu_runtime::{
+    PresentationOutcome, SurfaceCursorVisibility, SurfaceFrameRenderer, SurfaceWindow,
+};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 use winit::application::ApplicationHandler;
@@ -69,6 +71,13 @@ impl BrowserPresentationFrame {
             Self::Editor(frame) => BrowserFrameProvenance::Editor(BrowserPresentationId::new(
                 frame.presentation_id.get(),
             )),
+        }
+    }
+
+    const fn cursor_visibility(&self) -> SurfaceCursorVisibility {
+        match self {
+            Self::Bootstrap(_) => SurfaceCursorVisibility::Hidden,
+            Self::Editor(_) => SurfaceCursorVisibility::Visible,
         }
     }
 }
@@ -230,7 +239,11 @@ impl ApplicationHandler for BrowserFrontend {
                     return;
                 };
                 let provenance = frame.provenance();
-                let outcome = match presented.renderer.present_frame(frame.glyphs()) {
+                let cursor_visibility = frame.cursor_visibility();
+                let outcome = match presented
+                    .renderer
+                    .present_frame(frame.glyphs(), cursor_visibility)
+                {
                     Ok(outcome) => outcome,
                     Err(error) => {
                         report_presentation_failure(BrowserPresentationFailure::Rendering(

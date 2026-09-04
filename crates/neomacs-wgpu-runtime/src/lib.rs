@@ -11,6 +11,7 @@ pub use surface::{
     SurfaceInitError, SurfacePresentError, SurfaceRuntime, SurfaceWindow,
 };
 pub use surface_frame::{
-    SurfaceFrameInitError, SurfaceFramePresentError, SurfaceFrameRenderer, SurfaceScaleError,
+    SurfaceCursorVisibility, SurfaceFrameInitError, SurfaceFramePresentError, SurfaceFrameRenderer,
+    SurfaceScaleError,
 };
 pub use winit_input::WinitFrontendInput;
