@@ -1013,7 +1013,9 @@ impl RenderApp {
             faces_signature: Vec::new(),
             modifiers: 0,
             image_metadata,
-            cursor_defaults: CursorState::default(),
+            cursor_defaults: CursorState::new(
+                neomacs_display_protocol::frame_time::observe_platform_now(),
+            ),
             requested_visual_config,
             effects: EffectsConfig::default(),
             transition_policy: TransitionPolicy::default(),

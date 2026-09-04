@@ -349,7 +349,7 @@ impl GuiFrameRenderState {
             },
             frame_post_src: None,
             input_method: InputMethodState::default(),
-            cursor: CursorState::default(),
+            cursor: CursorState::new(at),
             mouse_pos: (0.0, 0.0),
             pointer_inside: false,
         }
@@ -1873,7 +1873,7 @@ impl GuiFrameWindowManager {
 
     pub(super) fn tick_top_level_cursor_blinks(
         &mut self,
-        now: Instant,
+        now: neomacs_display_protocol::frame_time::EventTime,
         cursor_wake_enabled: bool,
         renderer: Option<&WgpuRenderer>,
     ) -> bool {
@@ -1893,18 +1893,24 @@ impl GuiFrameWindowManager {
         dirty
     }
 
-    pub(super) fn tick_top_level_cursor_animations(&mut self) -> bool {
+    pub(super) fn tick_top_level_cursor_animations(
+        &mut self,
+        at: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
         let mut dirty = false;
         self.for_each_top_level_window_mut(|window_state| {
-            dirty |= window_state.render.tick_cursor_animation();
+            dirty |= window_state.render.tick_cursor_animation(at);
         });
         dirty
     }
 
-    pub(super) fn tick_top_level_cursor_size_animations(&mut self) -> bool {
+    pub(super) fn tick_top_level_cursor_size_animations(
+        &mut self,
+        at: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
         let mut dirty = false;
         self.for_each_top_level_window_mut(|window_state| {
-            dirty |= window_state.render.tick_cursor_size_animation();
+            dirty |= window_state.render.tick_cursor_size_animation(at);
         });
         dirty
     }

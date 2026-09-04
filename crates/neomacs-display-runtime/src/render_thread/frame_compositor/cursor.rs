@@ -9,17 +9,19 @@
 
 use neomacs_display_protocol::frame_time::EventTime;
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 use crate::render_thread::cursor::{CursorState, CursorTarget};
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_renderer_wgpu::WgpuRenderer;
 
 impl GuiFrameRenderState {
-    pub(in crate::render_thread) fn tick_cursor_animation(&mut self) -> bool {
-        let mut dirty = self.cursor.tick_animation();
+    pub(in crate::render_thread) fn tick_cursor_animation(
+        &mut self,
+        at: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
+        let mut dirty = self.cursor.tick_animation(at);
         for cursor in self.compositor.visual_cursors.values_mut() {
-            dirty |= cursor.tick_animation();
+            dirty |= cursor.tick_animation(at);
         }
         if dirty {
             self.compositor.dirty = true;
@@ -29,14 +31,14 @@ impl GuiFrameRenderState {
 
     pub(in crate::render_thread) fn tick_cursor_blink(
         &mut self,
-        now: Instant,
+        now: neomacs_display_protocol::frame_time::EventTime,
         cursor_wake_enabled: bool,
         renderer: Option<&WgpuRenderer>,
     ) -> bool {
         if !self.cursor.blink_enabled || self.cursor.target_cloned().is_none() {
             return false;
         }
-        if now.duration_since(self.cursor.last_blink_toggle) < self.cursor.blink_interval {
+        if now.saturating_since(self.cursor.last_blink_toggle) < self.cursor.blink_interval {
             return false;
         }
         let was_off = !self.cursor.blink_on;
@@ -47,7 +49,10 @@ impl GuiFrameRenderState {
             && cursor_wake_enabled
             && let Some(renderer) = renderer
         {
-            renderer.trigger_transient_cursor_wake(&mut self.compositor.renderer_effects, now);
+            renderer.trigger_transient_cursor_wake(
+                &mut self.compositor.renderer_effects,
+                now.into_instant(),
+            );
         }
         // A blink changes the cursor layer and nothing else, so it asks for a
         // composite of the retained scene rather than a repaint. When the
@@ -81,7 +86,7 @@ impl GuiFrameRenderState {
         &mut self,
         x: f32,
         y: f32,
-        now: EventTime,
+        now: neomacs_display_protocol::frame_time::EventTime,
         duration_ms: u32,
     ) {
         self.compositor
@@ -90,10 +95,13 @@ impl GuiFrameRenderState {
         self.compositor.dirty = true;
     }
 
-    pub(in crate::render_thread) fn tick_cursor_size_animation(&mut self) -> bool {
-        let mut dirty = self.cursor.tick_size_animation();
+    pub(in crate::render_thread) fn tick_cursor_size_animation(
+        &mut self,
+        at: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
+        let mut dirty = self.cursor.tick_size_animation(at);
         for cursor in self.compositor.visual_cursors.values_mut() {
-            dirty |= cursor.tick_size_animation();
+            dirty |= cursor.tick_size_animation(at);
         }
         if dirty {
             self.compositor.dirty = true;
@@ -104,6 +112,7 @@ impl GuiFrameRenderState {
     pub(in crate::render_thread) fn sync_visual_cursors_from_current_frame(
         &mut self,
         cursor_config: impl Fn(&mut CursorState),
+        at: neomacs_display_protocol::frame_time::EventTime,
     ) {
         let Some(current_frame) = self.compositor.current_frame.as_ref() else {
             self.compositor.visual_cursors.clear();
@@ -119,17 +128,20 @@ impl GuiFrameRenderState {
                 .compositor
                 .visual_cursors
                 .entry(cursor.window_id.get())
-                .or_default();
+                .or_insert_with(|| CursorState::new(at));
             cursor_config(state);
-            let (_, target_moved) = state.set_target(CursorTarget {
-                window_id: cursor.window_id.get(),
-                x: cursor.x,
-                y: cursor.y,
-                width: cursor.width,
-                height: cursor.height,
-                style: cursor.style,
-                frame_id: self.emacs_frame_id,
-            });
+            let (_, target_moved) = state.set_target(
+                CursorTarget {
+                    window_id: cursor.window_id.get(),
+                    x: cursor.x,
+                    y: cursor.y,
+                    width: cursor.width,
+                    height: cursor.height,
+                    style: cursor.style,
+                    frame_id: self.emacs_frame_id,
+                },
+                at,
+            );
             if target_moved {
                 self.compositor.dirty = true;
             }
