@@ -251,6 +251,92 @@ impl WgpuRenderer {
             }
         }
 
+        // Non-overlay image backgrounds: the image texture covers only its
+        // margin-inset content rect, so the face background for the full GNU
+        // box extent must be painted here, exactly like the char path above.
+        // Without it a masked/transparent image (telega's reply icon) shows
+        // the window background through its slot instead of the face
+        // background GNU paints behind the glyph.
+        for (glyph_index, glyph) in frame_glyphs.glyphs.iter().enumerate() {
+            if let FrameGlyph::Image {
+                face_id,
+                row_role,
+                clip_rect,
+                box_rect,
+                ..
+            } = glyph
+                && !row_role.is_chrome()
+            {
+                let (x, y, width, height) =
+                    (box_rect.x, box_rect.y, box_rect.width, box_rect.height);
+                for paint in params.pointer_override.face_paints(
+                    glyph_index,
+                    *face_id,
+                    *box_rect,
+                    clip_rect.as_ref(),
+                ) {
+                    let face_id = paint.face_id();
+                    let effective_clip = paint.clip();
+                    let paint_offset_y = if has_line_anims {
+                        self.line_y_offset(x, y)
+                    } else {
+                        0.0
+                    };
+                    let rf = match bg_face_cache {
+                        Some((id, ref data)) if id == face_id => *data,
+                        _ => {
+                            let data = frame_glyphs.resolved_face(face_id);
+                            bg_face_cache = Some((face_id, data));
+                            data
+                        }
+                    };
+                    let bg: Option<Color> = Some(rf.bg);
+                    let face = faces.get(&face_id);
+                    let has_gradient = face
+                        .and_then(|resolved| resolved.background_gradient.as_deref())
+                        .is_some();
+                    let has_solid_bg = face.map(|f| f.background.a > f32::EPSILON).unwrap_or(false);
+                    if bg.is_some() || has_gradient || has_solid_bg {
+                        if Self::paint_has_rounded_box_span(
+                            x,
+                            y,
+                            width,
+                            height,
+                            face_id,
+                            effective_clip.as_ref(),
+                            *row_role,
+                            box_spans,
+                            faces,
+                        ) {
+                            continue;
+                        }
+                        let fallback = bg.unwrap_or(
+                            face.map(|resolved| resolved.background)
+                                .unwrap_or(Color::TRANSPARENT),
+                        );
+                        self.add_face_paint_background(
+                            &mut non_overlay_rect_vertices,
+                            face,
+                            &fallback,
+                            paint,
+                            0.0,
+                            paint_offset_y,
+                        );
+                        if let Some(pat) = face.and_then(|f| f.stipple.as_deref()) {
+                            self.add_stipple_paint(
+                                &mut non_overlay_rect_vertices,
+                                &rf.fg,
+                                pat,
+                                paint,
+                                0.0,
+                                paint_offset_y,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Fringe bitmaps (own fringe column, drawn with the non-overlay
         // backgrounds so they sit below text — magit section fold arrows). ---
         for glyph in &frame_glyphs.glyphs {
