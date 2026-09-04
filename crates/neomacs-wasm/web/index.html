@@ -21,6 +21,30 @@
     <script type="module">
       const status = document.querySelector("#browser-status");
 
+      function installIcon(url) {
+        const link = document.createElement("link");
+        link.rel = "icon";
+        link.type = "image/svg+xml";
+        link.href = new URL(url, document.baseURI).href;
+        document.head.append(link);
+      }
+
+      function installStylesheet(url) {
+        const href = new URL(url, document.baseURI).href;
+        return new Promise((resolve, reject) => {
+          const link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = href;
+          link.addEventListener("load", resolve, { once: true });
+          link.addEventListener(
+            "error",
+            () => reject(new Error(`failed to load release stylesheet: ${href}`)),
+            { once: true },
+          );
+          document.head.append(link);
+        });
+      }
+
       async function loadCurrentRelease() {
         const response = await fetch("./manifest.json", { cache: "no-store" });
         if (!response.ok) {
@@ -31,16 +55,9 @@
           throw new Error("unsupported Neomacs browser release manifest");
         }
 
-        for (const [relationship, property] of [
-          ["icon", "favicon"],
-          ["stylesheet", "stylesheet"],
-        ]) {
-          if (typeof manifest[property] !== "string") continue;
-          const link = document.createElement("link");
-          link.rel = relationship;
-          link.href = new URL(manifest[property], document.baseURI).href;
-          if (relationship === "icon") link.type = "image/svg+xml";
-          document.head.append(link);
+        if (typeof manifest.favicon === "string") installIcon(manifest.favicon);
+        if (typeof manifest.stylesheet === "string") {
+          await installStylesheet(manifest.stylesheet);
         }
 
         await import(new URL(manifest.entry, document.baseURI).href);
