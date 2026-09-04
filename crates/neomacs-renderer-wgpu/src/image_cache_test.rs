@@ -356,7 +356,7 @@ fn decoded_corner_mask_tie_uses_gnu_first_corner_winner() {
 }
 
 #[test]
-fn decoded_transparent_svg_stays_transparent_with_explicit_lisp_background() {
+fn explicit_lisp_background_paints_the_svg_wrapper_background() {
     let data = br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect x="1" y="1" width="2" height="2" fill="#123456"/></svg>"##;
     let decoded = ImageCache::decode_data_with_metadata(
         data,
@@ -366,8 +366,10 @@ fn decoded_transparent_svg_stays_transparent_with_explicit_lisp_background() {
     )
     .unwrap();
 
-    assert!(decoded.metadata.background_transparent);
-    assert_ne!(decoded.metadata.background, 0xaa_bb_cc);
+    // GNU's SVG wrapper paints a full-bleed rect with the Lisp :background
+    // "instead of leaving it transparent" (src/image.c:12344).
+    assert!(!decoded.metadata.background_transparent);
+    assert_eq!(decoded.metadata.background, 0xaa_bb_cc);
 }
 
 #[test]
@@ -613,7 +615,14 @@ fn recursive_svg_references_fail_closed_without_panicking() {
         (0, 0),
     )
     .unwrap();
-    assert!(decoded.data.chunks_exact(4).all(|pixel| pixel[3] == 0));
+    // The recursive reference fails closed: nothing but the wrapper
+    // background rect (opaque black face background) may paint.
+    assert!(
+        decoded
+            .data
+            .chunks_exact(4)
+            .all(|pixel| pixel == [0, 0, 0, 255])
+    );
 }
 
 #[test]
@@ -762,7 +771,9 @@ fn dimensionless_svg_fallback_includes_markers_and_rasterization_applies_clippin
     let inside = ((5 * raster_width + 5) * 4) as usize;
     let outside = ((15 * raster_width + 15) * 4) as usize;
     assert_eq!(&clipped.data[inside..inside + 4], &[0x12, 0x34, 0x56, 0xff]);
-    assert_eq!(&clipped.data[outside..outside + 4], &[0, 0, 0, 0]);
+    // Outside the clip path only the wrapper background rect (opaque black
+    // face background) paints.
+    assert_eq!(&clipped.data[outside..outside + 4], &[0, 0, 0, 0xff]);
 }
 
 #[test]
@@ -783,8 +794,10 @@ fn svg_masks_gradients_and_inline_css_survive_rasterization() {
         (0, 0),
     )
     .unwrap();
-    assert!(decoded.data[3].abs_diff(128) <= 1);
-    assert!(decoded.data[7].abs_diff(128) <= 1);
+    // The 0.5-white mask halves the content, which the wrapper background
+    // rect then composites over the opaque face background (black).
+    assert_eq!(decoded.data[3], 0xff);
+    assert_eq!(decoded.data[7], 0xff);
     assert_ne!(&decoded.data[..3], &decoded.data[4..7]);
 }
 
@@ -803,7 +816,7 @@ fn svg_group_transforms_are_applied_before_rasterization() {
         (0, 0),
     )
     .unwrap();
-    assert_eq!(&decoded.data[0..4], &[0, 0, 0, 0]);
+    assert_eq!(&decoded.data[0..4], &[0, 0, 0, 0xff]);
     let translated_pixel = (5 * 4) as usize;
     assert_eq!(
         &decoded.data[translated_pixel..translated_pixel + 4],
@@ -824,7 +837,14 @@ fn svg_does_not_load_images_relative_to_the_process_working_directory() {
         (0, 0),
     )
     .unwrap();
-    assert!(decoded.data.chunks_exact(4).all(|pixel| pixel[3] == 0));
+    // The blocked relative reference paints nothing: only the wrapper
+    // background rect (opaque black face background) remains.
+    assert!(
+        decoded
+            .data
+            .chunks_exact(4)
+            .all(|pixel| pixel == [0, 0, 0, 255])
+    );
 }
 
 #[test]
@@ -872,7 +892,14 @@ fn svg_base_uri_cannot_authorize_parent_directory_escape() {
     )
     .expect("outer SVG remains valid");
 
-    assert!(decoded.rgba.chunks_exact(4).all(|pixel| pixel[3] == 0));
+    // The parent-directory escape fails closed: only the wrapper background
+    // rect may paint.
+    assert!(
+        decoded
+            .rgba
+            .chunks_exact(4)
+            .all(|pixel| pixel == [0, 0, 0, 255])
+    );
 }
 
 #[test]
@@ -904,7 +931,14 @@ fn nested_svg_cannot_escape_the_external_resource_policy() {
         (0, 0),
     )
     .unwrap();
-    assert!(decoded.data.chunks_exact(4).all(|pixel| pixel[3] == 0));
+    // Nothing but the wrapper background rect (opaque black face background)
+    // may paint: the nested external resource must not escape the policy.
+    assert!(
+        decoded
+            .data
+            .chunks_exact(4)
+            .all(|pixel| pixel == [0, 0, 0, 255])
+    );
 }
 
 #[test]
@@ -977,8 +1011,11 @@ fn semitransparent_svg_pixels_are_returned_as_straight_rgba() {
         (0, 0),
     )
     .unwrap();
-    assert_eq!(decoded.data[3], 0x80);
-    for (actual, expected) in decoded.data[..3].iter().zip([0x80_u8, 0x40, 0x20]) {
+    // The wrapper background rect (face background, black here) composites
+    // under the semi-transparent content, so the result is opaque straight
+    // RGB — never alpha-premultiplied.
+    assert_eq!(decoded.data[3], 0xff);
+    for (actual, expected) in decoded.data[..3].iter().zip([0x40_u8, 0x20, 0x10]) {
         assert!(
             actual.abs_diff(expected) <= 1,
             "RGB must be straight rather than alpha-premultiplied"

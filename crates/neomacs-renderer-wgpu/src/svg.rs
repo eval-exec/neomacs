@@ -229,10 +229,21 @@ fn load_with_dimensions(
     })
 }
 
-/// Establish GNU's face foreground as the root SVG `color` presentation
-/// attribute. Descendants using `currentColor` inherit it, while an explicit
-/// root attribute, inline style, or document stylesheet retains normal CSS
-/// precedence and can override it.
+/// Establish GNU's face colors on the SVG document (src/image.c:12344).
+///
+/// Two injections mirror GNU's wrapper SVG:
+///
+/// 1. The face foreground becomes the root `color` presentation attribute.
+///    Descendants using `currentColor` inherit it, while an explicit root
+///    attribute, inline style, or document stylesheet retains normal CSS
+///    precedence and can override it.
+/// 2. A full-bleed background rect painted with the face background becomes
+///    the first child.  GNU uses this as "the background color, instead of
+///    leaving it transparent".  It also fixes `:mask heuristic` for SVGs
+///    without their own background: the heuristic samples the four corners,
+///    and without the rect those corners are transparent black — so a
+///    default-black path (telega's reply icon) is masked away entirely
+///    instead of being kept against the face background.
 fn inject_root_face_color<'a>(
     data: Cow<'a, [u8]>,
     geometry: &RootGeometry,
@@ -241,15 +252,27 @@ fn inject_root_face_color<'a>(
     let SvgColorMode::Face(colors) = color_mode else {
         return data;
     };
-    if geometry.has_root_color {
-        return data;
-    }
-    let color = format!(" color=\"#{:06x}\"", colors.foreground().rgb24());
     let mut painted = data.into_owned();
-    painted.splice(
-        geometry.start_tag_insert_pos..geometry.start_tag_insert_pos,
-        color.bytes(),
-    );
+    // The rect goes in first: the attribute splice below shifts later
+    // indices, while this position (just past the root's `>`) stays put
+    // relative to the tag itself.
+    if painted.get(geometry.start_tag_insert_pos) == Some(&b'>') {
+        let rect = format!(
+            "<rect width=\"100%\" height=\"100%\" fill=\"#{:06x}\"/>",
+            colors.background().rgb24()
+        );
+        painted.splice(
+            geometry.start_tag_insert_pos + 1..geometry.start_tag_insert_pos + 1,
+            rect.bytes(),
+        );
+    }
+    if !geometry.has_root_color {
+        let color = format!(" color=\"#{:06x}\"", colors.foreground().rgb24());
+        painted.splice(
+            geometry.start_tag_insert_pos..geometry.start_tag_insert_pos,
+            color.bytes(),
+        );
+    }
     Cow::Owned(painted)
 }
 
@@ -866,4 +889,76 @@ fn valid_root_length(value: &str) -> bool {
 
 fn valid_dimensions(width: f64, height: f64) -> bool {
     width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Telega's `etc/symbols/reply.svg`: a default-black (no `fill`, no
+    /// `currentColor`) path, loaded with `:mask heuristic` like
+    /// `telega-etc-file-create-image` produces.
+    const REPLY_SVG: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 4.2333332 4.2333335" version="1.1" id="svg8">
+  <g transform="translate(0,-292.76665)" id="layer1">
+    <path style="stroke:none;stroke-width:0.31644347px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" d="m 3.2522301,295.81981 c -0.060907,-0.54693 -0.1986797,-0.65348 -0.4169559,-0.6559 -0.3938777,-0.004 -1.3128545,9e-5 -1.3128545,9e-5 v 0.42324 l -1.33166282,-0.82011 1.33166282,-0.82031 v 0.42343 c 0,0 1.2007043,-0.0295 1.6660151,-9e-5 0.4653107,0.0294 0.3270887,0.26026 0.3678221,1.44965" id="path817"/>
+  </g>
+</svg>"#;
+
+    /// REGRESSION (telega reply icon invisible on dark backgrounds): a
+    /// backgroundless SVG whose path has the default black fill must still
+    /// be painted over the face background, like GNU's wrapper rect does
+    /// (src/image.c:12344).  `:mask heuristic` samples the four corners as
+    /// its background color: without the injected rect the corners are
+    /// transparent black, the mask classifies the black path as background,
+    /// and the whole icon vanishes.
+    #[test]
+    fn face_background_rect_keeps_default_black_paths_masked_against_face_bg() {
+        let colors = ImageColorContext::from_pixels(0x1885f3, 0x333333);
+        let decoded = decode(
+            REPLY_SVG.as_bytes(),
+            ImageSizeSpec::new(
+                neomacs_display_protocol::image::AxisSize::AtMost(32),
+                neomacs_display_protocol::image::AxisSize::AtMost(18),
+            ),
+            ImageRotation::None,
+            ImageRealization::default(),
+            colors,
+            SvgResourceContext::Isolated,
+        )
+        .expect("decode reply svg");
+
+        let (w, h) = decoded.geometry.raster().dimensions();
+        let (w, h) = (w as usize, h as usize);
+        let pixel = |x: usize, y: usize| {
+            let base = (y * w + x) * 4;
+            [
+                decoded.rgba[base],
+                decoded.rgba[base + 1],
+                decoded.rgba[base + 2],
+                decoded.rgba[base + 3],
+            ]
+        };
+        // GNU's wrapper rect: the corners carry the face background, so the
+        // heuristic mask selects it — not transparent black — as background.
+        for corner in [(0usize, 0usize), (w - 1, 0), (w - 1, h - 1), (0, h - 1)] {
+            let px = pixel(corner.0, corner.1);
+            assert_eq!(
+                px,
+                [0x33, 0x33, 0x33, 255],
+                "corner {corner:?} must be the opaque face background"
+            );
+        }
+        // The default-black path itself stays opaque: a GNU-style heuristic
+        // mask (pixel != corner color) keeps every black pixel drawable.
+        let black_opaque = decoded
+            .rgba
+            .chunks_exact(4)
+            .filter(|px| px[3] > 0 && px[..3] == [0, 0, 0])
+            .count();
+        assert!(
+            black_opaque > 0,
+            "the default-black path must survive as opaque pixels"
+        );
+    }
 }
