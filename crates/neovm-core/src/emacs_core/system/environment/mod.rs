@@ -324,11 +324,16 @@ impl ChildEnvironment {
         }
     }
 
-    pub(crate) fn apply_to_child_command(
-        &self,
-        command: &mut crate::emacs_core::callproc::ChildCommand,
-    ) {
-        command.set_exact_env(std::sync::Arc::clone(&self.entries));
+    std::cfg_select! {
+        target_family = "wasm" => {}
+        _ => {
+            pub(crate) fn apply_to_child_command(
+                &self,
+                command: &mut crate::emacs_core::callproc::ChildCommand,
+            ) {
+                command.set_exact_env(std::sync::Arc::clone(&self.entries));
+            }
+        }
     }
 
     #[cfg(unix)]
