@@ -204,10 +204,13 @@ impl RenderApp {
     }
 
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // One observation for the whole pass. Everything this pass ages,
+        // schedules or services is dated to the same instant, so two windows
+        // cannot disagree about what time it is and a deadline cannot be
+        // serviced against a clock read taken after the work it gates.
+        let now = neomacs_display_protocol::frame_time::observe_platform_now();
         super::frame_stats::count(&super::frame_stats::EVENT_LOOP_WAKEUPS);
-        super::frame_stats::maybe_log_snapshot(
-            neomacs_display_protocol::frame_time::observe_platform_now(),
-        );
+        super::frame_stats::maybe_log_snapshot(now);
         if !self.lifecycle_flags.about_to_wait_seen {
             tracing::info!(
                 "Render thread entered about_to_wait: primary_window_exists={} frame_windows={}",
@@ -265,11 +268,10 @@ impl RenderApp {
         // event or replacing their bounded latest-frame slot. Service after
         // frame ingestion so visibility routing sees the newest accepted
         // root/child presentation.
-        self.process_video_frames(neomacs_display_protocol::frame_time::observe_platform_now());
+        self.process_video_frames(now);
 
         self.pump_glib();
 
-        let now = neomacs_display_protocol::frame_time::observe_platform_now();
         self.frame_windows.tick_top_level_cursor_blinks(
             now.into_instant(),
             self.effects.cursor_wake.enabled,
@@ -309,7 +311,6 @@ impl RenderApp {
         // wake deadline. Continuous activity is paced at the estimated
         // display cadence instead of a 4 ms poll; new-content demand fires
         // immediately on its first frame after idle.
-        let now = neomacs_display_protocol::frame_time::observe_platform_now();
         self.declare_frame_demands(now);
         // Publish per-window active demand for diagnostics (plan:
         // Observability). Runs only on loop wakes that already reconcile
