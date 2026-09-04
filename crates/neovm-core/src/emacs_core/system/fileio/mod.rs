@@ -1608,7 +1608,19 @@ pub fn make_directory(dir: &str, parents: bool) -> std::io::Result<()> {
 
 /// Delete FILENAME.
 pub fn delete_file(filename: &str) -> std::io::Result<()> {
-    fs::remove_file(filename)
+    unlink_file_path(Path::new(filename))
+}
+
+/// The portable entry point for Emacs `unlink' semantics.
+///
+/// Windows needs an explicit policy boundary because Rust's standard-library
+/// deletion intentionally bypasses the read-only attribute, whereas GNU
+/// clears that attribute first and exposes the change to file notifications.
+fn unlink_file_path(path: &Path) -> std::io::Result<()> {
+    std::cfg_select! {
+        windows => crate::emacs_core::w32::filesystem::unlink(path),
+        _ => fs::remove_file(path),
+    }
 }
 
 /// Rename file FROM to TO.
@@ -3639,7 +3651,7 @@ fn delete_file_compat(filename: &str) -> Result<(), Flow> {
 }
 
 fn delete_file_compat_path(path: &Path, path_value: Value) -> Result<(), Flow> {
-    match fs::remove_file(path) {
+    match unlink_file_path(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
         Err(err) => Err(signal_file_action_error_value(err, "Deleting", path_value)),

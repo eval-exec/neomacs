@@ -1,4 +1,4 @@
-//! Windows bootstrap symbols.
+//! Windows platform integration.
 //!
 //! GNU Emacs registers the MS-Windows Lisp surface from `syms_of_w32*`
 //! functions before `lisp/loadup.el` loads `term/w32-win.el`,
@@ -6,6 +6,8 @@
 //! platform variables are registered only for Windows builds, while the Lisp
 //! files can remain direct GNU sources.
 
+#[cfg(windows)]
+pub(crate) mod filesystem;
 #[cfg(windows)]
 pub(crate) mod security;
 #[cfg(windows)]
