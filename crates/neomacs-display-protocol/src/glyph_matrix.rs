@@ -1775,6 +1775,14 @@ pub struct ScrollBarItem {
 pub struct FrameDisplayState {
     /// Evaluator interaction snapshot paired with these exact pixels.
     pub presentation_id: PresentationId,
+    /// Why this presentation was produced.
+    ///
+    /// The compositor reads this to decide whether layout motion applies: a
+    /// presentation committed while an interactive resize is running installs
+    /// instantly, because during a drag GNU's Lisp owns the divider position
+    /// and the compositor must not animate toward a position window.el may
+    /// still clamp or round.
+    pub origin: crate::presentation_origin::PresentationOrigin,
     /// Canonical parent-relative placement paired with this presentation.
     #[serde(default)]
     pub frame_placement: crate::PresentedFramePlacement,
@@ -2304,6 +2312,7 @@ impl FrameDisplayState {
     pub fn new(frame_cols: usize, frame_rows: usize, char_width: f32, char_height: f32) -> Self {
         Self {
             presentation_id: PresentationId::default(),
+            origin: crate::presentation_origin::PresentationOrigin::Ordinary,
             frame_placement: crate::PresentedFramePlacement::default(),
             presented_pointer_source: crate::PresentedPointerSourceMap::empty(),
             presented_hit_index: crate::PresentedHitIndex::default(),
