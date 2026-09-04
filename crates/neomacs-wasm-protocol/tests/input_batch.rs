@@ -85,8 +85,6 @@ fn browser_editor_startup_validates_the_complete_initial_surface() {
     let startup = BrowserEditorStartup::new(
         FrontendLogicalExtent::new(1280, 720),
         2.0,
-        8.0,
-        16.0,
         16.0,
         BrowserColorScheme::Dark,
     )
@@ -98,7 +96,6 @@ fn browser_editor_startup_validates_the_complete_initial_surface() {
         FrontendLogicalExtent::new(1280, 720)
     );
     assert_eq!(startup.scale_factor(), 2.0);
-    assert_eq!(startup.character_size(), (8.0, 16.0));
     assert_eq!(startup.font_pixel_size(), 16.0);
     assert_eq!(startup.color_scheme(), BrowserColorScheme::Dark);
 }
@@ -109,8 +106,6 @@ fn browser_editor_startup_rejects_invalid_geometry_before_worker_boot() {
         BrowserEditorStartup::new(
             FrontendLogicalExtent::new(1280, 0),
             2.0,
-            8.0,
-            16.0,
             16.0,
             BrowserColorScheme::Light,
         ),
@@ -120,8 +115,6 @@ fn browser_editor_startup_rejects_invalid_geometry_before_worker_boot() {
         BrowserEditorStartup::new(
             FrontendLogicalExtent::new(1280, 720),
             f64::NAN,
-            8.0,
-            16.0,
             16.0,
             BrowserColorScheme::Light,
         ),

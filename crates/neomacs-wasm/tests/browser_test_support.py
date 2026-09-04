@@ -124,6 +124,16 @@ class BrowserEditorHarness:
         )
         return cbor2.loads(bytes(values)) if values else {}
 
+    def assert_active_cursor(self, description: str) -> dict[str, object]:
+        payload = self.frame_payload()
+        cursor = payload.get("phys_cursor")
+        if not isinstance(cursor, dict):
+            raise RuntimeError(
+                f"editor did not publish an active cursor for {description}; "
+                f"cursors={payload.get('cursors')!r}; frame={self.frame_text()!r}"
+            )
+        return cursor
+
     @staticmethod
     def matrix_text(entry: dict[str, object]) -> str:
         characters: list[str] = []

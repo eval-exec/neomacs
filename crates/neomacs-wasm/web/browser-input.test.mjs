@@ -113,7 +113,7 @@ test("HiDPI viewport observations keep editor geometry in CSS pixels", () => {
   });
 });
 
-test("HiDPI startup keeps font measurements in editor logical pixels", () => {
+test("HiDPI startup leaves font-cell measurement to the editor Worker", () => {
   const browser = {
     innerWidth: 1975,
     innerHeight: 1100,
@@ -124,8 +124,6 @@ test("HiDPI startup keeps font measurements in editor logical pixels", () => {
     width: 1975,
     height: 1100,
     scale_factor: 1.75,
-    character_width: 8,
-    character_height: 16,
     font_pixel_size: 16,
   });
 });

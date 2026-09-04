@@ -93,6 +93,21 @@ def assert_editor_frame_scale(
     )
 
 
+def assert_hidpi_keyboard_cursor(editor: BrowserEditorHarness) -> None:
+    editor.click_editor_canvas()
+    editor.type_native_meta_prefix("x")
+    editor.wait_for_frame_text("the HiDPI native M-x prompt", contains="M-x")
+    editor.type_native_text("a")
+    editor.wait_for_frame_text("HiDPI native text in M-x", contains="M-x a")
+    editor.assert_active_cursor("HiDPI native text in the M-x minibuffer")
+    editor.type_native_control_key("g")
+    editor.wait_for_frame_text(
+        "the cancelled HiDPI native M-x prompt",
+        contains="*scratch*",
+        excludes="M-x a",
+    )
+
+
 def frame_geometry(frame: dict[str, object]) -> dict[str, object]:
     return {
         key: frame.get(key)
@@ -159,6 +174,7 @@ def main() -> None:
             timeout=args.timeout,
         )
         assert_editor_frame_scale(editor, 1.75)
+        assert_hidpi_keyboard_cursor(editor)
 
         before_scale_change = latest_frame(driver).get("presentation_id")
         set_device_metrics(driver, width=1975, height=1100, scale=2.0)
