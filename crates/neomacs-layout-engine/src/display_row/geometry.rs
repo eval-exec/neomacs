@@ -9,6 +9,7 @@ use crate::window_output::{
     RowMetricsSnapshot,
 };
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
+use neomacs_display_protocol::{GeometryError, LogicalPixels};
 
 /// Horizontal append limit for a display row.
 ///
@@ -41,23 +42,27 @@ impl DisplayRowMaxX {
 /// line-number prefix lies inside the text area and is not subtracted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayRowTextAreaOrigin {
-    x_px: f32,
+    x_px: LogicalPixels,
 }
 
 impl DisplayRowTextAreaOrigin {
     /// A row laid out in its own coordinates: the text area starts at 0.
     /// Chrome rows, mock frames and unit tests build rows this way.
     pub(crate) fn row_local() -> Self {
-        Self { x_px: 0.0 }
+        Self {
+            x_px: LogicalPixels::default(),
+        }
     }
 
     /// A row of a window whose text area starts at frame-absolute `x_px`.
-    pub(crate) fn at_frame_x(x_px: f32) -> Self {
-        Self { x_px }
+    pub(crate) fn at_frame_x(x_px: f32) -> Result<Self, GeometryError> {
+        Ok(Self {
+            x_px: LogicalPixels::new(x_px)?,
+        })
     }
 
     pub(crate) fn window_local(self, frame_x_px: f32) -> f32 {
-        frame_x_px - self.x_px
+        frame_x_px - self.x_px.get()
     }
 }
 

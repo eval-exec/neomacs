@@ -4,7 +4,7 @@ use crate::display_row::walk_state::{
     DisplayRowTextOverflowDecision, SpecialTextRowOverflowDecision, TextRowTransitionStatePolicy,
     WordWrapBreakCandidate,
 };
-use neomacs_display_protocol::{Px, XwidgetLayoutAdvance};
+use neomacs_display_protocol::{GeometryError, LogicalPixels, Px, XwidgetLayoutAdvance};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DisplaySourceTextCharOverflowAction {
@@ -87,8 +87,8 @@ impl DisplaySourceSpecialCharOverflowAction {
 /// frame-absolute edge would be wrong in every window but the leftmost.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct WindowLocalRowExtent {
-    current_x_px: f32,
-    last_visible_x_px: f32,
+    current_x_px: LogicalPixels,
+    last_visible_x_px: LogicalPixels,
 }
 
 impl WindowLocalRowExtent {
@@ -96,20 +96,29 @@ impl WindowLocalRowExtent {
         origin: DisplayRowTextAreaOrigin,
         x_px: f32,
         right_edge_px: f32,
-    ) -> Self {
-        Self {
-            current_x_px: origin.window_local(x_px),
-            last_visible_x_px: origin.window_local(right_edge_px),
+    ) -> Result<Self, GeometryError> {
+        let current_x_px = LogicalPixels::new(origin.window_local(x_px))?;
+        let last_visible_x_px = LogicalPixels::new(origin.window_local(right_edge_px))?;
+        if current_x_px.get() < 0.0 || current_x_px.get() > last_visible_x_px.get() {
+            return Err(GeometryError::InvalidGeometry);
         }
+        Ok(Self {
+            current_x_px,
+            last_visible_x_px,
+        })
     }
 
     pub(crate) fn last_visible_x_px(self) -> f32 {
-        self.last_visible_x_px
+        self.last_visible_x_px.get()
     }
 
     /// `it->last_visible_x - it->current_x`: how much of the row is left.
     pub(crate) fn remaining_px(self) -> f32 {
-        self.last_visible_x_px - self.current_x_px
+        self.last_visible_x_px.get() - self.current_x_px.get()
+    }
+
+    fn remaining_advance(self) -> Option<XwidgetLayoutAdvance> {
+        XwidgetLayoutAdvance::new(Px(self.remaining_px()))
     }
 }
 
@@ -190,9 +199,9 @@ impl DisplayXwidgetOverflowAction {
         if crop <= 0.0 {
             return Self::Fits;
         }
-        if visible_width_px > 0.0 && (at_row_start || width_px > extent.last_visible_x_px() / 4.0) {
-            let advance = XwidgetLayoutAdvance::new(Px(visible_width_px))
-                .expect("a positive finite row remainder is a valid xwidget advance");
+        if (at_row_start || width_px > extent.last_visible_x_px() / 4.0)
+            && let Some(advance) = extent.remaining_advance()
+        {
             Self::CropAdvanceToVisibleWidth { advance }
         } else {
             Self::LeaveWhole

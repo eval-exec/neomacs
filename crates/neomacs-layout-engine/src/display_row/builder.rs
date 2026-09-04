@@ -1741,6 +1741,15 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                                     self.position.x_px(),
                                     self.max_x_px,
                                 );
+                                let Ok(extent) = extent else {
+                                    return DisplayRowAppendProgress::new(
+                                        start,
+                                        self.position,
+                                        metrics,
+                                        DisplayRowAppendStatus::Clipped,
+                                        slots,
+                                    );
+                                };
                                 let action = DisplayXwidgetOverflowAction::for_xwidget(
                                     xwidget.layout_advance(),
                                     extent,

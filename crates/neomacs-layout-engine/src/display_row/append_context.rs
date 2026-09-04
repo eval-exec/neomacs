@@ -803,6 +803,7 @@ impl DisplayRowAppendFrame {
     /// the same edge hscroll truncation uses.
     fn text_area_origin(&self) -> DisplayRowTextAreaOrigin {
         DisplayRowTextAreaOrigin::at_frame_x(self.area.text_area_left())
+            .expect("a display-row text-area origin is finite")
     }
 
     fn text_right_edge_excluding_line_number(&self) -> f32 {

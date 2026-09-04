@@ -14,6 +14,7 @@ fn leftmost_window(x_px: f32, right_edge_px: f32) -> WindowLocalRowExtent {
         x_px,
         right_edge_px,
     )
+    .expect("valid leftmost-window extent")
 }
 
 /// `produce_xwidget_glyph`, src/xdisp.c:32577-32579 (emacs-31.0.90), with
@@ -91,10 +92,11 @@ fn the_quarter_width_rule_uses_the_windows_own_width_in_a_right_hand_split() {
     // reserved column, so `last_visible_x` is 792 window-local; the widget
     // follows 70 cells of text and sits at window-local 560.
     let right_window = WindowLocalRowExtent::from_frame_coordinates(
-        DisplayRowTextAreaOrigin::at_frame_x(800.0),
+        DisplayRowTextAreaOrigin::at_frame_x(800.0).expect("finite text-area origin"),
         1360.0,
         1592.0,
-    );
+    )
+    .expect("valid right-window extent");
     assert_eq!(right_window.last_visible_x_px(), 792.0);
     assert_eq!(right_window.remaining_px(), 232.0, "current_x is 560");
 
@@ -122,11 +124,21 @@ fn the_quarter_width_rule_uses_the_windows_own_width_in_a_right_hand_split() {
 /// it), so the origin is the text area's left edge, not the content's.
 #[test]
 fn the_text_area_origin_is_not_moved_by_a_line_number_prefix() {
-    let origin = DisplayRowTextAreaOrigin::at_frame_x(100.0);
+    let origin = DisplayRowTextAreaOrigin::at_frame_x(100.0).expect("finite text-area origin");
     // content_x = 100 + 32 px of line numbers; the pen is 8 px past that.
     assert_eq!(origin.window_local(140.0), 40.0);
     assert_eq!(
         DisplayRowTextAreaOrigin::row_local().window_local(140.0),
         140.0
     );
+}
+
+#[test]
+fn row_extent_rejects_non_finite_and_inverted_frame_geometry() {
+    assert!(DisplayRowTextAreaOrigin::at_frame_x(f32::NAN).is_err());
+
+    let origin = DisplayRowTextAreaOrigin::at_frame_x(100.0).expect("finite text-area origin");
+    assert!(WindowLocalRowExtent::from_frame_coordinates(origin, f32::INFINITY, 180.0).is_err());
+    assert!(WindowLocalRowExtent::from_frame_coordinates(origin, 181.0, 180.0).is_err());
+    assert!(WindowLocalRowExtent::from_frame_coordinates(origin, 99.0, 180.0).is_err());
 }
