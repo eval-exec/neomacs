@@ -88,7 +88,8 @@ the page origin. `/tmp` is session-local memory and is discarded with the
 editor worker.
 
 With the server running, the real-browser smoke test verifies a visible editor,
-file mutations, temporary files, and persistence across a page reload:
+`M-x switch-to-buffer`, browser text input, buffer contents across switches,
+file mutations, temporary files, and OPFS persistence across a page reload:
 
 ```bash
 nix-shell \
@@ -99,6 +100,28 @@ nix-shell \
 
 Pass `--chrome PATH` when Chrome is not discoverable on `PATH`, or omit
 `--headless` for an interactive run.
+
+The browser build has four complementary test layers:
+
+```bash
+# DOM input, worker bootstrap, asset loading, and OPFS adapter behavior.
+node --test crates/neomacs-wasm/web/*.test.mjs
+
+# Host-profile, typed input-protocol, and editor-worker behavior.
+cargo nextest run \
+  -p neomacs-wasm -p neomacs-wasm-protocol -p neomacs-wasm-worker
+
+# Compile the real editor worker for the browser target.
+cargo check --target wasm32-unknown-unknown -p neomacs-wasm-worker
+
+# Exercise the assembled product through default Chrome, as shown above.
+python3 crates/neomacs-wasm/tests/browser_opfs_smoke.py \
+  --headless --url http://127.0.0.1:4174/
+```
+
+Add user-visible workflows such as buffer, window, and file commands to the
+real-browser smoke test. Keep protocol translation and storage edge cases in
+the faster JavaScript or Rust layers so failures identify the broken boundary.
 
 ## Linux (Arch Linux)
 
