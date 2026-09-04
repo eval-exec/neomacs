@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import shutil
 import threading
 import time
 from collections import Counter
@@ -21,7 +19,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+
+from browser_test_support import chrome_options
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,23 +36,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifacts-dir", type=Path)
     parser.add_argument("--timeout", type=float, default=30.0)
     return parser.parse_args()
-
-
-def chrome_binary(explicit: str | None) -> str | None:
-    if explicit:
-        return explicit
-    configured = os.environ.get("NEOMACS_WASM_CHROME")
-    if configured:
-        return configured
-    for candidate in (
-        "google-chrome-stable",
-        "google-chrome",
-        "chromium",
-        "chromium-browser",
-    ):
-        if resolved := shutil.which(candidate):
-            return resolved
-    return None
 
 
 class ReleaseServer(ThreadingHTTPServer):
@@ -251,13 +233,7 @@ def main() -> None:
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 
-    options = Options()
-    if binary := chrome_binary(args.chrome):
-        options.binary_location = binary
-    if args.headless or os.environ.get("NEOMACS_WASM_HEADLESS", "0") != "0":
-        options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    options = chrome_options(args.chrome, args.headless)
 
     driver = webdriver.Chrome(options=options)
     try:

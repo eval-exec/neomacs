@@ -92,6 +92,43 @@ struct BrowserReleaseManifest<'a> {
     favicon: String,
 }
 
+impl<'a> BrowserReleaseManifest<'a> {
+    fn for_bundle(bundle_id: &'a BrowserBundleId) -> Self {
+        Self {
+            schema: 1,
+            bundle_id: bundle_id.as_str(),
+            entry: browser_bundle_asset_url(bundle_id, BrowserBundleAsset::EntryScript),
+            stylesheet: browser_bundle_asset_url(bundle_id, BrowserBundleAsset::Stylesheet),
+            favicon: browser_bundle_asset_url(bundle_id, BrowserBundleAsset::Favicon),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BrowserBundleAsset {
+    EntryScript,
+    Stylesheet,
+    Favicon,
+}
+
+impl BrowserBundleAsset {
+    const fn filename(self) -> &'static str {
+        match self {
+            Self::EntryScript => "main.js",
+            Self::Stylesheet => "style.css",
+            Self::Favicon => "favicon.svg",
+        }
+    }
+}
+
+fn browser_bundle_asset_url(bundle_id: &BrowserBundleId, asset: BrowserBundleAsset) -> String {
+    format!(
+        "./{BROWSER_RELEASES_DIRECTORY}/{}/{}",
+        bundle_id.as_str(),
+        asset.filename(),
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WasmArtifact {
     Frontend,
@@ -366,14 +403,7 @@ pub(super) fn publish_browser_bundle(
     }
     fs::rename(staged_bundle, &release)?;
 
-    let release_prefix = format!("./{BROWSER_RELEASES_DIRECTORY}/{}/", bundle_id.as_str());
-    let manifest = BrowserReleaseManifest {
-        schema: 1,
-        bundle_id: bundle_id.as_str(),
-        entry: format!("{release_prefix}main.js"),
-        stylesheet: format!("{release_prefix}style.css"),
-        favicon: format!("{release_prefix}favicon.svg"),
-    };
+    let manifest = BrowserReleaseManifest::for_bundle(&bundle_id);
     let mut encoded = serde_json::to_vec_pretty(&manifest)?;
     encoded.push(b'\n');
     fs::write(package_root.join(BROWSER_RELEASE_MANIFEST), encoded)?;
