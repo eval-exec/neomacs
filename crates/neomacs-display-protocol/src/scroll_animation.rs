@@ -22,7 +22,6 @@
 //! Each effect is selected via [`TransitionEffect`] enum. Physics-based timing
 //! is controlled separately via [`TransitionEasing`].
 
-use std::f32::consts::PI;
 use strum::{EnumString, IntoStaticStr};
 
 /// All available snapshot-transition effects.

@@ -7,7 +7,6 @@
 //! Paths here are absolute on purpose: `super::cursor` inside this module
 //! would resolve to this file, not to `render_thread::cursor`.
 
-use neomacs_display_protocol::frame_time::EventTime;
 use std::collections::{HashMap, HashSet};
 
 use crate::render_thread::cursor::{CursorState, CursorTarget};
