@@ -23,6 +23,7 @@ use neomacs_display_protocol::types::VideoId;
 use neomacs_renderer_wgpu::{RendererFrameEffects, WgpuGlyphAtlas};
 
 mod child_frames;
+pub(in crate::render_thread) mod continuity;
 mod cursor;
 mod media;
 mod overlays;
