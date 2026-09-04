@@ -255,6 +255,35 @@ pub(crate) struct FrameCompositor {
     pub(super) retained_static: Option<RetainedStatic>,
 }
 
+impl FrameCompositor {
+    /// A compositor holding no scene yet.
+    ///
+    /// `glyph_atlas` is `None` before the wgpu device exists (and again after
+    /// device loss); every other field starts empty, so this is the single
+    /// construction path for both frame-render-state constructors.
+    pub(super) fn new(glyph_atlas: Option<WgpuGlyphAtlas>) -> Self {
+        Self {
+            current_frame: None,
+            #[cfg(feature = "video")]
+            visible_videos: HashSet::new(),
+            current_scene_generation: 0,
+            #[cfg(feature = "neo-term")]
+            terminal_expansion: TerminalExpansion::default(),
+            current_row_damage: None,
+            child_frames: ChildFrameManager::new(),
+            hidden_child_frames: HashSet::new(),
+            pending_child_frame_removals_to_present: Vec::new(),
+            glyph_atlas,
+            dirty: false,
+            cursor_dirty: false,
+            visual_cursors: HashMap::new(),
+            renderer_effects: RendererFrameEffects::default(),
+            transitions: TransitionState::default(),
+            retained_static: None,
+        }
+    }
+}
+
 /// A cursorless render of the current scene, retained across cursor-only
 /// frames so an ambient cursor effect composites over it instead of
 /// re-running the glyph pipeline. Validity is generation- and size-keyed.
@@ -417,76 +446,34 @@ impl GuiFrameRenderState {
         scale_factor: f64,
         fps_enabled: bool,
     ) -> Self {
-        Self {
+        Self::with_glyph_atlas(
             emacs_frame_id,
-            compositor: FrameCompositor {
-                current_frame: None,
-                #[cfg(feature = "video")]
-                visible_videos: HashSet::new(),
-                current_scene_generation: 0,
-                #[cfg(feature = "neo-term")]
-                terminal_expansion: TerminalExpansion::default(),
-                current_row_damage: None,
-                child_frames: ChildFrameManager::new(),
-                hidden_child_frames: HashSet::new(),
-                pending_child_frame_removals_to_present: Vec::new(),
-                glyph_atlas: Some(WgpuGlyphAtlas::new_with_scale(device, scale_factor as f32)),
-                dirty: false,
-                cursor_dirty: false,
-                visual_cursors: HashMap::new(),
-                renderer_effects: RendererFrameEffects::default(),
-                transitions: TransitionState::default(),
-                retained_static: None,
-            },
-            present_state: GuiFramePresentState::Suspended,
-            chrome: ChromeState::default(),
-            pointer_appearance: PointerAppearanceState::default(),
-            presented_press: None,
-            pending_pointer_damage: [None; 2],
-            #[cfg(test)]
-            pointer_damage_appearance_lookups: 0,
-            deferred_pointer_retirements: Vec::new(),
-            overlays: OverlayState {
-                popup_menu: None,
-                tooltip: None,
-                visual_bell_start: None,
-                fps: FpsCounter {
-                    enabled: fps_enabled,
-                    ..FpsCounter::default()
-                },
-                typing_speed: TypingSpeedState::default(),
-                idle_dim: IdleDimState::default(),
-            },
-            frame_post_src: None,
-            input_method: InputMethodState::default(),
-            cursor: CursorState::default(),
-            mouse_pos: (0.0, 0.0),
-            pointer_inside: false,
-        }
+            Some(WgpuGlyphAtlas::new_with_scale(device, scale_factor as f32)),
+            fps_enabled,
+        )
     }
 
+    /// A frame render state for a window whose wgpu device does not exist yet.
+    ///
+    /// The render thread builds `RenderApp` before winit reports `resumed`, so
+    /// there is no device to make a glyph atlas from at that point; the atlas
+    /// is filled in later by `populate_glyph_atlas`. Device loss takes the same
+    /// path in reverse (`clear_gpu_resident_state`), so the atlas-less state is
+    /// a permanent part of the frame lifecycle, not a test affordance.
     pub(super) fn new_without_device(emacs_frame_id: u64, fps_enabled: bool) -> Self {
+        Self::with_glyph_atlas(emacs_frame_id, None, fps_enabled)
+    }
+
+    /// The one construction path shared by the device and device-less
+    /// constructors, which differ only in whether a glyph atlas exists.
+    fn with_glyph_atlas(
+        emacs_frame_id: u64,
+        glyph_atlas: Option<WgpuGlyphAtlas>,
+        fps_enabled: bool,
+    ) -> Self {
         Self {
             emacs_frame_id,
-            compositor: FrameCompositor {
-                current_frame: None,
-                #[cfg(feature = "video")]
-                visible_videos: HashSet::new(),
-                current_scene_generation: 0,
-                #[cfg(feature = "neo-term")]
-                terminal_expansion: TerminalExpansion::default(),
-                current_row_damage: None,
-                child_frames: ChildFrameManager::new(),
-                hidden_child_frames: HashSet::new(),
-                pending_child_frame_removals_to_present: Vec::new(),
-                glyph_atlas: None,
-                dirty: false,
-                cursor_dirty: false,
-                visual_cursors: HashMap::new(),
-                renderer_effects: RendererFrameEffects::default(),
-                transitions: TransitionState::default(),
-                retained_static: None,
-            },
+            compositor: FrameCompositor::new(glyph_atlas),
             present_state: GuiFramePresentState::Suspended,
             chrome: ChromeState::default(),
             pointer_appearance: PointerAppearanceState::default(),
