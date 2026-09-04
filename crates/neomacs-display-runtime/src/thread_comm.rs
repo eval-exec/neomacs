@@ -22,7 +22,7 @@ use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_core::window::GuiFrameGeometryHints;
 use neovm_host_abi::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendModifiers, FrontendViewport, InvalidFrontendScaleFactor,
+    FrontendLogicalExtent, FrontendModifiers, FrontendViewport, InvalidFrontendScaleFactor,
 };
 
 /// Native selection owned by the display server.
@@ -235,15 +235,14 @@ impl InputEvent {
     }
 
     pub fn viewport_changed(
-        width: u32,
-        height: u32,
+        logical_width: u32,
+        logical_height: u32,
         scale_factor: f64,
         emacs_frame_id: u64,
     ) -> Result<Self, InvalidFrontendScaleFactor> {
         Ok(Self::Frontend(FrontendEvent::ViewportChanged(
             FrontendViewport::new(
-                width,
-                height,
+                FrontendLogicalExtent::new(logical_width, logical_height),
                 scale_factor,
                 FrontendFrameId::new(emacs_frame_id),
             )?,

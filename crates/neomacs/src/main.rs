@@ -1356,19 +1356,20 @@ fn record_primary_window_resize(shared: &SharedPrimaryWindowSize, event: &Displa
         return;
     };
 
-    if viewport.target().get() != 0 || viewport.width() == 0 || viewport.height() == 0 {
+    let extent = viewport.logical_extent();
+    if viewport.target().get() != 0 || extent.width() == 0 || extent.height() == 0 {
         return;
     }
 
     match shared.lock() {
         Ok(mut state) => {
-            state.width = viewport.width();
-            state.height = viewport.height();
+            state.width = extent.width();
+            state.height = extent.height();
         }
         Err(poisoned) => {
             let mut state = poisoned.into_inner();
-            state.width = viewport.width();
-            state.height = viewport.height();
+            state.width = extent.width();
+            state.height = extent.height();
         }
     }
 }

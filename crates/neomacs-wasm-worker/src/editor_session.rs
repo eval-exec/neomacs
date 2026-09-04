@@ -73,11 +73,11 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         )
         .map_err(|error| format!("failed to mount browser temporary storage: {error}"))?;
     evaluator.install_editor_file_system(Box::new(filesystem));
-    let (width, height) = startup.physical_extent();
+    let logical_extent = startup.logical_extent();
     let (character_width, character_height) = startup.character_size();
     let metrics = InitialFrameMetrics::new(
-        width,
-        height,
+        logical_extent.width(),
+        logical_extent.height(),
         character_width,
         character_height,
         startup.font_pixel_size(),

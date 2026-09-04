@@ -485,8 +485,8 @@ fn input_event_window_resize_construction() {
     let event = InputEvent::viewport_changed(1920, 1080, 1.0, 0).unwrap();
     match event {
         InputEvent::Frontend(FrontendEvent::ViewportChanged(viewport)) => {
-            assert_eq!(viewport.width(), 1920);
-            assert_eq!(viewport.height(), 1080);
+            assert_eq!(viewport.logical_extent().width(), 1920);
+            assert_eq!(viewport.logical_extent().height(), 1080);
             assert_eq!(viewport.scale().get(), 1.0);
             assert_eq!(viewport.target().get(), 0);
         }
@@ -1538,8 +1538,8 @@ fn cross_thread_input_event_delivery() {
     let evt2 = emacs.input_rx.try_recv().unwrap();
     match evt2 {
         InputEvent::Frontend(FrontendEvent::ViewportChanged(viewport)) => {
-            assert_eq!(viewport.width(), 1920);
-            assert_eq!(viewport.height(), 1080);
+            assert_eq!(viewport.logical_extent().width(), 1920);
+            assert_eq!(viewport.logical_extent().height(), 1080);
         }
         other => panic!("Expected WindowResize, got {:?}", other),
     }
