@@ -1,0 +1,15 @@
+#!/bin/sh
+
+# Keep the Rust workspace buildable before commits leave the machine.
+if ! cargo fmt --all --check; then
+  echo >&2
+  echo 'Push rejected: unformatted Rust source detected.' >&2
+  echo 'Run `cargo fmt --all`, commit the result, and retry.' >&2
+  exit 1
+fi
+
+if ! cargo check --workspace --all-targets; then
+  echo >&2
+  echo 'Push rejected: cargo check --workspace --all-targets failed.' >&2
+  exit 1
+fi
