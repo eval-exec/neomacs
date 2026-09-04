@@ -538,6 +538,7 @@ impl RuntimeState {
         } else {
             Plan::Interpret
         };
+        #[cfg(feature = "jit")]
         super::jit::stats::record_dispatch(matches!(plan, Plan::Compiled));
         plan
     }
