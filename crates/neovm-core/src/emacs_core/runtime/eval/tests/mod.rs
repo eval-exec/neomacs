@@ -21909,6 +21909,103 @@ fn command_loop_error_uses_buffer_local_command_error_function() {
     );
 }
 
+/// GNU decides whether an error is ignored while dispatching the signal, before
+/// `cmd_error_internal' invokes the buffer-local `command-error-function'.  A
+/// presentation callback may mutate `debug-ignored-errors', but that mutation
+/// must only affect later signals, not the one already being handled.
+#[tracing_test::traced_test]
+#[test]
+fn command_loop_captures_ignored_error_severity_before_presentation() {
+    let mut ev = Context::new();
+    let scratch = ev.buffers.create_buffer("*command-error-severity*");
+    ev.buffers.set_current(scratch);
+    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    assert!(ev.frames.select_frame(frame), "test needs a selected frame");
+    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
+    install_global_map_for_test(&mut ev, global_map);
+
+    fn stop_command_loop_after_severity_probe(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        assert!(args.is_empty(), "stop helper should not receive arguments");
+        ctx.command_loop.running = false;
+        Ok(Value::NIL)
+    }
+    ev.register_subr(SubrSpec::new(
+        "neo-stop-command-loop-after-severity-probe",
+        NativeFn::ContextVec(stop_command_loop_after_severity_probe),
+        SubrArity::new(0, Some(0)),
+    ));
+    ev.eval_str(
+        r#"(progn
+             (put 'end-of-line 'error-conditions '(end-of-line error))
+             (put 'end-of-line 'error-message "End of line")
+             (setq debug-ignored-errors '(end-of-line)
+                   neo-command-error-observation nil)
+             (set (make-local-variable 'command-error-function)
+                  (lambda (data _context _caller)
+                    (setq neo-command-error-observation data
+                          debug-ignored-errors nil)))
+             (fset 'neo-ignored-signaling-command
+                   (lambda () (interactive) (signal 'end-of-line nil)))
+             (fset 'neo-stop-after-severity-command
+                   (lambda ()
+                     (interactive)
+                     (neo-stop-command-loop-after-severity-probe)))
+             (fset 'command-execute
+                   (lambda (cmd &optional _record _keys _special)
+                     (funcall cmd))))"#,
+    )
+    .expect("install ignored-error severity probe");
+
+    crate::emacs_core::keymap::list_keymap_define_seq(
+        global_map,
+        &[Value::symbol("f9")],
+        Value::symbol("neo-ignored-signaling-command"),
+    )
+    .expect("define ignored signaling command");
+    crate::emacs_core::keymap::list_keymap_define_seq(
+        global_map,
+        &[Value::fixnum('q' as i64)],
+        Value::symbol("neo-stop-after-severity-command"),
+    )
+    .expect("define stop command");
+
+    ev.command_loop
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(Value::symbol("f9"));
+    ev.command_loop
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(Value::fixnum('q' as i64));
+    ev.command_loop.running = true;
+
+    ev.recursive_edit_inner()
+        .expect("command loop should recover and run the stop command");
+
+    assert_eq!(
+        ev.eval_symbol("neo-command-error-observation")
+            .expect("command error observation"),
+        Value::list(vec![Value::symbol("end-of-line")]),
+        "the ignored error must still be presented through the buffer-local callback"
+    );
+    logs_assert(|logs| {
+        let Some(line) = logs
+            .iter()
+            .find(|line| line.contains("Command loop") && line.contains("signal=(end-of-line"))
+        else {
+            return Err(format!("missing command-loop condition event in {logs:#?}"));
+        };
+        if !line.contains(" DEBUG ") {
+            return Err(format!(
+                "ignored error was not logged at DEBUG before presentation mutated state: {line}"
+            ));
+        }
+        Ok(())
+    });
+}
+
 /// One completed command is the public observability seam: input waiting has
 /// already ended, and the command loop owns every phase through finalization.
 /// A user can therefore correlate the start/complete records without mistaking

@@ -7777,6 +7777,11 @@ impl Context {
                     self.assign("last-prefix-arg", Value::NIL);
                     self.cancel_key_echo_state();
 
+                    // Classify while the signal's buffer and ignore policy are
+                    // still current.  The presentation callback below is
+                    // arbitrary Lisp and may change either one; GNU's debugger
+                    // gate has already made this decision before `cmd_error'.
+                    let severity = self.command_error_severity(&sig);
                     let data = self.signal_error_data_value(&sig);
                     self.report_command_error(data, "")?;
 
@@ -7785,7 +7790,7 @@ impl Context {
                     // (see `command_error_severity'): a quit or a
                     // `debug-ignored-errors' match is what the user just did,
                     // not an error.
-                    match self.command_error_severity(&sig) {
+                    match severity {
                         CommandErrorSeverity::Routine => tracing::debug!(
                             condition = %sym_name,
                             "Command loop signal: {error_msg} [signal={rendered_signal}]{backtrace_suffix}"
