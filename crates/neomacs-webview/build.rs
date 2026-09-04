@@ -155,7 +155,6 @@ fn generate_wpe_platform_bindings(out_dir: &Path) {
         // GObject/GLib functions we need
         .allowlist_function("g_object_unref")
         .allowlist_function("g_object_ref")
-        .allowlist_function("g_error_free")
         .allowlist_function("g_bytes_get_data")
         .allowlist_function("g_signal_connect_data")
         .allowlist_function("g_type_check_instance_is_a")

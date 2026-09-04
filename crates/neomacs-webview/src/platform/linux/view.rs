@@ -13,6 +13,7 @@ use std::rc::Rc;
 use super::error::{DisplayError, DisplayResult};
 
 use super::display::{WpePlatformDisplay, buffer_dmabuf_info};
+use super::glib_error::GlibErrorSlot;
 use super::native;
 use super::sys::platform as plat;
 use super::sys::webkit as wk;
@@ -216,19 +217,11 @@ impl BorrowedWpeBuffer {
         width: u32,
         height: u32,
     ) -> Result<BorrowedWpePixels<'_>, SoftwarePixelImportError> {
-        let mut error: *mut plat::GError = ptr::null_mut();
-        let bytes = plat::wpe_buffer_import_to_pixels(self.0.as_ptr(), &mut error);
+        let mut error = GlibErrorSlot::new();
+        let bytes = plat::wpe_buffer_import_to_pixels(self.0.as_ptr(), error.out_ptr().cast());
 
         if bytes.is_null() {
-            let message = if error.is_null() {
-                "pixel import failed without an error".to_owned()
-            } else {
-                let message = CStr::from_ptr((*error).message)
-                    .to_string_lossy()
-                    .into_owned();
-                plat::g_error_free(error);
-                message
-            };
+            let message = error.into_message("pixel import failed without an error");
             return Err(SoftwarePixelImportError::Native(message));
         }
 
@@ -1025,19 +1018,13 @@ unsafe fn finish_script(
     web_view: *mut wk::WebKitWebView,
     result: *mut wk::GAsyncResult,
 ) -> Result<WebValue, ScriptError> {
-    let mut error = ptr::null_mut();
-    let value = wk::webkit_web_view_evaluate_javascript_finish(web_view, result, &mut error);
-    if !error.is_null() {
-        let glib_error = error.cast::<plat::GError>();
-        let message = if (*glib_error).message.is_null() {
-            "WebKit rejected script evaluation".to_owned()
-        } else {
-            CStr::from_ptr((*glib_error).message)
-                .to_string_lossy()
-                .into_owned()
-        };
-        plat::g_error_free(glib_error);
-        return Err(ScriptError::Rejected(message));
+    let mut error = GlibErrorSlot::new();
+    let value =
+        wk::webkit_web_view_evaluate_javascript_finish(web_view, result, error.out_ptr().cast());
+    if error.is_set() {
+        return Err(ScriptError::Rejected(
+            error.into_message("WebKit rejected script evaluation"),
+        ));
     }
     if value.is_null() {
         return Err(ScriptError::ProcessFailed);
