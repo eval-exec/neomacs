@@ -443,7 +443,7 @@ impl Context {
         nargs: usize,
     ) -> BytecodeBacktraceFrame {
         let base = self.specpdl.len();
-        let args = self.backtrace_args_from_oversized_bc_stack(args_start, nargs);
+        let args = self.backtrace_args_from_oversized_bc_stack(BytecodeBacktraceRange::new(args_start, nargs));
         self.specpdl.push(SpecBinding::Backtrace {
             function,
             args,
@@ -460,11 +460,12 @@ impl Context {
     #[inline(never)]
     pub(super) fn backtrace_args_from_oversized_bc_stack(
         &mut self,
-        args_start: usize,
-        nargs: usize,
+        range: BytecodeBacktraceRange,
     ) -> BacktraceArgs {
-        let values = LispArgVec::from_slice(&self.bc_buf[args_start..args_start + nargs]);
-        BacktraceArgs::evaluated(self.store_backtrace_args(values))
+        let index = self.backtrace_args_stack.len();
+        self.backtrace_args_stack
+            .push(BacktraceArgStorage::BytecodeStack(range));
+        BacktraceArgs::evaluated(index)
     }
 
     /// Push a backtrace frame for a special-form call (`nargs == UNEVALLED`
@@ -495,7 +496,8 @@ impl Context {
     #[inline]
     pub(super) fn store_backtrace_args(&mut self, args: LispArgVec) -> usize {
         let index = self.backtrace_args_stack.len();
-        self.backtrace_args_stack.push(args);
+        self.backtrace_args_stack
+            .push(BacktraceArgStorage::Values(args));
         index
     }
 
@@ -583,11 +585,18 @@ impl Context {
         match args.view() {
             BacktraceArgsView::Unevalled(value) => smallvec::smallvec![value],
             BacktraceArgsView::Evaluated0 => LispArgVec::new(),
-            BacktraceArgsView::Evaluated(index) => self
-                .backtrace_args_stack
-                .get(index)
-                .cloned()
-                .unwrap_or_default(),
+            BacktraceArgsView::Evaluated(index) => match self.backtrace_args_stack.get(index) {
+                Some(BacktraceArgStorage::Values(values)) => values.clone(),
+                Some(BacktraceArgStorage::BytecodeStack(range)) => {
+                    let end = range.start.saturating_add(range.len);
+                    if end <= self.bc_buf.len() {
+                        LispArgVec::from_slice(&self.bc_buf[range.start..end])
+                    } else {
+                        LispArgVec::new()
+                    }
+                }
+                None => LispArgVec::new(),
+            },
             BacktraceArgsView::EvaluatedBcStack(span) => {
                 let start = span.start();
                 let len = span.len();
@@ -842,7 +851,8 @@ impl Context {
                 insert_at = insert_at.min(owned);
             }
         }
-        self.backtrace_args_stack.insert(insert_at, values);
+        self.backtrace_args_stack
+            .insert(insert_at, BacktraceArgStorage::Values(values));
         for binding in self.specpdl[index + 1..].iter_mut() {
             if let SpecBinding::Backtrace { args, .. } = binding
                 && let Some(owned) = args.owned_index()
@@ -863,10 +873,14 @@ impl Context {
         match args.view() {
             BacktraceArgsView::Unevalled(_) => 1,
             BacktraceArgsView::Evaluated0 => 0,
-            BacktraceArgsView::Evaluated(index) => self
-                .backtrace_args_stack
-                .get(index)
-                .map_or(0, |args| args.len()),
+            BacktraceArgsView::Evaluated(index) => {
+                self.backtrace_args_stack
+                    .get(index)
+                    .map_or(0, |storage| match storage {
+                        BacktraceArgStorage::Values(values) => values.len(),
+                        BacktraceArgStorage::BytecodeStack(range) => range.len,
+                    })
+            }
             BacktraceArgsView::EvaluatedBcStack(span) => span.len(),
         }
     }
@@ -876,9 +890,21 @@ impl Context {
             BacktraceArgsView::Unevalled(value) => visit(value),
             BacktraceArgsView::Evaluated0 => {}
             BacktraceArgsView::Evaluated(index) => {
-                if let Some(args) = self.backtrace_args_stack.get(index) {
-                    for arg in args.iter().copied() {
-                        visit(arg);
+                if let Some(storage) = self.backtrace_args_stack.get(index) {
+                    match storage {
+                        BacktraceArgStorage::Values(values) => {
+                            for arg in values.iter().copied() {
+                                visit(arg);
+                            }
+                        }
+                        BacktraceArgStorage::BytecodeStack(range) => {
+                            let end = range.start.saturating_add(range.len);
+                            if end <= self.bc_buf.len() {
+                                for arg in self.bc_buf[range.start..end].iter().copied() {
+                                    visit(arg);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3210,6 +3236,33 @@ impl Context {
             _ => {
                 let args = LispArgVec::from_slice(&self.bc_buf[args_start..args_start + nargs]);
                 func(self, &args)
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) fn backtrace_arg_or_nil(&self, args: &BacktraceArgs, index: usize) -> Value {
+        match args.view() {
+            BacktraceArgsView::Unevalled(_) | BacktraceArgsView::Evaluated0 => Value::NIL,
+            BacktraceArgsView::Evaluated(args_index) => self
+                .backtrace_args_stack
+                .get(args_index)
+                .and_then(|storage| match storage {
+                    BacktraceArgStorage::Values(values) => values.get(index).copied(),
+                    BacktraceArgStorage::BytecodeStack(range) => (index < range.len)
+                        .then(|| self.bc_buf.get(range.start.saturating_add(index)).copied())
+                        .flatten(),
+                })
+                .unwrap_or(Value::NIL),
+            BacktraceArgsView::EvaluatedBcStack(span) => {
+                if index < span.len() {
+                    self.bc_buf
+                        .get(span.start().saturating_add(index))
+                        .copied()
+                        .unwrap_or(Value::NIL)
+                } else {
+                    Value::NIL
+                }
             }
         }
     }
