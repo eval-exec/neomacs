@@ -15,6 +15,7 @@ use neomacs_app::session::{
     EditorSession, EditorSessionExit, FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort,
 };
 use neomacs_app::startup::{InteractiveGuiStartup, configure_interactive_gui_startup};
+use neomacs_layout_engine::font::metrics::FontMetricsService;
 use neomacs_layout_engine::font::sizing::FontSizing;
 use neomacs_wasm_protocol::{BrowserColorScheme, BrowserEditorStartup, BrowserInputBatch};
 use neovm_core::emacs_core::wait::{HostInputWaitBackend, HostInputWaitError};
@@ -24,6 +25,28 @@ use neovm_core::emacs_core::fileio::{
 use neovm_core::window::FrameDisplayIdentity;
 
 use crate::browser_host::{self, HostWake};
+
+const OPENING_FONT_FAMILY: &str = "monospace";
+const OPENING_FONT_WEIGHT: u16 = 400;
+
+fn initial_frame_metrics(startup: &BrowserEditorStartup) -> Result<InitialFrameMetrics, String> {
+    let font_pixel_size = startup.font_pixel_size();
+    let font = FontMetricsService::new().font_metrics(
+        OPENING_FONT_FAMILY,
+        OPENING_FONT_WEIGHT,
+        false,
+        font_pixel_size,
+    );
+    let extent = startup.logical_extent();
+    InitialFrameMetrics::new(
+        extent.width(),
+        extent.height(),
+        font.char_width,
+        font.line_height,
+        font_pixel_size,
+    )
+    .map_err(|error| format!("invalid browser opening geometry: {error}"))
+}
 
 pub(crate) fn run() -> Result<EditorSessionExit, String> {
     neomacs_host_runtime::time::BrowserClocks::new(
@@ -74,16 +97,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         )
         .map_err(|error| format!("failed to mount browser temporary storage: {error}"))?;
     evaluator.install_editor_file_system(Box::new(filesystem));
-    let logical_extent = startup.logical_extent();
-    let (character_width, character_height) = startup.character_size();
-    let metrics = InitialFrameMetrics::new(
-        logical_extent.width(),
-        logical_extent.height(),
-        character_width,
-        character_height,
-        startup.font_pixel_size(),
-    )
-    .map_err(|error| format!("invalid browser opening geometry: {error}"))?;
+    let metrics = initial_frame_metrics(&startup)?;
     let background = match startup.color_scheme() {
         BrowserColorScheme::Light => InitialBackgroundMode::Light,
         BrowserColorScheme::Dark => InitialBackgroundMode::Dark,
@@ -97,7 +111,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
             FrameDisplayIdentity::default(),
             InitialDisplayType::Color,
             background,
-            InitialFrameFont::named("monospace"),
+            InitialFrameFont::named(OPENING_FONT_FAMILY),
         ),
     );
     let invocation = InteractiveGuiStartup::new(
