@@ -18,6 +18,7 @@ use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
 };
 use objc2_app_kit::{NSEvent, NSResponder, NSView};
+use objc2_core_foundation::{CFBoolean, CFType};
 use objc2_foundation::{
     NSError, NSJSONSerialization, NSJSONWritingOptions, NSKeyValueObservingOptions, NSNumber,
     NSObject, NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSPoint, NSRect, NSSize,
@@ -40,6 +41,13 @@ use crate::{
     ScriptError, ScriptRequest, ScriptWorld, WebContentSize, WebProcessFailure, WebValue,
     WebViewEvent, WebViewGeneration, WebViewId, WebViewPolicy, WebViewWake,
 };
+
+/// Run a void-returning Objective-C callback without allowing a Rust panic to
+/// unwind through the foreign ABI.  The panic hook still reports the failure;
+/// the callback itself has no error channel through which to return it.
+fn run_objc_callback(callback: impl FnOnce()) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback));
+}
 
 define_class!(
     /// A flipped clipping view makes all placement arithmetic top-down, as it
@@ -156,7 +164,7 @@ define_class!(
         #[unsafe(method(webViewWebContentProcessDidTerminate:))]
         #[allow(non_snake_case)]
         unsafe fn webViewWebContentProcessDidTerminate(&self, _web_view: &WKWebView) {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_objc_callback(|| {
                 self.ivars()
                     .events
                     .borrow_mut()
@@ -166,7 +174,7 @@ define_class!(
                         failure: WebProcessFailure::Terminated,
                     });
                 self.ivars().wake.notify();
-            }));
+            });
         }
     }
 );
@@ -180,7 +188,7 @@ impl WebViewNavigationDelegate {
         // Objective-C delegate entry points are an FFI boundary.  Hand the
         // backend-neutral milestone to the load state, which decides what it
         // means next to the progress the observer already reported.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_objc_callback(|| {
             let ivars = self.ivars();
             let navigation = navigation
                 .map(NativeNavigation::of)
@@ -193,7 +201,7 @@ impl WebViewNavigationDelegate {
             );
             ivars.events.borrow_mut().extend(events);
             ivars.wake.notify();
-        }));
+        });
     }
 
     fn new(
@@ -248,7 +256,7 @@ define_class!(
             _change: Option<&AnyObject>,
             _context: *mut c_void,
         ) {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sample()));
+            run_objc_callback(|| self.sample());
         }
     }
 );
@@ -364,22 +372,24 @@ define_class!(
             let event = event.retain();
             let this = self.retain();
             let completion = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
-                let probe = classify_focus_probe(result, error);
-                let now = this.ivars().host_epoch.get();
-                match route_key(probe, sent, now) {
-                    KeyRoute::Emacs => {
-                        // Re-read the host: the epoch proved it unchanged,
-                        // so this is the view the key was typed into.
-                        let emacs_view = this.ivars().emacs_view.borrow().clone();
-                        if let Some(emacs_view) = emacs_view {
-                            emacs_view.keyDown(&event);
+                run_objc_callback(|| {
+                    let probe = classify_focus_probe(result, error);
+                    let now = this.ivars().host_epoch.get();
+                    match route_key(probe, sent, now) {
+                        KeyRoute::Emacs => {
+                            // Re-read the host: the epoch proved it unchanged,
+                            // so this is the view the key was typed into.
+                            let emacs_view = this.ivars().emacs_view.borrow().clone();
+                            if let Some(emacs_view) = emacs_view {
+                                emacs_view.keyDown(&event);
+                            }
                         }
+                        KeyRoute::WebView => unsafe {
+                            let _: () = msg_send![super(&*this), keyDown: &*event];
+                        },
+                        KeyRoute::Dropped => {}
                     }
-                    KeyRoute::WebView => unsafe {
-                        let _: () = msg_send![super(&*this), keyDown: &*event];
-                    },
-                    KeyRoute::Dropped => {}
-                }
+                });
             });
             unsafe {
                 self.evaluateJavaScript_completionHandler(
@@ -398,8 +408,9 @@ define_class!(
 
 /// Classify what `evaluateJavaScript:completionHandler:` handed back for
 /// `xwHasFocus()` without trusting its class: page JavaScript can redefine
-/// the function and return anything, and sending `boolValue` to a non-number
-/// raises an Objective-C exception that Rust cannot catch.
+/// the function and return anything.  WebKit bridges JavaScript Booleans to
+/// `CFBoolean`, which is an `NSNumber` subclass but has a distinct Core
+/// Foundation type ID; ordinary numeric zero and one are not accepted.
 fn classify_focus_probe(result: *mut AnyObject, error: *mut NSError) -> FocusProbe {
     if !error.is_null() {
         return FocusProbe::Failed;
@@ -409,10 +420,61 @@ fn classify_focus_probe(result: *mut AnyObject, error: *mut NSError) -> FocusPro
     let Some(result) = (unsafe { result.as_ref() }) else {
         return FocusProbe::Absent;
     };
-    match result.downcast_ref::<NSNumber>() {
-        Some(number) if number.boolValue() => FocusProbe::Focused,
-        Some(_) => FocusProbe::Unfocused,
-        None => FocusProbe::NotABoolean,
+    let Some(number) = result.downcast_ref::<NSNumber>() else {
+        return FocusProbe::NotABoolean;
+    };
+    // SAFETY: NSNumber is toll-free bridged to CFNumber/CFBoolean, so the
+    // object may be borrowed as CFType for the exact type-ID check.
+    let value = unsafe { &*std::ptr::from_ref(number).cast::<CFType>() };
+    let Some(boolean) = value.downcast_ref::<CFBoolean>() else {
+        return FocusProbe::NotABoolean;
+    };
+    if boolean.value() {
+        FocusProbe::Focused
+    } else {
+        FocusProbe::Unfocused
+    }
+}
+
+#[cfg(test)]
+mod focus_probe_tests {
+    use super::*;
+
+    fn classify_number(number: &Retained<NSNumber>) -> FocusProbe {
+        classify_focus_probe(
+            Retained::as_ptr(number).cast::<AnyObject>().cast_mut(),
+            ptr::null_mut(),
+        )
+    }
+
+    #[test]
+    fn only_core_foundation_booleans_are_focus_answers() {
+        assert_eq!(
+            classify_number(&NSNumber::new_bool(true)),
+            FocusProbe::Focused
+        );
+        assert_eq!(
+            classify_number(&NSNumber::new_bool(false)),
+            FocusProbe::Unfocused
+        );
+        assert_eq!(
+            classify_number(&NSNumber::new_i32(1)),
+            FocusProbe::NotABoolean,
+            "numeric one is truthy but is not a JavaScript Boolean"
+        );
+        assert_eq!(
+            classify_number(&NSNumber::new_i32(0)),
+            FocusProbe::NotABoolean,
+            "numeric zero is falsey but is not a JavaScript Boolean"
+        );
+    }
+
+    #[test]
+    fn objective_c_callback_panics_are_contained() {
+        let escaped = std::panic::catch_unwind(|| {
+            run_objc_callback(|| panic!("synthetic callback panic"));
+        });
+        assert!(escaped.is_ok(), "a panic must not unwind into Objective-C");
     }
 }
 
@@ -487,7 +549,7 @@ define_class!(
             _controller: &WKUserContentController,
             message: &WKScriptMessage,
         ) {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_objc_callback(|| {
                 // The body is whatever JSON value the page posted; only a
                 // string can be GNU's "C-g", so check the class before
                 // reading it rather than sending `isEqualToString:` blind.
@@ -499,7 +561,7 @@ define_class!(
                     }
                     KeyDownMessage::Ignored => {}
                 }
-            }));
+            });
         }
     }
 );

@@ -72,9 +72,9 @@ impl HostEpoch {
 /// answer is not trusted to be a boolean until it has been downcast.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FocusProbe {
-    /// An NSNumber that is true: an INPUT or TEXTAREA has focus.
+    /// A Core Foundation Boolean that is true: an INPUT or TEXTAREA has focus.
     Focused,
-    /// An NSNumber that is false.
+    /// A Core Foundation Boolean that is false.
     Unfocused,
     /// A nil result with no error (GNU: `else if (result)` fails, nothing
     /// is delivered).  This is the one answer a page can still use to eat
@@ -82,8 +82,8 @@ pub(super) enum FocusProbe {
     /// behaviour, unlike the non-boolean case below, which GNU cannot
     /// survive and this port has to decide for itself.
     Absent,
-    /// A non-nil result that is not an NSNumber.  GNU would send it
-    /// `boolValue` and raise; this port treats it as "no input focused".
+    /// A non-nil result that is not a Core Foundation Boolean.  GNU would
+    /// send it `boolValue`; this port treats it as "no input focused".
     NotABoolean,
     /// `evaluateJavaScript` reported an error.
     Failed,
