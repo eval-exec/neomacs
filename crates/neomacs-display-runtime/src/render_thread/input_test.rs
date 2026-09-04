@@ -121,7 +121,9 @@ fn stale_root_presentation_does_not_own_newly_exposed_surface_area() {
     );
     let mut stale = FrameGlyphBuffer::with_size(100.0, 50.0);
     stale.presentation_id = PresentationId::new(88);
-    window.render.set_current_frame(Some(stale), None);
+    window
+        .render
+        .set_current_frame(Some(stale), None, Default::default());
 
     assert_eq!(
         RenderApp::pointer_owner(window, 150.0, 25.0),
@@ -238,7 +240,9 @@ fn wheel_input_atomically_carries_its_presented_region() {
             .unwrap(),
         )
         .unwrap();
-    window.render.set_current_frame(Some(frame), None);
+    window
+        .render
+        .set_current_frame(Some(frame), None, Default::default());
 
     app.handle_mouse_wheel(
         window_id,
@@ -491,7 +495,11 @@ fn presented_pointer_integration_runtime_motion_drives_same_frame_mouse_face_pix
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(presented_pointer_integration_frame(69)), None);
+    render.set_current_frame(
+        Some(presented_pointer_integration_frame(69)),
+        None,
+        Default::default(),
+    );
     let frame = render.current_frame_clone().unwrap();
 
     let base_selection = render.pointer_selection_for(&frame);
@@ -566,7 +574,11 @@ fn presented_pointer_integration_published_frame_drives_hover_press_leave_and_st
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(presented_pointer_integration_frame(70)), None);
+    render.set_current_frame(
+        Some(presented_pointer_integration_frame(70)),
+        None,
+        Default::default(),
+    );
     render.set_dirty(false);
 
     assert!(render.update_presented_pointer_motion(Some((0x42, 84.0, 10.0))));
@@ -639,7 +651,11 @@ fn presented_pointer_integration_published_frame_drives_hover_press_leave_and_st
     assert!(render.update_presented_pointer_motion(Some((0x42, 84.0, 10.0))));
     assert!(render.pointer_appearance.active().is_some());
     render.set_dirty(false);
-    render.set_current_frame(Some(presented_pointer_integration_frame(71)), None);
+    render.set_current_frame(
+        Some(presented_pointer_integration_frame(71)),
+        None,
+        Default::default(),
+    );
     assert_eq!(render.pointer_appearance.active(), None);
     assert!(
         render.compositor.dirty,
@@ -658,7 +674,11 @@ fn presented_pointer_integration_damage_unions_old_and_new_paint_spans() {
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(presented_pointer_integration_frame(75)), None);
+    render.set_current_frame(
+        Some(presented_pointer_integration_frame(75)),
+        None,
+        Default::default(),
+    );
 
     assert!(render.update_presented_pointer_motion(Some((0x42, 84.0, 10.0))));
     assert_eq!(
@@ -699,7 +719,11 @@ fn presented_pointer_integration_damage_unions_old_and_new_paint_spans() {
     render.finish_pointer_paint_render();
     assert!(render.update_presented_pointer_motion(Some((0x42, 84.0, 10.0))));
     render.finish_pointer_paint_render();
-    render.set_current_frame(Some(presented_pointer_integration_frame(76)), None);
+    render.set_current_frame(
+        Some(presented_pointer_integration_frame(76)),
+        None,
+        Default::default(),
+    );
     assert_eq!(
         render.pointer_paint_damage(),
         [Some(FrameRect::new(0.0, 0.0, 96.0, 24.0).unwrap()), None],
@@ -757,7 +781,7 @@ fn unchanged_pointer_appearance_skips_damage_inspection_in_a_ten_thousand_glyph_
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(frame), None);
+    render.set_current_frame(Some(frame), None, Default::default());
     assert!(render.update_presented_pointer_motion(Some((0x42, 9_999.5, 5.0))));
     render.finish_pointer_paint_render();
     let lookups = render.pointer_damage_appearance_lookups();
@@ -849,7 +873,7 @@ fn presented_pointer_integration_topmost_child_uses_local_coordinates_then_root_
         &[(110.0, 85.0, 20.0, 10.0), (10.0, 5.0, 20.0, 10.0)],
     );
     set_test_frame_placement(&mut root, 0x42, 0, 0.0, 0.0, 0);
-    render.set_current_frame(Some(root), None);
+    render.set_current_frame(Some(root), None, Default::default());
     let mut lower_child =
         presented_pointer_integration_offset_frame(82, 60.0, 40.0, &[(10.0, 5.0, 20.0, 10.0)]);
     set_test_frame_placement(&mut lower_child, 0x98, 0x42, 100.0, 80.0, 5);
@@ -1023,7 +1047,7 @@ fn real_layout_publication_routes_overlapping_children_by_published_z_order() {
     let mut app = make_test_app(200, 120, 1.0);
     let render = ensure_primary_frame(&mut app).expect("primary render");
     render.set_emacs_frame_id(root.0);
-    render.set_current_frame(Some(root_frame), None);
+    render.set_current_frame(Some(root_frame), None, Default::default());
     assert!(render.update_child_frame(lower_frame));
     assert!(render.update_child_frame(upper_frame));
     let window = app.frame_windows.primary_window().unwrap();
@@ -1098,7 +1122,7 @@ fn real_layout_publication_keeps_nested_child_parent_relative_and_runtime_places
     let mut app = make_test_app(800, 600, 1.0);
     let render = ensure_primary_frame(&mut app).expect("primary render");
     render.set_emacs_frame_id(root.0);
-    render.set_current_frame(Some(root_frame), None);
+    render.set_current_frame(Some(root_frame), None, Default::default());
     assert!(render.update_child_frame(parent_frame));
     assert!(render.update_child_frame(nested_frame));
     let nested_entry = render
@@ -1117,7 +1141,11 @@ fn presented_pointer_integration_close_and_add_dispatch_distinct_interactions() 
         return;
     };
     render.set_emacs_frame_id(0x42);
-    render.set_current_frame(Some(presented_pointer_integration_frame(90)), None);
+    render.set_current_frame(
+        Some(presented_pointer_integration_frame(90)),
+        None,
+        Default::default(),
+    );
     let window = app.frame_windows.primary_window_mut().unwrap();
 
     let semantic = window
@@ -1586,7 +1614,7 @@ fn topmost_child_blocks_root_chrome_ownership() {
     render.set_emacs_frame_id(0x42);
     let mut root = FrameGlyphBuffer::with_size(800.0, 600.0);
     set_test_frame_placement(&mut root, 0x42, 0, 0.0, 0.0, 0);
-    render.set_current_frame(Some(root), None);
+    render.set_current_frame(Some(root), None, Default::default());
     let mut child = FrameGlyphBuffer::with_size(100.0, 100.0);
     set_test_frame_placement(&mut child, 0x99, 0x42, 0.0, 40.0, 0);
     render.update_child_frame(child);
@@ -1606,7 +1634,7 @@ fn nested_child_ime_cursor_area_uses_presented_root_relative_placement() {
 
     let mut root = FrameGlyphBuffer::with_size(800.0, 600.0);
     set_test_frame_placement(&mut root, 0x42, 0, 0.0, 0.0, 0);
-    render.set_current_frame(Some(root), None);
+    render.set_current_frame(Some(root), None, Default::default());
 
     let mut parent = FrameGlyphBuffer::with_size(300.0, 200.0);
     set_test_frame_placement(&mut parent, 0x50, 0x42, 100.0, 80.0, 1);

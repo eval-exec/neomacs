@@ -60,7 +60,7 @@ fn terminal_expansion_replacement_is_atomic_and_invalidates_the_scene() {
         color: Color::WHITE,
     };
     editor_frame.glyphs.push(editor_glyph.clone());
-    render.set_current_frame(Some(editor_frame), None);
+    render.set_current_frame(Some(editor_frame), None, Default::default());
     let face_id = neomacs_display_protocol::types::FaceId::new(0xffff_fff0);
     let generated_glyph = FrameGlyph::Border {
         window_id: neomacs_display_protocol::types::DisplayWindowId::new(1),
@@ -146,7 +146,7 @@ fn terminal_expansion_rejects_editor_face_collisions_without_partial_installatio
         editor_face_id,
         neomacs_display_protocol::face::Face::new(editor_face_id),
     );
-    render.set_current_frame(Some(editor_frame), None);
+    render.set_current_frame(Some(editor_frame), None, Default::default());
     let retained = TerminalExpansion::new(
         Vec::new(),
         HashMap::from([(
@@ -223,7 +223,11 @@ fn accepted_root_and_child_presentations_own_the_video_visibility_index() {
     let first = neomacs_display_protocol::types::VideoId::new(7);
     let child_video = neomacs_display_protocol::types::VideoId::new(8);
 
-    render.set_current_frame(Some(make_video_frame(0x42, 0, first.get())), None);
+    render.set_current_frame(
+        Some(make_video_frame(0x42, 0, first.get())),
+        None,
+        Default::default(),
+    );
     assert!(render.presents_video(first));
     assert!(!render.presents_video(child_video));
 
@@ -235,7 +239,7 @@ fn accepted_root_and_child_presentations_own_the_video_visibility_index() {
     assert!(render.presents_video(first));
     assert!(!render.presents_video(child_video));
 
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     assert!(!render.presents_video(first));
 }
 
@@ -253,7 +257,7 @@ fn root_present_mapping_refreshes_on_surface_and_presentation_edges() {
 
     let mut stale = FrameGlyphBuffer::with_size(664.0, 682.0);
     stale.presentation_id = PresentationId::new(5);
-    render.set_current_frame(Some(stale), None);
+    render.set_current_frame(Some(stale), None, Default::default());
     let initial = render.present_mapping().unwrap();
     assert_eq!(initial.presentation(), PresentationId::new(5));
     assert_eq!(initial.surface_logical_size().width(), 664.0);
@@ -271,7 +275,7 @@ fn root_present_mapping_refreshes_on_surface_and_presentation_edges() {
 
     let mut fresh = FrameGlyphBuffer::with_size(1974.8572, 1214.2858);
     fresh.presentation_id = PresentationId::new(6);
-    render.set_current_frame(Some(fresh), None);
+    render.set_current_frame(Some(fresh), None, Default::default());
     let fresh_on_maximized = render.present_mapping().unwrap();
     assert_eq!(fresh_on_maximized.presentation(), PresentationId::new(6));
     assert!((fresh_on_maximized.visible_content_rect().unwrap().width() - 1974.8572).abs() < 0.001);
@@ -286,7 +290,7 @@ fn suspended_surface_cannot_retain_a_drawable_present_mapping() {
     );
     let mut frame = FrameGlyphBuffer::with_size(800.0, 600.0);
     frame.presentation_id = PresentationId::new(7);
-    render.set_current_frame(Some(frame), None);
+    render.set_current_frame(Some(frame), None, Default::default());
     render.set_surface_state(
         SurfaceState::from_device_size(800, 600, DeviceScale::new(1.0).unwrap()).unwrap(),
     );
@@ -536,7 +540,7 @@ fn dirty_render_state_with_current_frame_is_presentable() {
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
 
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     render.mark_dirty();
 
     assert!(render.has_presentable_dirty_content());
@@ -555,7 +559,7 @@ fn beginning_presentable_render_consumes_dirty_content() {
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
 
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     render.mark_dirty();
 
     render.begin_presentable_render();
@@ -670,7 +674,7 @@ fn frame_render_state_remove_child_frame_marks_dirty_when_removed() {
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     let mut child = make_frame(0x99, 0x42);
     set_parent_offset(&mut child, 10.0, 20.0);
     render.compositor.child_frames.update_frame(child);
@@ -695,7 +699,7 @@ fn displayed_presentations_include_root_and_children_for_atomic_retirement() {
     );
     let mut root = make_frame(0x42, 0);
     root.presentation_id = neomacs_display_protocol::frame_chrome::PresentationId::new(7);
-    render.set_current_frame(Some(root), None);
+    render.set_current_frame(Some(root), None, Default::default());
     let mut child = make_frame(0x99, 0x42);
     child.presentation_id = neomacs_display_protocol::frame_chrome::PresentationId::new(8);
     render.compositor.child_frames.update_frame(child);
@@ -721,7 +725,7 @@ fn presented_pointer_hit_selects_the_displayed_root_or_child_map_in_local_coordi
     let mut root = make_frame(0x42, 0);
     root.presentation_id = PresentationId::new(21);
     install_pointer_region(&mut root, None, true);
-    render.set_current_frame(Some(root), None);
+    render.set_current_frame(Some(root), None, Default::default());
 
     let mut child = make_frame(0x99, 0x42);
     child.presentation_id = PresentationId::new(22);
@@ -771,7 +775,7 @@ fn replacing_a_frame_clears_pointer_appearance_from_the_retired_presentation() {
     );
     let mut old = make_frame(0x42, 0);
     old.presentation_id = PresentationId::new(7);
-    render.set_current_frame(Some(old), None);
+    render.set_current_frame(Some(old), None, Default::default());
     render
         .pointer_appearance
         .hover(Some(PresentedAppearanceKey::new(
@@ -784,7 +788,7 @@ fn replacing_a_frame_clears_pointer_appearance_from_the_retired_presentation() {
 
     let mut replacement = make_frame(0x42, 0);
     replacement.presentation_id = PresentationId::new(8);
-    render.set_current_frame(Some(replacement), None);
+    render.set_current_frame(Some(replacement), None, Default::default());
 
     assert_eq!(render.pointer_appearance.active(), None);
     assert_eq!(render.pointer_appearance.pressed(), None);
@@ -807,7 +811,7 @@ fn replacing_or_removing_a_child_clears_only_its_pointer_appearance() {
     );
     let mut root = make_frame(0x42, 0);
     root.presentation_id = PresentationId::new(7);
-    render.set_current_frame(Some(root), None);
+    render.set_current_frame(Some(root), None, Default::default());
     let mut child = make_frame(0x99, 0x42);
     child.presentation_id = PresentationId::new(17);
     assert!(render.update_child_frame(child));
@@ -820,7 +824,7 @@ fn replacing_or_removing_a_child_clears_only_its_pointer_appearance() {
 
     let mut root_replacement = make_frame(0x42, 0);
     root_replacement.presentation_id = PresentationId::new(8);
-    render.set_current_frame(Some(root_replacement), None);
+    render.set_current_frame(Some(root_replacement), None, Default::default());
     assert_eq!(
         render.pointer_appearance.active().unwrap().presentation(),
         PresentationId::new(17),
@@ -878,7 +882,7 @@ fn runtime_semantic_hit_query_uses_target_frame_presentation_and_rejects_stale_i
         .unwrap(),
     )
     .unwrap();
-    render.set_current_frame(Some(root), None);
+    render.set_current_frame(Some(root), None, Default::default());
 
     let hit = render
         .presented_region_hit(0x42, presentation, 12.0, 22.0)
@@ -907,7 +911,7 @@ fn frame_render_state_remove_child_frame_ignores_late_stale_update() {
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     let mut child = make_frame(0x99, 0x42);
     set_parent_offset(&mut child, 10.0, 20.0);
 
@@ -937,7 +941,7 @@ fn frame_render_state_show_child_frame_allows_fresh_update_after_removal() {
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     let mut child = make_frame(0x99, 0x42);
     set_parent_offset(&mut child, 10.0, 20.0);
 
@@ -964,7 +968,7 @@ fn frame_render_state_ignores_identical_child_frame_update() {
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     let mut child = make_frame(0x99, 0x42);
     set_parent_offset(&mut child, 10.0, 20.0);
 
@@ -1469,7 +1473,7 @@ fn cursor_blink_toggle_asks_for_a_cursor_frame_not_a_repaint() {
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     render.cursor.set_target(
         crate::render_thread::cursor::CursorTarget {
             window_id: 7,
@@ -1522,7 +1526,7 @@ fn content_change_outranks_a_pending_cursor_change() {
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    render.set_current_frame(Some(make_frame(0x42, 0)), None);
+    render.set_current_frame(Some(make_frame(0x42, 0)), None, Default::default());
     render.compositor.cursor_dirty = true;
     render.mark_dirty();
 
