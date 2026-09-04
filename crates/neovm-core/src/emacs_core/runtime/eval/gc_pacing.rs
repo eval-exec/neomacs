@@ -387,6 +387,7 @@ impl Context {
     /// that created it (e.g., in worker thread pools).
     pub fn setup_thread_locals(&mut self) {
         crate::tagged::gc::set_tagged_heap(&mut self.tagged_heap);
+        self.sync_charset_runtime_resources();
         super::super::syntax::restore_standard_syntax_table_object(self.standard_syntax_table);
         super::super::syntax::restore_syntax_code_objects(self.syntax_code_objects);
         super::super::category::restore_standard_category_table_object(
@@ -526,7 +527,17 @@ impl Context {
         &mut self,
         store: Box<dyn crate::emacs_core::fileio::RuntimeResourceStore>,
     ) {
+        let store = std::rc::Rc::<dyn crate::emacs_core::fileio::RuntimeResourceStore>::from(store);
+        crate::emacs_core::charset::install_runtime_resource_store(Some(std::rc::Rc::clone(
+            &store,
+        )));
         self.editor_file_system.install_runtime_resources(store);
+    }
+
+    pub(crate) fn sync_charset_runtime_resources(&self) {
+        crate::emacs_core::charset::install_runtime_resource_store(
+            self.editor_file_system.runtime_resources(),
+        );
     }
 
     /// Replace the target-default mutable filesystem before editor startup.
