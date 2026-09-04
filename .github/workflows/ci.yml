@@ -564,6 +564,14 @@ jobs:
           google-chrome --version
           chromedriver --version
 
+      - name: Exercise an ordinary warm-cache browser upgrade
+        run: |
+          "$TMPDIR/browser-smoke-venv/bin/python" \
+            crates/neomacs-wasm/tests/browser_release_upgrade.py \
+            --headless \
+            --distribution "$TMPDIR/neomacs-wasm-dist" \
+            --artifacts-dir "$TMPDIR/browser-smoke-artifacts"
+
       - name: Exercise packaged editor in default Chrome
         run: |
           python3 -m http.server 4174 \

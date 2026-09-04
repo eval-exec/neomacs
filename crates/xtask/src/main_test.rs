@@ -862,6 +862,7 @@ fn portable_frontend_ci_reuses_one_runtime_bundle_and_smokes_packaged_wasm() {
     assert!(wasm.contains("package(neomacs-wasm-protocol)"));
     assert!(wasm.contains("node --test crates/neomacs-wasm/web/*.test.mjs"));
     assert!(wasm.contains("cargo xtask build-wasm"));
+    assert!(wasm.contains("browser_release_upgrade.py"));
     assert!(wasm.contains("browser_opfs_smoke.py"));
     assert!(wasm.contains("--headless"));
     assert!(!wasm.contains("--enable-unsafe-webgpu"));
