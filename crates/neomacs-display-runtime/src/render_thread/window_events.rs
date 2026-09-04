@@ -105,9 +105,11 @@ impl RenderApp {
         if !self.effects.typing_speed.enabled {
             return;
         }
-        let now = std::time::Instant::now();
+        let now = neomacs_display_protocol::frame_time::observe_platform_now();
         if let Some(window_state) = self.frame_windows.get_by_winit_mut(window_id) {
-            window_state.render.record_typing_keypress(now);
+            window_state
+                .render
+                .record_typing_keypress(now.into_instant());
         }
     }
 
@@ -115,9 +117,9 @@ impl RenderApp {
         if !self.effects.idle_dim.enabled {
             return;
         }
-        let now = std::time::Instant::now();
+        let now = neomacs_display_protocol::frame_time::observe_platform_now();
         if let Some(window_state) = self.frame_windows.get_by_winit_mut(window_id) {
-            window_state.render.record_idle_activity(now);
+            window_state.render.record_idle_activity(now.into_instant());
         }
     }
 
@@ -186,7 +188,8 @@ impl RenderApp {
                         {
                             renderer.trigger_transient_resize_padding(
                                 &mut ws.render.compositor.renderer_effects,
-                                std::time::Instant::now(),
+                                neomacs_display_protocol::frame_time::observe_platform_now()
+                                    .into_instant(),
                             );
                         }
                         ws.render.mark_dirty();
@@ -476,7 +479,7 @@ impl RenderApp {
                         ClockSource, FrameTick, NativeWindowId, PacingAction,
                     };
                     let sched_id = NativeWindowId(emacs_fid);
-                    let now = std::time::Instant::now();
+                    let now = neomacs_display_protocol::frame_time::observe_platform_now();
                     let estimated_interval = self
                         .frame_windows
                         .get(emacs_fid)
@@ -488,7 +491,7 @@ impl RenderApp {
                         .unwrap_or(std::time::Duration::from_millis(16));
                     let tick = FrameTick {
                         frame_time: now,
-                        target_presentation_time: now + estimated_interval,
+                        target_presentation_time: now.plus(estimated_interval),
                         estimated_interval,
                         source: ClockSource::Synthetic,
                     };
@@ -523,7 +526,9 @@ impl RenderApp {
                         );
                     }
                     if let Some(renderer) = self.renderer.as_mut() {
-                        renderer.set_frame_sample_time(plan.tick.target_presentation_time);
+                        renderer.set_frame_sample_time(
+                            plan.tick.target_presentation_time.into_instant(),
+                        );
                     }
                     if let Some(window_state) = self.frame_windows.get_mut(emacs_fid) {
                         window_state.render.set_dirty(false);
@@ -541,7 +546,7 @@ impl RenderApp {
                         sched_id,
                         &plan,
                         result,
-                        std::time::Instant::now(),
+                        neomacs_display_protocol::frame_time::observe_platform_now(),
                     );
                     if action == PacingAction::RequestRedraw
                         && let Some(window_state) = self.frame_windows.get(emacs_fid)

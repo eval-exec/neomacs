@@ -13,7 +13,8 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+
+use neomacs_display_protocol::frame_time::EventTime;
 
 use super::frame_sched::{DemandReason, DemandReasonSet, FramePlan, NativeWindowId, RenderWork};
 
@@ -91,8 +92,8 @@ fn record_frame_time(latency_us: u64) {
     FRAME_TIME_BUCKETS[idx].fetch_add(1, Ordering::Relaxed);
 }
 
-/// Monotonic anchor for converting `Instant`s to storable microsecond ticks.
-static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+/// Monotonic anchor for converting observations to storable microsecond ticks.
+static EPOCH: std::sync::OnceLock<EventTime> = std::sync::OnceLock::new();
 /// Microsecond tick (vs EPOCH) of the oldest scene commit not yet presented;
 /// 0 = none pending. Approximate under multiple windows, which is acceptable
 /// for Stage 0 evidence.
@@ -102,11 +103,11 @@ static LAST_LOG_TICK_US: AtomicU64 = AtomicU64::new(0);
 /// Wakeup total at the last periodic snapshot log.
 static LAST_LOG_WAKEUPS: AtomicU64 = AtomicU64::new(0);
 
-fn tick_us(now: Instant) -> u64 {
+fn tick_us(now: EventTime) -> u64 {
     let epoch = *EPOCH.get_or_init(|| now);
     // Saturates at 0 for the first caller; monotonic afterwards. +1 keeps a
     // real tick from colliding with the 0 = "none pending" sentinel.
-    now.saturating_duration_since(epoch).as_micros() as u64 + 1
+    now.saturating_since(epoch).as_micros() as u64 + 1
 }
 
 pub(super) fn count(counter: &AtomicU64) {
@@ -181,7 +182,7 @@ pub(super) fn count_plan(window: NativeWindowId, plan: &FramePlan) {
 
 /// Record that a scene commit arrived; starts the commit-to-present clock if
 /// no earlier commit is still waiting to reach the screen.
-pub(super) fn note_scene_commit(now: Instant) {
+pub(super) fn note_scene_commit(now: EventTime) {
     count(&SCENE_COMMITS);
     let tick = tick_us(now);
     let _ = PENDING_COMMIT_TICK_US.compare_exchange(0, tick, Ordering::Relaxed, Ordering::Relaxed);
@@ -189,7 +190,7 @@ pub(super) fn note_scene_commit(now: Instant) {
 
 /// Record a top-level present; closes the commit-to-present measurement when
 /// a commit is pending.
-pub(super) fn note_present(now: Instant) {
+pub(super) fn note_present(now: EventTime) {
     count(&SURFACE_PRESENTS);
     let pending = PENDING_COMMIT_TICK_US.swap(0, Ordering::Relaxed);
     if pending != 0 {
@@ -298,7 +299,7 @@ const LOG_INTERVAL_US: u64 = 5_000_000;
 /// Log a snapshot at debug level at most every 5 seconds, and only when the
 /// loop actually woke since the previous log. Called from about_to_wait, so a
 /// fully idle loop logs nothing at all.
-pub(super) fn maybe_log_snapshot(now: Instant) {
+pub(super) fn maybe_log_snapshot(now: EventTime) {
     let tick = tick_us(now);
     let last = LAST_LOG_TICK_US.load(Ordering::Relaxed);
     if tick.saturating_sub(last) < LOG_INTERVAL_US {

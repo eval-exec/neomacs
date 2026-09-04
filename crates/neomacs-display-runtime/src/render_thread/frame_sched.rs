@@ -28,6 +28,8 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
+use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
+
 bitflags::bitflags! {
     /// Broad retained composition groups. Deliberately coarse: one bit per
     /// retained group, not one bit per effect.
@@ -116,7 +118,7 @@ pub(crate) enum Cadence {
     /// At most this many frames per second, phase-anchored per reason.
     MaxRate(NonZeroU16),
     /// At a specific deadline (blink timers, scheduled recovery).
-    At(Instant),
+    At(EventTime),
 }
 
 /// Declares [`DemandReason`] and everything indexed by it from a single list.
@@ -271,10 +273,24 @@ pub(crate) enum ClockSource {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FrameTick {
-    pub frame_time: Instant,
-    pub target_presentation_time: Instant,
+    pub frame_time: EventTime,
+    pub target_presentation_time: EventTime,
     pub estimated_interval: Duration,
     pub source: ClockSource,
+}
+
+// Interface defined by the temporal-presentation plan; consumed when the
+// renderer boundary is widened from a bare Instant to a FrameSample.
+#[allow(dead_code)]
+impl FrameTick {
+    /// The portable view of this tick, for code outside the scheduler.
+    ///
+    /// `FrameTick` is the scheduler's own richer record (it also carries the
+    /// clock source). [`FrameSample`] is what sampling code needs and is
+    /// nameable from `neomacs-renderer-wgpu`, which cannot see this type.
+    pub(crate) fn sample(self) -> FrameSample {
+        FrameSample::new(self.frame_time, self.estimated_interval)
+    }
 }
 
 /// The scheduler's decision about what work one tick performs.
@@ -334,7 +350,7 @@ pub(crate) enum PacingAction {
     /// Ask the platform for one redraw of this window.
     RequestRedraw,
     /// Arm a wake at this deadline (the loop aggregates the earliest).
-    WakeAt(Instant),
+    WakeAt(EventTime),
 }
 
 /// An instant the loop may block until, proven strictly later than the moment
@@ -346,11 +362,23 @@ pub(crate) enum PacingAction {
 /// elapsed" unrepresentable rather than merely discouraged: the event loop has
 /// no way to obtain an `Instant` from the coordinator without servicing first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FutureDeadline(Instant);
+pub(crate) struct FutureDeadline(EventTime);
 
 impl FutureDeadline {
-    pub(crate) fn instant(self) -> Instant {
+    /// The deadline as an [`EventTime`].
+    // Used by scheduler tests today; production callers move off the raw
+    // `instant()` accessor as the loop's wait path is converted.
+    #[allow(dead_code)]
+    pub(crate) fn event_time(self) -> EventTime {
         self.0
+    }
+
+    /// The deadline as a raw `Instant`, for winit's `ControlFlow::WaitUntil`.
+    ///
+    /// ADAPTER BOUNDARY ONLY: this is the one foreign API that needs a bare
+    /// `Instant`. Nothing else may unwrap a deadline.
+    pub(crate) fn instant(self) -> Instant {
+        self.0.into_instant()
     }
 }
 
@@ -433,22 +461,22 @@ const TIMEOUT_BACKOFF: Duration = Duration::from_millis(50);
 /// period at a time makes wake-up work proportional to every frame that was
 /// deliberately skipped; remainder arithmetic preserves the same phase in
 /// constant time.
-fn next_max_rate_phase(anchor: Instant, now: Instant, period: Duration) -> Instant {
+fn next_max_rate_phase(anchor: EventTime, now: EventTime, period: Duration) -> EventTime {
     debug_assert!(anchor <= now);
-    let elapsed = now.duration_since(anchor);
+    let elapsed = now.saturating_since(anchor);
     let remainder_nanos = elapsed.as_nanos() % period.as_nanos();
     let until_next = if remainder_nanos == 0 {
         period
     } else {
         period - Duration::from_nanos(remainder_nanos as u64)
     };
-    now + until_next
+    now.plus(until_next)
 }
 
 #[derive(Debug)]
 struct ScheduledDemand {
     reason: DemandReason,
-    at: Instant,
+    at: EventTime,
     invalidation: Invalidation,
     /// MaxRate period for phase-anchored rescheduling; None for At().
     period: Option<Duration>,
@@ -457,7 +485,7 @@ struct ScheduledDemand {
 #[derive(Debug, Clone, Copy)]
 struct MaxRateAnchor {
     reason: DemandReason,
-    at: Instant,
+    at: EventTime,
     period: Duration,
 }
 
@@ -502,7 +530,6 @@ struct WindowSched {
     scheduled: Vec<ScheduledDemand>,
     /// Phase anchors for MaxRate reasons: next allowed fire time.
     max_rate_anchor: Vec<MaxRateAnchor>,
-    last_present_at: Option<Instant>,
 }
 
 impl WindowSched {
@@ -510,7 +537,7 @@ impl WindowSched {
         self.presentation.visible && !self.presentation.occluded
     }
 
-    fn earliest_deadline(&self) -> Option<Instant> {
+    fn earliest_deadline(&self) -> Option<EventTime> {
         self.scheduled.iter().map(|s| s.at).min()
     }
 
@@ -525,7 +552,7 @@ impl WindowSched {
             .copied()
     }
 
-    fn set_anchor(&mut self, reason: DemandReason, at: Instant, period: Duration) {
+    fn set_anchor(&mut self, reason: DemandReason, at: EventTime, period: Duration) {
         if let Some(anchor) = self
             .max_rate_anchor
             .iter_mut()
@@ -565,7 +592,7 @@ pub(crate) struct FrameCoordinator {
     /// Decoder pull/service wake. This is intentionally separate from frame
     /// demand: reaching it services native media state, but does not authorize
     /// a repaint until the video system publishes a ready frame.
-    video_service_deadline: Option<Instant>,
+    video_service_deadline: Option<EventTime>,
 }
 
 impl FrameCoordinator {
@@ -584,7 +611,7 @@ impl FrameCoordinator {
     /// Replace the decoder's one outstanding service deadline. `None`
     /// withdraws it when no presented session needs another native pull.
     #[cfg(any(feature = "video", test))]
-    pub(crate) fn reconcile_video_service_deadline(&mut self, deadline: Option<Instant>) {
+    pub(crate) fn reconcile_video_service_deadline(&mut self, deadline: Option<EventTime>) {
         self.video_service_deadline = deadline;
     }
 
@@ -598,7 +625,7 @@ impl FrameCoordinator {
     pub(crate) fn submit_ready_video_frame(
         &mut self,
         id: NativeWindowId,
-        now: Instant,
+        now: EventTime,
     ) -> PacingAction {
         self.submit_demand(
             id,
@@ -626,7 +653,7 @@ impl FrameCoordinator {
         &mut self,
         id: NativeWindowId,
         demand: FrameDemand,
-        now: Instant,
+        now: EventTime,
     ) -> PacingAction {
         if demand.invalidation == Invalidation::None {
             return PacingAction::Sleep;
@@ -673,7 +700,7 @@ impl FrameCoordinator {
                     // First submission (or anchor already reached): fire now
                     // and anchor the phase grid at now + period.
                     None => {
-                        ws.set_anchor(demand.reason, now + period, period);
+                        ws.set_anchor(demand.reason, now.plus(period), period);
                         ws.due.merge(demand.invalidation, true, demand.reason);
                         Self::drive(ws)
                     }
@@ -681,7 +708,7 @@ impl FrameCoordinator {
                     // once now, and establish the new phase grid immediately.
                     Some(anchor) if anchor.period != period => {
                         ws.clear_schedule(demand.reason);
-                        ws.set_anchor(demand.reason, now + period, period);
+                        ws.set_anchor(demand.reason, now.plus(period), period);
                         ws.due.merge(demand.invalidation, true, demand.reason);
                         Self::drive(ws)
                     }
@@ -809,13 +836,11 @@ impl FrameCoordinator {
         id: NativeWindowId,
         plan: &FramePlan,
         result: PresentResult,
-        now: Instant,
+        now: EventTime,
     ) -> PacingAction {
         let ws = self.window(id);
         match result {
-            PresentResult::Presented => {
-                ws.last_present_at = Some(now);
-            }
+            PresentResult::Presented => {}
             PresentResult::AwaitingContent => {
                 // The plan has been consumed.  A committed frame arriving on
                 // the display channel will submit Redisplay and drive the next
@@ -855,12 +880,12 @@ impl FrameCoordinator {
                 if invalidation != Invalidation::None {
                     ws.schedule(ScheduledDemand {
                         reason: DemandReason::Expose,
-                        at: now + TIMEOUT_BACKOFF,
+                        at: now.plus(TIMEOUT_BACKOFF),
                         invalidation,
                         period: None,
                     });
                 }
-                return PacingAction::WakeAt(now + TIMEOUT_BACKOFF);
+                return PacingAction::WakeAt(now.plus(TIMEOUT_BACKOFF));
             }
         }
         if ws.due.driving && !ws.due.is_empty() {
@@ -949,7 +974,7 @@ impl FrameCoordinator {
 
     /// Fold every deadline that has come due into the window's due work,
     /// exactly as [`begin_frame`](Self::begin_frame) does for a tick.
-    fn collect_ripe(ws: &mut WindowSched, now: Instant) -> bool {
+    fn collect_ripe(ws: &mut WindowSched, now: EventTime) -> bool {
         let mut ripe = false;
         let mut i = 0;
         while i < ws.scheduled.len() {
@@ -988,7 +1013,7 @@ impl FrameCoordinator {
     /// This is the only way to obtain a wake instant from the coordinator:
     /// [`FutureDeadline`]'s field is private, so the "arm what you have not
     /// serviced" mistake cannot be written.
-    pub(crate) fn service_deadlines(&mut self, now: Instant) -> DeadlineService {
+    pub(crate) fn service_deadlines(&mut self, now: EventTime) -> DeadlineService {
         let mut redraw = Vec::new();
         for (id, ws) in &mut self.windows {
             if Self::collect_ripe(ws, now) && Self::drive(ws) == PacingAction::RequestRedraw {
@@ -1024,7 +1049,7 @@ impl FrameCoordinator {
     /// event loop reaches it only through
     /// [`service_deadlines`](Self::service_deadlines), which guarantees the
     /// value is not already elapsed.
-    fn next_wake_deadline(&self) -> Option<Instant> {
+    fn next_wake_deadline(&self) -> Option<EventTime> {
         let frame_deadline = self
             .windows
             .values()
@@ -1080,7 +1105,7 @@ impl FrameCoordinator {
     /// Test-only view of the raw earliest deadline. Runtime code cannot reach
     /// it: only [`FrameCoordinator::service_deadlines`] yields a wake, and only
     /// after the ripe deadlines have become work.
-    pub(super) fn next_wake_deadline_unserviced(&self) -> Option<Instant> {
+    pub(super) fn next_wake_deadline_unserviced(&self) -> Option<EventTime> {
         self.next_wake_deadline()
     }
 }
