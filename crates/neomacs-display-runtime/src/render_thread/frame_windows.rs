@@ -863,7 +863,12 @@ impl GuiFrameRenderState {
         &mut self,
         frame: Option<crate::core::frame_glyphs::FrameGlyphBuffer>,
         row_damage: Option<neomacs_renderer_wgpu::FrameRowDamage>,
+        scroll_anchors: super::frame_compositor::ScrollAnchorsByWindow,
     ) -> Option<ActivePresentationTransition> {
+        // Measure viewport motion against the presentation being replaced,
+        // while both sets of anchors are still in hand.
+        self.measure_scroll(frame.as_ref(), &scroll_anchors);
+        self.compositor.scroll_anchors = scroll_anchors;
         let before = self.active_pointer_damage();
         let previous_presentation = self
             .compositor

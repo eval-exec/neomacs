@@ -37,9 +37,11 @@ fn terminal_scene_commands_schedule_repositioning_and_final_removal() {
         .frame_windows
         .primary_window_mut()
         .expect("test app has a primary window");
-    primary
-        .render
-        .set_current_frame(Some(FrameGlyphBuffer::with_size(800.0, 600.0)), None);
+    primary.render.set_current_frame(
+        Some(FrameGlyphBuffer::with_size(800.0, 600.0)),
+        None,
+        Default::default(),
+    );
     let retained_terminal_glyph = FrameGlyph::Border {
         window_id: DisplayWindowId::new(0),
         row_role: GlyphRowRole::ModeLine,
