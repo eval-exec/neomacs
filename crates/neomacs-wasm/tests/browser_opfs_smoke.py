@@ -53,6 +53,18 @@ def assert_split_orientation(
 
 def exercise_native_keyboard(editor: BrowserEditorHarness) -> None:
     editor.switch_to_buffer("*scratch*")
+    editor.click_editor_canvas()
+    editor.type_native_meta_prefix("x")
+    editor.wait_for_frame_text("the native M-x prompt", contains="M-x")
+    editor.type_native_text("a")
+    editor.wait_for_frame_text("native text in the M-x prompt", contains="M-x a")
+    editor.type_native_control_key("g")
+    editor.wait_for_frame_text(
+        "the cancelled native M-x prompt",
+        contains="*scratch*",
+        excludes="M-x a",
+    )
+
     marker = f"NATIVE-{time.time_ns():x}"[-16:]
     editor.type_native_text(marker)
     editor.wait_for_frame_text("native Chrome text input", contains=marker)
