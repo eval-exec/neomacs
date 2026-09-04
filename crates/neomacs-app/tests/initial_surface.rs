@@ -39,7 +39,7 @@ fn gui_surface_reuses_gnu_startup_buffers_and_selects_one_visible_frame() {
     assert_eq!(frame.id, surface.frame());
     assert_eq!((frame.width, frame.height), (800, 600));
     assert_eq!(frame.device_scale_factor, 1.75);
-    assert!(frame.visible);
+    assert!(frame.visibility.is_visible());
     assert_eq!(frame.effective_window_system(), Some(Value::symbol("neo")));
 }
 
