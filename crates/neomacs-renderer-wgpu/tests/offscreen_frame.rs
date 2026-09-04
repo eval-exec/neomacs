@@ -468,7 +468,10 @@ fn unboxed_image_face_background_fills_the_glyph_box_extent() {
         }
         std::thread::yield_now();
     }
-    assert!(h.renderer.is_image_ready(image_id), "test image must decode");
+    assert!(
+        h.renderer.is_image_ready(image_id),
+        "test image must decode"
+    );
 
     let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
     frame.background = Color::BLACK;
