@@ -91,15 +91,58 @@ class ReleaseRequestHandler(BaseHTTPRequestHandler):
                 "public, max-age=31536000, immutable",
             )
             return
-        if path in {"/builds/a/main.js", "/builds/b/main.js"}:
-            release = path.split("/")[2]
+        release_asset = release_asset_path(path)
+        if release_asset is not None:
+            release, filename = release_asset
+        else:
+            self.send_error(404)
+            return
+
+        if filename == "main.js":
             script = (
-                "document.documentElement.dataset.neomacsRelease = "
-                f"{json.dumps(release)};\n"
+                "const worker = new Worker(\n"
+                "  new URL('./editor-worker.js', import.meta.url),\n"
+                "  { type: 'module' },\n"
+                ");\n"
+                "worker.addEventListener('message', ({ data }) => {\n"
+                "  if (data.error) {\n"
+                "    document.documentElement.dataset.neomacsFailure = data.error;\n"
+                "  } else {\n"
+                "    document.documentElement.dataset.neomacsRelease = data.release;\n"
+                "  }\n"
+                "  worker.terminate();\n"
+                "});\n"
             )
             self.send_payload(
                 script.encode(),
                 "text/javascript; charset=utf-8",
+                "public, max-age=31536000, immutable",
+            )
+            return
+        if filename == "editor-worker.js":
+            script = f"""
+            const release = {json.dumps(release)};
+            try {{
+              const response = await fetch(new URL("./editor.wasm", import.meta.url));
+              const importName = `fs_create_directory_${{release}}`;
+              const imports = {{ neomacs_host: {{ [importName]: () => {{}} }} }};
+              const {{ instance }} = await WebAssembly.instantiateStreaming(response, imports);
+              instance.exports.run();
+              self.postMessage({{ release }});
+            }} catch (error) {{
+              self.postMessage({{ error: String(error) }});
+            }}
+            """
+            self.send_payload(
+                script.encode(),
+                "text/javascript; charset=utf-8",
+                "public, max-age=31536000, immutable",
+            )
+            return
+        if filename == "editor.wasm":
+            self.send_payload(
+                incompatible_worker_wasm(release),
+                "application/wasm",
                 "public, max-age=31536000, immutable",
             )
             return
@@ -118,6 +161,50 @@ class ReleaseRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def release_asset_path(path: str) -> tuple[str, str] | None:
+    parts = path.strip("/").split("/")
+    if len(parts) != 3 or parts[0] != "builds" or parts[1] not in {"a", "b"}:
+        return None
+    if parts[2] not in {"main.js", "editor-worker.js", "editor.wasm"}:
+        return None
+    return parts[1], parts[2]
+
+
+def incompatible_worker_wasm(release: str) -> bytes:
+    """Return a module whose host import is intentionally release-specific."""
+
+    def name(value: str) -> bytes:
+        encoded = value.encode()
+        if len(encoded) >= 128:
+            raise ValueError("test Wasm names must fit in one unsigned LEB128 byte")
+        return bytes([len(encoded)]) + encoded
+
+    def section(section_id: int, payload: bytes) -> bytes:
+        if len(payload) >= 128:
+            raise ValueError("test Wasm sections must fit in one unsigned LEB128 byte")
+        return bytes([section_id, len(payload)]) + payload
+
+    function_type = section(1, b"\x01\x60\x00\x00")
+    imported_function = section(
+        2,
+        b"\x01"
+        + name("neomacs_host")
+        + name(f"fs_create_directory_{release}")
+        + b"\x00\x00",
+    )
+    declared_function = section(3, b"\x01\x00")
+    exported_function = section(7, b"\x01" + name("run") + b"\x00\x01")
+    function_body = section(10, b"\x01\x04\x00\x10\x00\x0b")
+    return (
+        b"\x00asm\x01\x00\x00\x00"
+        + function_type
+        + imported_function
+        + declared_function
+        + exported_function
+        + function_body
+    )
+
+
 def wait_for_release(driver: webdriver.Chrome, release: str, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -126,6 +213,11 @@ def wait_for_release(driver: webdriver.Chrome, release: str, timeout: float) -> 
         )
         if selected == release:
             return
+        failure = driver.execute_script(
+            "return document.documentElement.dataset.neomacsFailure || ''"
+        )
+        if failure:
+            raise RuntimeError(f"release {release!r} failed: {failure}")
         time.sleep(0.05)
     raise RuntimeError(f"browser did not select release {release!r}")
 
@@ -179,11 +271,13 @@ def main() -> None:
 
         if server.requests["/manifest.json"] < 2:
             raise RuntimeError("ordinary reload reused the cached release manifest")
-        for entry in ("/builds/a/main.js", "/builds/b/main.js"):
-            if server.requests[entry] != 1:
-                raise RuntimeError(
-                    f"expected one request for {entry}, got {server.requests[entry]}"
-                )
+        for release in ("a", "b"):
+            for filename in ("main.js", "editor-worker.js", "editor.wasm"):
+                entry = f"/builds/{release}/{filename}"
+                if server.requests[entry] != 1:
+                    raise RuntimeError(
+                        f"expected one request for {entry}, got {server.requests[entry]}"
+                    )
         print("PASS: ordinary reload upgraded one coherent browser release")
     except Exception:
         if args.artifacts_dir:
