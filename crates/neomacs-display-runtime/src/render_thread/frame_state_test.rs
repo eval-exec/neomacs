@@ -338,3 +338,58 @@ fn refresh_faces_rebuilds_from_primary_fallback_frames() {
     assert_eq!(conflicts.conflicts[0].face_id, FaceId::new(7));
     assert_eq!(conflicts.conflicts[0].conflicting_frame_id, 0x2000);
 }
+
+// =======================================================================
+// FPS counter: two clocks, deliberately separated
+// =======================================================================
+
+#[test]
+fn displayed_fps_is_exactly_frames_over_the_sample_span() {
+    use neomacs_display_protocol::frame_time::{FrameSample, observe_platform_now};
+
+    // This assertion is exact, which was impossible while the counter read the
+    // wall clock: 60 frames spaced one 60Hz interval apart must read 60 fps.
+    let interval = std::time::Duration::from_secs_f64(1.0 / 60.0);
+    let start = observe_platform_now();
+    let mut fps = crate::render_thread::state::FpsCounter {
+        enabled: true,
+        last_instant: start,
+        ..Default::default()
+    };
+    fps.enabled = true;
+
+    for frame in 1..=60u32 {
+        let sample = FrameSample::new(start.plus(interval * frame), interval);
+        RenderApp::update_fps_counter(&mut fps, sample);
+    }
+
+    assert!(
+        (fps.display_value - 60.0).abs() < 1e-3,
+        "expected exactly 60 fps, got {}",
+        fps.display_value
+    );
+    assert_eq!(fps.frame_count, 0, "the window resets once it reports");
+}
+
+#[test]
+fn a_disabled_fps_counter_does_not_advance() {
+    use neomacs_display_protocol::frame_time::{FrameSample, observe_platform_now};
+
+    let start = observe_platform_now();
+    let mut fps = crate::render_thread::state::FpsCounter {
+        enabled: false,
+        last_instant: start,
+        ..Default::default()
+    };
+    let sample = FrameSample::new(
+        start.plus(std::time::Duration::from_secs(2)),
+        interval_16ms(),
+    );
+    RenderApp::update_fps_counter(&mut fps, sample);
+    assert_eq!(fps.frame_count, 0);
+    assert_eq!(fps.display_value, 0.0);
+}
+
+fn interval_16ms() -> std::time::Duration {
+    std::time::Duration::from_millis(16)
+}

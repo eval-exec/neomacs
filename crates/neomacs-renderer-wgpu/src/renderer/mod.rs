@@ -197,7 +197,11 @@ pub struct WgpuRenderer {
     /// target presentation time). Set by the runtime before each render so
     /// time-driven effects sample one consistent instant instead of reading
     /// the wall clock mid-draw.
-    pub(super) frame_sample_time: std::time::Instant,
+    /// The one time sample every effect in this frame dates itself to.
+    ///
+    /// Set once per frame from the scheduler's tick, so two effects drawn in
+    /// the same frame cannot disagree about what time it is.
+    pub(super) frame_sample: neomacs_display_protocol::frame_time::FrameSample,
 }
 
 impl WgpuRenderer {
@@ -1176,7 +1180,10 @@ impl WgpuRenderer {
             ambient: AmbientClocks::default(),
             row_reuse: row_reuse::RowReuseCache::default(),
             glyph_stats: GlyphRenderStats::new(),
-            frame_sample_time: std::time::Instant::now(),
+            frame_sample: neomacs_display_protocol::frame_time::FrameSample::new(
+                neomacs_display_protocol::frame_time::observe_platform_now(),
+                std::time::Duration::from_millis(16),
+            ),
         }
     }
 
@@ -1342,8 +1349,14 @@ impl WgpuRenderer {
 
     /// Set the absolute time this frame's animation samples target
     /// (the frame tick's target presentation time).
-    pub fn set_frame_sample_time(&mut self, at: std::time::Instant) {
-        self.frame_sample_time = at;
+    /// The time sample this frame's effects must date themselves to.
+    #[must_use]
+    pub fn frame_sample(&self) -> neomacs_display_protocol::frame_time::FrameSample {
+        self.frame_sample
+    }
+
+    pub fn set_frame_sample(&mut self, sample: neomacs_display_protocol::frame_time::FrameSample) {
+        self.frame_sample = sample;
     }
 
     /// Get the glyph bind group layout for creating glyph bind groups

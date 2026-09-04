@@ -310,16 +310,35 @@ impl RenderApp {
             .apply_top_level_visual_cursor_animations();
     }
 
-    pub(super) fn update_fps_counter(fps: &mut FpsCounter) {
+    /// Advance the displayed frame rate against the frame's own clock.
+    ///
+    /// Deliberately separate from [`Self::begin_fps_cpu_span`]: the rate is a
+    /// property of how often frames are produced, so it is measured in the
+    /// frame domain and comes out as exactly frames divided by sample span.
+    /// The CPU span below measures render *work* and must not use this clock.
+    pub(super) fn update_fps_counter(
+        fps: &mut FpsCounter,
+        sample: neomacs_display_protocol::frame_time::FrameSample,
+    ) {
         if fps.enabled {
-            fps.render_start = std::time::Instant::now();
             fps.frame_count += 1;
-            let elapsed = fps.last_instant.elapsed();
+            let elapsed = sample.since(fps.last_instant);
             if elapsed.as_secs_f32() >= 1.0 {
                 fps.display_value = fps.frame_count as f32 / elapsed.as_secs_f32();
                 fps.frame_count = 0;
-                fps.last_instant = std::time::Instant::now();
+                fps.last_instant = sample.frame_time();
             }
+        }
+    }
+
+    /// Start the CPU stopwatch for this frame's render work.
+    ///
+    /// This one genuinely reads the wall clock, and must: it is paired with a
+    /// later `.elapsed()` to report how long the CPU spent building the frame.
+    /// Feeding it the frame sample would make it read zero every time.
+    pub(super) fn begin_fps_cpu_span(fps: &mut FpsCounter) {
+        if fps.enabled {
+            fps.cpu_span_start = std::time::Instant::now();
         }
     }
 
