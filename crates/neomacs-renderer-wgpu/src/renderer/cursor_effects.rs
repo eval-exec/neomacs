@@ -5,15 +5,14 @@
 //! then drawn by the caller in the render pass.
 
 use super::super::vertex::RectVertex;
+use super::effect_common::effect_entity_seed;
 use super::effect_common::{EffectCtx, find_cursor_pos, push_rect};
 use super::{CursorParticle, MatrixColumn, RippleWaveEntry, SonarPingEntry, SparkleBurstEntry};
+use neomacs_display_protocol::frame_time::EventTime;
 use neomacs_display_protocol::types::Color;
 
 /// Emit cursor glow effect vertices.
-pub(super) fn emit_cursor_glow(
-    ctx: &EffectCtx,
-    cursor_pulse_start: &std::time::Instant,
-) -> Vec<RectVertex> {
+pub(super) fn emit_cursor_glow(ctx: &EffectCtx, cursor_pulse_start: &EventTime) -> Vec<RectVertex> {
     if !ctx.effects.cursor_glow.enabled || !ctx.cursor_visible {
         return Vec::new();
     }
@@ -27,7 +26,10 @@ pub(super) fn emit_cursor_glow(
 
         // Apply pulse modulation if enabled
         if ctx.effects.cursor_pulse.enabled {
-            let elapsed = cursor_pulse_start.elapsed().as_secs_f32();
+            let elapsed = ctx
+                .frame_sample
+                .since_at_presentation(*cursor_pulse_start)
+                .as_secs_f32();
             let phase = elapsed * ctx.effects.cursor_pulse.speed * 2.0 * std::f32::consts::PI;
             let t = (phase.sin() + 1.0) / 2.0;
             let factor = ctx.effects.cursor_pulse.min_opacity
@@ -108,12 +110,12 @@ pub(super) fn emit_cursor_crosshair(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_magnetism(
     ctx: &EffectCtx,
-    entries: &mut Vec<(f32, f32, std::time::Instant)>,
+    entries: &mut Vec<(f32, f32, EventTime)>,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.cursor_magnetism.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let dur = std::time::Duration::from_millis(ctx.effects.cursor_magnetism.duration_ms as u64);
 
     // Detect cursor jump (large movement) and record
@@ -138,7 +140,7 @@ pub(super) fn emit_cursor_magnetism(
     }
 
     // Prune expired
-    entries.retain(|&(_, _, t)| now.duration_since(t) < dur);
+    entries.retain(|&(_, _, t)| now.saturating_since(t) < dur);
 
     // Render collapsing rings
     let mut needs_redraw = false;
@@ -148,7 +150,7 @@ pub(super) fn emit_cursor_magnetism(
         let max_alpha = ctx.effects.cursor_magnetism.opacity;
         let ring_count = ctx.effects.cursor_magnetism.ring_count;
         for &(cx, cy, started) in entries.iter() {
-            let t = now.duration_since(started).as_secs_f32() / dur.as_secs_f32();
+            let t = now.saturating_since(started).as_secs_f32() / dur.as_secs_f32();
             if t >= 1.0 {
                 continue;
             }
@@ -210,9 +212,14 @@ pub(super) fn emit_line_number_pulse(ctx: &EffectCtx) -> (Vec<RectVertex>, bool)
     let mut verts = Vec::new();
     let mut needs_redraw = false;
     if let Some(anim) = ctx.animated_cursor {
-        let now = std::time::Instant::now();
         let cycle = ctx.effects.line_number_pulse.cycle_ms as f64 / 1000.0;
-        let elapsed = now.elapsed().as_secs_f64();
+        // PRE-EXISTING NO-OP, PRESERVED: this read `Instant::now().elapsed()`,
+        // the interval from "now" to "now", so the pulse phase has always been
+        // pinned at zero and this effect renders a constant 50% alpha. Left at
+        // zero rather than re-anchored to the render epoch: giving it a real
+        // phase would start an animation that has never run, which is a visible
+        // change beyond moving this file onto the frame's time sample.
+        let elapsed = 0.0_f64;
         let phase = (elapsed % cycle) / cycle;
         let pulse = ((phase * std::f64::consts::TAU).sin() * 0.5 + 0.5) as f32;
         let alpha = ctx.effects.line_number_pulse.intensity * pulse;
@@ -270,12 +277,12 @@ pub(super) fn emit_cursor_spotlight(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_comet(
     ctx: &EffectCtx,
-    positions: &mut Vec<(f32, f32, f32, f32, std::time::Instant)>,
+    positions: &mut Vec<(f32, f32, f32, f32, EventTime)>,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.cursor_comet.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let fade_dur = std::time::Duration::from_millis(ctx.effects.cursor_comet.fade_ms as u64);
 
     // Record cursor position
@@ -291,7 +298,7 @@ pub(super) fn emit_cursor_comet(
     }
 
     // Prune old positions
-    positions.retain(|&(_, _, _, _, t)| now.duration_since(t) < fade_dur);
+    positions.retain(|&(_, _, _, _, t)| now.saturating_since(t) < fade_dur);
 
     // Keep only trail_length most recent
     let max = ctx.effects.cursor_comet.trail_length as usize;
@@ -308,7 +315,7 @@ pub(super) fn emit_cursor_comet(
         let max_alpha = ctx.effects.cursor_comet.opacity;
         let count = positions.len();
         for (i, &(px, py, pw, ph, t)) in positions.iter().enumerate() {
-            let age = now.duration_since(t).as_secs_f32();
+            let age = now.saturating_since(t).as_secs_f32();
             let time_fade = 1.0 - (age / fade_dur.as_secs_f32()).min(1.0);
             let pos_fade = (i as f32 + 1.0) / count as f32;
             let alpha = max_alpha * time_fade * pos_fade * 0.5;
@@ -335,7 +342,7 @@ pub(super) fn emit_cursor_particles(
     if !ctx.effects.cursor_particles.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let lifetime =
         std::time::Duration::from_millis(ctx.effects.cursor_particles.lifetime_ms as u64);
 
@@ -347,13 +354,16 @@ pub(super) fn emit_cursor_particles(
             let dy = (cur_pos.1 - prev.1).abs();
             if dx > 1.0 || dy > 1.0 {
                 // Emit particles from cursor center
-                let seed = (now.elapsed().subsec_nanos() as u64).wrapping_mul(2654435761);
+                // RNG SEED, NOT A TIME: this read `now.elapsed()` -- the few
+                // hundred nanoseconds since `now` was minted -- purely for its
+                // low bits. The frame's time sample is constant across a frame,
+                // so substituting it would give every particle in the burst the
+                // same trajectory. Seed from the frame counter and the
+                // particle's index instead: distinct within a frame, varying
+                // across frames, and reproducible for a replayed frame.
+                let spawn_base = particles.len() as u64;
                 for i in 0..ctx.effects.cursor_particles.count {
-                    // Simple hash-based pseudo-random
-                    let h = seed
-                        .wrapping_add(i as u64)
-                        .wrapping_mul(6364136223846793005)
-                        .wrapping_add(1442695040888963407);
+                    let h = effect_entity_seed(ctx.frame_seq, spawn_base.wrapping_add(i as u64));
                     let rx = ((h >> 16) & 0xFFFF) as f32 / 65535.0 - 0.5; // -0.5..0.5
                     let ry = ((h >> 32) & 0xFFFF) as f32 / 65535.0 - 0.5;
                     particles.push(CursorParticle {
@@ -371,7 +381,7 @@ pub(super) fn emit_cursor_particles(
     }
 
     // Prune expired particles
-    particles.retain(|p| now.duration_since(p.started) < p.lifetime);
+    particles.retain(|p| now.saturating_since(p.started) < p.lifetime);
 
     // Render particles
     let mut needs_redraw = false;
@@ -380,7 +390,7 @@ pub(super) fn emit_cursor_particles(
         let (pr, pg, pb) = ctx.effects.cursor_particles.color;
         let gravity = ctx.effects.cursor_particles.gravity;
         for p in particles.iter() {
-            let elapsed = now.duration_since(p.started).as_secs_f32();
+            let elapsed = now.saturating_since(p.started).as_secs_f32();
             let t = (elapsed / p.lifetime.as_secs_f32()).min(1.0);
             let alpha = (1.0 - t) * 0.8;
             if alpha > 0.001 {
@@ -412,14 +422,16 @@ pub(super) fn emit_matrix_rain(
     let fw = ctx.surface_width as f32 / ctx.scale_factor;
     let fh = ctx.surface_height as f32 / ctx.scale_factor;
     let dt = 1.0 / 60.0_f32;
-    let now_ns = std::time::Instant::now().elapsed().subsec_nanos() as u64;
+    // RNG SEED, NOT A TIME: the column layout was seeded from
+    // `Instant::now().elapsed().subsec_nanos()`, entropy dressed up as a clock
+    // read. The frame's time sample is constant across a frame, so it would
+    // collapse every column to one track. Each column is seeded from the frame
+    // counter and its own index instead.
 
     // Spawn columns if needed
     while columns.len() < ctx.effects.matrix_rain.column_count as usize {
         let i = columns.len() as u64;
-        let h = now_ns
-            .wrapping_mul(2654435761)
-            .wrapping_add(i * 6364136223846793005);
+        let h = effect_entity_seed(ctx.frame_seq, i);
         let x = (i as f32 / ctx.effects.matrix_rain.column_count as f32) * fw;
         let y = -(((h >> 16) & 0xFFFF) as f32 / 65535.0) * fh;
         let speed_var = 0.6 + ((h >> 32) & 0xFFFF) as f32 / 65535.0 * 0.8;
@@ -436,9 +448,9 @@ pub(super) fn emit_matrix_rain(
     for col in columns.iter_mut() {
         col.y += col.speed * dt;
         if col.y - col.length > fh {
-            let h = now_ns
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add((col.x * 1000.0) as u64);
+            // A recycled column keeps its x as its identity, so it draws a
+            // fresh track every time it wraps rather than repeating one.
+            let h = effect_entity_seed(ctx.frame_seq, (col.x * 1000.0) as u64);
             col.y = -(((h >> 16) & 0xFFFF) as f32 / 65535.0) * 50.0;
             let speed_var = 0.6 + ((h >> 32) & 0xFFFF) as f32 / 65535.0 * 0.8;
             col.speed = ctx.effects.matrix_rain.speed * speed_var;
@@ -559,7 +571,7 @@ pub(super) fn emit_cursor_ripple_wave(
     if !ctx.effects.cursor_ripple_wave.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
 
     // Detect cursor movement and spawn ripple
     if let Some(anim) = ctx.animated_cursor {
@@ -570,7 +582,7 @@ pub(super) fn emit_cursor_ripple_wave(
             || waves.last().is_none_or(|last| {
                 let dx = (cx - last.x).abs();
                 let dy = (cy - last.y).abs();
-                (dx > 2.0 || dy > 2.0) && now.duration_since(last.started).as_millis() > 50
+                (dx > 2.0 || dy > 2.0) && now.saturating_since(last.started).as_millis() > 50
             });
         if should_spawn {
             waves.push(RippleWaveEntry {
@@ -585,7 +597,7 @@ pub(super) fn emit_cursor_ripple_wave(
     }
 
     // Prune expired
-    waves.retain(|e| now.duration_since(e.started) < e.duration);
+    waves.retain(|e| now.saturating_since(e.started) < e.duration);
 
     let mut needs_redraw = false;
     let mut verts = Vec::new();
@@ -594,7 +606,8 @@ pub(super) fn emit_cursor_ripple_wave(
         let max_r = ctx.effects.cursor_ripple_wave.max_radius;
         let ring_count = ctx.effects.cursor_ripple_wave.ring_count;
         for entry in waves.iter() {
-            let t = now.duration_since(entry.started).as_secs_f32() / entry.duration.as_secs_f32();
+            let t =
+                now.saturating_since(entry.started).as_secs_f32() / entry.duration.as_secs_f32();
             let current_r = max_r * t;
             let fade = 1.0 - t;
             for ring in 0..ring_count {
@@ -637,8 +650,9 @@ pub(super) fn emit_cursor_lighthouse_beam(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = std::time::Instant::now()
-            .duration_since(ctx.aurora_start)
+        let now = ctx
+            .frame_sample
+            .since_at_presentation(ctx.aurora_start)
             .as_secs_f32();
         let center_x = anim.x + anim.width / 2.0;
         let center_y = anim.y + anim.height / 2.0;
@@ -676,14 +690,14 @@ pub(super) fn emit_cursor_sonar_ping(
     if !ctx.effects.cursor_sonar_ping.enabled {
         return (verts, needs_redraw);
     }
-    let now = std::time::Instant::now();
-    entries.retain(|e| now.duration_since(e.started) < e.duration);
+    let now = ctx.frame_sample.presentation_time();
+    entries.retain(|e| now.saturating_since(e.started) < e.duration);
     let (pr, pg, pb) = ctx.effects.cursor_sonar_ping.color;
     let ring_count = ctx.effects.cursor_sonar_ping.ring_count;
     let max_r = ctx.effects.cursor_sonar_ping.max_radius;
     let pop = ctx.effects.cursor_sonar_ping.opacity;
     for entry in entries.iter() {
-        let elapsed = now.duration_since(entry.started).as_secs_f32();
+        let elapsed = now.saturating_since(entry.started).as_secs_f32();
         let t = elapsed / entry.duration.as_secs_f32();
         for ring_idx in 0..ring_count {
             let ring_t = t - ring_idx as f32 * 0.15;
@@ -721,7 +735,7 @@ pub(super) fn emit_cursor_sonar_ping(
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_lightning_bolt(
     ctx: &EffectCtx,
-    last: &mut std::time::Instant,
+    last: &mut EventTime,
     segments: &mut Vec<(f32, f32, f32, f32)>,
     age: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -729,8 +743,8 @@ pub(super) fn emit_lightning_bolt(
     if !ctx.effects.lightning_bolt.enabled {
         return (verts, false);
     }
-    let now = std::time::Instant::now();
-    let dt = now.duration_since(*last).as_secs_f32();
+    let now = ctx.frame_sample.presentation_time();
+    let dt = now.saturating_since(*last).as_secs_f32();
     *last = now;
     *age += dt;
     let bolt_interval = 1.0 / ctx.effects.lightning_bolt.frequency;
@@ -740,7 +754,7 @@ pub(super) fn emit_lightning_bolt(
     if *age >= bolt_interval || segments.is_empty() {
         *age = 0.0;
         segments.clear();
-        let time_seed = now.duration_since(ctx.aurora_start).as_nanos() as u64;
+        let time_seed = now.saturating_since(ctx.aurora_start).as_nanos() as u64;
         // Random start point on frame edge
         let h1 = time_seed.wrapping_mul(2654435761);
         let start_x = (h1 & 0xFFFF) as f32 / 65535.0 * fw;
@@ -790,8 +804,9 @@ pub(super) fn emit_cursor_orbit_particles(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = std::time::Instant::now()
-            .duration_since(ctx.aurora_start)
+        let now = ctx
+            .frame_sample
+            .since_at_presentation(ctx.aurora_start)
             .as_secs_f32();
         let cx = anim.x + anim.width / 2.0;
         let cy = anim.y + anim.height / 2.0;
@@ -831,8 +846,9 @@ pub(super) fn emit_cursor_heartbeat_pulse(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = std::time::Instant::now()
-            .duration_since(ctx.aurora_start)
+        let now = ctx
+            .frame_sample
+            .since_at_presentation(ctx.aurora_start)
             .as_secs_f32();
         let cx = anim.x + anim.width / 2.0;
         let cy = anim.y + anim.height / 2.0;
@@ -876,7 +892,7 @@ pub(super) fn emit_cursor_metronome_tick(
     ctx: &EffectCtx,
     last_x: &mut f32,
     last_y: &mut f32,
-    tick_start: &mut Option<std::time::Instant>,
+    tick_start: &mut Option<EventTime>,
 ) -> (Vec<RectVertex>, bool) {
     let mut verts = Vec::new();
     let mut needs_redraw = false;
@@ -888,12 +904,12 @@ pub(super) fn emit_cursor_metronome_tick(
         let cy = anim.y;
         // Detect cursor move
         if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-            *tick_start = Some(std::time::Instant::now());
+            *tick_start = Some(ctx.frame_sample.presentation_time());
             *last_x = cx;
             *last_y = cy;
         }
         if let Some(start) = *tick_start {
-            let elapsed = start.elapsed().as_secs_f32();
+            let elapsed = ctx.frame_sample.since_at_presentation(start).as_secs_f32();
             let duration = ctx.effects.cursor_metronome.fade_ms as f32 / 1000.0;
             if elapsed < duration {
                 let t = elapsed / duration;
@@ -939,8 +955,9 @@ pub(super) fn emit_cursor_radar_sweep(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = std::time::Instant::now()
-            .duration_since(ctx.aurora_start)
+        let now = ctx
+            .frame_sample
+            .since_at_presentation(ctx.aurora_start)
             .as_secs_f32();
         let cx = anim.x + anim.width / 2.0;
         let cy = anim.y + anim.height / 2.0;
@@ -996,7 +1013,7 @@ pub(super) fn emit_cursor_radar_sweep(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_ripple_ring(
     ctx: &EffectCtx,
-    start: &mut Option<std::time::Instant>,
+    start: &mut Option<EventTime>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1010,12 +1027,15 @@ pub(super) fn emit_cursor_ripple_ring(
         let cy = anim.y + anim.height / 2.0;
         // Detect cursor move
         if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-            *start = Some(std::time::Instant::now());
+            *start = Some(ctx.frame_sample.presentation_time());
             *last_x = cx;
             *last_y = cy;
         }
         if let Some(start_time) = *start {
-            let elapsed = start_time.elapsed().as_secs_f32();
+            let elapsed = ctx
+                .frame_sample
+                .since_at_presentation(start_time)
+                .as_secs_f32();
             let max_r = ctx.effects.cursor_ripple_ring.max_radius;
             let duration = max_r / (ctx.effects.cursor_ripple_ring.speed * 60.0);
             if elapsed < duration {
@@ -1103,7 +1123,7 @@ pub(super) fn emit_cursor_scope(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_shockwave(
     ctx: &EffectCtx,
-    start: &mut Option<std::time::Instant>,
+    start: &mut Option<EventTime>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1117,12 +1137,15 @@ pub(super) fn emit_cursor_shockwave(
         let cy = anim.y + anim.height / 2.0;
         // Detect cursor move
         if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-            *start = Some(std::time::Instant::now());
+            *start = Some(ctx.frame_sample.presentation_time());
             *last_x = cx;
             *last_y = cy;
         }
         if let Some(start_time) = *start {
-            let elapsed = start_time.elapsed().as_secs_f32();
+            let elapsed = ctx
+                .frame_sample
+                .since_at_presentation(start_time)
+                .as_secs_f32();
             let max_r = ctx.effects.cursor_shockwave.radius;
             let duration = 1.0 / ctx.effects.cursor_shockwave.decay;
             if elapsed < duration {
@@ -1179,8 +1202,9 @@ pub(super) fn emit_cursor_gravity_well(ctx: &EffectCtx) -> Vec<RectVertex> {
         let gop = ctx.effects.cursor_gravity_well.opacity;
         let field_r = ctx.effects.cursor_gravity_well.field_radius;
         let lines = ctx.effects.cursor_gravity_well.line_count.clamp(4, 24);
-        let now = std::time::Instant::now()
-            .duration_since(ctx.aurora_start)
+        let now = ctx
+            .frame_sample
+            .since_at_presentation(ctx.aurora_start)
             .as_secs_f32();
         for line in 0..lines {
             let base_angle = line as f32 * std::f32::consts::PI * 2.0 / lines as f32 + now * 0.2;
@@ -1210,8 +1234,9 @@ pub(super) fn emit_cursor_portal(ctx: &EffectCtx) -> Vec<RectVertex> {
         return verts;
     }
     if let Some(ref anim) = *ctx.animated_cursor {
-        let now = std::time::Instant::now()
-            .duration_since(ctx.aurora_start)
+        let now = ctx
+            .frame_sample
+            .since_at_presentation(ctx.aurora_start)
             .as_secs_f32();
         let cx = anim.x + anim.width / 2.0;
         let cy = anim.y + anim.height / 2.0;
@@ -1252,7 +1277,7 @@ pub(super) fn emit_cursor_portal(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_bubble(
     ctx: &EffectCtx,
-    spawn_time: &mut Option<std::time::Instant>,
+    spawn_time: &mut Option<EventTime>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1266,12 +1291,12 @@ pub(super) fn emit_cursor_bubble(
         let cy = anim.y + anim.height / 2.0;
         // Detect cursor move
         if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-            *spawn_time = Some(std::time::Instant::now());
+            *spawn_time = Some(ctx.frame_sample.presentation_time());
             *last_x = cx;
             *last_y = cy;
         }
         if let Some(spawn) = *spawn_time {
-            let elapsed = spawn.elapsed().as_secs_f32();
+            let elapsed = ctx.frame_sample.since_at_presentation(spawn).as_secs_f32();
             let duration = 1.5;
             if elapsed < duration {
                 let (br, bg, bb) = ctx.effects.cursor_bubble.color;
@@ -1317,7 +1342,7 @@ pub(super) fn emit_cursor_bubble(
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_firework(
     ctx: &EffectCtx,
-    start: &mut Option<std::time::Instant>,
+    start: &mut Option<EventTime>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1333,12 +1358,15 @@ pub(super) fn emit_cursor_firework(
         let dx = cx - *last_x;
         let dy = cy - *last_y;
         if dx.abs() > 1.0 || dy.abs() > 1.0 {
-            *start = Some(std::time::Instant::now());
+            *start = Some(ctx.frame_sample.presentation_time());
             *last_x = cx;
             *last_y = cy;
         }
         if let Some(start_time) = *start {
-            let elapsed = start_time.elapsed().as_secs_f32();
+            let elapsed = ctx
+                .frame_sample
+                .since_at_presentation(start_time)
+                .as_secs_f32();
             let duration = 0.6;
             if elapsed < duration {
                 let t = elapsed / duration;
@@ -1378,8 +1406,9 @@ pub(super) fn emit_cursor_tornado(ctx: &EffectCtx) -> Vec<RectVertex> {
     if let Some(ref anim) = *ctx.animated_cursor {
         let cx = anim.x + anim.width / 2.0;
         let cy = anim.y + anim.height / 2.0;
-        let now = std::time::Instant::now()
-            .duration_since(ctx.aurora_start)
+        let now = ctx
+            .frame_sample
+            .since_at_presentation(ctx.aurora_start)
             .as_secs_f32();
         let (cr, cg, cb) = ctx.effects.cursor_tornado.color;
         let radius = ctx.effects.cursor_tornado.radius;
@@ -1421,7 +1450,7 @@ pub(super) fn emit_cursor_tornado(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_lightning(
     ctx: &EffectCtx,
-    start: &mut Option<std::time::Instant>,
+    start: &mut Option<EventTime>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1436,12 +1465,15 @@ pub(super) fn emit_cursor_lightning(
         let dx = cx - *last_x;
         let dy = cy - *last_y;
         if dx.abs() > 1.0 || dy.abs() > 1.0 {
-            *start = Some(std::time::Instant::now());
+            *start = Some(ctx.frame_sample.presentation_time());
             *last_x = cx;
             *last_y = cy;
         }
         if let Some(start_time) = *start {
-            let elapsed = start_time.elapsed().as_secs_f32();
+            let elapsed = ctx
+                .frame_sample
+                .since_at_presentation(start_time)
+                .as_secs_f32();
             let duration = 0.4;
             if elapsed < duration {
                 let t = elapsed / duration;
@@ -1494,7 +1526,7 @@ pub(super) fn emit_cursor_lightning(
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_cursor_snowflake(
     ctx: &EffectCtx,
-    start: &mut Option<std::time::Instant>,
+    start: &mut Option<EventTime>,
     last_x: &mut f32,
     last_y: &mut f32,
 ) -> (Vec<RectVertex>, bool) {
@@ -1509,12 +1541,15 @@ pub(super) fn emit_cursor_snowflake(
         let dx = cx - *last_x;
         let dy = cy - *last_y;
         if dx.abs() > 1.0 || dy.abs() > 1.0 {
-            *start = Some(std::time::Instant::now());
+            *start = Some(ctx.frame_sample.presentation_time());
             *last_x = cx;
             *last_y = cy;
         }
         if let Some(start_time) = *start {
-            let elapsed = start_time.elapsed().as_secs_f32();
+            let elapsed = ctx
+                .frame_sample
+                .since_at_presentation(start_time)
+                .as_secs_f32();
             let duration = 2.0;
             if elapsed < duration {
                 let t = elapsed / duration;
@@ -1565,8 +1600,9 @@ pub(super) fn emit_cursor_flame(ctx: &EffectCtx) -> Vec<RectVertex> {
     if let Some(ref anim) = *ctx.animated_cursor {
         let cx = anim.x + anim.width / 2.0;
         let cy = anim.y;
-        let now = std::time::Instant::now()
-            .duration_since(ctx.aurora_start)
+        let now = ctx
+            .frame_sample
+            .since_at_presentation(ctx.aurora_start)
             .as_secs_f32();
         let (cr, cg, cb) = ctx.effects.cursor_flame.color;
         let opacity = ctx.effects.cursor_flame.opacity;
@@ -1602,8 +1638,9 @@ pub(super) fn emit_cursor_crystal(ctx: &EffectCtx) -> Vec<RectVertex> {
     };
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (cr, cg, cb) = ctx.effects.cursor_crystal.color;
     let opacity = ctx.effects.cursor_crystal.opacity;
@@ -1649,8 +1686,9 @@ pub(super) fn emit_cursor_water_drop(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (wr, wg, wb) = ctx.effects.cursor_water_drop.color;
     let ripple_count = ctx.effects.cursor_water_drop.ripple_count;
@@ -1687,8 +1725,9 @@ pub(super) fn emit_cursor_pixel_dust(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (pr, pg, pb) = ctx.effects.cursor_pixel_dust.color;
     let dust_count = ctx.effects.cursor_pixel_dust.count;
@@ -1735,8 +1774,9 @@ pub(super) fn emit_cursor_candle_flame(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (fr, fg, fb) = ctx.effects.cursor_candle_flame.color;
     let flame_h = ctx.effects.cursor_candle_flame.height as f32;
@@ -1795,8 +1835,9 @@ pub(super) fn emit_cursor_moth_flame(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (mr, mg, mb) = ctx.effects.cursor_moth_flame.color;
     let moth_count = ctx.effects.cursor_moth_flame.moth_count;
@@ -1845,8 +1886,9 @@ pub(super) fn emit_cursor_sparkler(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (sr, sg, sb) = ctx.effects.cursor_sparkler.color;
     let spark_count = ctx.effects.cursor_sparkler.spark_count;
@@ -1886,8 +1928,9 @@ pub(super) fn emit_cursor_plasma_ball(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (pr, pg, pb) = ctx.effects.cursor_plasma_ball.color;
     let tendril_count = ctx.effects.cursor_plasma_ball.tendril_count;
@@ -1935,8 +1978,9 @@ pub(super) fn emit_cursor_quill_pen(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (qr, qg, qb) = ctx.effects.cursor_quill_pen.color;
     let trail_len = ctx.effects.cursor_quill_pen.trail_length;
@@ -1993,8 +2037,9 @@ pub(super) fn emit_cursor_aurora_borealis(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let (ar, ag, ab) = ctx.effects.cursor_aurora_borealis.color;
     let band_count = ctx.effects.cursor_aurora_borealis.band_count;
@@ -2042,8 +2087,9 @@ pub(super) fn emit_cursor_feather(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
@@ -2092,8 +2138,9 @@ pub(super) fn emit_cursor_stardust(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
@@ -2126,8 +2173,9 @@ pub(super) fn emit_cursor_compass_needle(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
@@ -2170,8 +2218,9 @@ pub(super) fn emit_cursor_galaxy(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
@@ -2206,8 +2255,9 @@ pub(super) fn emit_cursor_prism(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
@@ -2249,8 +2299,9 @@ pub(super) fn emit_cursor_moth(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
@@ -2322,11 +2373,15 @@ pub(super) fn emit_cursor_sparkle_burst(
             .wrapping_mul(31)
             .wrapping_add(cy as u32)
             .wrapping_mul(17)
-            .wrapping_add(std::time::Instant::now().elapsed().subsec_nanos());
+            // RNG SEED, NOT A TIME: the clock read mixed in here was entropy.
+            // The frame's sample is frame-constant, so it would make every
+            // burst spawned at one position identical forever; the frame
+            // counter varies it across frames while position varies it within.
+            .wrapping_add(effect_entity_seed(ctx.frame_seq, entries.len() as u64) as u32);
         entries.push(SparkleBurstEntry {
             cx,
             cy,
-            started: std::time::Instant::now(),
+            started: ctx.frame_sample.presentation_time(),
             seed,
         });
         if entries.len() > 20 {
@@ -2339,9 +2394,18 @@ pub(super) fn emit_cursor_sparkle_burst(
     let radius = ctx.effects.cursor_sparkle_burst.radius;
     let mut verts: Vec<RectVertex> = Vec::new();
     let duration = 0.4_f32;
-    entries.retain(|e| e.started.elapsed().as_secs_f32() < duration);
+    entries.retain(|e| {
+        ctx.frame_sample
+            .since_at_presentation(e.started)
+            .as_secs_f32()
+            < duration
+    });
     for entry in entries.iter() {
-        let t = entry.started.elapsed().as_secs_f32() / duration;
+        let t = ctx
+            .frame_sample
+            .since_at_presentation(entry.started)
+            .as_secs_f32()
+            / duration;
         let fade = 1.0 - t;
         for i in 0..count {
             let mut h = entry.seed.wrapping_add(i * 2654435761);
@@ -2371,8 +2435,9 @@ pub(super) fn emit_cursor_compass_rose(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
@@ -2435,8 +2500,9 @@ pub(super) fn emit_cursor_dna_helix(ctx: &EffectCtx) -> Vec<RectVertex> {
         Some(anim) => anim,
         None => return Vec::new(),
     };
-    let now = std::time::Instant::now()
-        .duration_since(ctx.aurora_start)
+    let now = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
         .as_secs_f32();
     let cx = anim.x + anim.width / 2.0;
     let cy = anim.y + anim.height / 2.0;
@@ -2500,7 +2566,7 @@ pub(super) fn emit_cursor_pendulum(
     ctx: &EffectCtx,
     last_x: &mut f32,
     last_y: &mut f32,
-    swing_start: &mut Option<std::time::Instant>,
+    swing_start: &mut Option<EventTime>,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.cursor_pendulum.enabled || !ctx.cursor_visible {
         return (Vec::new(), false);
@@ -2513,7 +2579,7 @@ pub(super) fn emit_cursor_pendulum(
     let cy = anim.y + anim.height / 2.0;
     // Detect cursor move
     if (cx - *last_x).abs() > 1.0 || (cy - *last_y).abs() > 1.0 {
-        *swing_start = Some(std::time::Instant::now());
+        *swing_start = Some(ctx.frame_sample.presentation_time());
         *last_x = cx;
         *last_y = cy;
     }
@@ -2521,7 +2587,7 @@ pub(super) fn emit_cursor_pendulum(
         Some(s) => *s,
         None => return (Vec::new(), false),
     };
-    let elapsed = start.elapsed().as_secs_f32();
+    let elapsed = ctx.frame_sample.since_at_presentation(start).as_secs_f32();
     let (pr, pg, pb) = ctx.effects.cursor_pendulum.color;
     let pop = ctx.effects.cursor_pendulum.opacity;
     let arc_len = ctx.effects.cursor_pendulum.arc_length;
@@ -2588,21 +2654,21 @@ pub(super) fn emit_cursor_drop_shadow(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// `fade_duration` controls how long each afterimage lasts.
 pub(super) fn emit_cursor_trail_fade(
     ctx: &EffectCtx,
-    positions: &mut Vec<(f32, f32, f32, f32, std::time::Instant)>,
+    positions: &mut Vec<(f32, f32, f32, f32, EventTime)>,
     fade_duration: &std::time::Duration,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.cursor_trail_fade.enabled || positions.is_empty() {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let fade_dur = *fade_duration;
 
     // Remove expired positions
-    positions.retain(|&(_, _, _, _, t)| now.duration_since(t) < fade_dur);
+    positions.retain(|&(_, _, _, _, t)| now.saturating_since(t) < fade_dur);
 
     let mut verts: Vec<RectVertex> = Vec::new();
     for &(tx, ty, tw, th, spawn) in positions.iter() {
-        let elapsed = now.duration_since(spawn).as_secs_f32();
+        let elapsed = now.saturating_since(spawn).as_secs_f32();
         let t = (elapsed / fade_dur.as_secs_f32()).min(1.0);
         let alpha = 0.3 * (1.0 - t) * (1.0 - t);
         if alpha < 0.005 {

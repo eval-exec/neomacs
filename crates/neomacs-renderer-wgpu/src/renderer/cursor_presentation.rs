@@ -7,6 +7,7 @@
 
 use neomacs_display_protocol::CursorColorCycleConfig;
 use neomacs_display_protocol::frame_glyphs::DisplaySlotId;
+use neomacs_display_protocol::frame_time::EventTime;
 use neomacs_display_protocol::types::{AnimatedCursor, Color, DisplayWindowId, Rect};
 
 use super::WgpuRenderer;
@@ -39,7 +40,7 @@ pub(super) enum CursorColorPolicy<'a> {
     Inherit,
     Cycle {
         config: &'a CursorColorCycleConfig,
-        origin: std::time::Instant,
+        origin: EventTime,
     },
     Override(Color),
 }
@@ -57,7 +58,7 @@ impl PresentedCursorPaint {
     pub(super) fn resolve(
         resolved: ResolvedCursorPaint,
         policy: CursorColorPolicy<'_>,
-        sample_time: std::time::Instant,
+        sample_time: EventTime,
     ) -> Self {
         let body_background = match policy {
             CursorColorPolicy::Inherit => resolved.box_background,
@@ -76,12 +77,10 @@ impl PresentedCursorPaint {
 pub(super) fn cursor_color_cycle_color_at(
     resolved_background: Color,
     cycle: &CursorColorCycleConfig,
-    sample_time: std::time::Instant,
-    cycle_start: std::time::Instant,
+    sample_time: EventTime,
+    cycle_start: EventTime,
 ) -> Color {
-    let elapsed = sample_time
-        .saturating_duration_since(cycle_start)
-        .as_secs_f64();
+    let elapsed = sample_time.saturating_since(cycle_start).as_secs_f64();
     // Keep the unbounded uptime calculation in f64. Converting a year of
     // elapsed seconds to f32 loses more precision than a 24 Hz frame interval.
     let phase = ((elapsed * f64::from(cycle.speed)) % 1.0) as f32;

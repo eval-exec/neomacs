@@ -1551,7 +1551,9 @@ impl WgpuRenderer {
                         bounds: info.bounds,
                         old_text,
                         new_text: new_text.clone(),
-                        started: std::time::Instant::now(),
+                        // Detected while building this frame: the crossfade is
+                        // anchored to when this frame's pixels appear.
+                        started: self.frame_sample.presentation_time(),
                         duration: std::time::Duration::from_millis(
                             self.effects.title_fade.duration_ms as u64,
                         ),
@@ -1566,7 +1568,7 @@ impl WgpuRenderer {
             self.fx
                 .title_fade
                 .active
-                .retain(|f| f.started.elapsed() < f.duration);
+                .retain(|f| self.frame_sample.since_at_presentation(f.started) < f.duration);
         }
 
         let mut all_rect_vertices: Vec<RectVertex> = Vec::new();
@@ -1592,8 +1594,12 @@ impl WgpuRenderer {
 
             if let Some(fade) = active_fade {
                 // Crossfade: render old text fading out, new text fading in
-                let t =
-                    (fade.started.elapsed().as_secs_f32() / fade.duration.as_secs_f32()).min(1.0);
+                let t = (self
+                    .frame_sample
+                    .since_at_presentation(fade.started)
+                    .as_secs_f32()
+                    / fade.duration.as_secs_f32())
+                .min(1.0);
                 // Ease-out quadratic
                 let eased = t * (2.0 - t);
                 let new_alpha = eased;

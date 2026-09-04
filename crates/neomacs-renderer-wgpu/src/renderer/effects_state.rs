@@ -7,6 +7,7 @@ use super::{
     ScrollSpacingEntry, ScrollVelocityFadeEntry, SonarPingEntry, TextFadeEntry, WindowFadeEntry,
 };
 use super::{RendererFrameEffects, WgpuRenderer};
+use neomacs_display_protocol::frame_time::{EventTime, observe_platform_now};
 use neomacs_display_protocol::types::{Color, Rect};
 
 impl WgpuRenderer {
@@ -33,7 +34,9 @@ impl WgpuRenderer {
             window_bounds,
             edit_y,
             initial_offset: offset,
-            started: std::time::Instant::now(),
+            // TRIGGER SIGNATURE: should take the `EventTime` of the edit that
+            // caused the slide; with no time parameter it mints its own.
+            started: observe_platform_now(),
             duration: std::time::Duration::from_millis(duration_ms as u64),
         });
     }
@@ -50,7 +53,7 @@ impl WgpuRenderer {
                 && gy < b.y + b.height
                 && gy >= anim.edit_y
             {
-                let elapsed = anim.started.elapsed();
+                let elapsed = self.frame_sample.since_at_presentation(anim.started);
                 let t = (elapsed.as_secs_f32() / anim.duration.as_secs_f32()).min(1.0);
                 // Ease-out quadratic: t * (2 - t)
                 let eased = t * (2.0 - t);
@@ -58,11 +61,11 @@ impl WgpuRenderer {
             }
         }
         // Scroll line spacing accordion effect
-        let now = std::time::Instant::now();
+        let now = self.frame_sample.presentation_time();
         for entry in &self.fx.scroll_spacing.active {
             let b = &entry.bounds;
             if gx >= b.x && gx < b.x + b.width && gy >= b.y && gy < b.y + b.height {
-                let elapsed = now.duration_since(entry.started).as_secs_f32();
+                let elapsed = now.saturating_since(entry.started).as_secs_f32();
                 let total = entry.duration.as_secs_f32();
                 if elapsed < total {
                     let progress = elapsed / total;
@@ -132,6 +135,9 @@ impl WgpuRenderer {
     }
 
     /// Trigger scroll velocity fade for a window
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     pub fn trigger_scroll_velocity_fade(
         &mut self,
         window_id: i64,
@@ -148,7 +154,7 @@ impl WgpuRenderer {
             window_id,
             bounds,
             velocity: delta,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(self.effects.scroll_velocity_fade.ms as u64),
         });
     }
@@ -161,7 +167,7 @@ impl WgpuRenderer {
     /// Get current resize padding amount (eases from max to 0)
     pub(super) fn resize_padding_amount(&self) -> f32 {
         if let Some(started) = self.fx.resize_padding.started {
-            let elapsed = started.elapsed().as_millis() as f32;
+            let elapsed = self.frame_sample.since_at_presentation(started).as_millis() as f32;
             let duration = self.effects.resize_padding.duration_ms as f32;
             if elapsed >= duration {
                 return 0.0;
@@ -292,7 +298,7 @@ impl WgpuRenderer {
             return None;
         }
         if let Some(started) = self.fx.error_pulse.started {
-            let elapsed = started.elapsed().as_millis() as f32;
+            let elapsed = self.frame_sample.since_at_presentation(started).as_millis() as f32;
             let duration = self.effects.cursor_error_pulse.duration_ms as f32;
             if elapsed >= duration {
                 return None;
@@ -308,6 +314,9 @@ impl WgpuRenderer {
     }
 
     /// Trigger a scroll momentum indicator for a window
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     pub fn trigger_scroll_momentum(
         &mut self,
         window_id: i64,
@@ -323,7 +332,7 @@ impl WgpuRenderer {
             window_id,
             bounds,
             direction,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(self.effects.scroll_momentum.fade_ms as u64),
         });
     }
@@ -362,6 +371,9 @@ impl WgpuRenderer {
     }
 
     /// Trigger edge glow for a window (at_top = beginning-of-buffer)
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     pub fn trigger_edge_glow(
         &mut self,
         window_id: i64,
@@ -377,17 +389,20 @@ impl WgpuRenderer {
             window_id,
             bounds,
             at_top,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(self.effects.edge_glow.fade_ms as u64),
         });
     }
 
     /// Trigger a sonar ping at cursor position
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     pub fn trigger_sonar_ping(&mut self, cx: f32, cy: f32, now: std::time::Instant) {
         self.fx.sonar_ping.entries.push(SonarPingEntry {
             cx,
             cy,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(
                 self.effects.cursor_sonar_ping.duration_ms as u64,
             ),
@@ -399,14 +414,14 @@ impl WgpuRenderer {
         if !self.effects.mode_line_transition.enabled || self.fx.mode_line_fade.active.is_empty() {
             return 1.0;
         }
-        let now = std::time::Instant::now();
+        let now = self.frame_sample.presentation_time();
         for entry in &self.fx.mode_line_fade.active {
             if gx >= entry.bounds_x
                 && gx < entry.bounds_x + entry.bounds_w
                 && gy >= entry.mode_line_y
                 && gy < entry.mode_line_y + entry.mode_line_h
             {
-                let elapsed = now.duration_since(entry.started).as_secs_f32();
+                let elapsed = now.saturating_since(entry.started).as_secs_f32();
                 let total = entry.duration.as_secs_f32();
                 if elapsed < total {
                     let t = elapsed / total;
@@ -418,6 +433,9 @@ impl WgpuRenderer {
     }
 
     /// Trigger a text fade-in animation for a window
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     pub fn trigger_text_fade_in(&mut self, window_id: i64, bounds: Rect, now: std::time::Instant) {
         // Replace existing animation for this window
         self.fx
@@ -427,7 +445,7 @@ impl WgpuRenderer {
         self.fx.text_fade.active.push(TextFadeEntry {
             window_id,
             bounds,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(
                 self.effects.text_fade_in.duration_ms as u64,
             ),
@@ -440,11 +458,11 @@ impl WgpuRenderer {
         if !self.effects.text_fade_in.enabled || self.fx.text_fade.active.is_empty() {
             return 1.0;
         }
-        let now = std::time::Instant::now();
+        let now = self.frame_sample.presentation_time();
         for entry in &self.fx.text_fade.active {
             let b = &entry.bounds;
             if gx >= b.x && gx < b.x + b.width && gy >= b.y && gy < b.y + b.height {
-                let elapsed = now.duration_since(entry.started).as_secs_f32();
+                let elapsed = now.saturating_since(entry.started).as_secs_f32();
                 let total = entry.duration.as_secs_f32();
                 if elapsed < total {
                     // Ease-in: start at 0, end at 1
@@ -457,6 +475,9 @@ impl WgpuRenderer {
     }
 
     /// Trigger a scroll line spacing animation for a window
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     pub fn trigger_scroll_line_spacing(
         &mut self,
         window_id: i64,
@@ -473,7 +494,7 @@ impl WgpuRenderer {
             window_id,
             bounds,
             direction,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(
                 self.durations.scroll_line_spacing_ms as u64,
             ),
@@ -505,7 +526,9 @@ impl WgpuRenderer {
         self.fx.window_fade.active.push(WindowFadeEntry {
             window_id,
             bounds,
-            started: std::time::Instant::now(),
+            // TRIGGER SIGNATURE: should take the `EventTime` of the window
+            // switch; with no time parameter it mints its own.
+            started: observe_platform_now(),
             duration: std::time::Duration::from_millis(
                 self.effects.window_switch_fade.duration_ms as u64,
             ),
@@ -568,15 +591,21 @@ struct RendererFrameEffectsRef<'a> {
 }
 
 impl RendererFrameEffectsRef<'_> {
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     fn trigger_click_halo(&mut self, x: f32, y: f32, now: std::time::Instant, duration_ms: u32) {
         self.renderer.fx.click_halo.halos.push(ClickHaloEntry {
             x,
             y,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(duration_ms as u64),
         });
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     fn trigger_edge_snap(
         &mut self,
         bounds: Rect,
@@ -591,21 +620,30 @@ impl RendererFrameEffectsRef<'_> {
             mode_line_height,
             at_top,
             at_bottom,
-            started: now,
+            started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(duration_ms as u64),
         });
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     fn trigger_cursor_error_pulse(&mut self, now: std::time::Instant) {
-        self.renderer.fx.error_pulse.started = Some(now);
+        self.renderer.fx.error_pulse.started = Some(EventTime::from_observed_instant(now));
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     fn trigger_cursor_wake(&mut self, now: std::time::Instant) {
-        self.renderer.fx.cursor_wake.started = Some(now);
+        self.renderer.fx.cursor_wake.started = Some(EventTime::from_observed_instant(now));
     }
 
+    // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
+    // `Instant` only because `neomacs-display-runtime` still bridges through
+    // `into_instant()` at the call site.
     fn trigger_resize_padding(&mut self, now: std::time::Instant) {
-        self.renderer.fx.resize_padding.started = Some(now);
+        self.renderer.fx.resize_padding.started = Some(EventTime::from_observed_instant(now));
     }
 
     fn spawn_ripple(&mut self, cx: f32, cy: f32) {
@@ -613,7 +651,8 @@ impl RendererFrameEffectsRef<'_> {
             .fx
             .typing_ripple
             .active
-            .push((cx, cy, std::time::Instant::now()));
+            // TRIGGER SIGNATURE: should take the keypress's `EventTime`.
+            .push((cx, cy, observe_platform_now()));
     }
 
     fn record_cursor_trail(&mut self, x: f32, y: f32, w: f32, h: f32, length: usize) {
@@ -624,7 +663,8 @@ impl RendererFrameEffectsRef<'_> {
         }
         trail
             .positions
-            .push((x, y, w, h, std::time::Instant::now()));
+            // TRIGGER SIGNATURE: should take the cursor move's `EventTime`.
+            .push((x, y, w, h, observe_platform_now()));
         trail.last_pos = (x, y);
         while trail.positions.len() > length {
             trail.positions.remove(0);

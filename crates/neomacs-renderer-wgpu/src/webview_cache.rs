@@ -18,6 +18,12 @@ pub struct CachedWebView {
     pub bind_group: wgpu::BindGroup,
     pub width: u32,
     pub height: u32,
+    /// When this texture was last refreshed.
+    ///
+    /// RESOURCE LIFETIME, NOT A VISUAL PHASE: this records when a webview
+    /// actually handed us new pixels, so it stays on the wall clock. Nothing
+    /// in a frame's visuals is dated to it, and the updates that stamp it
+    /// arrive on the webview's own schedule, not on a frame boundary.
     pub last_updated: Instant,
     // This marker is private so a browser-owned external texture cannot be
     // represented as a `CachedWebView` outside this module.
@@ -174,6 +180,7 @@ impl WgpuWebViewCache {
                 bind_group,
                 width,
                 height,
+                // Wall clock on purpose: see the field's doc comment.
                 last_updated: Instant::now(),
                 _ownership: CacheOwnedTexture,
             },
@@ -258,6 +265,7 @@ impl WgpuWebViewCache {
                 bind_group,
                 width,
                 height,
+                // Wall clock on purpose: see the field's doc comment.
                 last_updated: Instant::now(),
                 _ownership: CacheOwnedTexture,
             },

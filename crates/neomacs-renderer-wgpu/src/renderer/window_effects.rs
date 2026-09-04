@@ -58,13 +58,14 @@
 //! Offending sites are tagged `FIXME(chrome-insets)` below.
 
 use super::super::vertex::RectVertex;
-use super::effect_common::{EffectCtx, push_rect};
+use super::effect_common::{EffectCtx, effect_entity_seed, push_rect};
 use super::{
     ClickHaloEntry, CursorGhostEntry, EdgeGlowEntry, EdgeSnapEntry, HeatMapEntry, RainDrop,
     ScrollMomentumEntry, ScrollVelocityFadeEntry, WindowFadeEntry,
 };
 use neomacs_display_protocol::face::Face;
 use neomacs_display_protocol::frame_glyphs::{FrameGlyph, MaterializedFaceData};
+use neomacs_display_protocol::frame_time::EventTime;
 use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::types::{Color, Rect};
 use std::collections::HashMap;
@@ -153,7 +154,7 @@ pub(super) fn emit_typing_heatmap(
     if !ctx.effects.typing_heatmap.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let fade_dur = std::time::Duration::from_millis(ctx.effects.typing_heatmap.fade_ms as u64);
 
     // Detect cursor movement and record heat entry
@@ -176,7 +177,7 @@ pub(super) fn emit_typing_heatmap(
     }
 
     // Prune expired entries
-    heatmap_entries.retain(|e| now.duration_since(e.started) < fade_dur);
+    heatmap_entries.retain(|e| now.saturating_since(e.started) < fade_dur);
 
     let mut needs_redraw = false;
     let mut verts: Vec<RectVertex> = Vec::new();
@@ -184,7 +185,7 @@ pub(super) fn emit_typing_heatmap(
         let (hr, hg, hb) = ctx.effects.typing_heatmap.color;
         let max_alpha = ctx.effects.typing_heatmap.opacity;
         for entry in heatmap_entries.iter() {
-            let elapsed = now.duration_since(entry.started);
+            let elapsed = now.saturating_since(entry.started);
             let t = (elapsed.as_secs_f32() / fade_dur.as_secs_f32()).min(1.0);
             let alpha = max_alpha * (1.0 - t);
             if alpha > 0.001 {
@@ -437,9 +438,14 @@ pub(super) fn emit_window_breathing_border(ctx: &EffectCtx) -> (Vec<RectVertex>,
     if !ctx.effects.breathing_border.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
     let cycle = ctx.effects.breathing_border.cycle_ms as f64 / 1000.0;
-    let elapsed = now.elapsed().as_secs_f64();
+    // PRE-EXISTING NO-OP, PRESERVED: this read `Instant::now().elapsed()`, the
+    // interval from "now" to "now", so the breath phase has always been pinned
+    // at zero and the border sits at a constant opacity. Left at zero rather
+    // than re-anchored to the render epoch: giving it a real phase would start
+    // an animation that has never run, a visible change beyond moving this file
+    // onto the frame's time sample.
+    let elapsed = 0.0_f64;
     let phase = (elapsed % cycle) / cycle;
     let breath = ((phase * std::f64::consts::TAU).sin() * 0.5 + 0.5) as f32;
     let alpha = ctx.effects.breathing_border.min_opacity
@@ -505,7 +511,7 @@ pub(super) fn emit_cursor_ghost(
     if !ctx.effects.cursor_ghost.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let fade_dur = std::time::Duration::from_millis(ctx.effects.cursor_ghost.fade_ms as u64);
 
     // Detect cursor movement and spawn ghost
@@ -514,7 +520,7 @@ pub(super) fn emit_cursor_ghost(
             || ghost_entries.last().is_none_or(|last| {
                 let dx = (anim.x - last.x).abs();
                 let dy = (anim.y - last.y).abs();
-                (dx > 2.0 || dy > 2.0) && now.duration_since(last.started).as_millis() > 30
+                (dx > 2.0 || dy > 2.0) && now.saturating_since(last.started).as_millis() > 30
             });
         if should_spawn {
             ghost_entries.push(CursorGhostEntry {
@@ -531,7 +537,7 @@ pub(super) fn emit_cursor_ghost(
     }
 
     // Prune expired
-    ghost_entries.retain(|e| now.duration_since(e.started) < fade_dur);
+    ghost_entries.retain(|e| now.saturating_since(e.started) < fade_dur);
 
     let mut verts: Vec<RectVertex> = Vec::new();
     let mut needs_redraw = false;
@@ -539,7 +545,7 @@ pub(super) fn emit_cursor_ghost(
         let (gr, gg, gb) = ctx.effects.cursor_ghost.color;
         let drift = ctx.effects.cursor_ghost.drift;
         for entry in ghost_entries.iter() {
-            let elapsed = now.duration_since(entry.started).as_secs_f32();
+            let elapsed = now.saturating_since(entry.started).as_secs_f32();
             let t = (elapsed / fade_dur.as_secs_f32()).min(1.0);
             let alpha = ctx.effects.cursor_ghost.opacity * (1.0 - t) * (1.0 - t);
             if alpha < 0.001 {
@@ -568,8 +574,8 @@ pub(super) fn emit_edge_glow(
     if !ctx.effects.edge_glow.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
-    edge_glow_entries.retain(|e| now.duration_since(e.started) < e.duration);
+    let now = ctx.frame_sample.presentation_time();
+    edge_glow_entries.retain(|e| now.saturating_since(e.started) < e.duration);
 
     let mut verts: Vec<RectVertex> = Vec::new();
     let mut needs_redraw = false;
@@ -577,7 +583,8 @@ pub(super) fn emit_edge_glow(
         let (gr, gg, gb) = ctx.effects.edge_glow.color;
         let gh = ctx.effects.edge_glow.height;
         for entry in edge_glow_entries.iter() {
-            let t = now.duration_since(entry.started).as_secs_f32() / entry.duration.as_secs_f32();
+            let t =
+                now.saturating_since(entry.started).as_secs_f32() / entry.duration.as_secs_f32();
             let fade = (1.0 - t) * (1.0 - t);
             let base_alpha = ctx.effects.edge_glow.opacity * fade;
             let steps = 20u32;
@@ -618,17 +625,17 @@ pub(super) fn emit_rain_effect(
     if !ctx.effects.rain_effect.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
     let fw = ctx.logical_w;
     let fh = ctx.logical_h;
     let dt = 1.0 / 60.0_f32;
 
     // Spawn drops if needed
     while rain_drops.len() < ctx.effects.rain_effect.drop_count as usize {
-        let seed = now.elapsed().subsec_nanos() as u64;
-        let h = seed
-            .wrapping_mul(2654435761)
-            .wrapping_add(rain_drops.len() as u64 * 6364136223846793005);
+        // RNG SEED, NOT A TIME: `now.elapsed()` was read for its low bits, not
+        // for a duration. The frame's time sample is constant across a frame,
+        // so substituting it would drop every raindrop down one track. Seed
+        // each drop from the frame counter and its own index instead.
+        let h = effect_entity_seed(ctx.frame_seq, rain_drops.len() as u64);
         let x = ((h >> 16) & 0xFFFF) as f32 / 65535.0 * fw;
         let y = -(((h >> 32) & 0xFFFF) as f32) / 65535.0 * fh * 0.5;
         let speed_var = 0.7 + ((h >> 48) & 0xFFFF) as f32 / 65535.0 * 0.6;
@@ -647,10 +654,9 @@ pub(super) fn emit_rain_effect(
     for drop in rain_drops.iter_mut() {
         drop.y += drop.speed * dt;
         if drop.y > fh {
-            let seed = now.elapsed().subsec_nanos() as u64;
-            let h = seed
-                .wrapping_mul(2654435761)
-                .wrapping_add((drop.x * 1000.0) as u64);
+            // Same RNG seed, for a drop recycling off the bottom: its x is its
+            // identity, so it falls on a fresh track rather than repeating one.
+            let h = effect_entity_seed(ctx.frame_seq, (drop.x * 1000.0) as u64);
             drop.x = ((h >> 16) & 0xFFFF) as f32 / 65535.0 * fw;
             drop.y = -drop.length;
             let speed_var = 0.7 + ((h >> 48) & 0xFFFF) as f32 / 65535.0 * 0.6;
@@ -674,9 +680,9 @@ pub(super) fn emit_aurora_overlay(ctx: &EffectCtx) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.aurora.enabled {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let elapsed =
-        now.duration_since(ctx.aurora_start).as_secs_f64() * ctx.effects.aurora.speed as f64;
+        now.saturating_since(ctx.aurora_start).as_secs_f64() * ctx.effects.aurora.speed as f64;
     let fw = ctx.logical_w;
     let ah = ctx.effects.aurora.height;
     let (r1, g1, b1) = ctx.effects.aurora.color1;
@@ -821,12 +827,15 @@ pub(super) fn emit_window_mode_tint(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_focus_ring(
     ctx: &EffectCtx,
-    focus_ring_start: std::time::Instant,
+    focus_ring_start: EventTime,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.focus_ring.enabled {
         return (Vec::new(), false);
     }
-    let elapsed = focus_ring_start.elapsed().as_secs_f32();
+    let elapsed = ctx
+        .frame_sample
+        .since_at_presentation(focus_ring_start)
+        .as_secs_f32();
     let offset =
         (elapsed * ctx.effects.focus_ring.speed) % (ctx.effects.focus_ring.dash_length * 2.0);
     let dash = ctx.effects.focus_ring.dash_length;
@@ -968,14 +977,14 @@ pub(super) fn emit_window_padding_gradient(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_border_transition(
     ctx: &EffectCtx,
-    border_transitions: &mut Vec<(i64, bool, std::time::Instant)>,
+    border_transitions: &mut Vec<(i64, bool, EventTime)>,
     prev_border_selected: &mut i64,
     border_transition_duration: std::time::Duration,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.border_transition.enabled || ctx.frame_glyphs.window_infos.len() <= 1 {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let (ar, ag, ab) = ctx.effects.border_transition.active_color;
     let duration = border_transition_duration;
 
@@ -997,7 +1006,7 @@ pub(super) fn emit_border_transition(
     }
 
     // Clean up expired transitions
-    border_transitions.retain(|&(_, _, start)| now.duration_since(start) < duration);
+    border_transitions.retain(|&(_, _, start)| now.saturating_since(start) < duration);
 
     let border_thickness = 2.0_f32;
     let mut verts: Vec<RectVertex> = Vec::new();
@@ -1018,7 +1027,7 @@ pub(super) fn emit_border_transition(
             .iter()
             .find(|&&(wid, _, _)| wid == info.window_id.get())
         {
-            let t = (now.duration_since(start).as_secs_f32() / duration.as_secs_f32()).min(1.0);
+            let t = (now.saturating_since(start).as_secs_f32() / duration.as_secs_f32()).min(1.0);
             let eased = t * (2.0 - t);
             if becoming_active { eased } else { 1.0 - eased }
         } else if info.selected {
@@ -1311,13 +1320,13 @@ pub(super) fn emit_focus_mode(ctx: &EffectCtx) -> Vec<RectVertex> {
 pub(super) fn emit_inactive_window_dimming(
     ctx: &EffectCtx,
     per_window_dim: &mut HashMap<i64, f32>,
-    last_dim_tick: &mut std::time::Instant,
+    last_dim_tick: &mut EventTime,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.inactive_dim.enabled || ctx.frame_glyphs.window_infos.len() <= 1 {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
-    let dt = now.duration_since(*last_dim_tick).as_secs_f32().min(0.1);
+    let now = ctx.frame_sample.presentation_time();
+    let dt = now.saturating_since(*last_dim_tick).as_secs_f32().min(0.1);
     *last_dim_tick = now;
     let fade_speed = 8.0;
 
@@ -1437,7 +1446,7 @@ pub(super) fn emit_zen_mode(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_search_highlight(
     ctx: &EffectCtx,
-    search_pulse_start: std::time::Instant,
+    search_pulse_start: EventTime,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.search_pulse.enabled || ctx.effects.search_pulse.face_id == FaceId::new(0) {
         return (Vec::new(), false);
@@ -1477,7 +1486,10 @@ pub(super) fn emit_search_highlight(
         return (Vec::new(), false);
     }
 
-    let elapsed = search_pulse_start.elapsed().as_secs_f32();
+    let elapsed = ctx
+        .frame_sample
+        .since_at_presentation(search_pulse_start)
+        .as_secs_f32();
     let phase = elapsed * 3.0 * std::f32::consts::PI;
     let pulse = (phase.sin() + 1.0) / 2.0;
 
@@ -1589,18 +1601,18 @@ pub(super) fn emit_selection_glow(
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_typing_ripple(
     ctx: &EffectCtx,
-    active_ripples: &mut Vec<(f32, f32, std::time::Instant)>,
+    active_ripples: &mut Vec<(f32, f32, EventTime)>,
     typing_ripple_duration: f32,
 ) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.typing_ripple.enabled || active_ripples.is_empty() {
         return (Vec::new(), false);
     }
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
     let duration = typing_ripple_duration;
     let max_r = ctx.effects.typing_ripple.max_radius;
 
     // Remove expired ripples
-    active_ripples.retain(|&(_, _, t)| now.duration_since(t).as_secs_f32() < duration);
+    active_ripples.retain(|&(_, _, t)| now.saturating_since(t).as_secs_f32() < duration);
 
     if active_ripples.is_empty() {
         return (Vec::new(), false);
@@ -1610,7 +1622,7 @@ pub(super) fn emit_typing_ripple(
     let segments = 32;
 
     for &(cx, cy, spawn_t) in active_ripples.iter() {
-        let elapsed = now.duration_since(spawn_t).as_secs_f32();
+        let elapsed = now.saturating_since(spawn_t).as_secs_f32();
         let t = (elapsed / duration).min(1.0);
 
         let ease_t = 1.0 - (1.0 - t) * (1.0 - t);
@@ -2125,7 +2137,10 @@ pub(super) fn emit_scroll_velocity_fade(
     let mut verts: Vec<RectVertex> = Vec::new();
 
     for entry in scroll_velocity_fades.iter() {
-        let elapsed = entry.started.elapsed().as_millis() as f32;
+        let elapsed = ctx
+            .frame_sample
+            .since_at_presentation(entry.started)
+            .as_millis() as f32;
         let duration = entry.duration.as_millis() as f32;
         if elapsed >= duration {
             continue;
@@ -2145,7 +2160,8 @@ pub(super) fn emit_scroll_velocity_fade(
     }
 
     // Cleanup expired entries
-    scroll_velocity_fades.retain(|e| e.started.elapsed() < e.duration);
+    scroll_velocity_fades
+        .retain(|e| ctx.frame_sample.since_at_presentation(e.started) < e.duration);
     let needs_redraw = !scroll_velocity_fades.is_empty();
     (verts, needs_redraw)
 }
@@ -2165,7 +2181,10 @@ pub(super) fn emit_click_halo(
     let ring_steps = 8;
 
     for entry in click_halos.iter() {
-        let elapsed = entry.started.elapsed().as_millis() as f32;
+        let elapsed = ctx
+            .frame_sample
+            .since_at_presentation(entry.started)
+            .as_millis() as f32;
         let duration = entry.duration.as_millis() as f32;
         if elapsed >= duration {
             continue;
@@ -2195,7 +2214,7 @@ pub(super) fn emit_click_halo(
         }
     }
 
-    click_halos.retain(|e| e.started.elapsed() < e.duration);
+    click_halos.retain(|e| ctx.frame_sample.since_at_presentation(e.started) < e.duration);
     let needs_redraw = !click_halos.is_empty();
     (verts, needs_redraw)
 }
@@ -2215,7 +2234,10 @@ pub(super) fn emit_edge_snap(
     let steps = 3;
 
     for entry in edge_snaps.iter() {
-        let elapsed = entry.started.elapsed().as_millis() as f32;
+        let elapsed = ctx
+            .frame_sample
+            .since_at_presentation(entry.started)
+            .as_millis() as f32;
         let duration = entry.duration.as_millis() as f32;
         if elapsed >= duration {
             continue;
@@ -2262,7 +2284,7 @@ pub(super) fn emit_edge_snap(
         }
     }
 
-    edge_snaps.retain(|e| e.started.elapsed() < e.duration);
+    edge_snaps.retain(|e| ctx.frame_sample.since_at_presentation(e.started) < e.duration);
     let needs_redraw = !edge_snaps.is_empty();
     (verts, needs_redraw)
 }
@@ -2328,10 +2350,10 @@ pub(super) fn emit_scroll_momentum(
     }
     let bar_w = ctx.effects.scroll_momentum.width.max(1.0);
     let mut verts: Vec<RectVertex> = Vec::new();
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
 
     for entry in active_scroll_momentums {
-        let elapsed = now.duration_since(entry.started);
+        let elapsed = now.saturating_since(entry.started);
         if elapsed >= entry.duration {
             continue;
         }
@@ -2420,17 +2442,17 @@ pub(super) fn emit_vignette(ctx: &EffectCtx) -> Vec<RectVertex> {
 /// Window switch highlight fade.
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_window_switch_fade(
-    _ctx: &EffectCtx,
+    ctx: &EffectCtx,
     active_window_fades: &mut Vec<WindowFadeEntry>,
 ) -> (Vec<RectVertex>, bool) {
     if active_window_fades.is_empty() {
         return (Vec::new(), false);
     }
     let mut verts: Vec<RectVertex> = Vec::new();
-    let now = std::time::Instant::now();
+    let now = ctx.frame_sample.presentation_time();
 
     for fade in active_window_fades.iter() {
-        let elapsed = now.duration_since(fade.started);
+        let elapsed = now.saturating_since(fade.started);
         let t = (elapsed.as_secs_f32() / fade.duration.as_secs_f32()).min(1.0);
         if t >= 1.0 {
             continue;
@@ -2450,7 +2472,12 @@ pub(super) fn emit_window_switch_fade(
     }
 
     // Clean up completed fades
-    active_window_fades.retain(|f| f.started.elapsed().as_secs_f32() < f.duration.as_secs_f32());
+    active_window_fades.retain(|f| {
+        ctx.frame_sample
+            .since_at_presentation(f.started)
+            .as_secs_f32()
+            < f.duration.as_secs_f32()
+    });
     let needs_redraw = !active_window_fades.is_empty();
     (verts, needs_redraw)
 }
