@@ -174,15 +174,19 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: ${{ matrix.label == 'linux-x86_64' || matrix.label == 'windows-msvc-x86_64' }}
 
+      - name: Check native dependency type coherence
+        if: matrix.label == 'linux-x86_64'
+        run: cargo run --locked -p xtask -- check-dependency-coherence
+
       - name: cargo check workspace (Unix)
         if: runner.os != 'Windows'
-        run: cargo check --workspace
+        run: cargo check --workspace --all-targets
 
       - name: cargo check workspace (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cargo check --workspace
+          cargo check --workspace --all-targets
 
       - name: Test DirectWrite native font replay
         if: matrix.label == 'windows-msvc-x86_64'

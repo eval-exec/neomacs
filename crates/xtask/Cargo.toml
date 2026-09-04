@@ -15,4 +15,5 @@ sha2.workspace = true
 strum.workspace = true
 tempfile.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true

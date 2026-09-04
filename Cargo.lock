@@ -2340,7 +2340,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.20",
- "windows 0.54.0",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -8932,6 +8932,7 @@ dependencies = [
  "neomacs-perf",
  "rayon",
  "serde",
+ "serde_json",
  "sha2",
  "strum",
  "tempfile",

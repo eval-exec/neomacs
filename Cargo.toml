@@ -222,6 +222,9 @@ winit = "0.30"
 wgpu = { version = "30", features = ["glsl"] }
 # Keep this on the same major version as wgpu: the DMA-BUF importer passes
 # wgpu-hal types through wgpu's public HAL interop API.
+# Its `gpu-allocator` collaborator also exchanges nominal `windows` COM types;
+# `cargo xtask check-dependency-coherence` prevents Cargo updates from resolving
+# the two crates onto incompatible Windows binding versions.
 wgpu-hal = { version = "30", features = ["vulkan"] }
 # Shader-surface WGSL/GLSL validation on the Lisp thread (same version wgpu embeds)
 naga = { version = "30", features = ["wgsl-in", "glsl-in"] }

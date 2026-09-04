@@ -1,3 +1,4 @@
+mod dependency_coherence;
 mod gc_stress;
 mod pin_reference;
 mod production_capabilities;
@@ -430,6 +431,20 @@ fn try_main() -> Result<()> {
 
 fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut args = args.into_iter().peekable();
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("check-dependency-coherence")
+    ) {
+        args.next();
+        if let Some(unexpected) = args.next() {
+            return Err(format!(
+                "check-dependency-coherence does not accept arguments; found `{}`",
+                unexpected.to_string_lossy()
+            )
+            .into());
+        }
+        return dependency_coherence::run(&repo_root);
+    }
     if matches!(args.peek().and_then(|arg| arg.to_str()), Some("perf")) {
         args.next();
         neomacs_perf::run_cli(&repo_root, args)?;
@@ -4553,6 +4568,7 @@ fn print_usage() {
 fn usage_text() -> &'static str {
     "\
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--minimal] [--no-byte-compile] [--aot-preload]
+       cargo xtask check-dependency-coherence
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
        cargo xtask perf compare SCENARIO --baseline-editor PATH --candidate-editor PATH [--samples N>=3]
