@@ -1,8 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::{
-    BackendEvent, CreateOutcome, MissingPrerequisites, Platform, PlatformCreateRequest,
-    PlatformPresentation,
+    BackendEvent, CreateOutcome, HostRegistration, MissingPrerequisites, Platform,
+    PlatformCreateRequest, PlatformPresentation,
 };
 use crate::system::WebViewSystemImpl;
 use crate::{
@@ -17,6 +17,7 @@ use neomacs_display_protocol::{DeviceScale, DisplayWindowId, RootSurfaceRect};
 #[derive(Debug, Default)]
 struct FakePlatform {
     hosts: BTreeSet<HostWindowId>,
+    host_identities: BTreeMap<HostWindowId, u64>,
     creates: Vec<PlatformCreateRequest>,
     asynchronous: bool,
     activate_on_presentation: bool,
@@ -25,6 +26,7 @@ struct FakePlatform {
     closed: Vec<WebViewGeneration>,
     inputs: Vec<(WebViewGeneration, WebViewInput)>,
     presentations: Vec<(WebViewGeneration, Option<WebViewOccurrenceId>)>,
+    presented_host_identities: Vec<u64>,
 }
 
 #[derive(Debug)]
@@ -33,16 +35,22 @@ struct FakeView {
 }
 
 impl Platform for FakePlatform {
-    type Host = ();
+    type Host = u64;
     type PendingCreate = ();
     type View = FakeView;
 
-    fn register_host(&mut self, id: HostWindowId, (): Self::Host) {
+    fn register_host(&mut self, id: HostWindowId, identity: Self::Host) -> HostRegistration {
         self.hosts.insert(id);
+        match self.host_identities.insert(id, identity) {
+            None => HostRegistration::Added,
+            Some(previous) if previous == identity => HostRegistration::Unchanged,
+            Some(_) => HostRegistration::Replaced,
+        }
     }
 
     fn unregister_host(&mut self, host: HostWindowId) {
         self.hosts.remove(&host);
+        self.host_identities.remove(&host);
     }
 
     fn missing_prerequisites(&self, _request: &PlatformCreateRequest) -> MissingPrerequisites {
@@ -104,6 +112,11 @@ impl Platform for FakePlatform {
         _view: &mut Self::View,
         presentation: PlatformPresentation<'_>,
     ) -> Result<(), String> {
+        if let PlatformPresentation::Visible { host, .. } = presentation
+            && let Some(identity) = self.host_identities.get(&host)
+        {
+            self.presented_host_identities.push(*identity);
+        }
         self.presentations.push((
             generation,
             match presentation {
@@ -238,7 +251,7 @@ fn pre_ready_state_converges_before_native_creation() {
     assert_eq!(system.state(id), Some(WebViewState::Waiting));
     assert!(system.platform().creates.is_empty());
 
-    system.register_host(HostWindowId::new(9), ());
+    system.register_host(HostWindowId::new(9), 1);
 
     assert_eq!(system.state(id), Some(WebViewState::Ready));
     let [request] = system.platform().creates.as_slice() else {
@@ -298,7 +311,7 @@ fn input_is_typed_and_only_reaches_a_ready_generation() {
     system.command(WebViewCommand::Create(create(id))).unwrap();
     assert_eq!(system.presented_target(id), None);
 
-    system.register_host(host, ());
+    system.register_host(host, 1);
     assert_eq!(system.presented_target(id), None);
     let rect = RootSurfaceRect::new(0.0, 0.0, 320.0, 200.0).unwrap();
     let placement = ResolvedWebViewPlacement::new(
@@ -382,6 +395,44 @@ fn presentation_sync_attaches_and_hides_one_typed_occurrence() {
             (WebViewGeneration::new(1), Some(occurrence)),
             (WebViewGeneration::new(1), None),
         ]
+    );
+}
+
+/// A logical frame id can survive replacement of the native window behind
+/// it.  The current placement must be applied to that replacement even when
+/// redisplay produced no new scene revision.
+#[test]
+fn replacing_a_native_host_reapplies_the_current_scene() {
+    let id = WebViewId::new(25);
+    let host = HostWindowId::new(8);
+    let occurrence = WebViewOccurrenceId::new(50);
+    let mut system = WebViewSystemImpl::new(FakePlatform::default());
+    system.register_host(host, 1);
+    system.command(WebViewCommand::Create(create(id))).unwrap();
+
+    let rect = RootSurfaceRect::new(0.0, 0.0, 320.0, 200.0).unwrap();
+    let placement = ResolvedWebViewPlacement::new(
+        id,
+        occurrence,
+        DisplayWindowId::new(10),
+        rect,
+        rect,
+        DeviceScale::ONE,
+    )
+    .unwrap();
+    let scene = || {
+        ResolvedWebViewScene::try_new(host, WebViewSceneRevision::new(14), vec![placement.clone()])
+            .unwrap()
+    };
+
+    system.synchronize_presentation(scene()).unwrap();
+    system.register_host(host, 2);
+    system.synchronize_presentation(scene()).unwrap();
+
+    assert_eq!(
+        system.platform().presented_host_identities,
+        vec![1, 2],
+        "an unchanged logical scene must be rebound to the replacement native host"
     );
 }
 

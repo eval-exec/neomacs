@@ -191,12 +191,31 @@ pub(crate) enum PlatformPresentation<'a> {
     },
 }
 
+/// What registering a native host changed at the platform seam.
+///
+/// A logical [`HostWindowId`] can survive recreation of the native window
+/// behind it.  The system must reapply its current scene after
+/// [`HostRegistration::Replaced`], even when redisplay produced no new scene
+/// revision; otherwise native-overlay views remain attached to the dead host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+// Native-overlay adapters use every outcome.  Composited/unsupported target
+// builds intentionally collapse the host capability and therefore construct
+// only a subset.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+pub(crate) enum HostRegistration {
+    Added,
+    Unchanged,
+    Replaced,
+    Unavailable,
+}
+
 pub(crate) trait Platform {
     type Host;
     type PendingCreate;
     type View;
 
-    fn register_host(&mut self, id: HostWindowId, host: Self::Host);
+    fn register_host(&mut self, id: HostWindowId, host: Self::Host) -> HostRegistration;
     fn unregister_host(&mut self, host: HostWindowId);
 
     fn missing_prerequisites(&self, request: &PlatformCreateRequest) -> MissingPrerequisites;

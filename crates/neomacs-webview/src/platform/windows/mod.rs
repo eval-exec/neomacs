@@ -27,8 +27,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::core::{HSTRING, IUnknown, Interface, PCWSTR, PWSTR};
 
 use crate::backend::{
-    BackendEvent, CreateOutcome, MissingPrerequisites, NavigationMilestone, Platform,
-    PlatformCreateRequest, PlatformPresentation, PlatformUpdate,
+    BackendEvent, CreateOutcome, HostRegistration, MissingPrerequisites, NavigationMilestone,
+    Platform, PlatformCreateRequest, PlatformPresentation, PlatformUpdate,
 };
 use crate::{
     BrowsingRelationship, ButtonState, FocusIntent, HistoryAction, HostWindowId, NavigationTarget,
@@ -118,6 +118,7 @@ enum WindowsEnvironmentState {
 
 pub(crate) struct WindowsWebView {
     host: HostWindowId,
+    host_hwnd: HWND,
     composition: ICoreWebView2CompositionController,
     controller: ICoreWebView2Controller,
     controller3: ICoreWebView2Controller3,
@@ -142,6 +143,7 @@ impl WindowsWebView {
         request: PlatformCreateRequest,
         generation: WebViewGeneration,
         host: HostWindowId,
+        host_hwnd: HWND,
         visual: IDCompositionVisual,
         clip: IDCompositionRectangleClip,
         composition: ICoreWebView2CompositionController,
@@ -173,6 +175,7 @@ impl WindowsWebView {
 
         let mut view = Self {
             host,
+            host_hwnd,
             composition,
             controller,
             controller3,
@@ -688,6 +691,7 @@ impl WindowsPlatform {
                                 request,
                                 generation,
                                 host_id,
+                                hwnd,
                                 visual,
                                 clip,
                                 composition,
@@ -731,26 +735,33 @@ impl Platform for WindowsPlatform {
     type PendingCreate = PendingWindowsView;
     type View = WindowsWebView;
 
-    fn register_host(&mut self, id: HostWindowId, host: Self::Host) {
+    fn register_host(&mut self, id: HostWindowId, host: Self::Host) -> HostRegistration {
         let Some(hwnd) = Self::hwnd(&host) else {
             tracing::warn!(?id, "winit did not expose an HWND for WebView2 hosting");
-            return;
+            return HostRegistration::Unavailable;
         };
         if self.hosts.get(&id).is_some_and(|host| host.hwnd == hwnd) {
-            return;
+            return HostRegistration::Unchanged;
         }
         let device = match self.composition_device.as_ref() {
             Ok(device) => device.clone(),
             Err(error) => {
                 tracing::error!(?id, %error, "DirectComposition is unavailable");
-                return;
+                return HostRegistration::Unavailable;
             }
         };
         match HostComposition::new(hwnd, device) {
             Ok(host) => {
-                self.hosts.insert(id, host);
+                if self.hosts.insert(id, host).is_some() {
+                    HostRegistration::Replaced
+                } else {
+                    HostRegistration::Added
+                }
             }
-            Err(error) => tracing::error!(?id, %error, "failed to register WebView2 host"),
+            Err(error) => {
+                tracing::error!(?id, %error, "failed to register WebView2 host");
+                HostRegistration::Unavailable
+            }
         }
     }
 
@@ -862,16 +873,22 @@ impl Platform for WindowsPlatform {
                 host: requested,
                 placement,
             } => {
-                if requested != view.host {
-                    if let Some(old) = self.hosts.get(&view.host) {
+                let next = self
+                    .hosts
+                    .get(&requested)
+                    .ok_or_else(|| format!("host {requested:?} has no registered HWND"))?;
+                let logical_host_changed = requested != view.host;
+                let native_host_changed = next.hwnd != view.host_hwnd;
+                if logical_host_changed || native_host_changed {
+                    // When only the native HWND changed, registration already
+                    // released the old HostComposition.  A logical host move
+                    // can still detach explicitly from the registered old
+                    // root before attaching to the next one.
+                    if logical_host_changed && let Some(old) = self.hosts.get(&view.host) {
                         unsafe { old.root.RemoveVisual(&view.visual) }.map_err(|error| {
                             format!("failed to detach WebView2 from its old host: {error}")
                         })?;
                     }
-                    let next = self
-                        .hosts
-                        .get(&requested)
-                        .ok_or_else(|| format!("host {requested:?} has no registered HWND"))?;
                     unsafe {
                         next.root
                             .AddVisual(&view.visual, true, None::<&IDCompositionVisual>)
@@ -882,12 +899,9 @@ impl Platform for WindowsPlatform {
                             })?;
                     }
                     view.host = requested;
+                    view.host_hwnd = next.hwnd;
                 }
-                let host = self
-                    .hosts
-                    .get(&requested)
-                    .ok_or_else(|| format!("host {requested:?} has no registered HWND"))?;
-                view.present(host, placement)
+                view.present(next, placement)
             }
         }
     }

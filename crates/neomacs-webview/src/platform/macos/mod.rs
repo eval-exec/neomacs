@@ -17,8 +17,8 @@ use objc2_web_kit::WKWebsiteDataStore;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::backend::{
-    BackendEvent, CreateOutcome, MissingPrerequisites, Platform, PlatformCreateRequest,
-    PlatformPresentation, PlatformUpdate,
+    BackendEvent, CreateOutcome, HostRegistration, MissingPrerequisites, Platform,
+    PlatformCreateRequest, PlatformPresentation, PlatformUpdate,
 };
 use crate::{
     BrowsingRelationship, HostWindowId, StoragePartition, WebProfileId, WebViewGeneration,
@@ -109,14 +109,26 @@ impl Platform for MacPlatform {
     type PendingCreate = ();
     type View = MacWebView;
 
-    fn register_host(&mut self, id: HostWindowId, host: Self::Host) {
+    fn register_host(&mut self, id: HostWindowId, host: Self::Host) -> HostRegistration {
         if let Some(host) = Self::retain_host(&host) {
-            self.hosts.insert(id, host);
+            if self
+                .hosts
+                .get(&id)
+                .is_some_and(|current| std::ptr::eq::<NSView>(&**current, &*host))
+            {
+                return HostRegistration::Unchanged;
+            }
+            if self.hosts.insert(id, host).is_some() {
+                HostRegistration::Replaced
+            } else {
+                HostRegistration::Added
+            }
         } else {
             tracing::warn!(
                 ?id,
                 "winit did not expose an AppKit NSView for WebView hosting"
             );
+            HostRegistration::Unavailable
         }
     }
 

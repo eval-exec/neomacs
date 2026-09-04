@@ -37,8 +37,8 @@ use reactor::{ReactorEvent, WpeReactorHandle};
 use self::sys::{platform as plat, webkit as wk};
 
 use crate::backend::{
-    BackendEvent, CreateOutcome, MissingPrerequisites, Platform, PlatformCreateRequest,
-    PlatformUpdate,
+    BackendEvent, CreateOutcome, HostRegistration, MissingPrerequisites, Platform,
+    PlatformCreateRequest, PlatformUpdate,
 };
 use crate::{
     BrowsingRelationship, HostWindowId, StoragePartition, WebProfileId, WebViewEvent, WebViewFrame,
@@ -143,8 +143,11 @@ impl Platform for LinuxPlatform {
     type PendingCreate = ();
     type View = LinuxView;
 
-    fn register_host(&mut self, _id: HostWindowId, host: Self::Host) {
+    fn register_host(&mut self, _id: HostWindowId, host: Self::Host) -> HostRegistration {
         let _ = host.window();
+        // WPE is composited into renderer textures and does not attach native
+        // objects to the window capability.
+        HostRegistration::Unchanged
     }
 
     fn unregister_host(&mut self, _host: HostWindowId) {}

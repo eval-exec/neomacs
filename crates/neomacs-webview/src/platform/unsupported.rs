@@ -1,5 +1,6 @@
 use crate::backend::{
-    BackendEvent, CreateOutcome, MissingPrerequisites, Platform, PlatformCreateRequest,
+    BackendEvent, CreateOutcome, HostRegistration, MissingPrerequisites, Platform,
+    PlatformCreateRequest,
 };
 use crate::{HostWindowId, WebViewHost, WebViewInitError, WebViewSystemConfig, WebViewWake};
 
@@ -22,7 +23,9 @@ impl Platform for UnsupportedPlatform {
     type PendingCreate = ();
     type View = ();
 
-    fn register_host(&mut self, _id: HostWindowId, _host: Self::Host) {}
+    fn register_host(&mut self, _id: HostWindowId, _host: Self::Host) -> HostRegistration {
+        HostRegistration::Unavailable
+    }
 
     fn unregister_host(&mut self, _host: HostWindowId) {}
 

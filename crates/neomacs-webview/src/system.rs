@@ -5,8 +5,8 @@ use std::rc::Rc;
 use neomacs_display_protocol::WebViewId;
 
 use crate::backend::{
-    BackendEvent, CreateOutcome, MissingPrerequisites, Platform, PlatformCreateRequest,
-    PlatformPresentation, PlatformUpdate,
+    BackendEvent, CreateOutcome, HostRegistration, MissingPrerequisites, Platform,
+    PlatformCreateRequest, PlatformPresentation, PlatformUpdate,
 };
 use crate::platform::CurrentPlatform;
 use crate::{
@@ -564,7 +564,10 @@ impl<P: Platform> WebViewSystemImpl<P> {
     }
 
     pub(crate) fn register_host(&mut self, id: HostWindowId, host: P::Host) {
-        self.platform.register_host(id, host);
+        let registration = self.platform.register_host(id, host);
+        if registration == HostRegistration::Replaced {
+            self.reapply_host_scene(id);
+        }
         let waiting: Vec<_> = self
             .views
             .iter()
@@ -574,6 +577,33 @@ impl<P: Platform> WebViewSystemImpl<P> {
             .collect();
         for id in waiting {
             self.retry_waiting(id);
+        }
+    }
+
+    /// Rebind every active native overlay after the platform reports that the
+    /// native capability behind a stable logical host was replaced.
+    fn reapply_host_scene(&mut self, host: HostWindowId) {
+        let Some(scene) = self.scenes.get(&host).cloned() else {
+            return;
+        };
+        for placement in scene.placements() {
+            let Some(record) = self.views.get_mut(&placement.view()) else {
+                continue;
+            };
+            if let Lifecycle::Ready(view) = &mut record.lifecycle
+                && let Err(error) = self.platform.present(
+                    record.generation,
+                    view,
+                    PlatformPresentation::Visible { host, placement },
+                )
+            {
+                tracing::warn!(
+                    ?host,
+                    view = ?placement.view(),
+                    %error,
+                    "failed to rebind WebView to replacement native host"
+                );
+            }
         }
     }
 
