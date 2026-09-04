@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::emacs_core::charset::{
+    builtin_decode_char, builtin_define_charset_internal, reset_charset_registry,
+};
 use crate::emacs_core::fileio::{MemoryFileSystem, RuntimeResourceNode, RuntimeResourceStore};
 use crate::{Context, Value};
 
@@ -150,6 +153,35 @@ fn insert_file_contents_reads_mounted_data_files() {
         .expect("read mounted data through insert-file-contents");
 
     assert_eq!(contents.as_utf8_str(), Some("mounted release notes\n"));
+}
+
+#[test]
+fn charset_maps_are_read_from_the_context_runtime_mount() {
+    reset_charset_registry();
+    let mut evaluator = evaluator_with_files([(
+        "/neomacs/etc/charsets/browser-test.map",
+        b"21 2603\n".as_slice(),
+    )]);
+    // A restored pdump replaces thread-local charset metadata. Reactivating
+    // the owning evaluator must also restore its product-resource capability.
+    reset_charset_registry();
+    evaluator.setup_thread_locals();
+
+    let mut args = vec![Value::NIL; 17];
+    args[0] = Value::symbol("browser-runtime-map-test");
+    args[1] = Value::fixnum(1);
+    args[2] = Value::vector(vec![Value::fixnum(0), Value::fixnum(255)]);
+    args[12] = Value::string("browser-test");
+    builtin_define_charset_internal(args).expect("define mounted-map charset");
+
+    assert_eq!(
+        builtin_decode_char(vec![
+            Value::symbol("browser-runtime-map-test"),
+            Value::fixnum(0x21),
+        ])
+        .expect("decode through mounted charset map"),
+        Value::fixnum(0x2603),
+    );
 }
 
 #[test]
