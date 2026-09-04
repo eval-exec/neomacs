@@ -16,6 +16,7 @@
 #![allow(dead_code)]
 
 use std::io::{ErrorKind, Write};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -110,6 +111,7 @@ fn oracle_mem_limit_bytes() -> u64 {
     mb * 1024 * 1024
 }
 
+#[cfg(unix)]
 fn apply_memory_limit(cmd: &mut Command) {
     let limit = oracle_mem_limit_bytes() as libc::rlim_t;
     // Safety: `pre_exec` runs between fork and exec in the child.
@@ -128,6 +130,10 @@ fn apply_memory_limit(cmd: &mut Command) {
         });
     }
 }
+
+/// RLIMIT_AS is Unix-only; non-Unix hosts run spawned probes unlimited.
+#[cfg(not(unix))]
+fn apply_memory_limit(_cmd: &mut Command) {}
 
 /// Spawn the under-test `neomacs` binary with the given argv (passed
 /// after `argv[0]`, which Cargo provides via the `CARGO_BIN_EXE_neomacs`

@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -91,6 +92,31 @@ fn write_temp_elisp_file(
     Ok(file.into_temp_path())
 }
 
+/// Cap the oracle process's address space so a runaway evaluation dies
+/// at the rlimit instead of in the system OOM killer. Mirrors
+/// crates/neovm-oracle-tests/src/common.rs apply_virtual_memory_limit.
+#[cfg(unix)]
+fn apply_memory_limit(cmd: &mut Command, mem_limit_bytes: u64) {
+    // Safety: `pre_exec` runs between fork and exec in the child.
+    // setrlimit is async-signal-safe, so this is sound.
+    unsafe {
+        cmd.pre_exec(move || {
+            let rlim = libc::rlimit {
+                rlim_cur: mem_limit_bytes as libc::rlim_t,
+                rlim_max: mem_limit_bytes as libc::rlim_t,
+            };
+            if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+/// RLIMIT_AS is Unix-only; non-Unix hosts run the oracle unlimited.
+#[cfg(not(unix))]
+fn apply_memory_limit(_cmd: &mut Command, _mem_limit_bytes: u64) {}
+
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub fn run_oracle_eval(form: &str) -> Result<String, String> {
     let Some(oracle_bin) = oracle_emacs_path() else {
@@ -134,18 +160,7 @@ pub fn run_oracle_eval(form: &str) -> Result<String, String> {
             program,
         ]);
 
-    unsafe {
-        cmd.pre_exec(move || {
-            let rlim = libc::rlimit {
-                rlim_cur: mem_limit_bytes as libc::rlim_t,
-                rlim_max: mem_limit_bytes as libc::rlim_t,
-            };
-            if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    apply_memory_limit(&mut cmd, mem_limit_bytes);
 
     let output = cmd
         .output()
