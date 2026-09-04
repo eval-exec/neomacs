@@ -20,12 +20,32 @@ class FakeEventTarget {
     this.listeners.set(type, listeners);
   }
 
+  removeEventListener(type, listener) {
+    const listeners = this.listeners.get(type) ?? [];
+    this.listeners.set(type, listeners.filter((candidate) => candidate !== listener));
+  }
+
   dispatch(type, event = {}) {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 
   focus() {
     this.focusCalls += 1;
+  }
+}
+
+class FakeBrowserTarget extends FakeEventTarget {
+  constructor() {
+    super();
+    this.devicePixelRatio = 1.75;
+    this.mediaQueries = [];
+  }
+
+  matchMedia(media) {
+    const query = new FakeEventTarget();
+    query.media = media;
+    this.mediaQueries.push(query);
+    return query;
   }
 }
 
@@ -46,7 +66,7 @@ function keyEvent(key, overrides = {}) {
 }
 
 function harness() {
-  const root = new FakeEventTarget();
+  const root = new FakeBrowserTarget();
   const textInput = new FakeEventTarget();
   const batches = [];
   let viewportCalls = 0;
@@ -61,6 +81,19 @@ function harness() {
   });
   return { root, textInput, batches, viewportCalls: () => viewportCalls };
 }
+
+test("device-scale-only changes publish and re-arm viewport observation", () => {
+  const { root, viewportCalls } = harness();
+  const initialQuery = root.mediaQueries[0];
+
+  assert.equal(initialQuery.media, "(resolution: 1.75dppx)");
+  root.devicePixelRatio = 2;
+  initialQuery.dispatch("change");
+
+  assert.equal(viewportCalls(), 1);
+  assert.equal(root.mediaQueries[1].media, "(resolution: 2dppx)");
+  assert.equal(initialQuery.listeners.get("change").length, 0);
+});
 
 test("HiDPI viewport observations keep editor geometry in CSS pixels", () => {
   const browser = {

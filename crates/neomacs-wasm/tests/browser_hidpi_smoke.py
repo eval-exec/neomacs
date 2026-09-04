@@ -55,6 +55,7 @@ def wait_for_logical_geometry(
     width: int,
     height: int,
     timeout: float,
+    after_presentation: int | None = None,
 ) -> dict[str, object]:
     deadline = time.monotonic() + timeout
     observed: dict[str, object] = {}
@@ -64,12 +65,31 @@ def wait_for_logical_geometry(
             observed.get("frame_pixel_width") == float(width)
             and observed.get("frame_pixel_height") == float(height)
             and observed.get("font_pixel_size") == 16.0
+            and (
+                after_presentation is None
+                or observed.get("presentation_id") != after_presentation
+            )
         ):
             return observed
         time.sleep(0.1)
     raise RuntimeError(
         f"editor did not adopt logical viewport {width}x{height}; "
         f"last frame geometry={frame_geometry(observed)!r}"
+    )
+
+
+def assert_editor_frame_scale(
+    editor: BrowserEditorHarness,
+    expected: float,
+) -> None:
+    marker_prefix = f"HIDPI-SCALE-{time.time_ns()}-"
+    editor.eval_expression(
+        f'''(if (= (frame-scale-factor) {expected})
+               (message (concat "{marker_prefix}" "OK"))
+             (message (concat "{marker_prefix}" "FAIL:"
+                              (number-to-string (frame-scale-factor)))))''',
+        f"{marker_prefix}OK",
+        failure_marker=f"{marker_prefix}FAIL:",
     )
 
 
@@ -132,25 +152,41 @@ def main() -> None:
         editor.wait_ready()
         editor.wait_for_presentation()
         assert_browser_viewport(driver, width=1975, height=1100, scale=1.75)
-        initial = wait_for_logical_geometry(
+        wait_for_logical_geometry(
             driver,
             width=1975,
             height=1100,
             timeout=args.timeout,
         )
+        assert_editor_frame_scale(editor, 1.75)
 
+        before_scale_change = latest_frame(driver).get("presentation_id")
+        set_device_metrics(driver, width=1975, height=1100, scale=2.0)
+        assert_browser_viewport(driver, width=1975, height=1100, scale=2.0)
+        wait_for_logical_geometry(
+            driver,
+            width=1975,
+            height=1100,
+            timeout=args.timeout,
+            after_presentation=before_scale_change,
+        )
+        assert_editor_frame_scale(editor, 2.0)
+
+        before_resize = latest_frame(driver).get("presentation_id")
         set_device_metrics(driver, width=1440, height=900, scale=2.0)
         assert_browser_viewport(driver, width=1440, height=900, scale=2.0)
-        resized = wait_for_logical_geometry(
+        wait_for_logical_geometry(
             driver,
             width=1440,
             height=900,
             timeout=args.timeout,
+            after_presentation=before_resize,
         )
-        if resized.get("presentation_id") == initial.get("presentation_id"):
-            raise RuntimeError("viewport change did not produce a new editor presentation")
 
-        print("PASS: browser editor preserved logical geometry across HiDPI resize")
+        print(
+            "PASS: browser editor preserved logical geometry across DPR-only "
+            "and viewport changes"
+        )
     except Exception:
         if args.artifacts_dir:
             editor.capture_failure_artifacts(args.artifacts_dir)

@@ -61,6 +61,23 @@ function isPlainTextKey(event) {
     && !event.metaKey;
 }
 
+function installDeviceScaleViewportObserver(browser, sendViewport) {
+  if (typeof browser.matchMedia !== "function") return;
+
+  let resolutionQuery = null;
+  const scaleChanged = () => {
+    armCurrentScale();
+    sendViewport();
+  };
+  const armCurrentScale = () => {
+    resolutionQuery?.removeEventListener("change", scaleChanged);
+    const scale = browser.devicePixelRatio || 1;
+    resolutionQuery = browser.matchMedia(`(resolution: ${scale}dppx)`);
+    resolutionQuery.addEventListener("change", scaleChanged);
+  };
+  armCurrentScale();
+}
+
 function keyObservation(event, state, target) {
   if (event.isComposing || isPlainTextKey(event)) return null;
   const symbol = keySymbol(event);
@@ -107,6 +124,7 @@ export function installBrowserInput({
   root.addEventListener("keydown", (event) => sendKey(event, "pressed"), true);
   root.addEventListener("keyup", (event) => sendKey(event, "released"), true);
   root.addEventListener("resize", sendViewport);
+  installDeviceScaleViewportObserver(root, sendViewport);
   root.addEventListener("focus", () => enqueue({
     type: "focus-changed",
     focused: true,
