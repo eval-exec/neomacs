@@ -597,6 +597,12 @@ jobs:
           test "$ready" = true
 
           "$TMPDIR/browser-smoke-venv/bin/python" \
+            crates/neomacs-wasm/tests/browser_hidpi_smoke.py \
+            --headless \
+            --url http://127.0.0.1:4174/ \
+            --artifacts-dir "$TMPDIR/browser-smoke-artifacts"
+
+          "$TMPDIR/browser-smoke-venv/bin/python" \
             crates/neomacs-wasm/tests/browser_opfs_smoke.py \
             --headless \
             --url http://127.0.0.1:4174/ \
