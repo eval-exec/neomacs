@@ -368,7 +368,7 @@ fn cursor_color_cycle_reconciliation_drives_attributed_frames_and_retracts() {
 
     let mut coordinator = FrameCoordinator::new();
     let id = NativeWindowId(7);
-    let now = std::time::Instant::now();
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
     let display_60_hz = std::num::NonZeroU16::new(60).unwrap();
     let global = EffectsConfig::default();
     let frame = frame_with_cursor_effects(None, CursorStyle::FilledBox);
@@ -409,7 +409,7 @@ fn cursor_color_cycle_reconciliation_drives_attributed_frames_and_retracts() {
             &global,
             display_60_hz,
             true,
-            now + std::time::Duration::from_millis(1),
+            now.plus(std::time::Duration::from_millis(1)),
         ),
         PacingAction::WakeAt(_)
     ));
@@ -421,7 +421,7 @@ fn cursor_color_cycle_reconciliation_drives_attributed_frames_and_retracts() {
             &global,
             display_60_hz,
             false,
-            now + std::time::Duration::from_millis(2),
+            now.plus(std::time::Duration::from_millis(2)),
         ),
         PacingAction::Sleep,
         "a blinked-off cursor must withdraw its standing deadline"
@@ -437,11 +437,11 @@ fn cursor_color_cycle_reconciliation_drives_attributed_frames_and_retracts() {
             &global,
             display_60_hz,
             true,
-            now + std::time::Duration::from_millis(3),
+            now.plus(std::time::Duration::from_millis(3)),
         ),
         PacingAction::RequestRedraw
     );
-    let _ = coordinator.begin_frame(id, tick(now + std::time::Duration::from_millis(3)));
+    let _ = coordinator.begin_frame(id, tick(now.plus(std::time::Duration::from_millis(3))));
     assert!(matches!(
         RenderApp::reconcile_cursor_color_cycle_demand(
             &mut coordinator,
@@ -450,7 +450,7 @@ fn cursor_color_cycle_reconciliation_drives_attributed_frames_and_retracts() {
             &global,
             display_60_hz,
             true,
-            now + std::time::Duration::from_millis(4),
+            now.plus(std::time::Duration::from_millis(4)),
         ),
         PacingAction::WakeAt(_)
     ));
@@ -463,7 +463,7 @@ fn cursor_color_cycle_reconciliation_drives_attributed_frames_and_retracts() {
             &global,
             display_60_hz,
             true,
-            now + std::time::Duration::from_millis(5),
+            now.plus(std::time::Duration::from_millis(5)),
         ),
         PacingAction::Sleep,
         "an unfocused window must withdraw its standing deadline"
