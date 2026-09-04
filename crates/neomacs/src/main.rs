@@ -154,7 +154,8 @@ use neomacs_layout_engine::font::sizing::{
     FontSizing, FrameFontScalePolicy, ResolvedFrameFontScale, resolve_frame_font_scale,
 };
 use neomacs_layout_engine::gui_chrome::{
-    collect_gui_menu_bar_items_for_frame, collect_gui_tool_bar_items, compact_bar_mode_enabled,
+    collect_gui_menu_bar_items_for_frame, collect_gui_tool_bar_items_for_frame,
+    compact_bar_mode_enabled,
 };
 #[cfg(feature = "video")]
 use neomacs_video_model::{InitialPlayback, LoopMode, VideoSource};
@@ -2957,8 +2958,14 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
     } else {
         Vec::new()
     };
+    // The frame-context collector is the one GNU-shaped source
+    // (`update_tool_bar` selects the frame's window and buffer first); it
+    // also retains its result across frames until GNU's rebuild predicate
+    // fires, so the layout's own collection of the same frame is a cache hit.
     let tool_items = if tool_enabled {
-        collect_gui_tool_bar_items(eval)
+        selected_gui_frame_id
+            .map(|frame_id| collect_gui_tool_bar_items_for_frame(eval, frame_id))
+            .unwrap_or_default()
     } else {
         Vec::new()
     };

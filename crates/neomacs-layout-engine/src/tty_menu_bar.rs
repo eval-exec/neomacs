@@ -48,18 +48,24 @@ use std::cell::RefCell;
 /// process-unique number a domain type prevents it from being confused with
 /// the independently restarting menu-rebuild generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct MenuBarContextId(u64);
+pub(crate) struct MenuBarContextId(u64);
 
+/// GNU `update_menu_bar`'s rebuild predicate, sampled as a cache key.
+///
+/// `rebuild` models `windows_or_buffers_changed || update_mode_lines`;
+/// `modified_indicator` models `window_buffer_changed (w)`. `update_tool_bar`
+/// tests the same predicate plus `w->update_mode_line`, so the tool bar keys
+/// its cache on this value too (`gui_chrome.rs`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct MenuBarCacheKey {
-    context: MenuBarContextId,
-    frame: FrameId,
+pub(crate) struct MenuBarCacheKey {
+    pub(crate) context: MenuBarContextId,
+    pub(crate) frame: FrameId,
     rebuild: MenuBarRebuildGeneration,
     modified_indicator: MenuBarModifiedIndicator,
 }
 
 impl MenuBarCacheKey {
-    fn capture(eval: &Context, frame: FrameId) -> Self {
+    pub(crate) fn capture(eval: &Context, frame: FrameId) -> Self {
         Self {
             context: MenuBarContextId(eval.context_instance_id()),
             frame,

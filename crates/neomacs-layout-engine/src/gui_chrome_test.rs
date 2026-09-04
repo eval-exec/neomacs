@@ -474,3 +474,99 @@ fn the_stale_bytecode_refusal_covers_this_crates_tests() {
          process from this one"
     );
 }
+
+/// GNU `update_tool_bar` (`xdisp.c:15628`) rebuilds the tool bar only when
+/// `windows_or_buffers_changed || w->update_mode_line || update_mode_lines
+/// || window_buffer_changed (w)`; between those events `f->tool_bar_items`
+/// is reused and no item form is re-evaluated. Counts the `:enable`
+/// evaluations across each boundary.
+#[test]
+fn collect_gui_tool_bar_items_for_frame_retains_items_until_gnu_rebuild_predicate() {
+    let mut eval = Context::new();
+    eval.setup_thread_locals();
+
+    let buffer = eval.buffer_manager_mut().create_buffer("toolbar-retained");
+    assert!(eval.buffer_manager_mut().switch_current_unrecorded(buffer));
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("toolbar-retained", 800, 600, buffer);
+    assert!(eval.frame_manager_mut().select_frame(frame));
+    let selected_window = eval
+        .frame_manager()
+        .get(frame)
+        .expect("frame")
+        .selected_window;
+
+    eval.set_variable("neo-enable-evals", Value::fixnum(0));
+    let map = neovm_core::emacs_core::keymap::make_sparse_list_keymap();
+    neovm_core::emacs_core::keymap::list_keymap_define(
+        map,
+        Value::symbol("probe"),
+        Value::list(vec![
+            Value::symbol("menu-item"),
+            Value::string("Probe"),
+            Value::symbol("ignore"),
+            Value::symbol(":enable"),
+            Value::list(vec![
+                Value::symbol("setq"),
+                Value::symbol("neo-enable-evals"),
+                Value::list(vec![Value::symbol("1+"), Value::symbol("neo-enable-evals")]),
+            ]),
+        ]),
+    );
+    eval.set_variable("tool-bar-map", map);
+    let enable_evals = |eval: &Context| {
+        eval.obarray()
+            .symbol_value("neo-enable-evals")
+            .copied()
+            .expect("enable counter")
+    };
+    // A window that has never generated chrome carries GNU's
+    // `w->update_mode_line`; acknowledge it the way a redisplay pass does.
+    eval.note_chrome_generated(selected_window);
+
+    let first = collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(
+        first
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Probe"]
+    );
+    assert_eq!(enable_evals(&eval), Value::fixnum(1));
+
+    // Nothing crossed the predicate: the retained items come back unevaluated.
+    let second = collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(second, first);
+    assert_eq!(enable_evals(&eval), Value::fixnum(1));
+
+    // `window_buffer_changed (w)`: the selected window's buffer gained its
+    // modified star.
+    eval.eval_str("(insert \"x\")").expect("modify the buffer");
+    collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(enable_evals(&eval), Value::fixnum(2));
+    collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(enable_evals(&eval), Value::fixnum(2));
+
+    // `update_mode_lines`: `force-mode-line-update` on a displayed buffer.
+    // GNU clears that global flag only once redisplay has made a pass, so
+    // the tool bar keeps rebuilding until the window's chrome is acknowledged.
+    eval.eval_str("(force-mode-line-update)")
+        .expect("force-mode-line-update");
+    collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(enable_evals(&eval), Value::fixnum(3));
+    eval.note_chrome_generated(selected_window);
+    collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(enable_evals(&eval), Value::fixnum(3));
+
+    // `w->update_mode_line`: set on the selected window, it keeps the tool
+    // bar rebuilding until redisplay acknowledges the window's chrome.
+    eval.mark_chrome_dirty_window(selected_window);
+    collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(enable_evals(&eval), Value::fixnum(4));
+    collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(enable_evals(&eval), Value::fixnum(5));
+    eval.note_chrome_generated(selected_window);
+    collect_gui_tool_bar_items_for_frame(&mut eval, frame);
+    assert_eq!(enable_evals(&eval), Value::fixnum(5));
+}

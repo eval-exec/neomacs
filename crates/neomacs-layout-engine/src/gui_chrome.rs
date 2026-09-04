@@ -3,6 +3,7 @@
 //! Mirrors the existing TTY menu-bar walk, but produces GUI overlay
 //! payloads for the render thread from the active Lisp keymaps.
 
+use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
@@ -20,7 +21,9 @@ use neovm_core::emacs_core::{Context, Value};
 use neovm_core::window::FrameId;
 use strum::{EnumString, IntoStaticStr};
 
-use crate::tty_menu_bar::{collect_tty_menu_bar_items, collect_tty_menu_bar_items_for_frame};
+use crate::tty_menu_bar::{
+    MenuBarCacheKey, collect_tty_menu_bar_items, collect_tty_menu_bar_items_for_frame,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
@@ -95,17 +98,81 @@ pub fn collect_gui_tool_bar_items(eval: &mut Context) -> Vec<ToolBarItem> {
     items
 }
 
+/// Per-frame cache of collected tool-bar items.
+///
+/// GNU `update_tool_bar` (`xdisp.c:15628`) rebuilds `f->tool_bar_items` only
+/// when `windows_or_buffers_changed || w->update_mode_line ||
+/// update_mode_lines || window_buffer_changed (w)`; a plain self-insert sets
+/// none of them, so GNU never re-evaluates an item's `:enable` form per
+/// keystroke. Rebuilding on every published frame did: the default Paste
+/// item's `:enable` is `gui-backend-selection-exists-p`, a blocking clipboard
+/// round trip through the render thread, paid twice per frame.
+///
+/// The key is `update_menu_bar`'s predicate (shared with the menu-bar cache);
+/// the extra `w->update_mode_line` term is the selected window's chrome-dirty
+/// flag, consulted as a bypass rather than a key so that a window whose flag
+/// survives redisplay keeps rebuilding exactly as GNU does.
+///
+/// Items are plain owned data (`String`s, flags, image sources), so the cache
+/// is invisible to Lisp GC by construction.
+struct ToolBarItemsCache {
+    key: MenuBarCacheKey,
+    items: Vec<ToolBarItem>,
+}
+
+thread_local! {
+    static TOOL_BAR_ITEMS_CACHE: RefCell<Vec<ToolBarItemsCache>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// GNU `update_tool_bar`'s `w->update_mode_line` term for `frame_id`'s
+/// selected window. A frame without a live selected window is treated as
+/// dirty so the collector runs and produces its (empty) answer.
+fn selected_window_chrome_dirty(eval: &Context, frame_id: FrameId) -> bool {
+    eval.frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.selected_window())
+        .is_none_or(|window| eval.chrome_dirty().is_dirty(window.id()))
+}
+
 /// Collect the tool bar as `frame_id`'s selected window and buffer.
 ///
 /// GNU `update_tool_bar` temporarily selects exactly this frame context before
 /// evaluating buffer-local maps and menu-item forms. The shared evaluator
 /// scope also guarantees that the caller's selection is restored afterward.
+///
+/// Returns the retained items while GNU's rebuild predicate is false; see
+/// [`ToolBarItemsCache`].
 pub fn collect_gui_tool_bar_items_for_frame(
     eval: &mut Context,
     frame_id: FrameId,
 ) -> Vec<ToolBarItem> {
-    eval.with_frame_display_context(frame_id, collect_gui_tool_bar_items)
-        .unwrap_or_default()
+    let key = MenuBarCacheKey::capture(eval, frame_id);
+    if !selected_window_chrome_dirty(eval, frame_id) {
+        let cached = TOOL_BAR_ITEMS_CACHE.with(|cache| {
+            cache
+                .borrow()
+                .iter()
+                .find_map(|entry| (entry.key == key).then(|| entry.items.clone()))
+        });
+        if let Some(items) = cached {
+            return items;
+        }
+    }
+
+    let items = eval
+        .with_frame_display_context(frame_id, collect_gui_tool_bar_items)
+        .unwrap_or_default();
+
+    TOOL_BAR_ITEMS_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|entry| entry.key.context == key.context && entry.key.frame != key.frame);
+        cache.push(ToolBarItemsCache {
+            key,
+            items: items.clone(),
+        });
+    });
+    items
 }
 
 pub(crate) const GUI_CHROME_HORIZONTAL_PADDING: f32 = 8.0;
