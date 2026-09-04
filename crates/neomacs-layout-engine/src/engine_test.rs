@@ -1624,6 +1624,7 @@ fn test_window_params() -> WindowParams {
         previous_visible_end: None,
         point: 1,
         buffer_size: 1,
+        buffer_modiff: 0,
         buffer_begv: 1,
         display_line_numbers: DisplayLineNumbersMode::Off,
         hscroll: 0,

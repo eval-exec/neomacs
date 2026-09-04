@@ -24,6 +24,8 @@ fn install_test_text_body_hit_index(
                 window_start: 0,
                 window_end: 0,
                 buffer_size: 0,
+                buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(
+                ),
                 bounds,
                 geometry: neomacs_display_protocol::PresentedWindowGeometry::default(),
                 mode_line_height: 0.0,

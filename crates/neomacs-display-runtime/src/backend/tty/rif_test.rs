@@ -349,6 +349,7 @@ fn rasterize_places_each_right_margin_at_the_reserved_columns() {
         window_start: 1,
         window_end: 1,
         buffer_size: 1,
+        buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         bounds: outer,
         geometry: PresentedWindowGeometry::Complete {
             cell_origin: PresentedCellOrigin::default(),
@@ -426,6 +427,7 @@ fn rasterize_anchors_a_synthetic_right_border_after_short_text() {
         window_start: 1,
         window_end: 1,
         buffer_size: 1,
+        buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         bounds: outer,
         geometry: PresentedWindowGeometry::Complete {
             cell_origin: PresentedCellOrigin::default(),
