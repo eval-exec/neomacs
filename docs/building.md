@@ -87,11 +87,17 @@ that namespace is backed by origin-private file system storage and persists for
 the page origin. `/tmp` is session-local memory and is discarded with the
 editor worker.
 
-With the server running, the real-browser smoke test verifies a visible editor,
-`M-x switch-to-buffer`, browser text input, buffer contents across switches,
-file mutations, temporary files, and OPFS persistence across a page reload:
+With the server running, the real-browser smoke tests verify logical editor
+geometry across non-integer device scale factors and live viewport changes, as
+well as a visible editor, `M-x switch-to-buffer`, browser text input, buffer
+contents across switches, file mutations, temporary files, and OPFS
+persistence across a page reload:
 
 ```bash
+nix-shell \
+  -p google-chrome chromedriver python3Packages.selenium python3Packages.cbor2 \
+  --run 'python3 crates/neomacs-wasm/tests/browser_hidpi_smoke.py \
+    --headless --url http://127.0.0.1:4174/'
 nix-shell \
   -p google-chrome chromedriver python3Packages.selenium python3Packages.cbor2 \
   --run 'python3 crates/neomacs-wasm/tests/browser_opfs_smoke.py \
@@ -114,7 +120,11 @@ cargo nextest run \
 # Compile the real editor worker for the browser target.
 cargo check --target wasm32-unknown-unknown -p neomacs-wasm-worker
 
-# Exercise the assembled product through default Chrome, as shown above.
+# Exercise HiDPI startup and a live viewport/scale change in default Chrome.
+python3 crates/neomacs-wasm/tests/browser_hidpi_smoke.py \
+  --headless --url http://127.0.0.1:4174/
+
+# Exercise editing and persistent storage in the assembled product.
 python3 crates/neomacs-wasm/tests/browser_opfs_smoke.py \
   --headless --url http://127.0.0.1:4174/
 ```
