@@ -242,7 +242,7 @@ impl NativeVideoMediaMetadata {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "native-video"))]
 pub(crate) fn discover_media_metadata(path: &Path) -> Result<NativeVideoMediaMetadata, String> {
     use gstreamer_pbutils::prelude::*;
 
@@ -288,6 +288,16 @@ pub(crate) fn discover_media_metadata(path: &Path) -> Result<NativeVideoMediaMet
         },
         codec_caps,
     })
+}
+
+#[cfg(all(target_os = "linux", not(feature = "native-video")))]
+pub(crate) fn discover_media_metadata(_path: &Path) -> Result<NativeVideoMediaMetadata, String> {
+    Err(
+        "sustained native-video media discovery requires the native-video \
+         feature; rebuild the harness with \
+         `cargo xtask --features perf-native-video perf ...`"
+            .to_owned(),
+    )
 }
 
 #[cfg(not(target_os = "linux"))]

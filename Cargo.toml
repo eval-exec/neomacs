@@ -91,7 +91,7 @@ neomacs-video-model = { path = "crates/neomacs-video-model" }
 neomacs-webview = { path = "crates/neomacs-webview", default-features = false }
 neomacs-renderer-wgpu = { path = "crates/neomacs-renderer-wgpu", default-features = false }
 neomacs-diagnostics = { path = "crates/neomacs-diagnostics", default-features = false }
-neomacs-perf = { path = "crates/neomacs-perf" }
+neomacs-perf = { path = "crates/neomacs-perf", default-features = false }
 neomacs-test-oracle = { path = "crates/neomacs-test-oracle" }
 neomacs-melpa-test-support = { path = "crates/neomacs-melpa-test-support" }
 neomacs-parity-reference = { path = "crates/neomacs-parity-reference" }

@@ -76,6 +76,11 @@ cargo xtask perf run indentation
 cargo xtask perf run regex-search
 cargo xtask perf run sustained-native-video \
   --video-file target/perf-inputs/4k60.mp4
+# The sustained-native-video scenario additionally needs GStreamer discovery
+# compiled into the harness; xtask builds without it by default so
+# GStreamer-free hosts can still build the product:
+#   cargo xtask --features perf-native-video perf run sustained-native-video \
+#     --video-file target/perf-inputs/4k60.mp4
 cargo xtask perf run rust-lsp-typing --iterations 20 --frontend tui
 cargo xtask perf run editing-simulation --cpu 3 \
   --require-governor performance --hardware-counters

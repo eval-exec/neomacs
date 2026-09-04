@@ -7,6 +7,15 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["native-video"]
+# Discover sustained-native-video fixture metadata through GStreamer's typed
+# API. Default-on so workspace checks keep compiling the discovery path
+# wherever GStreamer development files exist; xtask opts out (default-features
+# = false) to stay buildable on GStreamer-free hosts such as the
+# startup-without-GStreamer CI lane.
+native-video = ["dep:gstreamer", "dep:gstreamer-pbutils"]
+
 [dependencies]
 neomacs-melpa-test-support.workspace = true
 clap.workspace = true
@@ -18,8 +27,8 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gstreamer = { workspace = true, features = ["v1_20"] }
-gstreamer-pbutils = { workspace = true, features = ["v1_20"] }
+gstreamer = { workspace = true, features = ["v1_20"], optional = true }
+gstreamer-pbutils = { workspace = true, features = ["v1_20"], optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
