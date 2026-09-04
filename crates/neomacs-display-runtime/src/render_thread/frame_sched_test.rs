@@ -1,6 +1,6 @@
 //! Deterministic tests for the pure frame scheduler. No window, GPU, or
-//! wall-clock dependency: one `Instant` anchors a synthetic timeline and all
-//! other times are derived by `Duration` arithmetic.
+//! wall-clock dependency: one observation anchors a synthetic timeline and all
+//! other times are derived from it by `Duration` arithmetic.
 
 use super::*;
 
@@ -8,18 +8,18 @@ fn win(n: u64) -> NativeWindowId {
     NativeWindowId(n)
 }
 
-fn t0() -> Instant {
-    Instant::now()
+fn t0() -> EventTime {
+    neomacs_display_protocol::frame_time::observe_platform_now()
 }
 
 fn ms(v: u64) -> Duration {
     Duration::from_millis(v)
 }
 
-fn tick_at(at: Instant) -> FrameTick {
+fn tick_at(at: EventTime) -> FrameTick {
     FrameTick {
         frame_time: at,
-        target_presentation_time: at + ms(8),
+        target_presentation_time: at.plus(ms(8)),
         estimated_interval: ms(16),
         source: ClockSource::Synthetic,
     }
@@ -69,10 +69,10 @@ fn duplicate_demand_coalesces_into_one_request() {
     }
     assert!(c.request_pending(win(1)));
     // The tick consumes the request; a new demand may request again.
-    let _ = c.begin_frame(win(1), tick_at(now + ms(5)));
+    let _ = c.begin_frame(win(1), tick_at(now.plus(ms(5))));
     assert!(!c.request_pending(win(1)));
     assert_eq!(
-        c.submit_demand(win(1), composite_cursor(), now + ms(6)),
+        c.submit_demand(win(1), composite_cursor(), now.plus(ms(6))),
         PacingAction::RequestRedraw
     );
 }
@@ -83,7 +83,7 @@ fn editor_commit_dominates_compositor_only_demand() {
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
     c.submit_demand(win(1), editor_commit(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert_eq!(plan.work, RenderWork::RebuildScene);
     assert!(plan.should_present);
 }
@@ -104,7 +104,7 @@ fn composite_layers_union() {
         },
         now,
     );
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert_eq!(
         plan.work,
         RenderWork::CompositeOnly {
@@ -149,7 +149,7 @@ fn earliest_deadline_wins() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(500)),
+            cadence: Cadence::At(now.plus(ms(500))),
             reason: DemandReason::CursorAnimation,
         },
         now,
@@ -160,20 +160,20 @@ fn earliest_deadline_wins() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::TRANSIENT_OVERLAYS,
             },
-            cadence: Cadence::At(now + ms(200)),
+            cadence: Cadence::At(now.plus(ms(200))),
             reason: DemandReason::FiniteEffect,
         },
         now,
     );
-    assert_eq!(c.next_wake_deadline(), Some(now + ms(200)));
+    assert_eq!(c.next_wake_deadline(), Some(now.plus(ms(200))));
 }
 
 #[test]
 fn ripe_video_deadline_requests_service_without_creating_frame_work() {
     let mut c = FrameCoordinator::new();
     let now = t0();
-    let video_at = now + ms(100);
-    let frame_at = now + ms(200);
+    let video_at = now.plus(ms(100));
+    let frame_at = now.plus(ms(200));
     c.submit_demand(
         win(1),
         FrameDemand {
@@ -207,7 +207,7 @@ fn ripe_video_deadline_requests_service_without_creating_frame_work() {
 
     // The service pass replaces the consumed deadline with its next future
     // wake. Reconciliation must converge without manufacturing frame work.
-    let next_video_at = video_at + ms(50);
+    let next_video_at = video_at.plus(ms(50));
     c.reconcile_video_service_deadline(Some(next_video_at));
     let reconciled = c.service_deadlines(video_at);
     assert!(!reconciled.video_service_due);
@@ -245,15 +245,15 @@ fn deadline_not_consumed_before_it_is_ripe() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(500)),
+            cadence: Cadence::At(now.plus(ms(500))),
             reason: DemandReason::CursorAnimation,
         },
         now,
     );
-    let early = c.begin_frame(win(1), tick_at(now + ms(100)));
+    let early = c.begin_frame(win(1), tick_at(now.plus(ms(100))));
     assert_eq!(early.work, RenderWork::None);
-    assert_eq!(c.next_wake_deadline(), Some(now + ms(500)));
-    let ripe = c.begin_frame(win(1), tick_at(now + ms(500)));
+    assert_eq!(c.next_wake_deadline(), Some(now.plus(ms(500))));
+    let ripe = c.begin_frame(win(1), tick_at(now.plus(ms(500))));
     assert_eq!(
         ripe.work,
         RenderWork::CompositeOnly {
@@ -273,7 +273,7 @@ fn late_tick_consumes_backlog_as_one_plan() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(100)),
+            cadence: Cadence::At(now.plus(ms(100))),
             reason: DemandReason::CursorAnimation,
         },
         now,
@@ -285,13 +285,13 @@ fn late_tick_consumes_backlog_as_one_plan() {
                 layers: LayerMask::CHROME,
                 damage: Damage::FullLayer,
             },
-            cadence: Cadence::At(now + ms(200)),
+            cadence: Cadence::At(now.plus(ms(200))),
             reason: DemandReason::Transition,
         },
         now,
     );
     // The tick arrives far after both deadlines: one plan, no backlog left.
-    let plan = c.begin_frame(win(1), tick_at(now + ms(5000)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(5000))));
     assert_eq!(
         plan.work,
         RenderWork::RepaintLayers {
@@ -300,7 +300,7 @@ fn late_tick_consumes_backlog_as_one_plan() {
         }
     );
     assert_eq!(c.next_wake_deadline(), None);
-    let next = c.begin_frame(win(1), tick_at(now + ms(5016)));
+    let next = c.begin_frame(win(1), tick_at(now.plus(ms(5016))));
     assert_eq!(next.work, RenderWork::None);
 }
 
@@ -320,7 +320,7 @@ fn occluded_window_retains_demand_and_does_not_present() {
         c.submit_demand(win(1), composite_cursor(), now),
         PacingAction::Sleep
     );
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert!(!plan.should_present);
     assert_eq!(plan.work, RenderWork::None);
     // Demand survives occlusion.
@@ -335,7 +335,7 @@ fn occluded_window_retains_demand_and_does_not_present() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(100)),
+            cadence: Cadence::At(now.plus(ms(100))),
             reason: DemandReason::FiniteEffect,
         },
         now,
@@ -374,7 +374,7 @@ fn max_rate_phase_survives_interleaved_commits() {
     let mut c = FrameCoordinator::new();
     let now = t0();
     let rate = NonZeroU16::new(10).unwrap(); // 100 ms period
-    let ambient = |c: &mut FrameCoordinator, at: Instant| {
+    let ambient = |c: &mut FrameCoordinator, at: EventTime| {
         c.submit_demand(
             win(1),
             FrameDemand {
@@ -390,24 +390,24 @@ fn max_rate_phase_survives_interleaved_commits() {
 
     // First submission fires immediately and anchors the grid at now+100ms.
     assert_eq!(ambient(&mut c, now), PacingAction::RequestRedraw);
-    let _ = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let _ = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
 
     // Standing resubmission lands on the anchor.
     assert_eq!(
-        ambient(&mut c, now + ms(2)),
-        PacingAction::WakeAt(now + ms(100))
+        ambient(&mut c, now.plus(ms(2))),
+        PacingAction::WakeAt(now.plus(ms(100)))
     );
 
     // An editor commit interleaves at t+30ms and renders its own frame.
-    c.submit_demand(win(1), editor_commit(), now + ms(30));
-    let commit_plan = c.begin_frame(win(1), tick_at(now + ms(31)));
+    c.submit_demand(win(1), editor_commit(), now.plus(ms(30)));
+    let commit_plan = c.begin_frame(win(1), tick_at(now.plus(ms(31))));
     assert_eq!(commit_plan.work, RenderWork::RebuildScene);
 
     // The ambient deadline is still the original grid point, not 30ms+100ms.
-    assert_eq!(c.next_wake_deadline(), Some(now + ms(100)));
+    assert_eq!(c.next_wake_deadline(), Some(now.plus(ms(100))));
 
     // Consuming the ambient tick advances the anchor by a whole period.
-    let ambient_plan = c.begin_frame(win(1), tick_at(now + ms(101)));
+    let ambient_plan = c.begin_frame(win(1), tick_at(now.plus(ms(101))));
     assert_eq!(
         ambient_plan.work,
         RenderWork::CompositeOnly {
@@ -415,8 +415,8 @@ fn max_rate_phase_survives_interleaved_commits() {
         }
     );
     assert_eq!(
-        ambient(&mut c, now + ms(102)),
-        PacingAction::WakeAt(now + ms(200))
+        ambient(&mut c, now.plus(ms(102))),
+        PacingAction::WakeAt(now.plus(ms(200)))
     );
 }
 
@@ -436,21 +436,21 @@ fn changing_max_rate_reanchors_without_waiting_for_the_old_period() {
         c.submit_demand(win(1), demand(1), now),
         PacingAction::RequestRedraw
     );
-    let _ = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let _ = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert_eq!(
-        c.submit_demand(win(1), demand(1), now + ms(2)),
-        PacingAction::WakeAt(now + Duration::from_secs(1))
+        c.submit_demand(win(1), demand(1), now.plus(ms(2))),
+        PacingAction::WakeAt(now.plus(Duration::from_secs(1)))
     );
 
-    let changed_at = now + ms(10);
+    let changed_at = now.plus(ms(10));
     assert_eq!(
         c.submit_demand(win(1), demand(24), changed_at),
         PacingAction::RequestRedraw
     );
-    let _ = c.begin_frame(win(1), tick_at(changed_at + ms(1)));
-    let next = changed_at + Duration::from_secs_f64(1.0 / 24.0);
+    let _ = c.begin_frame(win(1), tick_at(changed_at.plus(ms(1))));
+    let next = changed_at.plus(Duration::from_secs_f64(1.0 / 24.0));
     assert_eq!(
-        c.submit_demand(win(1), demand(24), changed_at + ms(2)),
+        c.submit_demand(win(1), demand(24), changed_at.plus(ms(2))),
         PacingAction::WakeAt(next)
     );
     assert_eq!(c.next_wake_deadline(), Some(next));
@@ -472,20 +472,22 @@ fn max_rate_preserves_its_phase_after_a_year_of_missed_frames() {
     c.submit_demand(win(1), demand, now);
     let _ = c.begin_frame(win(1), tick_at(now));
 
-    let resumed_at = now + Duration::from_secs(365 * 24 * 60 * 60) + Duration::from_millis(250);
+    let resumed_at = now
+        .plus(Duration::from_secs(365 * 24 * 60 * 60))
+        .plus(Duration::from_millis(250));
     assert_eq!(
         c.submit_demand(win(1), demand, resumed_at),
         PacingAction::RequestRedraw
     );
     let _ = c.begin_frame(win(1), tick_at(resumed_at));
-    let next = match c.submit_demand(win(1), demand, resumed_at + Duration::from_nanos(1)) {
+    let next = match c.submit_demand(win(1), demand, resumed_at.plus(Duration::from_nanos(1))) {
         PacingAction::WakeAt(next) => next,
         action => panic!("expected a phase-aligned deadline after resume, got {action:?}"),
     };
 
     assert_eq!(
         next,
-        resumed_at + Duration::from_millis(750),
+        resumed_at.plus(Duration::from_millis(750)),
         "missed frames must advance on the original phase grid, not re-anchor at resume time"
     );
 }
@@ -508,11 +510,11 @@ fn late_reconciliation_consumes_the_expired_schedule_exactly_once() {
     );
     let _ = c.begin_frame(win(1), tick_at(now));
     assert_eq!(
-        c.submit_demand(win(1), demand, now + ms(100)),
-        PacingAction::WakeAt(now + Duration::from_secs(1))
+        c.submit_demand(win(1), demand, now.plus(ms(100))),
+        PacingAction::WakeAt(now.plus(Duration::from_secs(1)))
     );
 
-    let late = now + Duration::from_millis(1_250);
+    let late = now.plus(Duration::from_millis(1_250));
     assert_eq!(
         c.submit_demand(win(1), demand, late),
         PacingAction::RequestRedraw
@@ -520,8 +522,8 @@ fn late_reconciliation_consumes_the_expired_schedule_exactly_once() {
     let plan = c.begin_frame(win(1), tick_at(late));
     assert!(plan.reasons.contains(DemandReason::CursorColorCycle));
     assert_eq!(
-        c.submit_demand(win(1), demand, late + Duration::from_nanos(1)),
-        PacingAction::WakeAt(now + Duration::from_secs(2)),
+        c.submit_demand(win(1), demand, late.plus(Duration::from_nanos(1))),
+        PacingAction::WakeAt(now.plus(Duration::from_secs(2))),
         "the expired scheduled record must not be consumed twice or re-anchor the phase"
     );
 }
@@ -536,14 +538,14 @@ fn commit_wakes_immediately_despite_future_deadline() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(400)),
+            cadence: Cadence::At(now.plus(ms(400))),
             reason: DemandReason::CursorAnimation,
         },
         now,
     );
     // The commit does not wait for the 400ms deadline.
     assert_eq!(
-        c.submit_demand(win(1), editor_commit(), now + ms(10)),
+        c.submit_demand(win(1), editor_commit(), now.plus(ms(10))),
         PacingAction::RequestRedraw
     );
 }
@@ -561,21 +563,21 @@ fn windows_are_independent() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::MEDIA,
             },
-            cadence: Cadence::At(now + ms(300)),
+            cadence: Cadence::At(now.plus(ms(300))),
             reason: DemandReason::Video,
         },
         now,
     );
     // Window 1's tick consumes only window 1's demand.
-    let plan1 = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan1 = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert_eq!(
         plan1.work,
         RenderWork::CompositeOnly {
             layers: LayerMask::CURSOR_EFFECTS,
         }
     );
-    assert_eq!(c.next_wake_deadline(), Some(now + ms(300)));
-    let plan2 = c.begin_frame(win(2), tick_at(now + ms(300)));
+    assert_eq!(c.next_wake_deadline(), Some(now.plus(ms(300))));
+    let plan2 = c.begin_frame(win(2), tick_at(now.plus(ms(300))));
     assert_eq!(
         plan2.work,
         RenderWork::CompositeOnly {
@@ -589,14 +591,14 @@ fn demand_submitted_during_render_requests_followup() {
     let mut c = FrameCoordinator::new();
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     // New demand arrives while the frame is being rendered.
-    c.submit_demand(win(1), editor_commit(), now + ms(2));
+    c.submit_demand(win(1), editor_commit(), now.plus(ms(2)));
     // request_pending was set again by the mid-render submit; finish_frame
     // must not request twice but the demand must survive.
-    let action = c.finish_frame(win(1), &plan, PresentResult::Presented, now + ms(3));
+    let action = c.finish_frame(win(1), &plan, PresentResult::Presented, now.plus(ms(3)));
     assert_eq!(action, PacingAction::Sleep);
-    let next = c.begin_frame(win(1), tick_at(now + ms(17)));
+    let next = c.begin_frame(win(1), tick_at(now.plus(ms(17))));
     assert_eq!(next.work, RenderWork::RebuildScene);
 }
 
@@ -605,16 +607,16 @@ fn timeout_backs_off_instead_of_retrying_immediately() {
     let mut c = FrameCoordinator::new();
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
-    let action = c.finish_frame(win(1), &plan, PresentResult::Timeout, now + ms(2));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
+    let action = c.finish_frame(win(1), &plan, PresentResult::Timeout, now.plus(ms(2)));
     match action {
-        PacingAction::WakeAt(at) => assert!(at > now + ms(2)),
+        PacingAction::WakeAt(at) => assert!(at > now.plus(ms(2))),
         other => panic!("expected bounded backoff, got {:?}", other),
     }
     assert!(!c.request_pending(win(1)));
     // The retry survives as a scheduled deadline and delivers the work.
     let deadline = c.next_wake_deadline().expect("recovery deadline");
-    assert!(deadline > now + ms(2));
+    assert!(deadline > now.plus(ms(2)));
     let retry = c.begin_frame(win(1), tick_at(deadline));
     assert_eq!(
         retry.work,
@@ -629,15 +631,20 @@ fn awaiting_content_sleeps_until_a_content_producer_submits_new_demand() {
     let mut c = FrameCoordinator::new();
     let now = t0();
     c.submit_demand(win(1), editor_commit(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
 
-    let action = c.finish_frame(win(1), &plan, PresentResult::AwaitingContent, now + ms(2));
+    let action = c.finish_frame(
+        win(1),
+        &plan,
+        PresentResult::AwaitingContent,
+        now.plus(ms(2)),
+    );
 
     assert_eq!(action, PacingAction::Sleep);
     assert_eq!(c.active_reasons(win(1)), Vec::new());
     assert_eq!(c.next_wake_deadline(), None);
     assert_eq!(
-        c.submit_demand(win(1), editor_commit(), now + ms(3)),
+        c.submit_demand(win(1), editor_commit(), now.plus(ms(3))),
         PacingAction::RequestRedraw
     );
 }
@@ -647,10 +654,10 @@ fn surface_lost_requeues_full_repaint() {
     let mut c = FrameCoordinator::new();
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
-    let action = c.finish_frame(win(1), &plan, PresentResult::SurfaceLost, now + ms(2));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
+    let action = c.finish_frame(win(1), &plan, PresentResult::SurfaceLost, now.plus(ms(2)));
     assert_eq!(action, PacingAction::RequestRedraw);
-    let next = c.begin_frame(win(1), tick_at(now + ms(10)));
+    let next = c.begin_frame(win(1), tick_at(now.plus(ms(10))));
     assert_eq!(
         next.work,
         RenderWork::RepaintLayers {
@@ -665,11 +672,11 @@ fn skipped_present_requeues_work() {
     let mut c = FrameCoordinator::new();
     let now = t0();
     c.submit_demand(win(1), editor_commit(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert_eq!(plan.work, RenderWork::RebuildScene);
-    let action = c.finish_frame(win(1), &plan, PresentResult::Skipped, now + ms(2));
+    let action = c.finish_frame(win(1), &plan, PresentResult::Skipped, now.plus(ms(2)));
     assert_eq!(action, PacingAction::RequestRedraw);
-    let next = c.begin_frame(win(1), tick_at(now + ms(17)));
+    let next = c.begin_frame(win(1), tick_at(now.plus(ms(17))));
     assert_eq!(next.work, RenderWork::RebuildScene);
 }
 
@@ -683,12 +690,12 @@ fn retract_withdraws_standing_deadline() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(250)),
+            cadence: Cadence::At(now.plus(ms(250))),
             reason: DemandReason::CursorAnimation,
         },
         now,
     );
-    assert_eq!(c.next_wake_deadline(), Some(now + ms(250)));
+    assert_eq!(c.next_wake_deadline(), Some(now.plus(ms(250))));
     c.retract(win(1), DemandReason::CursorAnimation);
     assert_eq!(c.next_wake_deadline(), None);
 }
@@ -715,8 +722,8 @@ fn on_demand_folds_into_next_frame_without_driving_one() {
     assert!(!c.request_pending(win(1)));
     assert_eq!(c.next_wake_deadline(), None);
     // A driving demand arrives; the OnDemand work rides along.
-    c.submit_demand(win(1), composite_cursor(), now + ms(1));
-    let plan = c.begin_frame(win(1), tick_at(now + ms(2)));
+    c.submit_demand(win(1), composite_cursor(), now.plus(ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(2))));
     assert_eq!(
         plan.work,
         RenderWork::RepaintLayers {
@@ -743,7 +750,7 @@ fn set_occluded_preserves_focus_and_issues_single_recovery() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(50)),
+            cadence: Cadence::At(now.plus(ms(50))),
             reason: DemandReason::FiniteEffect,
         },
         now,
@@ -762,7 +769,7 @@ fn set_visible_gates_presentation_like_occlusion() {
     c.submit_demand(win(1), composite_cursor(), now);
     assert_eq!(c.set_visible(win(1), false), PacingAction::Sleep);
     assert!(!c.is_eligible(win(1)));
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert!(!plan.should_present);
     assert_eq!(c.set_visible(win(1), true), PacingAction::RequestRedraw);
 }
@@ -776,7 +783,7 @@ fn focus_change_does_not_gate_presentation() {
     assert_eq!(c.set_focused(win(1), false), PacingAction::Sleep);
     assert!(c.is_eligible(win(1)));
     assert_eq!(c.set_focused(win(1), true), PacingAction::Sleep);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert!(plan.should_present);
 }
 
@@ -802,7 +809,7 @@ fn removed_window_contributes_nothing() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(100)),
+            cadence: Cadence::At(now.plus(ms(100))),
             reason: DemandReason::CursorAnimation,
         },
         now,
@@ -862,7 +869,7 @@ fn a_planned_frame_with_real_demand_never_reaches_the_platform_redraw_path() {
     let mut c = FrameCoordinator::new();
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert!(plan.should_present);
     assert_eq!(
         plan.work,
@@ -931,7 +938,7 @@ fn plan_attributes_the_frame_to_its_driving_reasons() {
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
     c.submit_demand(win(1), editor_commit(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert!(plan.reasons.contains(DemandReason::CursorAnimation));
     assert!(plan.reasons.contains(DemandReason::EditorCommit));
     assert!(!plan.reasons.contains(DemandReason::WebKit));
@@ -940,7 +947,7 @@ fn plan_attributes_the_frame_to_its_driving_reasons() {
         vec![DemandReason::EditorCommit, DemandReason::CursorAnimation]
     );
     // Consumed demand is not re-attributed to the next frame.
-    let next = c.begin_frame(win(1), tick_at(now + ms(2)));
+    let next = c.begin_frame(win(1), tick_at(now.plus(ms(2))));
     assert!(next.reasons.is_empty());
 }
 
@@ -959,7 +966,7 @@ fn an_ambient_24_hz_demand_attributes_every_frame_it_drives() {
     };
     let mut attributed = 0;
     for i in 0..10 {
-        let at = now + ms(42 * i);
+        let at = now.plus(ms(42 * i));
         c.submit_demand(win(1), cycle, at);
         let plan = c.begin_frame(win(1), tick_at(at));
         if plan.reasons.contains(DemandReason::CursorColorCycle) {
@@ -985,7 +992,7 @@ fn per_window_attribution_names_the_blinking_window_only() {
             invalidation: Invalidation::CompositeOnly {
                 layers: LayerMask::CURSOR_EFFECTS,
             },
-            cadence: Cadence::At(now + ms(500)),
+            cadence: Cadence::At(now.plus(ms(500))),
             reason: DemandReason::CursorAnimation,
         },
         now,
@@ -1000,7 +1007,7 @@ fn per_window_attribution_names_the_blinking_window_only() {
     assert_eq!(by_id(2).active_reasons, Vec::<&str>::new());
 
     // The blink deadline fires; the planned frame is attributed per-window.
-    let plan = c.begin_frame(win(1), tick_at(now + ms(500)));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(500))));
     assert!(plan.reasons.contains(DemandReason::CursorAnimation));
     frame_stats::count_plan(win(1), &plan);
     let snap = frame_stats::window_snapshots();
@@ -1038,10 +1045,10 @@ fn an_elapsed_recovery_deadline_becomes_a_redraw_request() {
     let mut c = FrameCoordinator::new();
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
-    let plan = c.begin_frame(win(1), tick_at(now + ms(1)));
-    c.finish_frame(win(1), &plan, PresentResult::Timeout, now + ms(2));
+    let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
+    c.finish_frame(win(1), &plan, PresentResult::Timeout, now.plus(ms(2)));
 
-    let woke = now + ms(60);
+    let woke = now.plus(ms(60));
     // The state that produced the spin: an elapsed deadline sitting in the
     // schedule with nothing to convert it into a frame.
     assert!(
@@ -1086,7 +1093,7 @@ fn servicing_never_leaves_an_elapsed_wake_deadline() {
                 layers: LayerMask::all(),
                 damage: Damage::FullLayer,
             },
-            cadence: Cadence::At(now + ms(10)),
+            cadence: Cadence::At(now.plus(ms(10))),
             reason: DemandReason::Redisplay,
         },
         now,
@@ -1106,11 +1113,11 @@ fn servicing_never_leaves_an_elapsed_wake_deadline() {
     c.finish_frame(win(2), &plan, PresentResult::Timeout, now);
 
     for step in [500u64, 1_000, 5_000] {
-        let woke = now + ms(step);
+        let woke = now.plus(ms(step));
         let service = c.service_deadlines(woke);
         if let LoopWake::At(deadline) = service.wake {
             assert!(
-                deadline.instant() > woke,
+                deadline.event_time() > woke,
                 "a serviced wake deadline must be strictly in the future"
             );
         }
@@ -1126,7 +1133,7 @@ fn a_ripe_at_demand_does_not_leave_its_old_deadline_behind() {
     // same hazard the MaxRate expired-anchor branch clears explicitly.
     let mut c = FrameCoordinator::new();
     let now = t0();
-    let at = now + ms(10);
+    let at = now.plus(ms(10));
     let demand = FrameDemand {
         invalidation: Invalidation::CompositeOnly {
             layers: LayerMask::CURSOR_EFFECTS,
@@ -1139,7 +1146,7 @@ fn a_ripe_at_demand_does_not_leave_its_old_deadline_behind() {
         PacingAction::WakeAt(at)
     );
     assert_eq!(
-        c.submit_demand(win(1), demand, at + ms(1)),
+        c.submit_demand(win(1), demand, at.plus(ms(1))),
         PacingAction::RequestRedraw
     );
     assert_eq!(

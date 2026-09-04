@@ -1536,7 +1536,9 @@ impl RenderApp {
         renderer.queue().present(output);
         #[cfg(feature = "video")]
         renderer.finish_presented_video_surface();
-        super::frame_stats::note_present(std::time::Instant::now());
+        super::frame_stats::note_present(
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        );
 
         if !child_frame_ids.is_empty() || !removed_child_frame_ids.is_empty() {
             tracing::debug!(

@@ -5,6 +5,7 @@ use super::state::{
 };
 use super::x11_hints::apply_window_geometry_hints;
 use crate::thread_comm::InputEvent;
+use neomacs_display_protocol::frame_time::EventTime;
 use std::sync::Arc;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::Window;
@@ -204,7 +205,9 @@ impl RenderApp {
 
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         super::frame_stats::count(&super::frame_stats::EVENT_LOOP_WAKEUPS);
-        super::frame_stats::maybe_log_snapshot(std::time::Instant::now());
+        super::frame_stats::maybe_log_snapshot(
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        );
         if !self.lifecycle_flags.about_to_wait_seen {
             tracing::info!(
                 "Render thread entered about_to_wait: primary_window_exists={} frame_windows={}",
@@ -262,13 +265,13 @@ impl RenderApp {
         // event or replacing their bounded latest-frame slot. Service after
         // frame ingestion so visibility routing sees the newest accepted
         // root/child presentation.
-        self.process_video_frames(std::time::Instant::now());
+        self.process_video_frames(neomacs_display_protocol::frame_time::observe_platform_now());
 
         self.pump_glib();
 
-        let now = std::time::Instant::now();
+        let now = neomacs_display_protocol::frame_time::observe_platform_now();
         self.frame_windows.tick_top_level_cursor_blinks(
-            now,
+            now.into_instant(),
             self.effects.cursor_wake.enabled,
             self.renderer.as_ref(),
         );
@@ -305,7 +308,7 @@ impl RenderApp {
         // wake deadline. Continuous activity is paced at the estimated
         // display cadence instead of a 4 ms poll; new-content demand fires
         // immediately on its first frame after idle.
-        let now = std::time::Instant::now();
+        let now = neomacs_display_protocol::frame_time::observe_platform_now();
         self.declare_frame_demands(now);
         // Publish per-window active demand for diagnostics (plan:
         // Observability). Runs only on loop wakes that already reconcile
@@ -351,7 +354,7 @@ impl RenderApp {
         if self.has_pending_images() {
             const IMAGE_DECODE_POLL_INTERVAL: std::time::Duration =
                 std::time::Duration::from_millis(16);
-            let image_poll = now + IMAGE_DECODE_POLL_INTERVAL;
+            let image_poll = now.plus(IMAGE_DECODE_POLL_INTERVAL).into_instant();
             deadline = Some(deadline.map_or(image_poll, |d| d.min(image_poll)));
         }
 
@@ -367,7 +370,7 @@ impl RenderApp {
     /// requests. Continuous demand is paced at the estimated display cadence
     /// (the plan's bounded synthetic clock); this replaced the legacy 4 ms
     /// active poll.
-    fn declare_frame_demands(&mut self, now: std::time::Instant) {
+    fn declare_frame_demands(&mut self, now: EventTime) {
         use super::frame_sched::{
             Cadence, Damage, DemandReason, FrameDemand, Invalidation, LayerMask, NativeWindowId,
             PacingAction,
@@ -615,7 +618,7 @@ impl RenderApp {
                             invalidation: Invalidation::CompositeOnly {
                                 layers: LayerMask::CURSOR_EFFECTS,
                             },
-                            cadence: Cadence::At(blink),
+                            cadence: Cadence::At(EventTime::from_observed_instant(blink)),
                             reason: DemandReason::CursorAnimation,
                         },
                         now,
@@ -637,7 +640,7 @@ impl RenderApp {
                 LOOP_WINDOW,
                 FrameDemand {
                     invalidation: legacy_repaint,
-                    cadence: Cadence::At(now + LEGACY_IDLE_POLL),
+                    cadence: Cadence::At(now.plus(LEGACY_IDLE_POLL)),
                     reason: DemandReason::Redisplay,
                 },
                 now,
@@ -755,7 +758,7 @@ impl RenderApp {
         global_effects: &neomacs_display_protocol::EffectsConfig,
         display_max_rate: std::num::NonZeroU16,
         cursor_visible: bool,
-        now: std::time::Instant,
+        now: EventTime,
     ) -> super::frame_sched::PacingAction {
         use super::frame_sched::{DemandReason, PacingAction};
 
