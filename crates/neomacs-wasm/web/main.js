@@ -3,7 +3,11 @@ import init, {
   wait_for_first_editor_presentation,
   worker_protocol_version,
 } from "./neomacs_wasm.js";
-import { installBrowserInput } from "./browser-input.mjs";
+import {
+  installBrowserInput,
+  observeBrowserEditorGeometry,
+  observeBrowserViewport,
+} from "./browser-input.mjs";
 import {
   initializeWasmFrontend,
   observeFirstEditorPresentation,
@@ -82,12 +86,9 @@ function installFrame(payload) {
 }
 
 function sendViewport() {
-  const scale = globalThis.devicePixelRatio || 1;
   enqueueInput([{
     type: "viewport-changed",
-    width: Math.max(1, Math.round(globalThis.innerWidth * scale)),
-    height: Math.max(1, Math.round(globalThis.innerHeight * scale)),
-    scale_factor: scale,
+    ...observeBrowserViewport(globalThis),
     target: targetFrame,
   }]);
 }
@@ -171,7 +172,6 @@ async function start() {
   };
   worker.onerror = (event) => showFailure(new Error(event.message));
 
-  const scale = globalThis.devicePixelRatio || 1;
   worker.postMessage({
     type: "start",
     wasmUrl: new URL("./neomacs_wasm_worker.wasm", import.meta.url).href,
@@ -191,12 +191,7 @@ async function start() {
     mailbox,
     startup: {
       protocol_version: worker_protocol_version(),
-      width: Math.max(1, Math.round(globalThis.innerWidth * scale)),
-      height: Math.max(1, Math.round(globalThis.innerHeight * scale)),
-      scale_factor: scale,
-      character_width: 8 * scale,
-      character_height: 16 * scale,
-      font_pixel_size: 16 * scale,
+      ...observeBrowserEditorGeometry(globalThis),
       color_scheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
     },
   });
