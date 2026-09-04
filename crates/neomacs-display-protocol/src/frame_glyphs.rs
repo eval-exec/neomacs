@@ -996,6 +996,17 @@ pub struct WindowInfo {
     pub window_end: i64,
     /// Total buffer size in characters (BUF_Z)
     pub buffer_size: i64,
+    /// The displayed buffer's modification tick, GNU's `MODIFF`.
+    ///
+    /// Presentation continuity uses this to decide whether scroll displacement
+    /// between two presentations can be measured exactly. Two presentations of
+    /// the same buffer at the same tick show the same text, so a row whose
+    /// character range appears in both is genuinely the same row and the pixel
+    /// difference is the scroll distance. If the tick moved, an equal-length
+    /// edit could leave every character range plausible while the text beneath
+    /// changed, which makes a row match wrong rather than merely ambiguous.
+    /// `buffer_size` is not a substitute for the same reason.
+    pub buffer_modiff: crate::presentation_origin::BufferModiff,
     /// Frame-absolute window bounds (includes mode-line)
     pub bounds: Rect,
     /// Atomically installed geometry from the same presentation.
@@ -2187,6 +2198,7 @@ impl FrameGlyphBuffer {
         window_start: i64,
         window_end: i64,
         buffer_size: i64,
+        buffer_modiff: crate::presentation_origin::BufferModiff,
         x: f32,
         y: f32,
         width: f32,
@@ -2207,6 +2219,7 @@ impl FrameGlyphBuffer {
             window_start,
             window_end,
             buffer_size,
+            buffer_modiff,
             bounds: Rect::new(x, y, width, height),
             geometry: PresentedWindowGeometry::Skipped {
                 cell_origin: PresentedCellOrigin::default(),

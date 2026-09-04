@@ -265,6 +265,8 @@ pub struct WindowParams {
     pub point: i64,
     /// Accessible end (ZV) in layout 0-based exclusive char coordinates.
     pub buffer_size: i64,
+    /// The displayed buffer's `MODIFF` at layout time.
+    pub buffer_modiff: i64,
     /// Accessible start (BEGV) in layout 0-based char coordinates.
     pub buffer_begv: i64,
 

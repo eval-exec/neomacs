@@ -29,6 +29,7 @@ fn install_complete_window_geometry(
         window_start: 1,
         window_end: 1,
         buffer_size: 1,
+        buffer_modiff: crate::presentation_origin::BufferModiff::default(),
         bounds: text_body,
         geometry: crate::PresentedWindowGeometry::Complete {
             cell_origin: crate::PresentedCellOrigin::default(),

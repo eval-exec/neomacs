@@ -56,6 +56,7 @@ fn window_params() -> WindowParams {
         previous_visible_end: None,
         point: 10,
         buffer_size: 210,
+        buffer_modiff: 0,
         buffer_begv: 0,
         display_line_numbers: DisplayLineNumbersMode::Off,
         hscroll: 4,
@@ -361,6 +362,7 @@ fn window_info(params: &WindowParams) -> WindowInfo {
         window_start: 31,
         window_end: 101,
         buffer_size: params.buffer_size,
+        buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         bounds: params.bounds,
         geometry: neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry::Complete {
             cell_origin: Default::default(),

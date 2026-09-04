@@ -1146,6 +1146,7 @@ fn managed_primary_visual_bell_uses_frame_renderer_effects() {
         1,
         50,
         50,
+        neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         0.0,
         0.0,
         400.0,

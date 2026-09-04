@@ -24,6 +24,7 @@ fn window_params() -> WindowParams {
         previous_visible_end: None,
         point: 21,
         buffer_size: 80,
+        buffer_modiff: 0,
         buffer_begv: 3,
         display_line_numbers: DisplayLineNumbersMode::Off,
         hscroll: 0,
