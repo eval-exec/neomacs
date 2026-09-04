@@ -392,6 +392,7 @@ impl Context {
         super::super::category::restore_standard_category_table_object(
             self.standard_category_table,
         );
+        super::super::casetab::restore_standard_case_table_object(&self.obarray);
         // Install this Context's quit-request flag so leaf functions
         // (regex matcher, other long-running scans) can poll it
         // without `&mut Context` access.

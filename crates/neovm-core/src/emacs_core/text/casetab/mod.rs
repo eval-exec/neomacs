@@ -22,6 +22,20 @@ pub fn reset_casetab_thread_locals() {
     STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
 }
 
+/// Re-anchor the standard case-table identity after activating an evaluator.
+///
+/// Portable restore reconstructs every heap object at a target-local address,
+/// so a process-global or thread-local `Value` cannot survive that boundary.
+/// The Lisp variable is part of the restored evaluator and is the source of
+/// truth; the thread-local is only its fast identity cache.
+pub(crate) fn restore_standard_case_table_object(obarray: &super::symbol::Obarray) {
+    let standard = obarray
+        .symbol_value_id(standard_case_table_object_symbol_id())
+        .copied()
+        .filter(is_case_table);
+    STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = standard);
+}
+
 /// Collect GC roots from the cached case table.
 pub fn collect_casetab_gc_roots(roots: &mut Vec<Value>) {
     STANDARD_CASE_TABLE_OBJECT.with(|slot| {
@@ -453,10 +467,12 @@ fn ensure_standard_case_table_object_in_state(obarray: &mut super::symbol::Obarr
         .cloned()
         && is_case_table(&value)
     {
+        STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(value));
         return Ok(value);
     }
     let table = make_standard_case_table_value();
     obarray.set_symbol_value_id(standard_case_table_object_symbol_id(), table);
+    STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
     Ok(table)
 }
 
