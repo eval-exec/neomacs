@@ -1,4 +1,5 @@
 use super::*;
+use crate::render_thread::frame_compositor::continuity::ScrollObservation;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::presentation_origin::BufferModiff;
 use neomacs_display_protocol::types::DisplayWindowId;
@@ -383,4 +384,67 @@ fn a_presentation_with_no_matrices_yields_no_anchors() {
     use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
     let state = FrameDisplayState::new(80, 24, 8.0, 16.0);
     assert!(anchors_by_window(&state).is_empty());
+}
+
+// =======================================================================
+// Observations are consumed exactly once
+// =======================================================================
+
+#[test]
+fn taking_pending_continuity_leaves_nothing_for_a_second_pass() {
+    use crate::render_thread::frame_windows::GuiFrameRenderState;
+
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.compositor.pending.scrolls.push(ScrollObservation {
+        window: DisplayWindowId::new(3),
+        region: neomacs_display_protocol::PresentedWindowRegions {
+            text_body: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 100.0, 100.0),
+            ..Default::default()
+        }
+        .buffer_viewport()
+        .expect("a positive body yields a viewport"),
+        displacement: ScrollDisplacement::NoOverlap {
+            direction: ScrollDirection::TowardBufferEnd,
+        },
+    });
+
+    let first = render.take_pending_continuity(true);
+    assert_eq!(
+        first.scrolls.len(),
+        1,
+        "the frame that consumes them sees them"
+    );
+    assert!(
+        first.accept_derived_effects,
+        "stamped with the frame's quality plan"
+    );
+
+    // A render pass can run again over the same retained presentation. If it
+    // saw the observation again, every derived effect would re-arm, report
+    // needs_redraw, and schedule yet another pass — a loop with no editor
+    // activity behind it.
+    let second = render.take_pending_continuity(true);
+    assert!(
+        second.scrolls.is_empty(),
+        "a second pass over one install must observe nothing"
+    );
+}
+
+#[test]
+fn the_quality_plan_decides_whether_derived_effects_run() {
+    use crate::render_thread::frame_windows::GuiFrameRenderState;
+
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    assert!(
+        !render.take_pending_continuity(false).accept_derived_effects,
+        "a degraded frame declines compositor-derived effects, as it did producer hints"
+    );
 }

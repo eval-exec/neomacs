@@ -40,7 +40,7 @@ impl GuiFrameRenderState {
         next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
         next_anchors: &super::ScrollAnchorsByWindow,
     ) {
-        self.compositor.pending_scroll.clear();
+        self.compositor.pending.scrolls.clear();
         let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next) else {
             return;
         };
@@ -87,11 +87,27 @@ impl GuiFrameRenderState {
                     .get(&curr.window_id)
                     .map_or(&[][..], Vec::as_slice),
             );
-            self.compositor.pending_scroll.push(ScrollObservation {
+            self.compositor.pending.scrolls.push(ScrollObservation {
                 window: curr.window_id,
                 region,
                 displacement,
             });
         }
+    }
+}
+
+impl GuiFrameRenderState {
+    /// Take the observations measured at the last install, exactly once.
+    ///
+    /// A frame consumes these; a second render pass over the same retained
+    /// presentation must see nothing, or every derived effect re-arms and the
+    /// resulting redraw request sustains itself.
+    pub(in crate::render_thread) fn take_pending_continuity(
+        &mut self,
+        accept_derived_effects: bool,
+    ) -> super::PendingContinuity {
+        let mut pending = std::mem::take(&mut self.compositor.pending);
+        pending.accept_derived_effects = accept_derived_effects;
+        pending
     }
 }
