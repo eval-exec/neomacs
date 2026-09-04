@@ -247,11 +247,13 @@ pub(super) struct WebViewPointerCapture {
 #[derive(Clone)]
 pub(super) struct FpsCounter {
     pub(super) enabled: bool,
-    pub(super) last_instant: Instant,
+    pub(super) last_instant: EventTime,
     pub(super) frame_count: u32,
     pub(super) display_value: f32,
     pub(super) frame_time_ms: f32,
-    pub(super) render_start: Instant,
+    /// Wall-clock start of this frame's CPU render span. Not frame time:
+    /// this measures work, and a frame-domain clock would read zero.
+    pub(super) cpu_span_start: Instant,
 }
 
 /// Typing-speed overlay state for one native GUI frame window.
@@ -290,11 +292,11 @@ impl Default for FpsCounter {
     fn default() -> Self {
         Self {
             enabled: false,
-            last_instant: Instant::now(),
+            last_instant: neomacs_display_protocol::frame_time::observe_platform_now(),
             frame_count: 0,
             display_value: 0.0,
             frame_time_ms: 0.0,
-            render_start: Instant::now(),
+            cpu_span_start: Instant::now(),
         }
     }
 }

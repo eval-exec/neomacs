@@ -219,9 +219,11 @@ struct GuiFrameChromeOverlays<'a> {
 const VISUAL_BELL_DURATION_SECS: f32 = 0.15;
 
 impl RenderApp {
-    fn update_typing_speed_state(state: &mut TypingSpeedState) -> bool {
-        // Step 2.5 replaces this with the frame's sample.
-        let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    fn update_typing_speed_state(
+        state: &mut TypingSpeedState,
+        sample: neomacs_display_protocol::frame_time::FrameSample,
+    ) -> bool {
+        let now = sample.frame_time();
         let window_secs = 5.0_f64;
         state
             .key_press_times
@@ -415,10 +417,9 @@ impl RenderApp {
         height: u32,
     ) {
         if let Some(start) = *visual_bell_start {
-            // Step 2.5 replaces this read with the frame's sample; today it is the
-            // same wall-clock read `start.elapsed()` performed, just typed.
-            let elapsed = neomacs_display_protocol::frame_time::observe_platform_now()
-                .saturating_since(start)
+            let elapsed = renderer
+                .frame_sample()
+                .since_at_presentation(start)
                 .as_secs_f32();
             let duration = VISUAL_BELL_DURATION_SECS;
             if elapsed < duration {
@@ -446,7 +447,7 @@ impl RenderApp {
             return false;
         }
 
-        let frame_time = fps.render_start.elapsed().as_secs_f32() * 1000.0;
+        let frame_time = fps.cpu_span_start.elapsed().as_secs_f32() * 1000.0;
         fps.frame_time_ms = fps.frame_time_ms * 0.9 + frame_time * 0.1;
         let stats_lines = vec![
             format!("{:.0} FPS | {:.1}ms", fps.display_value, fps.frame_time_ms),
@@ -467,7 +468,7 @@ impl RenderApp {
         typing_speed: &mut TypingSpeedState,
         frame_dirty: &mut bool,
     ) {
-        let keep_redrawing = Self::update_typing_speed_state(typing_speed);
+        let keep_redrawing = Self::update_typing_speed_state(typing_speed, renderer.frame_sample());
         renderer.render_typing_speed(surface_view, frame, glyph_atlas, typing_speed.displayed_wpm);
         if keep_redrawing {
             *frame_dirty = true;
@@ -524,7 +525,8 @@ impl RenderApp {
             FrameLifecycle::Active { native, .. } => native,
             _ => return Err(FrameRenderFailure::WindowNotReady),
         };
-        Self::update_fps_counter(&mut render.overlays.fps);
+        Self::begin_fps_cpu_span(&mut render.overlays.fps);
+        Self::update_fps_counter(&mut render.overlays.fps, renderer.frame_sample());
         // Read the one bit the offscreen decision needs straight out of the
         // retained frame. Missing content has its own typed outcome: the frame
         // channel, rather than an expose retry, is responsible for waking it.

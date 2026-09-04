@@ -1002,7 +1002,11 @@ impl WgpuRenderer {
         } else {
             CursorColorPolicy::Inherit
         };
-        PresentedCursorPaint::resolve(resolved, policy, self.frame_sample_time)
+        PresentedCursorPaint::resolve(
+            resolved,
+            policy,
+            self.frame_sample.presentation_time().into_instant(),
+        )
     }
 
     fn active_cursor_inverse_video(
