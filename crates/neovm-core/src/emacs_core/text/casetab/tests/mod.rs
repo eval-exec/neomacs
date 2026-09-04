@@ -193,6 +193,24 @@ fn builtin_standard_case_table_returns_case_table() {
 }
 
 #[test]
+fn evaluator_activation_restores_standard_case_table_identity() {
+    crate::test_utils::init_test_tracing();
+    let mut ctx = super::super::eval::Context::new();
+    let standard = builtin_standard_case_table(&mut ctx, vec![]).unwrap();
+    let current = builtin_current_case_table(&mut ctx, vec![]).unwrap();
+    assert_eq!(current.bits(), standard.bits());
+
+    reset_casetab_thread_locals();
+    STANDARD_CASE_TABLE_OBJECT.with(|slot| assert!(slot.borrow().is_none()));
+
+    ctx.setup_thread_locals();
+    STANDARD_CASE_TABLE_OBJECT.with(|slot| {
+        assert_eq!(slot.borrow().unwrap().bits(), standard.bits());
+    });
+    assert!(buffer_case_canon_table(ctx.buffers.current_buffer().unwrap()).is_none());
+}
+
+#[test]
 fn builtin_standard_case_table_wrong_args() {
     crate::test_utils::init_test_tracing();
     let mut ctx = super::super::eval::Context::new();
