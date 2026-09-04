@@ -88,6 +88,12 @@ pub enum MetricName {
     P50InputToRedisplayLatency,
     P95InputToRedisplayLatency,
     P99InputToRedisplayLatency,
+    /// Keystrokes whose input-to-redisplay latency exceeded the 1 ms budget,
+    /// as a count over the run. A Poisson count of over-budget events has far
+    /// lower variance than any single order statistic of the same samples,
+    /// and it is the quantity pause-placement work actually moves; read it
+    /// beside the percentiles, never instead of them.
+    InputLatencyOverBudgetCount,
     VideoPresentationFramesPerSecond,
     VideoDecodeFramesPerSecond,
     P50VideoPresentationInterval,
@@ -161,6 +167,7 @@ impl MetricName {
             | Self::L1DataCacheLoadMisses
             | Self::DataTlbLoadMisses => MetricUnit::Count,
             Self::OperationCount
+            | Self::InputLatencyOverBudgetCount
             | Self::VideoDecodedFrames
             | Self::VideoPresentedFrames
             | Self::VideoReplacedFrames

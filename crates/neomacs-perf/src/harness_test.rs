@@ -533,6 +533,71 @@ fn sustained_editing_reports_insert_and_delete_as_two_edits() {
 }
 
 #[test]
+fn gui_input_latency_counts_keystrokes_over_the_one_millisecond_budget() {
+    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_tmp = workspace_root.join("tmp");
+    fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
+    let scratch = tempfile::Builder::new()
+        .prefix("neomacs-perf-gui-latency-budget-test-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let request = RunRequest::new(
+        ScenarioId::GuiInputLatency,
+        "/unused/editor",
+        NonZeroU32::new(5).expect("non-zero literal"),
+    );
+    // Exactly 1000 us is within budget; the count is of samples strictly over it.
+    let raw_result = r#"{
+      "schema_version": 1,
+      "scenario": "gui-input-latency",
+      "status": "ok",
+      "iterations": 5,
+      "elapsed_us": 100,
+      "elapsed_wall_us": 120,
+      "operation_count": 5,
+      "initial_checksum": "same",
+      "final_checksum": "same",
+      "point_restored": true,
+      "expected_major_mode": "emacs-lisp-mode",
+      "actual_major_mode": "emacs-lisp-mode",
+      "type_phase_us": 0,
+      "comment_phase_us": 0,
+      "kill_yank_phase_us": 0,
+      "indent_phase_us": 0,
+      "regex_phase_us": 0,
+      "latency_samples_us": [500, 1500, 999, 1000, 2000],
+      "mode_phase_us": 0,
+      "fontify_phase_us": 0,
+      "replace_phase_us": 0,
+      "undo_redo_phase_us": 0,
+      "isearch_phase_us": 0,
+      "buffer_switch_phase_us": 0,
+      "how_many_phase_us": 0,
+      "motion_phase_us": 0,
+      "error": null
+    }"#;
+
+    let report = PerfHarness::new(scratch.path())
+        .record_fixture_result(&request, raw_result)
+        .expect("persist gui latency result");
+    let measurements = report
+        .artifact
+        .verdict
+        .measurements()
+        .expect("valid gui latency measurements");
+    let metric = |name: MetricName| {
+        measurements
+            .iter()
+            .find(|measurement| measurement.name == name)
+            .unwrap_or_else(|| panic!("{name:?} measurement"))
+            .value
+    };
+    assert_eq!(metric(MetricName::InputLatencyOverBudgetCount), 2.0);
+    assert_eq!(metric(MetricName::P50InputToRedisplayLatency), 1000.0);
+    assert_eq!(metric(MetricName::P99InputToRedisplayLatency), 2000.0);
+}
+
+#[test]
 fn sustained_native_video_promotes_pacing_gpu_pool_and_memory_metrics() {
     let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
     let workspace_tmp = workspace_root.join("tmp");

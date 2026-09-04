@@ -191,7 +191,13 @@ const SCENARIOS: &[ScenarioSpec] = &[
             width: 1200,
             height: 800,
         },
-        default_iterations: NonZeroU32::new(100).expect("non-zero scenario default"),
+        // The ranked metric is a p99: over 100 samples that is the 2nd-largest
+        // value, an extreme-value statistic decided by whether a handful of
+        // scheduling or GC events land inside the timed window. Over 1000 it
+        // is the 10th-largest. The workload costs ~2-5 ms per keystroke, so
+        // this adds a few seconds per run, not the minutes a percentile of
+        // 100 would need to become trustworthy by repetition.
+        default_iterations: NonZeroU32::new(1000).expect("non-zero scenario default"),
         primary_metric: MetricName::P99InputToRedisplayLatency,
         cross_editor_parity_metrics: &[],
     },

@@ -3773,9 +3773,24 @@ fn valid_editor_workload_measurements(
                 unit: MetricUnit::Microseconds,
             });
         }
+        let over_budget = samples
+            .iter()
+            .filter(|&&sample| sample > INPUT_LATENCY_BUDGET_US)
+            .count();
+        measurements.push(Measurement {
+            name: MetricName::InputLatencyOverBudgetCount,
+            value: over_budget as f64,
+            unit: MetricUnit::Count,
+        });
     }
     measurements
 }
+
+/// The per-keystroke latency budget behind
+/// [`MetricName::InputLatencyOverBudgetCount`]: one millisecond, the point at
+/// which a keystroke stops feeling immediate and past which every GNU sample
+/// in this scenario but a handful lies.
+const INPUT_LATENCY_BUDGET_US: u64 = 1_000;
 
 fn nearest_rank(sorted_samples: &[u64], percentile: f64) -> u64 {
     let rank = (percentile * sorted_samples.len() as f64).ceil() as usize;
