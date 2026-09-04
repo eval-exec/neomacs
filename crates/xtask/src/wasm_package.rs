@@ -4,9 +4,12 @@ use std::env;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tempfile::Builder;
 use wasm_bindgen_cli_support::Bindgen;
 
@@ -17,21 +20,77 @@ use super::portable_assets::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-pub(super) const WEB_SOURCE_FILES: [&str; 8] = [
+pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 7] = [
     "browser-input.mjs",
     "editor-worker.js",
-    "index.html",
     "main.js",
     "opfs-storage.mjs",
     "style.css",
     "wasm-bootstrap.mjs",
     "worker-assets.mjs",
 ];
+const WEB_SHELL_SOURCE: &str = "index.html";
 pub(super) const WEB_REPOSITORY_ASSETS: [(&str, &str); 1] = [(
     "crates/neomacs-display-runtime/assets/window-icon.svg",
     "favicon.svg",
 )];
 const EDITOR_WORKER_WASM: &str = "neomacs_wasm_worker.wasm";
+const BROWSER_RELEASE_MANIFEST: &str = "manifest.json";
+const BROWSER_RELEASES_DIRECTORY: &str = "builds";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct BrowserBundleId(String);
+
+impl BrowserBundleId {
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn from_tree(root: &Path) -> Result<Self> {
+        let mut files = Vec::new();
+        collect_bundle_files(root, root, &mut files)?;
+        if files.is_empty() {
+            return Err("browser bundle must contain at least one file".into());
+        }
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut digest = Sha256::new();
+        digest.update(b"neomacs-wasm-browser-bundle-v1\0");
+        let mut buffer = [0_u8; 64 * 1024];
+        for (name, path) in files {
+            digest.update((name.len() as u64).to_le_bytes());
+            digest.update(name.as_bytes());
+
+            let mut file = fs::File::open(&path)?;
+            let length = file.metadata()?.len();
+            digest.update(length.to_le_bytes());
+            loop {
+                let read = file.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                digest.update(&buffer[..read]);
+            }
+        }
+
+        Ok(Self(
+            digest
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        ))
+    }
+}
+
+#[derive(Serialize)]
+struct BrowserReleaseManifest<'a> {
+    schema: u32,
+    bundle_id: &'a str,
+    entry: String,
+    stylesheet: String,
+    favicon: String,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WasmArtifact {
@@ -134,14 +193,19 @@ fn package(options: WasmPackageOptions) -> Result<()> {
         .prefix(".neomacs-wasm-package-")
         .tempdir_in(parent)?;
 
-    generate_bindings(&input_wasm, staging.path())?;
+    let staged_bundle = staging.path().join("staged-bundle");
+    fs::create_dir(&staged_bundle)?;
+
+    generate_bindings(&input_wasm, &staged_bundle)?;
     copy_nonempty_file(
         &worker_wasm,
-        &staging.path().join(EDITOR_WORKER_WASM),
+        &staged_bundle.join(EDITOR_WORKER_WASM),
         "optimized neomacs-wasm Worker artifact",
     )?;
-    copy_web_sources(&options.repo_root, staging.path())?;
-    copy_portable_assets(&options.portable_assets, staging.path())?;
+    copy_web_bundle_sources(&options.repo_root, &staged_bundle)?;
+    copy_portable_assets(&options.portable_assets, &staged_bundle)?;
+    copy_browser_shell(&options.repo_root, staging.path())?;
+    let bundle_id = publish_browser_bundle(&staged_bundle, staging.path())?;
 
     // The destination was required not to exist, and the staging directory is
     // its sibling. A rename therefore publishes one complete tree without
@@ -149,8 +213,9 @@ fn package(options: WasmPackageOptions) -> Result<()> {
     fs::rename(staging.path(), &options.output_dir)?;
 
     println!(
-        "+ assembled neomacs-wasm browser distribution {}",
-        options.output_dir.display()
+        "+ assembled neomacs-wasm browser distribution {} (bundle {})",
+        options.output_dir.display(),
+        bundle_id.as_str(),
     );
     Ok(())
 }
@@ -259,9 +324,9 @@ fn generate_bindings(input_wasm: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_web_sources(repo_root: &Path, output: &Path) -> Result<()> {
+fn copy_web_bundle_sources(repo_root: &Path, output: &Path) -> Result<()> {
     let source_root = repo_root.join("crates/neomacs-wasm/web");
-    for filename in WEB_SOURCE_FILES {
+    for filename in WEB_BUNDLE_SOURCE_FILES {
         copy_nonempty_file(
             &source_root.join(filename),
             &output.join(filename),
@@ -274,6 +339,78 @@ fn copy_web_sources(repo_root: &Path, output: &Path) -> Result<()> {
             &output.join(destination),
             "browser repository asset",
         )?;
+    }
+    Ok(())
+}
+
+fn copy_browser_shell(repo_root: &Path, output: &Path) -> Result<()> {
+    copy_nonempty_file(
+        &repo_root
+            .join("crates/neomacs-wasm/web")
+            .join(WEB_SHELL_SOURCE),
+        &output.join(WEB_SHELL_SOURCE),
+        "browser release shell",
+    )
+}
+
+pub(super) fn publish_browser_bundle(
+    staged_bundle: &Path,
+    package_root: &Path,
+) -> Result<BrowserBundleId> {
+    let bundle_id = BrowserBundleId::from_tree(staged_bundle)?;
+    let releases = package_root.join(BROWSER_RELEASES_DIRECTORY);
+    fs::create_dir_all(&releases)?;
+    let release = releases.join(bundle_id.as_str());
+    if release.exists() {
+        return Err(format!("browser bundle already exists: {}", release.display()).into());
+    }
+    fs::rename(staged_bundle, &release)?;
+
+    let release_prefix = format!("./{BROWSER_RELEASES_DIRECTORY}/{}/", bundle_id.as_str());
+    let manifest = BrowserReleaseManifest {
+        schema: 1,
+        bundle_id: bundle_id.as_str(),
+        entry: format!("{release_prefix}main.js"),
+        stylesheet: format!("{release_prefix}style.css"),
+        favicon: format!("{release_prefix}favicon.svg"),
+    };
+    let mut encoded = serde_json::to_vec_pretty(&manifest)?;
+    encoded.push(b'\n');
+    fs::write(package_root.join(BROWSER_RELEASE_MANIFEST), encoded)?;
+
+    Ok(bundle_id)
+}
+
+fn collect_bundle_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<(String, PathBuf)>,
+) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_bundle_files(root, &path, files)?;
+        } else if file_type.is_file() {
+            let relative = path.strip_prefix(root)?;
+            let name = relative
+                .to_str()
+                .ok_or_else(|| {
+                    format!(
+                        "browser bundle path is not valid Unicode: {}",
+                        path.display()
+                    )
+                })?
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            files.push((name, path));
+        } else {
+            return Err(format!(
+                "browser bundle entries must be regular files or directories: {}",
+                path.display()
+            )
+            .into());
+        }
     }
     Ok(())
 }
