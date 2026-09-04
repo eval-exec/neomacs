@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Prove that an ordinary reload selects one coherent browser release.
+
+The test serves the stable shell from a real ``cargo xtask build-wasm``
+distribution with deliberately long-lived cache headers.  A manifest update
+then switches from a synthetic release A to release B without changing the
+origin, URL, Chrome session, or browser cache.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import threading
+import time
+from collections import Counter
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--distribution",
+        type=Path,
+        required=True,
+        help="browser distribution produced by cargo xtask build-wasm",
+    )
+    parser.add_argument("--chrome", help="path to Chrome or Chromium")
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--artifacts-dir", type=Path)
+    parser.add_argument("--timeout", type=float, default=30.0)
+    return parser.parse_args()
+
+
+def chrome_binary(explicit: str | None) -> str | None:
+    if explicit:
+        return explicit
+    configured = os.environ.get("NEOMACS_WASM_CHROME")
+    if configured:
+        return configured
+    for candidate in (
+        "google-chrome-stable",
+        "google-chrome",
+        "chromium",
+        "chromium-browser",
+    ):
+        if resolved := shutil.which(candidate):
+            return resolved
+    return None
+
+
+class ReleaseServer(ThreadingHTTPServer):
+    def __init__(self, shell: bytes) -> None:
+        super().__init__(("127.0.0.1", 0), ReleaseRequestHandler)
+        self.shell = shell
+        self.current_release = "a"
+        self.requests: Counter[str] = Counter()
+
+
+class ReleaseRequestHandler(BaseHTTPRequestHandler):
+    server: ReleaseServer
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        path = urlsplit(self.path).path
+        self.server.requests[path] += 1
+
+        if path in {"/", "/index.html"}:
+            self.send_payload(
+                self.server.shell,
+                "text/html; charset=utf-8",
+                "public, max-age=31536000, immutable",
+            )
+            return
+        if path == "/manifest.json":
+            release = self.server.current_release
+            manifest = {
+                "schema": 1,
+                "bundle_id": release,
+                "entry": f"./builds/{release}/main.js",
+            }
+            self.send_payload(
+                (json.dumps(manifest) + "\n").encode(),
+                "application/json",
+                "public, max-age=31536000, immutable",
+            )
+            return
+        if path in {"/builds/a/main.js", "/builds/b/main.js"}:
+            release = path.split("/")[2]
+            script = (
+                "document.documentElement.dataset.neomacsRelease = "
+                f"{json.dumps(release)};\n"
+            )
+            self.send_payload(
+                script.encode(),
+                "text/javascript; charset=utf-8",
+                "public, max-age=31536000, immutable",
+            )
+            return
+
+        self.send_error(404)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def send_payload(self, body: bytes, content_type: str, cache_control: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache_control)
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def wait_for_release(driver: webdriver.Chrome, release: str, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        selected = driver.execute_script(
+            "return document.documentElement.dataset.neomacsRelease || ''"
+        )
+        if selected == release:
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"browser did not select release {release!r}")
+
+
+def validate_distribution(distribution: Path) -> bytes:
+    shell = distribution.joinpath("index.html").read_bytes()
+    manifest = json.loads(distribution.joinpath("manifest.json").read_text())
+    if manifest.get("schema") != 1:
+        raise RuntimeError("browser distribution does not use manifest schema 1")
+    entry = manifest.get("entry")
+    if not isinstance(entry, str) or not entry.startswith("./builds/"):
+        raise RuntimeError("browser distribution entry is not content-addressed")
+    if not distribution.joinpath(entry.removeprefix("./")).is_file():
+        raise RuntimeError(f"browser distribution entry is missing: {entry}")
+    return shell
+
+
+def capture_failure(driver: webdriver.Chrome, directory: Path) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    driver.save_screenshot(str(directory / "browser-release-upgrade.png"))
+    directory.joinpath("browser-release-upgrade.html").write_text(
+        driver.page_source,
+        encoding="utf-8",
+    )
+
+
+def main() -> None:
+    args = parse_args()
+    shell = validate_distribution(args.distribution)
+    server = ReleaseServer(shell)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    options = Options()
+    if binary := chrome_binary(args.chrome):
+        options.binary_location = binary
+    if args.headless or os.environ.get("NEOMACS_WASM_HEADLESS", "0") != "0":
+        options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+
+    driver = webdriver.Chrome(options=options)
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/"
+        driver.get(url)
+        wait_for_release(driver, "a", args.timeout)
+
+        server.current_release = "b"
+        driver.refresh()
+        wait_for_release(driver, "b", args.timeout)
+
+        if server.requests["/manifest.json"] < 2:
+            raise RuntimeError("ordinary reload reused the cached release manifest")
+        for entry in ("/builds/a/main.js", "/builds/b/main.js"):
+            if server.requests[entry] != 1:
+                raise RuntimeError(
+                    f"expected one request for {entry}, got {server.requests[entry]}"
+                )
+        print("PASS: ordinary reload upgraded one coherent browser release")
+    except Exception:
+        if args.artifacts_dir:
+            capture_failure(driver, args.artifacts_dir)
+        raise
+    finally:
+        driver.quit()
+        server.shutdown()
+        server.server_close()
+        server_thread.join()
+
+
+if __name__ == "__main__":
+    main()
