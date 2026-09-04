@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>Neomacs</title>
-    <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-    <link rel="stylesheet" href="./style.css">
   </head>
   <body>
     <main id="browser-shell">
@@ -20,6 +18,41 @@
         tabindex="0"
       ></textarea>
     </main>
-    <script type="module" src="./main.js"></script>
+    <script type="module">
+      const status = document.querySelector("#browser-status");
+
+      async function loadCurrentRelease() {
+        const response = await fetch("./manifest.json", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`failed to fetch release manifest: ${response.status}`);
+        }
+        const manifest = await response.json();
+        if (manifest.schema !== 1 || typeof manifest.entry !== "string") {
+          throw new Error("unsupported Neomacs browser release manifest");
+        }
+
+        for (const [relationship, property] of [
+          ["icon", "favicon"],
+          ["stylesheet", "stylesheet"],
+        ]) {
+          if (typeof manifest[property] !== "string") continue;
+          const link = document.createElement("link");
+          link.rel = relationship;
+          link.href = new URL(manifest[property], document.baseURI).href;
+          if (relationship === "icon") link.type = "image/svg+xml";
+          document.head.append(link);
+        }
+
+        await import(new URL(manifest.entry, document.baseURI).href);
+      }
+
+      loadCurrentRelease().catch((error) => {
+        status.dataset.state = "failed";
+        status.textContent = `Neomacs failed to start: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        console.error(error);
+      });
+    </script>
   </body>
 </html>
