@@ -40,6 +40,19 @@ Also: `cat /proc/loadavg` before and after every timing run, and never compare a
 number against one taken from a different merge-base. Re-establish the baseline
 immediately after a rebase, before measuring anything else.
 
+**Instructions alone can mislead; read them WITH cycles.** A change that trades
+instruction count for memory traffic moves the two in opposite directions. The
+interpreter frame stack (`f939e1e2c`) is the worked example: it executes **8.4%
+MORE instructions** and takes **10.4% FEWER cycles**, because two Vec pushes with
+capacity checks cost more instructions than one 64-byte write, while removing a
+48-byte load+store per call and the copy-back per return removes the stalls that
+dominated. Gating on instructions alone would have called that a regression.
+
+Both counters are stable enough to trust: across two runs an hour apart, on a
+box whose load average differed by 2x, GNU's instruction count moved by 73 out
+of 7,420,822,395 and its cycle count by 0.05%. Wall time over the same pair
+moved 17%.
+
 Structural counters -- `LayoutStats` frame classes, `composition_bytes_scanned`,
 `buffer_snapshots_built` -- are load-insensitive too, and answer a different and
 often better question: did the code path change at all? Check those before
