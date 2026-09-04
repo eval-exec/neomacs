@@ -152,6 +152,14 @@ pub enum FrontendKeyState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidFrontendScaleFactor;
 
+impl std::fmt::Display for InvalidFrontendScaleFactor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("frontend scale factor must be finite and positive")
+    }
+}
+
+impl std::error::Error for InvalidFrontendScaleFactor {}
+
 /// Lossless, validated logical-to-device scale at the frontend boundary.
 ///
 /// Native window systems report this value as `f64`. Renderer adapters may
