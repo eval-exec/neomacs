@@ -54,7 +54,7 @@ pub(super) struct CursorState {
     // Blink state (managed by render thread)
     pub(super) blink_on: bool,
     pub(super) blink_enabled: bool,
-    pub(super) last_blink_toggle: std::time::Instant,
+    pub(super) last_blink_toggle: neomacs_display_protocol::frame_time::EventTime,
     pub(super) blink_interval: std::time::Duration,
 
     // Animation (smooth motion)
@@ -68,13 +68,13 @@ pub(super) struct CursorState {
     pub(super) current_w: f32,
     pub(super) current_h: f32,
     pub(super) animating: bool,
-    pub(super) last_anim_time: std::time::Instant,
+    pub(super) last_anim_time: neomacs_display_protocol::frame_time::EventTime,
     // For easing/linear styles: capture start position when animation begins
     pub(super) start_x: f32,
     pub(super) start_y: f32,
     pub(super) start_w: f32,
     pub(super) start_h: f32,
-    pub(super) anim_start_time: std::time::Instant,
+    pub(super) anim_start_time: neomacs_display_protocol::frame_time::EventTime,
     // For critically-damped spring: velocity per axis
     pub(super) velocity_x: f32,
     pub(super) velocity_y: f32,
@@ -95,16 +95,21 @@ pub(super) struct CursorState {
     pub(super) size_start_h: f32,
     pub(super) size_target_w: f32,
     pub(super) size_target_h: f32,
-    pub(super) size_anim_start: std::time::Instant,
+    pub(super) size_anim_start: neomacs_display_protocol::frame_time::EventTime,
 }
 
-impl Default for CursorState {
-    fn default() -> Self {
+impl CursorState {
+    /// Cursor state for a window that has just been created.
+    ///
+    /// There is no `Default`: every timing anchor here needs a real moment,
+    /// and the four `Instant::now()` calls this replaces could disagree with
+    /// each other by however long construction took.
+    pub(super) fn new(at: neomacs_display_protocol::frame_time::EventTime) -> Self {
         let visual = VisualConfig::default();
         Self {
             blink_on: true,
             blink_enabled: visual.cursor_blink.enabled,
-            last_blink_toggle: std::time::Instant::now(),
+            last_blink_toggle: at,
             blink_interval: visual.cursor_blink.interval,
             anim_enabled: visual.cursor_motion.enabled,
             anim_speed: visual.cursor_motion.speed,
@@ -116,12 +121,12 @@ impl Default for CursorState {
             current_w: 0.0,
             current_h: 0.0,
             animating: false,
-            last_anim_time: std::time::Instant::now(),
+            last_anim_time: at,
             start_x: 0.0,
             start_y: 0.0,
             start_w: 0.0,
             start_h: 0.0,
-            anim_start_time: std::time::Instant::now(),
+            anim_start_time: at,
             velocity_x: 0.0,
             velocity_y: 0.0,
             velocity_w: 0.0,
@@ -145,7 +150,7 @@ impl Default for CursorState {
             size_start_h: 0.0,
             size_target_w: 0.0,
             size_target_h: 0.0,
-            size_anim_start: std::time::Instant::now(),
+            size_anim_start: at,
         }
     }
 }
@@ -204,7 +209,11 @@ impl CursorState {
         }
     }
 
-    pub(super) fn set_target(&mut self, new_target: CursorTarget) -> (bool, bool) {
+    pub(super) fn set_target(
+        &mut self,
+        new_target: CursorTarget,
+        at: neomacs_display_protocol::frame_time::EventTime,
+    ) -> (bool, bool) {
         let had_target = self.target.is_some();
         let target_moved = self.target.as_ref().is_none_or(|old| {
             (old.x - new_target.x).abs() > 0.5
@@ -231,14 +240,13 @@ impl CursorState {
             self.prev_target_cx = new_target.x + new_target.width / 2.0;
             self.prev_target_cy = new_target.y + new_target.height / 2.0;
         } else if target_moved {
-            let now = std::time::Instant::now();
             self.animating = true;
-            self.last_anim_time = now;
+            self.last_anim_time = at;
             self.start_x = self.current_x;
             self.start_y = self.current_y;
             self.start_w = self.current_w;
             self.start_h = self.current_h;
-            self.anim_start_time = now;
+            self.anim_start_time = at;
             self.velocity_x = 0.0;
             self.velocity_y = 0.0;
             self.velocity_w = 0.0;
@@ -295,7 +303,7 @@ impl CursorState {
                 self.size_animating = true;
                 self.size_start_w = self.current_w;
                 self.size_start_h = self.current_h;
-                self.size_anim_start = std::time::Instant::now();
+                self.size_anim_start = at;
             }
             self.size_target_w = new_target.width;
             self.size_target_h = new_target.height;
@@ -346,9 +354,11 @@ impl CursorState {
         self.animating || self.size_animating
     }
 
-    pub(super) fn next_blink_deadline(&self) -> Option<std::time::Instant> {
+    pub(super) fn next_blink_deadline(
+        &self,
+    ) -> Option<neomacs_display_protocol::frame_time::EventTime> {
         (self.blink_enabled && self.target.is_some())
-            .then_some(self.last_blink_toggle + self.blink_interval)
+            .then_some(self.last_blink_toggle.plus(self.blink_interval))
     }
 
     /// Compute the 4 target corners for a cursor based on its style.
@@ -391,7 +401,10 @@ impl CursorState {
     }
 
     /// Tick cursor animation, returns true if position changed (needs redraw)
-    pub(super) fn tick_animation(&mut self) -> bool {
+    pub(super) fn tick_animation(
+        &mut self,
+        at: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
         if !self.anim_enabled || !self.animating {
             return false;
         }
@@ -400,9 +413,8 @@ impl CursorState {
             None => return false,
         };
 
-        let now = std::time::Instant::now();
-        let dt = now.duration_since(self.last_anim_time).as_secs_f32();
-        self.last_anim_time = now;
+        let dt = at.saturating_since(self.last_anim_time).as_secs_f32();
+        self.last_anim_time = at;
 
         match self.anim_style {
             CursorAnimStyle::Exponential => {
@@ -487,7 +499,7 @@ impl CursorState {
                 }
             }
             style => {
-                let elapsed = now.duration_since(self.anim_start_time).as_secs_f32();
+                let elapsed = at.saturating_since(self.anim_start_time).as_secs_f32();
                 let raw_t = (elapsed / self.anim_duration).min(1.0);
                 let t = match style {
                     CursorAnimStyle::EaseOutQuad => ease_out_quad(raw_t),
@@ -520,11 +532,14 @@ impl CursorState {
     }
 
     /// Tick cursor size transition, returns true if size changed (needs redraw).
-    pub(super) fn tick_size_animation(&mut self) -> bool {
+    pub(super) fn tick_size_animation(
+        &mut self,
+        at: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
         if !self.size_transition_enabled || !self.size_animating {
             return false;
         }
-        let elapsed = self.size_anim_start.elapsed().as_secs_f32();
+        let elapsed = at.saturating_since(self.size_anim_start).as_secs_f32();
         let raw_t = (elapsed / self.size_transition_duration).min(1.0);
         let t = raw_t * (2.0 - raw_t); // ease-out-quad
         self.current_w = self.size_start_w + (self.size_target_w - self.size_start_w) * t;
@@ -538,9 +553,9 @@ impl CursorState {
     }
 
     /// Reset blink to visible (e.g. when new frame arrives)
-    pub(super) fn reset_blink(&mut self) {
+    pub(super) fn reset_blink(&mut self, at: neomacs_display_protocol::frame_time::EventTime) {
         self.blink_on = true;
-        self.last_blink_toggle = std::time::Instant::now();
+        self.last_blink_toggle = at;
     }
 
     pub(super) fn force_blink_on(&mut self) -> bool {
