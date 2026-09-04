@@ -18,6 +18,7 @@ use super::cursor::CursorState;
 use super::terminal_expansion::TerminalExpansion;
 use super::transitions::TransitionState;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
+use continuity::scroll::ScrollDisplacement;
 #[cfg(feature = "video")]
 use neomacs_display_protocol::types::VideoId;
 use neomacs_renderer_wgpu::{RendererFrameEffects, WgpuGlyphAtlas};
@@ -67,7 +68,25 @@ pub(crate) struct FrameCompositor {
     /// (frame scheduling plan, Stage 4). Built lazily from the current frame
     /// and reused across cursor-only frames; invalidated on any full render.
     pub(super) retained_static: Option<RetainedStatic>,
+    /// Scroll anchors of the presentation currently displayed.
+    ///
+    /// Retained instead of its glyph rows: a materialized frame carries no
+    /// rows, and this is the whole of what measuring a scroll against the next
+    /// presentation needs.
+    pub(super) scroll_anchors: ScrollAnchorsByWindow,
+    /// How far each window's viewport moved on the most recent install, for
+    /// the transition planner to consume.
+    pub(super) pending_scroll: Vec<(
+        neomacs_display_protocol::types::DisplayWindowId,
+        ScrollDisplacement,
+    )>,
 }
+
+/// Scroll anchors keyed by the window that offered them.
+pub(in crate::render_thread) type ScrollAnchorsByWindow = std::collections::HashMap<
+    neomacs_display_protocol::types::DisplayWindowId,
+    Vec<continuity::scroll::RowAnchor>,
+>;
 
 impl FrameCompositor {
     /// A compositor holding no scene yet.
@@ -94,6 +113,8 @@ impl FrameCompositor {
             renderer_effects: RendererFrameEffects::default(),
             transitions: TransitionState::default(),
             retained_static: None,
+            scroll_anchors: ScrollAnchorsByWindow::default(),
+            pending_scroll: Vec::new(),
         }
     }
 }
