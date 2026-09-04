@@ -32,6 +32,47 @@ def startup_warning_rendered(frame_texts: list[str]) -> bool:
     )
 
 
+def assert_split_orientation(
+    matrices: list[dict[str, object]],
+    *,
+    side_by_side: bool,
+) -> None:
+    first, second = (matrix["pixel_bounds"] for matrix in matrices)
+    if side_by_side:
+        correct = first["x"] != second["x"] and first["y"] == second["y"]
+        expected = "side-by-side"
+    else:
+        correct = first["x"] == second["x"] and first["y"] != second["y"]
+        expected = "top/bottom"
+    if not correct:
+        raise RuntimeError(
+            f"browser editor did not render a {expected} split: "
+            f"{first!r}, {second!r}"
+        )
+
+
+def exercise_native_keyboard(editor: BrowserEditorHarness) -> None:
+    editor.switch_to_buffer("*scratch*")
+    marker = f"NATIVE-{time.time_ns():x}"[-16:]
+    editor.type_native_text(marker)
+    editor.wait_for_frame_text("native Chrome text input", contains=marker)
+
+    for digit, side_by_side in (("2", False), ("3", True)):
+        editor.type_native_control_prefix("x", digit)
+        matrices = editor.wait_for_window_matrices(
+            f"C-x {digit} split",
+            contains=marker,
+            count=2,
+        )
+        assert_split_orientation(matrices, side_by_side=side_by_side)
+        editor.type_native_control_prefix("x", "1")
+        editor.wait_for_window_matrices(
+            "C-x 1 split cleanup",
+            contains=marker,
+            count=1,
+        )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:4174/")
@@ -66,6 +107,9 @@ def main() -> None:
             raise RuntimeError("startup rendered the user-emacs-directory warning")
 
         if not args.persistence_only:
+            exercise_native_keyboard(editor)
+            print("PASS: native Chrome typing, C-x 2, and C-x 3")
+
             editor.exercise_buffer_switching()
             print("PASS: browser editor switched buffers and preserved text")
 
