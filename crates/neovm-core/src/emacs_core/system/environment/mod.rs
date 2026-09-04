@@ -307,12 +307,17 @@ impl ChildEnvironment {
         Self { entries }
     }
 
-    pub(crate) fn apply_to_child_command(
-        &self,
-        command: &mut crate::emacs_core::callproc::ChildCommand,
-    ) {
-        command.env_clear();
-        command.envs(self.entries.iter().map(|(name, value)| (name, value)));
+    std::cfg_select! {
+        target_family = "wasm" => {}
+        _ => {
+            pub(crate) fn apply_to_child_command(
+                &self,
+                command: &mut crate::emacs_core::callproc::ChildCommand,
+            ) {
+                command.env_clear();
+                command.envs(self.entries.iter().map(|(name, value)| (name, value)));
+            }
+        }
     }
 
     #[cfg(unix)]
