@@ -28,6 +28,13 @@ fn wasm_browser_shell_selects_the_current_release_through_an_uncached_manifest()
     let shell = include_str!("../../neomacs-wasm/web/index.html");
 
     assert!(shell.contains(r#"fetch("./manifest.json", { cache: "no-store" })"#));
+    let stylesheet_ready = shell
+        .find("await installStylesheet(manifest.stylesheet)")
+        .expect("browser shell must wait for its release stylesheet");
+    let entry_import = shell
+        .find("await import(new URL(manifest.entry, document.baseURI).href)")
+        .expect("browser shell must import the selected release entry");
+    assert!(stylesheet_ready < entry_import);
     assert!(shell.contains("await import(new URL(manifest.entry, document.baseURI).href)"));
     assert!(!shell.contains(r#"src="./main.js""#));
 }

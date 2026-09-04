@@ -30,6 +30,7 @@ class StartupWarningDetectionTest(unittest.TestCase):
             startup_warning_rendered(
                 [
                     "Any data that would normally be written there may be lost!",
+                    *[f"redisplay {index}" for index in range(128)],
                     "Welcome to Neomacs *scratch*",
                 ]
             )
