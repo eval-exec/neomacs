@@ -577,17 +577,17 @@ fn windows_attribute_watch_observes_set_file_modes() {
     reset_file_notify_thread_locals();
 }
 
-/// GNU implements set-file-times with FILE_WRITE_ATTRIBUTES and SetFileTime.
-/// Windows reports that metadata mutation to an attributes-only directory
-/// watch even when the target already has its read-only bit set.
+/// GNU's `sys_unlink' clears the read-only attribute before deleting a file.
+/// That preparation is observable as the second FILE_ACTION_MODIFIED in the
+/// upstream attribute-change ERT scenario.
 #[test]
 #[cfg(target_os = "windows")]
-fn windows_attribute_watch_observes_set_file_times_on_read_only_file() {
+fn windows_attribute_watch_observes_readonly_clear_before_delete() {
     crate::test_utils::init_test_tracing();
     reset_file_notify_thread_locals();
     let directory = workspace_temp_dir();
-    let file = directory.path().join("time-attribute.txt");
-    std::fs::write(&file, "contents").expect("seed timestamp fixture");
+    let file = directory.path().join("readonly-delete.txt");
+    std::fs::write(&file, "contents").expect("seed delete fixture");
 
     let mut eval = crate::emacs_core::eval::Context::new();
     let file_name = Value::string(file.display().to_string());
@@ -595,28 +595,21 @@ fn windows_attribute_watch_observes_set_file_times_on_read_only_file() {
         &mut eval,
         vec![file_name, Value::fixnum(0), Value::symbol("nofollow")],
     )
-    .expect("make timestamp fixture read-only");
+    .expect("make delete fixture read-only");
 
-    let variable = "neovm-test-w32-time-events";
+    let variable = "neovm-test-w32-delete-events";
     let callback = install_windows_event_recorder(&mut eval, variable);
     let descriptor = add_windows_attribute_watch(&mut eval, &file, callback);
-    crate::emacs_core::fileio::builtin_set_file_times(
-        &mut eval,
-        vec![file_name, Value::fixnum(0), Value::symbol("nofollow")],
-    )
-    .expect("change watched file timestamps");
+    crate::emacs_core::fileio::builtin_delete_file_internal(&mut eval, vec![file_name])
+        .expect("delete read-only watched file");
     let events = service_until(&mut eval, variable, has_modified_event);
     assert!(
         has_modified_event(&events),
-        "changing timestamps on a read-only file did not notify the watcher"
+        "deleting the read-only file did not expose GNU's attribute-clear notification"
     );
+    assert!(!file.exists(), "read-only file still exists after deletion");
 
     w32notify_rm_watch(vec![descriptor]).expect("remove Windows attribute watch");
-    crate::emacs_core::fileio::builtin_set_file_modes(
-        &mut eval,
-        vec![file_name, Value::fixnum(0o600), Value::symbol("nofollow")],
-    )
-    .expect("restore fixture writability");
     reset_file_notify_thread_locals();
 }
 
