@@ -21,6 +21,7 @@ mod child_frames;
 mod content;
 mod cursor_effects;
 mod cursor_presentation;
+mod deform;
 mod dynamic_buffer;
 mod effect_common;
 mod effects_state;
