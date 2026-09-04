@@ -1,5 +1,6 @@
 use super::*;
 use flate2::{Compression, write::GzEncoder};
+use serde::Deserialize;
 
 fn github_workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
     let marker = format!("\n  {name}:\n");
@@ -213,6 +214,265 @@ fn linux_release_publishes_verified_full_and_minimal_products() {
     assert!(audit.contains("minimal-tar"));
     assert!(workflow.contains("fresh-build --release --minimal"));
     assert!(workflow.contains("package-release.sh --minimal"));
+}
+
+#[test]
+fn release_workflow_publishes_only_tagged_nix_release_closures() {
+    #[derive(Debug, Deserialize)]
+    struct WorkflowDocument {
+        jobs: BTreeMap<String, serde_yaml_ng::Value>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReleaseCacheJob {
+        name: String,
+        #[serde(rename = "if")]
+        condition: String,
+        needs: String,
+        permissions: ReleaseCachePermissions,
+        strategy: ReleaseCacheStrategy,
+        #[serde(rename = "runs-on")]
+        runs_on: String,
+        #[serde(rename = "timeout-minutes")]
+        timeout_minutes: u16,
+        env: BTreeMap<String, String>,
+        steps: Vec<ReleaseCacheStep>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReleaseCachePermissions {
+        contents: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct ReleaseCacheStrategy {
+        fail_fast: bool,
+        matrix: ReleaseCacheMatrix,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReleaseCacheMatrix {
+        include: Vec<ReleaseCacheTarget>,
+    }
+
+    #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+    enum NixReleaseSystem {
+        #[serde(rename = "x86_64-linux")]
+        LinuxX86_64,
+        #[serde(rename = "aarch64-linux")]
+        LinuxAarch64,
+        #[serde(rename = "aarch64-darwin")]
+        DarwinAarch64,
+        #[serde(rename = "x86_64-darwin")]
+        DarwinX86_64,
+    }
+
+    #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+    enum NativeReleaseRunner {
+        #[serde(rename = "ubuntu-24.04")]
+        LinuxX86_64,
+        #[serde(rename = "ubuntu-24.04-arm")]
+        LinuxAarch64,
+        #[serde(rename = "macos-15")]
+        DarwinAarch64,
+        #[serde(rename = "macos-15-intel")]
+        DarwinX86_64,
+    }
+
+    #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+    struct ReleaseCacheTarget {
+        system: NixReleaseSystem,
+        runner: NativeReleaseRunner,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReleaseCacheStep {
+        name: String,
+        uses: Option<String>,
+        #[serde(rename = "with")]
+        inputs: Option<serde_yaml_ng::Value>,
+        env: Option<BTreeMap<String, String>>,
+        run: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct CachixActionInputs {
+        name: String,
+        skip_push: bool,
+        use_daemon: bool,
+        skip_adding_substituter: bool,
+    }
+
+    let workflow = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/workflows/release.yml"
+    ));
+    let document: WorkflowDocument =
+        serde_yaml_ng::from_str(workflow).expect("release workflow must be valid YAML");
+    let job: ReleaseCacheJob = serde_yaml_ng::from_value(
+        document
+            .jobs
+            .get("publish-cachix-release")
+            .expect("release workflow must define publish-cachix-release")
+            .clone(),
+    )
+    .expect("Cachix publisher must have the release-cache job shape");
+
+    assert_eq!(
+        job.name,
+        "publish Nix release closure (${{ matrix.system }})"
+    );
+    assert_eq!(
+        job.condition,
+        "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+    );
+    assert_eq!(job.needs, "create-release");
+    assert_eq!(job.permissions.contents, "read");
+    assert!(!job.strategy.fail_fast);
+    assert_eq!(job.runs_on, "${{ matrix.runner }}");
+    assert_eq!(job.timeout_minutes, 240);
+    assert_eq!(
+        job.env.get("NIX_SYSTEM").map(String::as_str),
+        Some("${{ matrix.system }}")
+    );
+    assert!(!job.env.contains_key("CACHIX_AUTH_TOKEN"));
+    assert_eq!(
+        job.strategy.matrix.include,
+        [
+            ReleaseCacheTarget {
+                system: NixReleaseSystem::LinuxX86_64,
+                runner: NativeReleaseRunner::LinuxX86_64,
+            },
+            ReleaseCacheTarget {
+                system: NixReleaseSystem::LinuxAarch64,
+                runner: NativeReleaseRunner::LinuxAarch64,
+            },
+            ReleaseCacheTarget {
+                system: NixReleaseSystem::DarwinAarch64,
+                runner: NativeReleaseRunner::DarwinAarch64,
+            },
+            ReleaseCacheTarget {
+                system: NixReleaseSystem::DarwinX86_64,
+                runner: NativeReleaseRunner::DarwinX86_64,
+            },
+        ]
+    );
+
+    let step = |name: &str| {
+        job.steps
+            .iter()
+            .find(|step| step.name == name)
+            .unwrap_or_else(|| panic!("release cache job must define step {name}"))
+    };
+    assert_eq!(
+        step("Set up Nix").uses.as_deref(),
+        Some("./.github/actions/setup-nix")
+    );
+
+    let cachix = step("Install Cachix without automatic pushing");
+    assert_eq!(
+        cachix.uses.as_deref(),
+        Some("cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866")
+    );
+    let cachix_inputs: CachixActionInputs = serde_yaml_ng::from_value(
+        cachix
+            .inputs
+            .clone()
+            .expect("Cachix action must declare bounded inputs"),
+    )
+    .expect("Cachix action inputs must disable every automatic push mode");
+    assert_eq!(
+        cachix_inputs,
+        CachixActionInputs {
+            name: "eval-exec".to_owned(),
+            skip_push: true,
+            use_daemon: false,
+            skip_adding_substituter: true,
+        }
+    );
+
+    let build_position = job
+        .steps
+        .iter()
+        .position(|step| step.name == "Build only the Nix release products")
+        .expect("release cache job must have an explicit build step");
+    let publish_position = job
+        .steps
+        .iter()
+        .position(|step| step.name == "Push and pin only the release closures")
+        .expect("release cache job must have an explicit publish step");
+    assert!(build_position < publish_position);
+
+    let build = &job.steps[build_position];
+    assert!(build.env.as_ref().is_none_or(BTreeMap::is_empty));
+    let build_script = build.run.as_deref().expect("Nix build step needs a script");
+    assert_eq!(build_script.matches("nix build").count(), 2);
+    assert!(build_script.contains(".#packages.${NIX_SYSTEM}.neomacs\""));
+    assert!(build_script.contains(".#packages.${NIX_SYSTEM}.neomacs-minimal\""));
+    assert_eq!(
+        build_script.matches("--no-link --print-out-paths").count(),
+        2
+    );
+
+    let publish = &job.steps[publish_position];
+    let publish_env = publish
+        .env
+        .as_ref()
+        .expect("publish step must receive its bounded environment");
+    assert_eq!(publish_env.len(), 3);
+    assert_eq!(
+        publish_env.get("CACHIX_AUTH_TOKEN").map(String::as_str),
+        Some("${{ secrets.CACHIX_AUTH_TOKEN }}")
+    );
+    assert_eq!(
+        publish_env.get("FULL_PATH").map(String::as_str),
+        Some("${{ steps.nix-release.outputs.full-path }}")
+    );
+    assert_eq!(
+        publish_env.get("MINIMAL_PATH").map(String::as_str),
+        Some("${{ steps.nix-release.outputs.minimal-path }}")
+    );
+    let publish_script = publish
+        .run
+        .as_deref()
+        .expect("release closure publish step needs a script");
+    assert!(publish_script.contains("cachix push eval-exec"));
+    assert_eq!(publish_script.matches("cachix pin eval-exec").count(), 2);
+
+    let token_steps: Vec<_> = job
+        .steps
+        .iter()
+        .filter(|step| {
+            step.env
+                .as_ref()
+                .is_some_and(|env| env.contains_key("CACHIX_AUTH_TOKEN"))
+        })
+        .map(|step| step.name.as_str())
+        .collect();
+    assert_eq!(
+        token_steps,
+        ["Push and pin only the release closures"],
+        "only the explicit publisher may receive the Cachix write credential"
+    );
+
+    for forbidden in [
+        "watch-store",
+        "watch-exec",
+        "nix develop",
+        "nix flake check",
+        "nix flake archive",
+        "pathsToPush",
+    ] {
+        assert!(
+            job.steps
+                .iter()
+                .filter_map(|step| step.run.as_deref())
+                .all(|script| !script.contains(forbidden)),
+            "release-only cache job contains broad publisher {forbidden}"
+        );
+    }
 }
 
 #[test]

@@ -404,6 +404,96 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Publish only the two Nix package closures that are release products. The
+  # build deliberately runs without the write token, and the Cachix action's
+  # automatic upload modes stay disabled: branch builds, development shells,
+  # checks, flake inputs, and incidental store paths do not belong in the
+  # release cache.
+  publish-cachix-release:
+    name: publish Nix release closure (${{ matrix.system }})
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: create-release
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+          - system: x86_64-darwin
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    env:
+      NIX_SYSTEM: ${{ matrix.system }}
+    steps:
+      - name: Checkout the tagged release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Nix
+        uses: ./.github/actions/setup-nix
+
+      # This action installs the Cachix CLI. setup-nix already owns the
+      # substituter configuration, and all implicit push mechanisms are off.
+      - name: Install Cachix without automatic pushing
+        uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: eval-exec
+          skipPush: true
+          useDaemon: false
+          skipAddingSubstituter: true
+
+      - name: Build only the Nix release products
+        id: nix-release
+        shell: bash
+        run: |
+          set -euo pipefail
+          full_path="$(
+            nix build --accept-flake-config --no-link --print-out-paths \
+              ".#packages.${NIX_SYSTEM}.neomacs"
+          )"
+          minimal_path="$(
+            nix build --accept-flake-config --no-link --print-out-paths \
+              ".#packages.${NIX_SYSTEM}.neomacs-minimal"
+          )"
+
+          case "$full_path" in
+            /nix/store/*) ;;
+            *) echo "unexpected full release output: $full_path" >&2; exit 1 ;;
+          esac
+          case "$minimal_path" in
+            /nix/store/*) ;;
+            *) echo "unexpected minimal release output: $minimal_path" >&2; exit 1 ;;
+          esac
+
+          echo "full-path=$full_path" >> "$GITHUB_OUTPUT"
+          echo "minimal-path=$minimal_path" >> "$GITHUB_OUTPUT"
+
+      # Keep the credential out of Nix evaluation and every build process. It
+      # exists only while the two known roots are uploaded and pinned.
+      - name: Push and pin only the release closures
+        shell: bash
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          FULL_PATH: ${{ steps.nix-release.outputs.full-path }}
+          MINIMAL_PATH: ${{ steps.nix-release.outputs.minimal-path }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$FULL_PATH" "$MINIMAL_PATH" | cachix push eval-exec
+
+          pin_system="${NIX_SYSTEM//_/-}"
+          cachix pin eval-exec \
+            "neomacs-${GITHUB_REF_NAME}-${pin_system}" "$FULL_PATH"
+          cachix pin eval-exec \
+            "neomacs-minimal-${GITHUB_REF_NAME}-${pin_system}" "$MINIMAL_PATH"
+
   # Notify the independently owned AUR publisher only after every native asset
   # and SHA256SUMS have become public. The downstream repository retains its
   # own AUR SSH credential and publishing policy; this job can only send the
