@@ -22006,6 +22006,134 @@ fn command_loop_captures_ignored_error_severity_before_presentation() {
     });
 }
 
+/// Command-loop diagnostics retain their signal-time classification and expose
+/// enough structured data for logs to be queried without parsing prose.  The
+/// presentation callback deliberately adds `void-function' to the ignore list;
+/// that must not suppress the diagnostic already in flight.  A quit remains a
+/// routine user action regardless of the list.
+#[tracing_test::traced_test]
+#[test]
+fn command_loop_emits_typed_diagnostics_for_error_and_quit() {
+    let mut ev = Context::new();
+    let scratch = ev.buffers.create_buffer("*command-loop-diagnostics*");
+    ev.buffers.set_current(scratch);
+    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    assert!(ev.frames.select_frame(frame), "test needs a selected frame");
+    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
+    install_global_map_for_test(&mut ev, global_map);
+
+    fn stop_command_loop_after_diagnostic_probe(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        assert!(args.is_empty(), "stop helper should not receive arguments");
+        ctx.command_loop.running = false;
+        Ok(Value::NIL)
+    }
+    ev.register_subr(SubrSpec::new(
+        "neo-stop-command-loop-after-diagnostic-probe",
+        NativeFn::ContextVec(stop_command_loop_after_diagnostic_probe),
+        SubrArity::new(0, Some(0)),
+    ));
+    ev.eval_str(
+        r#"(progn
+             (setq debug-ignored-errors nil
+                   neo-command-error-observations nil)
+             (set (make-local-variable 'command-error-function)
+                  (lambda (data _context _caller)
+                    (setq neo-command-error-observations
+                          (cons data neo-command-error-observations))
+                    (if (eq (car data) 'void-function)
+                        (setq debug-ignored-errors '(void-function)))))
+             (fset 'neo-diagnostic-signaling-command
+                   (lambda () (interactive) (neo-no-such-command)))
+             (fset 'neo-quit-signaling-command
+                   (lambda () (interactive) (signal 'quit nil)))
+             (fset 'neo-stop-after-diagnostic-command
+                   (lambda ()
+                     (interactive)
+                     (neo-stop-command-loop-after-diagnostic-probe)))
+             (fset 'command-execute
+                   (lambda (cmd &optional _record _keys _special)
+                     (funcall cmd))))"#,
+    )
+    .expect("install command-loop diagnostic probe");
+
+    for (key, command) in [
+        ("f10", "neo-diagnostic-signaling-command"),
+        ("f11", "neo-quit-signaling-command"),
+    ] {
+        crate::emacs_core::keymap::list_keymap_define_seq(
+            global_map,
+            &[Value::symbol(key)],
+            Value::symbol(command),
+        )
+        .expect("define signaling command");
+        ev.command_loop
+            .keyboard
+            .kboard
+            .unread_events
+            .push_back(Value::symbol(key));
+    }
+    crate::emacs_core::keymap::list_keymap_define_seq(
+        global_map,
+        &[Value::fixnum('q' as i64)],
+        Value::symbol("neo-stop-after-diagnostic-command"),
+    )
+    .expect("define stop command");
+    ev.command_loop
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(Value::fixnum('q' as i64));
+    ev.command_loop.running = true;
+
+    ev.recursive_edit_inner()
+        .expect("command loop should recover from both signals");
+
+    assert_eq!(
+        ev.eval_symbol("neo-command-error-observations")
+            .expect("command error observations"),
+        Value::list(vec![
+            Value::list(vec![Value::symbol("quit")]),
+            Value::list(vec![
+                Value::symbol("void-function"),
+                Value::symbol("neo-no-such-command"),
+            ]),
+        ]),
+        "both signals must be presented through the buffer-local callback"
+    );
+    logs_assert(|logs| {
+        let event_for = |condition: &str| {
+            logs.iter().copied().find(|line| {
+                line.contains("Command loop condition:")
+                    && line.contains(&format!("condition={condition}"))
+            })
+        };
+        let Some(error) = event_for("void-function") else {
+            return Err(format!("missing void-function diagnostic in {logs:#?}"));
+        };
+        if !error.contains(" ERROR ")
+            || !error.contains("signal=(void-function (neo-no-such-command))")
+            || !error.contains("backtrace=")
+        {
+            return Err(format!(
+                "void-function event lacks ERROR severity or structured fields: {error}"
+            ));
+        }
+
+        let Some(quit) = event_for("quit") else {
+            return Err(format!("missing quit diagnostic in {logs:#?}"));
+        };
+        if !quit.contains(" DEBUG ")
+            || !quit.contains("signal=(quit nil)")
+            || !quit.contains("backtrace=")
+        {
+            return Err(format!(
+                "quit event lacks DEBUG severity or structured fields: {quit}"
+            ));
+        }
+        Ok(())
+    });
+}
+
 /// One completed command is the public observability seam: input waiting has
 /// already ended, and the command loop owns every phase through finalization.
 /// A user can therefore correlate the start/complete records without mistaking

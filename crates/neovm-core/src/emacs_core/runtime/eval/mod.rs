@@ -7756,32 +7756,15 @@ impl Context {
                     // Keeping reporting here ensures the current buffer's
                     // buffer-local `command-error-function' decides how the
                     // error is presented (notably `minibuffer-error-function').
-                    let sym_name = format_symbol_name_for_diagnostic(sig.symbol);
-                    let error_msg = self.command_error_message(&sig);
-                    // Render the *condition symbol* and full signal payload, not
-                    // just the human message: a bare "peculiar error" (an error
-                    // whose condition has no `error-message`) is otherwise
-                    // undiagnosable in a bug report. `condition=` names the
-                    // symbol; `signal=` is the Lisp-readable `(SYMBOL . DATA)`.
-                    let rendered_signal = super::error::format_signal_data_with_eval(self, &sig);
-                    // Backtrace captured at signal-dispatch time (debug tracing
-                    // only); shows where it was raised without `debug-on-error`.
-                    let backtrace_suffix = self
-                        .last_uncaught_signal_backtrace
-                        .take()
-                        .map(|bt| format!("\nLisp backtrace (innermost first):\n{bt}"))
-                        .unwrap_or_default();
+                    // Capture every diagnostic decision and value before
+                    // arbitrary presentation Lisp can mutate editor state.
+                    let diagnostic = self.capture_command_loop_diagnostic(&sig);
                     // GNU `cmd_error' clears both prefix arguments and key
                     // echoing before calling `cmd_error_internal'.
                     self.assign("prefix-arg", Value::NIL);
                     self.assign("last-prefix-arg", Value::NIL);
                     self.cancel_key_echo_state();
 
-                    // Classify while the signal's buffer and ignore policy are
-                    // still current.  The presentation callback below is
-                    // arbitrary Lisp and may change either one; GNU's debugger
-                    // gate has already made this decision before `cmd_error'.
-                    let severity = self.command_error_severity(&sig);
                     let data = self.signal_error_data_value(&sig);
                     self.report_command_error(data, "")?;
 
@@ -7790,16 +7773,7 @@ impl Context {
                     // (see `command_error_severity'): a quit or a
                     // `debug-ignored-errors' match is what the user just did,
                     // not an error.
-                    match severity {
-                        CommandErrorSeverity::Routine => tracing::debug!(
-                            condition = %sym_name,
-                            "Command loop signal: {error_msg} [signal={rendered_signal}]{backtrace_suffix}"
-                        ),
-                        CommandErrorSeverity::Diagnostic => tracing::error!(
-                            condition = %sym_name,
-                            "Command loop error: {error_msg} [signal={rendered_signal}]{backtrace_suffix}"
-                        ),
-                    }
+                    diagnostic.emit();
 
                     // Restart the command loop.
                     continue;
@@ -7821,6 +7795,25 @@ impl Context {
                     .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
             })
             .unwrap_or_else(|| format_symbol_name_for_diagnostic(sig.symbol))
+    }
+
+    /// Freeze a command-loop diagnostic before `command-error-function' runs.
+    ///
+    /// GNU makes its debugger-ignore decision during signal dispatch, before
+    /// `cmd_error_internal' calls the presentation hook.  Keeping severity and
+    /// rendered values in one owned record makes that ordering explicit and
+    /// prevents later Lisp state changes from altering the event in flight.
+    fn capture_command_loop_diagnostic(&mut self, sig: &SignalData) -> CommandLoopDiagnostic {
+        CommandLoopDiagnostic {
+            severity: self.command_error_severity(sig),
+            condition: format_symbol_name_for_diagnostic(sig.symbol),
+            message: self.command_error_message(sig),
+            signal: super::error::format_signal_data_with_eval(self, sig),
+            backtrace: self
+                .last_uncaught_signal_backtrace
+                .take()
+                .unwrap_or_default(),
+        }
     }
 
     /// Main command loop — read key sequence, look up binding, execute.
@@ -19530,11 +19523,54 @@ fn next_context_instance_id() -> u64 {
 /// How the command loop's log treats an uncaught command signal; see
 /// `Context::command_error_severity'.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommandErrorSeverity {
+enum CommandErrorSeverity {
     /// What the user just did: a quit, or a condition GNU's debugger ignores
     /// (`debug-ignored-errors').  Shown in the echo area, logged at debug.
     Routine,
     /// Anything else: shown the same way, logged as an error so a bug
     /// report carries the condition and payload.
     Diagnostic,
+}
+
+/// An owned snapshot of one uncaught command signal, captured before Lisp
+/// presentation code can alter the state used to classify or render it.
+struct CommandLoopDiagnostic {
+    severity: CommandErrorSeverity,
+    condition: String,
+    message: String,
+    signal: String,
+    backtrace: String,
+}
+
+impl CommandLoopDiagnostic {
+    fn emit(self) {
+        let Self {
+            severity,
+            condition,
+            message,
+            signal,
+            backtrace,
+        } = self;
+
+        // A tracing callsite's level is static metadata, so selecting a level
+        // through a runtime variable would not compile.  Expanding the shared
+        // fields with a literal level keeps two compile-time callsites without
+        // duplicating the diagnostic schema.
+        macro_rules! emit_at {
+            ($level:expr) => {
+                tracing::event!(
+                    $level,
+                    condition = %condition,
+                    signal = %signal,
+                    backtrace = %backtrace,
+                    "Command loop condition: {message}"
+                )
+            };
+        }
+
+        match severity {
+            CommandErrorSeverity::Routine => emit_at!(tracing::Level::DEBUG),
+            CommandErrorSeverity::Diagnostic => emit_at!(tracing::Level::ERROR),
+        }
+    }
 }
