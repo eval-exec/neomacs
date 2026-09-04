@@ -125,11 +125,14 @@ export function installBrowserInput({
   root.addEventListener("keyup", (event) => sendKey(event, "released"), true);
   root.addEventListener("resize", sendViewport);
   installDeviceScaleViewportObserver(root, sendViewport);
-  root.addEventListener("focus", () => enqueue({
-    type: "focus-changed",
-    focused: true,
-    target: targetFrame(),
-  }));
+  root.addEventListener("focus", () => {
+    focusTextInput();
+    enqueue({
+      type: "focus-changed",
+      focused: true,
+      target: targetFrame(),
+    });
+  });
   root.addEventListener("blur", () => enqueue({
     type: "focus-changed",
     focused: false,
@@ -153,4 +156,5 @@ export function installBrowserInput({
       enqueue({ type: "text-committed", text, target: targetFrame() });
     }
   });
+  focusTextInput();
 }
