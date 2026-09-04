@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use neomacs_display_protocol::types::VideoId;
 
 use super::{
-    BackendEvent, DecodedFrame, DecodedFrameImport, DecoderOutputGeneration, backend_bridge,
+    BackendEvent, DecodedFrame, DecodedFrameImport, DecoderOutputGeneration,
+    MeasurementEpochDisposition, backend_bridge,
 };
 use crate::{
     FrameTiming, MediaTime, PackedVideoFormat, PlaybackEpoch, VideoColorimetry, VideoFrameFormat,
@@ -82,6 +83,37 @@ fn measurement_boundary_rejects_an_in_flight_old_generation_publication() {
         &events[0],
         BackendEvent::Frame { frame, .. } if frame.lease == 2
     ));
+}
+
+#[test]
+fn every_backend_event_has_an_explicit_measurement_epoch_disposition() {
+    let id = VideoId::new(1);
+    assert!(MeasurementEpochDisposition::Retain.retains_event());
+    assert!(!MeasurementEpochDisposition::Discard.retains_event());
+    assert_eq!(
+        BackendEvent::Frame {
+            id,
+            frame: frame(1),
+        }
+        .measurement_epoch_disposition(),
+        MeasurementEpochDisposition::Discard
+    );
+    assert_eq!(
+        BackendEvent::<u64>::FramesReplaced { id, count: 1 }.measurement_epoch_disposition(),
+        MeasurementEpochDisposition::Discard
+    );
+    assert_eq!(
+        BackendEvent::<u64>::Ended { id }.measurement_epoch_disposition(),
+        MeasurementEpochDisposition::Retain
+    );
+    assert_eq!(
+        BackendEvent::<u64>::OutputReconfigured {
+            id,
+            generation: DecoderOutputGeneration::INITIAL.next(),
+        }
+        .measurement_epoch_disposition(),
+        MeasurementEpochDisposition::Retain
+    );
 }
 
 fn frame(lease: u64) -> DecodedFrame<u64> {

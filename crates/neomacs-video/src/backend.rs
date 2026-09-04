@@ -134,6 +134,27 @@ pub(crate) enum BackendEvent<F> {
     },
 }
 
+/// Whether a queued backend event crosses a diagnostic measurement boundary.
+///
+/// Lifecycle and capability events must remain observable after counters are
+/// reset. Frame evidence produced before the acknowledged boundary must not be
+/// counted in the new epoch. Keeping this as a closed enum, and classifying
+/// events with an exhaustive match, makes every newly added event choose its
+/// behavior explicitly.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeasurementEpochDisposition {
+    Retain,
+    Discard,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+impl MeasurementEpochDisposition {
+    pub(crate) const fn retains_event(self) -> bool {
+        matches!(self, Self::Retain)
+    }
+}
+
 impl<F> BackendEvent<F> {
     pub(crate) const fn id(&self) -> VideoId {
         match self {
@@ -149,9 +170,21 @@ impl<F> BackendEvent<F> {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    pub(crate) const fn is_frame_measurement(&self) -> bool {
-        matches!(self, Self::Frame { .. } | Self::FramesReplaced { .. })
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
+    pub(crate) const fn measurement_epoch_disposition(&self) -> MeasurementEpochDisposition {
+        match self {
+            Self::Frame { .. } => MeasurementEpochDisposition::Discard,
+            #[cfg(any(target_os = "linux", test))]
+            Self::FramesReplaced { .. } => MeasurementEpochDisposition::Discard,
+            Self::Opened { .. }
+            | Self::DecoderSelected { .. }
+            | Self::StateChanged { .. }
+            | Self::Looped { .. }
+            | Self::Ended { .. }
+            | Self::Failed { .. } => MeasurementEpochDisposition::Retain,
+            #[cfg(any(target_os = "linux", test))]
+            Self::OutputReconfigured { .. } => MeasurementEpochDisposition::Retain,
+        }
     }
 }
 

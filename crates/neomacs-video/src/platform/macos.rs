@@ -710,8 +710,11 @@ impl DecoderBackend for MacDecoder {
     }
 
     fn begin_measurement_epoch(&mut self) {
-        self.pending
-            .retain(|event| !event.is_frame_measurement());
+        self.pending.retain(|event| {
+            event
+                .measurement_epoch_disposition()
+                .retains_event()
+        });
     }
 }
 
