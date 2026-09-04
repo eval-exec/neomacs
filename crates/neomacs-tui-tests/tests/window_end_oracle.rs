@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! GNU Emacs oracle coverage for synchronous `window-end` layout queries.
 //!
 //! The probes run inside real interactive TTY frames.  Batch mode cannot

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparison tests: shell compile.
 
 mod support;

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI parity guards for Finding 6: a requested redisplay must NOT be
 //! dropped when only a display-affecting buffer variable changes.
 //!

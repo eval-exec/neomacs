@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! The colour a face reaches the terminal as is the one Lisp computed.
 //!
 //! GNU never quantizes in the writer.  `map_tty_color` (src/xfaces.c:6620-6694)

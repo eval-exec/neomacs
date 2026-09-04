@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Attribute-level face parity scenarios guarded by whole-screen
 //! exact whole-display comparisons.
 //!

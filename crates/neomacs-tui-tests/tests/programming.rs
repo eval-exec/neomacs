@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparisons for common programming-buffer workflows.
 //!
 //! These cover GNU Emacs behavior from `lisp/indent.el`,

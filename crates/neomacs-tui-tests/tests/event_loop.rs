@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Event-loop / wait-machinery regression tests (Neomacs-only).
 //!
 //! These guard the GNU-faithful unified-wait redesign (issue #132). Each

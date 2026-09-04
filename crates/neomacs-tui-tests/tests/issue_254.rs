@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Regression coverage for issue #254: quitting `M-x` must dismiss its
 //! `*Completions*` popup window.
 

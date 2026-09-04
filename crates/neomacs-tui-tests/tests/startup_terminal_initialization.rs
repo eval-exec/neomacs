@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Startup on a terminal that auto-enables xterm mouse tracking still runs `-l`.
 //!
 //! `xterm--init` (lisp/term/xterm.el:1035-1044) calls `(xterm-mouse-mode 1)`

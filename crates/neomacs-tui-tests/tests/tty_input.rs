@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! End-to-end Unix TTY input regressions.
 //!
 //! These tests deliberately enter bytes through a real PTY.  Unit tests in

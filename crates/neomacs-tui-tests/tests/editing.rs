@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparisons for ordinary scratch-buffer editing.
 //!
 //! GNU's default path for printable characters is `self-insert-command`

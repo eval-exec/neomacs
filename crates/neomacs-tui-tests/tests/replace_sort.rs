@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparison tests: replace sort.
 
 mod support;

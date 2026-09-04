@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparisons for common Org mode workflows.
 //!
 //! GNU behavior here is driven by `lisp/org/org.el`,

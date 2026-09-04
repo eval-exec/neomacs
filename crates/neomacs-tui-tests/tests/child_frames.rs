@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparison tests for TTY child frame functionality.
 //!
 //! Each test spawns GNU Emacs and Neomacs side-by-side in isolated PTYs,

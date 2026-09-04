@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Regression test for issue #170: Doom's list-valued `line-prefix` must
 //! center buffer text in the public TTY character grid.
 

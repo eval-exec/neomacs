@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! End-to-end exact-display comparisons of Neomacs vs GNU Emacs.
 
 mod support;

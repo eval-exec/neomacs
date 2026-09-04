@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparison tests for the interactive command classes that exercise the
 //! command loop's sub-reads, `this-command-keys`, prefix-arg, and quit
 //! machinery — the same machinery this session's event-loop commits touched

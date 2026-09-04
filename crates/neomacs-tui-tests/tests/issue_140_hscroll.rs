@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Issue #140: with `truncate-lines` non-nil, `C-e` to the end of a line that
 //! extends past the window's right edge must auto-hscroll so the cursor stays
 //! visible — matching GNU's `hscroll_window_tree` exactly. Before the fix

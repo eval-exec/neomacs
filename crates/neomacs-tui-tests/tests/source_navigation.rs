@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparisons for common source-navigation workflows.
 //!
 //! GNU behavior here is driven by `lisp/progmodes/xref.el`,

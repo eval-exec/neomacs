@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI tests for child frame visibility lifecycle.
 //!
 //! Exercises the `set-frame-parameter 'visibility` → host notification

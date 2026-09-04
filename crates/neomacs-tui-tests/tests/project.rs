@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparisons for common project.el workflows.
 //!
 //! GNU behavior here is driven by `lisp/progmodes/project.el`:

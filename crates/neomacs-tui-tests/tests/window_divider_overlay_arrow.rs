@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! TUI comparison test: the overlay arrow.
 //!
 //! Written because the "window-divider / overlay-arrow TUI divergence

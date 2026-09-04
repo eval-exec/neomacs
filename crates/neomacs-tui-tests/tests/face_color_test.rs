@@ -1,3 +1,4 @@
+#![cfg(unix)]
 // Face colour comparison test via PTY.
 //!
 // Boots neomacs and GNU Emacs side-by-side, opens the Doom help
