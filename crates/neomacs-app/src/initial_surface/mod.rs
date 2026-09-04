@@ -18,6 +18,8 @@ use neovm_core::window::{
     FrameDisplayIdentity, FrameId, FrameParam, FrameVisibility, Rect, Window,
 };
 
+use crate::frontend_event::FrontendScaleFactor;
+
 /// Invalid geometry at the evaluator/frontend startup boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InvalidInitialFrameMetrics {
@@ -153,6 +155,7 @@ impl InitialBackgroundMode {
 #[derive(Clone, Debug)]
 enum InitialEditorSurfaceKind {
     Gui {
+        device_scale: FrontendScaleFactor,
         display_identity: FrameDisplayIdentity,
         display_type: InitialDisplayType,
         background_mode: InitialBackgroundMode,
@@ -175,6 +178,7 @@ impl InitialEditorSurfaceSpec {
     #[must_use]
     pub fn gui(
         metrics: InitialFrameMetrics,
+        device_scale: FrontendScaleFactor,
         display_identity: FrameDisplayIdentity,
         display_type: InitialDisplayType,
         background_mode: InitialBackgroundMode,
@@ -183,6 +187,7 @@ impl InitialEditorSurfaceSpec {
         Self {
             metrics,
             kind: InitialEditorSurfaceKind::Gui {
+                device_scale,
                 display_identity,
                 display_type,
                 background_mode,
@@ -331,28 +336,31 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
             .retain(|buffer| *buffer != scratch_buffer);
     }
 
-    let (initial_tty_frame, display_identity, display_type, background_mode, font) = match spec.kind
-    {
-        InitialEditorSurfaceKind::Gui {
-            display_identity,
-            display_type,
-            background_mode,
-            font,
-        } => (
-            false,
-            display_identity,
-            Some(display_type),
-            Some(background_mode),
-            font,
-        ),
-        InitialEditorSurfaceKind::Tty { initial_frame } => (
-            initial_frame,
-            FrameDisplayIdentity::default(),
-            None,
-            None,
-            InitialFrameFont::new(Value::NIL, Value::string("fixed")),
-        ),
-    };
+    let (initial_tty_frame, device_scale, display_identity, display_type, background_mode, font) =
+        match spec.kind {
+            InitialEditorSurfaceKind::Gui {
+                device_scale,
+                display_identity,
+                display_type,
+                background_mode,
+                font,
+            } => (
+                false,
+                Some(device_scale),
+                display_identity,
+                Some(display_type),
+                Some(background_mode),
+                font,
+            ),
+            InitialEditorSurfaceKind::Tty { initial_frame } => (
+                initial_frame,
+                None,
+                FrameDisplayIdentity::default(),
+                None,
+                None,
+                InitialFrameFont::new(Value::NIL, Value::string("fixed")),
+            ),
+        };
     let font_snapshot = font
         .parameter
         .as_vector_data()
@@ -380,6 +388,7 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
         frame_state.height = height;
         frame_state.visibility = FrameVisibility::Visible;
         if gui {
+            frame_state.device_scale_factor = device_scale.expect("GUI device scale").get();
             frame_state.set_window_system(Some(Value::symbol(gui_window_system_symbol())));
             frame_state.install_gnu_gui_default_parameters();
             frame_state.set_display_identity(display_identity);

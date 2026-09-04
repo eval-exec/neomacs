@@ -6,6 +6,7 @@ use neomacs_display_protocol::{ModifierEventKind, TransportModifierBits};
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
+use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::window::WindowId;
 
 impl RenderApp {

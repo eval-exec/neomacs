@@ -3,6 +3,7 @@
 use std::ffi::CString;
 use std::io;
 
+use neomacs_app::frontend_event::{FrontendLogicalExtent, FrontendScaleFactor};
 use neomacs_app::host::HostProfile;
 use neomacs_app::initial_surface::{
     InitialBackgroundMode, InitialDisplayType, InitialEditorSurfaceSpec, InitialFrameFont,
@@ -20,14 +21,14 @@ use winit::platform::android::activity::AndroidApp;
 /// Start one complete editor session without blocking the Activity thread.
 pub(super) fn spawn(
     app: AndroidApp,
-    width: u32,
-    height: u32,
+    logical_extent: FrontendLogicalExtent,
+    device_scale: FrontendScaleFactor,
     emit: impl Fn(NativeEditorWorkerEvent) + Send + 'static,
 ) -> io::Result<NativeEditorWorker> {
     let font_sizing = FontSizing::logical();
     NativeEditorWorker::spawn(
         "neomacs-android-evaluator",
-        move || create_evaluator(app, width, height, font_sizing),
+        move || create_evaluator(app, logical_extent, device_scale, font_sizing),
         PresentationMetrics::Scalable(font_sizing),
         emit,
     )
@@ -35,8 +36,8 @@ pub(super) fn spawn(
 
 fn create_evaluator(
     app: AndroidApp,
-    width: u32,
-    height: u32,
+    logical_extent: FrontendLogicalExtent,
+    device_scale: FrontendScaleFactor,
     font_sizing: FontSizing,
 ) -> Result<neovm_core::emacs_core::eval::Context, String> {
     let app_data = app
@@ -94,8 +95,8 @@ fn create_evaluator(
     let font_pixel_size = font_sizing.face_height_to_layout_pixels(100);
     let metrics = FontMetricsService::new().font_metrics("Monospace", 400, false, font_pixel_size);
     let frame_metrics = InitialFrameMetrics::new(
-        width,
-        height,
+        logical_extent.width(),
+        logical_extent.height(),
         metrics.char_width.max(1.0),
         metrics.line_height.max(1.0),
         font_pixel_size,
@@ -105,6 +106,7 @@ fn create_evaluator(
         &mut evaluator,
         InitialEditorSurfaceSpec::gui(
             frame_metrics,
+            device_scale,
             Default::default(),
             InitialDisplayType::Color,
             InitialBackgroundMode::Light,

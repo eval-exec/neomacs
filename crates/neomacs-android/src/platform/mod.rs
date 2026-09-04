@@ -4,7 +4,7 @@ mod evaluator;
 mod presentation;
 
 use neomacs_app::frontend_event::{
-    FrontendEvent, FrontendFrameId, FrontendLogicalExtent, FrontendViewport,
+    FrontendEvent, FrontendFrameId, FrontendLogicalExtent, FrontendScaleFactor, FrontendViewport,
 };
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
 use neomacs_app::session::{
@@ -55,22 +55,34 @@ impl AndroidFrontend {
         if self.worker.is_some() {
             return;
         }
-        let Some(size) = self
-            .presented
-            .as_ref()
-            .and_then(|presented| presented.logical_size().ok().flatten())
-        else {
+        let Some(logical_extent) = self.presented_logical_extent() else {
             return;
         };
-        let width = size.width().ceil().max(1.0) as u32;
-        let height = size.height().ceil().max(1.0) as u32;
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let device_scale = FrontendScaleFactor::new(window.scale_factor())
+            .expect("winit supplied an invalid Android scale factor");
         let proxy = self.worker_events.clone();
         self.worker = Some(
-            evaluator::spawn(self.app.clone(), width, height, move |event| {
-                let _ = proxy.send_event(event);
-            })
+            evaluator::spawn(
+                self.app.clone(),
+                logical_extent,
+                device_scale,
+                move |event| {
+                    let _ = proxy.send_event(event);
+                },
+            )
             .unwrap_or_else(|error| panic!("failed to spawn Android evaluator: {error}")),
         );
+    }
+
+    fn presented_logical_extent(&self) -> Option<FrontendLogicalExtent> {
+        let size = self.presented.as_ref()?.logical_size().ok().flatten()?;
+        Some(FrontendLogicalExtent::new(
+            size.width().round().max(1.0) as u32,
+            size.height().round().max(1.0) as u32,
+        ))
     }
 
     fn submit(&mut self, event: FrontendEvent) {
@@ -87,17 +99,9 @@ impl AndroidFrontend {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        let Some(size) = self
-            .presented
-            .as_ref()
-            .and_then(|presented| presented.logical_size().ok().flatten())
-        else {
+        let Some(logical_extent) = self.presented_logical_extent() else {
             return;
         };
-        let logical_extent = FrontendLogicalExtent::new(
-            size.width().round().max(1.0) as u32,
-            size.height().round().max(1.0) as u32,
-        );
         let viewport = FrontendViewport::new(logical_extent, window.scale_factor(), self.target)
             .expect("winit supplied an invalid Android scale factor");
         self.submit(FrontendEvent::ViewportChanged(viewport));

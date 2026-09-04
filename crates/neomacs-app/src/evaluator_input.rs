@@ -71,6 +71,15 @@ impl<'a> EvaluatorInputBatch<'a> {
                     emacs_frame_id: viewport.target().get(),
                 })
             }
+            FrontendEvent::TerminalViewportChanged(viewport) => {
+                let extent = viewport.extent();
+                Self::single(InputEvent::Resize {
+                    width: extent.columns(),
+                    height: extent.rows(),
+                    scale_factor: 1.0,
+                    emacs_frame_id: viewport.target().get(),
+                })
+            }
             FrontendEvent::CloseRequested { target } => Self::single(InputEvent::WindowClose {
                 emacs_frame_id: target.get(),
             }),
