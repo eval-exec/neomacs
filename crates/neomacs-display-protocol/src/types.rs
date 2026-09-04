@@ -56,6 +56,75 @@ display_id_type!(SurfaceId, u32);
 // neovm bridge boundary, which wrap into `FaceId` immediately.
 display_id_type!(FaceId, u32);
 
+/// A [`DisplayWindowId`] that has passed presentation-time validation.
+///
+/// `DisplayWindowId(0)` is used across the display engine as a "no window"
+/// placeholder — an unowned glyph buffer, a media surface with no host window,
+/// a status line built outside any window. That is fine for those structures,
+/// but it is poison for anything that keys on window *identity*: a diff that
+/// admitted the placeholder would pair two unrelated entries as the same
+/// window and treat them as one thing that moved.
+///
+/// Temporal planning therefore consumes `LiveDisplayWindowId`, which cannot be
+/// zero, and structures that genuinely mean "no window" say so with
+/// `Option<LiveDisplayWindowId>`.
+///
+/// Note that reuse is not a concern: the evaluator hands out window ids from a
+/// monotonic counter that starts at 1 and never recycles, so a live id is
+/// unique for the lifetime of the session.
+#[repr(transparent)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct LiveDisplayWindowId(std::num::NonZeroI64);
+
+/// The window identity was the `0` placeholder, which names no window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaceholderWindowId;
+
+impl std::fmt::Display for PlaceholderWindowId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("window id 0 is the no-window placeholder, not a live window")
+    }
+}
+
+impl std::error::Error for PlaceholderWindowId {}
+
+impl LiveDisplayWindowId {
+    #[must_use]
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+
+    #[must_use]
+    pub const fn id(self) -> DisplayWindowId {
+        DisplayWindowId::new(self.0.get())
+    }
+}
+
+impl TryFrom<DisplayWindowId> for LiveDisplayWindowId {
+    type Error = PlaceholderWindowId;
+
+    fn try_from(value: DisplayWindowId) -> Result<Self, Self::Error> {
+        match std::num::NonZeroI64::new(value.get()) {
+            Some(raw) => Ok(Self(raw)),
+            None => Err(PlaceholderWindowId),
+        }
+    }
+}
+
+impl From<LiveDisplayWindowId> for DisplayWindowId {
+    fn from(value: LiveDisplayWindowId) -> Self {
+        value.id()
+    }
+}
+
+impl std::fmt::Display for LiveDisplayWindowId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// Visual direction encoded by the parity of a resolved Unicode bidi level.
 ///
 /// Keep parity interpretation at the protocol boundary instead of scattering
