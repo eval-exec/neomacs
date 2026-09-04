@@ -1,7 +1,7 @@
 use neomacs_app::evaluator_input::EvaluatorInputBatch;
 use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendModifiers, FrontendPresentationId, FrontendViewport,
+    FrontendLogicalExtent, FrontendModifiers, FrontendPresentationId, FrontendViewport,
 };
 use neovm_core::keyboard::{self, InputEvent};
 
@@ -69,7 +69,12 @@ fn committed_text_expands_lazily_in_source_order() {
 #[test]
 fn viewport_focus_and_close_preserve_frame_identity() {
     let viewport = FrontendEvent::ViewportChanged(
-        FrontendViewport::new(800, 600, 1.25, FrontendFrameId::new(9)).unwrap(),
+        FrontendViewport::new(
+            FrontendLogicalExtent::new(800, 600),
+            1.25,
+            FrontendFrameId::new(9),
+        )
+        .unwrap(),
     );
     assert!(matches!(
         one(&viewport),
