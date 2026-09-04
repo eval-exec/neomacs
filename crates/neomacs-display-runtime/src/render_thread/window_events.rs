@@ -7,6 +7,7 @@ use neovm_core::keyboard::FrontendKey;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
+use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::window::WindowId;
 
 impl RenderApp {

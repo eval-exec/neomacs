@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use neomacs_app::frontend_event::FrontendScaleFactor;
 use neomacs_app::initial_surface::{
     InitialBackgroundMode, InitialDisplayType, InitialEditorSurfaceSpec, InitialFrameFont,
     InitialFrameMetrics, prepare_initial_editor_surface,
@@ -17,6 +18,7 @@ fn interactive_gui_startup_materializes_host_identity_and_gnu_command_line_state
         &mut evaluator,
         InitialEditorSurfaceSpec::gui(
             metrics,
+            FrontendScaleFactor::ONE,
             Default::default(),
             InitialDisplayType::Color,
             InitialBackgroundMode::Light,
