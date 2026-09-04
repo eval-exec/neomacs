@@ -10,9 +10,11 @@ worker, Rust host-import, and OPFS boundaries as an interactive browser session.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import time
+from pathlib import Path
 
 import cbor2
 from selenium import webdriver
@@ -26,6 +28,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:4174/")
     parser.add_argument("--chrome", help="path to Chrome or Chromium")
+    parser.add_argument(
+        "--artifacts-dir",
+        help="write a screenshot and browser state here when the smoke test fails",
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
         "--persistence-only",
@@ -297,6 +303,39 @@ def install_frame_observer(driver: webdriver.Chrome) -> None:
     )
 
 
+def capture_failure_artifacts(driver: webdriver.Chrome, directory: str) -> None:
+    output = Path(directory)
+    output.mkdir(parents=True, exist_ok=True)
+
+    errors: list[str] = []
+    try:
+        driver.save_screenshot(str(output / "browser.png"))
+    except Exception as error:  # noqa: BLE001 - diagnostics must not mask the failure
+        errors.append(f"screenshot: {error}")
+    try:
+        (output / "page.html").write_text(driver.page_source, encoding="utf-8")
+    except Exception as error:  # noqa: BLE001 - diagnostics must not mask the failure
+        errors.append(f"page source: {error}")
+    try:
+        state = {
+            "frame_text": frame_text(driver),
+            "worker_messages": driver.execute_script(
+                "return globalThis.__neomacsMessages || []"
+            ),
+        }
+        (output / "browser-state.json").write_text(
+            json.dumps(state, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    except Exception as error:  # noqa: BLE001 - diagnostics must not mask the failure
+        errors.append(f"browser state: {error}")
+    if errors:
+        (output / "artifact-errors.txt").write_text(
+            "\n".join(errors) + "\n",
+            encoding="utf-8",
+        )
+
+
 def main() -> None:
     args = parse_args()
     options = Options()
@@ -390,6 +429,10 @@ def main() -> None:
             args.timeout,
         )
         print(f"PASS: browser filesystem persisted {token} across reload")
+    except Exception:
+        if args.artifacts_dir:
+            capture_failure_artifacts(driver, args.artifacts_dir)
+        raise
     finally:
         driver.quit()
 
