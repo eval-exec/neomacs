@@ -316,9 +316,9 @@ impl InFlightPinned for SignalData {
 // conservatively, so the payload is a root for free the whole way out
 // (src/eval.c `signal_or_quit`, src/alloc.c `mark_stack`).
 //
-// This collector is PRECISE — there is no conservative stack scan
-// (`crates/neovm-core/src/tagged/CONCURRENT_GC.md`, "precise-rooting precondition";
-// `set_stack_bottom` is a no-op) — and a signal does not longjmp here, it
+// This collector is PRECISE — there is no conservative stack scan at all
+// (`crates/neovm-core/src/tagged/CONCURRENT_GC.md`, "precise-rooting precondition")
+// — and a signal does not longjmp here, it
 // travels up the Rust stack as `Flow::Signal(Box<SignalData>)`. That journey
 // is not quiet: every frame it passes runs `unbind_to`, which executes
 // `unwind-protect` cleanups, buffer and binding restores, and (through

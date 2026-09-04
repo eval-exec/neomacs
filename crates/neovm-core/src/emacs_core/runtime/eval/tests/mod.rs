@@ -14485,8 +14485,6 @@ fn finalizer_type_of_and_prints_opaquely() {
 fn gc_collect_exact_frees_stack_only_values() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let marker = 0u8;
-    ev.tagged_heap.set_stack_bottom(&marker as *const u8);
 
     ev.gc_collect_exact();
     let baseline = ev.tagged_heap.allocated_count();
@@ -20427,8 +20425,6 @@ fn gc_safe_point_exact_frees_stack_only_values() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     ev.tagged_heap.set_gc_threshold(1);
-    let marker = 0u8;
-    ev.tagged_heap.set_stack_bottom(&marker as *const u8);
 
     ev.gc_collect_exact();
     let baseline = ev.tagged_heap.allocated_count();
@@ -20539,7 +20535,7 @@ fn a_string_with_no_backtrace_frame_is_reclaimed_at_the_same_safepoint() {
     assert!(
         unsafe { (*unrooted_ptr).data.is_reclaimed() },
         "the collector must take a string held only in a Rust local: this \
-         collector is precise and `set_stack_bottom` is a no-op \
+         collector is precise and has no machine-stack scan \
          (tagged/CONCURRENT_GC.md)",
     );
     ev.restore_specpdl_roots(anchor_scope);

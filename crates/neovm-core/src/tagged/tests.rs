@@ -566,12 +566,13 @@ fn gc_float_collection() {
     assert!((f1.xfloat() - 1.0).abs() < f64::EPSILON);
 }
 
+/// The collector is precise: a value held only in a Rust local is not a root.
+/// There is no machine-stack scan and no API to configure one
+/// (`tagged/CONCURRENT_GC.md`, "precise-rooting precondition").
 #[test]
-fn gc_collect_exact_ignores_configured_stack_scan() {
+fn gc_collect_exact_does_not_scan_the_machine_stack() {
     crate::test_utils::init_test_tracing();
     let mut heap = super::gc::TaggedHeap::new();
-    let marker = 0u8;
-    heap.set_stack_bottom(&marker as *const u8);
 
     let stack_only = heap.alloc_cons(TaggedValue::fixnum(9), TaggedValue::NIL);
     let keep_visible = [stack_only];

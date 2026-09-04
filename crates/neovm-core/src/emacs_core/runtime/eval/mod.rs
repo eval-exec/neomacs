@@ -3803,7 +3803,6 @@ impl Context {
 
     pub fn new() -> Self {
         let mut ctx = Self::new_inner(true);
-        ctx.initialize_gc_stack_bottom();
         // Register builtins AFTER new_inner returns — the function is too
         // large (1500+ lines) for reliable codegen in debug mode when
         // combined with the full native subr manifest in the same frame.
@@ -6759,7 +6758,6 @@ impl Context {
             interpreted_closure_filter_fn: None,
             fringe_bitmaps: super::builtins::fringe_bitmap::FringeBitmapRegistry::new(),
         };
-        ev.initialize_gc_stack_bottom();
         ev.setup_thread_locals();
 
         // Rebuild the builtin subr registry after pdump restore. The dumped
@@ -7196,15 +7194,6 @@ impl Context {
         QUIT_REQUESTED_TLS.with(|cell| {
             *cell.borrow_mut() = Some(std::sync::Arc::clone(&self.quit_requested));
         });
-    }
-
-    fn initialize_gc_stack_bottom(&mut self) {
-        #[cfg(target_os = "linux")]
-        {
-            if let Some(stack_end) = crate::tagged::gc::read_stack_end_from_proc() {
-                self.tagged_heap.set_stack_bottom(stack_end as *const u8);
-            }
-        }
     }
 
     fn finish_runtime_activation(&mut self, sync_keyboard: bool) {

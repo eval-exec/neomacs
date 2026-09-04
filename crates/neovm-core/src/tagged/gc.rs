@@ -3877,10 +3877,6 @@ impl TaggedHeap {
         self.identity
     }
 
-    pub fn set_stack_bottom(&mut self, bottom: *const u8) {
-        let _ = bottom;
-    }
-
     pub fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
         self.write_tracking_mode = mode;
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|current| current.set(mode));
@@ -18078,17 +18074,4 @@ fn maybe_resize_for_test(ht: &mut crate::emacs_core::value::LispHashTable) {
         ht.size = if ht.size == 0 { 6 } else { ht.size * 2 };
         ht.data.reserve(ht.size as usize);
     }
-}
-
-pub fn read_stack_end_from_proc() -> Option<usize> {
-    let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
-    for line in maps.lines() {
-        if line.contains("[stack]") {
-            let dash = line.find('-')?;
-            let space = line.find(' ')?;
-            let end_hex = &line[dash + 1..space];
-            return usize::from_str_radix(end_hex, 16).ok();
-        }
-    }
-    None
 }

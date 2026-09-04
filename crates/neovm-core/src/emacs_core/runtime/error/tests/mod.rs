@@ -364,7 +364,7 @@ fn condition_case_binding_value_survives_a_collection() {
 /// points. GNU is safe here for free: `Fthrow` -> `unwind_to_catch`
 /// (src/eval.c:1188-1226) stores the value in `catchlist->val` and `longjmp`s,
 /// leaving it on the C stack, which `mark_stack` (src/alloc.c) scans
-/// conservatively. This collector is PRECISE — `set_stack_bottom` is a no-op
+/// conservatively. This collector is PRECISE — there is no machine-stack scan
 /// (`tagged/CONCURRENT_GC.md`, "precise-rooting precondition") — so a
 /// `Flow::Throw` payload that is not a seeded root is reclaimed mid-unwind and
 /// `catch` returns a free-list cell.

@@ -1,7 +1,7 @@
 //! `cargo xtask gc-stress` — run the shipped binary under `NEOVM_GC_STRESS=1`.
 //!
 //! WHY THIS EXISTS. The collector is precise: there is no conservative stack
-//! scan (`set_stack_bottom` is a literal no-op, see
+//! scan and no API to configure one (see
 //! `crates/neovm-core/src/tagged/CONCURRENT_GC.md`, "precise-rooting precondition"),
 //! so a Lisp value that rides RUST control flow — a `Flow`, an `EvalError`, a
 //! value held in a Rust local across a call that runs Lisp — is invisible to
