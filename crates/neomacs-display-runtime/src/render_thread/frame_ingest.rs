@@ -295,12 +295,14 @@ impl RenderApp {
         frame: crate::core::frame_glyphs::FrameGlyphBuffer,
         row_damage: neomacs_renderer_wgpu::FrameRowDamage,
         cursor_config: CursorConfigSnapshot,
+        scroll_anchors: crate::render_thread::frame_compositor::ScrollAnchorsByWindow,
     ) -> FrameIngestOutcome {
         Self::ingest_top_level_render_frame(
             &mut window_state.render,
             frame,
             row_damage,
             cursor_config,
+            scroll_anchors,
         )
     }
 
@@ -309,6 +311,7 @@ impl RenderApp {
         frame: crate::core::frame_glyphs::FrameGlyphBuffer,
         row_damage: neomacs_renderer_wgpu::FrameRowDamage,
         cursor_config: CursorConfigSnapshot,
+        scroll_anchors: crate::render_thread::frame_compositor::ScrollAnchorsByWindow,
     ) -> FrameIngestOutcome {
         use neomacs_display_protocol::frame_chrome::FrameChromeKind;
         if frame.frame_chrome.band(FrameChromeKind::MenuBar).is_none() {
@@ -330,7 +333,7 @@ impl RenderApp {
         render
             .cursor
             .reset_blink(neomacs_display_protocol::frame_time::observe_platform_now());
-        let presentation = render.set_current_frame(Some(frame), Some(row_damage));
+        let presentation = render.set_current_frame(Some(frame), Some(row_damage), scroll_anchors);
         let cursor_sync = Self::sync_render_cursor(render, cursor_config);
         render.sync_visual_cursors_from_current_frame(
             |cursor| cursor.apply_config(cursor_config),
@@ -541,6 +544,13 @@ impl RenderApp {
                 // existing rendering code.  The layout engine populates
                 // the grid and non-grid items; materialize() converts the
                 // grid into pixel-positioned glyphs and appends non-grid items.
+                // Reduce rows to scroll anchors before materializing them away:
+                // a FrameGlyphBuffer carries no rows, so this is the last point
+                // at which a later scroll can be measured.
+                let scroll_anchors =
+                    crate::render_thread::frame_compositor::continuity::scroll::anchors_by_window(
+                        &display_state,
+                    );
                 let frame = display_state.materialize();
                 // Row-damage summary for the renderer's vertex reuse. Built from
                 // exactly this display_state (the one `frame` was materialized
@@ -753,6 +763,7 @@ impl RenderApp {
                             frame,
                             row_damage,
                             cursor_config,
+                            scroll_anchors,
                         );
                         if let Some(cursor_sync) = outcome.cursor {
                             Self::update_frame_window_cursor_side_effects(
@@ -933,6 +944,7 @@ impl RenderApp {
                             frame,
                             row_damage,
                             cursor_config,
+                            scroll_anchors,
                         );
                         if let Some(transition) = outcome.presentation {
                             self.comms.send_input(
