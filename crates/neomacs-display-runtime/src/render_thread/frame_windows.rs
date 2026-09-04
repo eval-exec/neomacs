@@ -6,7 +6,6 @@
 //! of primary-window-addressed.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,31 +13,25 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Fullscreen, Window, WindowId};
 
-use super::child_frames::ChildFrameManager;
 use super::cursor::{CursorState, CursorTarget};
+pub(crate) use super::frame_compositor::{FrameCompositor, RetainedCursorCell, RetainedStatic};
 use super::state::{
     FpsCounter, GuiChromeInteractionState, IdleDimState, ImeCursorArea, PendingPointerDamage,
     PointerAppearanceState, PresentedInteractionKey, PresentedPointerHit, PresentedPressCapture,
     TypingSpeedState, WindowChrome, effective_window_scale_factor, window_size_from_emacs_pixels,
 };
 #[cfg(feature = "neo-term")]
-use super::terminal_expansion::{TerminalExpansion, TerminalExpansionUpdate};
-use super::transitions::{TransitionState, clear_frame_transition_textures};
+use super::terminal_expansion::TerminalExpansion;
+use super::transitions::clear_frame_transition_textures;
 use super::x11_hints::apply_window_geometry_hints;
-#[cfg(feature = "video")]
-use crate::core::frame_glyphs::FrameGlyph;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
 use neomacs_display_protocol::effect_config::IdleDimConfig;
-#[cfg(feature = "video")]
-use neomacs_display_protocol::types::VideoId;
 use neomacs_display_protocol::{
     DeviceScale, FrameRect, GeometrySize, LogicalPixels, PresentMapping, PresentationExtent,
     PresentationId, PresentedHit, PresentedHitError, PresentedHitQuery, RetainedImageSet,
     SurfaceState,
 };
-use neomacs_renderer_wgpu::{
-    PopupMenuState, RendererFrameEffects, TooltipState, WgpuGlyphAtlas, WgpuRenderer,
-};
+use neomacs_renderer_wgpu::{PopupMenuState, TooltipState, WgpuGlyphAtlas, WgpuRenderer};
 use neovm_core::window::GuiFrameGeometryHints;
 
 use crate::thread_comm::WindowFullscreenMode;
@@ -214,127 +207,6 @@ impl InputMethodState {
     }
 }
 
-/// Glyph composition and rendering state for a frame window.
-pub(crate) struct FrameCompositor {
-    pub current_frame: Option<FrameGlyphBuffer>,
-    /// Video identities present in the root or any accepted child
-    /// presentation. Rebuilt only when editor presentation data changes, so
-    /// decoder wakeups do not rescan every glyph at video frame rate.
-    #[cfg(feature = "video")]
-    visible_videos: HashSet<VideoId>,
-    /// Unique generation of the composed editor scene. Frame replacement and
-    /// renderer-owned terminal replacement both advance it, so face
-    /// aggregation and retained-static rendering cannot observe stale state.
-    pub current_scene_generation: u64,
-    /// Renderer-owned terminal contribution, kept out of the immutable editor
-    /// frame and composed only into render clones.
-    #[cfg(feature = "neo-term")]
-    pub(super) terminal_expansion: TerminalExpansion,
-    /// Row damage paired with `current_frame` (built from the same
-    /// FrameDisplayState that frame was materialized from). Set only
-    /// together with the frame via `set_current_frame` so a summary can
-    /// never describe a different frame than the glyphs it accompanies.
-    pub current_row_damage: Option<neomacs_renderer_wgpu::FrameRowDamage>,
-    pub child_frames: ChildFrameManager,
-    hidden_child_frames: HashSet<u64>,
-    pub(super) pending_child_frame_removals_to_present: Vec<u64>,
-    pub glyph_atlas: Option<WgpuGlyphAtlas>,
-    /// Content of the scene changed: the next frame must repaint layers.
-    pub dirty: bool,
-    /// Only the cursor layer changed (a blink toggle). The composite fast
-    /// path reproduces such a frame from the retained scene, so this asks for
-    /// a cursor-only frame rather than a repaint. Kept separate from `dirty`
-    /// because anything that sets `dirty` outranks it in the demand model.
-    pub(super) cursor_dirty: bool,
-    pub(super) visual_cursors: HashMap<i64, CursorState>,
-    pub renderer_effects: RendererFrameEffects,
-    pub transitions: TransitionState,
-    /// Retained cursorless static scene for the compositor-only fast path
-    /// (frame scheduling plan, Stage 4). Built lazily from the current frame
-    /// and reused across cursor-only frames; invalidated on any full render.
-    pub(super) retained_static: Option<RetainedStatic>,
-}
-
-impl FrameCompositor {
-    /// A compositor holding no scene yet.
-    ///
-    /// `glyph_atlas` is `None` before the wgpu device exists (and again after
-    /// device loss); every other field starts empty, so this is the single
-    /// construction path for both frame-render-state constructors.
-    pub(super) fn new(glyph_atlas: Option<WgpuGlyphAtlas>) -> Self {
-        Self {
-            current_frame: None,
-            #[cfg(feature = "video")]
-            visible_videos: HashSet::new(),
-            current_scene_generation: 0,
-            #[cfg(feature = "neo-term")]
-            terminal_expansion: TerminalExpansion::default(),
-            current_row_damage: None,
-            child_frames: ChildFrameManager::new(),
-            hidden_child_frames: HashSet::new(),
-            pending_child_frame_removals_to_present: Vec::new(),
-            glyph_atlas,
-            dirty: false,
-            cursor_dirty: false,
-            visual_cursors: HashMap::new(),
-            renderer_effects: RendererFrameEffects::default(),
-            transitions: TransitionState::default(),
-            retained_static: None,
-        }
-    }
-}
-
-/// A cursorless render of the current scene, retained across cursor-only
-/// frames so an ambient cursor effect composites over it instead of
-/// re-running the glyph pipeline. Validity is generation- and size-keyed.
-pub(crate) struct RetainedStatic {
-    #[allow(dead_code)]
-    pub(super) texture: wgpu::Texture,
-    pub(super) view: wgpu::TextureView,
-    /// Image-pipeline bind group for blitting the texture to the surface.
-    pub(super) bind_group: wgpu::BindGroup,
-    /// `current_scene_generation` this was built from; a new scene commit
-    /// bumps that stamp and invalidates this.
-    pub(super) generation: u64,
-    pub(super) width: u32,
-    pub(super) height: u32,
-    /// Per-filled-box-cursor single-glyph mini-frames, built once per
-    /// generation so the composite path re-renders each cursor cell (box plus
-    /// inverse-video character) without cloning the frame's font tables every
-    /// frame. The box color still cycles: it is recomputed from the frame
-    /// sample time inside `emit_cursor_visual`, not baked here.
-    pub(super) cursor_cells: Vec<RetainedCursorCell>,
-}
-
-/// A retained single-glyph mini-frame for one filled-box cursor cell, plus the
-/// physical-pixel scissor rect it is drawn within.
-pub(crate) struct RetainedCursorCell {
-    pub(super) mini: crate::core::frame_glyphs::FrameGlyphBuffer,
-    pub(super) scissor: (u32, u32, u32, u32),
-}
-
-impl RetainedStatic {
-    pub(super) fn new(
-        texture: wgpu::Texture,
-        view: wgpu::TextureView,
-        bind_group: wgpu::BindGroup,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        Self {
-            texture,
-            view,
-            bind_group,
-            // Sentinel: no valid scene captured yet, forcing a build on the
-            // first fast-path frame.
-            generation: u64::MAX,
-            width,
-            height,
-            cursor_cells: Vec::new(),
-        }
-    }
-}
-
 impl ChromeState {
     pub fn dismiss_menus(&mut self) {
         self.interaction.menu_bar_active = None;
@@ -409,35 +281,6 @@ impl GuiFrameRenderState {
         for entry in self.compositor.child_frames.frames.values() {
             retained.extend(entry.frame.referenced_images());
         }
-    }
-
-    #[cfg(feature = "video")]
-    fn refresh_visible_videos(&mut self) {
-        fn collect(frame: &FrameGlyphBuffer, output: &mut HashSet<VideoId>) {
-            output.extend(frame.glyphs.iter().filter_map(|glyph| match glyph {
-                FrameGlyph::Video { video_id, .. } => Some(*video_id),
-                _ => None,
-            }));
-        }
-
-        let mut visible = HashSet::new();
-        if let Some(frame) = &self.compositor.current_frame {
-            collect(frame, &mut visible);
-        }
-        for entry in self.compositor.child_frames.frames.values() {
-            collect(&entry.frame, &mut visible);
-        }
-        self.compositor.visible_videos = visible;
-    }
-
-    #[cfg(feature = "video")]
-    pub(super) fn presents_video(&self, id: VideoId) -> bool {
-        self.compositor.visible_videos.contains(&id)
-    }
-
-    #[cfg(feature = "video")]
-    pub(super) fn presented_video_ids(&self) -> impl Iterator<Item = VideoId> + '_ {
-        self.compositor.visible_videos.iter().copied()
     }
 
     pub(super) fn new(
@@ -690,7 +533,11 @@ impl GuiFrameRenderState {
         }
     }
 
-    fn active_pointer_damage(&mut self) -> Option<PendingPointerDamage> {
+    /// Pointer damage snapshot taken before a child-frame edit, so the
+    /// compositor submodule can pair it with `record_pointer_paint_transition`.
+    pub(in crate::render_thread) fn active_pointer_damage(
+        &mut self,
+    ) -> Option<PendingPointerDamage> {
         let active = self.pointer_appearance.active()?;
         let key = active.key();
         let frame_and_offset = if key.frame_id() == 0 || key.frame_id() == self.emacs_frame_id {
@@ -746,7 +593,12 @@ impl GuiFrameRenderState {
         }
     }
 
-    fn record_pointer_paint_transition(&mut self, before: Option<PendingPointerDamage>) {
+    /// Records pointer repaint needs after a child-frame edit changed what the
+    /// pointer overlaps. Paired with `active_pointer_damage`.
+    pub(in crate::render_thread) fn record_pointer_paint_transition(
+        &mut self,
+        before: Option<PendingPointerDamage>,
+    ) {
         let after = self.active_pointer_damage();
         if let Some(damage) = before {
             self.invalidate_pointer_damage_rows(damage);
@@ -879,62 +731,6 @@ impl GuiFrameRenderState {
             })
     }
 
-    pub(super) fn set_popup_menu(&mut self, popup_menu: Option<PopupMenuState>) {
-        if popup_menu.is_some() {
-            self.update_presented_pointer_motion(None);
-        }
-        self.overlays.popup_menu = popup_menu;
-        self.compositor.dirty = true;
-    }
-
-    pub(super) fn set_tooltip(&mut self, tooltip: Option<TooltipState>) {
-        self.overlays.tooltip = tooltip;
-        self.compositor.dirty = true;
-    }
-
-    /// Atomically replace the complete renderer-owned terminal contribution.
-    ///
-    /// The editor frame is never mutated. A real change advances the scene
-    /// generation, disables row reuse, and requests a full repaint; an
-    /// identical replacement has no side effects.
-    #[cfg(feature = "neo-term")]
-    pub(super) fn replace_terminal_expansion(
-        &mut self,
-        next: TerminalExpansion,
-    ) -> TerminalExpansionUpdate {
-        let Some(frame) = self.compositor.current_frame.as_ref() else {
-            self.compositor.terminal_expansion = TerminalExpansion::default();
-            return TerminalExpansionUpdate::NoFrame;
-        };
-        if let Some(face_id) = next
-            .faces()
-            .keys()
-            .find(|face_id| frame.faces.contains_key(face_id))
-            .copied()
-        {
-            tracing::error!(
-                face_id = face_id.get(),
-                "terminal expansion attempted to replace an editor-owned face"
-            );
-            return TerminalExpansionUpdate::FaceIdCollision(face_id);
-        }
-        if self.compositor.terminal_expansion == next {
-            return TerminalExpansionUpdate::Unchanged;
-        }
-        self.compositor.terminal_expansion = next;
-        self.compositor.current_scene_generation = super::frame_state::next_scene_generation();
-        self.compositor.current_row_damage = None;
-        self.compositor.dirty = true;
-        TerminalExpansionUpdate::Replaced
-    }
-
-    pub(super) fn set_visual_bell_start(&mut self, start: Option<Instant>) {
-        self.overlays.visual_bell_start = start;
-        if start.is_some() {
-            self.compositor.dirty = true;
-        }
-    }
-
     pub(super) fn set_ime_preedit(&mut self, text: String, cursor_range: Option<(usize, usize)>) {
         self.input_method.replace_preedit(text, cursor_range);
         self.compositor.dirty = true;
@@ -947,16 +743,6 @@ impl GuiFrameRenderState {
 
     pub(super) fn has_ime_preedit(&self) -> bool {
         self.input_method.has_preedit()
-    }
-
-    pub(super) fn record_typing_keypress(&mut self, now: Instant) {
-        self.overlays.typing_speed.key_press_times.push(now);
-        self.compositor.dirty = true;
-    }
-
-    pub(super) fn record_idle_activity(&mut self, now: Instant) {
-        self.overlays.idle_dim.last_activity_time = now;
-        self.compositor.dirty = true;
     }
 
     pub(super) fn dismiss_all_chrome_menus(&mut self) {
@@ -1116,56 +902,6 @@ impl GuiFrameRenderState {
         changed
     }
 
-    pub(super) fn update_popup_hover(&mut self, x: f32, y: f32) -> bool {
-        let Some(menu) = self.overlays.popup_menu.as_mut() else {
-            return false;
-        };
-        let dirty = menu.update_hover_at(x, y);
-        if dirty {
-            self.compositor.dirty = true;
-        }
-        dirty
-    }
-
-    pub(super) fn trigger_visual_bell(
-        &mut self,
-        cursor_error_pulse_enabled: bool,
-        edge_snap_enabled: bool,
-        edge_snap_duration_ms: u32,
-        now: Instant,
-    ) {
-        self.overlays.visual_bell_start = Some(now);
-        if cursor_error_pulse_enabled {
-            self.compositor
-                .renderer_effects
-                .trigger_cursor_error_pulse(now);
-        }
-        if edge_snap_enabled {
-            let selected_info = self.compositor.current_frame.as_ref().and_then(|frame| {
-                frame
-                    .window_infos
-                    .iter()
-                    .find(|info| info.selected && !info.is_minibuffer)
-                    .cloned()
-            });
-            if let Some(info) = selected_info {
-                let at_top = info.window_start <= 1;
-                let at_bottom = info.window_end >= info.buffer_size;
-                if at_top || at_bottom {
-                    self.compositor.renderer_effects.trigger_edge_snap(
-                        info.bounds,
-                        info.mode_line_height,
-                        at_top,
-                        at_bottom,
-                        now,
-                        edge_snap_duration_ms,
-                    );
-                }
-            }
-        }
-        self.compositor.dirty = true;
-    }
-
     pub(super) fn take_current_frame_for_render(&mut self) -> Option<FrameGlyphBuffer> {
         let current_frame = self.compositor.current_frame.as_mut()?;
         let mut frame = Self::take_frame_for_render(current_frame);
@@ -1180,325 +916,6 @@ impl GuiFrameRenderState {
         frame.transition_hints = transition_hints;
         frame.effect_hints = effect_hints;
         frame
-    }
-
-    pub(super) fn tick_cursor_animation(&mut self) -> bool {
-        let mut dirty = self.cursor.tick_animation();
-        for cursor in self.compositor.visual_cursors.values_mut() {
-            dirty |= cursor.tick_animation();
-        }
-        if dirty {
-            self.compositor.dirty = true;
-        }
-        dirty
-    }
-
-    pub(super) fn tick_cursor_blink(
-        &mut self,
-        now: Instant,
-        cursor_wake_enabled: bool,
-        renderer: Option<&WgpuRenderer>,
-    ) -> bool {
-        if !self.cursor.blink_enabled || self.cursor.target_cloned().is_none() {
-            return false;
-        }
-        if now.duration_since(self.cursor.last_blink_toggle) < self.cursor.blink_interval {
-            return false;
-        }
-        let was_off = !self.cursor.blink_on;
-        self.cursor.blink_on = !self.cursor.blink_on;
-        self.cursor.last_blink_toggle = now;
-        if was_off
-            && self.cursor.blink_on
-            && cursor_wake_enabled
-            && let Some(renderer) = renderer
-        {
-            renderer.trigger_transient_cursor_wake(&mut self.compositor.renderer_effects, now);
-        }
-        // A blink changes the cursor layer and nothing else, so it asks for a
-        // composite of the retained scene rather than a repaint. When the
-        // toggle also triggers the cursor-wake effect above, that effect marks
-        // the window dirty through mark_active_visuals_dirty on this same
-        // about_to_wait pass, which outranks this and forces the full render
-        // it needs.
-        self.compositor.cursor_dirty = true;
-        true
-    }
-
-    pub(super) fn force_cursor_blink_on(&mut self) -> bool {
-        if !self.cursor.force_blink_on() {
-            return false;
-        }
-        self.compositor.cursor_dirty = true;
-        true
-    }
-
-    pub(super) fn mark_active_visuals_dirty(&mut self) -> bool {
-        if !self.compositor.renderer_effects.needs_redraw()
-            && !self.compositor.transitions.has_active()
-        {
-            return false;
-        }
-        self.compositor.dirty = true;
-        true
-    }
-
-    pub(super) fn trigger_click_halo(&mut self, x: f32, y: f32, now: Instant, duration_ms: u32) {
-        self.compositor
-            .renderer_effects
-            .trigger_click_halo(x, y, now, duration_ms);
-        self.compositor.dirty = true;
-    }
-
-    pub(super) fn tick_cursor_size_animation(&mut self) -> bool {
-        let mut dirty = self.cursor.tick_size_animation();
-        for cursor in self.compositor.visual_cursors.values_mut() {
-            dirty |= cursor.tick_size_animation();
-        }
-        if dirty {
-            self.compositor.dirty = true;
-        }
-        dirty
-    }
-
-    pub(super) fn tick_idle_dim(&mut self, config: &IdleDimConfig) -> bool {
-        let idle_time = self.overlays.idle_dim.last_activity_time.elapsed();
-        let target_alpha = if idle_time >= config.delay {
-            config.opacity
-        } else {
-            0.0
-        };
-        let diff = target_alpha - self.overlays.idle_dim.current_alpha;
-        if diff.abs() > 0.001 {
-            let fade_speed = if config.fade_duration.as_secs_f32() > 0.0 {
-                1.0 / config.fade_duration.as_secs_f32() * 0.016
-            } else {
-                1.0
-            };
-            if diff > 0.0 {
-                self.overlays.idle_dim.current_alpha = (self.overlays.idle_dim.current_alpha
-                    + fade_speed * config.opacity)
-                    .min(target_alpha);
-            } else {
-                self.overlays.idle_dim.current_alpha =
-                    (self.overlays.idle_dim.current_alpha - fade_speed * config.opacity).max(0.0);
-            }
-            self.overlays.idle_dim.active = true;
-            self.compositor.dirty = true;
-            true
-        } else if self.overlays.idle_dim.current_alpha > 0.001 {
-            self.overlays.idle_dim.active = true;
-            false
-        } else {
-            self.overlays.idle_dim.active = false;
-            false
-        }
-    }
-
-    pub(super) fn clear_idle_dim(&mut self) {
-        self.overlays.idle_dim.active = false;
-        self.overlays.idle_dim.current_alpha = 0.0;
-    }
-
-    pub(super) fn sync_visual_cursors_from_current_frame(
-        &mut self,
-        cursor_config: impl Fn(&mut CursorState),
-    ) {
-        let Some(current_frame) = self.compositor.current_frame.as_ref() else {
-            self.compositor.visual_cursors.clear();
-            return;
-        };
-        let mut live_visual_cursor_ids = HashSet::new();
-        for cursor in &current_frame.window_cursors {
-            if cursor.window_id.get() >= 0 {
-                continue;
-            }
-            live_visual_cursor_ids.insert(cursor.window_id.get());
-            let state = self
-                .compositor
-                .visual_cursors
-                .entry(cursor.window_id.get())
-                .or_default();
-            cursor_config(state);
-            let (_, target_moved) = state.set_target(CursorTarget {
-                window_id: cursor.window_id.get(),
-                x: cursor.x,
-                y: cursor.y,
-                width: cursor.width,
-                height: cursor.height,
-                style: cursor.style,
-                frame_id: self.emacs_frame_id,
-            });
-            if target_moved {
-                self.compositor.dirty = true;
-            }
-        }
-        self.compositor
-            .visual_cursors
-            .retain(|id, _| live_visual_cursor_ids.contains(id));
-    }
-
-    pub(super) fn sync_cursor_config(&mut self, defaults: &CursorState, dirty: bool) {
-        let config = defaults.config_snapshot();
-        self.cursor.apply_config(config);
-        for cursor in self.compositor.visual_cursors.values_mut() {
-            cursor.apply_config(config);
-        }
-        if dirty {
-            self.compositor.dirty = true;
-        }
-    }
-
-    pub(super) fn apply_visual_cursor_animations(&mut self) {
-        if self.compositor.visual_cursors.is_empty() {
-            return;
-        }
-        let visual_cursor_rects: HashMap<i64, (f32, f32, f32, f32)> = self
-            .compositor
-            .visual_cursors
-            .iter()
-            .map(|(id, state)| {
-                (
-                    *id,
-                    (
-                        state.current_x,
-                        state.current_y,
-                        state.current_w,
-                        state.current_h,
-                    ),
-                )
-            })
-            .collect();
-        let Some(frame) = self.compositor.current_frame.as_mut() else {
-            return;
-        };
-        for cursor in &mut frame.window_cursors {
-            let Some((x, y, width, height)) = visual_cursor_rects.get(&cursor.window_id.get())
-            else {
-                continue;
-            };
-            cursor.x = *x;
-            cursor.y = *y;
-            cursor.width = *width;
-            cursor.height = *height;
-        }
-    }
-
-    pub(super) fn remove_child_frame(&mut self, frame_id: u64) -> bool {
-        let before = self.active_pointer_damage();
-        let removed_ids = self.compositor.child_frames.subtree_frame_ids(frame_id);
-        let removed_presentations = removed_ids
-            .iter()
-            .filter_map(|id| self.compositor.child_frames.frames.get(id))
-            .map(|entry| entry.frame.presentation_id)
-            .collect::<Vec<_>>();
-        self.compositor.hidden_child_frames.insert(frame_id);
-        let removed = self.compositor.child_frames.remove_frame(frame_id);
-        if removed {
-            self.compositor
-                .pending_child_frame_removals_to_present
-                .push(frame_id);
-        }
-        tracing::info!(
-            frame_id,
-            removed,
-            "child_frame_lifecycle: compositor_remove"
-        );
-        if removed {
-            #[cfg(feature = "video")]
-            self.refresh_visible_videos();
-            self.compositor.dirty = true;
-            for presentation in removed_presentations {
-                if self.pointer_appearance.retire(presentation) {
-                    self.record_pointer_paint_transition(before);
-                }
-            }
-        }
-        if self
-            .cursor
-            .target_cloned()
-            .is_some_and(|target| removed_ids.contains(&target.frame_id))
-        {
-            self.cursor.clear_target();
-            self.input_method.clear();
-            self.compositor.dirty = true;
-            return true;
-        }
-        removed
-    }
-
-    pub(super) fn displayed_presentations(&self) -> HashSet<u64> {
-        let mut presentations = HashSet::new();
-        if let Some(presentation) = self
-            .compositor
-            .current_frame
-            .as_ref()
-            .map(|frame| frame.presentation_id.get())
-            .filter(|presentation| *presentation != 0)
-        {
-            presentations.insert(presentation);
-        }
-        presentations.extend(
-            self.compositor
-                .child_frames
-                .frames
-                .values()
-                .map(|entry| entry.frame.presentation_id.get())
-                .filter(|presentation| *presentation != 0),
-        );
-        presentations
-    }
-
-    #[allow(dead_code)] // direct single-child lookup remains covered by frame_windows tests
-    pub(super) fn child_presentation(&self, frame_id: u64) -> Option<u64> {
-        self.compositor
-            .child_frames
-            .frames
-            .get(&frame_id)
-            .map(|entry| entry.frame.presentation_id.get())
-            .filter(|presentation| *presentation != 0)
-    }
-
-    pub(super) fn child_subtree_presentations(&self, frame_id: u64) -> Vec<u64> {
-        self.compositor.child_frames.subtree_presentations(frame_id)
-    }
-
-    pub(super) fn show_child_frame(&mut self, frame_id: u64) -> bool {
-        let changed = self.compositor.hidden_child_frames.remove(&frame_id);
-        tracing::info!(frame_id, changed, "child_frame_lifecycle: compositor_show");
-        changed
-    }
-
-    pub(super) fn update_child_frame(&mut self, frame: FrameGlyphBuffer) -> bool {
-        let before = self.active_pointer_damage();
-        let frame_id = frame.frame_placement.frame().get();
-        if self.compositor.hidden_child_frames.contains(&frame_id) {
-            tracing::debug!(
-                frame_id,
-                "ignoring child frame update while frame is explicitly hidden"
-            );
-            return false;
-        }
-        let previous_presentation = self
-            .compositor
-            .child_frames
-            .frames
-            .get(&frame_id)
-            .map(|entry| entry.frame.presentation_id);
-        let next_presentation = frame.presentation_id;
-        let changed = self.compositor.child_frames.update_frame(frame);
-        if changed {
-            #[cfg(feature = "video")]
-            self.refresh_visible_videos();
-            self.compositor.dirty = true;
-            if let Some(previous) = previous_presentation
-                && previous != next_presentation
-                && self.pointer_appearance.retire(previous)
-            {
-                self.record_pointer_paint_transition(before);
-            }
-        }
-        changed
     }
 }
 
