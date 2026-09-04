@@ -65,6 +65,18 @@ def exercise_native_keyboard(editor: BrowserEditorHarness) -> None:
         excludes="M-x a",
     )
 
+    fido_marker = f"FIDO-VERTICAL:{time.time_ns():x}"
+    editor.invoke_mx("fido-vertical-mode")
+    editor.eval_expression(
+        f'''(progn
+              (unless fido-vertical-mode
+                (error "fido-vertical-mode did not enable"))
+              (fido-vertical-mode -1)
+              (fido-mode -1)
+              (message "{fido_marker}"))''',
+        fido_marker,
+    )
+
     marker = f"NATIVE-{time.time_ns():x}"[-16:]
     editor.type_native_text(marker)
     editor.wait_for_frame_text("native Chrome text input", contains=marker)
