@@ -923,3 +923,45 @@ fn linear_component_to_srgb_u8_matches_the_arithmetic_form() {
         );
     }
 }
+
+// =======================================================================
+// LiveDisplayWindowId: the zero placeholder cannot reach identity-keyed code
+// =======================================================================
+
+#[test]
+fn live_window_id_rejects_the_zero_placeholder() {
+    assert_eq!(
+        LiveDisplayWindowId::try_from(DisplayWindowId::new(0)),
+        Err(PlaceholderWindowId)
+    );
+    // Default is the placeholder, so a defaulted struct cannot yield a live id.
+    assert_eq!(
+        LiveDisplayWindowId::try_from(DisplayWindowId::default()),
+        Err(PlaceholderWindowId)
+    );
+}
+
+#[test]
+fn live_window_id_accepts_real_ids_and_round_trips() {
+    for raw in [1_i64, 7, 42, i64::MAX, -1, i64::MIN] {
+        let live =
+            LiveDisplayWindowId::try_from(DisplayWindowId::new(raw)).expect("non-zero id is live");
+        assert_eq!(live.get(), raw);
+        assert_eq!(live.id(), DisplayWindowId::new(raw));
+        assert_eq!(DisplayWindowId::from(live), DisplayWindowId::new(raw));
+    }
+}
+
+#[test]
+fn live_window_id_is_a_niche_so_option_costs_nothing() {
+    assert_eq!(
+        std::mem::size_of::<Option<LiveDisplayWindowId>>(),
+        std::mem::size_of::<LiveDisplayWindowId>()
+    );
+}
+
+#[test]
+fn live_window_id_displays_as_its_number() {
+    let live = LiveDisplayWindowId::try_from(DisplayWindowId::new(19)).expect("live");
+    assert_eq!(live.to_string(), "19");
+}
