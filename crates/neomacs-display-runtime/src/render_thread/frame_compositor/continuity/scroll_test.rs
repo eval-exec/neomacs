@@ -44,8 +44,9 @@ fn window_at(window_start: i64) -> WindowInfo {
     }
 }
 
-fn refs(rows: &[GlyphRow]) -> Vec<&GlyphRow> {
-    rows.iter().collect()
+/// The anchors a presentation's rows offer.
+fn refs(rows: &[GlyphRow]) -> Vec<RowAnchor> {
+    rows.iter().filter_map(RowAnchor::of).collect()
 }
 
 // =======================================================================
@@ -337,4 +338,49 @@ fn outcomes_have_stable_names() {
     assert_eq!(name, "no_overlap");
     let reason: &'static str = AmbiguityReason::ModiffChanged.into();
     assert_eq!(reason, "modiff_changed");
+}
+
+// =======================================================================
+// Extracting anchors from a presentation
+// =======================================================================
+
+#[test]
+fn anchors_are_taken_per_window_and_exclude_rows_that_cannot_anchor() {
+    use neomacs_display_protocol::glyph_matrix::{FrameDisplayState, GlyphMatrix, MatrixRow};
+
+    let mut state = FrameDisplayState::new(80, 24, 8.0, 16.0);
+
+    let mut matrix = GlyphMatrix::new(0, 80);
+    let mut mode = text_row(500, 520, 580.0);
+    mode.mode_line = true;
+    for row in [text_row(100, 120, 0.0), text_row(120, 140, 16.0), mode] {
+        matrix.rows.push(MatrixRow::new(row));
+    }
+    state
+        .window_matrices
+        .push(neomacs_display_protocol::glyph_matrix::WindowMatrixEntry {
+            window_id: DisplayWindowId::new(3),
+            matrix,
+            pixel_bounds: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
+            text_pixel_bounds: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 580.0),
+            text_clip_bounds: None,
+            selected: false,
+        });
+
+    let by_window = anchors_by_window(&state);
+    let anchors = by_window
+        .get(&DisplayWindowId::new(3))
+        .expect("the window contributed anchors");
+    assert_eq!(
+        anchors.len(),
+        2,
+        "the mode line does not scroll, so it is not an anchor"
+    );
+}
+
+#[test]
+fn a_presentation_with_no_matrices_yields_no_anchors() {
+    use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
+    let state = FrameDisplayState::new(80, 24, 8.0, 16.0);
+    assert!(anchors_by_window(&state).is_empty());
 }

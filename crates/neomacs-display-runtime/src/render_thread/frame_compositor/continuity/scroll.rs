@@ -110,12 +110,34 @@ impl ScrollDisplacement {
 /// continuation that follows it, or a left-truncated row and its untruncated
 /// twin after an hscroll.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct RowKey {
+pub(in crate::render_thread) struct RowKey {
     start_charpos: usize,
     end_charpos: usize,
     continued: bool,
     truncated_left: bool,
     reversed: bool,
+}
+
+/// One row's contribution to measuring how far a viewport moved.
+///
+/// Extracted when a presentation is ingested and retained instead of the rows
+/// themselves: the compositor keeps materialized glyph buffers, which do not
+/// carry rows, and retaining whole matrices to answer one question would be
+/// far more than the question is worth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::render_thread) struct RowAnchor {
+    key: RowKey,
+    pixel_y: f32,
+}
+
+impl RowAnchor {
+    /// The anchor a row offers, or `None` if it may not anchor a measurement.
+    pub(in crate::render_thread) fn of(row: &GlyphRow) -> Option<Self> {
+        anchor_key(row).map(|key| Self {
+            key,
+            pixel_y: row.pixel_y,
+        })
+    }
 }
 
 /// A row eligible to anchor a measurement, or `None` if it cannot.
@@ -145,14 +167,13 @@ fn anchor_key(row: &GlyphRow) -> Option<RowKey> {
 /// Rows appearing more than once are dropped rather than disambiguated: if a
 /// range is not unique within one presentation, matching it across two says
 /// nothing.
-fn unique_anchors(rows: &[&GlyphRow]) -> std::collections::HashMap<RowKey, f32> {
+fn unique_anchors(anchors: &[RowAnchor]) -> std::collections::HashMap<RowKey, f32> {
     use std::collections::HashMap;
     let mut seen: HashMap<RowKey, Option<f32>> = HashMap::new();
-    for row in rows {
-        let Some(key) = anchor_key(row) else { continue };
-        seen.entry(key)
+    for anchor in anchors {
+        seen.entry(anchor.key)
             .and_modify(|slot| *slot = None)
-            .or_insert(Some(row.pixel_y));
+            .or_insert(Some(anchor.pixel_y));
     }
     seen.into_iter()
         .filter_map(|(key, y)| y.map(|y| (key, y)))
@@ -175,8 +196,8 @@ const DISPLACEMENT_AGREEMENT_EPSILON: f32 = 0.5;
 pub(in crate::render_thread) fn displacement(
     prev: &WindowInfo,
     curr: &WindowInfo,
-    prev_rows: &[&GlyphRow],
-    curr_rows: &[&GlyphRow],
+    prev_anchors: &[RowAnchor],
+    curr_anchors: &[RowAnchor],
 ) -> ScrollDisplacement {
     let direction = if curr.window_start > prev.window_start {
         ScrollDirection::TowardBufferEnd
@@ -197,14 +218,14 @@ pub(in crate::render_thread) fn displacement(
         };
     }
 
-    let previous = unique_anchors(prev_rows);
+    let previous = unique_anchors(prev_anchors);
     if previous.is_empty() {
         return ScrollDisplacement::Ambiguous {
             reason: AmbiguityReason::NoUniqueRow,
             direction,
         };
     }
-    let current = unique_anchors(curr_rows);
+    let current = unique_anchors(curr_anchors);
 
     let mut measured: Option<f32> = None;
     let mut anchors = 0usize;
@@ -236,6 +257,29 @@ pub(in crate::render_thread) fn displacement(
         },
         _ => ScrollDisplacement::NoOverlap { direction },
     }
+}
+
+/// The anchors every window in a presentation offers, keyed by window.
+///
+/// Taken at ingest, while the presentation still has its glyph matrices. The
+/// materialized buffer the compositor retains has no rows, so measuring a
+/// scroll later means keeping this much and no more.
+pub(in crate::render_thread) fn anchors_by_window(
+    state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState,
+) -> std::collections::HashMap<neomacs_display_protocol::types::DisplayWindowId, Vec<RowAnchor>> {
+    state
+        .window_matrices
+        .iter()
+        .map(|entry| {
+            let anchors = entry
+                .matrix
+                .rows
+                .iter()
+                .filter_map(|row| RowAnchor::of(row))
+                .collect();
+            (entry.window_id, anchors)
+        })
+        .collect()
 }
 
 #[cfg(test)]
