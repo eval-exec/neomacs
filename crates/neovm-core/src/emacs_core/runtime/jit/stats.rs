@@ -33,6 +33,11 @@ pub(crate) struct CompileStats {
     /// `ops.len()` of the function behind `max_us`.
     pub max_fn_len: usize,
     pub compiled_ok: u64,
+    /// Times compiled code was actually ENTERED. Compiles alone say nothing
+    /// about payoff: on org-editing the JIT costs 3-5% of instructions at every
+    /// setting and relaxing its profitability gate moves Ir by 0.006%, which is
+    /// only interpretable next to how often the compiled code runs.
+    pub native_entries: u64,
     pub not_profitable: u64,
     pub not_compilable: u64,
     /// Cache misses served by a pre-compiled AOT leaf ([`super::aot`]) instead
@@ -125,11 +130,12 @@ pub(super) fn record_aot_load(ops_len: usize) {
 pub(crate) fn format_summary(s: &CompileStats) -> String {
     let mean_us = s.total_us.checked_div(s.total_compiles).unwrap_or(0);
     format!(
-        "compiles={} ok={} not_profitable={} not_compilable={} aot_loads={} total_us={} \
-         mean_us={mean_us} max_us={} max_fn_len={} \
+        "compiles={} ok={} native_entries={} not_profitable={} not_compilable={} aot_loads={} \
+         total_us={} mean_us={mean_us} max_us={} max_fn_len={} \
          hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?}",
         s.total_compiles,
         s.compiled_ok,
+        s.native_entries,
         s.not_profitable,
         s.not_compilable,
         s.aot_loads,
@@ -138,6 +144,22 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         s.max_fn_len,
         s.histogram_us,
     )
+}
+
+/// Record one ENTRY into compiled code.
+///
+/// Separate from `record_compile` on purpose: a compile is a cost, an entry is
+/// the only thing that can repay it, and the two had no relationship in the
+/// stats until this existed.
+pub(crate) fn record_native_entry() {
+    if !summary_enabled() {
+        return;
+    }
+    STATS.with(|cell| {
+        let mut stats = cell.get();
+        stats.native_entries += 1;
+        cell.set(stats);
+    });
 }
 
 /// Test-only: this thread's current compile-stall aggregate.

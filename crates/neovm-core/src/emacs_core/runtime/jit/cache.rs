@@ -864,6 +864,7 @@ pub(crate) fn run_resolved_leaf(
     leaf: &CompiledLeaf,
     args: &[Value],
 ) -> Result<Option<usize>, Flow> {
+    super::stats::record_native_entry();
     finish_native_run(
         ctx,
         func,
