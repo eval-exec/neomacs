@@ -1,0 +1,180 @@
+name: publish Nix release cache
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag whose Nix closures will be published
+        required: true
+        type: string
+      release_commit:
+        description: Exact commit SHA the release tag must resolve to
+        required: true
+        type: string
+    secrets:
+      CACHIX_AUTH_TOKEN:
+        description: Per-cache write token for the public eval-exec cache
+        required: true
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag to backfill into Cachix
+        required: true
+        type: string
+      release_commit:
+        description: Exact 40-character commit SHA for the release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cachix-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish-release-closure:
+    name: publish Nix release closure (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+          - system: x86_64-darwin
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    env:
+      NIX_SYSTEM: ${{ matrix.system }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_COMMIT: ${{ inputs.release_commit }}
+    steps:
+      # Reject arbitrary refs before executing their Nix expressions. This
+      # workflow publishes immutable release products, never branch state.
+      - name: Verify the published release tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "release tag is not a supported version: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release commit is not a full lowercase SHA: $RELEASE_COMMIT" >&2
+            exit 1
+          fi
+          published_tag="$(
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,tagName \
+              --jq 'select(.isDraft == false) | .tagName'
+          )"
+          if [[ "$published_tag" != "$RELEASE_TAG" ]]; then
+            echo "GitHub release is missing or still a draft: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          published_commit="$(
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha
+          )"
+          if [[ "$published_commit" != "$RELEASE_COMMIT" ]]; then
+            echo "$RELEASE_TAG resolves to $published_commit, expected $RELEASE_COMMIT" >&2
+            exit 1
+          fi
+
+      - name: Checkout the released source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_commit }}
+          persist-credentials: false
+
+      # The selected tag owns its flake cache configuration. Keeping this
+      # setup independent of repository-local actions also permits backfills
+      # for releases made before the shared setup-nix action existed.
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      # This action installs the Cachix CLI. Every implicit upload mechanism is
+      # disabled; publishing is performed from explicit release roots below.
+      - name: Install Cachix without automatic pushing
+        uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: eval-exec
+          skipPush: true
+          useDaemon: false
+          skipAddingSubstituter: true
+
+      - name: Build only the Nix release products
+        id: nix-release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          build_release_package() {
+            local package="$1"
+            local path
+            path="$(
+              nix build --accept-flake-config --no-link --print-out-paths \
+                ".#packages.${NIX_SYSTEM}.${package}"
+            )"
+            case "$path" in
+              /nix/store/*$'\n'*)
+                echo "release package has multiple output paths: $package" >&2
+                return 1
+                ;;
+              /nix/store/*) ;;
+              *)
+                echo "unexpected release output for $package: $path" >&2
+                return 1
+                ;;
+            esac
+            printf '%s' "$path"
+          }
+
+          full_path="$(build_release_package neomacs)"
+          minimal_path=""
+          has_minimal="$(
+            nix eval --accept-flake-config --json \
+              ".#packages.${NIX_SYSTEM}" \
+              --apply 'packages: builtins.hasAttr "neomacs-minimal" packages'
+          )"
+          if [[ "$has_minimal" == true ]]; then
+            minimal_path="$(build_release_package neomacs-minimal)"
+          fi
+
+          echo "full-path=$full_path" >> "$GITHUB_OUTPUT"
+          echo "minimal-path=$minimal_path" >> "$GITHUB_OUTPUT"
+
+      # The Nix evaluator and all build processes above run without this
+      # credential. Only these explicitly selected store roots can be pushed.
+      - name: Push and pin only the release closures
+        shell: bash
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          FULL_PATH: ${{ steps.nix-release.outputs.full-path }}
+          MINIMAL_PATH: ${{ steps.nix-release.outputs.minimal-path }}
+        run: |
+          set -euo pipefail
+          release_paths=("$FULL_PATH")
+          if [[ -n "$MINIMAL_PATH" ]]; then
+            release_paths+=("$MINIMAL_PATH")
+          fi
+          printf '%s\n' "${release_paths[@]}" | cachix push eval-exec
+
+          pin_system="${NIX_SYSTEM//_/-}"
+          cachix pin eval-exec \
+            "neomacs-${RELEASE_TAG}-${pin_system}" "$FULL_PATH"
+          if [[ -n "$MINIMAL_PATH" ]]; then
+            cachix pin eval-exec \
+              "neomacs-minimal-${RELEASE_TAG}-${pin_system}" "$MINIMAL_PATH"
+          fi

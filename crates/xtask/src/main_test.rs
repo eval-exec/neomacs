@@ -2,6 +2,11 @@ use super::*;
 use flate2::{Compression, write::GzEncoder};
 use serde::Deserialize;
 
+#[derive(Debug, Deserialize)]
+struct ReadOnlyWorkflowPermissions {
+    contents: String,
+}
+
 fn github_workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
     let marker = format!("\n  {name}:\n");
     let (_, tail) = workflow
@@ -220,16 +225,13 @@ fn linux_release_publishes_verified_full_and_minimal_products() {
 fn release_workflow_publishes_only_tagged_nix_release_closures() {
     #[derive(Debug, Deserialize)]
     struct WorkflowDocument {
+        permissions: ReadOnlyWorkflowPermissions,
         jobs: BTreeMap<String, serde_yaml_ng::Value>,
     }
 
     #[derive(Debug, Deserialize)]
     struct ReleaseCacheJob {
         name: String,
-        #[serde(rename = "if")]
-        condition: String,
-        needs: String,
-        permissions: ReleaseCachePermissions,
         strategy: ReleaseCacheStrategy,
         #[serde(rename = "runs-on")]
         runs_on: String,
@@ -237,11 +239,6 @@ fn release_workflow_publishes_only_tagged_nix_release_closures() {
         timeout_minutes: u16,
         env: BTreeMap<String, String>,
         steps: Vec<ReleaseCacheStep>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct ReleaseCachePermissions {
-        contents: String,
     }
 
     #[derive(Debug, Deserialize)]
@@ -305,17 +302,26 @@ fn release_workflow_publishes_only_tagged_nix_release_closures() {
         skip_adding_substituter: bool,
     }
 
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct CheckoutActionInputs {
+        #[serde(rename = "ref")]
+        source_revision: String,
+        #[serde(rename = "persist-credentials")]
+        persist_credentials: bool,
+    }
+
     let workflow = include_str!(concat!(
         env!("CARGO_WORKSPACE_DIR"),
-        "/.github/workflows/release.yml"
+        "/.github/workflows/cachix-release.yml"
     ));
     let document: WorkflowDocument =
         serde_yaml_ng::from_str(workflow).expect("release workflow must be valid YAML");
     let job: ReleaseCacheJob = serde_yaml_ng::from_value(
         document
             .jobs
-            .get("publish-cachix-release")
-            .expect("release workflow must define publish-cachix-release")
+            .get("publish-release-closure")
+            .expect("release workflow must define publish-release-closure")
             .clone(),
     )
     .expect("Cachix publisher must have the release-cache job shape");
@@ -324,18 +330,21 @@ fn release_workflow_publishes_only_tagged_nix_release_closures() {
         job.name,
         "publish Nix release closure (${{ matrix.system }})"
     );
-    assert_eq!(
-        job.condition,
-        "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
-    );
-    assert_eq!(job.needs, "create-release");
-    assert_eq!(job.permissions.contents, "read");
+    assert_eq!(document.permissions.contents, "read");
     assert!(!job.strategy.fail_fast);
     assert_eq!(job.runs_on, "${{ matrix.runner }}");
     assert_eq!(job.timeout_minutes, 240);
     assert_eq!(
         job.env.get("NIX_SYSTEM").map(String::as_str),
         Some("${{ matrix.system }}")
+    );
+    assert_eq!(
+        job.env.get("RELEASE_TAG").map(String::as_str),
+        Some("${{ inputs.release_tag }}")
+    );
+    assert_eq!(
+        job.env.get("RELEASE_COMMIT").map(String::as_str),
+        Some("${{ inputs.release_commit }}")
     );
     assert!(!job.env.contains_key("CACHIX_AUTH_TOKEN"));
     assert_eq!(
@@ -366,9 +375,39 @@ fn release_workflow_publishes_only_tagged_nix_release_closures() {
             .find(|step| step.name == name)
             .unwrap_or_else(|| panic!("release cache job must define step {name}"))
     };
+
+    let verification = step("Verify the published release tag")
+        .run
+        .as_deref()
+        .expect("release verification step needs a script");
+    assert!(verification.contains("gh release view \"$RELEASE_TAG\""));
+    assert!(verification.contains("commits/${RELEASE_TAG}"));
+    assert!(verification.contains("$published_commit"));
+    assert!(verification.contains("$RELEASE_COMMIT"));
+
+    let checkout = step("Checkout the released source");
     assert_eq!(
-        step("Set up Nix").uses.as_deref(),
-        Some("./.github/actions/setup-nix")
+        checkout.uses.as_deref(),
+        Some("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")
+    );
+    let checkout_inputs: CheckoutActionInputs = serde_yaml_ng::from_value(
+        checkout
+            .inputs
+            .clone()
+            .expect("release checkout must declare its exact revision"),
+    )
+    .expect("release checkout must use the bounded immutable-ref contract");
+    assert_eq!(
+        checkout_inputs,
+        CheckoutActionInputs {
+            source_revision: "${{ inputs.release_commit }}".to_owned(),
+            persist_credentials: false,
+        }
+    );
+
+    assert_eq!(
+        step("Install Nix").uses.as_deref(),
+        Some("cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24")
     );
 
     let cachix = step("Install Cachix without automatic pushing");
@@ -408,13 +447,12 @@ fn release_workflow_publishes_only_tagged_nix_release_closures() {
     let build = &job.steps[build_position];
     assert!(build.env.as_ref().is_none_or(BTreeMap::is_empty));
     let build_script = build.run.as_deref().expect("Nix build step needs a script");
-    assert_eq!(build_script.matches("nix build").count(), 2);
-    assert!(build_script.contains(".#packages.${NIX_SYSTEM}.neomacs\""));
-    assert!(build_script.contains(".#packages.${NIX_SYSTEM}.neomacs-minimal\""));
-    assert_eq!(
-        build_script.matches("--no-link --print-out-paths").count(),
-        2
-    );
+    assert_eq!(build_script.matches("nix build").count(), 1);
+    assert!(build_script.contains(".#packages.${NIX_SYSTEM}.${package}"));
+    assert!(build_script.contains("--no-link --print-out-paths"));
+    assert!(build_script.contains("build_release_package neomacs"));
+    assert!(build_script.contains("builtins.hasAttr \"neomacs-minimal\""));
+    assert!(build_script.contains("build_release_package neomacs-minimal"));
 
     let publish = &job.steps[publish_position];
     let publish_env = publish
@@ -473,6 +511,150 @@ fn release_workflow_publishes_only_tagged_nix_release_closures() {
             "release-only cache job contains broad publisher {forbidden}"
         );
     }
+}
+
+#[test]
+fn published_nix_release_can_be_backfilled_without_recreating_the_github_release() {
+    #[derive(Debug, Deserialize)]
+    struct BackfillWorkflow {
+        #[serde(rename = "on")]
+        trigger: BackfillTrigger,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    struct BackfillTrigger {
+        workflow_call: CallableTrigger,
+        workflow_dispatch: DispatchTrigger,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct CallableTrigger {
+        inputs: BTreeMap<String, WorkflowInput>,
+        secrets: BTreeMap<String, WorkflowSecret>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DispatchTrigger {
+        inputs: BTreeMap<String, WorkflowInput>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct WorkflowInput {
+        required: bool,
+        #[serde(rename = "type")]
+        value_type: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct WorkflowSecret {
+        required: bool,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReleaseWorkflow {
+        jobs: BTreeMap<String, serde_yaml_ng::Value>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReleaseCacheCaller {
+        #[serde(rename = "if")]
+        condition: String,
+        needs: String,
+        permissions: ReadOnlyWorkflowPermissions,
+        uses: String,
+        #[serde(rename = "with")]
+        inputs: ReleaseCacheCallerInputs,
+        secrets: ReleaseCacheCallerSecrets,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReleaseCacheCallerInputs {
+        release_tag: String,
+        release_commit: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReleaseCacheCallerSecrets {
+        #[serde(rename = "CACHIX_AUTH_TOKEN")]
+        cachix_auth_token: String,
+    }
+
+    let workflow_path =
+        Path::new(env!("CARGO_WORKSPACE_DIR")).join(".github/workflows/cachix-release.yml");
+    let workflow = fs::read_to_string(&workflow_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", workflow_path.display()));
+    let document: BackfillWorkflow =
+        serde_yaml_ng::from_str(&workflow).expect("Cachix release workflow must be valid YAML");
+
+    let call_tag = document
+        .trigger
+        .workflow_call
+        .inputs
+        .get("release_tag")
+        .expect("reusable release-cache workflow must accept a release tag");
+    assert!(call_tag.required);
+    assert_eq!(call_tag.value_type, "string");
+    let call_commit = document
+        .trigger
+        .workflow_call
+        .inputs
+        .get("release_commit")
+        .expect("reusable release-cache workflow must accept an exact commit");
+    assert!(call_commit.required);
+    assert_eq!(call_commit.value_type, "string");
+    assert!(
+        document
+            .trigger
+            .workflow_call
+            .secrets
+            .get("CACHIX_AUTH_TOKEN")
+            .is_some_and(|secret| secret.required)
+    );
+
+    let dispatch_tag = document
+        .trigger
+        .workflow_dispatch
+        .inputs
+        .get("release_tag")
+        .expect("manual release-cache backfill must require a release tag");
+    assert!(dispatch_tag.required);
+    assert_eq!(dispatch_tag.value_type, "string");
+    let dispatch_commit = document
+        .trigger
+        .workflow_dispatch
+        .inputs
+        .get("release_commit")
+        .expect("manual release-cache backfill must require an exact commit");
+    assert!(dispatch_commit.required);
+    assert_eq!(dispatch_commit.value_type, "string");
+
+    let release_workflow: ReleaseWorkflow = serde_yaml_ng::from_str(include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/workflows/release.yml"
+    )))
+    .expect("release workflow must be valid YAML");
+    let caller: ReleaseCacheCaller = serde_yaml_ng::from_value(
+        release_workflow
+            .jobs
+            .get("publish-cachix-release")
+            .expect("release workflow must call the Cachix publisher")
+            .clone(),
+    )
+    .expect("release workflow must use the bounded Cachix caller contract");
+    assert_eq!(
+        caller.condition,
+        "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+    );
+    assert_eq!(caller.needs, "create-release");
+    assert_eq!(caller.permissions.contents, "read");
+    assert_eq!(caller.uses, "./.github/workflows/cachix-release.yml");
+    assert_eq!(caller.inputs.release_tag, "${{ github.ref_name }}");
+    assert_eq!(caller.inputs.release_commit, "${{ github.sha }}");
+    assert_eq!(
+        caller.secrets.cachix_auth_token,
+        "${{ secrets.CACHIX_AUTH_TOKEN }}"
+    );
 }
 
 #[test]
@@ -814,6 +996,10 @@ fn rust_ci_setup_uses_the_workspace_toolchain_and_owns_test_tooling() {
 #[test]
 fn ci_pins_external_actions_and_enables_automated_updates() {
     let workflows = [
+        include_str!(concat!(
+            env!("CARGO_WORKSPACE_DIR"),
+            "/.github/workflows/cachix-release.yml"
+        )),
         include_str!(concat!(
             env!("CARGO_WORKSPACE_DIR"),
             "/.github/workflows/docker-release.yml"

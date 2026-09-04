@@ -6,7 +6,7 @@ Scope: publish only the runtime closures of explicitly named Nix package outputs
 
 ## Recommendation
 
-Use the existing `eval-exec` Cachix cache as a **public, release-only cache** with Cachix-managed signing. Give only the post-release publishing step a per-cache write token, build on a native runner for each system advertised by [`flake.nix`](../../flake.nix), explicitly push only `.#neomacs` and `.#neomacs-minimal`, and pin every tag/package/system root.
+Use the existing `eval-exec` Cachix cache as a **public, release-only cache** with Cachix-managed signing. Give only the post-release publishing step a per-cache write token, build on a native runner for each system advertised by the selected tag's [`flake.nix`](../../flake.nix), explicitly push `.#neomacs` plus `.#neomacs-minimal` when that release exposes it, and pin every tag/package/system root.
 
 Add these jobs to the existing [`release.yml`](../../.github/workflows/release.yml) with `needs: create-release` and the same tag-only condition already used by the AUR and Docker publishers. Do not use a separate `on: release: types: [published]` workflow with the current pipeline: GitHub does not start a new workflow for an event caused by the repository `GITHUB_TOKEN`, apart from narrow documented exceptions. The existing release is created with that token. A same-workflow `needs` edge both runs after successful release creation and avoids another credential solely to trigger automation ([GitHub job dependencies](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idneeds), [`GITHUB_TOKEN` event behavior](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs)).
 
@@ -21,9 +21,11 @@ The publish matrix should be:
 
 GitHub currently offers all four native runner architectures ([GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)). `x86_64-darwin` needs an explicit lifecycle decision soon: GitHub says its Intel label is available only through August 2027, and Nixpkgs has announced the end of rolling Intel-Darwin support around 26.11 ([GitHub runner announcement](https://github.com/actions/runner-images/issues/13045), [Nixpkgs 26.05 release note](https://github.com/NixOS/nixpkgs/blob/5aad24e6372ad85e2b27b0c8ef1382bf686deb3c/doc/release-notes/rl-2605.section.md#x86_64-darwin-2605)). Remove that matrix row when the flake removes the system; do not publish a cache target the flake can no longer evaluate.
 
-## Why both package outputs count
+## Which package outputs count
 
-The flake exposes `neomacs` and `neomacs-minimal` as first-class packages on every advertised system in [`nix/modules/packages.nix`](../../nix/modules/packages.nix). The GitHub release already publishes the full Linux product plus a minimal Linux tarball/AppImage. Therefore both named outputs are release products and should be cached.
+The current flake exposes `neomacs` and `neomacs-minimal` as first-class packages on every advertised system in [`nix/modules/packages.nix`](../../nix/modules/packages.nix). The GitHub release publishes the full Linux product plus a minimal Linux tarball/AppImage. Therefore both named outputs are release products and should be cached for current and future releases.
+
+Older releases retain their own immutable flake surface. In particular, `v0.0.16` exposes `neomacs` but not `neomacs-minimal`; a backfill must publish only the full package instead of trying to build an output that did not belong to that release. The publisher consequently uses a closed allowlist: `neomacs` is required and `neomacs-minimal` is included only when the tagged flake declares it.
 
 This is still narrow: two named package roots per system, not “all packages” and not every path produced while building them. If the project later stops treating the minimal package as a released product, remove it explicitly from the publisher instead of switching to an automatic store watcher.
 
@@ -51,24 +53,32 @@ As of this review, Cachix does not document a GitHub OIDC or “trusted publishe
 
 ## Exact-closure publishing pattern
 
-Cachix documents the flake runtime-closure pattern as `nix build --no-link --print-out-paths ... | cachix push CACHE`; multiple explicitly named packages may be supplied ([Cachix pushing with flakes](https://docs.cachix.org/pushing#flakes)). Build each root separately so the full and minimal paths are unambiguous for pinning, then push those two roots:
+Cachix documents the flake runtime-closure pattern as `nix build --no-link --print-out-paths ... | cachix push CACHE`; multiple explicitly named packages may be supplied ([Cachix pushing with flakes](https://docs.cachix.org/pushing#flakes)). Build each allowlisted root separately so its path is unambiguous for pinning. The full root is mandatory; the minimal root is conditional on the tagged flake declaring it:
 
 ```sh
 full_path="$(nix build --accept-flake-config --no-link --print-out-paths ".#packages.${NIX_SYSTEM}.neomacs")"
-minimal_path="$(nix build --accept-flake-config --no-link --print-out-paths ".#packages.${NIX_SYSTEM}.neomacs-minimal")"
-
-printf '%s\n' "$full_path" "$minimal_path" | cachix push eval-exec
+release_paths=("$full_path")
+if nix eval --accept-flake-config --json ".#packages.${NIX_SYSTEM}" \
+  --apply 'packages: builtins.hasAttr "neomacs-minimal" packages' | grep -qx true; then
+  minimal_path="$(nix build --accept-flake-config --no-link --print-out-paths ".#packages.${NIX_SYSTEM}.neomacs-minimal")"
+  release_paths+=("$minimal_path")
+fi
+printf '%s\n' "${release_paths[@]}" | cachix push eval-exec
 
 pin_system="${NIX_SYSTEM//_/-}"
-cachix pin eval-exec "neomacs-${GITHUB_REF_NAME}-${pin_system}" "$full_path"
-cachix pin eval-exec "neomacs-minimal-${GITHUB_REF_NAME}-${pin_system}" "$minimal_path"
+cachix pin eval-exec "neomacs-${RELEASE_TAG}-${pin_system}" "$full_path"
+if [[ -n "${minimal_path:-}" ]]; then
+  cachix pin eval-exec "neomacs-minimal-${RELEASE_TAG}-${pin_system}" "$minimal_path"
+fi
 ```
 
 The checkout must remain the workflow's exact tag commit. `--accept-flake-config` is appropriate in this trusted release job because the flake itself declares the two project-approved substituters and public keys. Do not add `nix flake archive`, `nix flake check`, `nix develop`, `cachix watch-store`, or `cachix watch-exec` to this publisher.
 
 The official action's default daemon mode installs a post-build hook and uploads newly built paths. Its fallback store-scan mode can capture unrelated paths and is explicitly unsafe on multi-user stores. Those modes conflict with the release-only boundary ([`cachix-action` push modes](https://github.com/cachix/cachix-action/blob/38b082610b782e7e93e209c35fd730d399dee866/README.md#push-modes)). If the action is used to install/configure the CLI, set `skipPush: true` and perform the explicit `cachix push` above.
 
-A release job should install Cachix with every automatic upload path disabled, build without the secret, and expose the two store roots as step outputs. Only the final step receives the repository secret. The authoritative implementation is `publish-cachix-release` in [`release.yml`](../../.github/workflows/release.yml); keep the rationale here instead of duplicating executable workflow YAML.
+A release job should install Cachix with every automatic upload path disabled, build without the secret, and expose only the selected release store roots as step outputs. Only the final step receives the repository secret. The authoritative automatic caller is `publish-cachix-release` in [`release.yml`](../../.github/workflows/release.yml); keep the rationale here instead of duplicating executable workflow YAML.
+
+The reusable [`cachix-release.yml`](../../.github/workflows/cachix-release.yml) also accepts an existing published tag and its exact 40-character commit SHA through `workflow_dispatch`. It verifies that GitHub's release tag resolves to that commit and checks out the SHA rather than the mutable ref name. This permits a release such as `v0.0.16` to be backfilled without moving its tag or recreating its GitHub Release. Future releases call the same workflow after `create-release`, passing the tag event's commit SHA, so automatic publication and manual backfills cannot develop different cache policies.
 
 The implementation uses the repository's pinned checkout commit. GitHub states that a full commit SHA is the only immutable way to reference an action; the same policy covers both Cachix actions ([GitHub secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use#using-third-party-actions)). The job's GitHub permission remains `contents: read`; the only external write credential is the Cachix per-cache token.
 
@@ -102,6 +112,6 @@ For a public cache, no read token is required. `cachix use` writes the substitut
 
 ## Release cache versus CI cache
 
-The release namespace should have exactly one writer path: successful, tag-triggered jobs that depend on `create-release`. Ordinary CI may read the public release cache, but it must not receive the write token and must not upload dev shells, checks, dependency builds, branch builds, or incidental outputs.
+The release namespace should have exactly one reusable writer policy with two authorized entry paths: a successful tag-triggered job that depends on `create-release`, and a manually dispatched backfill that verifies an already-published release tag against an explicitly supplied commit SHA. Ordinary CI may read the public release cache, but it must not receive the write token and must not upload dev shells, checks, dependency builds, branch builds, or incidental outputs.
 
 If broad CI caching is ever desired, create a different cache and token with separate trust and retention policy. Cachix recommends separating caches according to who can write/read them and explicitly identifies separate CI/development caches as a way to avoid polluting a main cache ([Cachix cache organization](https://docs.cachix.org/getting-started#organizing-your-caches)). That future option is not part of this release-only design.
