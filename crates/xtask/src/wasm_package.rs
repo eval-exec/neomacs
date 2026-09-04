@@ -36,7 +36,7 @@ pub(super) const WEB_REPOSITORY_ASSETS: [(&str, &str); 1] = [(
 )];
 const EDITOR_WORKER_WASM: &str = "neomacs_wasm_worker.wasm";
 const BROWSER_RELEASE_MANIFEST: &str = "manifest.json";
-const BROWSER_RELEASES_DIRECTORY: &str = "builds";
+const BROWSER_BUNDLES_DIRECTORY: &str = "builds";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct BrowserBundleId(String);
@@ -123,7 +123,7 @@ impl BrowserBundleAsset {
 
 fn browser_bundle_asset_url(bundle_id: &BrowserBundleId, asset: BrowserBundleAsset) -> String {
     format!(
-        "./{BROWSER_RELEASES_DIRECTORY}/{}/{}",
+        "./{BROWSER_BUNDLES_DIRECTORY}/{}/{}",
         bundle_id.as_str(),
         asset.filename(),
     )
@@ -395,13 +395,13 @@ pub(super) fn publish_browser_bundle(
     package_root: &Path,
 ) -> Result<BrowserBundleId> {
     let bundle_id = BrowserBundleId::from_tree(staged_bundle)?;
-    let releases = package_root.join(BROWSER_RELEASES_DIRECTORY);
-    fs::create_dir_all(&releases)?;
-    let release = releases.join(bundle_id.as_str());
-    if release.exists() {
-        return Err(format!("browser bundle already exists: {}", release.display()).into());
+    let bundles = package_root.join(BROWSER_BUNDLES_DIRECTORY);
+    fs::create_dir_all(&bundles)?;
+    let bundle = bundles.join(bundle_id.as_str());
+    if bundle.exists() {
+        return Err(format!("browser bundle already exists: {}", bundle.display()).into());
     }
-    fs::rename(staged_bundle, &release)?;
+    fs::rename(staged_bundle, &bundle)?;
 
     let manifest = BrowserReleaseManifest::for_bundle(&bundle_id);
     let mut encoded = serde_json::to_vec_pretty(&manifest)?;
