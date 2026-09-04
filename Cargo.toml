@@ -123,7 +123,7 @@ vergen-gitcl = { version = "10.0.3", default-features = false, features = ["carg
 crossbeam-channel = "0.5"
 crossbeam-deque = "0.8"
 rayon = "1"
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 # FFI / system
 libc = "0.2"
