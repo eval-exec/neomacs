@@ -183,8 +183,12 @@ try {
   try {
     Remove-Item Env:SHELL -ErrorAction SilentlyContinue
     $neomacs = Join-Path $binDir "neomacs.exe"
+    # Windows PowerShell 5.1 does not escape embedded double quotes when it
+    # builds the native command line, so each elisp string quote must arrive
+    # backslash-escaped for CommandLineToArgvW (\" decodes to a literal ";
+    # the backslash of \n is not followed by a quote, so it survives as-is).
     $shellProbeExpression = `
-      '(progn (princ (format "shell=%s\n" shell-file-name)) (princ (shell-command-to-string "whoami")))'
+      '(progn (princ (format \"shell=%s\n\" shell-file-name)) (princ (shell-command-to-string \"whoami\")))'
     $shellProbe = @(& $neomacs "--batch" "-Q" "--eval" $shellProbeExpression 2>&1)
     if ($LASTEXITCODE -ne 0) {
       throw "installed shell-command probe exited with code $LASTEXITCODE`n$($shellProbe -join "`n")"
