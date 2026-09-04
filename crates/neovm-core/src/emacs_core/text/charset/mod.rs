@@ -15,8 +15,8 @@ use crate::buffer::{EmacsBytePos, LispCharPos1};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::rc::Rc;
+use std::sync::Arc;
 
 const RAW_BYTE_SENTINEL_MIN: u32 = 0xE080;
 const RAW_BYTE_SENTINEL_MAX: u32 = 0xE0FF;
@@ -36,26 +36,46 @@ struct CharsetMapCacheKey {
     min_code: i64,
 }
 
-static CHARSET_MAP_CACHE: OnceLock<
-    RwLock<HashMap<CharsetMapCacheKey, Option<Arc<CharsetMapData>>>>,
-> = OnceLock::new();
-
-fn charset_map_cache() -> &'static RwLock<HashMap<CharsetMapCacheKey, Option<Arc<CharsetMapData>>>>
-{
-    CHARSET_MAP_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+enum CharsetMapSource {
+    NativeInstallation,
+    MountedRuntimeResources(Rc<dyn super::fileio::RuntimeResourceStore>),
 }
 
-fn charset_map_dir() -> PathBuf {
-    // Resolve at RUNTIME, never via the compile-time `env!("CARGO_MANIFEST_DIR")`:
-    // that path is the build machine's source tree, which is absent in an
-    // installed release, so every charset-map load (e.g. `make-char
-    // 'latin-jisx0201` from kinsoku.el during normal startup) would silently
-    // fail -> `decode-char` returns nil -> "Invalid code(s)".
-    // `charset_map_directory()` resolves under the install data dir
-    // (`<runtime_root>/etc/charsets`), the neomacs equivalent of GNU's
-    // `charset-map-path`. Memoized: the runtime root does not change mid-process.
-    static DIR: OnceLock<PathBuf> = OnceLock::new();
-    DIR.get_or_init(super::load::charset_map_directory).clone()
+impl CharsetMapSource {
+    fn from_runtime_resources(
+        resources: Option<Rc<dyn super::fileio::RuntimeResourceStore>>,
+    ) -> Self {
+        match resources {
+            Some(resources) => Self::MountedRuntimeResources(resources),
+            None => Self::NativeInstallation,
+        }
+    }
+
+    fn is_same_source(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::NativeInstallation, Self::NativeInstallation) => true,
+            (Self::MountedRuntimeResources(current), Self::MountedRuntimeResources(other)) => {
+                Rc::ptr_eq(current, other)
+            }
+            _ => false,
+        }
+    }
+
+    fn contents(&self, map_name: &str) -> Option<Vec<u8>> {
+        match self {
+            Self::NativeInstallation => {
+                std::fs::read(super::load::charset_map_directory().join(format!("{map_name}.map")))
+                    .ok()
+            }
+            Self::MountedRuntimeResources(resources) => {
+                let path = resources
+                    .mount_root()
+                    .join("etc/charsets")
+                    .join(format!("{map_name}.map"));
+                resources.file_contents(&path).map(ToOwned::to_owned)
+            }
+        }
+    }
 }
 
 fn parse_hex_i64(value: &str) -> Option<i64> {
@@ -72,8 +92,8 @@ fn parse_hex_range(value: &str) -> Option<(i64, i64)> {
     }
 }
 
-fn parse_charset_map_file(path: &Path, info: &CharsetInfo) -> Option<CharsetMapData> {
-    let text = std::fs::read_to_string(path).ok()?;
+fn parse_charset_map(contents: &[u8], info: &CharsetInfo) -> Option<CharsetMapData> {
+    let text = std::str::from_utf8(contents).ok()?;
     let mut code_to_char = HashMap::new();
     let mut char_to_code = HashMap::new();
 
@@ -121,29 +141,6 @@ fn parse_charset_map_file(path: &Path, info: &CharsetInfo) -> Option<CharsetMapD
         code_to_char,
         char_to_code,
     })
-}
-
-/// Load (and cache) the code↔char tables of a charset `.map` file.  The owning
-/// `info` supplies the code-space used to convert the map's code points to
-/// linear indices (GNU `CODE_POINT_TO_INDEX`), so it is part of the cache key.
-fn load_charset_map(map_name: &str, info: &CharsetInfo) -> Option<Arc<CharsetMapData>> {
-    let key = CharsetMapCacheKey {
-        map_name: map_name.to_string(),
-        code_space: info.code_space,
-        min_code: info.min_code,
-    };
-    if let Ok(cache) = charset_map_cache().read()
-        && let Some(cached) = cache.get(&key)
-    {
-        return cached.clone();
-    }
-
-    let loaded = parse_charset_map_file(&charset_map_dir().join(format!("{map_name}.map")), info)
-        .map(Arc::new);
-    if let Ok(mut cache) = charset_map_cache().write() {
-        cache.insert(key, loaded.clone());
-    }
-    loaded
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +264,10 @@ pub(crate) struct CharsetRegistry {
     non_preferred_head: Option<usize>,
     /// Next auto-assigned charset ID.
     next_id: i64,
+    /// Typed source of lazily loaded `etc/charsets` maps.
+    map_source: CharsetMapSource,
+    /// Parsed maps belong to this registry and therefore to its resource source.
+    map_cache: RefCell<HashMap<CharsetMapCacheKey, Option<Arc<CharsetMapData>>>>,
 }
 
 impl CharsetRegistry {
@@ -278,6 +279,8 @@ impl CharsetRegistry {
             priority: Vec::new(),
             non_preferred_head: None,
             next_id: 256, // start above the Emacs built-in range
+            map_source: CharsetMapSource::NativeInstallation,
+            map_cache: RefCell::new(HashMap::new()),
         };
         reg.init_standard_charsets();
         // GNU's dumped Emacs has only `ascii` preferred by default (the locale
@@ -782,7 +785,47 @@ impl CharsetRegistry {
             priority: snapshot.priority,
             non_preferred_head: snapshot.non_preferred_head,
             next_id: snapshot.next_id,
+            map_source: CharsetMapSource::NativeInstallation,
+            map_cache: RefCell::new(HashMap::new()),
         }
+    }
+
+    fn install_runtime_resources(
+        &mut self,
+        resources: Option<Rc<dyn super::fileio::RuntimeResourceStore>>,
+    ) {
+        let source = CharsetMapSource::from_runtime_resources(resources);
+        if self.map_source.is_same_source(&source) {
+            return;
+        }
+        self.map_source = source;
+        self.map_cache.get_mut().clear();
+    }
+
+    fn charset_map_contents(&self, map_name: &str) -> Option<Vec<u8>> {
+        self.map_source.contents(map_name)
+    }
+
+    /// Load and cache a code↔character table from this registry's product
+    /// resource source. The owning charset's code-space is part of the key
+    /// because GNU's `CODE_POINT_TO_INDEX` can interpret one map differently
+    /// for different charset definitions.
+    fn load_charset_map(&self, map_name: &str, info: &CharsetInfo) -> Option<Arc<CharsetMapData>> {
+        let key = CharsetMapCacheKey {
+            map_name: map_name.to_owned(),
+            code_space: info.code_space,
+            min_code: info.min_code,
+        };
+        if let Some(cached) = self.map_cache.borrow().get(&key) {
+            return cached.clone();
+        }
+
+        let loaded = self
+            .charset_map_contents(map_name)
+            .and_then(|contents| parse_charset_map(&contents, info))
+            .map(Arc::new);
+        self.map_cache.borrow_mut().insert(key, loaded.clone());
+        loaded
     }
 
     /// Replace the plist for a charset.
@@ -813,7 +856,8 @@ impl CharsetRegistry {
         }
         if info.unified_p
             && let Some(unify_map) = charset_value_text(&info.unify_map)
-            && let Some(decoded) = load_charset_map(&unify_map, info)
+            && let Some(decoded) = self
+                .load_charset_map(&unify_map, info)
                 .and_then(|map| map.code_to_char.get(&code_point).copied())
         {
             return Some(decoded);
@@ -822,7 +866,8 @@ impl CharsetRegistry {
             CharsetMethod::Offset(offset) => {
                 charset_code_point_to_index(info, code_point).map(|index| index + offset)
             }
-            CharsetMethod::Map(map_name) => load_charset_map(map_name, info)
+            CharsetMethod::Map(map_name) => self
+                .load_charset_map(map_name, info)
                 .and_then(|map| map.code_to_char.get(&code_point).copied()),
             CharsetMethod::Subset(subset) => {
                 let parent_code = code_point - subset.offset;
@@ -849,7 +894,8 @@ impl CharsetRegistry {
         let info = self.charsets.get(&self.resolve_name(name))?;
         if info.unified_p
             && let Some(unify_map) = charset_value_text(&info.unify_map)
-            && let Some(encoded) = load_charset_map(&unify_map, info)
+            && let Some(encoded) = self
+                .load_charset_map(&unify_map, info)
                 .and_then(|map| map.char_to_code.get(&ch).copied())
         {
             return Some(encoded);
@@ -866,9 +912,9 @@ impl CharsetRegistry {
                     None
                 }
             }
-            CharsetMethod::Map(map_name) => {
-                load_charset_map(map_name, info).and_then(|map| map.char_to_code.get(&ch).copied())
-            }
+            CharsetMethod::Map(map_name) => self
+                .load_charset_map(map_name, info)
+                .and_then(|map| map.char_to_code.get(&ch).copied()),
             CharsetMethod::Subset(subset) => {
                 let parent_code = self.encode_char(subset.parent, ch)?;
                 if parent_code < subset.parent_min_code || parent_code > subset.parent_max_code {
@@ -939,9 +985,17 @@ thread_local! {
 /// Reset charset registry to default state (called from Context::new).
 pub(crate) fn reset_charset_registry() {
     CHARSET_REGISTRY.with(|slot| *slot.borrow_mut() = CharsetRegistry::new());
-    if let Ok(mut cache) = charset_map_cache().write() {
-        cache.clear();
-    }
+}
+
+/// Bind sandboxed product resources to the thread's GNU-style charset table.
+///
+/// The charset registry is evaluator-thread local, just like GNU's process-wide
+/// charset table. Keeping the resource capability beside that registry makes
+/// lazy `.map` loading use the same immutable namespace as ordinary Lisp load.
+pub(crate) fn install_runtime_resource_store(
+    resources: Option<Rc<dyn super::fileio::RuntimeResourceStore>>,
+) {
+    CHARSET_REGISTRY.with(|slot| slot.borrow_mut().install_runtime_resources(resources));
 }
 
 /// Collect GC roots from charset runtime state.
@@ -984,10 +1038,11 @@ pub(crate) fn charset_target_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
         let info = reg.charsets.get(&name)?;
         match info.method {
             CharsetMethod::Offset(offset) => {
-                offset_charset_char_ranges(info, offset, info.min_code, info.max_code)
+                offset_charset_char_ranges(&reg, info, offset, info.min_code, info.max_code)
             }
             CharsetMethod::Map(ref map_name) => {
-                let values = load_charset_map(map_name, info)?
+                let values = reg
+                    .load_charset_map(map_name, info)?
                     .code_to_char
                     .values()
                     .filter_map(|ch| u32::try_from(*ch).ok())
@@ -1028,14 +1083,19 @@ fn offset_raw_range(
     Some((from.min(to), from.max(to)))
 }
 
-fn offset_unified_ranges(info: &CharsetInfo, from_code: i64, to_code: i64) -> Vec<(u32, u32)> {
+fn offset_unified_ranges(
+    reg: &CharsetRegistry,
+    info: &CharsetInfo,
+    from_code: i64,
+    to_code: i64,
+) -> Vec<(u32, u32)> {
     if !info.unified_p {
         return Vec::new();
     }
     let Some(unify_map) = charset_value_text(&info.unify_map) else {
         return Vec::new();
     };
-    let Some(map) = load_charset_map(&unify_map, info) else {
+    let Some(map) = reg.load_charset_map(&unify_map, info) else {
         return Vec::new();
     };
 
@@ -1061,12 +1121,13 @@ fn offset_unified_ranges(info: &CharsetInfo, from_code: i64, to_code: i64) -> Ve
 }
 
 fn offset_charset_char_ranges(
+    reg: &CharsetRegistry,
     info: &CharsetInfo,
     offset: i64,
     from_code: i64,
     to_code: i64,
 ) -> Option<Vec<(u32, u32)>> {
-    let mut ranges = offset_unified_ranges(info, from_code, to_code);
+    let mut ranges = offset_unified_ranges(reg, info, from_code, to_code);
     if let Some(raw) = offset_raw_range(info, offset, from_code, to_code) {
         ranges.push(raw);
     }
@@ -1097,9 +1158,12 @@ pub(crate) fn map_charset_char_ranges(
         }
 
         match &info.method {
-            CharsetMethod::Offset(offset) => offset_charset_char_ranges(info, *offset, from, to),
+            CharsetMethod::Offset(offset) => {
+                offset_charset_char_ranges(&reg, info, *offset, from, to)
+            }
             CharsetMethod::Map(map_name) => {
-                let values = load_charset_map(map_name, info)?
+                let values = reg
+                    .load_charset_map(map_name, info)?
                     .code_to_char
                     .iter()
                     .filter_map(|(code, ch)| {
@@ -2341,9 +2405,7 @@ pub(crate) fn builtin_unify_charset(args: Vec<Value>) -> EvalResult {
 /// `(clear-charset-maps)` -- clear charset-related caches and return nil.
 pub(crate) fn builtin_clear_charset_maps(args: Vec<Value>) -> EvalResult {
     expect_max_args("clear-charset-maps", &args, 0)?;
-    if let Ok(mut cache) = charset_map_cache().write() {
-        cache.clear();
-    }
+    CHARSET_REGISTRY.with(|slot| slot.borrow().map_cache.borrow_mut().clear());
     Ok(Value::NIL)
 }
 

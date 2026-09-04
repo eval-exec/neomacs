@@ -648,6 +648,7 @@ pub fn snapshot_active_runtime(eval: &mut Context) -> ActiveRuntimeSnapshot {
 pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapshot) {
     eval.setup_thread_locals();
     restore_charset_registry(snapshot.charset_registry.clone());
+    eval.sync_charset_runtime_resources();
     restore_fontset_registry(snapshot.fontset_registry.clone());
     eval.sync_thread_runtime_bindings();
     eval.sync_current_thread_buffer_state();
