@@ -13425,8 +13425,23 @@ fn window_system_is_special_and_dynamically_bound_like_gnu_defvar_kboard() {
 }
 
 #[test]
-fn fixnum_limit_constants_are_special_like_gnu_defvar_lisp() {
+fn fixnum_limit_constants_match_the_target_and_are_special_like_gnu_defvar_lisp() {
     crate::test_utils::init_test_tracing();
+    let eval = Context::new();
+    assert_eq!(
+        eval.obarray()
+            .symbol_value("most-positive-fixnum")
+            .copied()
+            .and_then(Value::as_fixnum),
+        Some(Value::MOST_POSITIVE_FIXNUM),
+    );
+    assert_eq!(
+        eval.obarray()
+            .symbol_value("most-negative-fixnum")
+            .copied()
+            .and_then(Value::as_fixnum),
+        Some(Value::MOST_NEGATIVE_FIXNUM),
+    );
     let results = eval_all(
         "(list (special-variable-p 'most-positive-fixnum)
                (special-variable-p 'most-negative-fixnum))

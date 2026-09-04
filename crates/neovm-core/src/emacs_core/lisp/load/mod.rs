@@ -3988,12 +3988,7 @@ fn ensure_startup_compat_variables(eval: &mut super::eval::Context, project_root
         // fixnum limit and calls make_symbol_constant.  Reassert this here so
         // cached bootstrap dumps from older builds regain the C bootstrap
         // symbol flags after load.
-        obarray.set_symbol_value("most-positive-fixnum", Value::fixnum(i64::MAX >> 2));
-        obarray.make_special("most-positive-fixnum");
-        obarray.set_constant("most-positive-fixnum");
-        obarray.set_symbol_value("most-negative-fixnum", Value::fixnum(-(i64::MAX >> 2) - 1));
-        obarray.make_special("most-negative-fixnum");
-        obarray.set_constant("most-negative-fixnum");
+        super::eval::install_fixnum_limit_variables(obarray);
     }
     crate::emacs_core::xfaces::ensure_startup_compat_variables(eval);
 }
