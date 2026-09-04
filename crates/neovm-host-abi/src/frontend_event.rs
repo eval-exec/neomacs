@@ -236,41 +236,63 @@ impl FrontendKeyEvent {
     }
 }
 
-/// Physical drawable extent paired with its validated logical/device scale.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FrontendViewport {
+/// Two-dimensional editor extent measured in logical pixels.
+///
+/// Frontends must convert device/backing dimensions before constructing this
+/// value. Keeping the unit in the type makes that conversion explicit and
+/// prevents host APIs from accepting an unlabelled width/height pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrontendLogicalExtent {
     width: u32,
     height: u32,
-    scale: FrontendScaleFactor,
-    target: FrontendFrameId,
 }
 
-impl FrontendViewport {
-    /// Validate and construct a physical viewport observation.
-    pub fn new(
-        width: u32,
-        height: u32,
-        scale: f64,
-        target: FrontendFrameId,
-    ) -> Result<Self, InvalidFrontendScaleFactor> {
-        Ok(Self {
-            width,
-            height,
-            scale: FrontendScaleFactor::new(scale)?,
-            target,
-        })
+impl FrontendLogicalExtent {
+    /// Construct a logical editor extent.
+    #[must_use]
+    pub const fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
     }
 
-    /// Physical viewport width in device pixels.
+    /// Logical width in editor pixels.
     #[must_use]
     pub const fn width(self) -> u32 {
         self.width
     }
 
-    /// Physical viewport height in device pixels.
+    /// Logical height in editor pixels.
     #[must_use]
     pub const fn height(self) -> u32 {
         self.height
+    }
+}
+
+/// Logical editor extent paired with its validated logical-to-device scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrontendViewport {
+    logical_extent: FrontendLogicalExtent,
+    scale: FrontendScaleFactor,
+    target: FrontendFrameId,
+}
+
+impl FrontendViewport {
+    /// Validate and construct a logical viewport observation.
+    pub fn new(
+        logical_extent: FrontendLogicalExtent,
+        scale: f64,
+        target: FrontendFrameId,
+    ) -> Result<Self, InvalidFrontendScaleFactor> {
+        Ok(Self {
+            logical_extent,
+            scale: FrontendScaleFactor::new(scale)?,
+            target,
+        })
+    }
+
+    /// Logical editor extent sampled with the scale factor.
+    #[must_use]
+    pub const fn logical_extent(self) -> FrontendLogicalExtent {
+        self.logical_extent
     }
 
     /// Logical-to-device scale sampled with the extent.
