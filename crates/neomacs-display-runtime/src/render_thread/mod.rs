@@ -10,6 +10,7 @@ mod command_processing;
 mod cursor;
 mod cursor_runtime;
 mod device_loss;
+mod frame_compositor;
 mod frame_ingest;
 mod frame_sched;
 mod frame_state;
