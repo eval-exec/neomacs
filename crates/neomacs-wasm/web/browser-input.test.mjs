@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { installBrowserInput } from "./browser-input.mjs";
+import {
+  installBrowserInput,
+  observeBrowserEditorGeometry,
+  observeBrowserViewport,
+} from "./browser-input.mjs";
 
 class FakeEventTarget {
   constructor() {
@@ -57,6 +61,37 @@ function harness() {
   });
   return { root, textInput, batches, viewportCalls: () => viewportCalls };
 }
+
+test("HiDPI viewport observations keep editor geometry in CSS pixels", () => {
+  const browser = {
+    innerWidth: 1975,
+    innerHeight: 1100,
+    devicePixelRatio: 1.75,
+  };
+
+  assert.deepEqual(observeBrowserViewport(browser), {
+    width: 1975,
+    height: 1100,
+    scale_factor: 1.75,
+  });
+});
+
+test("HiDPI startup keeps font measurements in editor logical pixels", () => {
+  const browser = {
+    innerWidth: 1975,
+    innerHeight: 1100,
+    devicePixelRatio: 1.75,
+  };
+
+  assert.deepEqual(observeBrowserEditorGeometry(browser), {
+    width: 1975,
+    height: 1100,
+    scale_factor: 1.75,
+    character_width: 8,
+    character_height: 16,
+    font_pixel_size: 16,
+  });
+});
 
 test("plain keyboard text is committed through the text service exactly once", () => {
   const { root, textInput, batches } = harness();

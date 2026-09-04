@@ -15,6 +15,25 @@ const NAMED_KEY_SYMBOLS = new Map([
   ["Delete", 0xffff],
 ]);
 
+/** Sample editor geometry in browser logical (CSS) pixels. */
+export function observeBrowserViewport(browser) {
+  return {
+    width: Math.max(1, Math.round(browser.innerWidth)),
+    height: Math.max(1, Math.round(browser.innerHeight)),
+    scale_factor: browser.devicePixelRatio || 1,
+  };
+}
+
+/** Sample the complete logical geometry needed to open the editor frame. */
+export function observeBrowserEditorGeometry(browser) {
+  return {
+    ...observeBrowserViewport(browser),
+    character_width: 8,
+    character_height: 16,
+    font_pixel_size: 16,
+  };
+}
+
 function modifierSample(event) {
   return {
     shift: event.shiftKey,
