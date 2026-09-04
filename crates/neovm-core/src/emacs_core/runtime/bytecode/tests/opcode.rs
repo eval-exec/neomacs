@@ -23,3 +23,23 @@ fn op_disasm_simple() {
     assert_eq!(Op::Return.disasm(&c), "return");
     assert_eq!(Op::Goto(10).disasm(&c), "goto 10");
 }
+
+/// The dispatch loop fetches one `Op` per instruction, so `Op`'s size is the
+/// per-instruction load width. Recorded rather than aspirational: it is 8
+/// bytes, which is why the `bytecode-call-loop` gap is NOT opcode density.
+///
+/// Worth stating because the module doc above anticipates "a compact byte
+/// stream", and a 16-byte load in the dispatch loop's `perf annotate` output
+/// looks like evidence for exactly that. It is not -- with line-tables-only
+/// debuginfo and this much inlining, a spill/reload lands on a nearby source
+/// line. Measure the type before believing an instruction width.
+#[test]
+fn op_records_its_dispatch_fetch_width() {
+    let size = std::mem::size_of::<Op>();
+    let align = std::mem::align_of::<Op>();
+    eprintln!("size_of::<Op>() = {size}, align = {align}");
+    assert!(
+        size <= 16,
+        "Op grew past 16 bytes ({size}); the dispatch loop loads this per instruction"
+    );
+}
