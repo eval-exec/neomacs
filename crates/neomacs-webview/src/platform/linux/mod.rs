@@ -26,6 +26,8 @@ mod display;
 
 mod engine;
 
+mod glib_error;
+
 mod native;
 
 mod reactor;

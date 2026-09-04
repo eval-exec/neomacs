@@ -19,6 +19,8 @@ use super::cursor_presentation::{
     ResolvedCursorPaint,
 };
 use super::frame_pass::{BoxSpan, collect_frame_box_spans};
+#[cfg(all(feature = "webview", target_os = "linux"))]
+use super::layer_media::inline_webview_quad;
 use super::layer_media::{MediaQuad, clipped_media_rect, textured_quad_vertices_uv};
 use cosmic_text::SubpixelBin;
 use neomacs_display_protocol::DeviceScale;
@@ -1733,34 +1735,10 @@ impl WgpuRenderer {
 
                 let mut webkit_quads = Vec::new();
                 for glyph in &frame.glyphs {
-                    if let FrameGlyph::Xwidget {
-                        webview_id,
-                        x,
-                        y,
-                        width,
-                        height,
-                        ..
-                    } = glyph
+                    if let Some(quad) = inline_webview_quad(glyph, offset_x, offset_y)
+                        && self.caches.webview.get(quad.id).is_some()
                     {
-                        let view_id = *webview_id;
-                        if self.caches.webview.get(view_id).is_some() {
-                            let wx = *x + offset_x;
-                            let wy = *y + offset_y;
-                            tracing::debug!(
-                                "render_frame_content: webkit {} at ({:.1},{:.1}) size {:.1}x{:.1}",
-                                webview_id,
-                                wx,
-                                wy,
-                                width,
-                                height,
-                            );
-                            webkit_quads.push(MediaQuad {
-                                id: view_id,
-                                vertices: super::layer_media::textured_quad_vertices(
-                                    wx, wy, *width, *height, 0.0, 1.0,
-                                ),
-                            });
-                        }
+                        webkit_quads.push(quad);
                     }
                 }
                 let webkit_vertices: Vec<GlyphVertex> = webkit_quads

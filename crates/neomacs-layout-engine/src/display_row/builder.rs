@@ -14,8 +14,10 @@ use crate::display_row::append_context::{
     DisplayRowTextCharState, DisplayRowTextNaturalAdvanceKind, DisplayRowTextNaturalAdvancePolicy,
     DisplayRowTextNaturalAdvanceRequest,
 };
+use crate::display_row::geometry::DisplayRowTextAreaOrigin;
 #[cfg(test)]
 use crate::display_source::{DisplayItemSource, DisplaySourceContext};
+use crate::display_source_overflow::{DisplayXwidgetOverflowAction, WindowLocalRowExtent};
 use crate::glyph_row_writer;
 #[cfg(test)]
 use crate::output::builder::DisplayOutputBuilder;
@@ -1321,10 +1323,27 @@ enum DisplayRowOverflowPolicy {
     ClipToStructuralLane,
 }
 
+/// Per-item admission at the row's right edge.
+///
+/// GNU's `display_line` deliberately keeps an xwidget that
+/// `produce_xwidget_glyph` classified as `LeaveWhole`, even when its layout
+/// advance crosses a truncating row's boundary.  The native xwidget clip then
+/// limits what is presented.  Keeping this as an xwidget-branded capability
+/// prevents that exception from silently becoming the policy for images,
+/// videos, surfaces, or ordinary glyphs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayItemRightEdgeAdmission {
+    EnforceRowBoundary,
+    PreserveWholeXwidget,
+}
+
 pub(crate) struct DisplayRowProgressWriter<'layout, 'row, 'measurer> {
     writer: DisplayRowWriter<'layout, 'row, 'measurer>,
     position: DisplayRowPosition,
     max_x_px: f32,
+    /// Where `position` and `max_x_px` are measured from in GNU's
+    /// window-local terms; see `DisplayRowTextAreaOrigin`.
+    text_area_origin: DisplayRowTextAreaOrigin,
     text_run_measurement: Option<DisplayTextRunMeasurement>,
 }
 
@@ -1499,6 +1518,7 @@ impl<'layout, 'row> DisplayRowProgressWriter<'layout, 'row, '_> {
             writer,
             position,
             max_x_px,
+            text_area_origin: DisplayRowTextAreaOrigin::row_local(),
             text_run_measurement: None,
         }
     }
@@ -1538,17 +1558,20 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             glyph_measurer,
             position,
             max_x_px,
+            DisplayRowTextAreaOrigin::row_local(),
             area,
             DisplayRowAppendStartPolicy::ReconcileWithRowTail,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_glyph_measurer_for_area_and_start_policy(
         layout: &'layout DisplayRowLayout,
         row: &'row mut GlyphRow,
         glyph_measurer: &'measurer mut dyn DisplayGlyphMeasurer,
         position: DisplayRowPosition,
         max_x_px: f32,
+        text_area_origin: DisplayRowTextAreaOrigin,
         area: GlyphArea,
         start_policy: DisplayRowAppendStartPolicy,
     ) -> Self {
@@ -1560,6 +1583,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             writer,
             position,
             max_x_px,
+            text_area_origin,
             text_run_measurement: None,
         }
     }
@@ -1598,6 +1622,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             writer,
             position,
             max_x_px,
+            text_area_origin: DisplayRowTextAreaOrigin::row_local(),
             text_run_measurement: Some(text_run_measurement),
         }
     }
@@ -1610,6 +1635,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         glyph_measurer: &'measurer mut dyn DisplayGlyphMeasurer,
         position: DisplayRowPosition,
         max_x_px: f32,
+        text_area_origin: DisplayRowTextAreaOrigin,
         area: GlyphArea,
         start_policy: DisplayRowAppendStartPolicy,
     ) -> Self {
@@ -1621,6 +1647,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             writer,
             position,
             max_x_px,
+            text_area_origin,
             text_run_measurement: Some(text_run_measurement),
         }
     }
@@ -1697,6 +1724,61 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 let slot_start = self.position;
                 let slot_source = span.start.clone();
                 let before_len = self.area_len();
+                // GNU crops a wide xwidget's advance when it produces the
+                // glyph, before `display_line` measures the row; see
+                // `DisplayXwidgetOverflowAction`.  Xwidgets in body text only:
+                // images have their own GNU rule (not ported), and margin
+                // lanes keep their own structural clip below.
+                let (kind, right_edge_admission) = match kind {
+                    DisplayItemKind::MediaReplacement(media)
+                        if self.writer.overflow_policy()
+                            == DisplayRowOverflowPolicy::RejectOverflowingGlyph =>
+                    {
+                        match media.into_xwidget() {
+                            Ok(xwidget) => {
+                                let extent = WindowLocalRowExtent::from_frame_coordinates(
+                                    self.text_area_origin,
+                                    self.position.x_px(),
+                                    self.max_x_px,
+                                );
+                                let Ok(extent) = extent else {
+                                    return DisplayRowAppendProgress::new(
+                                        start,
+                                        self.position,
+                                        metrics,
+                                        DisplayRowAppendStatus::Clipped,
+                                        slots,
+                                    );
+                                };
+                                let action = DisplayXwidgetOverflowAction::for_xwidget(
+                                    xwidget.layout_advance(),
+                                    extent,
+                                    before_len == 0,
+                                );
+                                let admission = match action {
+                                    DisplayXwidgetOverflowAction::Fits
+                                    | DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
+                                        ..
+                                    } => DisplayItemRightEdgeAdmission::EnforceRowBoundary,
+                                    DisplayXwidgetOverflowAction::LeaveWhole => {
+                                        DisplayItemRightEdgeAdmission::PreserveWholeXwidget
+                                    }
+                                };
+                                (
+                                    DisplayItemKind::MediaReplacement(
+                                        xwidget.apply_overflow(action).into_media(),
+                                    ),
+                                    admission,
+                                )
+                            }
+                            Err(media) => (
+                                DisplayItemKind::MediaReplacement(media),
+                                DisplayItemRightEdgeAdmission::EnforceRowBoundary,
+                            ),
+                        }
+                    }
+                    kind => (kind, DisplayItemRightEdgeAdmission::EnforceRowBoundary),
+                };
                 let checkpoint = DisplayRowGlyphCheckpoint::capture(self.writer.row);
                 let mut written = self.writer.push_item(
                     DisplayItem::new(span, face, kind)
@@ -1707,6 +1789,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 let mut status = DisplayRowAppendStatus::Complete;
                 if written.has_positive_width()
                     && self.position.x_px() + written.width_px() > self.max_x_px
+                    && right_edge_admission == DisplayItemRightEdgeAdmission::EnforceRowBoundary
                 {
                     let available_px = (self.max_x_px - self.position.x_px()).max(0.0);
                     match self.writer.overflow_policy() {
@@ -2643,10 +2726,12 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
             DisplayMediaReplacementKind::Xwidget {
                 xwidget_id,
                 webview_id,
+                content,
             } => GlyphType::Xwidget {
                 xwidget_id,
                 webview_id,
                 width_cols,
+                content,
             },
             DisplayMediaReplacementKind::Surface { surface_id } => GlyphType::Surface {
                 surface_id: surface_id as i32,

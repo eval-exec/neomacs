@@ -6,7 +6,9 @@ use crate::display_row::builder::{
     apply_display_row_source_slot_bounds, merge_display_row_source_slot_bounds,
 };
 use crate::display_row::finalizer::{RowTrailingFaceFill, RowTrailingFaceFillResult};
-use crate::display_row::geometry::{DisplayRowGeometryState, DisplayRowMaxX};
+use crate::display_row::geometry::{
+    DisplayRowGeometryState, DisplayRowMaxX, DisplayRowTextAreaOrigin,
+};
 use crate::glyph_row_writer;
 use neomacs_display_protocol::face::Face;
 #[cfg(test)]
@@ -299,11 +301,33 @@ impl DisplayRowRenderIntoRowResult {
 pub(crate) struct DisplayRowRenderBounds {
     start: DisplayRowPosition,
     max_x: DisplayRowMaxX,
+    text_area_origin: DisplayRowTextAreaOrigin,
 }
 
 impl DisplayRowRenderBounds {
+    /// Bounds for a row laid out in its own coordinates (the text area
+    /// starts at 0): chrome rows, mock frames and unit tests.
     pub(crate) fn new(start: DisplayRowPosition, max_x: DisplayRowMaxX) -> Self {
-        Self { start, max_x }
+        Self {
+            start,
+            max_x,
+            text_area_origin: DisplayRowTextAreaOrigin::row_local(),
+        }
+    }
+
+    /// Bounds for a row of a window whose text area starts at a
+    /// frame-absolute x; the buffer text path uses this so window-local GNU
+    /// rules see window-local coordinates.
+    pub(crate) fn in_window_text_area(
+        start: DisplayRowPosition,
+        max_x: DisplayRowMaxX,
+        text_area_origin: DisplayRowTextAreaOrigin,
+    ) -> Self {
+        Self {
+            start,
+            max_x,
+            text_area_origin,
+        }
     }
 
     pub(crate) fn whole_row(width_px: f32) -> Self {
@@ -323,6 +347,10 @@ impl DisplayRowRenderBounds {
 
     pub(crate) fn max_x(self) -> DisplayRowMaxX {
         self.max_x
+    }
+
+    pub(crate) fn text_area_origin(self) -> DisplayRowTextAreaOrigin {
+        self.text_area_origin
     }
 }
 

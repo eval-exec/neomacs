@@ -6,20 +6,57 @@ use super::video_quad_vertices;
 
 #[cfg(all(feature = "webview", target_os = "linux"))]
 #[test]
-fn inline_webview_uses_the_explicit_browser_identity() {
+fn inline_webview_preserves_content_crop_and_child_frame_offset() {
+    use neomacs_display_protocol::{
+        FrameSpace, GeometryPoint, LogicalPixels, Px, Rect, XwidgetLayoutAdvance,
+        XwidgetPresentationGeometry,
+    };
+
     let mut glyphs = neomacs_display_protocol::FrameGlyphBuffer::new();
+    glyphs.set_draw_context(
+        neomacs_display_protocol::DisplayWindowId::new(1),
+        neomacs_display_protocol::GlyphRowRole::Text,
+        Some(Rect::new(0.0, 0.0, 312.0, 120.0)),
+    );
+    let content = neomacs_display_protocol::XwidgetContentExtent::new(600.0, 40.0)
+        .expect("valid xwidget content extent");
+    let presentation = XwidgetPresentationGeometry::new(
+        GeometryPoint::<FrameSpace, LogicalPixels>::from_px(8.0, 16.0).expect("valid origin"),
+        content,
+        XwidgetLayoutAdvance::new(Px(304.0)).expect("valid cropped advance"),
+        None,
+    );
     glyphs.add_xwidget(
         neomacs_display_protocol::XwidgetId::new(7),
         neomacs_display_protocol::WebViewId::new(91),
-        0.0,
-        0.0,
-        320.0,
-        200.0,
+        presentation,
     );
 
+    let quad = super::inline_webview_quad(&glyphs.glyphs[0], 100.0, 50.0)
+        .expect("the visible xwidget produces a quad");
+
+    assert_eq!(quad.id, neomacs_display_protocol::WebViewId::new(91));
     assert_eq!(
-        super::inline_webview_id(&glyphs.glyphs[0]),
-        Some(neomacs_display_protocol::WebViewId::new(91))
+        quad.vertices.map(|vertex| vertex.position),
+        [
+            [108.0, 66.0],
+            [412.0, 66.0],
+            [412.0, 106.0],
+            [108.0, 66.0],
+            [412.0, 106.0],
+            [108.0, 106.0],
+        ]
+    );
+    assert_eq!(
+        quad.vertices.map(|vertex| vertex.tex_coords),
+        [
+            [0.0, 0.0],
+            [304.0 / 600.0, 0.0],
+            [304.0 / 600.0, 1.0],
+            [0.0, 0.0],
+            [304.0 / 600.0, 1.0],
+            [0.0, 1.0],
+        ]
     );
 }
 

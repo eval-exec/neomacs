@@ -9,6 +9,7 @@ use crate::window_output::{
     RowMetricsSnapshot,
 };
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
+use neomacs_display_protocol::{GeometryError, LogicalPixels};
 
 /// Horizontal append limit for a display row.
 ///
@@ -28,6 +29,40 @@ impl DisplayRowMaxX {
             Self::Unbounded => f32::INFINITY,
             Self::Bounded(x) => x,
         }
+    }
+}
+
+/// Where the window's text area starts, in the frame-absolute pixels the row
+/// writer positions glyphs in.
+///
+/// GNU measures `it->current_x` and `it->last_visible_x` from this edge
+/// (src/dispextern.h:2785-2791, emacs-31.0.90), so any rule ported from a
+/// `produce_*` function that compares against `last_visible_x` itself, not
+/// only against the difference of the two, has to subtract it first.  The
+/// line-number prefix lies inside the text area and is not subtracted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DisplayRowTextAreaOrigin {
+    x_px: LogicalPixels,
+}
+
+impl DisplayRowTextAreaOrigin {
+    /// A row laid out in its own coordinates: the text area starts at 0.
+    /// Chrome rows, mock frames and unit tests build rows this way.
+    pub(crate) fn row_local() -> Self {
+        Self {
+            x_px: LogicalPixels::default(),
+        }
+    }
+
+    /// A row of a window whose text area starts at frame-absolute `x_px`.
+    pub(crate) fn at_frame_x(x_px: f32) -> Result<Self, GeometryError> {
+        Ok(Self {
+            x_px: LogicalPixels::new(x_px)?,
+        })
+    }
+
+    pub(crate) fn window_local(self, frame_x_px: f32) -> f32 {
+        frame_x_px - self.x_px.get()
     }
 }
 

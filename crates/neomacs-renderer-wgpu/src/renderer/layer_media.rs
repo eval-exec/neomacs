@@ -20,12 +20,43 @@ pub(super) struct MediaQuad<Id> {
     pub(super) vertices: [GlyphVertex; 6],
 }
 
+/// Resolve one portable xwidget presentation into the GPU quad used by the
+/// Linux composited-webview backend.
+///
+/// Root and child frames deliberately share this adapter: frame offsets move
+/// only the destination vertices, while clipping and texture coordinates are
+/// derived once from the protocol's intrinsic-content/layout/clip contract.
 #[cfg(all(feature = "webview", target_os = "linux"))]
-pub(super) const fn inline_webview_id(glyph: &FrameGlyph) -> Option<WebViewId> {
-    match glyph {
-        FrameGlyph::Xwidget { webview_id, .. } => Some(*webview_id),
-        _ => None,
-    }
+pub(super) fn inline_webview_quad(
+    glyph: &FrameGlyph,
+    offset_x: f32,
+    offset_y: f32,
+) -> Option<MediaQuad<WebViewId>> {
+    let FrameGlyph::Xwidget {
+        webview_id,
+        presentation,
+        ..
+    } = glyph
+    else {
+        return None;
+    };
+    let visible = presentation.resolve_visible(None).ok()??;
+    let draw = visible.visible_rect();
+    let [u_min, u_max, v_min, v_max] = visible.texture_coordinates().as_array();
+
+    Some(MediaQuad {
+        id: *webview_id,
+        vertices: textured_quad_vertices_uv(
+            draw.x() + offset_x,
+            draw.y() + offset_y,
+            draw.width(),
+            draw.height(),
+            u_min,
+            u_max,
+            v_min,
+            v_max,
+        ),
+    })
 }
 
 #[cfg(feature = "video")]
@@ -499,84 +530,15 @@ impl WgpuRenderer {
         {
             let mut quads = Vec::new();
             for glyph in &frame_glyphs.glyphs {
-                if let FrameGlyph::Xwidget {
-                    webview_id,
-                    x,
-                    y,
-                    width,
-                    height,
-                    clip_rect,
-                    ..
-                } = glyph
-                {
-                    let (draw_y, clipped_height, tex_v_min, tex_v_max) =
-                        if let Some(clip) = clip_rect {
-                            let mut y0 = *y;
-                            let mut h0 = *height;
-                            let mut v0 = 0.0_f32;
-                            let mut v1 = 1.0_f32;
-                            let top = clip.y;
-                            let bottom = clip.y + clip.height;
-                            if y0 < top {
-                                let cut = top - y0;
-                                if cut >= h0 {
-                                    continue;
-                                }
-                                y0 = top;
-                                h0 -= cut;
-                                if *height > 0.0 {
-                                    v0 += cut / *height;
-                                }
-                            }
-                            if y0 + h0 > bottom {
-                                let cut = (y0 + h0) - bottom;
-                                if cut >= h0 {
-                                    continue;
-                                }
-                                h0 -= cut;
-                                if *height > 0.0 {
-                                    v1 -= cut / *height;
-                                }
-                            }
-                            (y0, h0, v0, v1)
-                        } else {
-                            (*y, *height, 0.0, 1.0)
-                        };
-
-                    // Skip if fully clipped
-                    if clipped_height <= 0.0 {
-                        continue;
-                    }
-
-                    let view_id = inline_webview_id(glyph)
-                        .expect("the glyph was exhaustively matched as an xwidget");
+                if let Some(quad) = inline_webview_quad(glyph, 0.0, 0.0) {
+                    let view_id = quad.id;
                     // Check if webkit texture is ready
                     if self.caches.webview.get(view_id).is_some() {
                         self.media_budget
                             .touch(crate::media_budget::MediaType::WebKit, view_id.get());
-                        tracing::debug!(
-                            "Rendering webkit {} at ({}, {}) size {}x{} (clipped to {})",
-                            webview_id,
-                            x,
-                            y,
-                            width,
-                            height,
-                            clipped_height
-                        );
-                        // Create vertices for webkit quad (white color = no tinting)
-                        quads.push(MediaQuad {
-                            id: view_id,
-                            vertices: textured_quad_vertices(
-                                *x,
-                                draw_y,
-                                *width,
-                                clipped_height,
-                                tex_v_min,
-                                tex_v_max,
-                            ),
-                        });
+                        quads.push(quad);
                     } else {
-                        tracing::debug!("WebView {} not found in cache", webview_id);
+                        tracing::debug!("WebView {} not found in cache", view_id);
                     }
                 }
             }

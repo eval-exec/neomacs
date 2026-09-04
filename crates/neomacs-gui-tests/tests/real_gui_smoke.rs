@@ -101,6 +101,136 @@ fn real_gui_smoke_generates_surface_readback_png() {
 }
 
 #[test]
+fn oversized_xwidget_keeps_its_intrinsic_page_visible_behind_the_window_clip() {
+    if !cfg!(target_os = "linux") {
+        eprintln!("skipping oversized xwidget composition regression; WPE is Linux-only");
+        return;
+    }
+    let Some(backend) = requested_backend() else {
+        eprintln!(
+            "skipping oversized xwidget composition regression; set \
+             NEOMACS_GUI_TEST_BACKEND=wayland or x11 to run it"
+        );
+        return;
+    };
+
+    let workspace_root = workspace_root();
+    let binary = neomacs_binary(&workspace_root);
+    assert!(
+        binary.exists(),
+        "build {binary:?} with --features webview before running the xwidget regression"
+    );
+
+    let artifact_root = workspace_root.join("target/neomacs-gui-tests");
+    let session = DisplayHarness::for_backend(backend)
+        .start_session(&artifact_root)
+        .expect("display session should start");
+    let scenario = GuiScenario::new(
+        "oversized-xwidget",
+        workspace_root.join("crates/neomacs-gui-tests/fixtures/oversized-xwidget.el"),
+    );
+    let mut plan = GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario)
+        .with_program(binary)
+        // Keep readback armed until WPE publishes its first page texture.
+        .with_env("NEOMACS_DEBUG_SURFACE_READBACK", "120");
+    for (key, value) in session.env() {
+        plan = plan.with_env(key.clone(), value.clone());
+    }
+
+    let mut runner = ProcessGuiCommandRunner;
+    let result = plan
+        .run_with(
+            &mut runner,
+            GuiRunOptions::with_timeout(Duration::from_secs(15)),
+        )
+        .expect("oversized xwidget GUI run should produce artifacts");
+    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+
+    let snapshot_json = std::fs::read_to_string(&result.artifacts.frame_snapshot_json)
+        .expect("oversized xwidget frame snapshot JSON");
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&snapshot_json).expect("snapshot JSON parses");
+    let (window_id, glyph) = xwidget_glyph(&snapshot)
+        .expect("redisplay must retain an oversized xwidget glyph instead of dropping it");
+    let xwidget = &glyph["glyph_type"]["Xwidget"];
+    let intrinsic_width = xwidget["content"]["width_px"]
+        .as_f64()
+        .expect("xwidget intrinsic width");
+    let intrinsic_height = xwidget["content"]["height_px"]
+        .as_f64()
+        .expect("xwidget intrinsic height");
+    let layout_advance = glyph["pixel_width"]
+        .as_f64()
+        .expect("xwidget cropped layout advance");
+    let window = snapshot["frames"]
+        .as_array()
+        .expect("snapshot frames")
+        .iter()
+        .flat_map(|frame| {
+            frame["window_infos"]
+                .as_array()
+                .expect("frame window infos")
+        })
+        .find(|window| window["window_id"].as_u64() == Some(window_id))
+        .expect("xwidget's window info");
+    let text_body = &window["geometry"]["Complete"]["regions"]["text_body"];
+    let text_width = text_body["width"].as_f64().expect("text body width");
+    let text_height = text_body["height"].as_f64().expect("text body height");
+
+    assert!(
+        intrinsic_width >= text_width * 2.0 - 1.0,
+        "fixture must retain an intrinsic width wider than its text area: \
+         intrinsic={intrinsic_width}, text={text_width}"
+    );
+    assert!(
+        intrinsic_height >= text_height * 2.0 - 1.0,
+        "fixture must retain an intrinsic height taller than its text area: \
+         intrinsic={intrinsic_height}, text={text_height}"
+    );
+    assert!(
+        (layout_advance - text_width).abs() <= 1.0,
+        "GNU crops only the row advance to the remaining text width: \
+         advance={layout_advance}, text={text_width}"
+    );
+
+    let readback = image::open(&result.artifacts.png)
+        .expect("decode oversized xwidget surface readback")
+        .to_rgba8();
+    let magenta_pixels = readback
+        .pixels()
+        .filter(|pixel| is_webview_magenta(pixel.0))
+        .count();
+    assert!(
+        magenta_pixels >= 1024,
+        "the semantic xwidget glyph existed, but its deterministic magenta page \
+         was not visibly composed; found only {magenta_pixels} matching pixels in {}",
+        result.artifacts.png.display()
+    );
+}
+
+fn xwidget_glyph(snapshot: &serde_json::Value) -> Option<(u64, &serde_json::Value)> {
+    for frame in snapshot["frames"].as_array()? {
+        for window_matrix in frame["window_matrices"].as_array()? {
+            let window_id = window_matrix["window_id"].as_u64()?;
+            for row in window_matrix["matrix"]["rows"].as_array()? {
+                for area in row["glyphs"].as_array()? {
+                    for glyph in area.as_array()? {
+                        if glyph["glyph_type"]["Xwidget"].is_object() {
+                            return Some((window_id, glyph));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn is_webview_magenta([red, green, blue, _alpha]: [u8; 4]) -> bool {
+    red >= 200 && green <= 80 && blue >= 200
+}
+
+#[test]
 fn imageless_gui_startup_runs_early_init_once_on_the_live_gui_terminal() {
     let Some(backend) = requested_backend() else {
         eprintln!(

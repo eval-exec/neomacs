@@ -6,7 +6,9 @@ use crate::display_row::builder::{
     DisplayRowAppendStartPolicy, DisplayRowPosition, DisplayTabPolicy,
 };
 use crate::display_row::face_state::DisplayRowActiveFaceState;
-use crate::display_row::geometry::{DisplayRowGeometry, DisplayRowGeometryState, DisplayRowMaxX};
+use crate::display_row::geometry::{
+    DisplayRowGeometry, DisplayRowGeometryState, DisplayRowMaxX, DisplayRowTextAreaOrigin,
+};
 use crate::display_row::metrics::{DisplayRowFallbackMetrics, DisplayRowMeasuredFaceMetrics};
 use crate::display_row::render_state::DisplayRowRenderBounds;
 use crate::display_row::text_output::TextRowOutput;
@@ -74,6 +76,17 @@ impl DisplayRowAppendArea {
 
     pub(crate) fn line_number_width(self) -> f32 {
         self.line_number_width
+    }
+
+    /// Left edge of the complete TEXT_AREA, including a structural display
+    /// line-number prefix.  `content_x` is the ordinary buffer body's start,
+    /// so the prefix sits between the two.  This is the one place the append
+    /// context computes the edge: GNU's `it->current_x` counts the prefix
+    /// (it is produced as glyphs, `maybe_produce_line_number`,
+    /// src/xdisp.c:25701), so both hscroll truncation and the window-local
+    /// extent an overflowing glyph is measured against start here.
+    pub(crate) fn text_area_left(self) -> f32 {
+        self.content_x - self.line_number_width
     }
 
     pub(crate) fn right_edge(self) -> f32 {
@@ -221,10 +234,9 @@ impl DisplayRowAppendSurface {
         self.area.content_x()
     }
 
-    /// Left edge of the complete TEXT_AREA, including a structural display
-    /// line-number prefix.  `content_x` is the ordinary buffer body's start.
+    /// See [`DisplayRowAppendArea::text_area_left`].
     pub(crate) fn text_area_left(&self) -> f32 {
-        self.area.content_x() - self.area.line_number_width()
+        self.area.text_area_left()
     }
 
     pub(crate) fn right_edge(&self) -> f32 {
@@ -690,9 +702,11 @@ pub(crate) struct DisplayRowAppendFrame {
     glyph_y: f32,
     geometry: DisplayRowGeometry,
     default_row_height: f32,
-    content_x: f32,
-    text_width: f32,
-    line_number_width: f32,
+    /// The text area this row is appended into, held whole so every
+    /// derived edge (`content_x`, the text-area origin, the right edge)
+    /// comes from one value and cannot drift from what hscroll
+    /// truncation reads through [`DisplayRowAppendSurface`].
+    area: DisplayRowAppendArea,
     margin_areas: DisplayRowMarginAreas,
     face_space_width: f32,
     image_scale_environment: ImageScaleEnvironment,
@@ -757,15 +771,15 @@ impl DisplayRowAppendFrame {
     }
 
     pub(crate) fn content_x(&self) -> f32 {
-        self.content_x
+        self.area.content_x()
     }
 
     pub(crate) fn text_width(&self) -> f32 {
-        self.text_width
+        self.area.text_width()
     }
 
     pub(crate) fn line_number_width(&self) -> f32 {
-        self.line_number_width
+        self.area.line_number_width()
     }
 
     pub(crate) fn face_space_width(&self) -> f32 {
@@ -782,6 +796,14 @@ impl DisplayRowAppendFrame {
 
     fn right_edge(&self) -> f32 {
         self.content_x() + self.geometry().width()
+    }
+
+    /// The origin GNU's window-local `it->current_x` is measured from: the
+    /// text area's own left edge ([`DisplayRowAppendArea::text_area_left`]),
+    /// the same edge hscroll truncation uses.
+    fn text_area_origin(&self) -> DisplayRowTextAreaOrigin {
+        DisplayRowTextAreaOrigin::at_frame_x(self.area.text_area_left())
+            .expect("a display-row text-area origin is finite")
     }
 
     fn text_right_edge_excluding_line_number(&self) -> f32 {
@@ -808,9 +830,7 @@ impl DisplayRowAppendFrame {
                 tab_policy,
             ),
             default_row_height: metrics.fallback_metrics().row_height(),
-            content_x: area.content_x(),
-            text_width: area.text_width(),
-            line_number_width: area.line_number_width(),
+            area,
             margin_areas,
             face_space_width: metrics.space_width(),
             image_scale_environment,
@@ -859,7 +879,11 @@ impl DisplayRowAppendFrame {
             GlyphRowRole::Text,
         )
         .with_image_scale_environment(self.image_scale_environment)
-        .with_render_bounds(DisplayRowRenderBounds::new(position, kind.max_x(self)))
+        .with_render_bounds(DisplayRowRenderBounds::in_window_text_area(
+            position,
+            kind.max_x(self),
+            self.text_area_origin(),
+        ))
         .with_line_end_right_edge_x(self.text_right_edge_excluding_line_number())
     }
 

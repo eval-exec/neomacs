@@ -16,10 +16,10 @@
 //! ```
 
 use std::ffi::CString;
-use std::ptr;
 use tracing::{debug, info, warn};
 
 use super::error::{DisplayError, DisplayResult};
+use super::glib_error::GlibErrorSlot;
 use super::native;
 use super::sys::platform as plat;
 
@@ -66,18 +66,13 @@ impl WpePlatformDisplay {
             let delegate = if let Some(path) = device_path {
                 let c_path = CString::new(path)
                     .map_err(|_| DisplayError::WebKit("Invalid device path".into()))?;
-                let mut error: *mut plat::GError = ptr::null_mut();
-                let d = plat::wpe_display_headless_new_for_device(c_path.as_ptr(), &mut error);
+                let mut error = GlibErrorSlot::new();
+                let d = plat::wpe_display_headless_new_for_device(
+                    c_path.as_ptr(),
+                    error.out_ptr().cast(),
+                );
                 if d.is_null() {
-                    let error_msg = if !error.is_null() {
-                        let msg = std::ffi::CStr::from_ptr((*error).message)
-                            .to_string_lossy()
-                            .into_owned();
-                        plat::g_error_free(error);
-                        msg
-                    } else {
-                        "Unknown error".into()
-                    };
+                    let error_msg = error.into_message("Unknown error");
                     return Err(DisplayError::WebKit(format!(
                         "Failed to create WPE headless display for device {}: {}",
                         path, error_msg
@@ -107,18 +102,10 @@ impl WpePlatformDisplay {
             );
 
             // Connect the display
-            let mut error: *mut plat::GError = ptr::null_mut();
-            let connected = plat::wpe_display_connect(display, &mut error);
+            let mut error = GlibErrorSlot::new();
+            let connected = plat::wpe_display_connect(display, error.out_ptr().cast());
             if connected == 0 {
-                let error_msg = if !error.is_null() {
-                    let msg = std::ffi::CStr::from_ptr((*error).message)
-                        .to_string_lossy()
-                        .into_owned();
-                    plat::g_error_free(error);
-                    msg
-                } else {
-                    "Unknown error".into()
-                };
+                let error_msg = error.into_message("Unknown error");
                 plat::g_object_unref(display as *mut _);
                 return Err(DisplayError::WebKit(format!(
                     "Failed to connect WPE display: {}",
@@ -128,18 +115,10 @@ impl WpePlatformDisplay {
             info!("WpePlatformDisplay: Display connected");
 
             // Get EGL display from WPE Platform
-            let mut error: *mut plat::GError = ptr::null_mut();
-            let egl_display = plat::wpe_display_get_egl_display(display, &mut error);
+            let mut error = GlibErrorSlot::new();
+            let egl_display = plat::wpe_display_get_egl_display(display, error.out_ptr().cast());
             if egl_display.is_null() {
-                let error_msg = if !error.is_null() {
-                    let msg = std::ffi::CStr::from_ptr((*error).message)
-                        .to_string_lossy()
-                        .into_owned();
-                    plat::g_error_free(error);
-                    msg
-                } else {
-                    "Unknown error".into()
-                };
+                let error_msg = error.into_message("Unknown error");
                 warn!(
                     "WpePlatformDisplay: Failed to get EGL display: {}",
                     error_msg

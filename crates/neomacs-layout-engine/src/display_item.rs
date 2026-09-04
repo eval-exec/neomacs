@@ -1,9 +1,12 @@
 use crate::buffer_source::producer::frame::ReplacementCoveredSpan;
 use crate::display_property::DisplayPropertyClassification;
+use crate::display_source_overflow::DisplayXwidgetOverflowAction;
 use neomacs_display_protocol::face::{BoxRunMembership, BoxVerticalEdges};
 use neomacs_display_protocol::glyph_matrix::TerminalComposition;
 use neomacs_display_protocol::types::FaceId;
-use neomacs_display_protocol::{WebViewId, XwidgetId};
+use neomacs_display_protocol::{
+    Px, WebViewId, XwidgetContentExtent, XwidgetId, XwidgetLayoutAdvance,
+};
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::emacs_char::EmacsChar;
@@ -1373,13 +1376,49 @@ pub(crate) enum DisplayMediaReplacementKind {
         video_id: neomacs_display_protocol::VideoId,
         opacity: f32,
     },
+    /// `content` is GNU `xw->width`/`xw->height`; the outer `width` is the
+    /// layout advance, which the right-edge crop may narrow below it.
     Xwidget {
         xwidget_id: XwidgetId,
         webview_id: WebViewId,
+        content: XwidgetContentExtent,
     },
     Surface {
         surface_id: u32,
     },
+}
+
+/// A media replacement proven to be an xwidget.
+///
+/// GNU's right-edge policy is meaningful only for xwidgets.  Extracting this
+/// capability from the generic media enum makes applying that policy a typed
+/// operation instead of relying on a debug-only assertion that the caller did
+/// not accidentally crop an image, video, or shader surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DisplayXwidgetReplacement(DisplayMediaReplacement);
+
+impl DisplayXwidgetReplacement {
+    pub(crate) fn layout_advance(self) -> XwidgetLayoutAdvance {
+        XwidgetLayoutAdvance::new(Px(self.0.width))
+            .expect("an xwidget replacement always has a positive finite advance")
+    }
+
+    pub(crate) fn apply_overflow(mut self, action: DisplayXwidgetOverflowAction) -> Self {
+        match action {
+            DisplayXwidgetOverflowAction::Fits | DisplayXwidgetOverflowAction::LeaveWhole => {}
+            DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth { advance }
+                if advance.px().get() < self.0.width =>
+            {
+                self.0.width = advance.px().get();
+            }
+            DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth { .. } => {}
+        }
+        self
+    }
+
+    pub(crate) const fn into_media(self) -> DisplayMediaReplacement {
+        self.0
+    }
 }
 
 impl DisplayMediaReplacement {
@@ -1490,15 +1529,29 @@ impl DisplayMediaReplacement {
     }
 
     pub(crate) fn xwidget(xwidget: DisplayXwidgetItem) -> Self {
+        let width = display_replacement_dimension(xwidget.width);
+        let height = display_replacement_dimension(xwidget.height);
         Self {
             kind: DisplayMediaReplacementKind::Xwidget {
                 xwidget_id: xwidget.xwidget_id,
                 webview_id: xwidget.webview_id,
+                content: XwidgetContentExtent::new(width, height)
+                    .expect("display_replacement_dimension yields finite widths of at least 1"),
             },
-            width: display_replacement_dimension(xwidget.width),
-            height: display_replacement_dimension(xwidget.height),
+            width,
+            height,
             ascent: display_replacement_ascent(xwidget.height),
             positive_box_line_width: 0.0,
+        }
+    }
+
+    /// Prove this generic media replacement is an xwidget before exposing
+    /// GNU's xwidget-only overflow operation.
+    pub(crate) fn into_xwidget(self) -> Result<DisplayXwidgetReplacement, Self> {
+        if matches!(self.kind, DisplayMediaReplacementKind::Xwidget { .. }) {
+            Ok(DisplayXwidgetReplacement(self))
+        } else {
+            Err(self)
         }
     }
 

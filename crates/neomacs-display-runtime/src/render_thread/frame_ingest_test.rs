@@ -1,12 +1,16 @@
 //! Scene-clock behaviour of `frame_ingest.rs`: placement resolution runs once
 //! per presentation, and the scene revision moves only on a real change.
 
-use neomacs_display_protocol::{DeviceScale, DisplayWindowId, RootSurfaceRect, WebViewId};
+use neomacs_display_protocol::{
+    DeviceScale, DisplayWindowId, FrameGlyphBuffer, FrameSpace, GeometryPoint, GlyphRowRole,
+    LogicalPixels, Px, Rect, RootSurfaceRect, WebViewId, XwidgetContentExtent, XwidgetId,
+    XwidgetLayoutAdvance, XwidgetPresentationGeometry,
+};
 use neomacs_webview::{
     HostWindowId, ResolvedWebViewPlacement, WebViewOccurrenceId, WebViewSceneRevision,
 };
 
-use super::{WebViewPlacementInputs, WebViewSceneClock};
+use super::{WebViewPlacementInputs, WebViewSceneClock, collect_frame_webviews};
 
 fn placement(view: u32) -> ResolvedWebViewPlacement {
     let rect = RootSurfaceRect::new(0.0, 0.0, 20.0, 10.0).unwrap();
@@ -116,4 +120,52 @@ fn removing_the_newest_child_advances_the_host_scene_revision() {
     assert_eq!(with_child.revision(), WebViewSceneRevision::new(1));
     assert_eq!(unchanged.revision(), WebViewSceneRevision::new(1));
     assert_eq!(child_removed.revision(), WebViewSceneRevision::new(2));
+}
+
+/// GNU sizes the native view from the widget (`xww->width`) and clips it to
+/// the text area (`x_draw_xwidget_glyph_string`, src/xwidget.c:2841-2849,
+/// emacs-31.0.90); the glyph's cropped advance is not the view's size.  A
+/// 600 px page cropped to a 304 px slot is therefore a 600 px viewport behind
+/// a 304 px clip, not a 304 px viewport.
+#[test]
+fn a_cropped_xwidget_slot_keeps_the_native_content_width_behind_the_clip() {
+    let mut frame = FrameGlyphBuffer::new();
+    frame.set_draw_context(
+        DisplayWindowId::new(1),
+        GlyphRowRole::Text,
+        Some(Rect::new(0.0, 0.0, 312.0, 120.0)),
+    );
+    let content = XwidgetContentExtent::new(600.0, 40.0).expect("content extent");
+    let presentation = XwidgetPresentationGeometry::new(
+        GeometryPoint::<FrameSpace, LogicalPixels>::from_px(8.0, 16.0).expect("origin"),
+        content,
+        XwidgetLayoutAdvance::new(Px(304.0)).expect("cropped advance"),
+        None,
+    );
+    frame.add_xwidget(XwidgetId::new(7), WebViewId::new(91), presentation);
+
+    let mut occurrence = 0;
+    let mut placements = std::collections::HashMap::new();
+    collect_frame_webviews(
+        &frame,
+        0.0,
+        0.0,
+        RootSurfaceRect::new(0.0, 0.0, 320.0, 120.0).expect("root clip"),
+        DeviceScale::ONE,
+        &mut occurrence,
+        &mut placements,
+    );
+
+    let placement = placements
+        .get(&WebViewId::new(91))
+        .expect("the cropped xwidget is placed");
+    assert_eq!(placement.content_rect().width(), 600.0, "GNU: xww->width");
+    assert_eq!(placement.content_rect().height(), 40.0);
+    assert_eq!(placement.content_rect().x(), 8.0);
+    assert_eq!(
+        placement.visible_rect().width(),
+        304.0,
+        "clip_right = text_area_x + text_area_width - x"
+    );
+    assert_eq!(placement.visible_rect().x(), 8.0);
 }

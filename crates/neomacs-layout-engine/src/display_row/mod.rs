@@ -1165,6 +1165,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                             &mut glyph_measurer,
                             position,
                             render_bounds.max_x().to_f32(),
+                            render_bounds.text_area_origin(),
                             area,
                             append_start_policy,
                         );
@@ -1186,6 +1187,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                             &mut glyph_measurer,
                             position,
                             render_bounds.max_x().to_f32(),
+                            render_bounds.text_area_origin(),
                             area,
                             append_start_policy,
                         );

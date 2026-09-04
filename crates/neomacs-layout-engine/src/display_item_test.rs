@@ -324,3 +324,63 @@ fn replacement_source_keeps_non_text_kinds_with_covered_span() {
         "the covered buffer span applies to every item kind the string yields"
     );
 }
+
+/// `produce_xwidget_glyph` crops the glyph's advance (`it->pixel_width -=
+/// crop`, src/xdisp.c:32579, emacs-31.0.90) and nothing else: the widget's
+/// own size still drives the native view, which
+/// `x_draw_xwidget_glyph_string` clips (src/xwidget.c:2841-2849).
+#[test]
+fn cropping_an_xwidgets_advance_keeps_its_content_extent() {
+    let xwidget = DisplayMediaReplacement::xwidget(DisplayXwidgetItem {
+        xwidget_id: neomacs_display_protocol::XwidgetId::new(1),
+        webview_id: neomacs_display_protocol::WebViewId::new(1),
+        width: 600.0,
+        height: 40.0,
+    });
+    let content = |media: DisplayMediaReplacement| match media.kind {
+        DisplayMediaReplacementKind::Xwidget { content, .. } => content,
+        other => panic!("still an xwidget, got {other:?}"),
+    };
+    assert_eq!(xwidget.width, 600.0);
+    assert_eq!(content(xwidget).width_px(), 600.0);
+    assert_eq!(content(xwidget).height_px(), 40.0);
+
+    let cropped = xwidget
+        .into_xwidget()
+        .expect("typed xwidget replacement")
+        .apply_overflow(
+            crate::display_source_overflow::DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
+                advance: neomacs_display_protocol::XwidgetLayoutAdvance::new(
+                    neomacs_display_protocol::Px(304.0),
+                )
+                .unwrap(),
+            },
+        )
+        .into_media();
+    assert_eq!(cropped.width, 304.0, "the layout advance is cropped");
+    assert_eq!(cropped.height, 40.0);
+    assert_eq!(
+        content(cropped).width_px(),
+        600.0,
+        "the widget's own width is not"
+    );
+
+    // Widening is not cropping. Invalid advances cannot be represented.
+    let widened = xwidget
+        .into_xwidget()
+        .unwrap()
+        .apply_overflow(
+            crate::display_source_overflow::DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
+                advance: neomacs_display_protocol::XwidgetLayoutAdvance::new(
+                    neomacs_display_protocol::Px(900.0),
+                )
+                .unwrap(),
+            },
+        )
+        .into_media();
+    assert_eq!(widened.width, 600.0);
+    assert_eq!(
+        neomacs_display_protocol::XwidgetLayoutAdvance::new(neomacs_display_protocol::Px(0.0)),
+        None
+    );
+}

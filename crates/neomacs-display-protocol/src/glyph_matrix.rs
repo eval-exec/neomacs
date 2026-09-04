@@ -22,6 +22,10 @@ use super::types::{
     Color, DisplayWindowId, FaceId, ImageId, Px, Rect, ResolvedBidiDirection, SurfaceId, VideoId,
     WebViewId, XwidgetId,
 };
+use super::xwidget_extent::{
+    XwidgetContentExtent, XwidgetLayoutAdvance, XwidgetPresentationGeometry,
+};
+use super::{FrameSpace, GeometryPoint, GeometryRect, LogicalPixels};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 
@@ -99,11 +103,16 @@ pub enum GlyphType {
         width_cols: u16,
         opacity: f32,
     },
-    /// Inline native/web widget.
+    /// Inline native/web widget.  `width_cols` and the glyph's `pixel_width`
+    /// are the layout advance, which `produce_xwidget_glyph` may crop at the
+    /// right edge (src/xdisp.c:32577-32579, emacs-31.0.90); `content` is the
+    /// widget's own size, GNU `xw->width`/`xw->height`, which the crop never
+    /// touches.
     Xwidget {
         xwidget_id: XwidgetId,
         webview_id: WebViewId,
         width_cols: u16,
+        content: XwidgetContentExtent,
     },
     /// Inline shader surface (NeoMacs extension): a compositor-rendered GPU
     /// texture owned by the row primitive that reserves its layout slot.
@@ -1141,11 +1150,14 @@ impl GlyphRow {
                         xwidget_id,
                         webview_id,
                         width_cols,
+                        content,
                     } => {
                         0x5000_0000
                             ^ u64::from(xwidget_id.get())
                             ^ u64::from(webview_id.get()).rotate_left(17)
                             ^ u64::from(*width_cols).rotate_left(9)
+                            ^ u64::from(content.width_px().to_bits()).rotate_left(29)
+                            ^ u64::from(content.height_px().to_bits()).rotate_left(41)
                     }
                     GlyphType::Surface {
                         surface_id,
@@ -3209,6 +3221,7 @@ impl FrameDisplayState {
                     GlyphType::Xwidget {
                         xwidget_id,
                         webview_id,
+                        content,
                         ..
                     } => {
                         let layout_height = if glyph.pixel_height > 0.0 {
@@ -3226,17 +3239,40 @@ impl FrameDisplayState {
                         } else {
                             row_height
                         };
+                        let origin = GeometryPoint::<FrameSpace, LogicalPixels>::from_px(
+                            x,
+                            baseline - layout_ascent + glyph.vertical_offset_px,
+                        )
+                        .expect("materialized xwidget origin is finite");
+                        let clip = clip_rect.map(|clip| {
+                            GeometryRect::<FrameSpace, LogicalPixels>::new(
+                                clip.x,
+                                clip.y,
+                                clip.width,
+                                clip.height,
+                            )
+                            .expect("materialized xwidget clip is valid")
+                        });
+                        // Unlike ordinary painted glyphs, an xwidget carries
+                        // its visible text-area clip separately.  GNU keeps a
+                        // narrow overflowing xwidget's whole glyph advance in
+                        // truncating rows (`display_line`, src/xdisp.c) and
+                        // clips only the native presentation
+                        // (`x_draw_xwidget_glyph_string`, src/xwidget.c).
+                        let layout_advance = XwidgetLayoutAdvance::new(Px(glyph_width))
+                            .expect("a materialized xwidget has positive finite width");
                         push(FrameGlyph::Xwidget {
                             window_id,
                             row_role,
-                            clip_rect,
                             slot_id: Some(slot_id),
                             xwidget_id: *xwidget_id,
                             webview_id: *webview_id,
-                            x,
-                            y: baseline - layout_ascent + glyph.vertical_offset_px,
-                            width: materialized_width,
-                            height: layout_height,
+                            presentation: XwidgetPresentationGeometry::new(
+                                origin,
+                                *content,
+                                layout_advance,
+                                clip,
+                            ),
                             face_id: glyph.face_id,
                             box_vertical_edges: glyph.box_vertical_edges,
                         });

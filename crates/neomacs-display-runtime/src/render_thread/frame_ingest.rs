@@ -9,20 +9,6 @@ use crate::render_thread::cursor::{CursorConfigSnapshot, CursorTarget};
 use neomacs_display_protocol::frame_chrome::{FrameChrome, FrameChromeContent};
 
 #[cfg(feature = "webview")]
-fn intersect_webview_rect(
-    left: neomacs_display_protocol::RootSurfaceRect,
-    right: neomacs_display_protocol::RootSurfaceRect,
-) -> Option<neomacs_display_protocol::RootSurfaceRect> {
-    let x = left.x().max(right.x());
-    let y = left.y().max(right.y());
-    let far_x = (left.x() + left.width()).min(right.x() + right.width());
-    let far_y = (left.y() + left.height()).min(right.y() + right.height());
-    (far_x > x && far_y > y)
-        .then(|| neomacs_display_protocol::RootSurfaceRect::new(x, y, far_x - x, far_y - y).ok())
-        .flatten()
-}
-
-#[cfg(feature = "webview")]
 fn collect_frame_webviews(
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
     offset_x: f32,
@@ -39,46 +25,40 @@ fn collect_frame_webviews(
         let crate::core::frame_glyphs::FrameGlyph::Xwidget {
             window_id,
             webview_id,
-            x,
-            y,
-            width,
-            height,
-            clip_rect,
+            presentation,
             ..
         } = glyph
         else {
             continue;
         };
-        let Ok(content) = neomacs_display_protocol::RootSurfaceRect::new(
-            offset_x + *x,
-            offset_y + *y,
-            *width,
-            *height,
-        ) else {
+        // The native view is sized from the widget's own extent, GNU
+        // `xww->width`/`xww->height`, never from the glyph slot: layout may
+        // have cropped the slot at the right edge (`produce_xwidget_glyph`,
+        // src/xdisp.c:32577-32579, emacs-31.0.90) and GNU answers that by
+        // clipping the view, not resizing it (`x_draw_xwidget_glyph_string`,
+        // src/xwidget.c:2841-2849).  The clip below is that text-area clip.
+        let Ok(frame_to_root) = neomacs_display_protocol::SpaceTranslation::<
+            neomacs_display_protocol::FrameSpace,
+            neomacs_display_protocol::RootSurfaceSpace,
+            neomacs_display_protocol::LogicalPixels,
+        >::from_px(offset_x, offset_y) else {
             continue;
         };
-        let mut visible = intersect_webview_rect(content, frame_clip);
-        if let Some(clip) = clip_rect {
-            let Ok(clip) = neomacs_display_protocol::RootSurfaceRect::new(
-                offset_x + clip.x,
-                offset_y + clip.y,
-                clip.width,
-                clip.height,
-            ) else {
-                continue;
-            };
-            visible = visible.and_then(|visible| intersect_webview_rect(visible, clip));
-        }
-        let Some(visible) = visible else {
+        let Ok(root_presentation) = presentation.translated(frame_to_root) else {
             continue;
         };
+        let Ok(Some(visible)) = root_presentation.resolve_visible(Some(frame_clip)) else {
+            continue;
+        };
+        let content_rect = visible.content_rect();
+        let visible_rect = visible.visible_rect();
         *next_occurrence = next_occurrence.saturating_add(1);
         let Ok(placement) = neomacs_webview::ResolvedWebViewPlacement::new(
             *webview_id,
             neomacs_webview::WebViewOccurrenceId::new(*next_occurrence),
             *window_id,
-            content,
-            visible,
+            content_rect,
+            visible_rect,
             scale,
         ) else {
             continue;
@@ -161,10 +141,6 @@ impl WebViewSceneClock {
         )
     }
 }
-
-#[cfg(all(test, feature = "webview"))]
-#[path = "frame_ingest_test.rs"]
-mod tests;
 
 struct CursorSyncOutcome {
     target: CursorTarget,
@@ -1153,3 +1129,7 @@ fn dump_frame_glyphs_resolved(frame: &crate::core::frame_glyphs::FrameGlyphBuffe
     }
     out
 }
+
+#[cfg(all(test, feature = "webview"))]
+#[path = "frame_ingest_test.rs"]
+mod tests;
