@@ -2,9 +2,9 @@
 """Exercise the packaged Neomacs editor and its persistent browser filesystem.
 
 Serve an output produced by ``cargo xtask build-wasm`` before running this test.
-The test deliberately drives M-: through browser input instead of calling a
-test-only Wasm API, so every filesystem assertion crosses the same Lisp, worker,
-Rust host-import, and OPFS boundaries as an interactive browser session.
+The test deliberately drives ordinary browser input instead of calling a
+test-only Wasm API, so editor and filesystem assertions cross the same Lisp,
+worker, Rust host-import, and OPFS boundaries as an interactive browser session.
 """
 
 from __future__ import annotations
@@ -125,25 +125,33 @@ def wait_for_input_acceptance(
     )
 
 
-def eval_expression(
+def dispatch_key(
     driver: webdriver.Chrome,
-    expression: str,
-    marker: str,
+    key: str,
     timeout: float,
-    failure_marker: str | None = None,
-) -> str:
+    *,
+    alt: bool = False,
+) -> None:
     accepted = accepted_input_count(driver)
     driver.execute_script(
         """
-        const options = { key: ":", altKey: true, bubbles: true, cancelable: true };
+        const options = {
+          key: arguments[0],
+          altKey: arguments[1],
+          bubbles: true,
+          cancelable: true,
+        };
         dispatchEvent(new KeyboardEvent("keydown", options));
         dispatchEvent(new KeyboardEvent("keyup", options));
-        """
+        """,
+        key,
+        alt,
     )
     wait_for_input_acceptance(driver, accepted, 2, timeout)
 
-    expression = " ".join(line.strip() for line in expression.splitlines())
-    accepted += 2
+
+def commit_text(driver: webdriver.Chrome, text: str, timeout: float) -> None:
+    accepted = accepted_input_count(driver)
     driver.execute_script(
         """
         const input = document.querySelector("#browser-text-input");
@@ -154,19 +162,95 @@ def eval_expression(
           data: arguments[0],
         }));
         """,
-        expression,
+        text,
     )
     wait_for_input_acceptance(driver, accepted, 1, timeout)
 
-    accepted += 1
-    driver.execute_script(
-        """
-        const options = { key: "Enter", bubbles: true, cancelable: true };
-        dispatchEvent(new KeyboardEvent("keydown", options));
-        dispatchEvent(new KeyboardEvent("keyup", options));
-        """
+
+def wait_for_frame_text(
+    driver: webdriver.Chrome,
+    description: str,
+    timeout: float,
+    *,
+    contains: str,
+    excludes: str | None = None,
+) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = frame_text(driver)
+        if contains in text and (excludes is None or excludes not in text):
+            return text
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"editor did not render {description}; "
+        f"worker messages={driver.execute_script('return globalThis.__neomacsMessages')!r}; "
+        f"frame={frame_text(driver)!r}"
     )
-    wait_for_input_acceptance(driver, accepted, 2, timeout)
+
+
+def invoke_mx(driver: webdriver.Chrome, command: str, timeout: float) -> None:
+    dispatch_key(driver, "x", timeout, alt=True)
+    wait_for_frame_text(driver, "the M-x prompt", timeout, contains="M-x")
+    commit_text(driver, command, timeout)
+    wait_for_frame_text(driver, command, timeout, contains=command)
+    dispatch_key(driver, "Enter", timeout)
+
+
+def switch_to_buffer(
+    driver: webdriver.Chrome,
+    buffer_name: str,
+    timeout: float,
+) -> None:
+    invoke_mx(driver, "switch-to-buffer", timeout)
+    wait_for_frame_text(
+        driver,
+        "the switch-to-buffer prompt",
+        timeout,
+        contains="Switch to buffer",
+    )
+    commit_text(driver, buffer_name, timeout)
+    dispatch_key(driver, "Enter", timeout)
+    wait_for_frame_text(driver, f"buffer {buffer_name!r}", timeout, contains=buffer_name)
+
+
+def exercise_buffer_switching(driver: webdriver.Chrome, timeout: float) -> None:
+    suffix = f"{time.time_ns():x}"[-8:]
+    buffer_name = f"wasm-{suffix}"
+    buffer_text = f"WASM-BUFFER:{suffix}"
+
+    switch_to_buffer(driver, buffer_name, timeout)
+    commit_text(driver, buffer_text, timeout)
+    wait_for_frame_text(driver, "inserted buffer text", timeout, contains=buffer_text)
+
+    switch_to_buffer(driver, "*scratch*", timeout)
+    wait_for_frame_text(
+        driver,
+        "the scratch buffer without the test buffer contents",
+        timeout,
+        contains="*scratch*",
+        excludes=buffer_text,
+    )
+
+    switch_to_buffer(driver, buffer_name, timeout)
+    wait_for_frame_text(
+        driver,
+        "the preserved test buffer contents",
+        timeout,
+        contains=buffer_text,
+    )
+
+
+def eval_expression(
+    driver: webdriver.Chrome,
+    expression: str,
+    marker: str,
+    timeout: float,
+    failure_marker: str | None = None,
+) -> str:
+    dispatch_key(driver, ":", timeout, alt=True)
+    expression = " ".join(line.strip() for line in expression.splitlines())
+    commit_text(driver, expression, timeout)
+    dispatch_key(driver, "Enter", timeout)
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -234,6 +318,9 @@ def main() -> None:
             raise RuntimeError("startup rendered the user-emacs-directory warning")
 
         if not args.persistence_only:
+            exercise_buffer_switching(driver, args.timeout)
+            print("PASS: browser editor switched buffers and preserved text")
+
             operations_marker = f"OPFS-OPERATIONS:{token}"
             eval_expression(
                 driver,
