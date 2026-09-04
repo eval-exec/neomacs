@@ -237,13 +237,6 @@ impl FrameOutputOwner {
         request.render_and_apply(self.frame_output_target());
     }
 
-    pub(crate) fn render_window_switch_hint(
-        &mut self,
-        request: FrameWindowSwitchHintRenderRequest,
-    ) {
-        request.render_and_apply(self.frame_output_target());
-    }
-
     pub(crate) fn render_theme_transition_hint(
         &mut self,
         request: FrameThemeTransitionHintRenderRequest,
@@ -747,34 +740,6 @@ impl<'a> FrameLineAnimationHintsRenderRequest<'a> {
                     edit_y: edit_y + curr.char_height,
                     offset,
                 });
-            }
-        }
-    }
-}
-
-pub(crate) struct FrameWindowSwitchHintRenderRequest {
-    previous_selected_window_id: Option<DisplayWindowId>,
-}
-
-impl FrameWindowSwitchHintRenderRequest {
-    pub(crate) fn new(previous_selected_window_id: Option<DisplayWindowId>) -> Self {
-        Self {
-            previous_selected_window_id,
-        }
-    }
-
-    pub(crate) fn render_and_apply(self, mut state: FrameOutputTarget<'_>) {
-        let new_selected = state
-            .window_infos()
-            .iter()
-            .find(|info| info.selected && !info.is_minibuffer)
-            .map(|info| (info.window_id, info.bounds));
-        if let Some((window_id, bounds)) = new_selected {
-            if self
-                .previous_selected_window_id
-                .is_some_and(|previous| previous != window_id)
-            {
-                state.add_effect_hint(WindowEffectHint::WindowSwitchFade { window_id, bounds });
             }
         }
     }

@@ -1099,11 +1099,6 @@ pub enum WindowEffectHint {
         edit_y: f32,
         offset: f32,
     },
-    /// Fade highlight when selected window changes.
-    WindowSwitchFade {
-        window_id: DisplayWindowId,
-        bounds: Rect,
-    },
     /// Theme/background changed; request a full-frame theme crossfade.
     ThemeTransition { bounds: Rect },
 }
