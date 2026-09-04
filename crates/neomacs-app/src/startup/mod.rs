@@ -8,7 +8,7 @@ use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::terminal::pure::{
     TerminalRuntimeConfig, ensure_terminal_runtime_owner,
 };
-use neovm_core::window::FrameId;
+use neovm_core::window::{FrameId, FrameVisibility};
 
 use crate::initial_surface::InitialEditorSurface;
 
@@ -128,7 +128,7 @@ fn ensure_gnu_startup_terminal_frame(evaluator: &mut Context, opening_frame: Fra
                     .frame_manager()
                     .get(*candidate)
                     .is_some_and(|frame| {
-                        !frame.visible && frame.effective_window_system().is_none()
+                        frame.visibility.is_invisible() && frame.effective_window_system().is_none()
                     })
         })
     {
@@ -170,7 +170,7 @@ fn ensure_gnu_startup_terminal_frame(evaluator: &mut Context, opening_frame: Fra
         seed_buffer,
     );
     if let Some(frame) = evaluator.frame_manager_mut().get_mut(terminal_frame) {
-        frame.visible = false;
+        frame.visibility = FrameVisibility::Invisible;
         frame.set_window_system(None);
         frame.set_parameter(Value::symbol("display-type"), display_type);
         frame.set_parameter(Value::symbol("background-mode"), background_mode);
