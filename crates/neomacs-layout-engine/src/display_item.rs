@@ -1,9 +1,12 @@
 use crate::buffer_source::producer::frame::ReplacementCoveredSpan;
 use crate::display_property::DisplayPropertyClassification;
+use crate::display_source_overflow::DisplayXwidgetOverflowAction;
 use neomacs_display_protocol::face::{BoxRunMembership, BoxVerticalEdges};
 use neomacs_display_protocol::glyph_matrix::TerminalComposition;
 use neomacs_display_protocol::types::FaceId;
-use neomacs_display_protocol::{WebViewId, XwidgetContentExtent, XwidgetId};
+use neomacs_display_protocol::{
+    Px, WebViewId, XwidgetContentExtent, XwidgetId, XwidgetLayoutAdvance,
+};
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::emacs_char::EmacsChar;
@@ -1385,6 +1388,39 @@ pub(crate) enum DisplayMediaReplacementKind {
     },
 }
 
+/// A media replacement proven to be an xwidget.
+///
+/// GNU's right-edge policy is meaningful only for xwidgets.  Extracting this
+/// capability from the generic media enum makes applying that policy a typed
+/// operation instead of relying on a debug-only assertion that the caller did
+/// not accidentally crop an image, video, or shader surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DisplayXwidgetReplacement(DisplayMediaReplacement);
+
+impl DisplayXwidgetReplacement {
+    pub(crate) fn layout_advance(self) -> XwidgetLayoutAdvance {
+        XwidgetLayoutAdvance::new(Px(self.0.width))
+            .expect("an xwidget replacement always has a positive finite advance")
+    }
+
+    pub(crate) fn apply_overflow(mut self, action: DisplayXwidgetOverflowAction) -> Self {
+        match action {
+            DisplayXwidgetOverflowAction::Fits | DisplayXwidgetOverflowAction::LeaveWhole => {}
+            DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth { advance }
+                if advance.px().get() < self.0.width =>
+            {
+                self.0.width = advance.px().get();
+            }
+            DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth { .. } => {}
+        }
+        self
+    }
+
+    pub(crate) const fn into_media(self) -> DisplayMediaReplacement {
+        self.0
+    }
+}
+
 impl DisplayMediaReplacement {
     pub(crate) fn replacement_stretch(self) -> DisplayStretch {
         DisplayStretch {
@@ -1509,27 +1545,14 @@ impl DisplayMediaReplacement {
         }
     }
 
-    /// Narrow an xwidget's layout advance to `visible_width_px`, the way
-    /// `produce_xwidget_glyph` does at the right edge (`it->pixel_width -=
-    /// crop`, src/xdisp.c:32579, emacs-31.0.90).  The widget's own size in
-    /// `DisplayMediaReplacementKind::Xwidget::content` is untouched: GNU sizes
-    /// the native view from `xww->width` and clips it
-    /// (`x_draw_xwidget_glyph_string`, src/xwidget.c:2841-2849).
-    ///
-    /// Only an xwidget has this rule; see `DisplayXwidgetOverflowAction`.
-    pub(crate) fn xwidget_advance_cropped_to(mut self, visible_width_px: f32) -> Self {
-        debug_assert!(
-            matches!(self.kind, DisplayMediaReplacementKind::Xwidget { .. }),
-            "the right-edge crop is the xwidget rule; images have their own"
-        );
-        if !visible_width_px.is_finite()
-            || visible_width_px <= 0.0
-            || visible_width_px >= self.width
-        {
-            return self;
+    /// Prove this generic media replacement is an xwidget before exposing
+    /// GNU's xwidget-only overflow operation.
+    pub(crate) fn into_xwidget(self) -> Result<DisplayXwidgetReplacement, Self> {
+        if matches!(self.kind, DisplayMediaReplacementKind::Xwidget { .. }) {
+            Ok(DisplayXwidgetReplacement(self))
+        } else {
+            Err(self)
         }
-        self.width = visible_width_px;
-        self
     }
 
     pub(crate) fn surface(surface: DisplaySurfaceItem) -> Self {

@@ -49,6 +49,28 @@ pub(super) enum PointerOwner {
 mod webview_tests {
     use super::*;
 
+    fn presentation(
+        x: f32,
+        y: f32,
+        content: neomacs_display_protocol::XwidgetContentExtent,
+        advance: f32,
+    ) -> neomacs_display_protocol::XwidgetPresentationGeometry<neomacs_display_protocol::FrameSpace>
+    {
+        neomacs_display_protocol::XwidgetPresentationGeometry::new(
+            neomacs_display_protocol::GeometryPoint::<
+                neomacs_display_protocol::FrameSpace,
+                neomacs_display_protocol::LogicalPixels,
+            >::from_px(x, y)
+            .expect("valid origin"),
+            content,
+            neomacs_display_protocol::XwidgetLayoutAdvance::new(neomacs_display_protocol::Px(
+                advance,
+            ))
+            .expect("valid advance"),
+            None,
+        )
+    }
+
     #[test]
     fn hit_testing_keeps_xwidget_and_webview_identities_distinct() {
         let mut glyphs = neomacs_display_protocol::FrameGlyphBuffer::new();
@@ -57,10 +79,7 @@ mod webview_tests {
         glyphs.add_xwidget(
             neomacs_display_protocol::XwidgetId::new(7),
             neomacs_display_protocol::WebViewId::new(91),
-            10.0,
-            20.0,
-            content,
-            320.0,
+            presentation(10.0, 20.0, content, 320.0),
         );
 
         assert_eq!(
@@ -85,10 +104,7 @@ mod webview_tests {
         glyphs.add_xwidget(
             neomacs_display_protocol::XwidgetId::new(7),
             neomacs_display_protocol::WebViewId::new(91),
-            10.0,
-            20.0,
-            content,
-            100.0,
+            presentation(10.0, 20.0, content, 100.0),
         );
 
         assert_eq!(webview_glyph_hit_test(&glyphs.glyphs, 15.0, 25.0), None);
@@ -111,10 +127,7 @@ mod webview_tests {
         glyphs.add_xwidget(
             neomacs_display_protocol::XwidgetId::new(7),
             neomacs_display_protocol::WebViewId::new(91),
-            8.0,
-            10.0,
-            content,
-            304.0,
+            presentation(8.0, 10.0, content, 304.0),
         );
 
         assert_eq!(
@@ -209,24 +222,25 @@ fn webview_glyph_hit_test(glyphs: &[FrameGlyph], x: f32, y: f32) -> Option<WebVi
         // places the native view with, so hits and placement cannot differ.
         if let FrameGlyph::Xwidget {
             webview_id,
-            clip_rect,
-            x: wx,
-            y: wy,
-            content,
+            presentation,
             ..
         } = glyph
-            && x >= *wx
-            && x < *wx + content.width_px()
-            && y >= *wy
-            && y < *wy + content.height_px()
-            && clip_rect.as_ref().is_none_or(|clip| {
-                x >= clip.x && x < clip.x + clip.width && y >= clip.y && y < clip.y + clip.height
-            })
         {
-            return Some(WebViewPointerHit {
-                view: *webview_id,
-                position: WebContentPoint::new(x - *wx, y - *wy),
-            });
+            let Ok(point) = neomacs_display_protocol::GeometryPoint::<
+                neomacs_display_protocol::FrameSpace,
+                neomacs_display_protocol::LogicalPixels,
+            >::from_px(x, y) else {
+                continue;
+            };
+            let Ok(Some(visible)) = presentation.resolve_visible(None) else {
+                continue;
+            };
+            if let Some(content_point) = visible.content_point_at(point) {
+                return Some(WebViewPointerHit {
+                    view: *webview_id,
+                    position: WebContentPoint::new(content_point.x(), content_point.y()),
+                });
+            }
         }
     }
     None

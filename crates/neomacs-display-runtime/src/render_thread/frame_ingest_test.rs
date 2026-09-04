@@ -2,8 +2,9 @@
 //! per presentation, and the scene revision moves only on a real change.
 
 use neomacs_display_protocol::{
-    DeviceScale, DisplayWindowId, FrameGlyphBuffer, GlyphRowRole, Rect, RootSurfaceRect, WebViewId,
-    XwidgetContentExtent, XwidgetId,
+    DeviceScale, DisplayWindowId, FrameGlyphBuffer, FrameSpace, GeometryPoint, GlyphRowRole,
+    LogicalPixels, Px, Rect, RootSurfaceRect, WebViewId, XwidgetContentExtent, XwidgetId,
+    XwidgetLayoutAdvance, XwidgetPresentationGeometry,
 };
 use neomacs_webview::{
     HostWindowId, ResolvedWebViewPlacement, WebViewOccurrenceId, WebViewSceneRevision,
@@ -119,6 +120,8 @@ fn removing_the_newest_child_advances_the_host_scene_revision() {
     assert_eq!(with_child.revision(), WebViewSceneRevision::new(1));
     assert_eq!(unchanged.revision(), WebViewSceneRevision::new(1));
     assert_eq!(child_removed.revision(), WebViewSceneRevision::new(2));
+}
+
 /// GNU sizes the native view from the widget (`xww->width`) and clips it to
 /// the text area (`x_draw_xwidget_glyph_string`, src/xwidget.c:2841-2849,
 /// emacs-31.0.90); the glyph's cropped advance is not the view's size.  A
@@ -133,14 +136,13 @@ fn a_cropped_xwidget_slot_keeps_the_native_content_width_behind_the_clip() {
         Some(Rect::new(0.0, 0.0, 312.0, 120.0)),
     );
     let content = XwidgetContentExtent::new(600.0, 40.0).expect("content extent");
-    frame.add_xwidget(
-        XwidgetId::new(7),
-        WebViewId::new(91),
-        8.0,
-        16.0,
+    let presentation = XwidgetPresentationGeometry::new(
+        GeometryPoint::<FrameSpace, LogicalPixels>::from_px(8.0, 16.0).expect("origin"),
         content,
-        304.0,
+        XwidgetLayoutAdvance::new(Px(304.0)).expect("cropped advance"),
+        None,
     );
+    frame.add_xwidget(XwidgetId::new(7), WebViewId::new(91), presentation);
 
     let mut occurrence = 0;
     let mut placements = std::collections::HashMap::new();

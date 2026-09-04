@@ -345,7 +345,18 @@ fn cropping_an_xwidgets_advance_keeps_its_content_extent() {
     assert_eq!(content(xwidget).width_px(), 600.0);
     assert_eq!(content(xwidget).height_px(), 40.0);
 
-    let cropped = xwidget.xwidget_advance_cropped_to(304.0);
+    let cropped = xwidget
+        .into_xwidget()
+        .expect("typed xwidget replacement")
+        .apply_overflow(
+            crate::display_source_overflow::DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
+                advance: neomacs_display_protocol::XwidgetLayoutAdvance::new(
+                    neomacs_display_protocol::Px(304.0),
+                )
+                .unwrap(),
+            },
+        )
+        .into_media();
     assert_eq!(cropped.width, 304.0, "the layout advance is cropped");
     assert_eq!(cropped.height, 40.0);
     assert_eq!(
@@ -354,8 +365,22 @@ fn cropping_an_xwidgets_advance_keeps_its_content_extent() {
         "the widget's own width is not"
     );
 
-    // Widening is not cropping; a non-positive width is not either.
-    assert_eq!(xwidget.xwidget_advance_cropped_to(900.0).width, 600.0);
-    assert_eq!(xwidget.xwidget_advance_cropped_to(0.0).width, 600.0);
-    assert_eq!(xwidget.xwidget_advance_cropped_to(f32::NAN).width, 600.0);
+    // Widening is not cropping. Invalid advances cannot be represented.
+    let widened = xwidget
+        .into_xwidget()
+        .unwrap()
+        .apply_overflow(
+            crate::display_source_overflow::DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
+                advance: neomacs_display_protocol::XwidgetLayoutAdvance::new(
+                    neomacs_display_protocol::Px(900.0),
+                )
+                .unwrap(),
+            },
+        )
+        .into_media();
+    assert_eq!(widened.width, 600.0);
+    assert_eq!(
+        neomacs_display_protocol::XwidgetLayoutAdvance::new(neomacs_display_protocol::Px(0.0)),
+        None
+    );
 }

@@ -14004,23 +14004,22 @@ fn layout_frame_rust_emits_inline_webkit_glyphs_for_display_webkit_specs() {
         .as_ref()
         .expect("frame display state");
     let presentation = state.materialize();
-    let (xwidget_id, width, height, slot_id) = presentation
+    let (xwidget_id, geometry, slot_id) = presentation
         .glyphs
         .iter()
         .find_map(|glyph| match glyph {
             FrameGlyph::Xwidget {
                 xwidget_id,
-                width,
-                height,
+                presentation,
                 slot_id,
                 ..
-            } => Some((*xwidget_id, *width, *height, *slot_id)),
+            } => Some((*xwidget_id, *presentation, *slot_id)),
             _ => None,
         })
         .expect("inline xwidget glyph");
     assert_eq!(xwidget_id.get(), 99);
-    assert_eq!(width, 80.0);
-    assert_eq!(height, 45.0);
+    assert_eq!(geometry.layout_advance().px().get(), 80.0);
+    assert_eq!(geometry.content_extent().height_px(), 45.0);
     let replacement = assert_replacement_slot_between_neighbors(&eval, frame_id, 2, 80);
     let slot_id = slot_id.expect("webkit slot id");
     assert_eq!(i64::from(slot_id.col), replacement.col);
@@ -14093,20 +14092,24 @@ fn inline_xwidget_glyph_in_frame(
         .glyphs
         .iter()
         .find_map(|glyph| match glyph {
-            FrameGlyph::Xwidget {
-                x,
-                width,
-                height,
-                content,
-                clip_rect,
-                ..
-            } => Some(InlineXwidgetGlyph {
-                x: *x,
-                width: *width,
-                height: *height,
-                content: *content,
-                clip_rect: *clip_rect,
-            }),
+            FrameGlyph::Xwidget { presentation, .. } => {
+                let slot = presentation.layout_slot_rect();
+                let clip_rect = presentation.clip_rect().map(|clip| {
+                    neomacs_display_protocol::Rect::new(
+                        clip.x(),
+                        clip.y(),
+                        clip.width(),
+                        clip.height(),
+                    )
+                });
+                Some(InlineXwidgetGlyph {
+                    x: slot.x(),
+                    width: slot.width(),
+                    height: slot.height(),
+                    content: presentation.content_extent(),
+                    clip_rect,
+                })
+            }
             _ => None,
         })
 }
@@ -14212,19 +14215,26 @@ fn inline_xwidget_glyph_in_right_split(
         .find_map(|glyph| match glyph {
             FrameGlyph::Xwidget {
                 window_id,
-                x,
-                width,
-                height,
-                content,
-                clip_rect,
+                presentation,
                 ..
-            } if window_id.get() == right_window.0 as i64 => Some(InlineXwidgetGlyph {
-                x: *x,
-                width: *width,
-                height: *height,
-                content: *content,
-                clip_rect: *clip_rect,
-            }),
+            } if window_id.get() == right_window.0 as i64 => {
+                let slot = presentation.layout_slot_rect();
+                let clip_rect = presentation.clip_rect().map(|clip| {
+                    neomacs_display_protocol::Rect::new(
+                        clip.x(),
+                        clip.y(),
+                        clip.width(),
+                        clip.height(),
+                    )
+                });
+                Some(InlineXwidgetGlyph {
+                    x: slot.x(),
+                    width: slot.width(),
+                    height: slot.height(),
+                    content: presentation.content_extent(),
+                    clip_rect,
+                })
+            }
             _ => None,
         })
 }
@@ -14414,23 +14424,22 @@ fn layout_frame_rust_emits_inline_xwidget_glyphs_for_gnu_display_xwidget_specs()
         .as_ref()
         .expect("frame display state");
     let presentation = state.materialize();
-    let (xwidget_id, width, height, slot_id) = presentation
+    let (xwidget_id, geometry, slot_id) = presentation
         .glyphs
         .iter()
         .find_map(|glyph| match glyph {
             FrameGlyph::Xwidget {
                 xwidget_id,
-                width,
-                height,
+                presentation,
                 slot_id,
                 ..
-            } => Some((*xwidget_id, *width, *height, *slot_id)),
+            } => Some((*xwidget_id, *presentation, *slot_id)),
             _ => None,
         })
         .expect("inline xwidget glyph");
     assert_eq!(xwidget_id.get(), 1234);
-    assert_eq!(width, 96.0);
-    assert_eq!(height, 54.0);
+    assert_eq!(geometry.layout_advance().px().get(), 96.0);
+    assert_eq!(geometry.content_extent().height_px(), 54.0);
     let replacement = assert_replacement_slot_between_neighbors(&eval, frame_id, 2, 96);
     let slot_id = slot_id.expect("xwidget slot id");
     assert_eq!(i64::from(slot_id.col), replacement.col);

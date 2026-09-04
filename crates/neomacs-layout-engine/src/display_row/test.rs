@@ -3995,44 +3995,40 @@ fn install_measured_display_row_clips_window_chrome_media_to_measured_row() {
             neomacs_display_protocol::frame_glyphs::FrameGlyph::Xwidget {
                 window_id,
                 row_role,
-                clip_rect,
                 slot_id,
                 xwidget_id,
-                x,
-                y,
-                width,
-                height,
+                presentation,
                 ..
-            } => Some((
-                *window_id,
-                *row_role,
-                *clip_rect,
-                *slot_id,
-                *xwidget_id,
-                *x,
-                *y,
-                *width,
-                *height,
-            )),
+            } => Some((*window_id, *row_role, *slot_id, *xwidget_id, *presentation)),
             _ => None,
         })
         .expect("xwidget materialized from row glyph");
     assert_eq!(xwidget.0.get(), 77);
     assert_eq!(xwidget.1, GlyphRowRole::TabLine);
-    assert_eq!(xwidget.2, Some(row_bounds));
     assert_eq!(
-        xwidget.3,
+        xwidget.2,
         Some(neomacs_display_protocol::frame_glyphs::DisplaySlotId {
             window_id: neomacs_display_protocol::types::DisplayWindowId::new(77),
             row: 0,
             col: 0,
         })
     );
-    assert_eq!(xwidget.4.get(), 1234);
-    assert_eq!(xwidget.5, 0.0);
-    assert_eq!(xwidget.6, 4.0);
-    assert_eq!(xwidget.7, 96.0);
-    assert_eq!(xwidget.8, 54.0);
+    assert_eq!(xwidget.3.get(), 1234);
+    let slot = xwidget.4.layout_slot_rect();
+    assert_eq!(
+        (slot.x(), slot.y(), slot.width(), slot.height()),
+        (0.0, 4.0, 96.0, 54.0)
+    );
+    let clip = xwidget.4.clip_rect().expect("tab-line row clip");
+    assert_eq!(
+        (clip.x(), clip.y(), clip.width(), clip.height()),
+        (
+            row_bounds.x,
+            row_bounds.y,
+            row_bounds.width,
+            row_bounds.height
+        )
+    );
 }
 
 #[test]

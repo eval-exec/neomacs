@@ -12,8 +12,10 @@ use crate::types::{
     Color, DisplayFrameId, DisplayWindowId, FaceId, ImageId, Px, Rect, SurfaceId, VideoId,
     WebViewId, XwidgetId,
 };
-use crate::xwidget_extent::XwidgetContentExtent;
-use crate::{ContentTransitionIntent, TransitionDirection};
+use crate::xwidget_extent::XwidgetPresentationGeometry;
+use crate::{
+    ContentTransitionIntent, FrameSpace, GeometryRect, LogicalPixels, TransitionDirection,
+};
 use std::collections::HashMap;
 
 pub use crate::cursor::{CursorBarWidth, CursorKind, CursorSpec, CursorStyle};
@@ -244,25 +246,17 @@ pub enum FrameGlyph {
 
     /// Xwidget glyph (inline in buffer).
     ///
-    /// Three extents, as in GNU (see [`XwidgetContentExtent`]): `x`, `y`,
-    /// `width`, `height` are the glyph slot, the layout advance after
-    /// `produce_xwidget_glyph`'s right-edge crop and the cell a cursor on the
-    /// glyph occupies; `content` is the widget's own size, which sizes the
-    /// native view; `clip_rect` is the window's text area, which bounds what
-    /// of the widget is visible.  Native placement reads `content`, never
-    /// `width`.
+    /// [`XwidgetPresentationGeometry`] keeps GNU's three distinct geometries
+    /// together: intrinsic widget content, possibly cropped glyph advance,
+    /// and the window clip.  Native placement, Linux composition, cursor
+    /// geometry, and hit-testing all consume that one typed contract.
     Xwidget {
         window_id: DisplayWindowId,
         row_role: GlyphRowRole,
-        clip_rect: Option<Rect>,
         slot_id: Option<DisplaySlotId>,
         xwidget_id: XwidgetId,
         webview_id: WebViewId,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        content: XwidgetContentExtent,
+        presentation: XwidgetPresentationGeometry<FrameSpace>,
         face_id: FaceId,
         box_vertical_edges: BoxVerticalEdges,
     },
@@ -490,13 +484,6 @@ impl FrameGlyph {
                 height,
                 ..
             }
-            | FrameGlyph::Xwidget {
-                x,
-                y,
-                width,
-                height,
-                ..
-            }
             | FrameGlyph::Surface {
                 x,
                 y,
@@ -504,6 +491,10 @@ impl FrameGlyph {
                 height,
                 ..
             } => Some((*x, *y, *width, *height)),
+            FrameGlyph::Xwidget { presentation, .. } => {
+                let slot = presentation.layout_slot_rect();
+                Some((slot.x(), slot.y(), slot.width(), slot.height()))
+            }
             FrameGlyph::Image { slot_rect, .. } => {
                 Some((slot_rect.x, slot_rect.y, slot_rect.width, slot_rect.height))
             }
@@ -574,11 +565,13 @@ impl FrameGlyph {
             | FrameGlyph::Stretch { clip_rect, .. }
             | FrameGlyph::Image { clip_rect, .. }
             | FrameGlyph::Video { clip_rect, .. }
-            | FrameGlyph::Xwidget { clip_rect, .. }
             | FrameGlyph::Surface { clip_rect, .. }
             | FrameGlyph::FringeBitmap { clip_rect, .. }
             | FrameGlyph::Border { clip_rect, .. }
             | FrameGlyph::ScrollBar { clip_rect, .. } => *clip_rect,
+            FrameGlyph::Xwidget { presentation, .. } => presentation
+                .clip_rect()
+                .map(|clip| Rect::new(clip.x(), clip.y(), clip.width(), clip.height())),
             _ => None,
         }
     }
@@ -617,13 +610,6 @@ impl FrameGlyph {
                 height,
                 ..
             }
-            | FrameGlyph::Xwidget {
-                x,
-                y,
-                width,
-                height,
-                ..
-            }
             | FrameGlyph::Surface {
                 x,
                 y,
@@ -652,6 +638,10 @@ impl FrameGlyph {
                 height,
                 ..
             } => Some(Rect::new(*x, *y, *width, *height)),
+            FrameGlyph::Xwidget { presentation, .. } => {
+                let slot = presentation.layout_slot_rect();
+                Some(Rect::new(slot.x(), slot.y(), slot.width(), slot.height()))
+            }
             FrameGlyph::Background { bounds, .. } => Some(*bounds),
             #[cfg(feature = "neo-term")]
             FrameGlyph::Terminal {
@@ -2043,23 +2033,21 @@ impl FrameGlyphBuffer {
         &mut self,
         xwidget_id: XwidgetId,
         webview_id: WebViewId,
-        x: f32,
-        y: f32,
-        content: XwidgetContentExtent,
-        slot_width: f32,
+        presentation: XwidgetPresentationGeometry<FrameSpace>,
     ) {
+        let clip = self.current_clip_rect.map(|clip| {
+            GeometryRect::<FrameSpace, LogicalPixels>::new(clip.x, clip.y, clip.width, clip.height)
+                .expect("a frame draw-context clip has valid geometry")
+        });
+        let presentation = presentation.with_clip(clip);
+        let origin = presentation.origin();
         self.glyphs.push(FrameGlyph::Xwidget {
             window_id: self.current_window_id,
             row_role: self.current_row_role,
-            clip_rect: self.current_clip_rect,
-            slot_id: Some(self.current_slot_id(x, y)),
+            slot_id: Some(self.current_slot_id(origin.x(), origin.y())),
             xwidget_id,
             webview_id,
-            x,
-            y,
-            width: slot_width,
-            height: content.height_px(),
-            content,
+            presentation,
             face_id: self.current_face_id,
             box_vertical_edges: BoxVerticalEdges::Both,
         });
@@ -2413,13 +2401,6 @@ impl FrameGlyphBuffer {
                     height: slot_height,
                     ..
                 }
-                | FrameGlyph::Xwidget {
-                    x: slot_x,
-                    y: slot_y,
-                    width: slot_width,
-                    height: slot_height,
-                    ..
-                }
                 | FrameGlyph::Surface {
                     x: slot_x,
                     y: slot_y,
@@ -2428,6 +2409,15 @@ impl FrameGlyphBuffer {
                     ..
                 } => {
                     return (*slot_x, *slot_y, slot_width.max(1.0), slot_height.max(1.0));
+                }
+                FrameGlyph::Xwidget { presentation, .. } => {
+                    let slot = presentation.layout_slot_rect();
+                    return (
+                        slot.x(),
+                        slot.y(),
+                        slot.width().max(1.0),
+                        slot.height().max(1.0),
+                    );
                 }
                 _ => {}
             }

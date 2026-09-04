@@ -1716,31 +1716,28 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 // images have their own GNU rule (not ported), and margin
                 // lanes keep their own structural clip below.
                 let kind = match kind {
-                    DisplayItemKind::MediaReplacement(
-                        media @ DisplayMediaReplacement {
-                            kind: DisplayMediaReplacementKind::Xwidget { .. },
-                            ..
-                        },
-                    ) if self.writer.overflow_policy()
-                        == DisplayRowOverflowPolicy::RejectOverflowingGlyph =>
+                    DisplayItemKind::MediaReplacement(media)
+                        if self.writer.overflow_policy()
+                            == DisplayRowOverflowPolicy::RejectOverflowingGlyph =>
                     {
-                        let extent = WindowLocalRowExtent::from_frame_coordinates(
-                            self.text_area_origin,
-                            self.position.x_px(),
-                            self.max_x_px,
-                        );
-                        let action = DisplayXwidgetOverflowAction::for_xwidget(
-                            media.width,
-                            extent,
-                            before_len == 0,
-                        );
-                        DisplayItemKind::MediaReplacement(match action {
-                            DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
-                                visible_width_px,
-                            } => media.xwidget_advance_cropped_to(visible_width_px),
-                            DisplayXwidgetOverflowAction::Fits
-                            | DisplayXwidgetOverflowAction::LeaveWhole => media,
-                        })
+                        match media.into_xwidget() {
+                            Ok(xwidget) => {
+                                let extent = WindowLocalRowExtent::from_frame_coordinates(
+                                    self.text_area_origin,
+                                    self.position.x_px(),
+                                    self.max_x_px,
+                                );
+                                let action = DisplayXwidgetOverflowAction::for_xwidget(
+                                    xwidget.layout_advance(),
+                                    extent,
+                                    before_len == 0,
+                                );
+                                DisplayItemKind::MediaReplacement(
+                                    xwidget.apply_overflow(action).into_media(),
+                                )
+                            }
+                            Err(media) => DisplayItemKind::MediaReplacement(media),
+                        }
                     }
                     kind => kind,
                 };

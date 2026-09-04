@@ -20,12 +20,43 @@ pub(super) struct MediaQuad<Id> {
     pub(super) vertices: [GlyphVertex; 6],
 }
 
+/// Resolve one portable xwidget presentation into the GPU quad used by the
+/// Linux composited-webview backend.
+///
+/// Root and child frames deliberately share this adapter: frame offsets move
+/// only the destination vertices, while clipping and texture coordinates are
+/// derived once from the protocol's intrinsic-content/layout/clip contract.
 #[cfg(all(feature = "webview", target_os = "linux"))]
-pub(super) const fn inline_webview_id(glyph: &FrameGlyph) -> Option<WebViewId> {
-    match glyph {
-        FrameGlyph::Xwidget { webview_id, .. } => Some(*webview_id),
-        _ => None,
-    }
+pub(super) fn inline_webview_quad(
+    glyph: &FrameGlyph,
+    offset_x: f32,
+    offset_y: f32,
+) -> Option<MediaQuad<WebViewId>> {
+    let FrameGlyph::Xwidget {
+        webview_id,
+        presentation,
+        ..
+    } = glyph
+    else {
+        return None;
+    };
+    let visible = presentation.resolve_visible(None).ok()??;
+    let draw = visible.visible_rect();
+    let [u_min, u_max, v_min, v_max] = visible.texture_coordinates().as_array();
+
+    Some(MediaQuad {
+        id: *webview_id,
+        vertices: textured_quad_vertices_uv(
+            draw.x() + offset_x,
+            draw.y() + offset_y,
+            draw.width(),
+            draw.height(),
+            u_min,
+            u_max,
+            v_min,
+            v_max,
+        ),
+    })
 }
 
 #[cfg(feature = "video")]
@@ -499,60 +530,15 @@ impl WgpuRenderer {
         {
             let mut quads = Vec::new();
             for glyph in &frame_glyphs.glyphs {
-                if let FrameGlyph::Xwidget {
-                    webview_id,
-                    x,
-                    y,
-                    content,
-                    clip_rect,
-                    ..
-                } = glyph
-                {
-                    // The texture is the widget at its own size (GNU
-                    // `xww->width` x `xww->height`); the glyph slot may have
-                    // been cropped at the right edge, so draw the content
-                    // extent and cut it to the text-area clip on all four
-                    // sides through the helper the image path uses.
-                    let width = content.width_px();
-                    let height = content.height_px();
-                    let Some(clipped) =
-                        clipped_media_rect(*x, *y, width, height, clip_rect.as_ref())
-                    else {
-                        continue;
-                    };
-
-                    let view_id = inline_webview_id(glyph)
-                        .expect("the glyph was exhaustively matched as an xwidget");
+                if let Some(quad) = inline_webview_quad(glyph, 0.0, 0.0) {
+                    let view_id = quad.id;
                     // Check if webkit texture is ready
                     if self.caches.webview.get(view_id).is_some() {
                         self.media_budget
                             .touch(crate::media_budget::MediaType::WebKit, view_id.get());
-                        tracing::debug!(
-                            "Rendering webkit {} at ({}, {}) size {}x{} (clipped to {}x{})",
-                            webview_id,
-                            x,
-                            y,
-                            width,
-                            height,
-                            clipped.draw_width,
-                            clipped.draw_height
-                        );
-                        // Create vertices for webkit quad (white color = no tinting)
-                        quads.push(MediaQuad {
-                            id: view_id,
-                            vertices: textured_quad_vertices_uv(
-                                clipped.draw_x,
-                                clipped.draw_y,
-                                clipped.draw_width,
-                                clipped.draw_height,
-                                clipped.u_min,
-                                clipped.u_max,
-                                clipped.v_min,
-                                clipped.v_max,
-                            ),
-                        });
+                        quads.push(quad);
                     } else {
-                        tracing::debug!("WebView {} not found in cache", webview_id);
+                        tracing::debug!("WebView {} not found in cache", view_id);
                     }
                 }
             }

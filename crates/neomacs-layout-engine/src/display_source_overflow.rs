@@ -4,6 +4,7 @@ use crate::display_row::walk_state::{
     DisplayRowTextOverflowDecision, SpecialTextRowOverflowDecision, TextRowTransitionStatePolicy,
     WordWrapBreakCandidate,
 };
+use neomacs_display_protocol::{Px, XwidgetLayoutAdvance};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DisplaySourceTextCharOverflowAction {
@@ -180,7 +181,7 @@ impl WindowLocalRowExtent {
 pub(crate) enum DisplayXwidgetOverflowAction {
     Fits,
     CropAdvanceToVisibleWidth {
-        visible_width_px: f32,
+        advance: XwidgetLayoutAdvance,
     },
     /// GNU leaves the glyph whole; the row's overflow policy decides.
     LeaveWhole,
@@ -188,17 +189,20 @@ pub(crate) enum DisplayXwidgetOverflowAction {
 
 impl DisplayXwidgetOverflowAction {
     pub(crate) fn for_xwidget(
-        width_px: f32,
+        layout_advance: XwidgetLayoutAdvance,
         extent: WindowLocalRowExtent,
         at_row_start: bool,
     ) -> Self {
+        let width_px = layout_advance.px().get();
         let visible_width_px = extent.remaining_px();
         let crop = width_px - visible_width_px;
         if crop <= 0.0 {
             return Self::Fits;
         }
         if visible_width_px > 0.0 && (at_row_start || width_px > extent.last_visible_x_px() / 4.0) {
-            Self::CropAdvanceToVisibleWidth { visible_width_px }
+            let advance = XwidgetLayoutAdvance::new(Px(visible_width_px))
+                .expect("a positive finite row remainder is a valid xwidget advance");
+            Self::CropAdvanceToVisibleWidth { advance }
         } else {
             Self::LeaveWhole
         }

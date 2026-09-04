@@ -19,6 +19,8 @@ use super::cursor_presentation::{
     ResolvedCursorPaint,
 };
 use super::frame_pass::{BoxSpan, collect_frame_box_spans};
+#[cfg(all(feature = "webview", target_os = "linux"))]
+use super::layer_media::inline_webview_quad;
 use super::layer_media::{MediaQuad, clipped_media_rect, textured_quad_vertices_uv};
 use cosmic_text::SubpixelBin;
 use neomacs_display_protocol::DeviceScale;
@@ -1733,61 +1735,10 @@ impl WgpuRenderer {
 
                 let mut webkit_quads = Vec::new();
                 for glyph in &frame.glyphs {
-                    if let FrameGlyph::Xwidget {
-                        webview_id,
-                        x,
-                        y,
-                        content,
-                        clip_rect,
-                        ..
-                    } = glyph
+                    if let Some(quad) = inline_webview_quad(glyph, offset_x, offset_y)
+                        && self.caches.webview.get(quad.id).is_some()
                     {
-                        // The texture is the widget at its own size; the
-                        // glyph slot may be narrower after the right-edge
-                        // crop and must not squeeze it.  What the slot no
-                        // longer covers is cut away by the text-area clip,
-                        // through the same helper the image branch above
-                        // uses, so the widget cannot spill into the next
-                        // window of this child frame.
-                        let width = content.width_px();
-                        let height = content.height_px();
-                        let view_id = *webview_id;
-                        if self.caches.webview.get(view_id).is_some() {
-                            let Some(clipped) = super::layer_media::clipped_media_rect(
-                                *x,
-                                *y,
-                                width,
-                                height,
-                                clip_rect.as_ref(),
-                            ) else {
-                                continue;
-                            };
-                            let wx = clipped.draw_x + offset_x;
-                            let wy = clipped.draw_y + offset_y;
-                            tracing::debug!(
-                                "render_frame_content: webkit {} at ({:.1},{:.1}) size {:.1}x{:.1} (clipped to {:.1}x{:.1})",
-                                webview_id,
-                                wx,
-                                wy,
-                                width,
-                                height,
-                                clipped.draw_width,
-                                clipped.draw_height,
-                            );
-                            webkit_quads.push(MediaQuad {
-                                id: view_id,
-                                vertices: super::layer_media::textured_quad_vertices_uv(
-                                    wx,
-                                    wy,
-                                    clipped.draw_width,
-                                    clipped.draw_height,
-                                    clipped.u_min,
-                                    clipped.u_max,
-                                    clipped.v_min,
-                                    clipped.v_max,
-                                ),
-                            });
-                        }
+                        webkit_quads.push(quad);
                     }
                 }
                 let webkit_vertices: Vec<GlyphVertex> = webkit_quads

@@ -536,13 +536,6 @@ impl RenderApp {
                     slot_id,
                     ..
                 }
-                | FrameGlyph::Xwidget {
-                    x,
-                    y,
-                    row_role,
-                    slot_id,
-                    ..
-                }
                 | FrameGlyph::Surface {
                     x,
                     y,
@@ -572,6 +565,49 @@ impl RenderApp {
                     *y += row_index as f32 * line_spacing;
                     *x += char_in_row as f32 * letter_spacing;
                     slot_positions.insert(slot_id, (*x, *y));
+                }
+                FrameGlyph::Xwidget {
+                    presentation,
+                    row_role,
+                    slot_id,
+                    ..
+                } => {
+                    if row_role.is_chrome() {
+                        continue;
+                    }
+                    let Some(slot_id) = *slot_id else {
+                        continue;
+                    };
+                    let origin = *presentation.origin();
+                    let mut x = origin.x();
+                    let mut y = origin.y();
+                    if y < last_window_y - 1.0 {
+                        row_index = -1;
+                        last_y = f32::NEG_INFINITY;
+                    }
+                    last_window_y = y;
+
+                    if (y - last_y).abs() > 0.5 {
+                        row_index += 1;
+                        char_in_row = 0;
+                        last_y = y;
+                    } else {
+                        char_in_row += 1;
+                    }
+                    let dx = char_in_row as f32 * letter_spacing;
+                    let dy = row_index as f32 * line_spacing;
+                    x += dx;
+                    y += dy;
+                    let displacement = neomacs_display_protocol::SpaceTranslation::<
+                        neomacs_display_protocol::FrameSpace,
+                        neomacs_display_protocol::FrameSpace,
+                        neomacs_display_protocol::LogicalPixels,
+                    >::from_px(dx, dy)
+                    .expect("finite display spacing produces a valid displacement");
+                    *presentation = presentation
+                        .translated_origin(displacement)
+                        .expect("finite display spacing preserves valid xwidget geometry");
+                    slot_positions.insert(slot_id, (x, y));
                 }
                 _ => {}
             }

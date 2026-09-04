@@ -1,5 +1,10 @@
 use super::{DisplayXwidgetOverflowAction, WindowLocalRowExtent};
 use crate::display_row::geometry::DisplayRowTextAreaOrigin;
+use neomacs_display_protocol::{Px, XwidgetLayoutAdvance};
+
+fn advance(px: f32) -> XwidgetLayoutAdvance {
+    XwidgetLayoutAdvance::new(Px(px)).expect("positive finite layout advance")
+}
 
 /// A window at the frame's left edge: window-local and frame-absolute
 /// coordinates coincide, so this pins the rule itself.
@@ -17,36 +22,60 @@ fn leftmost_window(x_px: f32, right_edge_px: f32) -> WindowLocalRowExtent {
 #[test]
 fn an_xwidget_wider_than_the_remaining_row_is_cropped_by_gnus_rule() {
     assert_eq!(
-        DisplayXwidgetOverflowAction::for_xwidget(100.0, leftmost_window(8.0, 312.0), false),
+        DisplayXwidgetOverflowAction::for_xwidget(
+            advance(100.0),
+            leftmost_window(8.0, 312.0),
+            false,
+        ),
         DisplayXwidgetOverflowAction::Fits
     );
     assert_eq!(
-        DisplayXwidgetOverflowAction::for_xwidget(304.0, leftmost_window(8.0, 312.0), false),
+        DisplayXwidgetOverflowAction::for_xwidget(
+            advance(304.0),
+            leftmost_window(8.0, 312.0),
+            false,
+        ),
         DisplayXwidgetOverflowAction::Fits,
         "crop == 0 is not a crop"
     );
     // Mid-row, wider than a quarter of the visible width: crop = 600 - 304.
     assert_eq!(
-        DisplayXwidgetOverflowAction::for_xwidget(600.0, leftmost_window(8.0, 312.0), false),
+        DisplayXwidgetOverflowAction::for_xwidget(
+            advance(600.0),
+            leftmost_window(8.0, 312.0),
+            false,
+        ),
         DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
-            visible_width_px: 304.0
+            advance: advance(304.0)
         }
     );
     // At hpos 0 the width does not matter.
     assert_eq!(
-        DisplayXwidgetOverflowAction::for_xwidget(40.0, leftmost_window(300.0, 312.0), true),
+        DisplayXwidgetOverflowAction::for_xwidget(
+            advance(40.0),
+            leftmost_window(300.0, 312.0),
+            true,
+        ),
         DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
-            visible_width_px: 12.0
+            advance: advance(12.0)
         }
     );
     // Narrow (40 <= 312 / 4) and mid-row: GNU leaves it whole.
     assert_eq!(
-        DisplayXwidgetOverflowAction::for_xwidget(40.0, leftmost_window(300.0, 312.0), false),
+        DisplayXwidgetOverflowAction::for_xwidget(
+            advance(40.0),
+            leftmost_window(300.0, 312.0),
+            false,
+        ),
         DisplayXwidgetOverflowAction::LeaveWhole
     );
     // Nothing of the row is left; a zero-width crop would produce no glyph.
     assert_eq!(
-        DisplayXwidgetOverflowAction::for_xwidget(600.0, leftmost_window(312.0, 312.0), true),
+        DisplayXwidgetOverflowAction::for_xwidget(
+            advance(600.0),
+            leftmost_window(312.0, 312.0),
+            true,
+        ),
         DisplayXwidgetOverflowAction::LeaveWhole
     );
 }
@@ -70,17 +99,21 @@ fn the_quarter_width_rule_uses_the_windows_own_width_in_a_right_hand_split() {
     assert_eq!(right_window.remaining_px(), 232.0, "current_x is 560");
 
     assert_eq!(
-        DisplayXwidgetOverflowAction::for_xwidget(300.0, right_window, false),
+        DisplayXwidgetOverflowAction::for_xwidget(advance(300.0), right_window, false),
         DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
-            visible_width_px: 232.0
+            advance: advance(232.0)
         }
     );
     // The same widget at the same window-local place in the leftmost window
     // gets the same answer: the rule does not know where the window is.
     assert_eq!(
-        DisplayXwidgetOverflowAction::for_xwidget(300.0, leftmost_window(560.0, 792.0), false),
+        DisplayXwidgetOverflowAction::for_xwidget(
+            advance(300.0),
+            leftmost_window(560.0, 792.0),
+            false,
+        ),
         DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
-            visible_width_px: 232.0
+            advance: advance(232.0)
         }
     );
 }

@@ -11848,43 +11848,39 @@ fn display_replacement_append_context_installs_xwidget_replacements() {
             neomacs_display_protocol::frame_glyphs::FrameGlyph::Xwidget {
                 window_id,
                 row_role,
-                clip_rect,
                 slot_id,
                 xwidget_id,
-                x,
-                y,
-                width,
-                height,
+                presentation,
                 ..
-            } => Some((
-                *window_id,
-                *row_role,
-                *clip_rect,
-                *slot_id,
-                *xwidget_id,
-                *x,
-                *y,
-                *width,
-                *height,
-            )),
+            } => Some((*window_id, *row_role, *slot_id, *xwidget_id, *presentation)),
             _ => None,
         })
         .expect("xwidget materialized from its row glyph");
     assert_eq!(xwidget.0.get(), 77);
     assert_eq!(xwidget.1, GlyphRowRole::Text);
-    assert_eq!(xwidget.2, Some(text_bounds));
     assert_eq!(
-        xwidget.3,
+        xwidget.2,
         Some(neomacs_display_protocol::frame_glyphs::DisplaySlotId {
             window_id: neomacs_display_protocol::types::DisplayWindowId::new(77),
             row: 0,
             col: 2,
         })
     );
-    assert_eq!(xwidget.4.get(), 1234);
+    assert_eq!(xwidget.3.get(), 1234);
+    let slot = xwidget.4.layout_slot_rect();
     assert_eq!(
-        (xwidget.5, xwidget.6, xwidget.7, xwidget.8),
+        (slot.x(), slot.y(), slot.width(), slot.height()),
         (16.0, 24.0, 96.0, 54.0)
+    );
+    let clip = xwidget.4.clip_rect().expect("body-row text-area clip");
+    assert_eq!(
+        (clip.x(), clip.y(), clip.width(), clip.height()),
+        (
+            text_bounds.x,
+            text_bounds.y,
+            text_bounds.width,
+            text_bounds.height
+        )
     );
 }
 

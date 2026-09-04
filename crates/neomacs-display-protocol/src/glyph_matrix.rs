@@ -22,7 +22,10 @@ use super::types::{
     Color, DisplayWindowId, FaceId, ImageId, Px, Rect, ResolvedBidiDirection, SurfaceId, VideoId,
     WebViewId, XwidgetId,
 };
-use super::xwidget_extent::XwidgetContentExtent;
+use super::xwidget_extent::{
+    XwidgetContentExtent, XwidgetLayoutAdvance, XwidgetPresentationGeometry,
+};
+use super::{FrameSpace, GeometryPoint, GeometryRect, LogicalPixels};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 
@@ -3236,20 +3239,34 @@ impl FrameDisplayState {
                         } else {
                             row_height
                         };
+                        let origin = GeometryPoint::<FrameSpace, LogicalPixels>::from_px(
+                            x,
+                            baseline - layout_ascent + glyph.vertical_offset_px,
+                        )
+                        .expect("materialized xwidget origin is finite");
+                        let clip = clip_rect.map(|clip| {
+                            GeometryRect::<FrameSpace, LogicalPixels>::new(
+                                clip.x,
+                                clip.y,
+                                clip.width,
+                                clip.height,
+                            )
+                            .expect("materialized xwidget clip is valid")
+                        });
+                        let layout_advance = XwidgetLayoutAdvance::new(Px(materialized_width))
+                            .expect("a materialized xwidget has positive finite width");
                         push(FrameGlyph::Xwidget {
                             window_id,
                             row_role,
-                            clip_rect,
                             slot_id: Some(slot_id),
                             xwidget_id: *xwidget_id,
                             webview_id: *webview_id,
-                            x,
-                            y: baseline - layout_ascent + glyph.vertical_offset_px,
-                            width: materialized_width,
-                            // The slot is as tall as the widget; the row's
-                            // vertical clip, not the glyph, bounds what shows.
-                            height: content.height_px(),
-                            content: *content,
+                            presentation: XwidgetPresentationGeometry::new(
+                                origin,
+                                *content,
+                                layout_advance,
+                                clip,
+                            ),
                             face_id: glyph.face_id,
                             box_vertical_edges: glyph.box_vertical_edges,
                         });
