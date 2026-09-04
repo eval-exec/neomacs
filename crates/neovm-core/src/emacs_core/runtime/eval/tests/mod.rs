@@ -21869,11 +21869,7 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
             Value::symbol(command),
         )
         .expect("define signaling command");
-        ev.command_loop
-            .keyboard
-            .kboard
-            .unread_events
-            .push_back(Value::symbol(key));
+        ev.command_loop.unread_event(Value::symbol(key));
     }
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
@@ -21881,11 +21877,7 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
         Value::symbol("neo-stop-command-loop-error-test-command"),
     )
     .expect("define stop command");
-    ev.command_loop
-        .keyboard
-        .kboard
-        .unread_events
-        .push_back(Value::fixnum('q' as i64));
+    ev.command_loop.unread_event(Value::fixnum('q' as i64));
     ev.command_loop.running = true;
 
     ev.recursive_edit_inner()
