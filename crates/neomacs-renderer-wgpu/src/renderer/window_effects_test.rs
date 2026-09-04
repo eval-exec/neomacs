@@ -43,6 +43,7 @@ fn test_window_info(
         window_start: 0,
         window_end: 100,
         buffer_size: 100,
+        buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         bounds,
         geometry: Default::default(),
         mode_line_height,

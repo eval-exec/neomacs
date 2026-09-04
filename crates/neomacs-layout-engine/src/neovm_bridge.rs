@@ -2085,6 +2085,7 @@ pub fn window_params_from_neovm_with_font_sizing(
             lisp_char_pos_to_layout_i64(point)
         },
         buffer_size: buffer.point_max_char_pos().get() as i64,
+        buffer_modiff: buffer.modified_tick(),
         buffer_begv: buffer.point_min_char_pos().get() as i64,
         display_line_numbers,
         hscroll: hscroll as i32,
