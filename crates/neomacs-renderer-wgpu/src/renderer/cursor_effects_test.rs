@@ -55,6 +55,7 @@ fn make_selected_window_info(x: f32, y: f32, w: f32, h: f32) -> WindowInfo {
         window_start: 0,
         window_end: 100,
         buffer_size: 200,
+        buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         bounds: Rect::new(x, y, w, h),
         geometry: Default::default(),
         mode_line_height: 20.0,

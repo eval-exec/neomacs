@@ -518,6 +518,9 @@ impl<'a> WindowFrameInfoRenderRequest<'a> {
             window_start: self.params.window_start,
             window_end: 0,
             buffer_size: self.params.buffer_size,
+            buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::new(
+                self.params.buffer_modiff as u64,
+            ),
             bounds: Rect::new(
                 self.params.bounds.x,
                 self.params.bounds.y,
