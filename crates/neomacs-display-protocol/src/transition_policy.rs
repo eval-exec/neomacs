@@ -347,6 +347,9 @@ fn vertical(
 ///
 /// This is the authoritative transition config shared across crates; render
 /// code consumes this policy instead of owning separate config fields.
+/// Default minimum viewport height, in device pixels, for a scroll transition.
+const MINIMUM_SCROLL_REGION_HEIGHT_PX: f32 = 50.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransitionPolicy {
     pub buffer: BufferTransitionConfig,
@@ -381,6 +384,16 @@ impl TransitionPolicy {
                 bounds.height,
             ),
         })
+    }
+
+    /// Smallest viewport a scroll transition is worth running in.
+    ///
+    /// Below this a slide is more distracting than informative, and the
+    /// retained strip is mostly chrome. Expressed in device pixels so the
+    /// judgement means the same thing on a HiDPI display as on a 1x one.
+    #[must_use]
+    pub fn minimum_scroll_region_height(&self) -> f32 {
+        MINIMUM_SCROLL_REGION_HEIGHT_PX
     }
 
     pub fn scroll_plan(

@@ -1064,14 +1064,6 @@ pub enum ContentTransitionHint {
         target: BufferTransitionTarget,
         intent: ContentTransitionIntent,
     },
-    /// One window viewport moved within the same buffer identity.
-    ViewportScrolled {
-        window_id: DisplayWindowId,
-        region: BufferViewportRegion,
-        direction: TransitionDirection,
-        /// Pixel distance to slide.
-        scroll_distance: f32,
-    },
 }
 
 /// Explicit effect hint from layout producers to render thread.
@@ -1230,69 +1222,28 @@ pub struct FrameGlyphBuffer {
     pub fringe_bitmaps: HashMap<u16, FringeBitmapData>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WindowPresentationDelta {
-    GeometryChanged,
-    BufferChanged,
-    ViewportScrolled { direction: ScrollDirection },
-    TextMetricsChanged,
-    Unchanged,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScrollDirection {
-    TowardBufferStart,
-    TowardBufferEnd,
-}
-
-impl ScrollDirection {
-    const fn transition_direction(self) -> TransitionDirection {
-        match self {
-            Self::TowardBufferStart => TransitionDirection::Backward,
-            Self::TowardBufferEnd => TransitionDirection::Forward,
-        }
-    }
-}
-
-fn classify_window_presentation_delta(
-    prev: &WindowInfo,
-    curr: &WindowInfo,
-) -> WindowPresentationDelta {
-    let bounds_changed = (prev.bounds.x - curr.bounds.x).abs() > 2.0
-        || (prev.bounds.y - curr.bounds.y).abs() > 2.0
-        || (prev.bounds.width - curr.bounds.width).abs() > 2.0
-        || (prev.bounds.height - curr.bounds.height).abs() > 2.0;
-    if bounds_changed {
-        return WindowPresentationDelta::GeometryChanged;
-    }
-
-    if prev.buffer_id != 0 && curr.buffer_id != 0 && prev.buffer_id != curr.buffer_id {
-        return WindowPresentationDelta::BufferChanged;
-    }
-
-    if prev.window_start != curr.window_start {
-        let direction = if curr.window_start > prev.window_start {
-            ScrollDirection::TowardBufferEnd
-        } else {
-            ScrollDirection::TowardBufferStart
-        };
-        return WindowPresentationDelta::ViewportScrolled { direction };
-    }
-
-    if (prev.char_height - curr.char_height).abs() > 1.0 {
-        return WindowPresentationDelta::TextMetricsChanged;
-    }
-
-    WindowPresentationDelta::Unchanged
-}
-
-/// Derive a transition hint by comparing previous/current window metadata.
+/// A window's geometry is treated as unchanged within this many pixels.
 ///
-/// This centralizes transition geometry decisions outside any concrete glyph
-/// buffer materialization path. Geometry deltas are deliberately non-animating:
-/// retained pixels from different presentation extents are not compatible
-/// transition inputs.
-pub fn derive_window_transition_hint(
+/// Sub-pixel jitter between presentations is not a layout change; animating on
+/// it would fire a transition on every rounding difference.
+const GEOMETRY_STABILITY_EPSILON_PX: f32 = 2.0;
+
+/// Text metrics are treated as unchanged within this many pixels.
+const CHAR_HEIGHT_STABILITY_EPSILON_PX: f32 = 1.0;
+
+/// Whether this window's *content identity* changed, warranting a replacement
+/// transition.
+///
+/// This is deliberately narrow. It answers only the question the pixels cannot:
+/// that the thing being shown became a different thing, so the outgoing image
+/// should be replaced rather than moved. How far a viewport scrolled is a
+/// measurement the compositor makes by comparing presentations, not something a
+/// producer declares.
+///
+/// Returns `None` when the window's geometry moved, because retained pixels from
+/// a different presentation extent are not compatible transition inputs.
+#[must_use]
+pub fn derive_buffer_replacement_hint(
     prev: &WindowInfo,
     curr: &WindowInfo,
 ) -> Option<ContentTransitionHint> {
@@ -1301,46 +1252,37 @@ pub fn derive_window_transition_hint(
     }
 
     // The retained snapshot and new presentation must describe the same
-    // buffer-owned pixels. A current-only clip can otherwise sample old
-    // chrome after tab/header/mode-line or split geometry changes.
+    // buffer-owned pixels. A current-only clip can otherwise sample old chrome
+    // after tab/header/mode-line or split geometry changes.
     let previous_region = prev.geometry.buffer_viewport()?;
     let current_region = curr.geometry.buffer_viewport()?;
     if previous_region != current_region {
         return None;
     }
 
-    match classify_window_presentation_delta(prev, curr) {
-        WindowPresentationDelta::GeometryChanged | WindowPresentationDelta::Unchanged => None,
-        WindowPresentationDelta::BufferChanged | WindowPresentationDelta::TextMetricsChanged => {
-            Some(ContentTransitionHint::BufferReplaced {
-                target: BufferTransitionTarget::Window {
-                    window_id: curr.window_id,
-                    region: current_region,
-                },
-                intent: ContentTransitionIntent::Replace,
-            })
-        }
-        WindowPresentationDelta::ViewportScrolled { direction } => {
-            let region = current_region;
-            let bounds = region.bounds();
-            if bounds.height < 50.0 {
-                return None;
-            }
-
-            // Keep legacy estimate shape to preserve current feel.
-            let cols = (bounds.width / curr.char_height).max(1.0);
-            let char_delta = (curr.window_start - prev.window_start).unsigned_abs() as f32;
-            let est_lines = (char_delta / cols).max(1.0);
-            let scroll_px = (est_lines * curr.char_height).min(bounds.height);
-
-            Some(ContentTransitionHint::ViewportScrolled {
-                window_id: curr.window_id,
-                region,
-                direction: direction.transition_direction(),
-                scroll_distance: scroll_px,
-            })
-        }
+    let bounds_moved = (prev.bounds.x - curr.bounds.x).abs() > GEOMETRY_STABILITY_EPSILON_PX
+        || (prev.bounds.y - curr.bounds.y).abs() > GEOMETRY_STABILITY_EPSILON_PX
+        || (prev.bounds.width - curr.bounds.width).abs() > GEOMETRY_STABILITY_EPSILON_PX
+        || (prev.bounds.height - curr.bounds.height).abs() > GEOMETRY_STABILITY_EPSILON_PX;
+    if bounds_moved {
+        return None;
     }
+
+    let buffer_changed =
+        prev.buffer_id != 0 && curr.buffer_id != 0 && prev.buffer_id != curr.buffer_id;
+    let metrics_changed =
+        (prev.char_height - curr.char_height).abs() > CHAR_HEIGHT_STABILITY_EPSILON_PX;
+    if !buffer_changed && !metrics_changed {
+        return None;
+    }
+
+    Some(ContentTransitionHint::BufferReplaced {
+        target: BufferTransitionTarget::Window {
+            window_id: curr.window_id,
+            region: current_region,
+        },
+        intent: ContentTransitionIntent::Replace,
+    })
 }
 
 impl FrameGlyphBuffer {
