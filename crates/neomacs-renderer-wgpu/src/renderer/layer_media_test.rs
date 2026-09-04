@@ -8,13 +8,15 @@ use super::video_quad_vertices;
 #[test]
 fn inline_webview_uses_the_explicit_browser_identity() {
     let mut glyphs = neomacs_display_protocol::FrameGlyphBuffer::new();
+    let content = neomacs_display_protocol::XwidgetContentExtent::new(320.0, 200.0)
+        .expect("valid xwidget content extent");
     glyphs.add_xwidget(
         neomacs_display_protocol::XwidgetId::new(7),
         neomacs_display_protocol::WebViewId::new(91),
         0.0,
         0.0,
+        content,
         320.0,
-        200.0,
     );
 
     assert_eq!(
