@@ -10,14 +10,18 @@ import {
 class FakeEventTarget {
   constructor() {
     this.listeners = new Map();
+    this.listenerOptions = new Map();
     this.value = "";
     this.focusCalls = 0;
   }
 
-  addEventListener(type, listener) {
+  addEventListener(type, listener, options) {
     const listeners = this.listeners.get(type) ?? [];
     listeners.push(listener);
     this.listeners.set(type, listeners);
+    const optionList = this.listenerOptions.get(type) ?? [];
+    optionList.push(options);
+    this.listenerOptions.set(type, optionList);
   }
 
   removeEventListener(type, listener) {
@@ -209,9 +213,10 @@ test("page lifecycle emits at most one typed close request", () => {
   }]]);
 });
 
-test("pointer activation restores the browser text service focus", () => {
+test("pointer activation restores text focus after canvas target handlers", () => {
   const { root, textInput } = harness();
 
+  assert.deepEqual(root.listenerOptions.get("pointerdown"), [false]);
   root.dispatch("pointerdown");
 
   assert.equal(textInput.focusCalls, 2);

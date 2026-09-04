@@ -138,7 +138,10 @@ export function installBrowserInput({
     focused: false,
     target: targetFrame(),
   }));
-  root.addEventListener("pointerdown", focusTextInput, true);
+  // Winit focuses its tabindex=0 canvas in the target phase. Restore the
+  // browser text service afterward so printable keys and IME commits keep
+  // flowing through the single text-committed path.
+  root.addEventListener("pointerdown", focusTextInput, false);
   root.addEventListener("pagehide", requestClose);
   root.addEventListener("beforeunload", requestClose);
 

@@ -249,6 +249,20 @@ class BrowserEditorHarness:
     def type_native_text(self, text: str) -> None:
         ActionChains(self.driver).send_keys(text).perform()
 
+    def click_editor_canvas(self) -> None:
+        canvas = self.driver.find_element("css selector", "canvas")
+        ActionChains(self.driver).move_to_element(canvas).click().perform()
+
+    def type_native_meta_prefix(self, key: str) -> None:
+        ActionChains(self.driver).key_down(Keys.ALT).send_keys(key).key_up(
+            Keys.ALT
+        ).perform()
+
+    def type_native_control_key(self, key: str) -> None:
+        ActionChains(self.driver).key_down(Keys.CONTROL).send_keys(key).key_up(
+            Keys.CONTROL
+        ).perform()
+
     def type_native_control_prefix(self, key: str, suffix: str) -> None:
         ActionChains(self.driver).key_down(Keys.CONTROL).send_keys(key).key_up(
             Keys.CONTROL
