@@ -27,6 +27,14 @@ pub enum SealFramePresentationError {
         available: PresentationId,
     },
     Spatial(PresentedHitError),
+    /// A presented window carried the `0` placeholder as its identity.
+    ///
+    /// Zero means "no window" across the display engine, and presentation
+    /// continuity keys on window identity: admitting it would let two unrelated
+    /// entries pair as the same window and be animated as one thing that moved.
+    PlaceholderWindowIdentity {
+        index: usize,
+    },
 }
 
 impl From<PresentedHitError> for SealFramePresentationError {
@@ -48,6 +56,13 @@ impl SealedFramePresentation {
                 expected: presentation,
                 available: placement.presentation(),
             });
+        }
+        if let Some(index) = state
+            .window_infos
+            .iter()
+            .position(|info| info.window_id == crate::types::DisplayWindowId::default())
+        {
+            return Err(SealFramePresentationError::PlaceholderWindowIdentity { index });
         }
         state.validate_spatial_projections()?;
         Ok(Self {
