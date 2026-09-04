@@ -205,14 +205,56 @@ pub(crate) fn reject_command(command: ClipboardCommand, error: String) {
     }
 }
 
+/// Process-local stand-in for a selection the platform clipboard does not
+/// expose.
+///
+/// GNU Emacs never rejects PRIMARY on a non-X platform.  The NS port maps it
+/// to a private pasteboard named "Selection" (emacs-31.0.90 src/nsselect.m:56
+/// and :547, `symbol_to_nsstring` / `nxatoms_of_nsselect`), which
+/// `ns-own-selection-internal` (:397-446) writes and `ns-get-selection`
+/// (:514-541) reads back, and the w32 port keeps it as a Lisp property
+/// (lisp/term/w32-win.el:364-367, :417-447).  Both are only visible to this
+/// Emacs, which is what this store reproduces.
+///
+/// Ledgered divergence: GNU NS also declares `ns_send_types` on the
+/// pasteboard and compares change counts to detect a foreign owner, since a
+/// named NSPasteboard is reachable by other processes that know its name.
+/// Neomacs does not expose that pasteboard, so a foreign owner cannot arise
+/// and the value lives in this process only.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Default)]
+struct PrivatePasteboard {
+    text: Option<String>,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl PrivatePasteboard {
+    /// Own the selection with `text`, or disown it with `None`
+    /// (`ns-disown-selection-internal`, nsselect.m:449-466).
+    fn store(&mut self, text: Option<&str>) {
+        self.text = text.map(str::to_owned);
+    }
+
+    fn load(&self) -> Option<String> {
+        self.text.clone()
+    }
+}
+
 struct ArboardClipboard {
     clipboard: Clipboard,
+    /// PRIMARY on platforms whose clipboard API has no such selection.
+    #[cfg(not(target_os = "linux"))]
+    primary: PrivatePasteboard,
 }
 
 impl ArboardClipboard {
     fn new() -> Result<Self, String> {
         Clipboard::new()
-            .map(|clipboard| Self { clipboard })
+            .map(|clipboard| Self {
+                clipboard,
+                #[cfg(not(target_os = "linux"))]
+                primary: PrivatePasteboard::default(),
+            })
             .map_err(|err| format!("failed to initialize the system clipboard: {err}"))
     }
 
@@ -255,7 +297,8 @@ impl ClipboardBackend for ArboardClipboard {
                     }
                     .map_err(|err| err.to_string()),
                     ClipboardSelection::Primary => {
-                        Err("PRIMARY selection is not supported on this platform".to_owned())
+                        self.primary.store(text);
+                        Ok(())
                     }
                 }
             }
@@ -274,9 +317,7 @@ impl ClipboardBackend for ArboardClipboard {
             _ => {
                 match selection {
                     ClipboardSelection::Clipboard => Self::text_result(self.clipboard.get_text()),
-                    ClipboardSelection::Primary => {
-                        Err("PRIMARY selection is not supported on this platform".to_owned())
-                    }
+                    ClipboardSelection::Primary => Ok(self.primary.load()),
                 }
             }
         }
@@ -563,5 +604,44 @@ mod tests {
             recorded_writes.try_recv(),
             Err(crossbeam_channel::TryRecvError::Empty)
         );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn private_pasteboard_round_trips_store_load_and_clear() {
+        let mut pasteboard = PrivatePasteboard::default();
+        assert_eq!(pasteboard.load(), None);
+
+        pasteboard.store(Some("selected"));
+        assert_eq!(pasteboard.load(), Some("selected".to_owned()));
+
+        pasteboard.store(Some("reselected"));
+        assert_eq!(pasteboard.load(), Some("reselected".to_owned()));
+
+        pasteboard.store(None);
+        assert_eq!(pasteboard.load(), None);
+    }
+
+    /// GNU's NS port keeps PRIMARY in a private pasteboard instead of
+    /// rejecting it (emacs-31.0.90 src/nsselect.m:56, :547), so every
+    /// region deactivation under `select-active-regions` must succeed here.
+    /// Only PRIMARY is touched: the system CLIPBOARD is left alone.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn arboard_backend_keeps_primary_in_a_private_pasteboard() {
+        let mut backend = ArboardClipboard::new().expect("system clipboard should open");
+
+        backend
+            .set_text(ClipboardSelection::Primary, Some("selected"))
+            .expect("PRIMARY store must not fail on this platform");
+        assert_eq!(
+            backend.text(ClipboardSelection::Primary),
+            Ok(Some("selected".to_owned()))
+        );
+
+        backend
+            .set_text(ClipboardSelection::Primary, None)
+            .expect("PRIMARY disown must not fail on this platform");
+        assert_eq!(backend.text(ClipboardSelection::Primary), Ok(None));
     }
 }
