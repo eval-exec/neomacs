@@ -94,6 +94,8 @@ pub(crate) struct FrameCompositor {
 #[derive(Default)]
 pub(in crate::render_thread) struct PendingContinuity {
     pub(in crate::render_thread) scrolls: Vec<continuity::ScrollObservation>,
+    /// Whether the frame's selection moved to another window.
+    pub(in crate::render_thread) selection: Option<continuity::selection::SelectionObservation>,
     /// Whether this frame's quality plan admits compositor-derived effects —
     /// the role `RenderFeaturePlan::accept_effect_hints` played for producer
     /// hints.

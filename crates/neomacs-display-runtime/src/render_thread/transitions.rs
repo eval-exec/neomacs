@@ -343,7 +343,6 @@ fn apply_effect_hint(
     effects: &neomacs_display_protocol::EffectsConfig,
     hint: &WindowEffectHint,
     now: neomacs_display_protocol::frame_time::EventTime,
-    frame_dirty: &mut bool,
     width: u32,
     height: u32,
 ) {
@@ -410,12 +409,6 @@ fn apply_effect_hint(
                 );
             }
         }
-        WindowEffectHint::WindowSwitchFade { window_id, bounds } => {
-            if effects.window_switch_fade.enabled {
-                renderer.start_window_fade(window_id.get(), *bounds);
-                *frame_dirty = true;
-            }
-        }
         WindowEffectHint::ThemeTransition { bounds } => {
             if !effects.theme_transition.enabled {
                 return;
@@ -466,6 +459,13 @@ pub(super) fn detect_frame_transitions(
     }
     // Scroll transitions come from a measurement the compositor made when the
     // presentation was installed, not from anything the producer declared.
+    if pending.accept_derived_effects
+        && let Some(selection) = pending.selection
+        && effects.window_switch_fade.enabled
+    {
+        renderer.start_window_fade(selection.window.get(), selection.bounds);
+        *frame_dirty = true;
+    }
     for scroll in &pending.scrolls {
         let Some(planned) = plan_scroll(&transitions.policy, scroll) else {
             continue;
@@ -483,16 +483,7 @@ pub(super) fn detect_frame_transitions(
         );
     }
     for hint in &effect_hints {
-        apply_effect_hint(
-            renderer,
-            transitions,
-            effects,
-            hint,
-            now,
-            frame_dirty,
-            width,
-            height,
-        );
+        apply_effect_hint(renderer, transitions, effects, hint, now, width, height);
     }
 }
 

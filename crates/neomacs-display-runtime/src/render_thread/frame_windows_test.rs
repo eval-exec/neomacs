@@ -646,7 +646,7 @@ fn frame_render_state_drains_runtime_hints_once_for_render_clone() {
         },
         intent: neomacs_display_protocol::ContentTransitionIntent::Replace,
     });
-    frame.add_effect_hint(WindowEffectHint::WindowSwitchFade {
+    frame.add_effect_hint(WindowEffectHint::TextFadeIn {
         window_id: neomacs_display_protocol::types::DisplayWindowId::new(7),
         bounds: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 80.0, 80.0),
     });

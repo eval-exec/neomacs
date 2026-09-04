@@ -534,27 +534,6 @@ fn frame_line_animation_request_uses_cursor_y_for_buffer_size_change() {
 }
 
 #[test]
-fn frame_window_switch_request_emits_fade_from_previous_selection() {
-    let params = window_params();
-    let info = window_info(&params);
-    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
-    builder.add_output_window_info(info.clone());
-    install_skipped_geometry(&mut builder, info.window_id, info.bounds);
-
-    FrameWindowSwitchHintRenderRequest::new(Some(DisplayWindowId::new(7)))
-        .render_and_apply(FrameOutputTarget::from_builder(&mut builder));
-
-    let state = builder.finish(80, 24, 8.0, 16.0);
-    assert!(matches!(
-        state.effect_hints.as_slice(),
-        [WindowEffectHint::WindowSwitchFade {
-            window_id,
-            ..
-        }] if window_id.get() == 41
-    ));
-}
-
-#[test]
 fn frame_theme_transition_request_uses_content_height_before_minibuffer() {
     let params = window_params();
     let info = window_info(&params);

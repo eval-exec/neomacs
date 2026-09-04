@@ -10,6 +10,7 @@
 //! replacement was a navigation, for instance).
 
 pub(in crate::render_thread) mod scroll;
+pub(in crate::render_thread) mod selection;
 
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_display_protocol::frame_glyphs::BufferViewportRegion;
@@ -109,5 +110,22 @@ impl GuiFrameRenderState {
         let mut pending = std::mem::take(&mut self.compositor.pending);
         pending.accept_derived_effects = accept_derived_effects;
         pending
+    }
+}
+
+impl GuiFrameRenderState {
+    /// Record whether the frame's selection moved into the presentation being
+    /// installed. Runs beside `measure_scroll`, for the same reason: the
+    /// outgoing presentation is about to be replaced.
+    pub(in crate::render_thread) fn observe_selection_change(
+        &mut self,
+        next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
+    ) {
+        self.compositor.pending.selection = match (self.compositor.current_frame.as_ref(), next) {
+            (Some(previous), Some(next)) => {
+                selection::observe_selection(&previous.window_infos, &next.window_infos)
+            }
+            _ => None,
+        };
     }
 }

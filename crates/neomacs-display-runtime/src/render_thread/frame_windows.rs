@@ -868,6 +868,7 @@ impl GuiFrameRenderState {
         // Measure viewport motion against the presentation being replaced,
         // while both sets of anchors are still in hand.
         self.measure_scroll(frame.as_ref(), &scroll_anchors);
+        self.observe_selection_change(frame.as_ref());
         self.compositor.scroll_anchors = scroll_anchors;
         let before = self.active_pointer_damage();
         let previous_presentation = self
