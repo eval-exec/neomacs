@@ -106,6 +106,171 @@ pub(super) enum CapturedFrame {
     DmaBuf(DmaBufData),
 }
 
+const MAX_WPE_BUFFER_DIMENSION: u32 = 8_192;
+const SOFTWARE_PIXEL_BYTES_PER_PIXEL: usize = 4;
+const MAX_SOFTWARE_FRAME_BYTES: usize = MAX_WPE_BUFFER_DIMENSION as usize
+    * MAX_WPE_BUFFER_DIMENSION as usize
+    * SOFTWARE_PIXEL_BYTES_PER_PIXEL;
+
+/// Validated memory layout for a software frame borrowed from WPE.
+///
+/// WPE's DMA-BUF fallback may pad each row, so imported bytes are not assumed
+/// to be tightly packed. The constructor validates every value derived from
+/// foreign metadata before Rust creates a slice or allocates a destination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SoftwarePixelLayout {
+    width: usize,
+    height: usize,
+    stride: usize,
+    packed_len: usize,
+}
+
+impl SoftwarePixelLayout {
+    fn new(width: u32, height: u32, byte_len: usize) -> Result<Self, SoftwarePixelLayoutError> {
+        let width = width as usize;
+        let height = height as usize;
+
+        if byte_len > MAX_SOFTWARE_FRAME_BYTES {
+            return Err(SoftwarePixelLayoutError::ExceedsFrameLimit {
+                actual: byte_len,
+                maximum: MAX_SOFTWARE_FRAME_BYTES,
+            });
+        }
+        if height == 0 {
+            return Err(SoftwarePixelLayoutError::PartialRow { byte_len, height });
+        }
+        if !byte_len.is_multiple_of(height) {
+            return Err(SoftwarePixelLayoutError::PartialRow { byte_len, height });
+        }
+
+        let stride = byte_len / height;
+        let minimum_stride = width
+            .checked_mul(SOFTWARE_PIXEL_BYTES_PER_PIXEL)
+            .ok_or(SoftwarePixelLayoutError::DimensionOverflow)?;
+        if stride < minimum_stride {
+            return Err(SoftwarePixelLayoutError::StrideTooShort {
+                actual: stride,
+                minimum: minimum_stride,
+            });
+        }
+
+        let packed_len = minimum_stride
+            .checked_mul(height)
+            .ok_or(SoftwarePixelLayoutError::DimensionOverflow)?;
+        Ok(Self {
+            width,
+            height,
+            stride,
+            packed_len,
+        })
+    }
+
+    const fn stride(self) -> usize {
+        self.stride
+    }
+
+    const fn packed_len(self) -> usize {
+        self.packed_len
+    }
+
+    fn copy_bgra_opaque(self, source: &[u8]) -> Vec<u8> {
+        debug_assert_eq!(source.len(), self.stride * self.height);
+
+        let mut packed = Vec::with_capacity(self.packed_len());
+        for row in source.chunks_exact(self.stride).take(self.height) {
+            for pixel in row[..self.width * SOFTWARE_PIXEL_BYTES_PER_PIXEL].chunks_exact(4) {
+                packed.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+        }
+        packed
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+enum SoftwarePixelLayoutError {
+    #[error("software pixel dimensions overflow addressable memory")]
+    DimensionOverflow,
+    #[error("software pixel import has {actual} bytes; supported frames use at most {maximum}")]
+    ExceedsFrameLimit { actual: usize, maximum: usize },
+    #[error("software pixel import length {byte_len} does not contain {height} complete rows")]
+    PartialRow { byte_len: usize, height: usize },
+    #[error("software pixel row stride {actual} is shorter than {minimum}")]
+    StrideTooShort { actual: usize, minimum: usize },
+}
+
+/// A WPE buffer borrowed from the native render callback.
+///
+/// This is a pointer token rather than `&WPEBuffer`: importing pixels may
+/// mutate WPE's internal cache, so representing the foreign object as a Rust
+/// shared reference would promise an aliasing guarantee that the C API does
+/// not make.
+struct BorrowedWpeBuffer(NonNull<plat::WPEBuffer>);
+
+impl BorrowedWpeBuffer {
+    unsafe fn from_render_callback(buffer: *mut plat::WPEBuffer) -> Self {
+        Self(NonNull::new_unchecked(buffer))
+    }
+
+    unsafe fn import_pixels(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<BorrowedWpePixels<'_>, SoftwarePixelImportError> {
+        let mut error: *mut plat::GError = ptr::null_mut();
+        let bytes = plat::wpe_buffer_import_to_pixels(self.0.as_ptr(), &mut error);
+
+        if bytes.is_null() {
+            let message = if error.is_null() {
+                "pixel import failed without an error".to_owned()
+            } else {
+                let message = CStr::from_ptr((*error).message)
+                    .to_string_lossy()
+                    .into_owned();
+                plat::g_error_free(error);
+                message
+            };
+            return Err(SoftwarePixelImportError::Native(message));
+        }
+
+        let mut byte_len: plat::gsize = 0;
+        let data = plat::g_bytes_get_data(bytes, &mut byte_len);
+        if data.is_null() || byte_len == 0 {
+            return Err(SoftwarePixelImportError::Empty);
+        }
+
+        let byte_len = byte_len as usize;
+        let layout = SoftwarePixelLayout::new(width, height, byte_len)?;
+        let bytes = std::slice::from_raw_parts(data.cast(), byte_len);
+        Ok(BorrowedWpePixels { bytes, layout })
+    }
+}
+
+/// Pixels borrowed from a WPE buffer for the duration of the render callback.
+///
+/// `wpe_buffer_import_to_pixels` returns `(transfer none)`: the `GBytes` and
+/// its storage remain owned by `WPEBuffer`. Binding the resulting Rust slice
+/// to [`BorrowedWpeBuffer`] prevents it from escaping that borrow.
+struct BorrowedWpePixels<'buffer> {
+    bytes: &'buffer [u8],
+    layout: SoftwarePixelLayout,
+}
+
+impl<'buffer> BorrowedWpePixels<'buffer> {
+    fn into_bgra_opaque(self) -> Vec<u8> {
+        self.layout.copy_bgra_opaque(self.bytes)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SoftwarePixelImportError {
+    #[error("{0}")]
+    Native(String),
+    #[error("software pixel import returned no data")]
+    Empty,
+    #[error(transparent)]
+    Layout(#[from] SoftwarePixelLayoutError),
+}
+
 /// Reactor-local acknowledgement for one buffer accepted by our custom
 /// `WPEView::render_buffer` implementation.
 ///
@@ -964,7 +1129,11 @@ unsafe fn capture_render_buffer(
     let width = plat::wpe_buffer_get_width(buffer) as u32;
     let height = plat::wpe_buffer_get_height(buffer) as u32;
 
-    if width == 0 || height == 0 || width > 8192 || height > 8192 {
+    if width == 0
+        || height == 0
+        || width > MAX_WPE_BUFFER_DIMENSION
+        || height > MAX_WPE_BUFFER_DIMENSION
+    {
         tracing::warn!(
             "render_buffer_callback: invalid dimensions {}x{}",
             width,
@@ -1064,91 +1233,26 @@ unsafe fn capture_pixels(
 ) -> Option<CapturedFrame> {
     tracing::trace!("render_buffer_callback: capturing software pixels");
 
-    let mut error: *mut plat::GError = ptr::null_mut();
-    let bytes = plat::wpe_buffer_import_to_pixels(buffer, &mut error);
-
-    if bytes.is_null() {
-        if !error.is_null() {
-            let msg = std::ffi::CStr::from_ptr((*error).message).to_string_lossy();
-            tracing::warn!("render_buffer_callback: pixel import failed: {}", msg);
-            plat::g_error_free(error);
-        } else {
-            tracing::warn!("render_buffer_callback: pixel import failed without an error");
+    let borrowed_buffer = BorrowedWpeBuffer::from_render_callback(buffer);
+    let imported = match borrowed_buffer.import_pixels(width, height) {
+        Ok(imported) => imported,
+        Err(error) => {
+            tracing::warn!("render_buffer_callback: {error}");
+            return None;
         }
-        return None;
-    }
-
-    let mut size: plat::gsize = 0;
-    let data = plat::g_bytes_get_data(bytes, &mut size);
-
-    if data.is_null() || size == 0 {
-        tracing::warn!("render_buffer_callback: empty pixel data");
-        plat::g_bytes_unref(bytes);
-        return None;
-    }
-
-    let size = size as usize;
-    let expected_size = (width * height * 4) as usize;
-    if size < expected_size {
-        tracing::warn!(
-            "render_buffer_callback: pixel data too small {} < {} for {}x{}",
-            size,
-            expected_size,
-            width,
-            height
-        );
-        plat::g_bytes_unref(bytes);
-        return None;
-    }
-
-    // Copy pixel data before callback returns
-    let pixel_data: Vec<u8> = std::slice::from_raw_parts(data as *const u8, size).to_vec();
-    plat::g_bytes_unref(bytes);
-
-    // Calculate actual stride from buffer size.
-    // wpe_buffer_import_to_pixels may return data with GPU-aligned stride
-    // (e.g., 832*4=3328 for a 784px-wide image padded to 64-pixel alignment).
-    let actual_stride = size / (height as usize);
-    let min_stride = (width as usize) * 4;
-    if actual_stride < min_stride {
-        tracing::warn!(
-            "render_buffer_callback: stride {} < min {} for width {}",
-            actual_stride,
-            min_stride,
-            width
-        );
-        return None;
-    }
+    };
     tracing::debug!(
         "render_buffer_callback: pixel data size={}, {}x{}, stride={} (min={})",
-        size,
+        imported.bytes.len(),
         width,
         height,
-        actual_stride,
-        min_stride
+        imported.layout.stride(),
+        width as usize * SOFTWARE_PIXEL_BYTES_PER_PIXEL
     );
 
     // Cairo ARGB32 / XRGB8888 format: bytes in memory [B, G, R, A/X] on little-endian.
     // Target: BGRA for wgpu Bgra8UnormSrgb — same byte order, just force alpha=255.
-    let mut pixels_with_alpha: Vec<u8> = Vec::with_capacity(expected_size);
-    for row in 0..(height as usize) {
-        let row_start = row * actual_stride;
-        for col in 0..(width as usize) {
-            let offset = row_start + col * 4;
-            if offset + 3 >= pixel_data.len() {
-                tracing::warn!(
-                    "render_buffer_callback: pixel data underflow at row={} col={}",
-                    row,
-                    col
-                );
-                return None;
-            }
-            pixels_with_alpha.push(pixel_data[offset]); // B
-            pixels_with_alpha.push(pixel_data[offset + 1]); // G
-            pixels_with_alpha.push(pixel_data[offset + 2]); // R
-            pixels_with_alpha.push(255); // A (force opaque)
-        }
-    }
+    let pixels_with_alpha = imported.into_bgra_opaque();
 
     Some(CapturedFrame::Pixels(RawFrameData {
         pixels: pixels_with_alpha,
@@ -1289,5 +1393,62 @@ mod guard_tests {
         // Exercises the String (owned) payload downcast branch.
         let neutral = guard_wpe_callback("test", -1, || panic!("{}", String::from("dynamic")));
         assert_eq!(neutral, -1);
+    }
+}
+
+#[cfg(test)]
+mod software_pixel_tests {
+    use super::{SoftwarePixelLayout, SoftwarePixelLayoutError};
+
+    #[test]
+    fn pixel_layout_accepts_padded_rows() {
+        let layout = SoftwarePixelLayout::new(784, 2, 6_656).unwrap();
+
+        assert_eq!(layout.stride(), 3_328);
+        assert_eq!(layout.packed_len(), 6_272);
+    }
+
+    #[test]
+    fn pixel_copy_discards_row_padding_and_forces_opaque_alpha() {
+        let layout = SoftwarePixelLayout::new(1, 2, 16).unwrap();
+        let imported = [1, 2, 3, 4, 90, 91, 92, 93, 5, 6, 7, 8, 94, 95, 96, 97];
+
+        assert_eq!(
+            layout.copy_bgra_opaque(&imported),
+            [1, 2, 3, 255, 5, 6, 7, 255]
+        );
+    }
+
+    #[test]
+    fn pixel_layout_rejects_an_import_larger_than_any_supported_frame() {
+        assert_eq!(
+            SoftwarePixelLayout::new(1_280, 1_122, 1_342_003_188_534_479_329),
+            Err(SoftwarePixelLayoutError::ExceedsFrameLimit {
+                actual: 1_342_003_188_534_479_329,
+                maximum: 268_435_456,
+            })
+        );
+    }
+
+    #[test]
+    fn pixel_layout_rejects_partial_rows() {
+        assert_eq!(
+            SoftwarePixelLayout::new(2, 2, 17),
+            Err(SoftwarePixelLayoutError::PartialRow {
+                byte_len: 17,
+                height: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn pixel_layout_rejects_short_rows() {
+        assert_eq!(
+            SoftwarePixelLayout::new(2, 2, 8),
+            Err(SoftwarePixelLayoutError::StrideTooShort {
+                actual: 4,
+                minimum: 8,
+            })
+        );
     }
 }
