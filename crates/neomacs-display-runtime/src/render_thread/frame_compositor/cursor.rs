@@ -7,6 +7,7 @@
 //! Paths here are absolute on purpose: `super::cursor` inside this module
 //! would resolve to this file, not to `render_thread::cursor`.
 
+use neomacs_display_protocol::frame_time::EventTime;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -80,12 +81,12 @@ impl GuiFrameRenderState {
         &mut self,
         x: f32,
         y: f32,
-        now: Instant,
+        now: EventTime,
         duration_ms: u32,
     ) {
         self.compositor
             .renderer_effects
-            .trigger_click_halo(x, y, now, duration_ms);
+            .trigger_click_halo(x, y, now.into_instant(), duration_ms);
         self.compositor.dirty = true;
     }
 

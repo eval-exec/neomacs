@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Instant;
 
+use neomacs_display_protocol::frame_time::EventTime;
+
 use winit::dpi::{LogicalSize, PhysicalSize, Size};
 
 use crate::clipboard::ClipboardService;
@@ -256,22 +258,28 @@ pub(super) struct FpsCounter {
 #[derive(Default)]
 pub(super) struct TypingSpeedState {
     /// Key press timestamps for WPM calculation.
-    pub(super) key_press_times: Vec<Instant>,
+    pub(super) key_press_times: Vec<EventTime>,
     /// Smoothed WPM value for display.
     pub(super) displayed_wpm: f32,
 }
 
 /// Idle dim overlay state for one native GUI frame window.
 pub(super) struct IdleDimState {
-    pub(super) last_activity_time: Instant,
+    pub(super) last_activity_time: EventTime,
     pub(super) current_alpha: f32,
     pub(super) active: bool,
 }
 
-impl Default for IdleDimState {
-    fn default() -> Self {
+impl IdleDimState {
+    /// Idle state for a window that has just been created.
+    ///
+    /// There is no `Default`: "no activity recorded" has no honest zero value.
+    /// Seeding with `None` and treating it as "idle forever" would dim a
+    /// freshly-opened window immediately, so creation counts as activity and
+    /// the caller must say when it happened.
+    pub(super) fn new(at: EventTime) -> Self {
         Self {
-            last_activity_time: Instant::now(),
+            last_activity_time: at,
             current_alpha: 0.0,
             active: false,
         }
@@ -342,7 +350,11 @@ pub(super) struct WindowChrome {
     pub(super) title: String,
     pub(super) titlebar_height: f32,
     pub(super) titlebar_hover: u32,
-    pub(super) last_titlebar_click: Instant,
+    /// When the titlebar was last clicked, for double-click detection.
+    /// `None` until the first click: a window has not been clicked at creation,
+    /// and pretending otherwise made the first click within the double-click
+    /// interval of opening a window maximize it instead of dragging it.
+    pub(super) last_titlebar_click: Option<EventTime>,
     pub(super) is_fullscreen: bool,
     pub(super) corner_radius: f32,
 }
@@ -356,7 +368,7 @@ impl Default for WindowChrome {
             title: String::from("neomacs"),
             titlebar_height: 30.0,
             titlebar_hover: 0,
-            last_titlebar_click: Instant::now(),
+            last_titlebar_click: None,
             is_fullscreen: false,
             corner_radius: 0.0,
         }
@@ -966,7 +978,11 @@ impl RenderApp {
                 },
                 geometry_hints: None,
             },
-            render: GuiFrameRenderState::new_without_device(0, false),
+            render: GuiFrameRenderState::new_without_device(
+                0,
+                false,
+                neomacs_display_protocol::frame_time::observe_platform_now(),
+            ),
         });
 
         let requested_visual_config = VisualConfig::default();

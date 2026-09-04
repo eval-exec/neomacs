@@ -107,9 +107,7 @@ impl RenderApp {
         }
         let now = neomacs_display_protocol::frame_time::observe_platform_now();
         if let Some(window_state) = self.frame_windows.get_by_winit_mut(window_id) {
-            window_state
-                .render
-                .record_typing_keypress(now.into_instant());
+            window_state.render.record_typing_keypress(now);
         }
     }
 
@@ -119,7 +117,7 @@ impl RenderApp {
         }
         let now = neomacs_display_protocol::frame_time::observe_platform_now();
         if let Some(window_state) = self.frame_windows.get_by_winit_mut(window_id) {
-            window_state.render.record_idle_activity(now.into_instant());
+            window_state.render.record_idle_activity(now);
         }
     }
 

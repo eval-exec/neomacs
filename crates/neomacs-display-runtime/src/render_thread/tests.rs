@@ -827,6 +827,7 @@ fn adopt_primary_window_command_updates_existing_primary_render_state_identity()
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
@@ -859,6 +860,7 @@ fn adopted_primary_frame_id_targets_primary_popup_menu() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
@@ -909,6 +911,7 @@ fn primary_tooltip_command_marks_render_state_dirty() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
@@ -954,6 +957,7 @@ fn hide_popup_menu_marks_primary_chrome_dirty_without_popup() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
@@ -1000,6 +1004,7 @@ fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
@@ -1049,6 +1054,7 @@ fn tooltip_for_unknown_secondary_does_not_fall_back_to_primary() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
@@ -1094,6 +1100,7 @@ fn adopted_primary_frame_id_targets_primary_visual_bell() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
@@ -1120,8 +1127,15 @@ fn adopted_primary_frame_id_targets_primary_visual_bell() {
 
 #[test]
 fn managed_primary_visual_bell_uses_frame_renderer_effects() {
-    let mut render = make_test_device()
-        .map(|device| super::frame_windows::GuiFrameRenderState::new(0x1000, &device, 1.0, false));
+    let mut render = make_test_device().map(|device| {
+        super::frame_windows::GuiFrameRenderState::new(
+            0x1000,
+            &device,
+            1.0,
+            false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        )
+    });
     let Some(render) = render.as_mut() else {
         return;
     };
@@ -1148,7 +1162,12 @@ fn managed_primary_visual_bell_uses_frame_renderer_effects() {
     );
     render.compositor.current_frame = Some(frame);
 
-    render.trigger_visual_bell(true, true, 120, std::time::Instant::now());
+    render.trigger_visual_bell(
+        true,
+        true,
+        120,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
 
     assert!(render.overlays.visual_bell_start.is_some());
     assert!(render.compositor.renderer_effects.has_transient_effects());
@@ -1168,6 +1187,7 @@ fn adopted_primary_pointer_target_uses_real_frame_id() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
@@ -1209,6 +1229,7 @@ fn unknown_secondary_frame_snapshot_does_not_fall_back_to_primary() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;
