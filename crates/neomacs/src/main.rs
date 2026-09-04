@@ -187,6 +187,7 @@ use neovm_core::emacs_core::eval::{
     WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{ImageCatalog, ImageResolveRequest, ReadyImage};
+use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::load::{
     LoadupDumpInvocation, LoadupDumpMode, LoadupInvocation, RuntimeImageRole,
     find_file_in_load_path, get_load_path, load_file,
@@ -197,6 +198,7 @@ use neovm_core::emacs_core::terminal::pure::{
     TerminalRuntimeConfig, configure_terminal_runtime, ensure_terminal_runtime_owner,
     reset_terminal_host, reset_terminal_runtime, set_terminal_host,
 };
+use neovm_core::emacs_core::value::list_length;
 use neovm_core::emacs_core::{
     Context, DisplayHost, GraphicalFaceAttribute, GuiFrameHostRequest, PopupMenuRequest,
 };
@@ -2899,16 +2901,22 @@ fn initialize_reused_gui_startup_frame(eval: &mut Context, frame_id: FrameId) {
     sync_selected_gui_chrome_state(eval);
 }
 
+/// GNU `tool-bar-mode` (tool-bar.el) runs `tool-bar-setup` once, when the
+/// mode is enabled on a graphic display and the default `tool-bar-map` is
+/// still the empty `(keymap)` it was created with. Neomacs creates the host
+/// GUI frame before Lisp startup, so that one-time check is re-asked at the
+/// chrome sync instead. It runs on every published frame, so it is three
+/// direct reads rather than a parsed and evaluated probe form.
 fn ensure_gnu_tool_bar_setup(eval: &mut Context) {
-    let needs_setup = match eval.eval_str(
-        "(and (fboundp 'tool-bar-setup) tool-bar-mode (= 1 (length (default-value 'tool-bar-map))))",
-    ) {
-        Ok(value) => value.is_truthy(),
-        Err(err) => {
-            tracing::warn!("failed probing tool-bar setup state: {err}");
-            false
-        }
-    };
+    let needs_setup = eval.obarray().fboundp("tool-bar-setup")
+        && eval
+            .obarray()
+            .symbol_value("tool-bar-mode")
+            .is_some_and(|value| value.is_truthy())
+        && eval
+            .obarray()
+            .default_value_id(intern("tool-bar-map"))
+            .is_some_and(|map| list_length(map) == Some(1));
     if !needs_setup {
         return;
     }
