@@ -841,6 +841,33 @@ fn published_nix_release_can_be_backfilled_without_recreating_the_github_release
 }
 
 #[test]
+fn portable_frontend_ci_reuses_one_runtime_bundle_and_smokes_packaged_wasm() {
+    let workflow = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/workflows/ci.yml"
+    ));
+
+    let assets = github_workflow_job(workflow, "portable-runtime-assets");
+    assert!(assets.contains("fresh-build --release --portable-seed"));
+    assert!(assets.contains("package-portable-assets"));
+    assert!(assets.contains("name: neomacs-portable-runtime-assets"));
+
+    let android = github_workflow_job(workflow, "android-package");
+    assert!(android.contains("needs: portable-runtime-assets"));
+    assert!(android.contains("name: neomacs-portable-runtime-assets"));
+    assert!(!android.contains("fresh-build --release --portable-seed"));
+
+    let wasm = github_workflow_job(workflow, "wasm-browser-smoke");
+    assert!(wasm.contains("needs: [portable-runtime-assets, neomacs-workspace-test-archive]"));
+    assert!(wasm.contains("package(neomacs-wasm-protocol)"));
+    assert!(wasm.contains("node --test crates/neomacs-wasm/web/*.test.mjs"));
+    assert!(wasm.contains("cargo xtask build-wasm"));
+    assert!(wasm.contains("browser_opfs_smoke.py"));
+    assert!(wasm.contains("--headless"));
+    assert!(!wasm.contains("--enable-unsafe-webgpu"));
+}
+
+#[test]
 #[cfg(unix)]
 fn linux_ci_setup_profiles_expose_capabilities_and_reject_unknown_profiles() {
     let repo_root = repository_root();

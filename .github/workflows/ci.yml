@@ -375,9 +375,54 @@ jobs:
       - name: Check portable frontend
         run: cargo check -p ${{ matrix.product }} --target ${{ matrix.target }}
 
+  portable-runtime-assets:
+    name: portable runtime assets (linux x86_64)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+
+      - name: Prepare workspace temp directory
+        run: mkdir -p "$TMPDIR"
+
+      - *install_linux_deps
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+          cache-key: ci-portable-runtime-assets-linux-x86_64
+
+      - name: Build portable runtime image
+        run: >-
+          cargo xtask fresh-build --release --portable-seed
+          --portable-runtime-image "$TMPDIR/neomacs.portable" --low-memory
+
+      - name: Package portable runtime assets
+        run: >-
+          cargo xtask package-portable-assets
+          --portable-runtime-image "$TMPDIR/neomacs.portable"
+          --output-dir "$TMPDIR/neomacs-portable-assets"
+
+      - name: Upload portable runtime assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: neomacs-portable-runtime-assets
+          path: ${{ env.TMPDIR }}/neomacs-portable-assets
+          if-no-files-found: error
+          retention-days: 1
+
   android-package:
     name: assembled Android package (arm64-v8a)
     if: github.event_name != 'schedule'
+    needs: portable-runtime-assets
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -420,16 +465,11 @@ jobs:
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$toolchain/aarch64-linux-android24-clang"
           } >> "$GITHUB_ENV"
 
-      - name: Build portable runtime image
-        run: >-
-          cargo xtask fresh-build --release --portable-seed
-          --portable-runtime-image "$TMPDIR/neomacs.portable" --low-memory
-
-      - name: Package portable runtime assets
-        run: >-
-          cargo xtask package-portable-assets
-          --portable-runtime-image "$TMPDIR/neomacs.portable"
-          --output-dir "$TMPDIR/neomacs-android-assets"
+      - name: Download portable runtime assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: neomacs-portable-runtime-assets
+          path: ${{ env.TMPDIR }}/neomacs-portable-assets
 
       - name: Build Android native library
         env:
@@ -443,14 +483,122 @@ jobs:
           android_project="$GITHUB_WORKSPACE/crates/neomacs-android/android"
           "$android_project/gradlew" --no-daemon -p "$android_project" \
             -PneomacsNativeLibrary="$GITHUB_WORKSPACE/target/aarch64-linux-android/release/libneomacs_android.so" \
-            -PneomacsPortableAssets="$TMPDIR/neomacs-android-assets" \
+            -PneomacsPortableAssets="$TMPDIR/neomacs-portable-assets" \
             assembleRelease
 
       - name: Verify assembled Android package
         run: >-
           cargo xtask verify-android-apk
           --apk crates/neomacs-android/android/app/build/outputs/apk/release/app-release-unsigned.apk
-          --portable-assets "$TMPDIR/neomacs-android-assets"
+          --portable-assets "$TMPDIR/neomacs-portable-assets"
+
+  wasm-browser-smoke:
+    name: packaged browser smoke (Chrome x86_64)
+    if: github.event_name != 'schedule'
+    needs: [portable-runtime-assets, neomacs-workspace-test-archive]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+
+      - name: Prepare workspace temp directory
+        run: mkdir -p "$TMPDIR/nextest" "$TMPDIR/browser-smoke-artifacts"
+
+      - *install_linux_deps
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-wasm-browser-smoke-wasm32
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+          target: wasm32-unknown-unknown
+
+      - name: Download portable runtime assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: neomacs-portable-runtime-assets
+          path: ${{ env.TMPDIR }}/neomacs-portable-assets
+
+      - name: Download workspace test archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: neomacs-workspace-tests-nextest-archive-linux-x86_64
+          path: .
+
+      - name: Run browser adapter Rust contracts
+        run: |
+          cargo nextest run \
+            --archive-file neomacs-workspace-tests.tar.zst \
+            --extract-to "$TMPDIR/nextest" \
+            -E 'package(neomacs-wasm)|package(neomacs-wasm-protocol)|package(neomacs-wasm-worker)' \
+            --workspace-remap "$GITHUB_WORKSPACE" \
+            --no-fail-fast
+
+      - name: Run browser adapter JavaScript contracts
+        run: node --test crates/neomacs-wasm/web/*.test.mjs
+
+      - name: Assemble browser distribution
+        run: >-
+          cargo xtask build-wasm
+          --portable-assets "$TMPDIR/neomacs-portable-assets"
+          --output-dir "$TMPDIR/neomacs-wasm-dist"
+
+      - name: Install browser smoke test dependencies
+        run: |
+          python3 -m venv "$TMPDIR/browser-smoke-venv"
+          "$TMPDIR/browser-smoke-venv/bin/pip" install \
+            --disable-pip-version-check \
+            -r crates/neomacs-wasm/tests/requirements.txt
+
+      - name: Verify hosted browser toolchain
+        run: |
+          command -v google-chrome
+          command -v chromedriver
+          google-chrome --version
+          chromedriver --version
+
+      - name: Exercise packaged editor in default Chrome
+        run: |
+          python3 -m http.server 4174 \
+            --bind 127.0.0.1 \
+            --directory "$TMPDIR/neomacs-wasm-dist" \
+            >"$TMPDIR/neomacs-wasm-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          ready=false
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4174/ >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+
+          "$TMPDIR/browser-smoke-venv/bin/python" \
+            crates/neomacs-wasm/tests/browser_opfs_smoke.py \
+            --headless \
+            --url http://127.0.0.1:4174/ \
+            --artifacts-dir "$TMPDIR/browser-smoke-artifacts"
+
+      - name: Upload browser smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: neomacs-wasm-browser-smoke-${{ github.run_id }}
+          path: |
+            ${{ env.TMPDIR }}/neomacs-wasm-http.log
+            ${{ env.TMPDIR }}/browser-smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 14
 
   linux-no-gstreamer-startup:
     name: startup without GStreamer (linux x86_64)
