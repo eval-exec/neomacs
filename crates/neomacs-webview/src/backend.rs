@@ -1,7 +1,9 @@
 use neomacs_display_protocol::WebViewId;
 
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+use crate::LoadPhase;
 use crate::{
-    BrowsingRelationship, FocusIntent, HistoryAction, HostWindowId, LoadPhase, NavigationTarget,
+    BrowsingRelationship, FocusIntent, HistoryAction, HostWindowId, NavigationTarget,
     ResolvedWebViewPlacement, ScriptRequest, StoragePartition, WebContentSize, WebViewEvent,
     WebViewFrame, WebViewGeneration, WebViewInput, WebViewPolicy,
 };
