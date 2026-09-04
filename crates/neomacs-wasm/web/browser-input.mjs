@@ -28,8 +28,6 @@ export function observeBrowserViewport(browser) {
 export function observeBrowserEditorGeometry(browser) {
   return {
     ...observeBrowserViewport(browser),
-    character_width: 8,
-    character_height: 16,
     font_pixel_size: 16,
   };
 }
