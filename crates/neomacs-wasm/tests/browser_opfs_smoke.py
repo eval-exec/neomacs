@@ -21,7 +21,19 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
 
-STARTUP_WARNING = "Unable to create `user-emacs-directory' (~/.emacs.d/)"
+STARTUP_WARNING_FRAGMENTS = (
+    "Unable to create `user-emacs-directory'",
+    "Any data that would normally be written there may be lost!",
+    "customize the variable `user-emacs-directory-warning'",
+)
+
+
+def startup_warning_rendered(frame_texts: list[str]) -> bool:
+    return any(
+        fragment in text
+        for text in frame_texts
+        for fragment in STARTUP_WARNING_FRAGMENTS
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,6 +84,7 @@ class BrowserEditorHarness:
             {
                 "source": """
                 globalThis.__neomacsLastFrame = null;
+                globalThis.__neomacsFrames = [];
                 globalThis.__neomacsMessages = [];
                 const NativeWorker = globalThis.Worker;
                 globalThis.Worker = class extends NativeWorker {
@@ -84,7 +97,12 @@ class BrowserEditorHarness:
                         message: event.data?.message,
                       });
                       if (event.data?.type === "frame") {
-                        globalThis.__neomacsLastFrame = event.data.payload.slice(0);
+                        const frame = event.data.payload.slice(0);
+                        globalThis.__neomacsLastFrame = frame;
+                        globalThis.__neomacsFrames.push(frame);
+                        if (globalThis.__neomacsFrames.length > 64) {
+                          globalThis.__neomacsFrames.shift();
+                        }
                       }
                     });
                   }
@@ -105,11 +123,8 @@ class BrowserEditorHarness:
             time.sleep(0.25)
         raise RuntimeError("browser did not become ready")
 
-    def frame_text(self) -> str:
-        values = self.driver.execute_script(
-            "return Array.from(new Uint8Array("
-            "globalThis.__neomacsLastFrame || new ArrayBuffer()))"
-        )
+    @staticmethod
+    def decode_frame_text(values: list[int]) -> str:
         if not values:
             return ""
         frame = cbor2.loads(bytes(values))
@@ -122,6 +137,20 @@ class BrowserEditorHarness:
                         if isinstance(kind, dict) and "Char" in kind:
                             characters.append(kind["Char"].get("ch", ""))
         return "".join(characters)
+
+    def frame_text(self) -> str:
+        values = self.driver.execute_script(
+            "return Array.from(new Uint8Array("
+            "globalThis.__neomacsLastFrame || new ArrayBuffer()))"
+        )
+        return self.decode_frame_text(values)
+
+    def frame_texts(self) -> list[str]:
+        frames = self.driver.execute_script(
+            "return (globalThis.__neomacsFrames || []).map("
+            "frame => Array.from(new Uint8Array(frame)))"
+        )
+        return [self.decode_frame_text(values) for values in frames]
 
     def wait_for_presentation(self) -> str:
         deadline = time.monotonic() + self.timeout
@@ -294,6 +323,7 @@ class BrowserEditorHarness:
         try:
             state = {
                 "frame_text": self.frame_text(),
+                "frame_texts": self.frame_texts(),
                 "worker_messages": self.driver.execute_script(
                     "return globalThis.__neomacsMessages || []"
                 ),
@@ -328,8 +358,8 @@ def main() -> None:
         editor.install_frame_observer()
         driver.get(args.url)
         editor.wait_ready()
-        initial = editor.wait_for_presentation()
-        if STARTUP_WARNING in initial:
+        editor.wait_for_presentation()
+        if startup_warning_rendered(editor.frame_texts()):
             raise RuntimeError("startup rendered the user-emacs-directory warning")
 
         if not args.persistence_only:
@@ -375,8 +405,8 @@ def main() -> None:
 
         driver.refresh()
         editor.wait_ready()
-        refreshed = editor.wait_for_presentation()
-        if STARTUP_WARNING in refreshed:
+        editor.wait_for_presentation()
+        if startup_warning_rendered(editor.frame_texts()):
             raise RuntimeError("reload rendered the user-emacs-directory warning")
 
         persisted_marker = f"OPFS-PERSISTED:{token}"
