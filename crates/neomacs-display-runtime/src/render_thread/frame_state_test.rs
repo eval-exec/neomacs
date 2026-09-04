@@ -285,6 +285,7 @@ fn refresh_faces_rebuilds_from_primary_fallback_frames() {
             .primary_window()
             .map_or(1.0, |ws| ws.scale_factor()),
         app.frame_windows.fps_enabled,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     if let Some(window_state) = app.frame_windows.primary_window_mut() {
         window_state.render = __render;

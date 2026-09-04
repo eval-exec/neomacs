@@ -201,7 +201,7 @@ impl RenderApp {
             }
             UiCommand::VisualBell { frame } => {
                 let emacs_frame_id = frame.raw_id();
-                let now = std::time::Instant::now();
+                let now = neomacs_display_protocol::frame_time::observe_platform_now();
                 let cursor_error_pulse_enabled = self.effects.cursor_error_pulse.enabled;
                 let edge_snap_enabled = self.effects.edge_snap.enabled;
                 let edge_snap_duration_ms = self.effects.edge_snap.duration_ms;

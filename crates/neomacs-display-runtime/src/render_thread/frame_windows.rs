@@ -26,6 +26,7 @@ use super::transitions::clear_frame_transition_textures;
 use super::x11_hints::apply_window_geometry_hints;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
 use neomacs_display_protocol::effect_config::IdleDimConfig;
+use neomacs_display_protocol::frame_time::EventTime;
 use neomacs_display_protocol::{
     DeviceScale, FrameRect, GeometrySize, LogicalPixels, PresentMapping, PresentationExtent,
     PresentationId, PresentedHit, PresentedHitError, PresentedHitQuery, RetainedImageSet,
@@ -35,6 +36,9 @@ use neomacs_renderer_wgpu::{PopupMenuState, TooltipState, WgpuGlyphAtlas, WgpuRe
 use neovm_core::window::GuiFrameGeometryHints;
 
 use crate::thread_comm::WindowFullscreenMode;
+
+/// How close together two titlebar clicks must be to count as a double click.
+const TITLEBAR_DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// Native window/surface state for a top-level GUI frame.
 pub(crate) struct GuiFrameNativeWindowState {
@@ -167,7 +171,7 @@ pub(crate) struct ChromeState {
 pub(crate) struct OverlayState {
     pub popup_menu: Option<PopupMenuState>,
     pub tooltip: Option<TooltipState>,
-    pub visual_bell_start: Option<Instant>,
+    pub visual_bell_start: Option<neomacs_display_protocol::frame_time::EventTime>,
     pub(super) fps: FpsCounter,
     pub(super) typing_speed: TypingSpeedState,
     pub(super) idle_dim: IdleDimState,
@@ -288,11 +292,13 @@ impl GuiFrameRenderState {
         device: &wgpu::Device,
         scale_factor: f64,
         fps_enabled: bool,
+        at: EventTime,
     ) -> Self {
         Self::with_glyph_atlas(
             emacs_frame_id,
             Some(WgpuGlyphAtlas::new_with_scale(device, scale_factor as f32)),
             fps_enabled,
+            at,
         )
     }
 
@@ -303,8 +309,12 @@ impl GuiFrameRenderState {
     /// is filled in later by `populate_glyph_atlas`. Device loss takes the same
     /// path in reverse (`clear_gpu_resident_state`), so the atlas-less state is
     /// a permanent part of the frame lifecycle, not a test affordance.
-    pub(super) fn new_without_device(emacs_frame_id: u64, fps_enabled: bool) -> Self {
-        Self::with_glyph_atlas(emacs_frame_id, None, fps_enabled)
+    pub(super) fn new_without_device(
+        emacs_frame_id: u64,
+        fps_enabled: bool,
+        at: EventTime,
+    ) -> Self {
+        Self::with_glyph_atlas(emacs_frame_id, None, fps_enabled, at)
     }
 
     /// The one construction path shared by the device and device-less
@@ -313,6 +323,7 @@ impl GuiFrameRenderState {
         emacs_frame_id: u64,
         glyph_atlas: Option<WgpuGlyphAtlas>,
         fps_enabled: bool,
+        at: EventTime,
     ) -> Self {
         Self {
             emacs_frame_id,
@@ -334,7 +345,7 @@ impl GuiFrameRenderState {
                     ..FpsCounter::default()
                 },
                 typing_speed: TypingSpeedState::default(),
-                idle_dim: IdleDimState::default(),
+                idle_dim: IdleDimState::new(at),
             },
             frame_post_src: None,
             input_method: InputMethodState::default(),
@@ -1277,17 +1288,16 @@ impl GuiFrameWindowState {
         };
         match action {
             1 => {
-                let now = Instant::now();
-                if now
-                    .duration_since(native.chrome.last_titlebar_click)
-                    .as_millis()
-                    < 400
-                {
+                let now = neomacs_display_protocol::frame_time::observe_platform_now();
+                let is_double_click = native.chrome.last_titlebar_click.is_some_and(|previous| {
+                    now.saturating_since(previous) < TITLEBAR_DOUBLE_CLICK_INTERVAL
+                });
+                if is_double_click {
                     native.window.set_maximized(!native.window.is_maximized());
                 } else {
                     let _ = native.window.drag_window();
                 }
-                native.chrome.last_titlebar_click = now;
+                native.chrome.last_titlebar_click = Some(now);
                 true
             }
             3 => {
@@ -1654,7 +1664,7 @@ impl GuiFrameWindowManager {
                         title: req.title.clone(),
                         titlebar_hover: 0,
                         resize_edge: None,
-                        last_titlebar_click: Instant::now(),
+                        last_titlebar_click: None,
                         ..self.chrome_defaults.clone()
                     };
                     let mut render = GuiFrameRenderState::new(
@@ -1662,6 +1672,7 @@ impl GuiFrameWindowManager {
                         device,
                         scale_factor,
                         self.fps_enabled,
+                        neomacs_display_protocol::frame_time::observe_platform_now(),
                     );
                     render.set_surface_state(
                         SurfaceState::from_device_size(
@@ -1898,10 +1909,14 @@ impl GuiFrameWindowManager {
         dirty
     }
 
-    pub(super) fn tick_top_level_idle_dim(&mut self, config: &IdleDimConfig) -> bool {
+    pub(super) fn tick_top_level_idle_dim(
+        &mut self,
+        config: &IdleDimConfig,
+        now: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
         let mut dirty = false;
         self.for_each_top_level_window_mut(|window_state| {
-            dirty |= window_state.render.tick_idle_dim(config);
+            dirty |= window_state.render.tick_idle_dim(config, now);
         });
         dirty
     }

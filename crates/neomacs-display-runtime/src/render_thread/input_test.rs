@@ -486,7 +486,11 @@ fn presented_pointer_integration_runtime_motion_drives_same_frame_mouse_face_pix
         eprintln!("SKIP: no GPU adapter");
         return;
     };
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(presented_pointer_integration_frame(69)), None);
     let frame = render.current_frame_clone().unwrap();
 
@@ -557,7 +561,11 @@ fn presented_pointer_integration_runtime_motion_drives_same_frame_mouse_face_pix
 
 #[test]
 fn presented_pointer_integration_published_frame_drives_hover_press_leave_and_staleness() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(presented_pointer_integration_frame(70)), None);
     render.set_dirty(false);
 
@@ -645,7 +653,11 @@ fn presented_pointer_integration_published_frame_drives_hover_press_leave_and_st
 
 #[test]
 fn presented_pointer_integration_damage_unions_old_and_new_paint_spans() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(presented_pointer_integration_frame(75)), None);
 
     assert!(render.update_presented_pointer_motion(Some((0x42, 84.0, 10.0))));
@@ -740,7 +752,11 @@ fn unchanged_pointer_appearance_skips_damage_inspection_in_a_ten_thousand_glyph_
             .unwrap(),
         )
         .unwrap();
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(frame), None);
     assert!(render.update_presented_pointer_motion(Some((0x42, 9_999.5, 5.0))));
     render.finish_pointer_paint_render();
@@ -1327,7 +1343,11 @@ fn pressed_visual_stays_captured_while_hover_follows_pointer() {
 
 #[test]
 fn visual_transitions_do_not_mutate_evaluator_press_capture() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let target = PresentedInteractionKey::new(PresentationId::new(11), InteractionId::new(99));
     render.capture_presented(Some(target));
 
@@ -1345,7 +1365,11 @@ fn visual_transitions_do_not_mutate_evaluator_press_capture() {
 #[test]
 fn cursor_leave_clears_hover_but_preserves_visual_and_input_capture() {
     let pressed_visual = appearance_key(11, 3);
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let target = PresentedInteractionKey::new(PresentationId::new(11), InteractionId::new(99));
     render.capture_presented(Some(target));
     render.pointer_appearance.hover(Some(pressed_visual));
@@ -1366,7 +1390,11 @@ fn cursor_leave_clears_hover_but_preserves_visual_and_input_capture() {
 #[test]
 fn tab_release_uses_the_original_capture_after_hover_moves_or_leaves() {
     let captured = PresentedInteractionKey::new(PresentationId::new(21), InteractionId::new(7));
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.capture_presented(Some(captured));
     render.pointer_appearance.hover(Some(appearance_key(21, 1)));
     render.pointer_appearance.press();
@@ -1393,7 +1421,11 @@ fn tab_release_uses_the_original_capture_after_hover_moves_or_leaves() {
 
 #[test]
 fn blank_tab_band_capture_suppresses_release_without_fake_interaction() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.capture_presented(None);
 
     assert_eq!(
@@ -1407,7 +1439,11 @@ fn blank_tab_band_capture_suppresses_release_without_fake_interaction() {
 #[test]
 fn captured_release_precedes_deferred_presentation_retirement() {
     let target = PresentedInteractionKey::new(PresentationId::new(41), InteractionId::new(9));
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.capture_presented(Some(target));
     assert_eq!(render.route_presentation_retirement(41), None);
 
@@ -1429,7 +1465,11 @@ fn captured_release_precedes_deferred_presentation_retirement() {
 #[test]
 fn cancellation_flushes_pinned_retirement_without_release() {
     let target = PresentedInteractionKey::new(PresentationId::new(51), InteractionId::new(10));
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.capture_presented(Some(target));
     render.chrome.interaction.toolbar_press_captured = true;
     render.chrome.interaction.toolbar_pressed = Some(3);
@@ -1450,7 +1490,11 @@ fn cancellation_flushes_pinned_retirement_without_release() {
 
 #[test]
 fn focus_cancellation_dirties_toolbar_and_compact_only_state() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.pointer_inside = true;
     render.chrome.interaction.toolbar_hovered = Some(1);
     render.chrome.interaction.toolbar_pressed = Some(1);
@@ -1474,7 +1518,11 @@ fn focus_cancellation_dirties_toolbar_and_compact_only_state() {
 #[test]
 fn programmatic_popup_open_suppresses_underlying_hover_immediately() {
     let key = appearance_key(61, 1);
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.pointer_appearance.hover(Some(key));
     render.pointer_appearance.press();
     render.set_dirty(false);
@@ -1496,7 +1544,11 @@ fn programmatic_popup_open_suppresses_underlying_hover_immediately() {
 
 #[test]
 fn non_root_owner_clears_stale_root_chrome_hover() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.chrome.interaction.menu_bar_hovered = Some(1);
     render.chrome.interaction.compact_bar_menu_hovered = Some(2);
     render.chrome.interaction.compact_bar_tool_hovered = Some(3);
@@ -1512,7 +1564,11 @@ fn non_root_owner_clears_stale_root_chrome_hover() {
 #[test]
 fn tab_capture_survives_tab_bar_removal_until_release() {
     let captured = PresentedInteractionKey::new(PresentationId::new(31), InteractionId::new(8));
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.capture_presented(Some(captured));
 
     render.chrome.interaction.clear_tab_bar();
@@ -1623,6 +1679,7 @@ fn ensure_primary_frame(app: &mut RenderApp) -> Option<&mut GuiFrameRenderState>
                 .primary_window()
                 .map_or(1.0, |ws| ws.scale_factor()),
             false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
         );
         if let Some(window_state) = app.frame_windows.primary_window_mut() {
             window_state.render = __render;
