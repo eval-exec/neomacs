@@ -6,6 +6,7 @@ use crate::backend::wgpu::{
 use crate::thread_comm::InputEvent;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
+use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::window::WindowId;
 
 impl RenderApp {
