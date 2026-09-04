@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import shutil
 import time
 from pathlib import Path
 
 import cbor2
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+
+from browser_test_support import chrome_options
 
 
 STARTUP_WARNING_FRAGMENTS = (
@@ -52,23 +51,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--timeout", type=float, default=60.0)
     return parser.parse_args()
-
-
-def chrome_binary(explicit: str | None) -> str | None:
-    if explicit:
-        return explicit
-    configured = os.environ.get("NEOMACS_WASM_CHROME")
-    if configured:
-        return configured
-    for candidate in (
-        "google-chrome-stable",
-        "google-chrome",
-        "chromium",
-        "chromium-browser",
-    ):
-        if resolved := shutil.which(candidate):
-            return resolved
-    return None
 
 
 class BrowserEditorHarness:
@@ -356,13 +338,7 @@ class BrowserEditorHarness:
 
 def main() -> None:
     args = parse_args()
-    options = Options()
-    if binary := chrome_binary(args.chrome):
-        options.binary_location = binary
-    if args.headless or os.environ.get("NEOMACS_WASM_HEADLESS", "0") != "0":
-        options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    options = chrome_options(args.chrome, args.headless)
 
     token = f"neomacs-opfs-{time.time_ns()}"
     driver = webdriver.Chrome(options=options)
