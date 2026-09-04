@@ -1063,7 +1063,7 @@ fn derive_transition_hint_reports_buffer_content_replacement() {
     let prev = make_window_info(1, 100, 10, Rect::new(0.0, 0.0, 800.0, 600.0));
     let curr = make_window_info(1, 200, 10, Rect::new(0.0, 0.0, 800.0, 600.0));
 
-    let hint = derive_window_transition_hint(&prev, &curr).unwrap();
+    let hint = derive_buffer_replacement_hint(&prev, &curr).unwrap();
     assert_eq!(
         hint,
         ContentTransitionHint::BufferReplaced {
@@ -1085,7 +1085,7 @@ fn derive_transition_hint_requires_complete_previous_viewport_geometry() {
         outer: prev.bounds,
     };
 
-    assert_eq!(derive_window_transition_hint(&prev, &curr), None);
+    assert_eq!(derive_buffer_replacement_hint(&prev, &curr), None);
 }
 
 #[test]
@@ -1099,7 +1099,7 @@ fn derive_transition_hint_rejects_changed_viewport_inside_stable_outer_bounds() 
     regions.text_body.height -= 18.0;
     regions.tab_line = Some(Rect::new(0.0, 0.0, 800.0, 18.0));
 
-    assert_eq!(derive_window_transition_hint(&prev, &curr), None);
+    assert_eq!(derive_buffer_replacement_hint(&prev, &curr), None);
 }
 
 #[test]
@@ -1134,28 +1134,19 @@ fn derive_transition_hint_skips_window_geometry_change() {
     let prev = make_window_info(1, 100, 10, Rect::new(0.0, 0.0, 664.0, 646.0));
     let curr = make_window_info(1, 100, 10, Rect::new(0.0, 0.0, 1100.0, 760.0));
 
-    assert_eq!(derive_window_transition_hint(&prev, &curr), None);
+    assert_eq!(derive_buffer_replacement_hint(&prev, &curr), None);
 }
 
 #[test]
-fn derive_transition_hint_reports_viewport_scroll() {
+fn a_viewport_scroll_is_no_longer_a_producer_hint() {
+    // Scrolling within the same buffer produces no hint at all now: how far a
+    // viewport moved is measured by the compositor from anchor rows, not
+    // declared here from a character count. Only a change of content identity
+    // is still the producer's to report.
     let prev = make_window_info(1, 100, 10, Rect::new(0.0, 0.0, 800.0, 600.0));
     let curr = make_window_info(1, 100, 42, Rect::new(0.0, 0.0, 800.0, 600.0));
 
-    match derive_window_transition_hint(&prev, &curr).unwrap() {
-        ContentTransitionHint::ViewportScrolled {
-            window_id,
-            region,
-            direction,
-            scroll_distance,
-        } => {
-            assert_eq!(window_id.get(), 1);
-            assert_eq!(region, curr.geometry.buffer_viewport().unwrap());
-            assert_eq!(direction, TransitionDirection::Forward);
-            assert!(scroll_distance > 0.0);
-        }
-        other => panic!("expected ViewportScrolled, got {:?}", other),
-    }
+    assert_eq!(derive_buffer_replacement_hint(&prev, &curr), None);
 }
 
 #[test]
@@ -1164,7 +1155,7 @@ fn derive_transition_hint_skips_minibuffer() {
     let mut curr = make_window_info(1, 100, 20, Rect::new(0.0, 0.0, 800.0, 600.0));
     curr.is_minibuffer = true;
 
-    assert!(derive_window_transition_hint(&prev, &curr).is_none());
+    assert!(derive_buffer_replacement_hint(&prev, &curr).is_none());
 }
 
 // =======================================================================

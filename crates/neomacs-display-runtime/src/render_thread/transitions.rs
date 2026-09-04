@@ -249,27 +249,33 @@ fn plan_transition_hint(
                 plan,
             })
         }
-        ContentTransitionHint::ViewportScrolled {
-            window_id,
-            region,
-            direction,
-            scroll_distance,
-        } => {
-            let bounds = region.bounds();
-            if bounds.height < 50.0 {
-                return None;
-            }
-            Some(PlannedTransition {
-                key: TransitionKey::Window(*window_id),
-                source: TransitionSource::Scroll,
-                plan: SynchronizedTransitionPlan::from_single(policy.scroll_plan(
-                    bounds,
-                    *direction,
-                    *scroll_distance,
-                )?),
-            })
-        }
     }
+}
+
+/// Plan a scroll transition from a measured viewport displacement.
+///
+/// Only an exact measurement animates. An ambiguous or non-overlapping scroll
+/// has no honest distance to slide by, and inventing one is what the character
+/// count estimate used to do — the previous presentation's pixels would be
+/// dragged a distance unrelated to how far the text actually moved.
+fn plan_scroll(
+    policy: &TransitionPolicy,
+    scroll: &crate::render_thread::frame_compositor::continuity::ScrollObservation,
+) -> Option<PlannedTransition> {
+    let bounds = scroll.region.bounds();
+    if bounds.height < policy.minimum_scroll_region_height() {
+        return None;
+    }
+    let pixels = scroll.displacement.exact_pixels()?;
+    Some(PlannedTransition {
+        key: TransitionKey::Window(scroll.window),
+        source: TransitionSource::Scroll,
+        plan: SynchronizedTransitionPlan::from_single(policy.scroll_plan(
+            bounds,
+            scroll.displacement.direction().transition_direction(),
+            pixels,
+        )?),
+    })
 }
 
 fn apply_transition_hint(
@@ -444,6 +450,7 @@ pub(super) fn detect_frame_transitions(
     transitions: &mut TransitionState,
     effects: &neomacs_display_protocol::EffectsConfig,
     frame: &mut FrameGlyphBuffer,
+    scrolls: &[crate::render_thread::frame_compositor::continuity::ScrollObservation],
     frame_dirty: &mut bool,
     width: u32,
     height: u32,
@@ -456,6 +463,24 @@ pub(super) fn detect_frame_transitions(
 
     for hint in &transition_hints {
         apply_transition_hint(renderer, transitions, hint, now, width, height);
+    }
+    // Scroll transitions come from a measurement the compositor made when the
+    // presentation was installed, not from anything the producer declared.
+    for scroll in scrolls {
+        let Some(planned) = plan_scroll(&transitions.policy, scroll) else {
+            continue;
+        };
+        transitions.active.remove(&planned.key);
+        start_transition(
+            renderer,
+            transitions,
+            planned.key,
+            planned.source,
+            planned.plan,
+            now,
+            width,
+            height,
+        );
     }
     for hint in &effect_hints {
         apply_effect_hint(

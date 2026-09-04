@@ -18,11 +18,6 @@
 //! instead: find a row that appears in both presentations and take the
 //! difference of its pixel positions.
 
-// Interface defined by the temporal-presentation plan and exercised by this
-// module's tests; the production consumer arrives when the producer-side
-// classifier is replaced. Remove this attribute in that change.
-#![allow(dead_code)]
-
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::glyph_matrix::{GlyphRow, NO_BUFFER_POSITION_CHARPOS};
 use neomacs_display_protocol::transition_policy::TransitionDirection;
