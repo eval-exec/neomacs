@@ -134,6 +134,71 @@ class BrowserEditorHarness:
             )
         return cursor
 
+    def assert_active_cursor_painted(self, description: str) -> dict[str, object]:
+        cursor = self.assert_active_cursor(description)
+        canvas = self.driver.find_element("css selector", "canvas")
+        screenshot = canvas.screenshot_as_base64
+        observation = self.driver.execute_async_script(
+            r"""
+            const [png, cursor] = arguments;
+            const done = arguments[arguments.length - 1];
+            const image = new Image();
+            image.onload = () => {
+              const editorCanvas = document.querySelector("canvas");
+              const bounds = editorCanvas.getBoundingClientRect();
+              const scaleX = image.naturalWidth / bounds.width;
+              const scaleY = image.naturalHeight / bounds.height;
+              const insetX = cursor.width * 0.25;
+              const insetY = cursor.height * 0.25;
+              const x = Math.floor((cursor.x + insetX) * scaleX);
+              const y = Math.floor((cursor.y + insetY) * scaleY);
+              const width = Math.max(1, Math.floor(cursor.width * 0.5 * scaleX));
+              const height = Math.max(1, Math.floor(cursor.height * 0.5 * scaleY));
+              const raster = document.createElement("canvas");
+              raster.width = image.naturalWidth;
+              raster.height = image.naturalHeight;
+              const context = raster.getContext("2d");
+              context.drawImage(image, 0, 0);
+              const pixels = context.getImageData(x, y, width, height).data;
+              const expected = [
+                Math.round(cursor.color.r * 255),
+                Math.round(cursor.color.g * 255),
+                Math.round(cursor.color.b * 255),
+              ];
+              let matching = 0;
+              for (let offset = 0; offset < pixels.length; offset += 4) {
+                if (Math.abs(pixels[offset] - expected[0]) <= 24
+                    && Math.abs(pixels[offset + 1] - expected[1]) <= 24
+                    && Math.abs(pixels[offset + 2] - expected[2]) <= 24) {
+                  matching += 1;
+                }
+              }
+              done({
+                matching,
+                sampled: pixels.length / 4,
+                expected,
+                sampleRect: {x, y, width, height},
+                imageSize: {
+                  width: image.naturalWidth,
+                  height: image.naturalHeight,
+                },
+              });
+            };
+            image.onerror = () => done({error: "could not decode canvas screenshot"});
+            image.src = `data:image/png;base64,${png}`;
+            """,
+            screenshot,
+            cursor,
+        )
+        sampled = observation.get("sampled", 0)
+        matching = observation.get("matching", 0)
+        if sampled == 0 or matching * 2 < sampled:
+            raise RuntimeError(
+                f"browser did not paint the active cursor for {description}; "
+                f"observation={observation!r}; cursor={cursor!r}"
+            )
+        return cursor
+
     @staticmethod
     def matrix_text(entry: dict[str, object]) -> str:
         characters: list[str] = []

@@ -40,6 +40,24 @@ pub enum SurfaceFramePresentError {
     Surface(#[from] SurfacePresentError),
 }
 
+/// Whether a direct surface presentation should paint its active cursor.
+///
+/// Direct product adapters do not run the desktop display runtime's cursor
+/// blink state machine. Requiring this value at the presentation boundary
+/// keeps bootstrap and editor frames explicit without reducing the decision
+/// to an easy-to-invert boolean argument.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceCursorVisibility {
+    Hidden,
+    Visible,
+}
+
+impl SurfaceCursorVisibility {
+    const fn is_visible(self) -> bool {
+        matches!(self, Self::Visible)
+    }
+}
+
 /// Owns every GPU object needed to present a [`FrameGlyphBuffer`].
 ///
 /// Product adapters forward window lifecycle events here; they do not own
@@ -120,6 +138,7 @@ impl SurfaceFrameRenderer {
     pub fn present_frame(
         &mut self,
         frame: &FrameGlyphBuffer,
+        cursor_visibility: SurfaceCursorVisibility,
     ) -> Result<PresentationOutcome, SurfaceFramePresentError> {
         let Some(mapping) = frame_mapping(self.surface.extent(), self.device_scale, frame)? else {
             return Ok(PresentationOutcome::Skipped(
@@ -142,7 +161,7 @@ impl SurfaceFrameRenderer {
                     frame,
                     glyph_atlas,
                     mapping,
-                    false,
+                    cursor_visibility.is_visible(),
                     None,
                     (-1.0, -1.0),
                     None,
@@ -236,5 +255,11 @@ mod tests {
             error.to_string(),
             "renderer initialization failed: invalid pipeline"
         );
+    }
+
+    #[test]
+    fn direct_surface_cursor_visibility_is_explicit() {
+        assert!(SurfaceCursorVisibility::Visible.is_visible());
+        assert!(!SurfaceCursorVisibility::Hidden.is_visible());
     }
 }
