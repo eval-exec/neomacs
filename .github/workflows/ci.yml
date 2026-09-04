@@ -564,6 +564,11 @@ jobs:
           google-chrome --version
           chromedriver --version
 
+      - name: Test browser smoke oracles
+        run: >-
+          "$TMPDIR/browser-smoke-venv/bin/python"
+          crates/neomacs-wasm/tests/browser_opfs_smoke_test.py
+
       - name: Exercise an ordinary warm-cache browser upgrade
         run: |
           "$TMPDIR/browser-smoke-venv/bin/python" \
