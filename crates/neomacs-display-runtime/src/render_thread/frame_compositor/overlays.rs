@@ -3,7 +3,7 @@
 //!
 //! Paths here are absolute on purpose, matching the sibling submodules.
 
-use std::time::Instant;
+use neomacs_display_protocol::frame_time::EventTime;
 
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_display_protocol::effect_config::IdleDimConfig;
@@ -23,19 +23,19 @@ impl GuiFrameRenderState {
         self.compositor.dirty = true;
     }
 
-    pub(in crate::render_thread) fn set_visual_bell_start(&mut self, start: Option<Instant>) {
+    pub(in crate::render_thread) fn set_visual_bell_start(&mut self, start: Option<EventTime>) {
         self.overlays.visual_bell_start = start;
         if start.is_some() {
             self.compositor.dirty = true;
         }
     }
 
-    pub(in crate::render_thread) fn record_typing_keypress(&mut self, now: Instant) {
+    pub(in crate::render_thread) fn record_typing_keypress(&mut self, now: EventTime) {
         self.overlays.typing_speed.key_press_times.push(now);
         self.compositor.dirty = true;
     }
 
-    pub(in crate::render_thread) fn record_idle_activity(&mut self, now: Instant) {
+    pub(in crate::render_thread) fn record_idle_activity(&mut self, now: EventTime) {
         self.overlays.idle_dim.last_activity_time = now;
         self.compositor.dirty = true;
     }
@@ -56,13 +56,13 @@ impl GuiFrameRenderState {
         cursor_error_pulse_enabled: bool,
         edge_snap_enabled: bool,
         edge_snap_duration_ms: u32,
-        now: Instant,
+        now: EventTime,
     ) {
         self.overlays.visual_bell_start = Some(now);
         if cursor_error_pulse_enabled {
             self.compositor
                 .renderer_effects
-                .trigger_cursor_error_pulse(now);
+                .trigger_cursor_error_pulse(now.into_instant());
         }
         if edge_snap_enabled {
             let selected_info = self.compositor.current_frame.as_ref().and_then(|frame| {
@@ -81,7 +81,7 @@ impl GuiFrameRenderState {
                         info.mode_line_height,
                         at_top,
                         at_bottom,
-                        now,
+                        now.into_instant(),
                         edge_snap_duration_ms,
                     );
                 }
@@ -90,8 +90,12 @@ impl GuiFrameRenderState {
         self.compositor.dirty = true;
     }
 
-    pub(in crate::render_thread) fn tick_idle_dim(&mut self, config: &IdleDimConfig) -> bool {
-        let idle_time = self.overlays.idle_dim.last_activity_time.elapsed();
+    pub(in crate::render_thread) fn tick_idle_dim(
+        &mut self,
+        config: &IdleDimConfig,
+        now: EventTime,
+    ) -> bool {
+        let idle_time = now.saturating_since(self.overlays.idle_dim.last_activity_time);
         let target_alpha = if idle_time >= config.delay {
             config.opacity
         } else {

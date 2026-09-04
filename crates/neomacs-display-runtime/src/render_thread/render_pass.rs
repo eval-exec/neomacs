@@ -215,16 +215,20 @@ struct GuiFrameChromeOverlays<'a> {
     ime_preedit: Option<GuiFrameImeOverlay<'a>>,
 }
 
+/// How long the visual-bell flash ramps down over.
+const VISUAL_BELL_DURATION_SECS: f32 = 0.15;
+
 impl RenderApp {
     fn update_typing_speed_state(state: &mut TypingSpeedState) -> bool {
-        let now = std::time::Instant::now();
+        // Step 2.5 replaces this with the frame's sample.
+        let now = neomacs_display_protocol::frame_time::observe_platform_now();
         let window_secs = 5.0_f64;
         state
             .key_press_times
-            .retain(|t| now.duration_since(*t).as_secs_f64() < window_secs);
+            .retain(|t| now.saturating_since(*t).as_secs_f64() < window_secs);
         let count = state.key_press_times.len() as f64;
         let target_wpm = if count > 1.0 {
-            let span = now.duration_since(state.key_press_times[0]).as_secs_f64();
+            let span = now.saturating_since(state.key_press_times[0]).as_secs_f64();
             if span > 0.1 {
                 (count / span) * 60.0 / 5.0
             } else {
@@ -405,14 +409,18 @@ impl RenderApp {
     fn render_frame_visual_bell_overlay(
         renderer: &mut WgpuRenderer,
         surface_view: &wgpu::TextureView,
-        visual_bell_start: &mut Option<std::time::Instant>,
+        visual_bell_start: &mut Option<neomacs_display_protocol::frame_time::EventTime>,
         frame_dirty: &mut bool,
         width: u32,
         height: u32,
     ) {
         if let Some(start) = *visual_bell_start {
-            let elapsed = start.elapsed().as_secs_f32();
-            let duration = 0.15;
+            // Step 2.5 replaces this read with the frame's sample; today it is the
+            // same wall-clock read `start.elapsed()` performed, just typed.
+            let elapsed = neomacs_display_protocol::frame_time::observe_platform_now()
+                .saturating_since(start)
+                .as_secs_f32();
+            let duration = VISUAL_BELL_DURATION_SECS;
             if elapsed < duration {
                 let alpha = (1.0 - elapsed / duration) * 0.3;
                 renderer.render_visual_bell(surface_view, width, height, alpha);

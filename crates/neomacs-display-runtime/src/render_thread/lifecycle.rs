@@ -282,7 +282,8 @@ impl RenderApp {
 
         if self.effects.idle_dim.enabled {
             let idle_dim_config = self.effects.idle_dim.clone();
-            self.frame_windows.tick_top_level_idle_dim(&idle_dim_config);
+            self.frame_windows
+                .tick_top_level_idle_dim(&idle_dim_config, now);
         } else {
             self.frame_windows.clear_top_level_idle_dim();
         }

@@ -43,7 +43,11 @@ fn gui_text_input_policy_enables_native_ime_on_window_creation() {
 #[cfg(feature = "neo-term")]
 #[test]
 fn terminal_expansion_replacement_is_atomic_and_invalidates_the_scene() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let mut editor_frame = make_frame(0x42, 0);
     let editor_glyph = FrameGlyph::Border {
         window_id: neomacs_display_protocol::types::DisplayWindowId::new(1),
@@ -130,7 +134,11 @@ fn terminal_expansion_replacement_is_atomic_and_invalidates_the_scene() {
 #[cfg(feature = "neo-term")]
 #[test]
 fn terminal_expansion_rejects_editor_face_collisions_without_partial_installation() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let editor_face_id = neomacs_display_protocol::types::FaceId::new(0xffff_fff0);
     let retained_face_id = neomacs_display_protocol::types::FaceId::new(0xffff_fff1);
     let mut editor_frame = make_frame(0x42, 0);
@@ -207,7 +215,11 @@ fn make_video_frame(frame_id: u64, parent_id: u64, video_id: u32) -> FrameGlyphB
 #[cfg(feature = "video")]
 #[test]
 fn accepted_root_and_child_presentations_own_the_video_visibility_index() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let first = neomacs_display_protocol::types::VideoId::new(7);
     let child_video = neomacs_display_protocol::types::VideoId::new(8);
 
@@ -229,7 +241,11 @@ fn accepted_root_and_child_presentations_own_the_video_visibility_index() {
 
 #[test]
 fn root_present_mapping_refreshes_on_surface_and_presentation_edges() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let initial_surface =
         SurfaceState::from_device_size(1162, 1194, DeviceScale::new(1.75).unwrap()).unwrap();
     render.set_surface_state(initial_surface);
@@ -263,7 +279,11 @@ fn root_present_mapping_refreshes_on_surface_and_presentation_edges() {
 
 #[test]
 fn suspended_surface_cannot_retain_a_drawable_present_mapping() {
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let mut frame = FrameGlyphBuffer::with_size(800.0, 600.0);
     frame.presentation_id = PresentationId::new(7);
     render.set_current_frame(Some(frame), None);
@@ -430,7 +450,13 @@ fn frame_render_state_syncs_visual_cursor_config_from_defaults() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.compositor.visual_cursors.insert(7, {
         let mut cursor = crate::render_thread::cursor::CursorState::default();
         cursor.set_target(CursorTarget {
@@ -468,7 +494,13 @@ fn dirty_render_state_without_current_frame_is_not_presentable() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
 
     render.mark_dirty();
 
@@ -484,7 +516,13 @@ fn dirty_render_state_with_current_frame_is_presentable() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
 
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
     render.mark_dirty();
@@ -497,7 +535,13 @@ fn beginning_presentable_render_consumes_dirty_content() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
 
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
     render.mark_dirty();
@@ -517,7 +561,13 @@ fn frame_render_state_applies_visual_cursor_animation_rects() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let mut frame = make_frame(0x42, 0);
     frame.window_cursors.push(WindowCursor {
         window_id: neomacs_display_protocol::types::DisplayWindowId::new(-7),
@@ -596,7 +646,13 @@ fn frame_render_state_remove_child_frame_marks_dirty_when_removed() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
     let mut child = make_frame(0x99, 0x42);
     set_parent_offset(&mut child, 10.0, 20.0);
@@ -613,7 +669,13 @@ fn displayed_presentations_include_root_and_children_for_atomic_retirement() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let mut root = make_frame(0x42, 0);
     root.presentation_id = neomacs_display_protocol::frame_chrome::PresentationId::new(7);
     render.set_current_frame(Some(root), None);
@@ -634,7 +696,11 @@ fn presented_pointer_hit_selects_the_displayed_root_or_child_map_in_local_coordi
         InteractionId, PointerAppearanceId, frame_chrome::PresentationId,
     };
 
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let mut root = make_frame(0x42, 0);
     root.presentation_id = PresentationId::new(21);
     install_pointer_region(&mut root, None, true);
@@ -681,7 +747,11 @@ fn replacing_a_frame_clears_pointer_appearance_from_the_retired_presentation() {
         InteractionId, PointerAppearanceId, frame_chrome::PresentationId,
     };
 
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let mut old = make_frame(0x42, 0);
     old.presentation_id = PresentationId::new(7);
     render.set_current_frame(Some(old), None);
@@ -713,7 +783,11 @@ fn replacing_or_removing_a_child_clears_only_its_pointer_appearance() {
     use crate::render_thread::state::PresentedAppearanceKey;
     use neomacs_display_protocol::{PointerAppearanceId, frame_chrome::PresentationId};
 
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let mut root = make_frame(0x42, 0);
     root.presentation_id = PresentationId::new(7);
     render.set_current_frame(Some(root), None);
@@ -758,7 +832,11 @@ fn runtime_semantic_hit_query_uses_target_frame_presentation_and_rejects_stale_i
         PresentedRegionKind, PresentedTextPosition, frame_chrome::PresentationId,
     };
 
-    let mut render = GuiFrameRenderState::new_without_device(0x42, false);
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     let presentation = PresentationId::new(7);
     let window = DisplayWindowId::new(9);
     let mut root = make_frame(0x42, 0);
@@ -805,7 +883,13 @@ fn frame_render_state_remove_child_frame_ignores_late_stale_update() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
     let mut child = make_frame(0x99, 0x42);
     set_parent_offset(&mut child, 10.0, 20.0);
@@ -829,7 +913,13 @@ fn frame_render_state_show_child_frame_allows_fresh_update_after_removal() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
     let mut child = make_frame(0x99, 0x42);
     set_parent_offset(&mut child, 10.0, 20.0);
@@ -850,7 +940,13 @@ fn frame_render_state_ignores_identical_child_frame_update() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
     let mut child = make_frame(0x99, 0x42);
     set_parent_offset(&mut child, 10.0, 20.0);
@@ -870,7 +966,13 @@ fn frame_render_state_remove_child_cursor_clears_preedit() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.cursor.set_target(CursorTarget {
         window_id: 7,
         x: 1.0,
@@ -894,7 +996,13 @@ fn frame_render_state_preedit_update_replaces_composition_and_preserves_cursor()
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
 
     render.set_ime_preedit("ni".to_string(), Some((2, 2)));
     render.set_ime_preedit("你".to_string(), Some((3, 3)));
@@ -1334,7 +1442,13 @@ fn cursor_blink_toggle_asks_for_a_cursor_frame_not_a_repaint() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
     render
         .cursor
@@ -1379,7 +1493,13 @@ fn content_change_outranks_a_pending_cursor_change() {
     let Some(device) = make_test_device() else {
         return;
     };
-    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false);
+    let mut render = GuiFrameRenderState::new(
+        0x42,
+        &device,
+        1.0,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
     render.set_current_frame(Some(make_frame(0x42, 0)), None);
     render.compositor.cursor_dirty = true;
     render.mark_dirty();
@@ -1391,4 +1511,34 @@ fn content_change_outranks_a_pending_cursor_change() {
     render.begin_presentable_render();
     assert!(!render.has_presentable_dirty_content());
     assert!(!render.has_presentable_cursor_change());
+}
+
+// =======================================================================
+// Observation state: creation is not an event that already happened
+// =======================================================================
+
+#[test]
+fn a_new_window_has_never_had_its_titlebar_clicked() {
+    // Seeding this with the creation time made the first click within the
+    // double-click interval of opening a window maximize it instead of
+    // starting a drag. "Never clicked" is a distinct state, so it gets one.
+    let chrome = crate::render_thread::state::WindowChrome::default();
+    assert!(chrome.last_titlebar_click.is_none());
+}
+
+#[test]
+fn a_new_window_counts_its_creation_as_activity_so_it_does_not_dim_at_once() {
+    // IdleDimState deliberately has no Default: there is no honest zero value
+    // for "when was this window last active", and treating None as "idle
+    // forever" would dim a freshly-opened window immediately.
+    let created = neomacs_display_protocol::frame_time::observe_platform_now();
+    let idle = crate::render_thread::state::IdleDimState::new(created);
+    assert_eq!(idle.last_activity_time, created);
+    assert_eq!(idle.current_alpha, 0.0);
+    assert!(!idle.active);
+    // No time has passed as of creation, so nothing is idle yet.
+    assert_eq!(
+        created.saturating_since(idle.last_activity_time),
+        std::time::Duration::ZERO
+    );
 }
