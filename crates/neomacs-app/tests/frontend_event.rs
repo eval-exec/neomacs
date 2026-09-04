@@ -1,6 +1,6 @@
 use neomacs_app::frontend_event::{
     FrontendEvent, FrontendFrameId, FrontendKeyEvent, FrontendKeyState, FrontendKeySymbol,
-    FrontendModifiers, FrontendPresentationId, FrontendViewport,
+    FrontendLogicalExtent, FrontendModifiers, FrontendPresentationId, FrontendViewport,
 };
 
 #[test]
@@ -30,13 +30,20 @@ fn key_event_keeps_state_modifiers_and_target_together() {
 
 #[test]
 fn viewport_validates_scale_at_the_adapter_boundary() {
-    assert!(FrontendViewport::new(800, 600, 0.0, FrontendFrameId::PRIMARY).is_err());
-    assert!(FrontendViewport::new(800, 600, f64::NAN, FrontendFrameId::PRIMARY).is_err());
-    assert!(FrontendViewport::new(800, 600, f64::INFINITY, FrontendFrameId::PRIMARY).is_err());
+    let logical_extent = FrontendLogicalExtent::new(800, 600);
+    assert!(FrontendViewport::new(logical_extent, 0.0, FrontendFrameId::PRIMARY).is_err());
+    assert!(FrontendViewport::new(logical_extent, f64::NAN, FrontendFrameId::PRIMARY).is_err());
+    assert!(
+        FrontendViewport::new(logical_extent, f64::INFINITY, FrontendFrameId::PRIMARY).is_err()
+    );
 
     let scale = 1.500_000_000_000_000_2;
-    let viewport = FrontendViewport::new(800, 600, scale, FrontendFrameId::PRIMARY).unwrap();
-    assert_eq!((viewport.width(), viewport.height()), (800, 600));
+    let viewport = FrontendViewport::new(logical_extent, scale, FrontendFrameId::PRIMARY).unwrap();
+    assert_eq!(viewport.logical_extent(), logical_extent);
+    assert_eq!(
+        (logical_extent.width(), logical_extent.height()),
+        (800, 600)
+    );
     assert_eq!(viewport.scale().get(), scale);
     assert_eq!(viewport.target(), FrontendFrameId::PRIMARY);
 }
