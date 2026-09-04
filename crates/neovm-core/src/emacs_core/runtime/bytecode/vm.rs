@@ -1426,32 +1426,34 @@ fn lexenv_tail_reachable(current: Value, entry: Value) -> bool {
 }
 
 #[inline(always)]
-fn fixnum_tagged_i64(value: Value) -> i64 {
+fn fixnum_tagged_signed_word(value: Value) -> isize {
     debug_assert!(value.is_fixnum());
     // GNU bytecode.c compares XFIXNUM values for fixnum comparison opcodes.
     // Neomacs fixnums are `(n << 2) | 2`, so the signed tagged bits preserve
-    // the same total order without materializing the untagged integer.
-    value.bits() as i64
+    // the same total order without materializing the untagged integer. Keep
+    // the comparison in the target's signed word type: widening a wasm32
+    // `usize` directly to `i64` zero-extends negative fixnums.
+    value.bits() as isize
 }
 
 #[inline(always)]
 fn fixnum_lt(left: Value, right: Value) -> bool {
-    fixnum_tagged_i64(left) < fixnum_tagged_i64(right)
+    fixnum_tagged_signed_word(left) < fixnum_tagged_signed_word(right)
 }
 
 #[inline(always)]
 fn fixnum_gt(left: Value, right: Value) -> bool {
-    fixnum_tagged_i64(left) > fixnum_tagged_i64(right)
+    fixnum_tagged_signed_word(left) > fixnum_tagged_signed_word(right)
 }
 
 #[inline(always)]
 fn fixnum_le(left: Value, right: Value) -> bool {
-    fixnum_tagged_i64(left) <= fixnum_tagged_i64(right)
+    fixnum_tagged_signed_word(left) <= fixnum_tagged_signed_word(right)
 }
 
 #[inline(always)]
 fn fixnum_ge(left: Value, right: Value) -> bool {
-    fixnum_tagged_i64(left) >= fixnum_tagged_i64(right)
+    fixnum_tagged_signed_word(left) >= fixnum_tagged_signed_word(right)
 }
 
 #[inline]

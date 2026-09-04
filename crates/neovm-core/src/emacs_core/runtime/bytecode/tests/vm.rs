@@ -14,6 +14,17 @@ fn new_vm(eval: &mut Context) -> Vm<'_> {
     Vm::from_context(eval)
 }
 
+#[test]
+fn inline_fixnum_comparisons_use_target_width_signed_order() {
+    let negative = Value::fixnum(-1);
+    let zero = Value::fixnum(0);
+
+    assert!(fixnum_lt(negative, zero));
+    assert!(fixnum_le(negative, zero));
+    assert!(fixnum_gt(zero, negative));
+    assert!(fixnum_ge(zero, negative));
+}
+
 fn find_bin(name: &str) -> String {
     let path = std::env::var_os("PATH").expect("PATH should be set");
     for dir in std::env::split_paths(&path) {
