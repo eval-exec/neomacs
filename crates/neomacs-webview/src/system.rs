@@ -42,11 +42,49 @@ impl DesiredWebView {
     fn set_navigation(&mut self, navigation: NavigationTarget) {
         self.create.initial_navigation = Some(navigation);
     }
+
+    fn mutable_state(&self) -> MutableWebViewState {
+        MutableWebViewState {
+            model_size: self.create.initial_size,
+            navigation: self.create.initial_navigation.clone(),
+        }
+    }
+}
+
+/// The declarative fields that may change while native creation is in flight.
+///
+/// Native creation receives a snapshot of this state. Keeping that snapshot
+/// beside the pending handle lets completion converge to the latest desired
+/// state before clients can observe `Ready`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MutableWebViewState {
+    model_size: WebContentSize,
+    navigation: Option<NavigationTarget>,
+}
+
+impl MutableWebViewState {
+    fn submitted(request: &PlatformCreateRequest) -> Self {
+        Self {
+            model_size: request.size(),
+            navigation: request.navigation().cloned(),
+        }
+    }
+}
+
+struct PendingViewCreate<C> {
+    handle: C,
+    submitted: MutableWebViewState,
+}
+
+#[derive(Clone, Copy)]
+enum CreationPresentationState {
+    NeedsConvergence,
+    AppliedByActivation,
 }
 
 enum Lifecycle<P: Platform> {
     Waiting(MissingPrerequisites),
-    Creating(P::PendingCreate),
+    Creating(PendingViewCreate<P::PendingCreate>),
     Ready(P::View),
     Failed(String),
     Closing,
@@ -243,11 +281,22 @@ impl<P: Platform> WebViewSystemImpl<P> {
         generation: WebViewGeneration,
         request: PlatformCreateRequest,
     ) -> Lifecycle<P> {
+        let submitted = MutableWebViewState::submitted(&request);
         match self.platform.begin_create(request) {
-            Ok(CreateOutcome::Ready(view)) => self.accept_created_view(id, generation, view),
+            Ok(CreateOutcome::Ready(view)) => self.accept_created_view(
+                id,
+                generation,
+                view,
+                submitted.clone(),
+                submitted,
+                CreationPresentationState::NeedsConvergence,
+            ),
             Ok(CreateOutcome::Pending(mut pending)) => {
                 let Some((host, placement)) = self.active_placement(id) else {
-                    return Lifecycle::Creating(pending);
+                    return Lifecycle::Creating(PendingViewCreate {
+                        handle: pending,
+                        submitted,
+                    });
                 };
                 match self.platform.activate_pending(
                     generation,
@@ -257,8 +306,18 @@ impl<P: Platform> WebViewSystemImpl<P> {
                         placement: &placement,
                     },
                 ) {
-                    Ok(Some(view)) => self.accept_created_view(id, generation, view),
-                    Ok(None) => Lifecycle::Creating(pending),
+                    Ok(Some(view)) => self.accept_created_view(
+                        id,
+                        generation,
+                        view,
+                        submitted.clone(),
+                        submitted,
+                        CreationPresentationState::AppliedByActivation,
+                    ),
+                    Ok(None) => Lifecycle::Creating(PendingViewCreate {
+                        handle: pending,
+                        submitted,
+                    }),
                     Err(error) => self.failed_lifecycle(id, generation, error),
                 }
             }
@@ -286,8 +345,16 @@ impl<P: Platform> WebViewSystemImpl<P> {
         id: WebViewId,
         generation: WebViewGeneration,
         mut view: P::View,
+        submitted: MutableWebViewState,
+        desired: MutableWebViewState,
+        presentation: CreationPresentationState,
     ) -> Lifecycle<P> {
-        if let Some((host, placement)) = self.active_placement(id)
+        if let Err(error) = self.converge_created_view(id, &mut view, &submitted, &desired) {
+            self.platform.close(view);
+            return self.failed_lifecycle(id, generation, error);
+        }
+        if matches!(presentation, CreationPresentationState::NeedsConvergence)
+            && let Some((host, placement)) = self.active_placement(id)
             && let Err(error) = self.platform.present(
                 generation,
                 &mut view,
@@ -302,6 +369,28 @@ impl<P: Platform> WebViewSystemImpl<P> {
         }
         self.events.push(WebViewEvent::Ready { id, generation });
         Lifecycle::Ready(view)
+    }
+
+    fn converge_created_view(
+        &mut self,
+        id: WebViewId,
+        view: &mut P::View,
+        submitted: &MutableWebViewState,
+        desired: &MutableWebViewState,
+    ) -> Result<(), String> {
+        if desired.model_size != submitted.model_size {
+            self.platform
+                .update(view, PlatformUpdate::ModelSize(desired.model_size))
+                .map_err(|error| format!("failed to apply latest model size to {id:?}: {error}"))?;
+        }
+        if desired.navigation != submitted.navigation
+            && let Some(target) = desired.navigation.as_ref()
+        {
+            self.platform
+                .update(view, PlatformUpdate::Navigation(target))
+                .map_err(|error| format!("failed to apply latest navigation to {id:?}: {error}"))?;
+        }
+        Ok(())
     }
 
     fn failed_lifecycle(
@@ -511,26 +600,33 @@ impl<P: Platform> WebViewSystemImpl<P> {
                         view: *view_id,
                         error,
                     })?,
-                Lifecycle::Creating(pending) => {
-                    match self
-                        .platform
-                        .activate_pending(record.generation, pending, presentation)
-                    {
-                        Ok(Some(view)) => {
-                            record.lifecycle = Lifecycle::Ready(view);
-                            self.events.push(WebViewEvent::Ready {
-                                id: *view_id,
-                                generation: record.generation,
-                            });
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            record.lifecycle = Lifecycle::Failed(error.clone());
-                            self.events.push(WebViewEvent::Failed {
-                                id: *view_id,
-                                generation: record.generation,
-                                error: error.clone(),
-                            });
+                Lifecycle::Creating(creating) => match self.platform.activate_pending(
+                    record.generation,
+                    &mut creating.handle,
+                    presentation,
+                ) {
+                    Ok(Some(view)) => {
+                        let generation = record.generation;
+                        let submitted = creating.submitted.clone();
+                        let desired = record.desired.mutable_state();
+                        let _ = record;
+                        let lifecycle = self.accept_created_view(
+                            *view_id,
+                            generation,
+                            view,
+                            submitted,
+                            desired,
+                            CreationPresentationState::AppliedByActivation,
+                        );
+                        let failure = match &lifecycle {
+                            Lifecycle::Failed(error) => Some(error.clone()),
+                            _ => None,
+                        };
+                        self.views
+                            .get_mut(view_id)
+                            .expect("the activated create is still current")
+                            .lifecycle = lifecycle;
+                        if let Some(error) = failure {
                             return Err(WebViewPresentationError::Backend {
                                 host,
                                 view: *view_id,
@@ -538,7 +634,21 @@ impl<P: Platform> WebViewSystemImpl<P> {
                             });
                         }
                     }
-                }
+                    Ok(None) => {}
+                    Err(error) => {
+                        record.lifecycle = Lifecycle::Failed(error.clone());
+                        self.events.push(WebViewEvent::Failed {
+                            id: *view_id,
+                            generation: record.generation,
+                            error: error.clone(),
+                        });
+                        return Err(WebViewPresentationError::Backend {
+                            host,
+                            view: *view_id,
+                            error,
+                        });
+                    }
+                },
                 Lifecycle::Waiting(_) | Lifecycle::Failed(_) | Lifecycle::Closing => {}
             }
         }
@@ -710,18 +820,30 @@ impl<P: Platform> WebViewSystemImpl<P> {
         generation: WebViewGeneration,
         result: Result<P::View, String>,
     ) {
-        let is_current_create = self.views.get(&id).is_some_and(|record| {
-            record.generation == generation && matches!(record.lifecycle, Lifecycle::Creating(_))
-        });
-        if !is_current_create {
+        let Some((submitted, desired)) = self.views.get(&id).and_then(|record| {
+            if record.generation != generation {
+                return None;
+            }
+            let Lifecycle::Creating(creating) = &record.lifecycle else {
+                return None;
+            };
+            Some((creating.submitted.clone(), record.desired.mutable_state()))
+        }) else {
             if let Ok(view) = result {
                 self.platform.close(view);
             }
             return;
-        }
+        };
 
         let lifecycle = match result {
-            Ok(view) => self.accept_created_view(id, generation, view),
+            Ok(view) => self.accept_created_view(
+                id,
+                generation,
+                view,
+                submitted,
+                desired,
+                CreationPresentationState::NeedsConvergence,
+            ),
             Err(error) => self.failed_lifecycle(id, generation, error),
         };
         self.views

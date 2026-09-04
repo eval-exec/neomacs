@@ -27,6 +27,13 @@ struct FakePlatform {
     inputs: Vec<(WebViewGeneration, WebViewInput)>,
     presentations: Vec<(WebViewGeneration, Option<WebViewOccurrenceId>)>,
     presented_host_identities: Vec<u64>,
+    updates: Vec<FakeUpdate>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FakeUpdate {
+    ModelSize(WebContentSize),
+    Navigation(NavigationTarget),
 }
 
 #[derive(Debug)]
@@ -103,6 +110,25 @@ impl Platform for FakePlatform {
         input: WebViewInput,
     ) -> Result<(), String> {
         self.inputs.push((generation, input));
+        Ok(())
+    }
+
+    fn update(
+        &mut self,
+        _view: &mut Self::View,
+        update: crate::backend::PlatformUpdate<'_>,
+    ) -> Result<(), String> {
+        match update {
+            crate::backend::PlatformUpdate::ModelSize(size) => {
+                self.updates.push(FakeUpdate::ModelSize(size));
+            }
+            crate::backend::PlatformUpdate::Navigation(target) => {
+                self.updates.push(FakeUpdate::Navigation(target.clone()));
+            }
+            crate::backend::PlatformUpdate::History(_)
+            | crate::backend::PlatformUpdate::EvaluateScript(_)
+            | crate::backend::PlatformUpdate::Focus(_) => {}
+        }
         Ok(())
     }
 
@@ -268,6 +294,47 @@ fn pre_ready_state_converges_before_native_creation() {
             id,
             generation: WebViewGeneration::new(1),
         }]
+    );
+}
+
+#[test]
+fn desired_state_changed_during_native_creation_converges_before_ready() {
+    let id = WebViewId::new(19);
+    let host = HostWindowId::new(1);
+    let mut platform = FakePlatform {
+        asynchronous: true,
+        ..FakePlatform::default()
+    };
+    platform.hosts.insert(host);
+    let mut system = WebViewSystemImpl::new(platform);
+
+    system.command(WebViewCommand::Create(create(id))).unwrap();
+    system
+        .command(WebViewCommand::SetModelSize {
+            id,
+            size: WebContentSize::new(800, 600).unwrap(),
+        })
+        .unwrap();
+    system
+        .command(WebViewCommand::Navigate {
+            id,
+            target: NavigationTarget::Uri("https://latest.invalid/".into()),
+        })
+        .unwrap();
+
+    system
+        .platform_mut()
+        .complete(id, WebViewGeneration::new(1));
+    system.service();
+
+    assert_eq!(system.state(id), Some(WebViewState::Ready));
+    assert_eq!(
+        system.platform().updates,
+        vec![
+            FakeUpdate::ModelSize(WebContentSize::new(800, 600).unwrap()),
+            FakeUpdate::Navigation(NavigationTarget::Uri("https://latest.invalid/".into())),
+        ],
+        "a view must observe the latest declarative state before Ready"
     );
 }
 

@@ -82,8 +82,9 @@ impl PlatformCreateRequest {
     }
 }
 
-// Linux and macOS create synchronously; Windows uses `Pending` until a host
-// placement supplies the HWND required by its composition controller.
+// Linux and Windows create asynchronously; macOS currently creates inline.
+// Windows may additionally wait for a host placement that supplies the HWND
+// required by its composition controller.
 #[allow(dead_code)]
 pub(crate) enum CreateOutcome<V, C> {
     Ready(V),
