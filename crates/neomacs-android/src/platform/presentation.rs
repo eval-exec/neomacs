@@ -7,7 +7,8 @@ use neomacs_app::session::{
 use neomacs_display_protocol::{FrameGlyphBuffer, GeometrySize, LogicalPixels};
 use neomacs_layout_engine::bootstrap_frame::PortableBootstrapFrameBuilder;
 use neomacs_wgpu_runtime::{
-    PresentationOutcome, SurfaceFramePresentError, SurfaceFrameRenderer, SurfaceScaleError,
+    PresentationOutcome, SurfaceCursorVisibility, SurfaceFramePresentError, SurfaceFrameRenderer,
+    SurfaceScaleError,
 };
 
 pub(super) struct PresentedFrontend {
@@ -67,9 +68,14 @@ impl PresentedFrontend {
     pub(super) fn present(
         &mut self,
     ) -> Result<Option<PresentationOutcome>, SurfaceFramePresentError> {
+        let cursor_visibility = if self.active.is_some() {
+            SurfaceCursorVisibility::Visible
+        } else {
+            SurfaceCursorVisibility::Hidden
+        };
         self.frame
             .as_ref()
-            .map(|frame| self.renderer.present_frame(frame))
+            .map(|frame| self.renderer.present_frame(frame, cursor_visibility))
             .transpose()
     }
 
