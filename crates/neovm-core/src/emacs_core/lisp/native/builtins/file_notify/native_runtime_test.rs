@@ -499,6 +499,127 @@ fn windows_callback_change_is_observed_by_an_already_rearmed_watch() {
     reset_file_notify_thread_locals();
 }
 
+#[cfg(target_os = "windows")]
+fn install_windows_event_recorder(
+    eval: &mut crate::emacs_core::eval::Context,
+    variable: &str,
+) -> Value {
+    eval.eval_str(&format!(
+        r#"
+        (progn
+          (setq {variable} nil)
+          (lambda (event)
+            (setq {variable} (cons event {variable}))))
+        "#,
+    ))
+    .expect("create Windows event recorder")
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_attribute_watch(
+    eval: &mut crate::emacs_core::eval::Context,
+    file: &Path,
+    callback: Value,
+) -> Value {
+    w32notify_add_watch(
+        eval,
+        vec![
+            Value::string(file.display().to_string()),
+            Value::list(vec![Value::symbol("attributes")]),
+            callback,
+        ],
+    )
+    .expect("add Windows attribute watch")
+}
+
+#[cfg(target_os = "windows")]
+fn has_modified_event(events: &[Vec<Value>]) -> bool {
+    events
+        .iter()
+        .any(|fields| fields.get(1) == Some(&Value::symbol("modified")))
+}
+
+/// GNU's `attribute-change' contract depends on changing the Windows
+/// read-only attribute producing FILE_ACTION_MODIFIED under an
+/// FILE_NOTIFY_CHANGE_ATTRIBUTES watch.
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_attribute_watch_observes_set_file_modes() {
+    crate::test_utils::init_test_tracing();
+    reset_file_notify_thread_locals();
+    let directory = workspace_temp_dir();
+    let file = directory.path().join("mode-attribute.txt");
+    std::fs::write(&file, "contents").expect("seed mode fixture");
+
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let variable = "neovm-test-w32-mode-events";
+    let callback = install_windows_event_recorder(&mut eval, variable);
+    let descriptor = add_windows_attribute_watch(&mut eval, &file, callback);
+    let file_name = Value::string(file.display().to_string());
+
+    crate::emacs_core::fileio::builtin_set_file_modes(
+        &mut eval,
+        vec![file_name, Value::fixnum(0), Value::symbol("nofollow")],
+    )
+    .expect("make watched file read-only");
+    let events = service_until(&mut eval, variable, has_modified_event);
+    assert!(
+        has_modified_event(&events),
+        "changing the read-only attribute did not notify the watcher"
+    );
+
+    w32notify_rm_watch(vec![descriptor]).expect("remove Windows attribute watch");
+    crate::emacs_core::fileio::builtin_set_file_modes(
+        &mut eval,
+        vec![file_name, Value::fixnum(0o600), Value::symbol("nofollow")],
+    )
+    .expect("restore fixture writability");
+    reset_file_notify_thread_locals();
+}
+
+/// GNU implements set-file-times with FILE_WRITE_ATTRIBUTES and SetFileTime.
+/// Windows reports that metadata mutation to an attributes-only directory
+/// watch even when the target already has its read-only bit set.
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_attribute_watch_observes_set_file_times_on_read_only_file() {
+    crate::test_utils::init_test_tracing();
+    reset_file_notify_thread_locals();
+    let directory = workspace_temp_dir();
+    let file = directory.path().join("time-attribute.txt");
+    std::fs::write(&file, "contents").expect("seed timestamp fixture");
+
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let file_name = Value::string(file.display().to_string());
+    crate::emacs_core::fileio::builtin_set_file_modes(
+        &mut eval,
+        vec![file_name, Value::fixnum(0), Value::symbol("nofollow")],
+    )
+    .expect("make timestamp fixture read-only");
+
+    let variable = "neovm-test-w32-time-events";
+    let callback = install_windows_event_recorder(&mut eval, variable);
+    let descriptor = add_windows_attribute_watch(&mut eval, &file, callback);
+    crate::emacs_core::fileio::builtin_set_file_times(
+        &mut eval,
+        vec![file_name, Value::fixnum(0), Value::symbol("nofollow")],
+    )
+    .expect("change watched file timestamps");
+    let events = service_until(&mut eval, variable, has_modified_event);
+    assert!(
+        has_modified_event(&events),
+        "changing timestamps on a read-only file did not notify the watcher"
+    );
+
+    w32notify_rm_watch(vec![descriptor]).expect("remove Windows attribute watch");
+    crate::emacs_core::fileio::builtin_set_file_modes(
+        &mut eval,
+        vec![file_name, Value::fixnum(0o600), Value::symbol("nofollow")],
+    )
+    .expect("restore fixture writability");
+    reset_file_notify_thread_locals();
+}
+
 /// GNU's w32notify worker treats deletion of the watched directory as normal
 /// descriptor invalidation: the pending native read ends, `w32notify-valid-p'
 /// becomes nil, and no asynchronous `file-notify-error' escapes through the
