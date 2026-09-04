@@ -817,13 +817,18 @@ impl RenderApp {
                     .map(|(_, _, bg)| bg.clone())
             };
 
+            // Drained here, not earlier: the surface-acquisition paths above can
+            // return, and observations dropped on one of those would lose the
+            // scroll measured at install with no later chance to plan it.
+            let pending_continuity =
+                render.take_pending_continuity(feature_plan.accept_effect_hints);
             renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
                 detect_frame_transitions(
                     renderer,
                     &mut render.compositor.transitions,
                     &renderer.effects.clone(),
                     &mut frame,
-                    &render.compositor.pending_scroll,
+                    pending_continuity,
                     &mut render.compositor.dirty,
                     native.width,
                     native.height,
@@ -880,13 +885,18 @@ impl RenderApp {
                 scroll_indicators_enabled,
                 toolbar,
             );
+            // Drained here, not earlier: the surface-acquisition paths above can
+            // return, and observations dropped on one of those would lose the
+            // scroll measured at install with no later chance to plan it.
+            let pending_continuity =
+                render.take_pending_continuity(feature_plan.accept_effect_hints);
             renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
                 detect_frame_transitions(
                     renderer,
                     &mut render.compositor.transitions,
                     &renderer.effects.clone(),
                     &mut frame,
-                    &render.compositor.pending_scroll,
+                    pending_continuity,
                     &mut render.compositor.dirty,
                     native.width,
                     native.height,
