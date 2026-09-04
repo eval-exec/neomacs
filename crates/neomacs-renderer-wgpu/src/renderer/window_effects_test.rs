@@ -1,8 +1,9 @@
 use super::*;
 use crate::effect_config::EffectsConfig;
 use neomacs_display_protocol::frame_glyphs::{FrameGlyphBuffer, WindowInfo};
+use neomacs_display_protocol::frame_time::{FrameSample, observe_platform_now};
 use neomacs_display_protocol::types::Rect;
-use std::time::Instant;
+use std::time::Duration;
 
 /// Helper to create a test EffectCtx
 fn test_ctx<'a>(effects: &'a EffectsConfig, frame_glyphs: &'a FrameGlyphBuffer) -> EffectCtx<'a> {
@@ -14,7 +15,11 @@ fn test_ctx<'a>(effects: &'a EffectsConfig, frame_glyphs: &'a FrameGlyphBuffer) 
         mouse_pos: (0.0, 0.0),
         surface_width: 800,
         surface_height: 600,
-        aurora_start: Instant::now(),
+        aurora_start: observe_platform_now(),
+        // Effects date themselves to the frame's sample, not to the clock, so
+        // a test frame carries one explicitly.
+        frame_sample: FrameSample::new(observe_platform_now(), Duration::from_millis(16)),
+        frame_seq: 1,
         scale_factor: 1.0,
         logical_w: 800.0,
         logical_h: 600.0,

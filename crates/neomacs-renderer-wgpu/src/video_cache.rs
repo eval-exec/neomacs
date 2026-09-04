@@ -174,6 +174,11 @@ impl VideoPresentationTracker {
     }
 
     fn finish_presented_surface(&mut self) {
+        // CPU STOPWATCH, NOT A VISUAL PHASE: this feeds the presentation
+        // interval histogram (p50/p95/p99) that diagnoses how the compositor
+        // actually paced us. Dating it to the frame's predicted presentation
+        // would make it measure the schedule we asked for instead of the one
+        // we got, which is exactly the discrepancy it exists to expose.
         self.finish_presented_surface_at(std::time::Instant::now());
     }
 

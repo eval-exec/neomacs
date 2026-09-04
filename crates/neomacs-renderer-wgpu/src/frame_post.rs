@@ -17,7 +17,8 @@
 //! name -> slot table so [`FramePost::set_uniform`] can update values live.
 
 use std::collections::HashMap;
-use std::time::Instant;
+
+use neomacs_display_protocol::frame_time::{EventTime, FrameSample, observe_platform_now};
 
 use crate::shader_surface::{
     SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceShaderLanguage, SurfaceUniformInit,
@@ -33,8 +34,12 @@ pub struct FramePost {
     /// name -> (slot, components) for `set_uniform` by Lisp name.
     uniform_slots: HashMap<String, (usize, u8)>,
     custom: [[f32; 4]; SURFACE_USER_UNIFORM_SLOTS],
-    start: Instant,
-    last: Option<Instant>,
+    /// `iTime` epoch. Dated to the frame sample, not the wall clock: the
+    /// shader's animation is a visual phase, so it must be correct when the
+    /// pixels appear.
+    start: EventTime,
+    /// Previous frame's presentation time, for `iTimeDelta`.
+    last: Option<EventTime>,
     frame_index: u32,
 }
 
@@ -123,7 +128,9 @@ impl FramePost {
             sampler,
             uniform_slots,
             custom,
-            start: Instant::now(),
+            // Adapter read: the epoch is minted at install time, outside any
+            // frame. Every later read of it goes through the frame sample.
+            start: observe_platform_now(),
             last: None,
             frame_index: 0,
         })
@@ -158,11 +165,15 @@ impl FramePost {
         height_px: u32,
         scale: f32,
         mouse: (f32, f32),
+        sample: FrameSample,
     ) {
-        let now = Instant::now();
+        // `iTime`/`iTimeDelta` are a visual phase, so they are dated to when
+        // this frame reaches the screen rather than to a clock read taken
+        // somewhere in the middle of building it.
+        let now = sample.presentation_time();
         let dt = self
             .last
-            .map(|t| now.duration_since(t).as_secs_f32().clamp(0.0, 0.1))
+            .map(|t| now.saturating_since(t).as_secs_f32().clamp(0.0, 0.1))
             .unwrap_or(0.0);
         self.last = Some(now);
         self.frame_index = self.frame_index.wrapping_add(1);
@@ -173,7 +184,7 @@ impl FramePost {
         uniforms[2] = scale;
         uniforms[4] = mouse.0;
         uniforms[5] = mouse.1;
-        uniforms[8] = now.duration_since(self.start).as_secs_f32();
+        uniforms[8] = now.saturating_since(self.start).as_secs_f32();
         uniforms[9] = dt;
         uniforms[10] = self.frame_index as f32;
         for (slot, value) in self.custom.iter().enumerate() {

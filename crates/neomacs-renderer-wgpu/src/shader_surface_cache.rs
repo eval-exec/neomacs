@@ -12,6 +12,7 @@
 //! view resumes the clock. This is deliberately stricter than video's
 //! process-wide demand.
 
+use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -137,13 +138,21 @@ pub struct CachedShaderSurface {
     /// (display refresh); `Some(n)` re-renders at most n times/sec.
     fps: Option<u32>,
     /// When this surface last actually re-rendered — the `:fps` cap is
-    /// measured from here, and `iTime` advances by the real wall-time since
-    /// it, so a capped cadence still plays at correct speed (just fewer
-    /// frames). `None` until the first render.
-    last_render: Option<Instant>,
+    /// measured from here, and `iTime` advances by the time since it, so a
+    /// capped cadence still plays at correct speed (just fewer frames).
+    /// `None` until the first render.
+    ///
+    /// An `EventTime` taken from the frame sample, not a clock read: `iTime`
+    /// is a visual phase, so it has to be right when the pixels appear.
+    last_render: Option<EventTime>,
     /// Needs one render even if not animating (created / uniform changed).
     dirty: bool,
     /// Last time the composite phase drew this surface (plus grace).
+    ///
+    /// Deliberately a wall-clock `Instant`, unlike `last_render`: this answers
+    /// a resource-lifetime question ("is this surface still live enough to
+    /// keep animating?"), and it is read by scheduler queries that run outside
+    /// any frame, where no frame sample exists.
     active_until: Option<Instant>,
     /// Logical (scale-independent) size the surface was created with. Physical
     /// `width_px`/`height_px` are derived from it via `clamp_size`; kept so a
@@ -616,6 +625,10 @@ impl ShaderSurfaceCache {
     /// iTime clock stay live for `ACTIVE_GRACE` past the last composite.
     pub fn mark_drawn(&mut self, id: u32) {
         if let Some(surface) = self.surfaces.get_mut(&id) {
+            // LIFETIME, NOT PHASE: a real clock read, because the grace window
+            // is compared against real clock reads in `has_active_surfaces`
+            // and `active_animation_max_fps`, which the frame scheduler calls
+            // outside a frame where no sample exists.
             surface.active_until = Some(Instant::now() + ACTIVE_GRACE);
         }
     }
@@ -623,6 +636,8 @@ impl ShaderSurfaceCache {
     /// Whether any animated surface was composited recently — the
     /// `DemandReason::ShaderSurface` signal.
     pub fn has_active_surfaces(&self) -> bool {
+        // LIFETIME, NOT PHASE: called by the scheduler to decide whether to
+        // ask for a frame at all, so there is no frame sample to date it to.
         let now = Instant::now();
         self.surfaces
             .values()
@@ -637,6 +652,8 @@ impl ShaderSurfaceCache {
     /// Only sustained animation counts; a one-shot `dirty` surface gets its
     /// single frame via the redraw request regardless of cadence.
     pub fn active_animation_max_fps(&self) -> Option<u32> {
+        // LIFETIME, NOT PHASE: same scheduler query, same reasoning as
+        // `has_active_surfaces`.
         let now = Instant::now();
         let mut max_cap: Option<u32> = None;
         for surface in self.surfaces.values() {
@@ -685,8 +702,17 @@ impl ShaderSurfaceCache {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         external: &std::collections::HashMap<SurfaceChannelSource, wgpu::TextureView>,
+        sample: FrameSample,
     ) -> usize {
-        let now = Instant::now();
+        // Two clocks, two questions. `iTime`, `iTimeDelta` and the `:fps`
+        // cadence are a visual phase, so they are dated to when this frame
+        // reaches the screen...
+        let now = sample.presentation_time();
+        // ...while the composite grace window is a resource-lifetime question,
+        // stamped by `mark_drawn` off the wall clock and compared against it
+        // by the scheduler. Keeping them separate is why neither has to be
+        // converted into the other's domain.
+        let live_now = Instant::now();
 
         let mut pending: Vec<u32> = Vec::new();
         for (id, surface) in &mut self.surfaces {
@@ -695,7 +721,7 @@ impl ShaderSurfaceCache {
             else {
                 continue;
             };
-            let animating = surface.animate && surface.is_active(now);
+            let animating = surface.animate && surface.is_active(live_now);
             if !surface.dirty && !animating {
                 continue;
             }
@@ -707,17 +733,17 @@ impl ShaderSurfaceCache {
                 && let (Some(fps), Some(last)) = (surface.fps, surface.last_render)
             {
                 let min_interval = Duration::from_secs_f32(1.0 / fps.max(1) as f32);
-                if now.duration_since(last) < min_interval {
+                if now.saturating_since(last) < min_interval {
                     continue;
                 }
             }
-            // Advance the clock by real wall-time since THIS surface last
-            // rendered, so a capped cadence plays at correct speed (fewer
-            // frames, not slow motion). Uncapped surfaces render every tick,
-            // so this equals the frame delta as before.
+            // Advance the clock by the time since THIS surface last rendered,
+            // so a capped cadence plays at correct speed (fewer frames, not
+            // slow motion). Uncapped surfaces render every tick, so this equals
+            // the frame delta as before.
             let surface_dt = surface
                 .last_render
-                .map(|last| now.duration_since(last).as_secs_f32().clamp(0.0, 0.1))
+                .map(|last| now.saturating_since(last).as_secs_f32().clamp(0.0, 0.1))
                 .unwrap_or(0.0);
             if animating {
                 surface.elapsed += surface_dt;
@@ -817,6 +843,8 @@ impl ShaderSurfaceCache {
 }
 
 impl CachedShaderSurface {
+    /// Takes a wall-clock `Instant`, matching `active_until`: this is the
+    /// lifetime question, not the phase one.
     fn is_active(&self, now: Instant) -> bool {
         self.active_until.is_some_and(|until| now < until)
     }
