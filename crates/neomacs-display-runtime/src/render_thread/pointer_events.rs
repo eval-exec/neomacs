@@ -1295,7 +1295,7 @@ impl RenderApp {
                 window_state.render.trigger_click_halo(
                     x,
                     y,
-                    std::time::Instant::now(),
+                    neomacs_display_protocol::frame_time::observe_platform_now(),
                     self.effects.click_halo.duration_ms,
                 );
             }
