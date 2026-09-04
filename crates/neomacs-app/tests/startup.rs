@@ -78,7 +78,7 @@ fn interactive_gui_startup_materializes_host_identity_and_gnu_command_line_state
         .frame_manager()
         .get(neovm_core::window::FrameId(terminal_frame))
         .unwrap();
-    assert!(!terminal_frame.visible);
+    assert!(terminal_frame.visibility.is_invisible());
     assert!(terminal_frame.effective_window_system().is_none());
     assert_eq!(
         list_to_vec(&evaluator.eval_str("command-line-args").unwrap()).unwrap(),
