@@ -185,10 +185,8 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
 #[cfg(unix)]
 #[test]
 fn neomacsclient_tty_identifies_its_terminal_to_the_server() {
-    use std::ffi::CStr;
     use std::fs::{self, File, OpenOptions};
     use std::io::{Read, Write};
-    use std::os::fd::FromRawFd;
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::process::Stdio;
@@ -203,25 +201,16 @@ fn neomacsclient_tty_identifies_its_terminal_to_the_server() {
     let socket = dir.path().join("server");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
 
-    let master_fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
-    assert!(
-        master_fd >= 0,
-        "posix_openpt: {}",
-        std::io::Error::last_os_error()
+    let master = File::from(
+        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
+            .expect("posix_openpt failed"),
     );
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    assert_eq!(unsafe { libc::grantpt(master_fd) }, 0, "grantpt failed");
-    assert_eq!(unsafe { libc::unlockpt(master_fd) }, 0, "unlockpt failed");
-    let mut slave_name = vec![0i8; 1024];
-    assert_eq!(
-        unsafe { libc::ptsname_r(master_fd, slave_name.as_mut_ptr(), slave_name.len()) },
-        0,
-        "ptsname_r failed"
-    );
-    let slave_name = unsafe { CStr::from_ptr(slave_name.as_ptr()) }
-        .to_str()
-        .expect("PTY path should be UTF-8")
-        .to_owned();
+    rustix::pty::grantpt(&master).expect("grantpt failed");
+    rustix::pty::unlockpt(&master).expect("unlockpt failed");
+    let slave_name = rustix::pty::ptsname(&master, Vec::new())
+        .expect("ptsname_r failed")
+        .to_string_lossy()
+        .into_owned();
     let slave = OpenOptions::new()
         .read(true)
         .write(true)
@@ -266,10 +255,8 @@ fn neomacsclient_tty_identifies_its_terminal_to_the_server() {
 #[cfg(unix)]
 #[test]
 fn neomacsclient_tty_forwards_resize_to_the_server_process() {
-    use std::ffi::CStr;
     use std::fs::{self, File, OpenOptions};
     use std::io::{Read, Write};
-    use std::os::fd::FromRawFd;
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::process::Stdio;
@@ -307,24 +294,20 @@ fn neomacsclient_tty_forwards_resize_to_the_server_process() {
         stream.write_all(b"-print DONE\n").expect("finish response");
     });
 
-    let master_fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
-    assert!(master_fd >= 0, "posix_openpt failed");
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    assert_eq!(unsafe { libc::grantpt(master_fd) }, 0, "grantpt failed");
-    assert_eq!(unsafe { libc::unlockpt(master_fd) }, 0, "unlockpt failed");
-    let mut slave_name = vec![0i8; 1024];
-    assert_eq!(
-        unsafe { libc::ptsname_r(master_fd, slave_name.as_mut_ptr(), slave_name.len()) },
-        0,
-        "ptsname_r failed"
+    let master = File::from(
+        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
+            .expect("posix_openpt failed"),
     );
-    let slave_name = unsafe { CStr::from_ptr(slave_name.as_ptr()) }
-        .to_str()
-        .expect("PTY path should be UTF-8");
+    rustix::pty::grantpt(&master).expect("grantpt failed");
+    rustix::pty::unlockpt(&master).expect("unlockpt failed");
+    let slave_name = rustix::pty::ptsname(&master, Vec::new())
+        .expect("ptsname_r failed")
+        .to_string_lossy()
+        .into_owned();
     let slave = OpenOptions::new()
         .read(true)
         .write(true)
-        .open(slave_name)
+        .open(&slave_name)
         .expect("open PTY slave");
     let mut client = Command::new(env!("CARGO_BIN_EXE_neomacsclient"))
         .arg("--socket-name")

@@ -101,6 +101,7 @@ tikv-jemalloc-sys = { version = "0.7", optional = true, default-features = false
 hostname.workspace = true
 tempfile.workspace = true
 stacker.workspace = true
+rustix = { workspace = true, features = ["pty", "termios"] }
 
 [build-dependencies]
 pkg-config.workspace = true

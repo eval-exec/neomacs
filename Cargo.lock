@@ -3703,6 +3703,7 @@ dependencies = [
  "neomacs-webview",
  "neovm-core",
  "pkg-config",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "signal-hook 0.3.18",
