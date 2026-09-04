@@ -1,3 +1,4 @@
+use neomacs_app::frontend_event::FrontendScaleFactor;
 use neomacs_app::initial_surface::{
     InitialBackgroundMode, InitialDisplayType, InitialEditorSurfaceSpec, InitialFrameFont,
     InitialFrameMetrics, prepare_initial_editor_surface,
@@ -12,6 +13,7 @@ fn gui_surface_reuses_gnu_startup_buffers_and_selects_one_visible_frame() {
     let metrics = InitialFrameMetrics::new(800, 600, 8.0, 16.0, 16.0).expect("valid GUI metrics");
     let spec = InitialEditorSurfaceSpec::gui(
         metrics,
+        FrontendScaleFactor::new(1.75).unwrap(),
         FrameDisplayIdentity::default(),
         InitialDisplayType::Color,
         InitialBackgroundMode::Light,
@@ -36,6 +38,7 @@ fn gui_surface_reuses_gnu_startup_buffers_and_selects_one_visible_frame() {
         .expect("initial frame selected");
     assert_eq!(frame.id, surface.frame());
     assert_eq!((frame.width, frame.height), (800, 600));
+    assert_eq!(frame.device_scale_factor, 1.75);
     assert!(frame.visible);
     assert_eq!(frame.effective_window_system(), Some(Value::symbol("neo")));
 }
@@ -53,6 +56,7 @@ fn named_initial_font_keeps_parameter_and_public_name_identical() {
     let metrics = InitialFrameMetrics::new(320, 240, 8.0, 16.0, 16.0).unwrap();
     let spec = InitialEditorSurfaceSpec::gui(
         metrics,
+        FrontendScaleFactor::new(1.0).unwrap(),
         FrameDisplayIdentity::default(),
         InitialDisplayType::Color,
         InitialBackgroundMode::Light,

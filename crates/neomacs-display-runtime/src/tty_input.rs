@@ -15,6 +15,7 @@ use crate::thread_comm::{InputEvent, LifecycleCommand, RenderCommand, RenderComm
 #[cfg(not(unix))]
 use crossterm::event::Event;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use neovm_host_abi::frontend_event::FrontendTerminalExtent;
 
 #[cfg(unix)]
 const GNU_KBD_BUFFER_SIZE: usize = 4096;
@@ -167,8 +168,10 @@ fn read_tty_events(
             && last_size != Some(size)
         {
             last_size = Some(size);
-            let event = InputEvent::viewport_changed(size.0 as u32, size.1 as u32, 1.0, 0)
-                .expect("one is a valid TTY scale");
+            let event = InputEvent::terminal_viewport_changed(
+                FrontendTerminalExtent::new(size.0 as u32, size.1 as u32),
+                0,
+            );
             if tx.send(event).is_err() {
                 tracing::warn!("tty_input: channel closed");
                 return;
@@ -248,8 +251,10 @@ fn read_tty_events(
                     }
                     Ok(Event::Resize(cols, rows)) => {
                         tracing::debug!("tty_input: resize {}x{}", cols, rows);
-                        let event = InputEvent::viewport_changed(cols as u32, rows as u32, 1.0, 0)
-                            .expect("one is a valid TTY scale");
+                        let event = InputEvent::terminal_viewport_changed(
+                            FrontendTerminalExtent::new(cols as u32, rows as u32),
+                            0,
+                        );
                         if tx.send(event).is_err() {
                             tracing::warn!("tty_input: channel closed");
                             return;
