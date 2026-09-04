@@ -97,22 +97,6 @@ impl TaggedHeap {
             }
             self.verify_incremental_tricolor();
         }
-<<<<<<< HEAD
-||||||| parent of 7f96c28c80 (refactor: share compile-time host services)
-        // Unchain dead markers before the sweep frees them (mirrors GNU
-        // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
-        let unchain_t0 = crate::host::time::Instant::now();
-        self.unchain_dead_markers();
-        self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
-
-=======
-        // Unchain dead markers before the sweep frees them (mirrors GNU
-        // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
-        let unchain_t0 = neomacs_host_runtime::time::Instant::now();
-        self.unchain_dead_markers();
-        self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
-
->>>>>>> 7f96c28c80 (refactor: share compile-time host services)
         // The generation census reads the final marks before the sweep
         // detaches the young list (no-op unless `NEOVM_GC_CENSUS`).
         if self.census.is_some() {

@@ -7364,17 +7364,11 @@ impl crate::emacs_core::eval::Context {
         if self.command_loop.idle_start_time.is_some() {
             return;
         }
-<<<<<<< HEAD
         // Install the background compiles that finished (P2.4): a leaf whose
         // function is not called again would otherwise stay pending.
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::cache::drain_ready_pending(Some(self));
-        let now = crate::host::time::Instant::now();
-||||||| parent of 7f96c28c80 (refactor: share compile-time host services)
-        let now = crate::host::time::Instant::now();
-=======
         let now = neomacs_host_runtime::time::Instant::now();
->>>>>>> 7f96c28c80 (refactor: share compile-time host services)
         self.command_loop.idle_start_time = Some(now);
         self.command_loop.last_idle_start_time = Some(now);
 

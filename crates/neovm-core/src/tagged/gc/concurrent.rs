@@ -346,16 +346,8 @@ impl TaggedHeap {
         launch_background_mark(job);
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
-<<<<<<< HEAD
-        self.pace_mark_start = Some(crate::host::time::Instant::now());
-        self.pace_mark_start_bytes = self.bytes_since_gc();
-||||||| parent of 7f96c28c80 (refactor: share compile-time host services)
-        self.pace_mark_start = Some(crate::host::time::Instant::now());
-        self.pace_mark_start_bytes = self.bytes_since_gc;
-=======
         self.pace_mark_start = Some(neomacs_host_runtime::time::Instant::now());
-        self.pace_mark_start_bytes = self.bytes_since_gc;
->>>>>>> 7f96c28c80 (refactor: share compile-time host services)
+        self.pace_mark_start_bytes = self.bytes_since_gc();
     }
 
     /// The ownership snapshot a concurrent mark starting now hands the GC

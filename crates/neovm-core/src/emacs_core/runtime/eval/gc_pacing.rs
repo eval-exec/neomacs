@@ -589,6 +589,7 @@ impl Context {
         );
         super::super::error::install_in_flight_registry_handle(&self.in_flight_registry);
         super::super::casetab::activate_casetab_thread_locals(self.cached_standard_case_table);
+        self.sync_charset_runtime_resources();
         let thread = std::thread::current().id();
         let thread_changed = self.last_activation_thread != Some(thread);
         self.last_activation_thread = Some(thread);
@@ -752,7 +753,17 @@ impl Context {
         &mut self,
         store: Box<dyn crate::emacs_core::fileio::RuntimeResourceStore>,
     ) {
+        let store = std::rc::Rc::<dyn crate::emacs_core::fileio::RuntimeResourceStore>::from(store);
+        crate::emacs_core::charset::install_runtime_resource_store(Some(std::rc::Rc::clone(
+            &store,
+        )));
         self.editor_file_system.install_runtime_resources(store);
+    }
+
+    pub(crate) fn sync_charset_runtime_resources(&self) {
+        crate::emacs_core::charset::install_runtime_resource_store(
+            self.editor_file_system.runtime_resources(),
+        );
     }
 
     /// Replace the target-default mutable filesystem before editor startup.

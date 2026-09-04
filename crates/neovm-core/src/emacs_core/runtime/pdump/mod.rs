@@ -688,6 +688,7 @@ pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapsh
     // successful load would have produced.)
     crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
     restore_charset_registry(snapshot.charset_registry.clone());
+    eval.sync_charset_runtime_resources();
     restore_fontset_registry(snapshot.fontset_registry.clone());
     eval.sync_thread_runtime_bindings();
     eval.sync_current_thread_buffer_state();

@@ -2364,7 +2364,6 @@ impl Context {
         // Context's obarray is not that one (P1.4 §3.6).
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::cache::sync_cache_to_obarray(self.obarray.generation());
-<<<<<<< HEAD
         // Exact GC can finish an older sweep after activation. Read the epoch
         // here, before any TLS cache reconstructs Values from address keys.
         let collection_epoch = unsafe { (*heap_ptr).gc_collections() };
@@ -2378,14 +2377,7 @@ impl Context {
             crate::tagged::gc::CacheRootScan::Collection,
             &mut groups,
         );
-        let tl_seed_t0 = crate::host::time::Instant::now();
-||||||| parent of 7f96c28c80 (refactor: share compile-time host services)
-        collect_thread_local_gc_roots(&mut thread_local_roots, heap_identity, &mut groups);
-        let tl_seed_t0 = crate::host::time::Instant::now();
-=======
-        collect_thread_local_gc_roots(&mut thread_local_roots, heap_identity, &mut groups);
         let tl_seed_t0 = neomacs_host_runtime::time::Instant::now();
->>>>>>> 7f96c28c80 (refactor: share compile-time host services)
         let tl_seed_count = thread_local_roots.len();
         for (root, origin) in thread_local_roots {
             unsafe {
