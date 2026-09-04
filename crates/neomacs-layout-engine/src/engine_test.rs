@@ -9617,6 +9617,313 @@ fn replacing_display_measurement_preserves_conservative_bottom_scroll() {
     );
 }
 
+/// One describe-char scenario run: chat buffer with an image-bearing reply
+/// row, point placed per `point_mode`, then a Help-style vertical split.
+/// Returns the max nested `layout_window_rust` depth observed.
+fn run_describe_char_scenario(
+    conservatively: i64,
+    point_mode: &str,
+    image_height: i64,
+    wrapped_paragraph: bool,
+) -> (usize, usize) {
+    let mut eval = Context::new();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    eval.set_display_host(Box::new(RecordingImageDisplayHost {
+        requests: Arc::clone(&requests),
+        video_requests: Arc::new(Mutex::new(Vec::new())),
+        webkit_requests: Arc::new(Mutex::new(Vec::new())),
+        surface_requests: Arc::new(Mutex::new(Vec::new())),
+    }));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let image_spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("png"),
+        Value::keyword("file"),
+        Value::string("/tmp/neomacs-inline-image.png"),
+        Value::keyword("max-width"),
+        Value::fixnum(32),
+        Value::keyword("max-height"),
+        Value::fixnum(image_height),
+    ]);
+    let prefix = Value::string_with_text_properties(
+        "@@",
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 2,
+            plist: Value::list(vec![Value::symbol("display"), image_spec.clone()]),
+        }],
+    );
+    let reply_line = " azz> grok build/grok cli/grok agent/grok bot\n";
+    let context_line = "description context line 000\n";
+    let image_char;
+    let point_byte;
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.set_buffer_local("scroll-conservatively", Value::fixnum(conservatively));
+        let mut text = String::new();
+        for line in 0..24 {
+            text.push_str(&format!("preceding chat line {line:03}\n"));
+        }
+        image_char = text.len();
+        text.push('↩');
+        text.push_str(reply_line);
+        if wrapped_paragraph {
+            for word in 0..120 {
+                text.push_str(&format!("wrapped filler word {word:03} "));
+            }
+            text.push('\n');
+        }
+        for line in 0..140 {
+            text.push_str(&format!("description context line {line:03}\n"));
+        }
+        buf.insert(&text);
+        assert!(buf.put_text_property(
+            image_char,
+            image_char + '↩'.len_utf8(),
+            Value::symbol("display"),
+            image_spec,
+        ));
+        assert!(buf.put_text_property(
+            image_char,
+            image_char + '↩'.len_utf8(),
+            Value::symbol("line-prefix"),
+            prefix.clone(),
+        ));
+        assert!(buf.put_text_property(
+            image_char,
+            image_char + '↩'.len_utf8(),
+            Value::symbol("wrap-prefix"),
+            prefix,
+        ));
+        point_byte = match point_mode {
+            "at-image" => image_char,
+            "line-end" => image_char + '↩'.len_utf8() + reply_line.len(),
+            "below-image" => {
+                image_char + '↩'.len_utf8() + reply_line.len() + 10 * context_line.len()
+            }
+            other => panic!("unknown point_mode {other}"),
+        };
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(point_byte));
+    }
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("probe-describe-char", 640, 448, buf_id);
+    let selected = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    super::viewport_retry_depth_probe::reset();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let after_initial = super::viewport_retry_depth_probe::max_depth();
+
+    // *Help* opens below the source window, resizing it mid-session.
+    eval.frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected,
+            neovm_core::window::SplitDirection::Vertical,
+            buf_id,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("help window");
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        let neovm_core::window::Window::Leaf { point, .. } =
+            frame.find_window_mut(selected).expect("source window")
+        else {
+            panic!("source window is not a leaf");
+        };
+        *point = LispCharPos1::from_one_based_usize(point_byte + 1);
+    }
+    super::viewport_retry_depth_probe::reset();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let after_split = super::viewport_retry_depth_probe::max_depth();
+
+    (after_initial, after_split)
+}
+
+/// Help-window variant: describe-char's `*Help*` buffer contains a copy of
+/// the image display property, and its point sits at EOB beyond the small
+/// Help window's visible span.  Returns max nested depth over both windows.
+fn run_help_window_scenario(conservatively: i64) -> usize {
+    let mut eval = Context::new();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    eval.set_display_host(Box::new(RecordingImageDisplayHost {
+        requests: Arc::clone(&requests),
+        video_requests: Arc::new(Mutex::new(Vec::new())),
+        webkit_requests: Arc::new(Mutex::new(Vec::new())),
+        surface_requests: Arc::new(Mutex::new(Vec::new())),
+    }));
+    let chat_buf = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let image_spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("png"),
+        Value::keyword("file"),
+        Value::string("/tmp/neomacs-inline-image.png"),
+        Value::keyword("max-width"),
+        Value::fixnum(32),
+        Value::keyword("max-height"),
+        Value::fixnum(18),
+    ]);
+    let chat_image;
+    let help_image;
+    let help_end;
+    {
+        let buf = eval.buffer_manager_mut().get_mut(chat_buf).expect("buffer");
+        buf.set_buffer_local("scroll-conservatively", Value::fixnum(conservatively));
+        let mut text = String::new();
+        for line in 0..24 {
+            text.push_str(&format!("preceding chat line {line:03}\n"));
+        }
+        chat_image = text.len();
+        text.push('↩');
+        text.push_str(" azz> grok build/grok cli/grok agent/grok bot\n");
+        for line in 0..140 {
+            text.push_str(&format!("description context line {line:03}\n"));
+        }
+        buf.insert(&text);
+        assert!(buf.put_text_property(
+            chat_image,
+            chat_image + '↩'.len_utf8(),
+            Value::symbol("display"),
+            image_spec.clone(),
+        ));
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(chat_image));
+    }
+    let help_buf = eval.buffer_manager_mut().create_buffer("*Help*");
+    {
+        let buf = eval
+            .buffer_manager_mut()
+            .get_mut(help_buf)
+            .expect("help buffer");
+        buf.set_buffer_local("scroll-conservatively", Value::fixnum(conservatively));
+        let mut text = String::new();
+        for line in 0..8 {
+            text.push_str(&format!("help header line {line:03}\n"));
+        }
+        help_image = text.len();
+        text.push('↩');
+        text.push_str(" display: (image ...)\n");
+        for line in 0..60 {
+            text.push_str(&format!(
+                "help body line {line:03} with more words to wrap\n"
+            ));
+        }
+        help_end = text.len();
+        buf.insert(&text);
+        assert!(buf.put_text_property(
+            help_image,
+            help_image + '↩'.len_utf8(),
+            Value::symbol("display"),
+            image_spec,
+        ));
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(help_end));
+    }
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("probe-help-window", 640, 448, chat_buf);
+    let selected = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    // *Help* opens below the source window on its own buffer.
+    let help_window = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected,
+            neovm_core::window::SplitDirection::Vertical,
+            help_buf,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("help window");
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        let neovm_core::window::Window::Leaf { point, .. } =
+            frame.find_window_mut(selected).expect("source window")
+        else {
+            panic!("source window is not a leaf");
+        };
+        *point = LispCharPos1::from_one_based_usize(chat_image + 1);
+        let neovm_core::window::Window::Leaf { point, .. } =
+            frame.find_window_mut(help_window).expect("help window")
+        else {
+            panic!("help window is not a leaf");
+        };
+        *point = LispCharPos1::from_one_based_usize(help_end + 1);
+    }
+    let mut engine = LayoutEngine::new();
+    super::viewport_retry_depth_probe::reset();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    super::viewport_retry_depth_probe::max_depth()
+}
+
+/// REGRESSION (telega describe-char evaluator stack overflow): the viewport
+/// visibility retry must consume *iterations*, never nested
+/// `layout_window_rust` frames.  Each frame is large (image parsing, font
+/// resolution, row walks); the recursive architecture overflowed the
+/// profiling evaluator's stack at ~30 nested placement attempts, far below
+/// the nominal retry budget.
+///
+/// Sweeps the geometry around the crash: scroll-conservatively, point
+/// position, image height, wrapped paragraphs, plus a `*Help*`-window
+/// variant — and asserts that no scenario nests layout at all.
+#[tracing_test::traced_test]
+#[test]
+fn viewport_retries_iterate_without_nesting_layout_window_rust() {
+    let mut report = Vec::new();
+    let mut worst = 0usize;
+    for conservatively in [0i64, 101i64] {
+        for point_mode in ["at-image", "line-end", "below-image"] {
+            for image_height in [18i64, 40i64] {
+                for wrapped_paragraph in [false, true] {
+                    let (initial, split) = run_describe_char_scenario(
+                        conservatively,
+                        point_mode,
+                        image_height,
+                        wrapped_paragraph,
+                    );
+                    report.push(format!(
+                        "c={conservatively} {point_mode:>11} img_h={image_height:>2} \
+                         wrapped={wrapped_paragraph:<5} depth initial={initial} split={split}"
+                    ));
+                    worst = worst.max(initial).max(split);
+                }
+            }
+        }
+    }
+    for conservatively in [0i64, 101i64] {
+        let help_depth = run_help_window_scenario(conservatively);
+        report.push(format!(
+            "c={conservatively} help-window depth split={help_depth}"
+        ));
+        worst = worst.max(help_depth);
+    }
+    for line in &report {
+        eprintln!("PROBE {line}");
+    }
+    assert_eq!(
+        worst, 1,
+        "viewport retries must consume iterations, never nested \
+         layout_window_rust frames; worst depth={worst} across {report:?}"
+    );
+}
+
 #[test]
 fn distant_point_with_unrelated_overlay_does_not_exhaust_visibility_retries() {
     let mut eval = Context::new();

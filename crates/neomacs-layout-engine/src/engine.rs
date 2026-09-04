@@ -110,6 +110,51 @@ use neovm_core::window::{
 
 /// Bound redisplay convergence work when point begins outside the visible span.
 const MAX_WINDOW_VISIBILITY_RETRIES: usize = 128;
+
+/// Test-only probe counting nested `layout_window_rust` invocations.
+///
+/// The viewport retry budget must consume *iterations*, not Rust stack.
+/// Production builds never reference this module.
+#[cfg(test)]
+mod viewport_retry_depth_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static DEPTH: Cell<usize> = const { Cell::new(0) };
+        static MAX_DEPTH: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) struct Guard;
+
+    impl Guard {
+        pub(super) fn enter() -> Self {
+            DEPTH.with(|depth| {
+                let next = depth.get() + 1;
+                depth.set(next);
+                MAX_DEPTH.with(|max| {
+                    if next > max.get() {
+                        max.set(next);
+                    }
+                });
+            });
+            Guard
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            DEPTH.with(|depth| depth.set(depth.get() - 1));
+        }
+    }
+
+    pub(super) fn reset() {
+        MAX_DEPTH.with(|max| max.set(0));
+    }
+
+    pub(super) fn max_depth() -> usize {
+        MAX_DEPTH.with(|max| max.get())
+    }
+}
 /// Bound intrinsic chrome convergence so oscillating status-line Lisp can
 /// never publish mismatched geometry or spin forever.
 const MAX_FRAME_LAYOUT_RETRIES: usize = 12;
@@ -836,7 +881,22 @@ enum LeafLayoutAttempt {
         window_end_attempt: Option<neovm_core::window::WindowEndAttempt>,
     },
     Effect(LayoutEffect),
+    /// The attempt unwound and asks the window loop to re-enter with these
+    /// inputs instead of nesting another `layout_window_rust` frame.  The
+    /// visibility retry budget must consume *iterations*, never Rust stack:
+    /// each `layout_window_rust` frame is large (image parsing, font
+    /// resolution, row walks), and a bounded retry chain of nested frames
+    /// still overflows a profiling evaluator's stack well before the
+    /// numeric budget is spent.
+    Retry(Box<WindowLayoutRetry>),
     LogicalInputsChanged,
+}
+
+/// Iterative continuation of `layout_window_rust` for one visibility retry.
+struct WindowLayoutRetry {
+    params: WindowParams,
+    remaining_visibility_retries: usize,
+    viewport_resolution: ViewportResolutionPhase,
 }
 
 /// Whether this leaf is choosing, measuring, or committing its viewport.
@@ -2062,6 +2122,12 @@ impl LayoutEngine {
                 let mut cursor_only_replay = plan.cursor_only.take();
                 let mut scroll_replay = plan.scroll.take();
                 let mut is_edit = plan.is_edit;
+                let mut visibility_retry_budget = if query_window.is_some() {
+                    0
+                } else {
+                    MAX_WINDOW_VISIBILITY_RETRIES
+                };
+                let mut viewport_retry_phase = ViewportResolutionPhase::Resolve;
                 let window_layout = loop {
                     match self.layout_window_rust(
                         evaluator,
@@ -2071,12 +2137,8 @@ impl LayoutEngine {
                         &layout_box,
                         &face_resolver,
                         window_geometry.reserve_terminal_right_border_col,
-                        if query_window.is_some() {
-                            0
-                        } else {
-                            MAX_WINDOW_VISIBILITY_RETRIES
-                        },
-                        ViewportResolutionPhase::Resolve,
+                        visibility_retry_budget,
+                        viewport_retry_phase.clone(),
                         cursor_only_replay.take(),
                         scroll_replay.take(),
                         is_edit,
@@ -2091,6 +2153,19 @@ impl LayoutEngine {
                         } => {
                             frame_window_end_attempts.stage(window_end_attempt);
                             break outcome;
+                        }
+                        LeafLayoutAttempt::Retry(retry) => {
+                            // Same-inputs continuation: the attempt committed a
+                            // new window start (or point) and asks for one more
+                            // bounded attempt.  Do not re-collect live inputs —
+                            // the retry carries the exact params the recursive
+                            // call site used to build.  Replays were already
+                            // consumed; position publication keeps the value
+                            // the attempt derived it from.
+                            live_inputs.window = retry.params;
+                            visibility_retry_budget = retry.remaining_visibility_retries;
+                            viewport_retry_phase = retry.viewport_resolution;
+                            is_edit = false;
                         }
                         LeafLayoutAttempt::Effect(effect) => {
                             lisp_ledger.acknowledge_scroll_hook(&effect);
@@ -2163,6 +2238,15 @@ impl LayoutEngine {
                                 live_inputs.source,
                             );
                             is_edit = false;
+                            // A hook effect re-enters this leaf from its live
+                            // inputs, which is the same fresh attempt the old
+                            // recursion performed by unwinding to this loop.
+                            visibility_retry_budget = if query_window.is_some() {
+                                0
+                            } else {
+                                MAX_WINDOW_VISIBILITY_RETRIES
+                            };
+                            viewport_retry_phase = ViewportResolutionPhase::Resolve;
                         }
                         LeafLayoutAttempt::LogicalInputsChanged => {
                             let request = FrameRelayoutRequest::LogicalInputsChanged {
@@ -3385,6 +3469,16 @@ impl LayoutEngine {
         topology_generation: u64,
         face_attempt: &FrameFaceAttempt,
     ) -> LeafLayoutAttempt {
+        #[cfg(test)]
+        let _viewport_retry_depth = viewport_retry_depth_probe::Guard::enter();
+        tracing::debug!(
+            "layout_window_rust: enter win={} start={} point={} remaining={} phase={:?}",
+            params.window_id,
+            params.window_start,
+            params.point,
+            remaining_visibility_retries,
+            viewport_resolution,
+        );
         let window_id = neovm_core::window::WindowId(params.window_id as u64);
         let live_window_start = ResolvedWindowStart::from_layout_charpos(params.window_start);
         let resolved_window_start = match &viewport_resolution {
@@ -3676,24 +3770,11 @@ impl LayoutEngine {
                 // (span re-wrapped / re-measured / lost position continuity).
                 // Re-lay this window from scratch with no fast-path plan —
                 // replay-free layout cannot mispredict, so this terminates.
-                return self.layout_window_rust(
-                    evaluator,
-                    frame_id,
-                    params,
-                    frame_params,
-                    layout_box,
-                    face_resolver,
-                    reserve_right_border_col,
+                return LeafLayoutAttempt::Retry(Box::new(WindowLayoutRetry {
+                    params: params.clone(),
                     remaining_visibility_retries,
-                    viewport_resolution.clone(),
-                    None,
-                    None,
-                    false,
-                    position_publication,
-                    lisp_ledger,
-                    topology_generation,
-                    face_attempt,
-                );
+                    viewport_resolution: viewport_resolution.clone(),
+                }));
             }
             BufferSourceRenderAttemptOutcome::ResolveViewport {
                 decision: ViewportDecision::NeedMoreMeasurement(measurement),
@@ -3704,24 +3785,11 @@ impl LayoutEngine {
                 let mut measurement_params = params.clone();
                 measurement_params.window_start = measurement.probe_window_start().get();
                 measurement_params.previous_visible_end = None;
-                return self.layout_window_rust(
-                    evaluator,
-                    frame_id,
-                    &measurement_params,
-                    frame_params,
-                    layout_box,
-                    face_resolver,
-                    reserve_right_border_col,
-                    remaining_visibility_retries.saturating_sub(1),
-                    ViewportResolutionPhase::Measure(measurement),
-                    None,
-                    None,
-                    false,
-                    position_publication,
-                    lisp_ledger,
-                    topology_generation,
-                    face_attempt,
-                );
+                return LeafLayoutAttempt::Retry(Box::new(WindowLayoutRetry {
+                    params: measurement_params,
+                    remaining_visibility_retries: remaining_visibility_retries.saturating_sub(1),
+                    viewport_resolution: ViewportResolutionPhase::Measure(measurement),
+                }));
             }
             BufferSourceRenderAttemptOutcome::ResolveViewport {
                 decision:
@@ -3746,15 +3814,38 @@ impl LayoutEngine {
                     .map_or(fallback_window_start, |start| {
                         ResolvedWindowStart::from_layout_charpos(start.get() as i64)
                     });
+                tracing::debug!(
+                    "layout_window_rust: point-relative placement win={} point={} lines_above={} fallback={} resolved={} remaining={}",
+                    params.window_id,
+                    point.get(),
+                    lines_above_point,
+                    fallback_window_start.get(),
+                    resolved_start.get(),
+                    remaining_visibility_retries,
+                );
                 // A display-motion error, or a motion engine that cannot
                 // represent a better start for this display span, preserves
                 // the semantic viewport. Do not spend the remaining budget
                 // rediscovering the same no-op placement.
-                let next_visibility_retries = if resolved_start == fallback_window_start {
-                    0
-                } else {
-                    remaining_visibility_retries.saturating_sub(1)
-                };
+                //
+                // A motion result equal to the start this attempt already
+                // laid out from is the same story: layout from those inputs
+                // is deterministic (the freshness check above pins them), so
+                // re-committing it cannot change the producer's decision and
+                // would only cycle.  Stop the chain there; the numeric
+                // retry budget is a bound, not a convergence plan.  Measure
+                // phases are exempt: their start is a probe, and a commit of
+                // the same position re-runs the producer *without* the probe
+                // continuation, which can legitimately converge differently.
+                let reattempting_current_start =
+                    !matches!(&viewport_resolution, ViewportResolutionPhase::Measure(_))
+                        && resolved_start.get() == params.window_start;
+                let next_visibility_retries =
+                    if resolved_start == fallback_window_start || reattempting_current_start {
+                        0
+                    } else {
+                        remaining_visibility_retries.saturating_sub(1)
+                    };
                 if evaluator.frame_manager().window_topology_generation() != topology_generation
                     || evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id)
                         != freshness_before_motion
@@ -3765,24 +3856,11 @@ impl LayoutEngine {
                 let mut retry_params = params.clone();
                 retry_params.window_start = resolved_start.get();
                 retry_params.previous_visible_end = None;
-                return self.layout_window_rust(
-                    evaluator,
-                    frame_id,
-                    &retry_params,
-                    frame_params,
-                    layout_box,
-                    face_resolver,
-                    reserve_right_border_col,
-                    next_visibility_retries,
-                    ViewportResolutionPhase::Commit(resolved_start),
-                    None,
-                    None,
-                    false,
-                    position_publication,
-                    lisp_ledger,
-                    topology_generation,
-                    face_attempt,
-                );
+                return LeafLayoutAttempt::Retry(Box::new(WindowLayoutRetry {
+                    params: retry_params,
+                    remaining_visibility_retries: next_visibility_retries,
+                    viewport_resolution: ViewportResolutionPhase::Commit(resolved_start),
+                }));
             }
             BufferSourceRenderAttemptOutcome::ResolveViewport {
                 decision: ViewportDecision::Keep | ViewportDecision::Commit { .. },
@@ -3802,26 +3880,13 @@ impl LayoutEngine {
                 // A visibility retry re-flows the window from a new window_start,
                 // so the Phase A fast-path plan (snapshotted against the original
                 // window_start) no longer applies — re-lay from scratch.
-                return self.layout_window_rust(
-                    evaluator,
-                    frame_id,
-                    &retry_params,
-                    frame_params,
-                    layout_box,
-                    face_resolver,
-                    reserve_right_border_col,
-                    remaining_visibility_retries.saturating_sub(1),
-                    ViewportResolutionPhase::Commit(ResolvedWindowStart::from_layout_charpos(
-                        window_start,
-                    )),
-                    None,
-                    None,
-                    false,
-                    position_publication,
-                    lisp_ledger,
-                    topology_generation,
-                    face_attempt,
-                );
+                return LeafLayoutAttempt::Retry(Box::new(WindowLayoutRetry {
+                    params: retry_params,
+                    remaining_visibility_retries: remaining_visibility_retries.saturating_sub(1),
+                    viewport_resolution: ViewportResolutionPhase::Commit(
+                        ResolvedWindowStart::from_layout_charpos(window_start),
+                    ),
+                }));
             }
             BufferSourceRenderAttemptOutcome::RetryPointIntoWindow { point_charpos } => {
                 if let Some(attempt) = window_end_attempt.take() {
@@ -3853,24 +3918,11 @@ impl LayoutEngine {
                 evaluator.set_window_point_for_redisplay(frame_id, window_id, point_lisp);
                 let mut retry_params = params.clone();
                 retry_params.point = point_charpos;
-                return self.layout_window_rust(
-                    evaluator,
-                    frame_id,
-                    &retry_params,
-                    frame_params,
-                    layout_box,
-                    face_resolver,
-                    reserve_right_border_col,
-                    remaining_visibility_retries.saturating_sub(1),
-                    ViewportResolutionPhase::Commit(resolved_window_start),
-                    None,
-                    None,
-                    false,
-                    position_publication,
-                    lisp_ledger,
-                    topology_generation,
-                    face_attempt,
-                );
+                return LeafLayoutAttempt::Retry(Box::new(WindowLayoutRetry {
+                    params: retry_params,
+                    remaining_visibility_retries: remaining_visibility_retries.saturating_sub(1),
+                    viewport_resolution: ViewportResolutionPhase::Commit(resolved_window_start),
+                }));
             }
             BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
