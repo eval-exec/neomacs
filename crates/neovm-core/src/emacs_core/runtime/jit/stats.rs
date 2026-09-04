@@ -38,6 +38,16 @@ pub(crate) struct CompileStats {
     /// setting and relaxing its profitability gate moves Ir by 0.006%, which is
     /// only interpretable next to how often the compiled code runs.
     pub native_entries: u64,
+    /// Times `dispatch_sized` was consulted at all, and how it answered.
+    ///
+    /// Compilation is only ever triggered from this decision, so a callee that
+    /// never reaches it is never heated, never compiled and never entered. The
+    /// counters exist because eliminating every OTHER candidate (threshold,
+    /// profitability gate, id cap, arity) left "ordinary calls do not arrive
+    /// here" as the only explanation, and that deserved measuring rather than
+    /// inferring.
+    pub dispatch_consulted: u64,
+    pub dispatch_said_compiled: u64,
     pub not_profitable: u64,
     pub not_compilable: u64,
     /// Cache misses served by a pre-compiled AOT leaf ([`super::aot`]) instead
@@ -130,12 +140,14 @@ pub(super) fn record_aot_load(ops_len: usize) {
 pub(crate) fn format_summary(s: &CompileStats) -> String {
     let mean_us = s.total_us.checked_div(s.total_compiles).unwrap_or(0);
     format!(
-        "compiles={} ok={} native_entries={} not_profitable={} not_compilable={} aot_loads={} \
+        "compiles={} ok={} native_entries={} dispatch={}/{} not_profitable={} not_compilable={} aot_loads={} \
          total_us={} mean_us={mean_us} max_us={} max_fn_len={} \
          hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?}",
         s.total_compiles,
         s.compiled_ok,
         s.native_entries,
+        s.dispatch_said_compiled,
+        s.dispatch_consulted,
         s.not_profitable,
         s.not_compilable,
         s.aot_loads,
@@ -144,6 +156,21 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         s.max_fn_len,
         s.histogram_us,
     )
+}
+
+/// Record one `dispatch_sized` consultation and its verdict.
+pub(crate) fn record_dispatch(said_compiled: bool) {
+    if !summary_enabled() {
+        return;
+    }
+    STATS.with(|cell| {
+        let mut stats = cell.get();
+        stats.dispatch_consulted += 1;
+        if said_compiled {
+            stats.dispatch_said_compiled += 1;
+        }
+        cell.set(stats);
+    });
 }
 
 /// Record one ENTRY into compiled code.

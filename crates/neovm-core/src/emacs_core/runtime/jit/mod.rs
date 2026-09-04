@@ -533,11 +533,13 @@ impl RuntimeState {
                 .unwrap_or(u32::MAX)
                 .max(1)
         };
-        if now >= threshold.saturating_mul(factor) {
+        let plan = if now >= threshold.saturating_mul(factor) {
             Plan::Compiled
         } else {
             Plan::Interpret
-        }
+        };
+        super::jit::stats::record_dispatch(matches!(plan, Plan::Compiled));
+        plan
     }
 
     #[inline]
