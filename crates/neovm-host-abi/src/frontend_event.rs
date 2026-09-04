@@ -161,6 +161,9 @@ pub struct InvalidFrontendScaleFactor;
 pub struct FrontendScaleFactor(f64);
 
 impl FrontendScaleFactor {
+    /// Unit scale for hosts whose logical and device coordinates coincide.
+    pub const ONE: Self = Self(1.0);
+
     /// Validate and construct a finite, positive scale factor.
     pub fn new(scale: f64) -> Result<Self, InvalidFrontendScaleFactor> {
         if scale.is_finite() && scale > 0.0 {
@@ -267,6 +270,64 @@ impl FrontendLogicalExtent {
     }
 }
 
+/// Two-dimensional terminal viewport measured in character cells.
+///
+/// This is deliberately distinct from [`FrontendLogicalExtent`]: terminal
+/// columns and rows are not pixels, even though the evaluator's legacy frame
+/// representation stores both through the same resize path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrontendTerminalExtent {
+    columns: u32,
+    rows: u32,
+}
+
+impl FrontendTerminalExtent {
+    /// Construct a terminal character-cell extent.
+    #[must_use]
+    pub const fn new(columns: u32, rows: u32) -> Self {
+        Self { columns, rows }
+    }
+
+    /// Terminal width in character-cell columns.
+    #[must_use]
+    pub const fn columns(self) -> u32 {
+        self.columns
+    }
+
+    /// Terminal height in character-cell rows.
+    #[must_use]
+    pub const fn rows(self) -> u32 {
+        self.rows
+    }
+}
+
+/// Character-cell terminal viewport and the editor frame it targets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrontendTerminalViewport {
+    extent: FrontendTerminalExtent,
+    target: FrontendFrameId,
+}
+
+impl FrontendTerminalViewport {
+    /// Construct a terminal viewport observation.
+    #[must_use]
+    pub const fn new(extent: FrontendTerminalExtent, target: FrontendFrameId) -> Self {
+        Self { extent, target }
+    }
+
+    /// Terminal grid sampled by this observation.
+    #[must_use]
+    pub const fn extent(self) -> FrontendTerminalExtent {
+        self.extent
+    }
+
+    /// Editor frame targeted by the terminal resize.
+    #[must_use]
+    pub const fn target(self) -> FrontendFrameId {
+        self.target
+    }
+}
+
 /// Logical editor extent paired with its validated logical-to-device scale.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrontendViewport {
@@ -320,8 +381,10 @@ pub enum FrontendEvent {
         /// Editor frame receiving the text.
         target: FrontendFrameId,
     },
-    /// Physical extent or display-scale change.
+    /// Logical extent or logical-to-device scale change.
     ViewportChanged(FrontendViewport),
+    /// Character-cell terminal viewport change.
+    TerminalViewportChanged(FrontendTerminalViewport),
     /// Keyboard-focus change.
     FocusChanged {
         /// Whether the target gained focus.

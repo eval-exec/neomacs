@@ -4630,6 +4630,7 @@ fn bootstrap_buffers(
     let spec = match display.frontend() {
         FrontendKind::Gui => InitialEditorSurfaceSpec::gui(
             metrics,
+            neomacs_app::frontend_event::FrontendScaleFactor::ONE,
             match &display.kind {
                 BootstrapDisplayKind::Gui { identity, .. } => FrameDisplayIdentity::Graphical(identity.clone()),
                 _ => unreachable!("GUI display kind"),
