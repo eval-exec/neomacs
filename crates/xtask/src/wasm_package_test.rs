@@ -7,20 +7,66 @@ use super::portable_assets::{
     RUNTIME_RESOURCE_ID_ASSET, sha256_file,
 };
 use super::wasm_package::{
-    WEB_REPOSITORY_ASSETS, WEB_SOURCE_FILES, WasmArtifact, WasmPackageOptions,
-    validate_output_destination, validate_portable_assets, wasm_artifact,
+    WEB_BUNDLE_SOURCE_FILES, WEB_REPOSITORY_ASSETS, WasmArtifact, WasmPackageOptions,
+    publish_browser_bundle, validate_output_destination, validate_portable_assets, wasm_artifact,
 };
 
 #[test]
 fn wasm_package_includes_the_browser_text_service_adapter() {
-    assert!(WEB_SOURCE_FILES.contains(&"browser-input.mjs"));
-    assert!(WEB_SOURCE_FILES.contains(&"wasm-bootstrap.mjs"));
-    assert!(WEB_SOURCE_FILES.contains(&"worker-assets.mjs"));
+    assert!(WEB_BUNDLE_SOURCE_FILES.contains(&"browser-input.mjs"));
+    assert!(WEB_BUNDLE_SOURCE_FILES.contains(&"wasm-bootstrap.mjs"));
+    assert!(WEB_BUNDLE_SOURCE_FILES.contains(&"worker-assets.mjs"));
 }
 
 #[test]
 fn wasm_package_includes_the_origin_private_filesystem_adapter() {
-    assert!(WEB_SOURCE_FILES.contains(&"opfs-storage.mjs"));
+    assert!(WEB_BUNDLE_SOURCE_FILES.contains(&"opfs-storage.mjs"));
+}
+
+#[test]
+fn wasm_browser_shell_selects_the_current_release_through_an_uncached_manifest() {
+    let shell = include_str!("../../neomacs-wasm/web/index.html");
+
+    assert!(shell.contains(r#"fetch("./manifest.json", { cache: "no-store" })"#));
+    assert!(shell.contains("await import(new URL(manifest.entry, document.baseURI).href)"));
+    assert!(!shell.contains(r#"src="./main.js""#));
+}
+
+#[test]
+fn browser_bundle_publication_addresses_every_release_asset_by_one_content_id() {
+    let temporary = tempdir().unwrap();
+    let staged_bundle = temporary.path().join("staged-bundle");
+    let package = temporary.path().join("package");
+    std::fs::create_dir_all(staged_bundle.join("assets")).unwrap();
+    std::fs::write(staged_bundle.join("main.js"), "export const release = 1;\n").unwrap();
+    std::fs::write(staged_bundle.join("style.css"), "body { color: red; }\n").unwrap();
+    std::fs::write(staged_bundle.join("favicon.svg"), "<svg/>\n").unwrap();
+    std::fs::write(staged_bundle.join("assets/runtime"), "runtime\n").unwrap();
+
+    let bundle_id = publish_browser_bundle(&staged_bundle, &package).unwrap();
+    let release_root = package.join("builds").join(bundle_id.as_str());
+
+    assert_eq!(bundle_id.as_str().len(), 64);
+    assert!(
+        bundle_id
+            .as_str()
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
+    assert!(!staged_bundle.exists());
+    assert_eq!(
+        std::fs::read_to_string(release_root.join("assets/runtime")).unwrap(),
+        "runtime\n",
+    );
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(package.join("manifest.json")).unwrap()).unwrap();
+    let release_prefix = format!("./builds/{}/", bundle_id.as_str());
+    assert_eq!(manifest["schema"], 1);
+    assert_eq!(manifest["bundle_id"], bundle_id.as_str());
+    assert_eq!(manifest["entry"], format!("{release_prefix}main.js"));
+    assert_eq!(manifest["stylesheet"], format!("{release_prefix}style.css"),);
+    assert_eq!(manifest["favicon"], format!("{release_prefix}favicon.svg"),);
 }
 
 #[test]
@@ -31,10 +77,6 @@ fn wasm_package_reuses_the_window_icon_as_its_favicon() {
             "crates/neomacs-display-runtime/assets/window-icon.svg",
             "favicon.svg"
         )]
-    );
-    assert!(
-        include_str!("../../neomacs-wasm/web/index.html")
-            .contains(r#"<link rel="icon" type="image/svg+xml" href="./favicon.svg">"#)
     );
 }
 
