@@ -203,6 +203,17 @@ pub struct WgpuRenderer {
     /// Set once per frame from the scheduler's tick, so two effects drawn in
     /// the same frame cannot disagree about what time it is.
     pub(super) frame_sample: neomacs_display_protocol::frame_time::FrameSample,
+    /// Monotonic frame counter, advanced with [`Self::set_frame_sample`].
+    ///
+    /// Effects that need pseudo-random per-entity values used to reach for
+    /// `Instant::now().elapsed().subsec_nanos()`, entropy disguised as a clock
+    /// read. The frame's time sample cannot replace that — it is constant
+    /// across a frame, so it would collapse a scatter to a single value. This
+    /// counter is the entropy input instead: mixed with an entity index by
+    /// `effect_common::effect_entity_seed`, it gives every entity in a frame a
+    /// different seed and the same entity a different seed each frame, and
+    /// unlike the clock it replays identically.
+    pub(super) frame_seq: u64,
 }
 
 impl WgpuRenderer {
@@ -1181,6 +1192,7 @@ impl WgpuRenderer {
             ambient: AmbientClocks::default(),
             row_reuse: row_reuse::RowReuseCache::default(),
             glyph_stats: GlyphRenderStats::new(),
+            frame_seq: 0,
             frame_sample: neomacs_display_protocol::frame_time::FrameSample::new(
                 neomacs_display_protocol::frame_time::observe_platform_now(),
                 std::time::Duration::from_millis(16),
@@ -1358,6 +1370,9 @@ impl WgpuRenderer {
 
     pub fn set_frame_sample(&mut self, sample: neomacs_display_protocol::frame_time::FrameSample) {
         self.frame_sample = sample;
+        // A new sample is a new frame, and `frame_seq` is what effect seeds
+        // vary on from frame to frame (see the field's doc comment).
+        self.frame_seq = self.frame_seq.wrapping_add(1);
     }
 
     /// Get the glyph bind group layout for creating glyph bind groups

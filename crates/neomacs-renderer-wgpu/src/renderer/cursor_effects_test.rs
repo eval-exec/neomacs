@@ -2,7 +2,9 @@ use super::super::effect_common::EffectCtx;
 use super::*;
 use crate::effect_config::EffectsConfig;
 use neomacs_display_protocol::frame_glyphs::{FrameGlyphBuffer, WindowInfo};
+use neomacs_display_protocol::frame_time::{EventTime, FrameSample, observe_platform_now};
 use neomacs_display_protocol::types::{AnimatedCursor, Rect};
+use std::time::Duration;
 
 /// Helper to create an EffectCtx for testing
 fn make_ctx<'a>(
@@ -19,7 +21,11 @@ fn make_ctx<'a>(
         mouse_pos: (400.0, 300.0),
         surface_width: 800,
         surface_height: 600,
-        aurora_start: std::time::Instant::now(),
+        aurora_start: observe_platform_now(),
+        // Effects date themselves to the frame's sample, not to the clock, so
+        // a test frame carries one explicitly.
+        frame_sample: FrameSample::new(observe_platform_now(), Duration::from_millis(16)),
+        frame_seq: 1,
         scale_factor: 1.0,
         logical_w: 800.0,
         logical_h: 600.0,
@@ -122,7 +128,7 @@ fn test_cursor_glow_disabled() {
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
-    let cursor_pulse_start = std::time::Instant::now();
+    let cursor_pulse_start = observe_platform_now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     assert_eq!(verts.len(), 0, "disabled glow should produce no vertices");
@@ -137,7 +143,7 @@ fn test_cursor_glow_cursor_not_visible() {
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, false);
-    let cursor_pulse_start = std::time::Instant::now();
+    let cursor_pulse_start = observe_platform_now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     assert_eq!(verts.len(), 0, "invisible cursor should produce no glow");
@@ -152,7 +158,7 @@ fn test_cursor_glow_no_cursor() {
     let anim_cursor = None;
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
-    let cursor_pulse_start = std::time::Instant::now();
+    let cursor_pulse_start = observe_platform_now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     assert_eq!(verts.len(), 0, "no cursor should produce no glow");
@@ -170,7 +176,7 @@ fn test_cursor_glow_with_animated_cursor() {
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
-    let cursor_pulse_start = std::time::Instant::now();
+    let cursor_pulse_start = observe_platform_now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
 
@@ -196,7 +202,7 @@ fn test_cursor_glow_with_pulse() {
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
-    let cursor_pulse_start = std::time::Instant::now();
+    let cursor_pulse_start = observe_platform_now();
 
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
 
@@ -375,17 +381,22 @@ fn test_cursor_magnetism_expired_entries_pruned() {
 
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
 
-    // Add an old entry at a different position
-    let old_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    // Add an old entry at a different position. No sleep is needed any more:
+    // the effect ages entries against the injected frame sample, so this entry
+    // is exactly ten seconds old however fast the test runs.
+    let old_time =
+        EventTime::from_observed_instant(std::time::Instant::now() - Duration::from_secs(10));
     let mut entries = vec![(50.0, 50.0, old_time)];
-
-    std::thread::sleep(std::time::Duration::from_millis(5));
 
     let (_verts, _) = emit_cursor_magnetism(&ctx, &mut entries);
 
     // Old entry should be pruned, new one added (cursor jumped from 50,50 to 200,100)
     assert_eq!(entries.len(), 1);
-    assert!(entries[0].2.elapsed().as_millis() < 100);
+    assert_eq!(
+        entries[0].2,
+        ctx.frame_sample.presentation_time(),
+        "the surviving entry is the one this frame stamped"
+    );
     // New entry should be near cursor position (205, 110 = cursor center)
     assert!((entries[0].0 - 205.0).abs() < 1.0);
     assert!((entries[0].1 - 110.0).abs() < 1.0);
@@ -586,7 +597,8 @@ fn test_cursor_trail_fade_prunes_old_positions() {
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
 
     // Add old position
-    let old_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    let old_time =
+        EventTime::from_observed_instant(std::time::Instant::now() - Duration::from_secs(10));
     let mut positions = vec![(50.0, 50.0, 10.0, 20.0, old_time)];
     let fade_dur = std::time::Duration::from_millis(100);
 
@@ -623,7 +635,7 @@ fn test_all_effects_produce_valid_vertices() {
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
 
     // Test cursor_glow
-    let cursor_pulse_start = std::time::Instant::now();
+    let cursor_pulse_start = observe_platform_now();
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     validate_vertex_count(&verts);
     validate_vertices(&verts);
@@ -652,7 +664,7 @@ fn test_effects_respect_cursor_visible_flag() {
     // Test with cursor_visible = false
     let ctx = make_ctx(&config, &fgb, &anim_cursor, false);
 
-    let cursor_pulse_start = std::time::Instant::now();
+    let cursor_pulse_start = observe_platform_now();
     let verts = emit_cursor_glow(&ctx, &cursor_pulse_start);
     assert_eq!(verts.len(), 0, "glow should respect cursor_visible=false");
 
@@ -671,7 +683,7 @@ fn test_cursor_glow_layer_count_calculation() {
 
     let fgb = FrameGlyphBuffer::default();
     let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
-    let cursor_pulse_start = std::time::Instant::now();
+    let cursor_pulse_start = observe_platform_now();
 
     // Test different radius values
     for radius in [10.0_f32, 20.0, 30.0, 50.0, 100.0] {

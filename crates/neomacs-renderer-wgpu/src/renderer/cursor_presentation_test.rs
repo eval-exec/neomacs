@@ -4,6 +4,7 @@ use super::{
 };
 use neomacs_display_protocol::CursorColorCycleConfig;
 use neomacs_display_protocol::frame_glyphs::DisplaySlotId;
+use neomacs_display_protocol::frame_time::observe_platform_now;
 use neomacs_display_protocol::types::{
     AnimatedCursor, Color, DisplayFrameId, DisplayWindowId, Rect,
 };
@@ -12,7 +13,7 @@ use neomacs_display_protocol::types::{
 fn color_cycle_origin_inherits_the_gnu_resolved_cursor_paint() {
     let cycle = CursorColorCycleConfig::default();
     let resolved = ResolvedCursorPaint::new(Color::WHITE, Color::BLACK);
-    let origin = std::time::Instant::now();
+    let origin = observe_platform_now();
 
     let presented = PresentedCursorPaint::resolve(
         resolved,
@@ -34,8 +35,8 @@ fn color_cycle_depends_on_target_time_not_delivered_tick_count() {
     cycle.saturation = 1.0;
     cycle.lightness = 0.5;
     let resolved = ResolvedCursorPaint::new(Color::BLACK, Color::WHITE);
-    let origin = std::time::Instant::now();
-    let target = origin + std::time::Duration::from_millis(500);
+    let origin = observe_platform_now();
+    let target = origin.plus(std::time::Duration::from_millis(500));
     let policy = CursorColorPolicy::Cycle {
         config: &cycle,
         origin,
@@ -46,7 +47,7 @@ fn color_cycle_depends_on_target_time_not_delivered_tick_count() {
         let _ = PresentedCursorPaint::resolve(
             resolved,
             policy,
-            origin + std::time::Duration::from_millis(skipped_sample),
+            origin.plus(std::time::Duration::from_millis(skipped_sample)),
         );
     }
     let after_intermediate_samples = PresentedCursorPaint::resolve(resolved, policy, target);
@@ -61,8 +62,8 @@ fn color_cycle_retains_frame_scale_precision_after_a_year() {
     cycle.saturation = 1.0;
     cycle.lightness = 0.5;
     let resolved = ResolvedCursorPaint::new(Color::WHITE, Color::BLACK);
-    let origin = std::time::Instant::now();
-    let after_a_year = origin + std::time::Duration::from_secs(365 * 24 * 60 * 60);
+    let origin = observe_platform_now();
+    let after_a_year = origin.plus(std::time::Duration::from_secs(365 * 24 * 60 * 60));
     let policy = CursorColorPolicy::Cycle {
         config: &cycle,
         origin,
@@ -72,7 +73,7 @@ fn color_cycle_retains_frame_scale_precision_after_a_year() {
     let next = PresentedCursorPaint::resolve(
         resolved,
         policy,
-        after_a_year + std::time::Duration::from_secs_f64(1.0 / 24.0),
+        after_a_year.plus(std::time::Duration::from_secs_f64(1.0 / 24.0)),
     );
 
     assert_ne!(
@@ -103,7 +104,7 @@ fn vertical_motion_does_not_inverse_the_destination_glyph_before_the_box_arrives
     let paint = PresentedCursorPaint::resolve(
         ResolvedCursorPaint::new(Color::WHITE, Color::BLACK),
         CursorColorPolicy::Inherit,
-        std::time::Instant::now(),
+        observe_platform_now(),
     );
 
     let presentation = FilledBoxPresentation::resolve(
@@ -136,7 +137,7 @@ fn horizontal_and_vertical_motion_share_one_in_flight_contract() {
     let paint = PresentedCursorPaint::resolve(
         ResolvedCursorPaint::new(Color::WHITE, Color::BLACK),
         CursorColorPolicy::Inherit,
-        std::time::Instant::now(),
+        observe_platform_now(),
     );
     let moving_from = |x, y| AnimatedCursor {
         window_id,
@@ -181,7 +182,7 @@ fn settled_box_owns_the_matching_inverse_video_cell() {
     let paint = PresentedCursorPaint::resolve(
         ResolvedCursorPaint::new(Color::WHITE, Color::BLACK),
         CursorColorPolicy::Inherit,
-        std::time::Instant::now(),
+        observe_platform_now(),
     );
 
     let presentation =
