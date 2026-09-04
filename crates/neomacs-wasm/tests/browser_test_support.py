@@ -10,6 +10,8 @@ from pathlib import Path
 
 import cbor2
 from selenium import webdriver
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 
 
@@ -115,6 +117,45 @@ class BrowserEditorHarness:
         )
         return self.decode_frame_text(values)
 
+    def frame_payload(self) -> dict[str, object]:
+        values = self.driver.execute_script(
+            "return Array.from(new Uint8Array("
+            "globalThis.__neomacsLastFrame || new ArrayBuffer()))"
+        )
+        return cbor2.loads(bytes(values)) if values else {}
+
+    @staticmethod
+    def matrix_text(entry: dict[str, object]) -> str:
+        characters: list[str] = []
+        for row in entry["matrix"]["rows"]:
+            for area in row["glyphs"]:
+                for glyph in area:
+                    kind = glyph["glyph_type"]
+                    if isinstance(kind, dict) and "Char" in kind:
+                        characters.append(kind["Char"].get("ch", ""))
+        return "".join(characters)
+
+    def wait_for_window_matrices(
+        self,
+        description: str,
+        *,
+        contains: str,
+        count: int,
+    ) -> list[dict[str, object]]:
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline:
+            matching = [
+                entry
+                for entry in self.frame_payload().get("window_matrices", [])
+                if contains in self.matrix_text(entry)
+            ]
+            if len(matching) == count:
+                return matching
+            time.sleep(0.1)
+        raise RuntimeError(
+            f"editor did not render {description}; frame={self.frame_text()!r}"
+        )
+
     def finish_startup_frame_capture(self) -> list[str]:
         frames = self.driver.execute_script(
             "const frames = globalThis.__neomacsStartupFrames || [];"
@@ -204,6 +245,14 @@ class BrowserEditorHarness:
             text,
         )
         self.wait_for_input_acceptance(accepted, 1)
+
+    def type_native_text(self, text: str) -> None:
+        ActionChains(self.driver).send_keys(text).perform()
+
+    def type_native_control_prefix(self, key: str, suffix: str) -> None:
+        ActionChains(self.driver).key_down(Keys.CONTROL).send_keys(key).key_up(
+            Keys.CONTROL
+        ).send_keys(suffix).perform()
 
     def wait_for_frame_text(
         self,
