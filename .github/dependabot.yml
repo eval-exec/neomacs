@@ -18,3 +18,8 @@ updates:
           - "wgpu"
           - "wgpu-*"
           - "naga"
+
+  - package-ecosystem: pip
+    directory: /crates/neomacs-wasm/tests
+    schedule:
+      interval: weekly
