@@ -10,8 +10,7 @@ from pathlib import Path
 import cbor2
 from selenium import webdriver
 
-from browser_opfs_smoke import BrowserEditorHarness
-from browser_test_support import chrome_options
+from browser_test_support import BrowserEditorHarness, chrome_options
 
 
 def parse_args() -> argparse.Namespace:
