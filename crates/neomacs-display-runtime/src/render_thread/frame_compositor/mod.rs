@@ -73,9 +73,31 @@ pub(crate) struct FrameCompositor {
     /// rows, and this is the whole of what measuring a scroll against the next
     /// presentation needs.
     pub(super) scroll_anchors: ScrollAnchorsByWindow,
-    /// How far each window's viewport moved on the most recent install, for
-    /// the transition planner to consume.
-    pub(super) pending_scroll: Vec<continuity::ScrollObservation>,
+    /// Facts measured at the most recent install, consumed exactly once.
+    pub(super) pending: PendingContinuity,
+}
+
+/// What the compositor measured when the current presentation was installed.
+///
+/// Taken by value when a frame consumes it, not borrowed. Producer effect hints
+/// have always been one-shot — `take_runtime_hints` drains them as the frame is
+/// taken for render — but these observations were not, and `detect_frame_transitions`
+/// runs on *every* render pass, not once per install. A second pass over the same
+/// retained presentation would re-arm every effect (each trigger drops its old
+/// entry and pushes a fresh start time), and each re-arm reports `needs_redraw`,
+/// which marks the frame dirty and schedules another pass. That is a loop that
+/// sustains itself with no editor activity at all.
+///
+/// It is latent today only because scroll transitions default to disabled, so the
+/// one existing consumer plans nothing. Draining here is what makes it safe to
+/// move further effects onto this path.
+#[derive(Default)]
+pub(in crate::render_thread) struct PendingContinuity {
+    pub(in crate::render_thread) scrolls: Vec<continuity::ScrollObservation>,
+    /// Whether this frame's quality plan admits compositor-derived effects —
+    /// the role `RenderFeaturePlan::accept_effect_hints` played for producer
+    /// hints.
+    pub(in crate::render_thread) accept_derived_effects: bool,
 }
 
 /// Scroll anchors keyed by the window that offered them.
@@ -110,7 +132,7 @@ impl FrameCompositor {
             transitions: TransitionState::default(),
             retained_static: None,
             scroll_anchors: ScrollAnchorsByWindow::default(),
-            pending_scroll: Vec::new(),
+            pending: PendingContinuity::default(),
         }
     }
 }

@@ -450,7 +450,7 @@ pub(super) fn detect_frame_transitions(
     transitions: &mut TransitionState,
     effects: &neomacs_display_protocol::EffectsConfig,
     frame: &mut FrameGlyphBuffer,
-    scrolls: &[crate::render_thread::frame_compositor::continuity::ScrollObservation],
+    pending: crate::render_thread::frame_compositor::PendingContinuity,
     frame_dirty: &mut bool,
     width: u32,
     height: u32,
@@ -466,7 +466,7 @@ pub(super) fn detect_frame_transitions(
     }
     // Scroll transitions come from a measurement the compositor made when the
     // presentation was installed, not from anything the producer declared.
-    for scroll in scrolls {
+    for scroll in &pending.scrolls {
         let Some(planned) = plan_scroll(&transitions.policy, scroll) else {
             continue;
         };
