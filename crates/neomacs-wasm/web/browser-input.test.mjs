@@ -144,6 +144,20 @@ test("plain keyboard text is committed through the text service exactly once", (
   assert.equal(textInput.value, "");
 });
 
+test("installation claims editor keyboard focus and browser focus restores it", () => {
+  const { root, textInput, batches } = harness();
+
+  assert.equal(textInput.focusCalls, 1);
+
+  root.dispatch("focus");
+  assert.equal(textInput.focusCalls, 2);
+  assert.deepEqual(batches, [[{
+    type: "focus-changed",
+    focused: true,
+    target: "41",
+  }]]);
+});
+
 test("IME updates remain local until one final Unicode commit", () => {
   const { textInput, batches } = harness();
 
@@ -200,5 +214,5 @@ test("pointer activation restores the browser text service focus", () => {
 
   root.dispatch("pointerdown");
 
-  assert.equal(textInput.focusCalls, 1);
+  assert.equal(textInput.focusCalls, 2);
 });
