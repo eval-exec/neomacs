@@ -77,6 +77,17 @@ def exercise_native_keyboard(editor: BrowserEditorHarness) -> None:
         fido_marker,
     )
 
+    editor.invoke_mx("org-mode")
+    editor.wait_for_frame_text(
+        "Org loaded from the packaged runtime resources",
+        contains="(Org",
+    )
+    editor.invoke_mx("lisp-interaction-mode")
+    editor.wait_for_frame_text(
+        "the restored scratch-buffer mode",
+        contains="(Lisp Interaction",
+    )
+
     marker = f"NATIVE-{time.time_ns():x}"[-16:]
     editor.type_native_text(marker)
     editor.wait_for_frame_text("native Chrome text input", contains=marker)
@@ -132,7 +143,7 @@ def main() -> None:
 
         if not args.persistence_only:
             exercise_native_keyboard(editor)
-            print("PASS: native Chrome typing, C-x 2, and C-x 3")
+            print("PASS: native Chrome mode loading, typing, C-x 2, and C-x 3")
 
             editor.exercise_buffer_switching()
             print("PASS: browser editor switched buffers and preserved text")
