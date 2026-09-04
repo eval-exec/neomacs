@@ -431,6 +431,105 @@ fn primary_frame_inline_image_samples_only_its_source_slice() {
     );
 }
 
+/// REGRESSION (telega reply icon on dark themes): an image glyph whose face
+/// has NO box must still paint that face's background across its GNU box
+/// extent.  The image texture covers only its margin-inset content rect;
+/// without this fill a masked/transparent image (telega's reply.svg arrow)
+/// shows the window background through its slot instead of the face
+/// background GNU paints behind the glyph.
+#[test]
+fn unboxed_image_face_background_fills_the_glyph_box_extent() {
+    let Some(mut h) = try_harness() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+
+    const IMAGE_ID: u32 = 702;
+    let image_id = ImageId::new(IMAGE_ID);
+    const IMAGE_WIDTH: u32 = 8;
+    const IMAGE_HEIGHT: u32 = 8;
+    let mut argb = Vec::with_capacity((IMAGE_WIDTH * IMAGE_HEIGHT * 4) as usize);
+    for _ in 0..IMAGE_WIDTH * IMAGE_HEIGHT {
+        // [A, R, G, B]: opaque red content.
+        argb.extend_from_slice(&[255, 255, 0, 0]);
+    }
+    h.renderer.load_image_argb32_with_id(
+        test_image_load(IMAGE_ID),
+        &argb,
+        IMAGE_WIDTH,
+        IMAGE_HEIGHT,
+        IMAGE_WIDTH * 4,
+    );
+    let decode_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < decode_deadline {
+        h.renderer.process_pending_images();
+        if h.renderer.is_image_ready(image_id) {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(h.renderer.is_image_ready(image_id), "test image must decode");
+
+    let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    frame.background = Color::BLACK;
+    let image_face_id = FaceId::new(42);
+    let mut image_face = Face::new(image_face_id);
+    // A solid background and NO box: the face-background fill has no box
+    // pass to lean on, which is exactly the telega reply-icon case.
+    image_face.background = Color::GREEN;
+    frame.faces.insert(image_face_id, image_face);
+    frame.glyphs.push(FrameGlyph::Image {
+        window_id: DisplayWindowId::new(1),
+        row_role: GlyphRowRole::Text,
+        clip_rect: None,
+        slot_id: None,
+        image_id: ImageId::new(IMAGE_ID),
+        source_rect: ImageSourceRect::FULL,
+        slot_rect: neomacs_display_protocol::Rect::new(16.0, 16.0, 32.0, 16.0),
+        box_rect: neomacs_display_protocol::Rect::new(16.0, 8.0, 32.0, 32.0),
+        x: 20.0,
+        y: 20.0,
+        width: 24.0,
+        height: 8.0,
+        face_id: image_face_id,
+        box_vertical_edges: BoxVerticalEdges::Both,
+    });
+
+    h.renderer.render_frame_glyphs(
+        &h.view,
+        &frame,
+        &mut h.atlas,
+        mapping_for(&frame, W, H),
+        false,
+        None,
+        (0.0, 0.0),
+        None,
+        None,
+        None,
+    );
+    let rendered = read_back(&h);
+    let content = px(&rendered, 24, 24);
+    assert!(
+        content[0] > 180 && content[1] < 80,
+        "the image content rect must sample the red texture, got {content:?}"
+    );
+    let horizontal_margin = px(&rendered, 17, 20);
+    assert!(
+        horizontal_margin[1] > 180 && horizontal_margin[0] < 80,
+        "the unboxed image face must fill its horizontal margin with its background, got {horizontal_margin:?}"
+    );
+    let row_above_image = px(&rendered, 24, 12);
+    assert!(
+        row_above_image[1] > 180 && row_above_image[0] < 80,
+        "the unboxed image face must fill the complete row-height box slot, got {row_above_image:?}"
+    );
+    let corner = px(&rendered, 2, 2);
+    assert!(
+        corner[0] < 80 && corner[1] < 80 && corner[2] < 80,
+        "the face-background fill must stay clipped to the box extent, got {corner:?}"
+    );
+}
+
 #[test]
 fn stale_presentation_is_clipped_at_native_scale_after_surface_growth() {
     let Some(mut h) = try_harness() else {
