@@ -18,7 +18,6 @@ use super::cursor::CursorState;
 use super::terminal_expansion::TerminalExpansion;
 use super::transitions::TransitionState;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
-use continuity::scroll::ScrollDisplacement;
 #[cfg(feature = "video")]
 use neomacs_display_protocol::types::VideoId;
 use neomacs_renderer_wgpu::{RendererFrameEffects, WgpuGlyphAtlas};
@@ -76,10 +75,7 @@ pub(crate) struct FrameCompositor {
     pub(super) scroll_anchors: ScrollAnchorsByWindow,
     /// How far each window's viewport moved on the most recent install, for
     /// the transition planner to consume.
-    pub(super) pending_scroll: Vec<(
-        neomacs_display_protocol::types::DisplayWindowId,
-        ScrollDisplacement,
-    )>,
+    pub(super) pending_scroll: Vec<continuity::ScrollObservation>,
 }
 
 /// Scroll anchors keyed by the window that offered them.

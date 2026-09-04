@@ -17,7 +17,7 @@ use neomacs_display_protocol::frame_chrome::{
 use neomacs_display_protocol::frame_glyphs::{
     BufferTransitionTarget, BufferViewportRegion, ContentTransitionHint, GlyphRowRole,
     PresentedCellOrigin as ProtocolCellOrigin, PresentedWindowGeometry as ProtocolWindowGeometry,
-    WindowEffectHint, WindowInfo, derive_window_transition_hint,
+    WindowEffectHint, WindowInfo, derive_buffer_replacement_hint,
 };
 use neomacs_display_protocol::glyph_matrix::{FrameDisplayState, ScrollBarItem};
 use neomacs_display_protocol::types::FaceId;
@@ -627,7 +627,7 @@ impl<'a> WindowFrameInfoEffectsRenderRequest<'a> {
         let Some(prev) = self.prev_window_infos.get(&curr.window_id) else {
             return NavigationIntentObservation::retired(navigation);
         };
-        let Some(mut hint) = derive_window_transition_hint(prev, curr) else {
+        let Some(mut hint) = derive_buffer_replacement_hint(prev, curr) else {
             return NavigationIntentObservation::retired(navigation);
         };
         let observation = match (&mut hint, self.content_transition_mode) {

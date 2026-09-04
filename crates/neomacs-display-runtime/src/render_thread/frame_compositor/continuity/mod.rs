@@ -12,6 +12,17 @@
 pub(in crate::render_thread) mod scroll;
 
 use crate::render_thread::frame_windows::GuiFrameRenderState;
+use neomacs_display_protocol::frame_glyphs::BufferViewportRegion;
+use neomacs_display_protocol::types::DisplayWindowId;
+
+/// One window's viewport motion between two presentations.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::render_thread) struct ScrollObservation {
+    pub(in crate::render_thread) window: DisplayWindowId,
+    /// The buffer-owned pixels a transition may animate within.
+    pub(in crate::render_thread) region: BufferViewportRegion,
+    pub(in crate::render_thread) displacement: scroll::ScrollDisplacement,
+}
 
 impl GuiFrameRenderState {
     /// Measure how far each window's viewport moved into the presentation being
@@ -40,13 +51,32 @@ impl GuiFrameRenderState {
             .collect();
 
         for curr in &next.window_infos {
+            // The minibuffer does not scroll its own viewport the way a text
+            // window does, and animating it fights the echo area.
+            if curr.is_minibuffer {
+                continue;
+            }
             let Some(prev) = previous_by_window.get(&curr.window_id) else {
                 continue;
             };
             if prev.window_start == curr.window_start {
                 continue;
             }
-            let measured = scroll::displacement(
+            // A transition samples retained pixels from the previous
+            // presentation and draws them inside the new one's clip. If the two
+            // describe different buffer-owned regions -- after a tab, header or
+            // mode line appeared, or the window was split -- those pixels are
+            // not compatible inputs, so there is nothing safe to animate.
+            let (Some(previous_region), Some(region)) = (
+                prev.geometry.buffer_viewport(),
+                curr.geometry.buffer_viewport(),
+            ) else {
+                continue;
+            };
+            if previous_region != region {
+                continue;
+            }
+            let displacement = scroll::displacement(
                 prev,
                 curr,
                 self.compositor
@@ -57,9 +87,11 @@ impl GuiFrameRenderState {
                     .get(&curr.window_id)
                     .map_or(&[][..], Vec::as_slice),
             );
-            self.compositor
-                .pending_scroll
-                .push((curr.window_id, measured));
+            self.compositor.pending_scroll.push(ScrollObservation {
+                window: curr.window_id,
+                region,
+                displacement,
+            });
         }
     }
 }
