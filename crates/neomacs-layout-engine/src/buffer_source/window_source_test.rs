@@ -1,7 +1,10 @@
 use super::*;
+use crate::neovm_bridge::RustBufferAccess;
 use crate::scroll_policy::ScrollPolicy;
 use crate::types::{DisplayLineNumbersMode, LineWrapMode, WindowKind, WindowParams};
 use neomacs_display_protocol::types::Rect;
+use neovm_core::buffer::{EmacsBytePos, EmacsByteRange};
+use neovm_core::emacs_core::{Context, Value};
 
 fn window_params() -> WindowParams {
     WindowParams {
@@ -95,7 +98,6 @@ fn request(
         0,
         accessible_end,
         max_rows,
-        20,
         kind,
         scroll_policy,
         0,
@@ -116,7 +118,6 @@ fn source_request_from_window_params_carries_source_bounds() {
     assert_eq!(request.accessible_start, 3);
     assert_eq!(request.accessible_end, 80);
     assert_eq!(request.max_rows, 6);
-    assert_eq!(request.visible_cols, 20);
     assert!(!request.kind.is_minibuffer());
 }
 
@@ -132,15 +133,107 @@ fn source_request_from_window_params_resolves_the_scroll_policy() {
 }
 
 #[test]
-fn source_request_from_window_params_uses_text_bounds_columns() {
-    let mut params = window_params();
-    params.bounds.width = 1000.0;
-    params.text_bounds.width = 48.0;
-    params.char_width = 12.0;
+fn source_request_defers_folded_row_visibility_to_the_display_walk() {
+    let mut eval = Context::new();
+    let buffer_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let hidden = (0..80)
+        .map(|index| format!("hidden state {index}\n"))
+        .collect::<String>();
+    let text = format!("{}\n{hidden}after\n", "x".repeat(30));
+    let hidden_start = 31;
+    let point = text.find("after").expect("point after fold");
+    {
+        let buffer = eval
+            .buffer_manager_mut()
+            .get_mut(buffer_id)
+            .expect("current buffer");
+        buffer.insert(&text);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("folded"), Value::T)]),
+        );
+        assert!(buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(EmacsBytePos::new(hidden_start), EmacsBytePos::new(point)),
+            Value::symbol("invisible"),
+            Value::symbol("folded"),
+        ));
+    }
 
-    let request = BufferWindowSourceRequest::from_window_params(&params, 6);
+    let request = BufferWindowSourceRequest::new(
+        0,
+        None,
+        point as i64,
+        0,
+        text.len() as i64,
+        4,
+        WindowKind::Main,
+        ScrollPolicy::Recenter,
+        0,
+    );
+    let buffer = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("current buffer");
 
-    assert_eq!(request.visible_cols, 4);
+    assert_eq!(
+        request.resolve(&RustBufferAccess::new(buffer)).get(),
+        0,
+        "folded source lines must be measured by the canonical display walk before scrolling"
+    );
+}
+
+#[test]
+fn source_request_defers_replacing_display_spans_to_the_display_walk() {
+    let mut eval = Context::new();
+    let buffer_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let replaced = (0..80)
+        .map(|index| format!("replaced source line {index}\n"))
+        .collect::<String>();
+    let text = format!("{}\n{replaced}after\n", "x".repeat(30));
+    let replaced_start = 31;
+    let point = text.find("after").expect("point after replacement");
+    {
+        let buffer = eval
+            .buffer_manager_mut()
+            .get_mut(buffer_id)
+            .expect("current buffer");
+        buffer.insert(&text);
+        assert!(buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(EmacsBytePos::new(replaced_start), EmacsBytePos::new(point)),
+            Value::symbol("display"),
+            Value::string("replacement"),
+        ));
+    }
+
+    let request = BufferWindowSourceRequest::new(
+        0,
+        None,
+        point as i64,
+        0,
+        text.len() as i64,
+        4,
+        WindowKind::Main,
+        ScrollPolicy::Recenter,
+        0,
+    );
+    let buffer = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("current buffer");
+
+    assert_eq!(
+        request.resolve(&RustBufferAccess::new(buffer)).get(),
+        0,
+        "replacing display spans must use their rendered rows before scrolling"
+    );
 }
 
 // 6 single-letter lines; line N is the letter at charpos 2*(N-1).

@@ -363,10 +363,11 @@ fn previous_screen_line_target(
             }
         }
 
-        let anchor_is_invisible = crate::emacs_core::xdisp::zero_width_invisible_run_end_byte(
+        let anchor_is_invisible = crate::emacs_core::xdisp::invisible_source_run_end_byte(
             eval,
             buffer_id,
             anchor.get(),
+            crate::emacs_core::xdisp::InvisibleRunContext::DisplayMotion,
         )?
         .is_some_and(|next_visible| next_visible > anchor.get());
         if anchor_is_invisible {
@@ -556,10 +557,11 @@ fn current_screen_line_start_with_truncation(
             .get(buffer_id)
             .map(|buf| buf.emacs_byte_pos_to_lisp_char_pos(preceding).as_i64())
             .unwrap_or(1);
-        if crate::emacs_core::xdisp::invisible_status_for_value(
+        if !crate::emacs_core::xdisp::invisible_status_for_value(
             eval,
             Value::fixnum(preceding_lisp_pos),
-        )? == 0
+        )?
+        .hides_source()
         {
             break;
         }
@@ -1715,11 +1717,14 @@ impl DisplayStopProp {
     ) -> Result<Option<(usize, usize)>, Flow> {
         let hit =
             match self {
-                Self::Invisible => {
-                    super::xdisp::zero_width_invisible_run_end_byte(ctx, buffer_id, byte)?
-                        .filter(|&next_visible| next_visible > byte)
-                        .map(|next_visible| (0usize, next_visible))
-                }
+                Self::Invisible => super::xdisp::invisible_source_run_end_byte(
+                    ctx,
+                    buffer_id,
+                    byte,
+                    super::xdisp::InvisibleRunContext::DisplayMotion,
+                )?
+                .filter(|&next_visible| next_visible > byte)
+                .map(|next_visible| (0usize, next_visible)),
                 Self::Display => display_run_at(ctx, buffer_id, byte, column)
                     .filter(|&(_, run_end)| run_end > byte),
                 Self::Composition => composition_run_at(ctx, buffer_id, byte)
@@ -2248,9 +2253,12 @@ fn scan_for_column(
 
     while scan < end {
         if scan >= next_invisible_probe {
-            if let Some(next_visible) =
-                super::xdisp::zero_width_invisible_run_end_byte(ctx, buffer_id, scan)?
-                && next_visible > scan
+            if let Some(next_visible) = super::xdisp::invisible_source_run_end_byte(
+                ctx,
+                buffer_id,
+                scan,
+                super::xdisp::InvisibleRunContext::ColumnScan,
+            )? && next_visible > scan
             {
                 scan = next_visible.min(end);
                 if scan >= end {

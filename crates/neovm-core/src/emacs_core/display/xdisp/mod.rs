@@ -21,6 +21,7 @@ use super::display_spec;
 use super::error::{EvalResult, Flow, signal};
 use super::hook_runtime;
 use super::intern::intern;
+pub(crate) use super::invisibility::{Invisibility, text_prop_means_invisible};
 use super::symbol::LispVariableLocality;
 use super::value::*;
 use crate::buffer::{
@@ -3767,44 +3768,26 @@ fn expand_mode_line_percent_in_state(
     }
 }
 
-fn invisible_prop_member(propval: Value, list: Value) -> i64 {
-    let mut tail = list;
-    while tail.is_cons() {
-        let element = tail.cons_car();
-        if eq_value(&propval, &element) {
-            return 1;
+impl Invisibility {
+    const fn elides_source_for(self, context: InvisibleRunContext) -> bool {
+        match (context, self) {
+            (_, Self::Visible) => false,
+            (_, Self::Hidden) | (InvisibleRunContext::DisplayMotion, Self::HiddenWithEllipsis) => {
+                true
+            }
+            (InvisibleRunContext::ColumnScan, Self::HiddenWithEllipsis) => false,
         }
-        if element.is_cons() && eq_value(&propval, &element.cons_car()) {
-            return if element.cons_cdr().is_nil() { 1 } else { 2 };
-        }
-        tail = tail.cons_cdr();
     }
-    0
 }
 
-fn invisible_prop(propval: Value, list: Value) -> i64 {
-    let direct = invisible_prop_member(propval, list);
-    if direct != 0 {
-        return direct;
-    }
-
-    let mut proptail = propval;
-    while proptail.is_cons() {
-        let result = invisible_prop_member(proptail.cons_car(), list);
-        if result != 0 {
-            return result;
-        }
-        proptail = proptail.cons_cdr();
-    }
-    0
-}
-
-pub(crate) fn text_prop_means_invisible(prop: Value, invisibility_spec: Value) -> i64 {
-    if invisibility_spec == Value::T {
-        i64::from(prop.is_truthy())
-    } else {
-        invisible_prop(prop, invisibility_spec)
-    }
+/// GNU's `skip_invisible` gives ellipsis-bearing invisibility different
+/// semantics depending on its WINDOW argument: display motion elides the
+/// source and realizes an ellipsis, while `current-column`/`move-to-column`
+/// pass nil and count the underlying source text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InvisibleRunContext {
+    DisplayMotion,
+    ColumnScan,
 }
 
 /// Port of GNU `xdisp.c:display_prop_intangible_p`: does this `display` property
@@ -3861,7 +3844,7 @@ fn display_single_spec_replacing_p(spec: Value, frame_window_p: bool) -> bool {
 pub(crate) fn invisible_status_for_value(
     eval: &mut super::eval::Context,
     pos_or_prop: Value,
-) -> Result<i64, Flow> {
+) -> Result<Invisibility, Flow> {
     let prop = match pos_or_prop.kind() {
         ValueKind::Fixnum(v) if v >= 0 => super::textprop::builtin_get_char_property(
             eval,
@@ -3877,10 +3860,11 @@ pub(crate) fn invisible_status_for_value(
     Ok(text_prop_means_invisible(prop, invisibility_spec))
 }
 
-pub(crate) fn zero_width_invisible_run_end_byte(
+pub(crate) fn invisible_source_run_end_byte(
     eval: &mut super::eval::Context,
     buffer_id: BufferId,
     byte_pos: usize,
+    context: InvisibleRunContext,
 ) -> Result<Option<usize>, Flow> {
     let byte_pos = EmacsBytePos::new(byte_pos);
     let lisp_pos = {
@@ -3893,16 +3877,10 @@ pub(crate) fn zero_width_invisible_run_end_byte(
         super::textprop::byte_to_elisp_pos(buf, byte_pos)
     };
 
-    // `invisible-p` returns 1 for hidden text without an ellipsis and 2 for
-    // hidden text whose invisibility spec requests one.  Both values hide the
-    // underlying buffer run from display motion.  Treating only 1 as hidden
-    // made `vertical-motion` walk through org-fold drawers (`((SPEC . t))`
-    // yields 2), so ordinary up/down motion could land inside a folded drawer;
-    // Org then correctly revealed the drawer around point.  The display
-    // iterator must skip the hidden source run in both cases.  This helper
-    // intentionally reports zero width: its callers need the hidden source
-    // elision for row motion, while redisplay owns the synthetic ellipsis glyph.
-    if invisible_status_for_value(eval, Value::fixnum(lisp_pos))? == 0 {
+    // This helper answers only the source boundary, never an estimated
+    // ellipsis width. The typed context preserves GNU's deliberate distinction
+    // between display motion and column scans.
+    if !invisible_status_for_value(eval, Value::fixnum(lisp_pos))?.elides_source_for(context) {
         return Ok(None);
     }
 
@@ -3924,11 +3902,7 @@ pub(crate) fn zero_width_invisible_run_end_byte(
 /// (invisible-p POS-OR-PROP) -> boolean
 pub(crate) fn builtin_invisible_p(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("invisible-p", &args, 1)?;
-    match invisible_status_for_value(eval, args[0])? {
-        0 => Ok(Value::NIL),
-        1 => Ok(Value::T),
-        other => Ok(Value::fixnum(other)),
-    }
+    Ok(invisible_status_for_value(eval, args[0])?.into_lisp())
 }
 
 /// (line-pixel-height) -> integer

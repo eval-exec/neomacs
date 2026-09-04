@@ -18896,20 +18896,20 @@ impl Context {
             // Find boundaries `beg`..`end` of the invisible run around PT.
             while end < zv {
                 let prop = self.apfp_char_property(end, inv)?;
-                let i = super::xdisp::text_prop_means_invisible(prop, spec);
-                if i == 0 {
+                let invisibility = super::xdisp::text_prop_means_invisible(prop, spec);
+                if !invisibility.hides_source() {
                     break;
                 }
-                ellipsis = ellipsis || i > 1;
+                ellipsis = ellipsis || invisibility.shows_ellipsis();
                 end = self.apfp_next_change(end, inv, zv)?;
             }
             while beg > begv {
                 let prop = self.apfp_char_property(beg - 1, inv)?;
-                let i = super::xdisp::text_prop_means_invisible(prop, spec);
-                if i == 0 {
+                let invisibility = super::xdisp::text_prop_means_invisible(prop, spec);
+                if !invisibility.hides_source() {
                     break;
                 }
-                ellipsis = ellipsis || i > 1;
+                ellipsis = ellipsis || invisibility.shows_ellipsis();
                 beg = self.apfp_prev_change(beg, inv, begv)?;
             }
 
@@ -18949,10 +18949,11 @@ impl Context {
                     // Already as far as we can go; avoid an infinite loop.
                 } else {
                     let here = self.apfp_pos_property(pt2, inv)?;
-                    if super::xdisp::text_prop_means_invisible(here, spec) != 0 {
+                    if super::xdisp::text_prop_means_invisible(here, spec).hides_source() {
                         let other = if pt2 == beg { end } else { beg };
                         let other_val = self.apfp_pos_property(other, inv)?;
-                        if super::xdisp::text_prop_means_invisible(other_val, spec) == 0 {
+                        if !super::xdisp::text_prop_means_invisible(other_val, spec).hides_source()
+                        {
                             self.apfp_set_point(id, other);
                             moved = true;
                         }

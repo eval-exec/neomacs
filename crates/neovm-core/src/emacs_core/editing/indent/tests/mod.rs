@@ -234,6 +234,26 @@ fn current_column_and_move_to_column_treat_invisible_text_as_zero_width() {
 }
 
 #[test]
+fn current_column_counts_source_text_when_invisibility_requests_an_ellipsis() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::runtime_startup_context();
+    let value = ev
+        .eval_str(
+            r#"(with-temp-buffer
+                 (insert "aaHIDDENbb")
+                 (setq buffer-invisibility-spec '((fold . t)))
+                 (put-text-property 3 9 'invisible 'fold)
+                 (goto-char (point-max))
+                 (current-column))"#,
+        )
+        .expect("ellipsis-bearing invisible column scan");
+
+    // GNU `skip_invisible' receives a nil window from `current-column' and
+    // deliberately leaves status-2 (ellipsis-bearing) source in the scan.
+    assert_eq!(value, Value::fixnum(10));
+}
+
+#[test]
 fn vertical_motion_skips_ellipsis_bearing_invisible_runs() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();

@@ -9387,6 +9387,143 @@ fn point_after_large_fold_keeps_visually_valid_window_start() {
 }
 
 #[test]
+fn visibility_retry_never_places_window_start_inside_unmeasured_fold() {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let prefix = (0..12)
+        .map(|index| format!("visible prefix {index}\n"))
+        .collect::<String>();
+    let hidden = (0..80)
+        .map(|index| format!("hidden state {index}\n"))
+        .collect::<String>();
+    let text = format!("{prefix}{hidden}after\nnext\n");
+    let hidden_start = prefix.len();
+    let hidden_end = hidden_start + hidden.len();
+    let after = hidden_end;
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&text);
+        buf.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("folded"), Value::T)]),
+        );
+        assert!(buf.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::symbol("folded"),
+        ));
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "visibility-retry-across-large-fold",
+        640,
+        120,
+        buf_id,
+    );
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    eval.buffer_manager_mut()
+        .goto_buffer_emacs_byte_pos(buf_id, EmacsBytePos::new(after));
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+    let neovm_core::window::Window::Leaf { point, .. } = frame
+        .find_window_mut(selected_window)
+        .expect("selected window")
+    else {
+        panic!("selected window is not a leaf");
+    };
+    *point = LispCharPos1::new((after + 1) as i64);
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let frame = eval.frame_manager().get(frame_id).expect("frame");
+    let neovm_core::window::Window::Leaf { window_start, .. } =
+        frame.find_window(selected_window).expect("selected window")
+    else {
+        panic!("selected window is not a leaf");
+    };
+    let start_byte = window_start.as_i64() as usize - 1;
+    assert!(
+        start_byte <= hidden_start || start_byte >= hidden_end,
+        "the retry must advance through measured display rows, not raw source lines; \
+         window-start={window_start:?}, hidden={hidden_start}..{hidden_end}"
+    );
+    assert!(
+        engine
+            .last_frame_display_state
+            .as_ref()
+            .and_then(|state| state.phys_cursor.as_ref())
+            .is_some(),
+        "the accepted retry must make point visibly placeable"
+    );
+}
+
+#[test]
+fn distant_point_with_unrelated_overlay_does_not_exhaust_visibility_retries() {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let text = (0..1_200)
+        .map(|index| format!("ordinary line {index}\n"))
+        .collect::<String>();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&text);
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str("(overlay-put (make-overlay 1 2) 'face 'bold)")
+        .expect("install unrelated face overlay");
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("distant-point-with-face-overlay", 640, 120, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let point = text.rfind("ordinary line").expect("last line");
+    eval.buffer_manager_mut()
+        .goto_buffer_emacs_byte_pos(buf_id, EmacsBytePos::new(point));
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+    let neovm_core::window::Window::Leaf {
+        point: window_point,
+        ..
+    } = frame
+        .find_window_mut(selected_window)
+        .expect("selected window")
+    else {
+        panic!("selected window is not a leaf");
+    };
+    *window_point = LispCharPos1::new((point + 1) as i64);
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    assert!(
+        engine
+            .last_frame_display_state
+            .as_ref()
+            .and_then(|state| state.phys_cursor.as_ref())
+            .is_some(),
+        "a non-display overlay must not turn an ordinary jump into more than \
+         MAX_WINDOW_VISIBILITY_RETRIES screen-at-a-time retries"
+    );
+}
+
+#[test]
 fn layout_frame_rust_renders_invisible_ellipsis_through_row_builder() {
     let mut eval = Context::new();
     let buf_id = eval

@@ -1,6 +1,6 @@
 //! Buffer window source read bounds and text extraction.
 
-use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess, RustTextPropAccess};
+use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
 use crate::scroll_policy::{
     ForwardScroll, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
     line_start_below, top_margin,
@@ -56,7 +56,6 @@ pub(crate) struct BufferWindowSourceRequest {
     accessible_start: i64,
     accessible_end: i64,
     max_rows: usize,
-    visible_cols: i64,
     kind: WindowKind,
     scroll_policy: ScrollPolicy,
     scroll_margin: i64,
@@ -114,7 +113,6 @@ impl BufferWindowSourceRequest {
             params.accessible_start_charpos().get(),
             params.accessible_end_charpos().get(),
             max_rows,
-            visible_cols_for_window_params(params),
             params.kind,
             ScrollPolicy::from_window_params(params),
             params.scroll_margin,
@@ -143,7 +141,6 @@ impl BufferWindowSourceRequest {
         accessible_start: i64,
         accessible_end: i64,
         max_rows: usize,
-        visible_cols: i64,
         kind: WindowKind,
         scroll_policy: ScrollPolicy,
         scroll_margin: i64,
@@ -159,7 +156,6 @@ impl BufferWindowSourceRequest {
             accessible_start,
             accessible_end,
             max_rows,
-            visible_cols: visible_cols.max(1),
             kind,
             scroll_policy,
             scroll_margin,
@@ -193,76 +189,33 @@ impl BufferWindowSourceRequest {
         let requested = self
             .requested_window_start
             .clamp(self.accessible_start, self.accessible_end);
-        if self.point_fits_visible_budget_through_folds(requested, access) {
-            return ResolvedWindowStart(requested);
-        }
-        ResolvedWindowStart(
-            self.resolve_window_start(|charpos| access.byte_at(access.charpos_to_bytepos(charpos))),
-        )
+        let measurement = self.forward_scroll_measurement(requested, access);
+        ResolvedWindowStart(self.resolve_window_start_with_measurement(
+            |charpos| access.byte_at(access.charpos_to_bytepos(charpos)),
+            measurement,
+        ))
     }
 
-    /// Whether POINT still fits in the current viewport once invisible source
-    /// runs are elided.  The ordinary source preflight counts logical newlines;
-    /// a large folded Org drawer therefore looks hundreds of rows tall and can
-    /// recenter the window into the hidden LOGBOOK even though point is only a
-    /// few DISPLAY rows below the current start.  GNU makes this decision with
-    /// its display iterator, which skips the fold.  Keep the requested start
-    /// when a bounded display-aware scan proves point still fits.
-    fn point_fits_visible_budget_through_folds<B: LayoutBufferView>(
+    fn forward_scroll_measurement<B: LayoutBufferView>(
         self,
         window_start: i64,
         access: &RustBufferAccess<'_, B>,
-    ) -> bool {
-        if self.point_charpos < window_start || self.point_charpos > self.accessible_end {
-            return false;
-        }
-        let row_budget = last_usable_row(self.max_rows, self.scroll_margin).max(1);
-        let props = RustTextPropAccess::new(access.view());
-        let mut pos = window_start;
-        let mut row = 0i64;
-        let mut col = 0i64;
-        let mut crossed_fold = false;
-
-        while pos < self.point_charpos && row <= row_budget {
-            let (status, next_visible) = props.check_invisible(pos);
-            if status.hidden {
-                crossed_fold = true;
-                if status.ellipsis {
-                    col += 3;
-                    row += col / self.visible_cols;
-                    col %= self.visible_cols;
-                }
-                pos = next_visible.max(pos + 1).min(self.accessible_end);
-                continue;
+    ) -> ForwardScrollMeasurement {
+        let scan_start = match self.previous_viewport_point_relation() {
+            PreviousViewportPointRelation::Visible
+            | PreviousViewportPointRelation::NeedsMeasuredLayout => {
+                return ForwardScrollMeasurement::SourceLineEstimate;
             }
-
-            match access.byte_at(access.charpos_to_bytepos(pos)) {
-                Some(b'\n') => {
-                    row += 1;
-                    col = 0;
-                }
-                Some(b'\t') => {
-                    // The request deliberately has no full tab-stop state;
-                    // charging a whole conventional tab stop is safer than
-                    // treating a tab as one ordinary glyph in this preflight.
-                    col += 8;
-                    row += col / self.visible_cols;
-                    col %= self.visible_cols;
-                }
-                Some(_) => {
-                    // Two columns is conservative for ordinary wide glyphs;
-                    // if that already fits, the hidden logical lines cannot be
-                    // a valid reason to recenter into the fold.
-                    col += 2;
-                    row += col / self.visible_cols;
-                    col %= self.visible_cols;
-                }
-                None => break,
-            }
-            pos += 1;
+            PreviousViewportPointRelation::Below {
+                visible_end_exclusive,
+            } => visible_end_exclusive,
+            PreviousViewportPointRelation::Unknown => window_start,
+        };
+        if self.point_charpos <= scan_start {
+            return ForwardScrollMeasurement::SourceLineEstimate;
         }
 
-        crossed_fold && row <= row_budget
+        access.forward_scroll_measurement(scan_start, self.point_charpos)
     }
 
     /// Treat the requested start as authoritative, clamped only to the live
@@ -346,7 +299,19 @@ impl BufferWindowSourceRequest {
         }
     }
 
+    #[cfg(test)]
     fn resolve_window_start(self, byte_at_charpos: impl Fn(i64) -> Option<u8>) -> i64 {
+        self.resolve_window_start_with_measurement(
+            byte_at_charpos,
+            ForwardScrollMeasurement::SourceLineEstimate,
+        )
+    }
+
+    fn resolve_window_start_with_measurement(
+        self,
+        byte_at_charpos: impl Fn(i64) -> Option<u8>,
+        forward_measurement: ForwardScrollMeasurement,
+    ) -> i64 {
         let mut window_start = self.requested_window_start.max(self.accessible_start);
 
         if window_start > self.accessible_start {
@@ -371,7 +336,9 @@ impl BufferWindowSourceRequest {
             return adjusted;
         }
 
-        if let Some(adjusted) = self.forward_scroll_window_start(window_start, &byte_at_charpos) {
+        if let Some(adjusted) =
+            self.forward_scroll_window_start(window_start, forward_measurement, &byte_at_charpos)
+        {
             tracing::debug!(
                 "layout_window_rust: forward-adjusted window_start {} -> {} (point={})",
                 self.requested_window_start,
@@ -442,6 +409,7 @@ impl BufferWindowSourceRequest {
     fn forward_scroll_window_start(
         self,
         window_start: i64,
+        measurement: ForwardScrollMeasurement,
         byte_at_charpos: &impl Fn(i64) -> Option<u8>,
     ) -> Option<i64> {
         if self.kind.is_minibuffer() {
@@ -469,6 +437,9 @@ impl BufferWindowSourceRequest {
             PreviousViewportPointRelation::Below {
                 visible_end_exclusive: end,
             } => {
+                if measurement == ForwardScrollMeasurement::DisplayRowsRequired {
+                    return None;
+                }
                 let (extra_lines, bounded) = count_lines_bounded(
                     end,
                     self.point_charpos,
@@ -477,12 +448,17 @@ impl BufferWindowSourceRequest {
                 );
                 (self.max_rows as i64 + extra_lines, bounded)
             }
-            PreviousViewportPointRelation::Unknown => count_lines_bounded(
-                window_start,
-                self.point_charpos,
-                bottom_row + self.scroll_policy.search_limit_lines(),
-                byte_at_charpos,
-            ),
+            PreviousViewportPointRelation::Unknown => {
+                if measurement == ForwardScrollMeasurement::DisplayRowsRequired {
+                    return None;
+                }
+                count_lines_bounded(
+                    window_start,
+                    self.point_charpos,
+                    bottom_row + self.scroll_policy.search_limit_lines(),
+                    byte_at_charpos,
+                )
+            }
         };
         // GNU's `dy`: how far point falls past the last row the bottom
         // scroll-margin leaves usable (xdisp.c:19443). `<= 0` means point is
@@ -519,13 +495,6 @@ impl BufferWindowSourceRequest {
             byte_at_charpos,
         )
     }
-}
-
-fn visible_cols_for_window_params(params: &WindowParams) -> i64 {
-    let char_width = params.char_width.max(1.0);
-    (params.text_bounds.width.max(1.0) / char_width)
-        .floor()
-        .max(1.0) as i64
 }
 
 #[cfg(test)]

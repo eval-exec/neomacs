@@ -15,6 +15,7 @@ use neovm_core::emacs_core::effect_profile::{
     EffectScope, effect_name_from_lisp, effect_operation_from_lisp,
 };
 use neovm_core::emacs_core::image_catalog::image_scale_environment;
+use neovm_core::emacs_core::invisibility::{Invisibility, text_prop_means_invisible};
 use neovm_core::emacs_core::plist::plist_get;
 use neovm_core::emacs_core::symbol::Obarray;
 use neovm_core::emacs_core::textprop::{DirectCharProperties, resolve_effective_char_property};
@@ -1410,6 +1411,19 @@ pub(crate) fn buffer_selective_display<B: LayoutBufferView>(buffer: &B) -> i32 {
     }
 }
 
+/// Evidence available for estimating forward scrolling before all intervening
+/// display rows have been produced.
+///
+/// Counting source newlines can under-estimate display rows (wrapping and
+/// inserted display material), which a later measured retry can correct.  It
+/// must not over-estimate them: selective display, invisibility and replacing
+/// display properties can collapse many source lines into one display item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ForwardScrollMeasurement {
+    SourceLineEstimate,
+    DisplayRowsRequired,
+}
+
 fn parse_color_pixel(value: &Value) -> Option<u32> {
     value
         .as_runtime_string_owned()
@@ -2401,6 +2415,29 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
         buffer_i64_charpos_to_emacs_byte_pos(self.buffer, charpos).get() as i64
     }
 
+    /// Classify an unmeasured layout-character span for forward scrolling.
+    ///
+    /// This is shared by pre-layout source selection and post-layout retries;
+    /// neither phase may silently fall back to source-line arithmetic across a
+    /// span whose display walk can consume or replace source text.
+    pub(crate) fn forward_scroll_measurement(
+        &self,
+        char_from: i64,
+        char_to: i64,
+    ) -> ForwardScrollMeasurement {
+        if char_to <= char_from {
+            return ForwardScrollMeasurement::SourceLineEstimate;
+        }
+        if buffer_selective_display(self.view()) != 0
+            || RustTextPropAccess::new(self.view())
+                .has_display_row_collapse_between(char_from, char_to)
+        {
+            ForwardScrollMeasurement::DisplayRowsRequired
+        } else {
+            ForwardScrollMeasurement::SourceLineEstimate
+        }
+    }
+
     /// Convert a GNU Lisp-visible buffer position to a byte position.
     ///
     /// GNU Lisp positions are 1-based, so this is only appropriate for
@@ -2958,7 +2995,25 @@ pub(crate) enum InvisibleStatus {
 }
 
 impl InvisibleStatus {
+    #[cfg(test)]
     const VISIBLE: Self = Self::Visible;
+
+    const fn from_invisibility(
+        invisibility: Invisibility,
+        origin: InvisiblePropertyOrigin,
+    ) -> Self {
+        match invisibility {
+            Invisibility::Visible => Self::Visible,
+            Invisibility::Hidden => Self::Hidden {
+                ellipsis: false,
+                origin,
+            },
+            Invisibility::HiddenWithEllipsis => Self::Hidden {
+                ellipsis: true,
+                origin,
+            },
+        }
+    }
 
     pub(crate) const fn hidden(self) -> bool {
         matches!(self, Self::Hidden { .. })
@@ -3034,91 +3089,15 @@ fn clamped_layout_emacs_byte_range<B: LayoutBufferView>(
     (from < to).then(|| EmacsByteRange::new(from, to))
 }
 
-fn invisible_atom_status(
-    prop_atom: Value,
-    spec: Value,
-    origin: InvisiblePropertyOrigin,
-) -> InvisibleStatus {
-    if spec.is_nil() {
-        return InvisibleStatus::VISIBLE;
-    }
-    if spec.is_t() {
-        return InvisibleStatus::Hidden {
-            ellipsis: false,
-            origin,
-        };
-    }
-
-    let mut cursor = spec;
-    while cursor.is_cons() {
-        let entry = cursor.cons_car();
-        if entry.is_cons() {
-            if eq_value(&entry.cons_car(), &prop_atom) {
-                return if entry.cons_cdr().is_nil() {
-                    InvisibleStatus::Hidden {
-                        ellipsis: false,
-                        origin,
-                    }
-                } else {
-                    InvisibleStatus::Hidden {
-                        ellipsis: true,
-                        origin,
-                    }
-                };
-            }
-        } else if eq_value(&entry, &prop_atom) {
-            return InvisibleStatus::Hidden {
-                ellipsis: false,
-                origin,
-            };
-        }
-        cursor = cursor.cons_cdr();
-    }
-
-    if eq_value(&spec, &prop_atom) {
-        InvisibleStatus::Hidden {
-            ellipsis: false,
-            origin,
-        }
-    } else {
-        InvisibleStatus::VISIBLE
-    }
-}
-
-fn invisible_prop_status(
+fn invisible_status_with_origin(
     prop: Option<Value>,
     spec: Value,
     origin: InvisiblePropertyOrigin,
 ) -> InvisibleStatus {
-    let Some(prop) = prop else {
-        return InvisibleStatus::VISIBLE;
-    };
-    if prop.is_nil() || spec.is_nil() {
-        return InvisibleStatus::VISIBLE;
-    }
-    if spec.is_t() {
-        return InvisibleStatus::Hidden {
-            ellipsis: false,
-            origin,
-        };
-    }
-
-    if prop.is_cons() {
-        let mut cursor = prop;
-        while cursor.is_cons() {
-            let status = invisible_atom_status(cursor.cons_car(), spec, origin);
-            if status.hidden() {
-                return status;
-            }
-            cursor = cursor.cons_cdr();
-        }
-        if !cursor.is_nil() {
-            return invisible_atom_status(cursor, spec, origin);
-        }
-        InvisibleStatus::VISIBLE
-    } else {
-        invisible_atom_status(prop, spec, origin)
-    }
+    let invisibility = prop.map_or(Invisibility::Visible, |property| {
+        text_prop_means_invisible(property, spec)
+    });
+    InvisibleStatus::from_invisibility(invisibility, origin)
 }
 
 impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
@@ -3205,6 +3184,48 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
             })
     }
 
+    /// Whether `[char_from, char_to)` contains an effective property that can
+    /// collapse source rows during the display walk.
+    ///
+    /// Unlike [`RustBufferAccess::has_walk_consumption_hazard`], this predicate
+    /// is deliberately range- and semantics-aware.  A face-only overlay, an
+    /// out-of-range overlay, a non-replacing `display` value, or an `invisible`
+    /// value disabled by `buffer-invisibility-spec` cannot make source-line
+    /// counting over-estimate display rows and therefore must not force
+    /// screen-at-a-time visibility retries.
+    fn has_display_row_collapse_between(&self, char_from: i64, char_to: i64) -> bool {
+        let max = self.buffer.layout_point_max_char_pos().get() as i64;
+        let mut charpos = char_from.clamp(0, max);
+        let end = char_to.clamp(charpos, max);
+        let end_byte = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, end);
+        let display = Value::symbol("display");
+
+        while charpos < end {
+            if self.invisible_status_at(charpos).hidden() || self.replacing_display_at(charpos) {
+                return true;
+            }
+
+            let bytepos = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, charpos);
+            let next_display_text = self
+                .buffer
+                .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
+                    bytepos, display, end_byte,
+                )
+                .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next) as i64)
+                .unwrap_or(end);
+            // `next_invisible_boundary` includes every overlay endpoint, so it
+            // is also the boundary at which an overlay `display` winner may
+            // change. It separately tracks invisible text-property changes.
+            let next = self
+                .next_invisible_boundary(charpos)
+                .min(next_display_text)
+                .min(end);
+            charpos = next.max(charpos.saturating_add(1));
+        }
+
+        false
+    }
+
     /// Combined `invisible` status at `charpos` from the `invisible` text
     /// property and the highest-priority overlay (GNU `invisible_p`).
     fn invisible_status_at(&self, charpos: i64) -> InvisibleStatus {
@@ -3242,7 +3263,7 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
                 InvisiblePropertyOrigin::TextProperty,
             )
         };
-        invisible_prop_status(value, spec, origin)
+        invisible_status_with_origin(value, spec, origin)
     }
 
     /// Next position where the `invisible` property changes, combining the
@@ -3427,7 +3448,8 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
             .buffer
             .layout_buffer_local_value(LayoutVar::BufferInvisibilitySpec)
             .unwrap_or(Value::T);
-        invisible_prop_status(Some(invisible), spec, InvisiblePropertyOrigin::Overlay).hidden()
+        invisible_status_with_origin(Some(invisible), spec, InvisiblePropertyOrigin::Overlay)
+            .hidden()
     }
 
     /// The overlay's `before-string` / `after-string` if it is something GNU

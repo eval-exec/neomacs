@@ -23,7 +23,7 @@ use crate::display_row::walk_state::{
 };
 use crate::display_status_line::ChromeRowRenderServices;
 use crate::hit_test::HitRow;
-use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess};
+use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
 use crate::scroll_policy::{
     ForwardScroll, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
     line_start_below,
@@ -864,6 +864,27 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         // `scroll_margin_y`, xdisp.c:19420).
         let laid_out_rows = visible_rows_below(self.rows, self.window_start);
         let bottom_row = last_usable_row(laid_out_rows as usize, self.scroll_margin);
+
+        // A point below the measured rows can be extrapolated in source lines
+        // only when source and display progress monotonically together.  If an
+        // intervening property may consume source text, advance solely through
+        // rows this render actually measured and retry from that proven
+        // boundary.  The next render can then walk the fold/replacement and
+        // either place point or make another measured step.
+        let first_unmeasured = visible_end_lisp
+            .map(crate::coords::lisp_char_pos_to_layout_i64)
+            .unwrap_or(self.charpos);
+        let forward_measurement = point_beyond_visible_span.then(|| {
+            self.buf_access
+                .forward_scroll_measurement(first_unmeasured, self.point_charpos)
+        });
+        if forward_measurement == Some(ForwardScrollMeasurement::DisplayRowsRequired) {
+            return next_window_start_from_visible_rows(
+                self.rows,
+                self.window_start,
+                laid_out_rows,
+            );
+        }
 
         // Which display row point landed on. Inside the laid-out rows this is
         // exact — it accounts for wrapped lines and for text the display hides.
