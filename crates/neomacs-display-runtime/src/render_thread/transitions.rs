@@ -98,7 +98,11 @@ impl SynchronizedTransitionPlan {
 /// Renderer-owned state for any snapshot transition.
 pub(super) struct ActiveTransition {
     source: TransitionSource,
-    pub(super) started: std::time::Instant,
+    /// When this transition began, dated to the presentation time of the
+    /// frame that started it. Progress is measured against the presentation
+    /// time of each later frame, so the phase is correct when the pixels
+    /// actually appear rather than when they were built.
+    pub(super) started: neomacs_display_protocol::frame_time::EventTime,
     /// Regions share this transition's one clock and previous-frame snapshot.
     plan: SynchronizedTransitionPlan,
     // Snapshot handles retained for the transition's lifetime; sampling goes
@@ -272,7 +276,7 @@ fn apply_transition_hint(
     renderer: &WgpuRenderer,
     transitions: &mut TransitionState,
     hint: &ContentTransitionHint,
-    now: std::time::Instant,
+    now: neomacs_display_protocol::frame_time::EventTime,
     width: u32,
     height: u32,
 ) {
@@ -299,7 +303,7 @@ fn start_transition(
     transition_key: TransitionKey,
     source: TransitionSource,
     plan: SynchronizedTransitionPlan,
-    now: std::time::Instant,
+    now: neomacs_display_protocol::frame_time::EventTime,
     width: u32,
     height: u32,
 ) {
@@ -332,7 +336,7 @@ fn apply_effect_hint(
     transitions: &mut TransitionState,
     effects: &neomacs_display_protocol::EffectsConfig,
     hint: &WindowEffectHint,
-    now: std::time::Instant,
+    now: neomacs_display_protocol::frame_time::EventTime,
     frame_dirty: &mut bool,
     width: u32,
     height: u32,
@@ -340,7 +344,7 @@ fn apply_effect_hint(
     match hint {
         WindowEffectHint::TextFadeIn { window_id, bounds } => {
             if effects.text_fade_in.enabled {
-                renderer.trigger_text_fade_in(window_id.get(), *bounds, now);
+                renderer.trigger_text_fade_in(window_id.get(), *bounds, now.into_instant());
             }
         }
         WindowEffectHint::ScrollLineSpacing {
@@ -349,7 +353,12 @@ fn apply_effect_hint(
             direction,
         } => {
             if effects.scroll_line_spacing.enabled {
-                renderer.trigger_scroll_line_spacing(window_id.get(), *bounds, *direction, now);
+                renderer.trigger_scroll_line_spacing(
+                    window_id.get(),
+                    *bounds,
+                    *direction,
+                    now.into_instant(),
+                );
             }
         }
         WindowEffectHint::ScrollMomentum {
@@ -358,7 +367,12 @@ fn apply_effect_hint(
             direction,
         } => {
             if effects.scroll_momentum.enabled {
-                renderer.trigger_scroll_momentum(window_id.get(), *bounds, *direction, now);
+                renderer.trigger_scroll_momentum(
+                    window_id.get(),
+                    *bounds,
+                    *direction,
+                    now.into_instant(),
+                );
             }
         }
         WindowEffectHint::ScrollVelocityFade {
@@ -367,7 +381,12 @@ fn apply_effect_hint(
             delta,
         } => {
             if effects.scroll_velocity_fade.enabled {
-                renderer.trigger_scroll_velocity_fade(window_id.get(), *bounds, *delta, now);
+                renderer.trigger_scroll_velocity_fade(
+                    window_id.get(),
+                    *bounds,
+                    *delta,
+                    now.into_instant(),
+                );
             }
         }
         WindowEffectHint::LineAnimation {
@@ -430,7 +449,10 @@ pub(super) fn detect_frame_transitions(
     height: u32,
 ) {
     let (transition_hints, effect_hints) = frame.take_runtime_hints();
-    let now = std::time::Instant::now();
+    // One sample for the whole frame: a transition detected and rendered in the
+    // same frame starts at progress 0 rather than at whatever the gap between
+    // two clock reads happened to be.
+    let now = renderer.frame_sample().presentation_time();
 
     for hint in &transition_hints {
         apply_transition_hint(renderer, transitions, hint, now, width, height);
@@ -483,7 +505,7 @@ pub(super) fn render_frame_transitions(
     width: u32,
     height: u32,
 ) {
-    let now = std::time::Instant::now();
+    let now = renderer.frame_sample().presentation_time();
     let current_bg = match current_offscreen_view_and_bg(transitions) {
         Some((_, bg)) => bg.clone(),
         None => return,
@@ -491,7 +513,7 @@ pub(super) fn render_frame_transitions(
 
     let mut completed = Vec::new();
     for (&transition_key, transition) in &transitions.active {
-        let elapsed = now.duration_since(transition.started);
+        let elapsed = now.saturating_since(transition.started);
         let raw_t = (elapsed.as_secs_f32() / transition.plan.duration.as_secs_f32()).min(1.0);
         let elapsed_secs = elapsed.as_secs_f32();
 
