@@ -580,7 +580,7 @@ impl WgpuRenderer {
                     let paint = PresentedCursorPaint::resolve(
                         ResolvedCursorPaint::new(cursor.color, cursor.cursor_fg),
                         CursorColorPolicy::Inherit,
-                        self.frame_sample_time,
+                        self.frame_sample.presentation_time().into_instant(),
                     );
                     let presentation = FilledBoxPresentation::resolve(
                         cursor.window_id,

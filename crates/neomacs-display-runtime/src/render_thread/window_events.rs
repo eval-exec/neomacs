@@ -524,9 +524,7 @@ impl RenderApp {
                         );
                     }
                     if let Some(renderer) = self.renderer.as_mut() {
-                        renderer.set_frame_sample_time(
-                            plan.tick.target_presentation_time.into_instant(),
-                        );
+                        renderer.set_frame_sample(plan.tick.sample());
                     }
                     if let Some(window_state) = self.frame_windows.get_mut(emacs_fid) {
                         window_state.render.set_dirty(false);
