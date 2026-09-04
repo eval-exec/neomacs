@@ -139,15 +139,6 @@ impl WindowLocalRowExtent {
 ///
 /// What this port does NOT do, relative to the GNU function:
 ///
-/// - **`LeaveWhole` drops the glyph.** In GNU a narrow mid-row widget that
-///   does not fit is continued onto the next row or truncated by
-///   `display_line` (the test at src/xdisp.c:26221-26224, the branch that
-///   restores the position and emits the continuation glyph at
-///   :26416-26434); this row builder has no
-///   remainder for a media replacement, so the row's
-///   `RejectOverflowingGlyph` policy consumes the covered text and emits
-///   nothing.  The pre-existing behavior, narrowed by this rule to widgets
-///   GNU would also leave whole.
 /// - **No room at all.** With `hpos == 0` GNU still crops when nothing of
 ///   the row is left, producing a glyph of zero or negative width
 ///   (`clip_to_bounds (-1, …)`, :32600); here `visible_width_px > 0.0`

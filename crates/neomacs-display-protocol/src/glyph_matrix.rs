@@ -3253,7 +3253,13 @@ impl FrameDisplayState {
                             )
                             .expect("materialized xwidget clip is valid")
                         });
-                        let layout_advance = XwidgetLayoutAdvance::new(Px(materialized_width))
+                        // Unlike ordinary painted glyphs, an xwidget carries
+                        // its visible text-area clip separately.  GNU keeps a
+                        // narrow overflowing xwidget's whole glyph advance in
+                        // truncating rows (`display_line`, src/xdisp.c) and
+                        // clips only the native presentation
+                        // (`x_draw_xwidget_glyph_string`, src/xwidget.c).
+                        let layout_advance = XwidgetLayoutAdvance::new(Px(glyph_width))
                             .expect("a materialized xwidget has positive finite width");
                         push(FrameGlyph::Xwidget {
                             window_id,

@@ -1323,6 +1323,20 @@ enum DisplayRowOverflowPolicy {
     ClipToStructuralLane,
 }
 
+/// Per-item admission at the row's right edge.
+///
+/// GNU's `display_line` deliberately keeps an xwidget that
+/// `produce_xwidget_glyph` classified as `LeaveWhole`, even when its layout
+/// advance crosses a truncating row's boundary.  The native xwidget clip then
+/// limits what is presented.  Keeping this as an xwidget-branded capability
+/// prevents that exception from silently becoming the policy for images,
+/// videos, surfaces, or ordinary glyphs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayItemRightEdgeAdmission {
+    EnforceRowBoundary,
+    PreserveWholeXwidget,
+}
+
 pub(crate) struct DisplayRowProgressWriter<'layout, 'row, 'measurer> {
     writer: DisplayRowWriter<'layout, 'row, 'measurer>,
     position: DisplayRowPosition,
@@ -1715,7 +1729,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 // `DisplayXwidgetOverflowAction`.  Xwidgets in body text only:
                 // images have their own GNU rule (not ported), and margin
                 // lanes keep their own structural clip below.
-                let kind = match kind {
+                let (kind, right_edge_admission) = match kind {
                     DisplayItemKind::MediaReplacement(media)
                         if self.writer.overflow_policy()
                             == DisplayRowOverflowPolicy::RejectOverflowingGlyph =>
@@ -1732,14 +1746,29 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                                     extent,
                                     before_len == 0,
                                 );
-                                DisplayItemKind::MediaReplacement(
-                                    xwidget.apply_overflow(action).into_media(),
+                                let admission = match action {
+                                    DisplayXwidgetOverflowAction::Fits
+                                    | DisplayXwidgetOverflowAction::CropAdvanceToVisibleWidth {
+                                        ..
+                                    } => DisplayItemRightEdgeAdmission::EnforceRowBoundary,
+                                    DisplayXwidgetOverflowAction::LeaveWhole => {
+                                        DisplayItemRightEdgeAdmission::PreserveWholeXwidget
+                                    }
+                                };
+                                (
+                                    DisplayItemKind::MediaReplacement(
+                                        xwidget.apply_overflow(action).into_media(),
+                                    ),
+                                    admission,
                                 )
                             }
-                            Err(media) => DisplayItemKind::MediaReplacement(media),
+                            Err(media) => (
+                                DisplayItemKind::MediaReplacement(media),
+                                DisplayItemRightEdgeAdmission::EnforceRowBoundary,
+                            ),
                         }
                     }
-                    kind => kind,
+                    kind => (kind, DisplayItemRightEdgeAdmission::EnforceRowBoundary),
                 };
                 let checkpoint = DisplayRowGlyphCheckpoint::capture(self.writer.row);
                 let mut written = self.writer.push_item(
@@ -1751,6 +1780,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 let mut status = DisplayRowAppendStatus::Complete;
                 if written.has_positive_width()
                     && self.position.x_px() + written.width_px() > self.max_x_px
+                    && right_edge_admission == DisplayItemRightEdgeAdmission::EnforceRowBoundary
                 {
                     let available_px = (self.max_x_px - self.position.x_px()).max(0.0);
                     match self.writer.overflow_policy() {

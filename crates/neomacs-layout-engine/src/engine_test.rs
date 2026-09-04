@@ -14339,12 +14339,19 @@ fn layout_frame_rust_measures_the_quarter_width_rule_from_the_text_area_not_the_
     assert_eq!(cropped.content.width_px(), 200.0);
 
     // 195 px is not wider than a quarter of the window measured from the
-    // text area (195 <= 196), so GNU leaves it whole and this port drops it.
-    // Measured from the content edge the quarter would be smaller than 195
-    // and the widget would have been cropped instead.
-    assert!(
-        inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 195, 40).is_none(),
-        "the quarter-width threshold is the text area's, prefix included"
+    // text area (195 <= 196), so GNU leaves its layout advance whole.  With
+    // truncation enabled, `display_line` retains that glyph past the right
+    // edge and `x_draw_xwidget_glyph_string` clips the native widget to the
+    // text area.  Measured from the content edge the quarter would be smaller
+    // than 195 and the widget would have been cropped instead.
+    let whole = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 195, 40)
+        .expect("GNU retains a narrow overflowing xwidget and clips its presentation");
+    assert_eq!(whole.x, cropped.x, "the two widgets start at the same pen");
+    assert_eq!(whole.width, 195.0, "GNU leaves the layout advance whole");
+    assert_eq!(whole.content.width_px(), 195.0);
+    assert_eq!(
+        whole.clip_rect, cropped.clip_rect,
+        "both presentations are clipped by the same window text area"
     );
 }
 
