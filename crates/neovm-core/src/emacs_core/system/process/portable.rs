@@ -20,6 +20,8 @@ mod bootstrap;
 mod nproc;
 #[path = "system_processes.rs"]
 mod system_processes;
+mod portable_wait;
+pub(crate) use portable_wait::builtin_accept_process_output;
 
 use crate::buffer::BufferId;
 use crate::emacs_core::error::{EvalResult, Flow, LispCondition, expect_args, signal};
@@ -143,7 +145,6 @@ unsupported_process_subrs!(
     builtin_print_preprocess,
     builtin_format_network_address,
     builtin_network_interface_info,
-    builtin_accept_process_output,
     builtin_make_process,
     builtin_make_network_process,
     builtin_neomacs_open_tls_stream,
