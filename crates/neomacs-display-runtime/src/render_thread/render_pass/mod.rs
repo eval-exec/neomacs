@@ -292,12 +292,18 @@ fn render_frame_window_contents_to_surface(
         render.finish_pointer_paint_render();
         renderer.set_scale_factor(old_scale_factor);
         renderer.resize(old_width, old_height);
-        // No projection: eligibility required that no pane is moving, so
-        // this frame places nothing that hit testing has to be told about.
+        // Forwarded, not discarded. Eligibility requires only that this frame
+        // *places* nothing — and `sample_pane_layout` has one path that places
+        // nothing while still producing a projection: a retarget that leaves
+        // the panes already where the new layout wants them ends the motion and
+        // publishes the settled transform. Hardcoding `None` here dropped it,
+        // so hit testing went on using the morph's last mid-motion transform
+        // for every frame afterwards, until some later morph happened to
+        // publish again.
         return Ok(RenderedFrameSurface {
             output,
             frame,
-            projection: None,
+            projection: pane_projection,
         });
     }
 
