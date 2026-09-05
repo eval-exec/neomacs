@@ -496,7 +496,7 @@ impl WgpuRenderer {
             direction,
             started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(
-                self.durations.scroll_line_spacing_ms as u64,
+                self.effects.scroll_line_spacing.duration_ms as u64,
             ),
         });
     }
