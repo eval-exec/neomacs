@@ -122,10 +122,10 @@ fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
 }
 
 impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
-    /// Walk with no window context (tests / non-window callers). The redisplay
-    /// path uses [`new_for_window`](Self::new_for_window) so overlay `window`
-    /// properties are honored.
-    #[allow(dead_code)] // retained for non-window callers and focused tests
+    /// Walk with no window context. The redisplay path uses
+    /// [`new_for_window`](Self::new_for_window) so overlay `window` properties
+    /// are honored, so only focused tests seat a walk this way.
+    #[cfg(test)]
     pub(crate) fn new(
         buffer_id: BufferId,
         buffer: &'request B,
