@@ -265,9 +265,11 @@ fn take_runtime_hints_drains_transition_and_effect_hints() {
         },
         intent: ContentTransitionIntent::Replace,
     });
-    buf.add_effect_hint(WindowEffectHint::TextFadeIn {
+    buf.add_effect_hint(WindowEffectHint::LineAnimation {
         window_id: DisplayWindowId::new(1),
         bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
+        edit_y: 32.0,
+        offset: 16.0,
     });
 
     let (transition_hints, effect_hints) = buf.take_runtime_hints();

@@ -449,11 +449,11 @@ fn a_scroll_emits_only_the_hints_the_producer_still_owns() {
 
     let state = builder.finish(80, 24, 8.0, 16.0);
     assert_eq!(curr_infos.len(), 1);
-    // Was 4. The compositor now measures viewport motion itself and derives the
-    // line-spacing and momentum effects from it, so the producer no longer
-    // names them. What remains is the text fade and the velocity fade, whose
-    // conversions are still to come.
-    assert_eq!(state.effect_hints.len(), 2);
+    // Was 4, then 2, now 0. The compositor measures viewport motion itself and
+    // derives every scroll effect from it, so a scroll makes the producer emit
+    // nothing at all. Kept as the regression guard until `WindowEffectHint`
+    // itself goes with the line-animation conversion.
+    assert!(state.effect_hints.is_empty());
 }
 
 #[test]

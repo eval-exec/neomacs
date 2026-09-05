@@ -94,6 +94,8 @@ pub(crate) struct FrameCompositor {
 #[derive(Default)]
 pub(in crate::render_thread) struct PendingContinuity {
     pub(in crate::render_thread) scrolls: Vec<continuity::ScrollObservation>,
+    /// Windows showing text they were not showing before.
+    pub(in crate::render_thread) shown_text_replaced: Vec<continuity::ShownTextReplaced>,
     /// Whether the frame's selection moved to another window.
     pub(in crate::render_thread) selection: Option<continuity::selection::SelectionObservation>,
     /// Whether the frame's theme changed.
