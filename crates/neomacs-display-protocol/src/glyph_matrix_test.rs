@@ -58,6 +58,7 @@ fn install_complete_window_geometry(
                 ..crate::PresentedWindowRegions::default()
             },
         },
+        line_number_field: None,
         mode_line_height: 0.0,
         header_line_height: 0.0,
         tab_line_height: 0.0,

@@ -32,6 +32,7 @@ fn window(id: i64, bounds: Rect) -> WindowInfo {
         buffer_modiff: BufferModiff::new(1),
         bounds,
         geometry: neomacs_display_protocol::PresentedWindowGeometry::default(),
+        line_number_field: None,
         mode_line_height: 20.0,
         header_line_height: 0.0,
         tab_line_height: 0.0,

@@ -361,6 +361,7 @@ fn rasterize_places_each_right_margin_at_the_reserved_columns() {
                 ..PresentedWindowRegions::default()
             },
         },
+        line_number_field: None,
         mode_line_height: 0.0,
         header_line_height: 0.0,
         tab_line_height: 0.0,
@@ -437,6 +438,7 @@ fn rasterize_anchors_a_synthetic_right_border_after_short_text() {
                 ..PresentedWindowRegions::default()
             },
         },
+        line_number_field: None,
         mode_line_height: 0.0,
         header_line_height: 0.0,
         tab_line_height: 0.0,

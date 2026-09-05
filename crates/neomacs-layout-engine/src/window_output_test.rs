@@ -126,6 +126,7 @@ fn window_info(window_id: i64) -> WindowInfo {
         buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         bounds: Rect::new(0.0, 0.0, 80.0, 16.0),
         geometry: Default::default(),
+        line_number_field: None,
         mode_line_height: 0.0,
         header_line_height: 0.0,
         tab_line_height: 0.0,

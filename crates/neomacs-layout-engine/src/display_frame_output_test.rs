@@ -3,8 +3,8 @@ use crate::types::{DisplayLineNumbersMode, FrameParams, LineWrapMode, WindowKind
 use neomacs_display_protocol::cursor::CursorBarWidth;
 use neomacs_display_protocol::frame_chrome::FrameChromeKind;
 use neomacs_display_protocol::frame_glyphs::{
-    BufferTransitionTarget, ContentTransitionHint, CursorKind, PresentedCellOrigin,
-    PresentedWindowGeometry, PresentedWindowRegions, WindowInfo,
+    BufferTransitionTarget, ContentTransitionHint, CursorKind, LineNumberFieldWidth,
+    PresentedCellOrigin, PresentedWindowGeometry, PresentedWindowRegions, WindowInfo,
 };
 use neomacs_display_protocol::types::{DisplayWindowId, Rect};
 use neomacs_display_protocol::{ContentTransitionIntent, TransitionDirection};
@@ -367,6 +367,7 @@ fn window_info(params: &WindowParams) -> WindowInfo {
             cell_origin: Default::default(),
             regions,
         },
+        line_number_field: None,
         mode_line_height: params.mode_line_height,
         header_line_height: params.header_line_height,
         tab_line_height: params.tab_line_height,
@@ -404,7 +405,7 @@ fn window_frame_info_request_emits_background_and_window_info() {
     };
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
 
-    WindowFrameInfoRenderRequest::new(&params, metadata)
+    WindowFrameInfoRenderRequest::new(&params, metadata, LineNumberFieldWidth::measured(27.0))
         .render_and_apply(FrameOutputTarget::from_builder(&mut builder));
     install_skipped_geometry(
         &mut builder,
@@ -420,6 +421,13 @@ fn window_frame_info_request_emits_background_and_window_info() {
     assert_eq!(state.window_infos[0].window_id.get(), params.window_id);
     assert_eq!(state.window_infos[0].buffer_file_name, "notes.org");
     assert!(state.window_infos[0].modified);
+    // The line-number field is measured by the body walk and cannot be
+    // recovered downstream, so this constructor has to publish what it was
+    // given rather than defaulting it away.
+    assert_eq!(
+        state.window_infos[0].line_number_field,
+        LineNumberFieldWidth::measured(27.0)
+    );
 }
 
 #[test]
@@ -740,7 +748,7 @@ fn window_scroll_bars_request_skips_empty_vertical_track() {
 fn frame_output_rejects_window_without_installed_geometry() {
     let params = window_params();
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
-    WindowFrameInfoRenderRequest::new(&params, WindowFrameMetadata::default())
+    WindowFrameInfoRenderRequest::new(&params, WindowFrameMetadata::default(), None)
         .render_and_apply(FrameOutputTarget::from_builder(&mut builder));
     let _ = builder.finish(80, 24, 8.0, 16.0);
 }
@@ -751,7 +759,7 @@ fn frame_output_rejects_duplicate_window_identity() {
     let params = window_params();
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
     for _ in 0..2 {
-        WindowFrameInfoRenderRequest::new(&params, WindowFrameMetadata::default())
+        WindowFrameInfoRenderRequest::new(&params, WindowFrameMetadata::default(), None)
             .render_and_apply(FrameOutputTarget::from_builder(&mut builder));
     }
 }

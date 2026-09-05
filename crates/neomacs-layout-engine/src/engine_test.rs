@@ -5280,6 +5280,201 @@ fn layout_frame_rust_places_line_number_prefix_before_buffer_text() {
     );
 }
 
+/// GNU records the field it produced in `it->lnum_pixel_width` (xdisp.c
+/// `maybe_produce_line_number`) and advances `current_x` past it before buffer
+/// text. The published `WindowInfo` must carry that same measurement: it is the
+/// only number a consumer can pair with the published `text_body.x` to name the
+/// band, and without it the renderer is back to inventing a width.
+#[test]
+fn the_published_window_info_carries_the_line_number_field_the_row_walk_reserved() {
+    let (mut eval, frame_id, buffer_id, selected_window) =
+        incr_editing_frame("alpha\nbeta\ngamma\n", 360, 180);
+    eval.buffer_manager_mut()
+        .get_mut(buffer_id)
+        .expect("line-number buffer")
+        .set_buffer_local("display-line-numbers", Value::T);
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("frame display state");
+    let info = state
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == selected_window.0 as i64)
+        .expect("selected window info");
+    let field = info
+        .line_number_field
+        .expect("a window displaying line numbers reserved a field");
+    let neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry::Complete {
+        regions, ..
+    } = info.geometry
+    else {
+        panic!("an accepted window publishes complete geometry");
+    };
+
+    let frame = state.materialize();
+    let mut buffer_text_left = None;
+    for glyph in &frame.glyphs {
+        let FrameGlyph::Char {
+            window_id,
+            row_role: GlyphRowRole::Text,
+            char,
+            x,
+            ..
+        } = glyph
+        else {
+            continue;
+        };
+        if window_id.get() != selected_window.0 as i64 {
+            continue;
+        }
+        if *char == 'a' && buffer_text_left.is_none() {
+            buffer_text_left = Some(*x);
+        }
+    }
+    let buffer_text_left = buffer_text_left.expect("materialized buffer text alpha");
+
+    assert!(
+        (regions.text_body.x + field.px() - buffer_text_left).abs() < 0.5,
+        "the published field must end exactly where buffer text begins: text_body.x={} + \
+         field={} vs text left {buffer_text_left}",
+        regions.text_body.x,
+        field.px()
+    );
+}
+
+/// `display-line-numbers` is nil by default, so a window that produced no
+/// line-number glyphs has no band on screen. Reporting `Some(0.0)` instead of
+/// `None` would make every consumer responsible for remembering to test for
+/// zero, and the one that forgets paints over buffer text.
+#[test]
+fn a_window_showing_no_line_numbers_publishes_no_line_number_field_at_all() {
+    let (mut eval, frame_id, _buffer_id, selected_window) =
+        incr_editing_frame("alpha\nbeta\ngamma\n", 360, 180);
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("frame display state");
+    let info = state
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == selected_window.0 as i64)
+        .expect("selected window info");
+
+    assert_eq!(
+        info.line_number_field, None,
+        "a window with display-line-numbers nil reserved no field"
+    );
+}
+
+/// GNU's `should_produce_line_number` rejects minibuffer windows outright, so
+/// an echo area whose buffer sets `display-line-numbers` still lays no field.
+/// If this is false, a consumer lights a band in the echo area with no numbers
+/// under it.
+#[test]
+fn a_minibuffer_window_publishes_no_line_number_field_even_when_its_buffer_enables_them() {
+    let mut eval = Context::new();
+    let root_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.buffer_manager_mut()
+        .get_mut(root_id)
+        .expect("root buffer")
+        .set_buffer_local("display-line-numbers", Value::T);
+    eval.ensure_echo_area_buffers();
+    let echo_buffer_id = eval
+        .buffer_manager()
+        .find_buffer_by_name(" *Echo Area 0*")
+        .expect("echo area buffer");
+    eval.buffer_manager_mut()
+        .get_mut(echo_buffer_id)
+        .expect("echo area buffer")
+        .set_buffer_local("display-line-numbers", Value::T);
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "layout-minibuffer-line-number-field",
+        640,
+        160,
+        root_id,
+    );
+    eval.set_current_message(Some(LispString::from_utf8("Echo has no field")));
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let minibuffer = state
+        .window_infos
+        .iter()
+        .find(|info| info.is_minibuffer)
+        .expect("minibuffer window info");
+
+    assert_eq!(
+        minibuffer.line_number_field, None,
+        "GNU forbids line numbers in minibuffers, so the mini-window reserved no field"
+    );
+}
+
+/// A cursor-only replay reuses the retained body rows verbatim instead of
+/// re-laying them, but it still reports the field those rows were laid against.
+/// If this is false the band changes width on every keystroke that takes the
+/// fast path, while the numbers under it stay put.
+#[test]
+fn a_cursor_only_replay_publishes_the_same_line_number_field_as_the_walk_it_reused_rows_from() {
+    let text = "(defun f (a b) (+ a b))\n".repeat(40);
+    let (mut eval, frame_id, buf_id, selected_window) = incr_editing_frame(&text, 800, 600);
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("line-number buffer")
+        .set_buffer_local("display-line-numbers", Value::T);
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let full_walk_field = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("frame display state")
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == selected_window.0 as i64)
+        .expect("selected window info")
+        .line_number_field
+        .expect("the full walk reserved a field");
+
+    {
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buffer.goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(10));
+    }
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(
+        engine.last_layout_stats().cursor_only_windows,
+        1,
+        "the point move must take the cursor-only fast path for this test to mean anything"
+    );
+    let replay_field = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("frame display state")
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == selected_window.0 as i64)
+        .expect("selected window info")
+        .line_number_field
+        .expect("the replay reported the reused rows' field");
+
+    assert_eq!(replay_field, full_walk_field);
+}
+
 #[test]
 fn layout_frame_rust_fills_rows_beyond_eob_with_line_number_text_prefix() {
     let (mut eval, frame_id, buffer_id, selected_window) = incr_editing_frame("hello\n", 640, 400);

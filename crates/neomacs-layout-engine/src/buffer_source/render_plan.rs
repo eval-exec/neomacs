@@ -966,6 +966,7 @@ impl BufferSourceOutputSetup {
                 effective_default_face,
                 cursor_only: true,
                 reused_matrix_rows: None,
+                line_number_field_width: line_number_field.extent().get(),
             };
         }
 
@@ -1203,6 +1204,7 @@ impl BufferSourceOutputSetup {
                 effective_default_face,
                 cursor_only: false,
                 reused_matrix_rows: Some(reused_matrix_rows),
+                line_number_field_width: line_number_field.extent().get(),
             };
         }
 
@@ -1403,6 +1405,7 @@ impl BufferSourceOutputSetup {
             effective_default_face,
             cursor_only: false,
             reused_matrix_rows: None,
+            line_number_field_width: line_number_field.extent().get(),
         }
     }
 }
