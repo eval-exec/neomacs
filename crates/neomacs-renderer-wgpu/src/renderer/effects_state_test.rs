@@ -873,12 +873,12 @@ fn scroll_velocity_fade_entry_fields() {
     let entry = ScrollVelocityFadeEntry {
         window_id: 5,
         bounds,
-        velocity: 3.5,
+        intensity: 0.7,
         started: now,
         duration: std::time::Duration::from_millis(300),
     };
     assert_eq!(entry.window_id, 5);
-    assert_approx(entry.velocity, 3.5, "velocity");
+    assert_approx(entry.intensity, 0.7, "intensity");
 }
 
 #[test]

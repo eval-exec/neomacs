@@ -2143,8 +2143,7 @@ pub(super) fn emit_scroll_velocity_fade(
 
         let t = elapsed / duration;
         let fade = (1.0 - t) * (1.0 - t);
-        let vel_factor = (entry.velocity / 50.0).min(1.0);
-        let alpha = max_op * fade * vel_factor;
+        let alpha = max_op * fade * entry.intensity;
         if alpha < 0.005 {
             continue;
         }

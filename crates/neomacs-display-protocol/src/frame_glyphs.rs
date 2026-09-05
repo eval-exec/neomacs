@@ -1069,17 +1069,6 @@ pub enum ContentTransitionHint {
 /// Explicit effect hint from layout producers to render thread.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WindowEffectHint {
-    /// Fade in newly shown text in a window region.
-    TextFadeIn {
-        window_id: DisplayWindowId,
-        bounds: Rect,
-    },
-    /// Velocity-based fade intensity during scroll.
-    ScrollVelocityFade {
-        window_id: DisplayWindowId,
-        bounds: Rect,
-        delta: f32,
-    },
     /// Animate line insertion/deletion below edit point.
     LineAnimation {
         window_id: DisplayWindowId,

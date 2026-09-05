@@ -134,7 +134,11 @@ impl WgpuRenderer {
             .trigger_click_halo(x, y, now, duration_ms);
     }
 
-    /// Trigger scroll velocity fade for a window
+    /// Trigger scroll velocity fade for a window.
+    ///
+    /// `intensity` is a normalized `0.0..=1.0` strength, not a distance: how
+    /// far the viewport moved is measured by the compositor, which knows the
+    /// scale to normalize against.
     // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
     // `Instant` only because `neomacs-display-runtime` still bridges through
     // `into_instant()` at the call site.
@@ -142,7 +146,7 @@ impl WgpuRenderer {
         &mut self,
         window_id: i64,
         bounds: Rect,
-        delta: f32,
+        intensity: f32,
         now: std::time::Instant,
     ) {
         // Replace existing entry for this window
@@ -153,7 +157,7 @@ impl WgpuRenderer {
         self.fx.scroll_velocity.fades.push(ScrollVelocityFadeEntry {
             window_id,
             bounds,
-            velocity: delta,
+            intensity: intensity.clamp(0.0, 1.0),
             started: EventTime::from_observed_instant(now),
             duration: std::time::Duration::from_millis(self.effects.scroll_velocity_fade.ms as u64),
         });
