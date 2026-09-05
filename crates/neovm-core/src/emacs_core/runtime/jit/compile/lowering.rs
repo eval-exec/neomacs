@@ -625,14 +625,39 @@ pub(crate) fn emit_root_window_stores(
             fb.ins()
                 .trapnz(moved, cranelift_codegen::ir::TrapCode::unwrap_user(3));
         }
-        let ptr = fb
-            .ins()
-            .load(rt.ptr_ty, MemFlagsData::trusted(), vmctx, off_ptr);
-        let slot0 = fb.ins().iadd(ptr, h.byte_off);
-        for (i, &v) in to_root.iter().enumerate() {
-            fb.ins()
-                .store(MemFlagsData::trusted(), v, slot0, (i * 8) as i32);
-        }
+        // Which slots already hold their value (see `RootWinCarry`).
+        let (ptr, slot0) = ROOTWIN_CARRY.with(|c| {
+            let mut c = c.borrow_mut();
+            let needs_store = to_root
+                .iter()
+                .enumerate()
+                .any(|(i, &v)| c.stored.get(i).copied().flatten() != Some(v));
+            let addr = needs_store.then(|| {
+                let ptr = fb
+                    .ins()
+                    .load(rt.ptr_ty, MemFlagsData::trusted(), vmctx, off_ptr);
+                (ptr, fb.ins().iadd(ptr, h.byte_off))
+            });
+            for (i, &v) in to_root.iter().enumerate() {
+                if c.stored.get(i).copied().flatten() == Some(v) {
+                    c.elided += 1;
+                    continue;
+                }
+                let (_, slot0) = addr.expect("a differing slot implies the address");
+                fb.ins()
+                    .store(MemFlagsData::trusted(), v, slot0, (i * 8) as i32);
+                c.emitted += 1;
+                if c.stored.len() <= i {
+                    c.stored.resize(i + 1, None);
+                }
+                c.stored[i] = Some(v);
+            }
+            // Slots at or above this site's count may be clobbered by the
+            // nested activation during the call.
+            c.stored.truncate(to_root.len());
+            addr.unwrap_or((vmctx, vmctx))
+        });
+        let _ = (ptr, slot0);
         let need = fb.ins().iadd_imm_u(h.base, to_root.len() as i64);
         fb.ins()
             .store(MemFlagsData::trusted(), need, vmctx, off_top);
@@ -1923,6 +1948,80 @@ pub(crate) struct HoistedRootWin {
     pub(crate) byte_off: ClifValue,
 }
 
+thread_local! {
+    /// Which root-window slots the hoisted sites of the function being
+    /// lowered have already stored (see [`RootWinCarry`]). Reset per
+    /// function and at every bytecode basic-block leader.
+    static ROOTWIN_CARRY: std::cell::RefCell<RootWinCarry> =
+        std::cell::RefCell::new(RootWinCarry { stored: Vec::new(), emitted: 0, elided: 0 });
+}
+
+/// The per-window-index SSA value the last hoisted site stored.
+///
+/// Why eliding a store whose recorded value matches is exact: between two
+/// sites of one activation the window slots below the first site's count
+/// are written by nobody — our sites are the only writers of this frame's
+/// slots, a nested activation works above `top`, and the collector only
+/// reads — so a slot whose stored SSA value is unchanged still holds it.
+/// Slots at or above a site's count may be clobbered by the nested
+/// activation during its call, so the record is truncated to that count.
+///
+/// Why resetting only at bytecode leaders is exact: sites are the window's
+/// only writers, and every internal block an op's lowering creates (status
+/// checks, guards, fast/slow merges) has all its predecessors inside that
+/// op, so within one bytecode basic block every path from the previous
+/// site to the next runs the same stores. The only edges that can reach a
+/// site with a different store history are jumps to a bytecode leader
+/// (loop heads, branch targets, handlers, the OSR entry) — the record is
+/// dropped there.
+struct RootWinCarry {
+    stored: Vec<Option<ClifValue>>,
+    /// Diagnostics: root-window stores emitted / elided in this function.
+    emitted: u32,
+    elided: u32,
+}
+
+/// Forget the carried record: a new function, or a bytecode leader.
+pub(crate) fn rootwin_carry_reset() {
+    ROOTWIN_CARRY.with(|c| c.borrow_mut().stored.clear());
+}
+
+/// Zero the per-function elision counters (at the hoisted prologue).
+pub(crate) fn rootwin_counters_reset() {
+    ROOTWIN_CARRY.with(|c| {
+        let mut c = c.borrow_mut();
+        c.stored.clear();
+        c.emitted = 0;
+        c.elided = 0;
+    });
+}
+
+/// `(root-window stores emitted, elided)` for the function just lowered.
+pub(crate) fn rootwin_counters() -> (u32, u32) {
+    ROOTWIN_CARRY.with(|c| {
+        let c = c.borrow();
+        (c.emitted, c.elided)
+    })
+}
+
+/// `NEOVM_JIT_DUMP_CLIF=<path>`: append every lowered function's CLIF (with
+/// an `;; ops=N` header) to `path` — the IR-composition census.
+pub(crate) fn dump_clif(func: &cranelift_codegen::ir::Function, header: &str) {
+    use std::sync::OnceLock;
+    static PATH: OnceLock<Option<String>> = OnceLock::new();
+    let Some(path) = PATH.get_or_init(|| std::env::var("NEOVM_JIT_DUMP_CLIF").ok()) else {
+        return;
+    };
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, ";; {header}\n{}\n", func.display());
+    }
+}
+
 /// Emit the hoisted root-window prologue into the current (entry) block:
 /// load the frame base, grow the buffer once if `max_slots` more slots may
 /// not fit, and record the base for every site (`RtCtx::rootwin`).
@@ -1932,6 +2031,7 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     vmctx: ClifValue,
     max_slots: usize,
 ) {
+    rootwin_counters_reset();
     let (_off_ptr, off_top, off_cap) = ctx_rootwin_offsets();
     let base = fb
         .ins()

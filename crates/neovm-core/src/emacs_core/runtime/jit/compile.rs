@@ -3449,6 +3449,9 @@ fn build_leaf_fn<M: Module>(
         for &l in &cfg.leaders {
             let blk = block_for[&l];
             fb.switch_to_block(blk);
+            // A leader may be reached from any store history: drop the
+            // root-window record (see `lowering::RootWinCarry`).
+            lowering::rootwin_carry_reset();
             // An unreachable block — no path from the entry, so the dataflow
             // gave it no entry depth: the byte-compiler emits code after an
             // unconditional exit that nothing targets (ebrowse, eglot, wdired,
@@ -3885,6 +3888,14 @@ fn build_leaf_fn<M: Module>(
     let mut ctx = module.make_context();
     ctx.func = func;
     note_clif_size(&ctx.func);
+    let (rw_emitted, rw_elided) = lowering::rootwin_counters();
+    lowering::dump_clif(
+        &ctx.func,
+        &format!(
+            "baseline ops={} rw_stores={rw_emitted} rw_elided={rw_elided}",
+            ops.len()
+        ),
+    );
     module
         .define_function(fid, &mut ctx)
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
