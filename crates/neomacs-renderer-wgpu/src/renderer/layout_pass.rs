@@ -37,13 +37,28 @@
 use crate::renderer::{GlyphVertex, WgpuRenderer};
 use neomacs_display_protocol::types::Rect;
 
+/// Which picture a pane's pixels come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneSource {
+    /// The frame just composed. Every pane that still exists reads from here.
+    Destination,
+    /// The composition before it, which is the only place a pane the
+    /// destination no longer contains still has pixels. A window that has been
+    /// deleted is absent from the new presentation entirely, so there is
+    /// nothing of it to sample there — without this it can only vanish.
+    Previous,
+}
+
 /// One pane's placement for this frame, in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaneBlit {
     /// Where the pane is drawn right now.
     pub bounds: Rect,
-    /// Where in the composed picture its content lives.
+    /// Where in its source picture its content lives.
     pub content_origin: (f32, f32),
+    pub source: PaneSource,
+    /// How opaque to draw it, for a pane entering or leaving.
+    pub opacity: f32,
 }
 
 impl WgpuRenderer {
@@ -54,6 +69,7 @@ impl WgpuRenderer {
     pub fn render_pane_layout(
         &mut self,
         source: &wgpu::BindGroup,
+        previous: Option<&wgpu::BindGroup>,
         destination: &wgpu::TextureView,
         frame_size: (f32, f32),
         panes: &[PaneBlit],
@@ -63,10 +79,13 @@ impl WgpuRenderer {
             return;
         }
 
-        let corner = |x: f32, y: f32, u: f32, v: f32| GlyphVertex {
+        let corner = |x: f32, y: f32, u: f32, v: f32, a: f32| GlyphVertex {
             position: [x, y],
             tex_coords: [u, v],
-            color: [1.0, 1.0, 1.0, 1.0],
+            // Premultiplied by the pipeline's blend, so the alpha alone carries
+            // a departing pane's fade; there is no separate opacity uniform to
+            // keep in step with the geometry.
+            color: [1.0, 1.0, 1.0, a],
         };
 
         let mut vertices = Vec::with_capacity((panes.len() + 1) * 6);
@@ -76,13 +95,18 @@ impl WgpuRenderer {
         // the panes over a cleared target would make all of that disappear for
         // the length of the motion.
         vertices.extend_from_slice(&[
-            corner(0.0, 0.0, 0.0, 0.0),
-            corner(frame_width, 0.0, 1.0, 0.0),
-            corner(frame_width, frame_height, 1.0, 1.0),
-            corner(0.0, 0.0, 0.0, 0.0),
-            corner(frame_width, frame_height, 1.0, 1.0),
-            corner(0.0, frame_height, 0.0, 1.0),
+            corner(0.0, 0.0, 0.0, 0.0, 1.0),
+            corner(frame_width, 0.0, 1.0, 0.0, 1.0),
+            corner(frame_width, frame_height, 1.0, 1.0, 1.0),
+            corner(0.0, 0.0, 0.0, 0.0, 1.0),
+            corner(frame_width, frame_height, 1.0, 1.0, 1.0),
+            corner(0.0, frame_height, 0.0, 1.0, 1.0),
         ]);
+        // Quads are grouped by source, because a bind group cannot change
+        // within one draw call. Destination-sourced panes are emitted first so
+        // a departing pane, which is leaving and should read as on top of what
+        // replaces it, draws over them.
+        let mut departing = Vec::new();
 
         for pane in panes {
             // The pane samples its own size from the picture, not its
@@ -97,15 +121,25 @@ impl WgpuRenderer {
             let y0 = pane.bounds.y;
             let x1 = pane.bounds.x + pane.bounds.width;
             let y1 = pane.bounds.y + pane.bounds.height;
-            vertices.extend_from_slice(&[
-                corner(x0, y0, u0, v0),
-                corner(x1, y0, u1, v0),
-                corner(x1, y1, u1, v1),
-                corner(x0, y0, u0, v0),
-                corner(x1, y1, u1, v1),
-                corner(x0, y1, u0, v1),
-            ]);
+            let quad = [
+                corner(x0, y0, u0, v0, pane.opacity),
+                corner(x1, y0, u1, v0, pane.opacity),
+                corner(x1, y1, u1, v1, pane.opacity),
+                corner(x0, y0, u0, v0, pane.opacity),
+                corner(x1, y1, u1, v1, pane.opacity),
+                corner(x0, y1, u0, v1, pane.opacity),
+            ];
+            match pane.source {
+                PaneSource::Destination => vertices.extend_from_slice(&quad),
+                // Dropped silently when there is no previous composition — the
+                // first frame a window is ever drawn on has no history to fade
+                // from, and inventing one would fade in from an empty texture.
+                PaneSource::Previous if previous.is_some() => departing.extend_from_slice(&quad),
+                PaneSource::Previous => {}
+            }
         }
+        let destination_vertices = vertices.len() as u32;
+        vertices.extend_from_slice(&departing);
 
         let upload = self
             .arenas
@@ -146,7 +180,13 @@ impl WgpuRenderer {
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_bind_group(1, source, &[]);
             pass.set_vertex_buffer(0, upload.buffer_slice());
-            pass.draw(0..vertices.len() as u32, 0..1);
+            pass.draw(0..destination_vertices, 0..1);
+            if destination_vertices < vertices.len() as u32
+                && let Some(previous) = previous
+            {
+                pass.set_bind_group(1, previous, &[]);
+                pass.draw(destination_vertices..vertices.len() as u32, 0..1);
+            }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
     }

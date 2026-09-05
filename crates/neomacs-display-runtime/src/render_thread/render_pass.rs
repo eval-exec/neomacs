@@ -859,8 +859,14 @@ impl RenderApp {
                 // Same picture, placed rather than copied whole: each pane
                 // reads the region of the composed frame it owns and draws
                 // it where the motion currently puts it.
+                let previous = render
+                    .compositor
+                    .transitions
+                    .previous_composition()
+                    .map(|lease| lease.bind_group().clone());
                 renderer.render_pane_layout(
                     composition.bind_group(),
+                    previous.as_ref(),
                     &composition_view,
                     (
                         native.width as f32 / native.scale_factor as f32,
