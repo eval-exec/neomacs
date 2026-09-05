@@ -70,6 +70,26 @@ struct RenderedFrameSurface {
     projection: Option<neomacs_display_protocol::InteractionProjection>,
 }
 
+/// The inputs one frame's content draw needs that are fixed for the whole
+/// frame, whichever composition strategy runs.
+///
+/// Bundled rather than threaded positionally because two of the fields have
+/// the same type and different scope — `root_animated_cursor` is
+/// `animated_cursor` filtered to the root frame — and a positional list makes
+/// swapping them trivially easy to write and impossible to see. The two flags
+/// that genuinely differ per call, `cursor_visible` and `include_overlays`,
+/// stay explicit arguments for the same reason: they are the choice, not the
+/// context.
+struct FrameDrawInputs<'a> {
+    present_mapping: neomacs_display_protocol::PresentMapping,
+    root_animated_cursor: Option<crate::core::types::AnimatedCursor>,
+    animated_cursor: Option<crate::core::types::AnimatedCursor>,
+    bg_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
+    child_frame_style: &'a ChildFrameStyle,
+    scroll_indicators_enabled: bool,
+    toolbar: &'a ToolbarResources,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_frame_window_contents(
     renderer: &mut WgpuRenderer,
@@ -77,25 +97,19 @@ fn render_frame_window_contents(
     render: &mut GuiFrameRenderState,
     surface_view: &wgpu::TextureView,
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
-    present_mapping: neomacs_display_protocol::PresentMapping,
+    inputs: &FrameDrawInputs<'_>,
     cursor_visible: bool,
-    root_animated_cursor: Option<crate::core::types::AnimatedCursor>,
-    animated_cursor: Option<crate::core::types::AnimatedCursor>,
-    bg_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
     include_overlays: bool,
-    child_frame_style: &ChildFrameStyle,
-    scroll_indicators_enabled: bool,
-    toolbar: &ToolbarResources,
 ) {
     scene::render_frame_root_glyphs(
         renderer,
         render,
         surface_view,
         frame,
-        present_mapping,
+        inputs.present_mapping,
         cursor_visible,
-        root_animated_cursor,
-        bg_gradient,
+        inputs.root_animated_cursor,
+        inputs.bg_gradient,
     );
     let renderer_effects_still_active = render.compositor.renderer_effects.needs_redraw();
 
@@ -111,10 +125,10 @@ fn render_frame_window_contents(
         surface_view,
         frame,
         cursor_visible,
-        animated_cursor,
-        child_frame_style,
-        scroll_indicators_enabled,
-        toolbar,
+        inputs.animated_cursor,
+        inputs.child_frame_style,
+        inputs.scroll_indicators_enabled,
+        inputs.toolbar,
     );
     if renderer_effects_still_active {
         render.mark_dirty();
@@ -234,6 +248,16 @@ fn render_frame_window_contents_to_surface(
     let cursor_visible = render.cursor.blink_on;
     composition_targets::report_unpooled_gpu_textures(renderer, render);
 
+    let inputs = FrameDrawInputs {
+        present_mapping,
+        root_animated_cursor,
+        animated_cursor,
+        bg_gradient,
+        child_frame_style,
+        scroll_indicators_enabled,
+        toolbar,
+    };
+
     // The retained-static fast path is a whole composition strategy; it
     // owns its own eligibility rule and its own draw. What the draw order
     // keeps is the decision to take it and the tail every strategy shares.
@@ -245,14 +269,8 @@ fn render_frame_window_contents_to_surface(
             render,
             &composition_view,
             &frame,
-            present_mapping,
+            &inputs,
             cursor_visible,
-            root_animated_cursor,
-            animated_cursor,
-            bg_gradient,
-            child_frame_style,
-            scroll_indicators_enabled,
-            toolbar,
             mouse_pos,
         );
         if frame_post_active {
@@ -289,15 +307,9 @@ fn render_frame_window_contents_to_surface(
             render,
             composition.view(),
             &frame,
-            present_mapping,
+            &inputs,
             cursor_visible,
-            root_animated_cursor,
-            animated_cursor,
-            bg_gradient,
             false,
-            child_frame_style,
-            scroll_indicators_enabled,
-            toolbar,
         );
 
         // Drained here, not earlier: the surface-acquisition paths above can
@@ -375,15 +387,9 @@ fn render_frame_window_contents_to_surface(
             render,
             &composition_view,
             &frame,
-            present_mapping,
+            &inputs,
             cursor_visible,
-            root_animated_cursor,
-            animated_cursor,
-            bg_gradient,
             true,
-            child_frame_style,
-            scroll_indicators_enabled,
-            toolbar,
         );
         // Drained here, not earlier: the surface-acquisition paths above can
         // return, and observations dropped on one of those would lose the
