@@ -4,6 +4,7 @@
 #![allow(clippy::type_complexity)]
 
 pub(in crate::render_thread) mod chrome;
+mod retained_static;
 mod scene;
 mod surface;
 
@@ -36,102 +37,54 @@ struct RenderedFrameSurface {
     projection: Option<neomacs_display_protocol::InteractionProjection>,
 }
 
-#[cfg(test)]
-mod retained_static_pointer_tests {
-    use super::RenderApp;
-    use crate::core::frame_glyphs::{CursorStyle, DisplaySlotId, FrameGlyphBuffer, WindowCursor};
-    use crate::render_thread::state::{PointerAppearanceState, PresentedAppearanceKey};
-    use neomacs_display_protocol::frame_chrome::PresentationId;
-    use neomacs_display_protocol::{
-        Color, DisplayWindowId, EffectsConfig, FrameRate, PointerAppearanceId,
-    };
+#[allow(clippy::too_many_arguments)]
+fn render_frame_window_contents(
+    renderer: &mut WgpuRenderer,
+    native: &GuiFrameNativeWindowState,
+    render: &mut GuiFrameRenderState,
+    surface_view: &wgpu::TextureView,
+    frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
+    present_mapping: neomacs_display_protocol::PresentMapping,
+    cursor_visible: bool,
+    root_animated_cursor: Option<crate::core::types::AnimatedCursor>,
+    animated_cursor: Option<crate::core::types::AnimatedCursor>,
+    bg_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
+    include_overlays: bool,
+    child_frame_style: &ChildFrameStyle,
+    scroll_indicators_enabled: bool,
+    toolbar: &ToolbarResources,
+) {
+    scene::render_frame_root_glyphs(
+        renderer,
+        render,
+        surface_view,
+        frame,
+        present_mapping,
+        cursor_visible,
+        root_animated_cursor,
+        bg_gradient,
+    );
+    let renderer_effects_still_active = render.compositor.renderer_effects.needs_redraw();
 
-    fn filled_box_frame(effects: EffectsConfig) -> (FrameGlyphBuffer, DisplayWindowId) {
-        let window_id = DisplayWindowId::new(1);
-        let mut frame = FrameGlyphBuffer::with_size(20.0, 20.0);
-        frame.window_cursors.push(WindowCursor {
-            window_id,
-            slot_id: DisplaySlotId::ZERO,
-            x: 1.0,
-            y: 2.0,
-            width: 3.0,
-            height: 4.0,
-            style: CursorStyle::FilledBox,
-            color: Color::WHITE,
-            cursor_fg: Color::BLACK,
-            ascent: 0.0,
-            active: true,
-        });
-        frame.set_window_cursor_effects(window_id, effects);
-        (frame, window_id)
+    if !include_overlays {
+        render.set_dirty(renderer_effects_still_active);
+        return;
     }
 
-    #[test]
-    fn hover_and_pressed_pointer_appearance_force_full_render_and_disable_cursor_cells() {
-        let mut pointer = PointerAppearanceState::default();
-        let mut frame = FrameGlyphBuffer::with_size(20.0, 20.0);
-        frame.window_cursors.push(WindowCursor {
-            window_id: DisplayWindowId::new(1),
-            slot_id: DisplaySlotId::ZERO,
-            x: 1.0,
-            y: 2.0,
-            width: 3.0,
-            height: 4.0,
-            style: CursorStyle::FilledBox,
-            color: Color::WHITE,
-            cursor_fg: Color::BLACK,
-            ascent: 0.0,
-            active: true,
-        });
-        assert!(RenderApp::retained_static_pointer_appearance_allowed(
-            &pointer
-        ));
-        assert_eq!(
-            RenderApp::build_filled_box_cursor_cells(&frame, 1.0, &pointer).len(),
-            1
-        );
-
-        let key = PresentedAppearanceKey::new(
-            PresentationId::new(7),
-            PointerAppearanceId::try_from(0usize).unwrap(),
-        );
-        pointer.hover(Some(key));
-        assert!(!RenderApp::retained_static_pointer_appearance_allowed(
-            &pointer
-        ));
-        assert!(RenderApp::build_filled_box_cursor_cells(&frame, 1.0, &pointer).is_empty());
-
-        pointer.press();
-        assert!(!RenderApp::retained_static_pointer_appearance_allowed(
-            &pointer
-        ));
-        assert!(RenderApp::build_filled_box_cursor_cells(&frame, 1.0, &pointer).is_empty());
-    }
-
-    #[test]
-    fn retained_filled_box_cursor_cells_preserve_local_effect_profiles() {
-        let pointer = PointerAppearanceState::default();
-
-        for local_enabled in [false, true] {
-            let mut local = EffectsConfig::cursor_profile_baseline();
-            local.cursor_color_cycle.enabled = local_enabled;
-            local.cursor_color_cycle.fps = FrameRate::new(12).unwrap();
-            let (frame, window_id) = filled_box_frame(local.clone());
-
-            let mut global = EffectsConfig::default();
-            global.cursor_color_cycle.enabled = !local_enabled;
-            global.cursor_color_cycle.fps = FrameRate::new(60).unwrap();
-
-            let cells = RenderApp::build_filled_box_cursor_cells(&frame, 1.0, &pointer);
-            assert_eq!(cells.len(), 1);
-            assert_eq!(
-                cells[0]
-                    .mini
-                    .effective_window_cursor_effects(window_id, &global),
-                &local,
-                "the retained cursor-only path must resolve the same local profile as the full renderer"
-            );
-        }
+    chrome::render_frame_window_overlays_with_toolbar_resources(
+        renderer,
+        native,
+        render,
+        surface_view,
+        frame,
+        cursor_visible,
+        animated_cursor,
+        child_frame_style,
+        scroll_indicators_enabled,
+        toolbar,
+    );
+    if renderer_effects_still_active {
+        render.mark_dirty();
     }
 }
 
@@ -285,116 +238,27 @@ impl RenderApp {
         let cursor_visible = render.cursor.blink_on;
         Self::report_unpooled_gpu_textures(renderer, render);
 
-        // Stage 4 retained-static fast path: when the coordinator asked for a
-        // compositor-only cursor frame and the scene is eligible (no
-        // transition, no dynamic overlay, and every cursor is a clean
-        // top-layer style), blit the retained cursorless scene and draw only
-        // the cursor, skipping the glyph pipeline. The retained scene is built
-        // once per scene generation and reused; any ineligibility falls
-        // through to the full render below. The composite is proven
-        // bit-identical to a full render (offscreen_frame::composite_matches_
-        // full_render). Set NEOMACS_DISABLE_RETAINED_STATIC to force-disable.
-        // Gate on an *active* transition, not on `need_offscreen`: the latter
-        // is true whenever crossfade/scroll transitions are merely enabled
-        // (the default), because the offscreen snapshot only has to be kept
-        // current across scene commits. A compositor-only frame changes no
-        // editor content, so it cannot start a transition, and the "before" snapshot
-        // captured at the last scene-commit full render stays correct. Gating
-        // on `!need_offscreen` here would disable the fast path entirely under
-        // the default transition policy.
-        // A morph disqualifies the fast path for the same reason an active
-        // transition does: the retained scene is a picture of the panes where
-        // the *presentation* puts them, and this frame needs them where the
-        // motion puts them. Reproducing it would snap every pane to its
-        // destination for that frame and back on the next — a blink landing
-        // mid-motion is enough to show it.
-        if compositor_only_hint
-            && pane_blits.is_empty()
-            && !render.compositor.transitions.has_active()
-            && !Self::window_has_active_overlays(render)
-            && Self::retained_static_pointer_appearance_allowed(&render.pointer_appearance)
-            && !render.has_pointer_paint_damage()
-            && std::env::var_os("NEOMACS_DISABLE_RETAINED_STATIC").is_none()
-        {
-            let mouse_pos = render.mouse_pos;
-            let generation = render.compositor.current_scene_generation;
-            let retained_valid = matches!(
-                &render.compositor.retained_static,
-                Some(rs) if rs.generation == generation
-                    && rs.width == native.width
-                    && rs.height == native.height
-            );
-            if !retained_valid {
-                Self::ensure_retained_static_texture(renderer, render, native.width, native.height);
-                let retained_view = render
-                    .compositor
-                    .retained_static
-                    .as_ref()
-                    .expect("retained texture just ensured")
-                    .view
-                    .clone();
-                // Render the full cursorless static scene into the retained
-                // texture (this runs the glyph pipeline once per generation).
-                Self::render_frame_window_contents(
-                    renderer,
-                    native,
-                    render,
-                    &retained_view,
-                    &frame,
-                    present_mapping,
-                    false,
-                    root_animated_cursor,
-                    animated_cursor,
-                    bg_gradient,
-                    true,
-                    child_frame_style,
-                    scroll_indicators_enabled,
-                    toolbar,
-                );
-                let cells = Self::build_filled_box_cursor_cells(
-                    &frame,
-                    native.scale_factor as f32,
-                    &render.pointer_appearance,
-                );
-                if let Some(rs) = render.compositor.retained_static.as_mut() {
-                    rs.generation = generation;
-                    rs.cursor_cells = cells;
-                }
-                super::frame_stats::count(&super::frame_stats::RETAINED_STATIC_BUILDS);
-            }
-            if let Some(rs) = render.compositor.retained_static.as_ref() {
-                renderer.blit_texture_to_view(
-                    &rs.bind_group,
-                    &composition_view,
-                    native.width,
-                    native.height,
-                );
-            }
-            renderer.render_cursor_only(
+        // The retained-static fast path is a whole composition strategy; it
+        // owns its own eligibility rule and its own draw. What the draw order
+        // keeps is the decision to take it and the tail every strategy shares.
+        let mouse_pos = render.mouse_pos;
+        if retained_static::is_eligible(compositor_only_hint, &pane_blits, render) {
+            retained_static::draw(
+                renderer,
+                native,
+                render,
                 &composition_view,
                 &frame,
                 present_mapping,
                 cursor_visible,
+                root_animated_cursor,
                 animated_cursor,
+                bg_gradient,
+                child_frame_style,
+                scroll_indicators_enabled,
+                toolbar,
                 mouse_pos,
             );
-            // Filled-box cursors are inverse-video: the retained scene has the
-            // character in its normal color, so each filled-box cell (box plus
-            // the character in cursor_fg) is redrawn over the composite from a
-            // single-glyph mini-frame, scissored to the cell. Bit-identical to
-            // the full render (offscreen_frame::filled_box_composite_matches_
-            // full_render).
-            if cursor_visible {
-                Self::composite_filled_box_cursor_cells(
-                    renderer,
-                    render,
-                    &composition_view,
-                    present_mapping,
-                    animated_cursor,
-                    mouse_pos,
-                );
-            }
-            super::frame_stats::count(&super::frame_stats::COMPOSITE_ONLY_FRAMES);
             if frame_post_active {
                 renderer.frame_post_to_view(
                     &composition_view,
@@ -407,6 +271,8 @@ impl RenderApp {
             render.finish_pointer_paint_render();
             renderer.set_scale_factor(old_scale_factor);
             renderer.resize(old_width, old_height);
+            // No projection: eligibility required that no pane is moving, so
+            // this frame places nothing that hit testing has to be told about.
             return Ok(RenderedFrameSurface {
                 output,
                 frame,
@@ -421,7 +287,7 @@ impl RenderApp {
             .then(|| Self::advance_frame_composition(renderer, render, surface_size))
             .flatten();
         if let Some(composition) = composition.as_ref() {
-            Self::render_frame_window_contents(
+            render_frame_window_contents(
                 renderer,
                 native,
                 render,
@@ -507,7 +373,7 @@ impl RenderApp {
                 toolbar,
             );
         } else {
-            Self::render_frame_window_contents(
+            render_frame_window_contents(
                 renderer,
                 native,
                 render,
@@ -558,185 +424,6 @@ impl RenderApp {
             frame,
             projection: pane_projection,
         })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_frame_window_contents(
-        renderer: &mut WgpuRenderer,
-        native: &GuiFrameNativeWindowState,
-        render: &mut GuiFrameRenderState,
-        surface_view: &wgpu::TextureView,
-        frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
-        present_mapping: neomacs_display_protocol::PresentMapping,
-        cursor_visible: bool,
-        root_animated_cursor: Option<crate::core::types::AnimatedCursor>,
-        animated_cursor: Option<crate::core::types::AnimatedCursor>,
-        bg_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
-        include_overlays: bool,
-        child_frame_style: &ChildFrameStyle,
-        scroll_indicators_enabled: bool,
-        toolbar: &ToolbarResources,
-    ) {
-        scene::render_frame_root_glyphs(
-            renderer,
-            render,
-            surface_view,
-            frame,
-            present_mapping,
-            cursor_visible,
-            root_animated_cursor,
-            bg_gradient,
-        );
-        let renderer_effects_still_active = render.compositor.renderer_effects.needs_redraw();
-
-        if !include_overlays {
-            render.set_dirty(renderer_effects_still_active);
-            return;
-        }
-
-        chrome::render_frame_window_overlays_with_toolbar_resources(
-            renderer,
-            native,
-            render,
-            surface_view,
-            frame,
-            cursor_visible,
-            animated_cursor,
-            child_frame_style,
-            scroll_indicators_enabled,
-            toolbar,
-        );
-        if renderer_effects_still_active {
-            render.mark_dirty();
-        }
-    }
-
-    /// Build a single-glyph mini-frame for each filled-box cursor in the frame
-    /// (only the glyphs in that cursor's slot, with the frame's font tables),
-    /// paired with the physical-pixel scissor rect for its cell. Called once
-    /// per scene generation when the retained static scene is rebuilt; the
-    /// results are reused across cursor-only frames so the font tables are not
-    /// cloned every frame.
-    fn build_filled_box_cursor_cells(
-        frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
-        scale: f32,
-        pointer_appearance: &super::state::PointerAppearanceState,
-    ) -> Vec<super::frame_windows::RetainedCursorCell> {
-        use crate::core::frame_glyphs::{CursorStyle, FrameGlyphBuffer};
-        if !Self::retained_static_pointer_appearance_allowed(pointer_appearance) {
-            return Vec::new();
-        }
-        let mut cells = Vec::new();
-        for cursor in &frame.window_cursors {
-            if !matches!(cursor.style, CursorStyle::FilledBox) {
-                continue;
-            }
-            let mut mini = FrameGlyphBuffer::with_size(frame.width, frame.height);
-            mini.presentation_id = frame.presentation_id;
-            mini.clone_font_bindings_from(frame);
-            mini.background = frame.background;
-            mini.background_alpha = frame.background_alpha;
-            // Carry the parent's default glyph metrics: a metric-less frame
-            // makes render_frame_glyphs fall back to invented defaults, and a
-            // default-metric change clears the whole glyph atlas — so a bare
-            // mini-frame silently evicted every cached glyph on each
-            // filled-box cursor composite (defeating this path's "the glyph
-            // is warm in the atlas" premise) and again on the next real frame.
-            mini.font_pixel_size = frame.font_pixel_size;
-            mini.char_height = frame.char_height;
-            for glyph in &frame.glyphs {
-                if glyph.slot_id() == Some(cursor.slot_id) {
-                    mini.glyphs.push(glyph.clone());
-                }
-            }
-            let mut only_cursor = cursor.clone();
-            only_cursor.active = true;
-            mini.window_cursors = vec![only_cursor];
-            // The retained cursor cell is rendered independently from its
-            // source frame. Preserve the source window's local profile so the
-            // cursor-only and full-render paths resolve configuration through
-            // the same local-over-global rule.
-            if let Some(effects) = frame.window_cursor_effects(cursor.window_id) {
-                mini.set_window_cursor_effects(cursor.window_id, effects.clone());
-            }
-            // The box covers the cell = the cursor rect; scissor to it in
-            // physical pixels (glyph positions are logical, scaled by the
-            // uniform, so the scissor rect is logical * scale).
-            let scissor = (
-                (cursor.x * scale).floor().max(0.0) as u32,
-                (cursor.y * scale).floor().max(0.0) as u32,
-                (cursor.width * scale).ceil().max(1.0) as u32,
-                (cursor.height * scale).ceil().max(1.0) as u32,
-            );
-            cells.push(super::frame_windows::RetainedCursorCell { mini, scissor });
-        }
-        cells
-    }
-
-    /// Redraw each filled-box cursor's inverse-video cell over the composited
-    /// scene, from the mini-frames retained for this generation. The retained
-    /// static scene has the character in its normal color; a filled-box cursor
-    /// covers that cell with a box in the cursor color and redraws the
-    /// character in `cursor_fg`. Each cell renders scissored with
-    /// `LoadOp::Load`, so no full-frame glyph work runs and the rest of the
-    /// composite is preserved. The glyph is warm in the atlas from the retained
-    /// build, so it is a cache hit; the box color is recomputed from the frame
-    /// sample time, so it still cycles.
-    fn composite_filled_box_cursor_cells(
-        renderer: &mut WgpuRenderer,
-        render: &mut GuiFrameRenderState,
-        surface_view: &wgpu::TextureView,
-        present_mapping: neomacs_display_protocol::PresentMapping,
-        animated_cursor: Option<crate::core::types::AnimatedCursor>,
-        mouse_pos: (f32, f32),
-    ) {
-        let Some(atlas) = render.compositor.glyph_atlas.as_mut() else {
-            return;
-        };
-        let Some(retained) = render.compositor.retained_static.as_ref() else {
-            return;
-        };
-        for cell in &retained.cursor_cells {
-            atlas.set_current_frame_fonts(cell.mini.font_bindings());
-            renderer.render_frame_cell_loaded(
-                surface_view,
-                &cell.mini,
-                atlas,
-                present_mapping,
-                true,
-                animated_cursor,
-                mouse_pos,
-                cell.scissor,
-            );
-        }
-    }
-
-    /// Whether any dynamic overlay is active. Overlays are not part of the
-    /// retained static scene, so their presence forces the full render path.
-    ///
-    /// Idle dimming is included: it is a post-content overlay drawn *after* the
-    /// cursor (glyphs.rs draw_post_content_effects, after draw_cursor_layer), so
-    /// in a full render the cursor is dimmed too. The composite fast path draws
-    /// the cursor over the already-dimmed retained scene, which would leave the
-    /// cursor undimmed — and the retained scene's validity is not keyed on dim
-    /// alpha. Falling back to the full render whenever dimming is active keeps
-    /// both correct.
-    fn window_has_active_overlays(render: &GuiFrameRenderState) -> bool {
-        render.overlays.popup_menu.is_some()
-            || render.overlays.tooltip.is_some()
-            || render.overlays.visual_bell_start.is_some()
-            || render.has_ime_preedit()
-            || render.overlays.idle_dim.active
-            // The FPS counter is redrawn from a live timer every frame; the
-            // retained scene would freeze it, so a full render is required
-            // while it is shown.
-            || render.overlays.fps.enabled
-    }
-
-    fn retained_static_pointer_appearance_allowed(
-        pointer_appearance: &super::state::PointerAppearanceState,
-    ) -> bool {
-        pointer_appearance.active().is_none()
     }
 
     /// Lease the intermediate composition texture for the full-frame post
@@ -840,46 +527,6 @@ impl RenderApp {
             limit_bytes = budget.limit_bytes().get(),
             "full-frame GPU texture accounting"
         );
-    }
-
-    /// Ensure the window's retained-static texture exists at `width`x`height`
-    /// in the surface format, recreating it on a size change. Leaves the
-    /// generation stamp untouched (the caller sets it after rendering).
-    ///
-    /// Not a pool lease: `RetainedStatic` owns a raw texture, and it is
-    /// counted through the [`UnpooledTexture`] census instead.
-    fn ensure_retained_static_texture(
-        renderer: &WgpuRenderer,
-        render: &mut GuiFrameRenderState,
-        width: u32,
-        height: u32,
-    ) {
-        let needs_new = match &render.compositor.retained_static {
-            Some(rs) => rs.width != width || rs.height != height,
-            None => true,
-        };
-        if !needs_new {
-            return;
-        }
-        let texture = renderer.device().create_texture(&wgpu::TextureDescriptor {
-            label: Some("retained-static-scene"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: renderer.surface_format(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = renderer.create_texture_bind_group(&view);
-        render.compositor.retained_static = Some(super::frame_windows::RetainedStatic::new(
-            texture, view, bind_group, width, height,
-        ));
     }
 
     /// Render and present one top-level frame window, preserving the precise
