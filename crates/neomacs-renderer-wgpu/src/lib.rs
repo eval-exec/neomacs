@@ -54,7 +54,8 @@ pub use renderer::{
     WindowRowDamage,
 };
 pub use shader_surface::{
-    SURFACE_USER_UNIFORM_SLOTS, SurfaceUniformInit, compose_surface_wgsl, validate_surface_wgsl,
+    SURFACE_USER_UNIFORM_SLOTS, ShaderValidationError, SurfaceContract, SurfaceUniformInit,
+    compose_surface_wgsl, validate_surface_wgsl,
 };
 pub use shader_surface_cache::{MAX_SURFACE_SIZE, ShaderSurfaceCache};
 pub use vertex::{GlyphVertex, RectVertex, RoundedRectVertex, TextureVertex, Uniforms};

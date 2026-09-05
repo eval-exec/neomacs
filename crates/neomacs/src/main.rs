@@ -133,8 +133,9 @@ use neomacs_display_runtime::render_thread::{
     SharedMonitorInfo, build_render_event_loop,
 };
 use neomacs_display_runtime::shader_surface::{
-    SurfaceChannelSource as RendererChannelSource, SurfaceShaderLanguage as RendererShaderLanguage,
-    SurfaceUniformInit, validate_surface_glsl, validate_surface_wgsl,
+    SurfaceChannelSource as RendererChannelSource, SurfaceContract,
+    SurfaceShaderLanguage as RendererShaderLanguage, SurfaceUniformInit, validate_surface_glsl,
+    validate_surface_wgsl,
 };
 #[cfg(feature = "video")]
 use neomacs_display_runtime::thread_comm::VideoSessionCommand;
@@ -1304,15 +1305,23 @@ fn renderer_channel_source(
 
 /// Validate + compose a user surface shader in either dialect on the Lisp
 /// thread (errors become Lisp signals); returns the composed module source.
+///
+/// The typed refusal is flattened to its `Display` text here because a Lisp
+/// signal carries a string: the distinction the type draws is for Rust callers
+/// that can act on it, and neither of these two can.
 fn validate_surface_shader(
     language: ShaderSurfaceLanguage,
     source: &str,
     uniforms: &[(String, u8)],
 ) -> Result<String, String> {
+    // Nothing declares a contract yet, so every shader is composed against the
+    // prelude this build ships.
+    let contract = SurfaceContract::default();
     match language {
-        ShaderSurfaceLanguage::Wgsl => validate_surface_wgsl(source, uniforms),
-        ShaderSurfaceLanguage::Glsl => validate_surface_glsl(source, uniforms),
+        ShaderSurfaceLanguage::Wgsl => validate_surface_wgsl(source, uniforms, contract),
+        ShaderSurfaceLanguage::Glsl => validate_surface_glsl(source, uniforms, contract),
     }
+    .map_err(|err| err.to_string())
 }
 
 fn read_primary_window_size(shared: &SharedPrimaryWindowSize) -> PrimaryWindowSize {
