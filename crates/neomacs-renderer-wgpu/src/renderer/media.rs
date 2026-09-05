@@ -546,10 +546,29 @@ impl WgpuRenderer {
         self.caches.surface.set_uniform(id, name, value);
     }
 
+    /// Whether any shader surface exists, so a pointer path can skip searching
+    /// a frame's glyphs for one when the answer could only be "none".
+    #[must_use]
+    pub fn has_shader_surfaces(&self) -> bool {
+        !self.caches.surface.is_empty()
+    }
+
+    /// Route the pointer's hover position over a surface glyph into its
+    /// `iMouse.xy`. `u`/`v` are that position normalized inside the composited
+    /// quad (top-left origin); click state (`zw`) is untouched.
+    ///
+    /// Which surface is under the pointer, and where inside it, is resolved by
+    /// the compositor from the projection that placed the panes — the renderer
+    /// receives the answer rather than recomputing it from a pointer position
+    /// whose coordinate space it cannot check.
+    pub fn surface_mouse_hover(&mut self, id: u32, u: f32, v: f32) {
+        self.caches.surface.set_mouse_uv(id, u, v);
+    }
+
     /// Route a button press over a surface glyph into its `iMouse.zw`
     /// (Shadertoy click state). `u`/`v` are the press position normalized
     /// inside the composited quad (top-left origin), mapped like hover's
-    /// `set_mouse_uv`; zw stay positive until `surface_mouse_release`.
+    /// `surface_mouse_hover`; zw stay positive until `surface_mouse_release`.
     pub fn surface_mouse_press(&mut self, id: u32, u: f32, v: f32) {
         self.caches.surface.set_mouse_press_uv(id, u, v);
     }

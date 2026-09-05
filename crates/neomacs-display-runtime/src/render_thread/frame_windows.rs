@@ -23,13 +23,13 @@ use super::state::{
 use super::terminal_expansion::TerminalExpansion;
 use super::transitions::clear_frame_transition_textures;
 use super::x11_hints::apply_window_geometry_hints;
-use crate::core::frame_glyphs::FrameGlyphBuffer;
+use crate::core::frame_glyphs::{FrameGlyph, FrameGlyphBuffer};
 use neomacs_display_protocol::effect_config::IdleDimConfig;
 use neomacs_display_protocol::frame_time::EventTime;
 use neomacs_display_protocol::{
     DeviceScale, FrameRect, GeometrySize, LogicalPixels, PresentMapping, PresentationExtent,
-    PresentationId, PresentedHit, PresentedHitError, PresentedHitQuery, RetainedImageSet,
-    SurfaceState,
+    PresentationFramePoint, PresentationId, PresentedHit, PresentedHitError, PresentedHitQuery,
+    RetainedImageSet, SurfaceState,
 };
 use neomacs_renderer_wgpu::{PopupMenuState, TooltipState, WgpuGlyphAtlas, WgpuRenderer};
 use neovm_core::window::GuiFrameGeometryHints;
@@ -493,6 +493,43 @@ impl GuiFrameRenderState {
         }
     }
 
+    /// The immutable buffer currently shown for `target_frame_id`.
+    ///
+    /// The root frame and a child frame are looked up in different places, and
+    /// every hit test needs both the buffer and the projection that belongs to
+    /// it; resolving the pair in one place is what keeps them from being
+    /// fetched from two different frames.
+    fn frame_for_target(&self, target_frame_id: u64) -> Option<&FrameGlyphBuffer> {
+        if target_frame_id == self.emacs_frame_id {
+            self.compositor.current_frame.as_ref()
+        } else {
+            self.compositor
+                .child_frames
+                .frames
+                .get(&target_frame_id)
+                .map(|entry| &entry.frame)
+        }
+    }
+
+    /// The glyphs on screen for `target_frame_id`, paired with where a pointer
+    /// at frame-local `(x, y)` lands among them.
+    ///
+    /// Returned together because apart is where they go wrong: glyph rects are
+    /// in the destination presentation's coordinates, and while a pane is in
+    /// motion the pointer's frame-local position is not. A caller given the
+    /// pair cannot reach for the raw coordinates instead, because the hit tests
+    /// over these glyphs accept nothing but the witnessed point.
+    pub(super) fn glyph_hit_target(
+        &self,
+        target_frame_id: u64,
+        x: f32,
+        y: f32,
+    ) -> Option<(&[FrameGlyph], PresentationFramePoint)> {
+        let frame = self.frame_for_target(target_frame_id)?;
+        let point = self.inverse_map(frame, x, y)?;
+        Some((frame.glyphs.as_slice(), point))
+    }
+
     /// Hit-tests pointer semantics from the immutable buffer currently shown
     /// for `target_frame_id`. Coordinates are local to that target frame.
     pub(super) fn presented_pointer_hit(
@@ -501,16 +538,7 @@ impl GuiFrameRenderState {
         x: f32,
         y: f32,
     ) -> Result<Option<PresentedPointerHit>, PresentedHitError> {
-        let frame = if target_frame_id == self.emacs_frame_id {
-            self.compositor.current_frame.as_ref()
-        } else {
-            self.compositor
-                .child_frames
-                .frames
-                .get(&target_frame_id)
-                .map(|entry| &entry.frame)
-        };
-        let Some(frame) = frame else {
+        let Some(frame) = self.frame_for_target(target_frame_id) else {
             return Ok(None);
         };
         let Some(point) = self.inverse_map(frame, x, y) else {
@@ -535,16 +563,7 @@ impl GuiFrameRenderState {
         x: f32,
         y: f32,
     ) -> Result<Option<PresentedHit>, PresentedHitError> {
-        let frame = if target_frame_id == self.emacs_frame_id {
-            self.compositor.current_frame.as_ref()
-        } else {
-            self.compositor
-                .child_frames
-                .frames
-                .get(&target_frame_id)
-                .map(|entry| &entry.frame)
-        };
-        let Some(frame) = frame else {
+        let Some(frame) = self.frame_for_target(target_frame_id) else {
             return Ok(None);
         };
         let Some(point) = self.inverse_map(frame, x, y) else {
@@ -567,22 +586,11 @@ impl GuiFrameRenderState {
         x: f32,
         y: f32,
     ) -> Result<Option<(PresentationId, Option<PresentedHit>)>, PresentedHitError> {
-        let presentation = if target_frame_id == self.emacs_frame_id {
-            let Some(frame) = self.compositor.current_frame.as_ref() else {
-                return Ok(None);
-            };
-            frame.presentation_id
-        } else {
-            let Some(frame) = self
-                .compositor
-                .child_frames
-                .frames
-                .get(&target_frame_id)
-                .map(|entry| &entry.frame)
-            else {
-                return Ok(None);
-            };
-            frame.presentation_id
+        let Some(presentation) = self
+            .frame_for_target(target_frame_id)
+            .map(|frame| frame.presentation_id)
+        else {
+            return Ok(None);
         };
         let hit = self.presented_region_hit(target_frame_id, presentation, x, y)?;
         Ok(Some((presentation, hit)))
