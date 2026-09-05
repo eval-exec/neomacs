@@ -15,7 +15,8 @@ use neomacs_display_protocol::PointerAppearanceSelection;
 use neomacs_display_protocol::effect_config::EffectsConfig;
 use neomacs_display_protocol::face::Face;
 use neomacs_display_protocol::frame_glyphs::{
-    CursorStyle, DisplaySlotId, FrameGlyph, FrameGlyphBuffer, GlyphRowRole, WindowCursor,
+    CursorStyle, DisplaySlotId, FrameGlyph, FrameGlyphBuffer, GlyphRowRole, ScrollBarIdentity,
+    WindowCursor,
 };
 use neomacs_display_protocol::gradient::{ColorStop, Gradient};
 use neomacs_display_protocol::types::FaceId;
@@ -1403,7 +1404,7 @@ impl WgpuRenderer {
         mapping: neomacs_display_protocol::PresentMapping,
         cursor_visible: bool,
         animated_cursor: Option<AnimatedCursor>,
-        mouse_pos: (f32, f32),
+        hovered_scroll_bar: Option<ScrollBarIdentity>,
         background_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
         pointer_selection: Option<PointerAppearanceSelection>,
         row_damage: Option<&super::row_reuse::FrameRowDamage>,
@@ -1415,7 +1416,7 @@ impl WgpuRenderer {
             mapping,
             cursor_visible,
             animated_cursor,
-            mouse_pos,
+            hovered_scroll_bar,
             background_gradient,
             pointer_selection,
             row_damage,
@@ -1438,7 +1439,6 @@ impl WgpuRenderer {
         mapping: neomacs_display_protocol::PresentMapping,
         cursor_visible: bool,
         animated_cursor: Option<AnimatedCursor>,
-        mouse_pos: (f32, f32),
         scissor: (u32, u32, u32, u32),
     ) {
         self.render_frame_glyphs_impl(
@@ -1448,7 +1448,9 @@ impl WgpuRenderer {
             mapping,
             cursor_visible,
             animated_cursor,
-            mouse_pos,
+            // A retained cursor cell is one character and its box; the
+            // mini-frame carries no scroll bar there could be a highlight on.
+            None,
             None,
             None,
             None,
@@ -1469,7 +1471,7 @@ impl WgpuRenderer {
         mapping: neomacs_display_protocol::PresentMapping,
         cursor_visible: bool,
         animated_cursor: Option<AnimatedCursor>,
-        mouse_pos: (f32, f32),
+        hovered_scroll_bar: Option<ScrollBarIdentity>,
         background_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
         pointer_selection: Option<PointerAppearanceSelection>,
         row_damage: Option<&super::row_reuse::FrameRowDamage>,
@@ -1580,7 +1582,7 @@ impl WgpuRenderer {
                 cursor_visible,
                 animated_cursor.as_ref(),
             ),
-            mouse_pos,
+            hovered_scroll_bar,
             background_gradient,
             logical_w,
             logical_h,
@@ -1686,7 +1688,6 @@ impl WgpuRenderer {
                 frame_glyphs,
                 animated_cursor: &animated_cursor,
                 cursor_visible,
-                mouse_pos,
                 surface_width,
                 surface_height,
                 aurora_start: self.ambient.aurora_start,
@@ -1766,7 +1767,7 @@ impl WgpuRenderer {
         mapping: neomacs_display_protocol::PresentMapping,
         cursor_visible: bool,
         animated_cursor: Option<AnimatedCursor>,
-        mouse_pos: (f32, f32),
+        hovered_scroll_bar: Option<ScrollBarIdentity>,
     ) {
         debug_assert_eq!(mapping.presentation(), frame_glyphs.presentation_id);
         debug_assert_eq!(mapping.content_logical_size().width(), frame_glyphs.width);
@@ -1782,7 +1783,7 @@ impl WgpuRenderer {
             cursor_visible,
             animated_cursor: &animated_cursor,
             cursor_inverse_video: None,
-            mouse_pos,
+            hovered_scroll_bar,
             background_gradient: None,
             logical_w,
             logical_h,

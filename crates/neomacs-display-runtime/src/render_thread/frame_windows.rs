@@ -511,6 +511,56 @@ impl GuiFrameRenderState {
         }
     }
 
+    /// The scroll bar the pointer is over in `frame`, if any.
+    ///
+    /// Resolved here rather than while drawing, because it is a question about
+    /// the composition and the renderer is handed the answer. Asking it at the
+    /// draw site meant comparing the window's `mouse_pos` — a root-surface
+    /// position — against glyph rects that belong to the destination
+    /// presentation. Those are the same pixel only while the panes are
+    /// settled; for the length of a `split-window` morph a pane's content is
+    /// drawn translated away from where its destination rect says it is, so
+    /// the highlight would land on whichever bar happened to sit at the
+    /// pointer's unprojected coordinates, or on none.
+    ///
+    /// `frame` is the buffer being drawn rather than a frame id: a retained
+    /// cursor cell renders a mini-frame of the same presentation, and the
+    /// answer has to be about the presentation, not about whichever buffer the
+    /// compositor is currently holding.
+    pub(super) fn hovered_scroll_bar(
+        &self,
+        frame: &FrameGlyphBuffer,
+    ) -> Option<neomacs_display_protocol::ScrollBarIdentity> {
+        let point = self
+            .inverse_map(frame, self.mouse_pos.0, self.mouse_pos.1)?
+            .in_frame_space();
+        let (x, y) = (point.x(), point.y());
+        // Last glyph first, so the bar drawn on top wins where two overlap.
+        // The draw site could not choose: it re-ran the same test per glyph and
+        // lit every bar the pointer fell inside.
+        frame.glyphs.iter().rev().find_map(|glyph| {
+            let FrameGlyph::ScrollBar {
+                x: bar_x,
+                y: bar_y,
+                width,
+                height,
+                ..
+            } = glyph
+            else {
+                return None;
+            };
+            // Inclusive at the far edges, which is the extent the highlight has
+            // always had. Half-open would be the more usual convention and is
+            // what a hit test that decided anything would need; this one only
+            // brightens a colour, and narrowing it would change what a user
+            // sees for no reason connected to the space bug being fixed.
+            if x < *bar_x || x > *bar_x + *width || y < *bar_y || y > *bar_y + *height {
+                return None;
+            }
+            glyph.scroll_bar_identity()
+        })
+    }
+
     /// The glyphs on screen for `target_frame_id`, paired with where a pointer
     /// at frame-local `(x, y)` lands among them.
     ///
