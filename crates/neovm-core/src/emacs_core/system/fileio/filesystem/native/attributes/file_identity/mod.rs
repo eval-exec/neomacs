@@ -7,13 +7,8 @@
 use std::fs;
 use std::path::Path;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct Principal {
-    pub(super) id: i64,
-    pub(super) name: Option<String>,
-}
+use super::super::super::FilePrincipal as Principal;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Ownership {
     pub(super) user: Principal,
     pub(super) group: Principal,
