@@ -1413,13 +1413,13 @@ fn candidate_matches_openp(
     candidate: &LispString,
 ) -> Result<bool, Flow> {
     let Some(predicate) = predicate else {
-        return Ok(readable_non_directory_candidate(candidate));
+        return readable_non_directory_candidate(eval, candidate);
     };
     if predicate.is_nil() {
-        return Ok(readable_non_directory_candidate(candidate));
+        return readable_non_directory_candidate(eval, candidate);
     }
     if predicate.is_t() {
-        return Ok(readable_non_directory_candidate(candidate));
+        return readable_non_directory_candidate(eval, candidate);
     }
 
     if let Some(mask) = predicate.as_fixnum() {
@@ -1433,20 +1433,40 @@ fn candidate_matches_openp(
     if eq_value(&result, &Value::symbol("dir-ok")) {
         return Ok(true);
     }
-    Ok(!candidate_is_directory(candidate))
+    Ok(crate::emacs_core::fileio::builtin_file_directory_p(
+        eval,
+        vec![Value::heap_string(candidate.clone())],
+    )?
+    .is_nil())
 }
 
-fn readable_non_directory_candidate(candidate: &LispString) -> bool {
-    let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(candidate);
-    match std::fs::File::open(&path).and_then(|file| file.metadata()) {
-        Ok(meta) => !meta.is_dir(),
-        Err(_) => false,
+fn readable_non_directory_candidate(
+    eval: &mut super::eval::Context,
+    candidate: &LispString,
+) -> Result<bool, Flow> {
+    use crate::emacs_core::fileio::{self, AccessMode, FileEntryKind};
+
+    // GNU openp checks for a file-exists-p handler, then delegates readability
+    // to file-readable-p. The ordinary path must use the same namespace as
+    // Lisp file primitives, including immutable bundled runtime resources.
+    let handler = fileio::find_file_name_handler_lisp_for_eval(
+        eval,
+        candidate,
+        Value::symbol("file-exists-p"),
+    );
+    if !handler.is_nil() {
+        return Ok(!fileio::builtin_file_readable_p(
+            eval,
+            vec![Value::heap_string(candidate.clone())],
+        )?
+        .is_nil());
     }
-}
-
-fn candidate_is_directory(candidate: &LispString) -> bool {
     let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(candidate);
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_dir())
+    let filesystem = eval.editor_file_system();
+    Ok(filesystem.access(&path, AccessMode::Read)
+        && filesystem
+            .metadata(&path, true)
+            .is_ok_and(|metadata| metadata.kind != FileEntryKind::Directory))
 }
 
 fn integer_access_predicate_matches(candidate: &LispString, mask: i64) -> bool {
