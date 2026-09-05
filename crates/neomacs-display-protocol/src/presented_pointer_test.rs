@@ -377,8 +377,9 @@ fn presented_pointer_regions_keep_click_meaning_separate_from_shared_appearance(
     )
     .expect("valid pointer map");
 
-    let body = map.hit_test(25.0, 10.0).expect("tab body hit");
-    let close = map.hit_test(55.0, 10.0).expect("tab close hit");
+    let [body, close] = map.regions() else {
+        panic!("both published regions survive validation");
+    };
 
     assert_eq!(body.interaction(), Some(InteractionId::new(10)));
     assert_eq!(close.interaction(), Some(InteractionId::new(11)));
@@ -405,7 +406,9 @@ fn presented_pointer_region_can_publish_click_meaning_without_an_appearance() {
     let json = serde_json::to_string(&map).expect("serialize click-only map");
     let decoded: PresentedPointerMap =
         serde_json::from_str(&json).expect("deserialize click-only map");
-    let hit = decoded.hit_test(5.0, 5.0).expect("click-only region hit");
+    let [hit] = decoded.regions() else {
+        panic!("the click-only region survives transport");
+    };
 
     assert_eq!(hit.interaction(), Some(InteractionId::new(12)));
     assert_eq!(hit.appearance(), None);
@@ -430,7 +433,9 @@ fn presented_pointer_region_can_publish_visual_appearance_without_click_meaning(
     let json = serde_json::to_string(&map).expect("serialize visual-only map");
     let decoded: PresentedPointerMap =
         serde_json::from_str(&json).expect("deserialize visual-only map");
-    let hit = decoded.hit_test(5.0, 5.0).expect("visual-only region hit");
+    let [hit] = decoded.regions() else {
+        panic!("the visual-only region survives transport");
+    };
 
     assert_eq!(hit.interaction(), None);
     assert_eq!(hit.appearance(), Some(appearance_id));
@@ -660,99 +665,139 @@ fn presented_pointer_map_deserialization_rejects_intrinsically_invalid_data() {
     assert!(serde_json::from_str::<PresentedPointerMap>(overflowing_span).is_err());
 }
 
+/// A presentation whose pointer regions resolve the way the render thread
+/// resolves them.
+///
+/// Production has exactly one route from a point to a pointer region:
+/// `FrameGlyphBuffer::resolve_presented_hit`, through the presentation's
+/// semantic index. Every region here is owned by one covering semantic region,
+/// which is what publication requires and what binds them into that index.
+fn frame_resolving_pointer_regions(
+    presentation: crate::PresentationId,
+    size: (f32, f32),
+    regions: Vec<(FrameRect, InteractionId)>,
+) -> crate::FrameGlyphBuffer {
+    let window = crate::DisplayWindowId::new(1);
+    let owner = crate::PresentedRegionId::new(Some(window), crate::PresentedRegionKind::TextBody);
+    let mut frame = crate::FrameGlyphBuffer::with_size(size.0, size.1);
+    frame.presentation_id = presentation;
+    frame
+        .install_presented_hit_index(
+            crate::PresentedHitIndex::from_parts(
+                presentation,
+                vec![crate::PresentedHitRegion::new(
+                    Some(window),
+                    crate::PresentedRegionKind::TextBody,
+                    rect(0.0, 0.0, size.0, size.1),
+                    0,
+                )],
+                vec![],
+            )
+            .expect("one window-sized text body is a valid semantic index"),
+        )
+        .expect("the index names this presentation");
+    frame
+        .install_presented_pointer(
+            regions
+                .into_iter()
+                .map(|(bounds, interaction)| {
+                    PresentedPointerRegion::new_owned(owner, bounds, Some(interaction), None)
+                })
+                .collect(),
+            vec![],
+        )
+        .expect("regions inside their owner publish");
+    frame
+}
+
+fn resolved_interaction(frame: &crate::FrameGlyphBuffer, x: f32, y: f32) -> Option<InteractionId> {
+    frame
+        .resolve_presented_hit(crate::PresentedHitQuery::new(settled_point(
+            frame.presentation_id,
+            x,
+            y,
+        )))
+        .expect("a query about the frame's own presentation is coherent")
+        .and_then(|hit| hit.interaction())
+}
+
 #[test]
 fn presented_pointer_hit_testing_is_half_open_and_stable_for_overlaps() {
-    let face_id = FaceId::new(7);
-    let appearance_id = PointerAppearanceId::try_from(0usize).unwrap();
-    let first = PresentedPointerRegion::new(
-        rect(10.0, 10.0, 20.0, 10.0),
-        Some(InteractionId::new(1)),
-        Some(appearance_id),
+    // If this fails, a pointer on a shared edge belongs to two regions at
+    // once, and which meaning a click carries depends on a publication order
+    // the producer never promised to control.
+    let presentation = crate::PresentationId::new(31);
+    let frame = frame_resolving_pointer_regions(
+        presentation,
+        (100.0, 50.0),
+        vec![
+            (rect(10.0, 10.0, 20.0, 10.0), InteractionId::new(1)),
+            (rect(15.0, 10.0, 20.0, 10.0), InteractionId::new(2)),
+        ],
     );
-    let overlapping = PresentedPointerRegion::new(
-        rect(15.0, 10.0, 20.0, 10.0),
-        Some(InteractionId::new(2)),
-        Some(appearance_id),
-    );
-    let map = try_map(
-        &[face_id],
-        vec![first, overlapping],
-        vec![appearance(face_id)],
-    )
-    .unwrap();
 
     assert_eq!(
-        map.hit_test(15.0, 10.0)
-            .map(PresentedPointerRegion::interaction),
-        Some(Some(InteractionId::new(1)))
+        resolved_interaction(&frame, 15.0, 10.0),
+        Some(InteractionId::new(1)),
+        "the first published region wins where two overlap"
     );
-    assert!(map.hit_test(9.99, 10.0).is_none());
-    assert!(map.hit_test(10.0, 20.0).is_none());
-    assert!(map.hit_test(35.0, 10.0).is_none());
+    assert_eq!(resolved_interaction(&frame, 9.99, 10.0), None);
+    assert_eq!(
+        resolved_interaction(&frame, 10.0, 20.0),
+        None,
+        "the bottom edge belongs to the next row, not this one"
+    );
+    assert_eq!(resolved_interaction(&frame, 35.0, 10.0), None);
 }
 
 #[test]
 fn presented_pointer_hit_testing_examines_only_the_selected_y_band() {
-    let mut regions = vec![PresentedPointerRegion::new(
-        rect(50.0, 20.0, 20.0, 1.0),
-        Some(InteractionId::new(1)),
-        None,
-    )];
+    // If this fails every pointer motion walks every region in the frame, and
+    // the cost of hover grows with the size of the buffer being displayed.
+    let presentation = crate::PresentationId::new(31);
+    let mut regions = vec![(rect(50.0, 20.0, 20.0, 1.0), InteractionId::new(1))];
     for row in 0..50 {
         if row != 20 {
-            regions.push(PresentedPointerRegion::new(
+            regions.push((
                 rect(0.0, row as f32, 10.0, 1.0),
-                Some(InteractionId::new(100 + row)),
-                None,
+                InteractionId::new(100 + row),
             ));
         }
     }
-    regions.push(PresentedPointerRegion::new(
-        rect(40.0, 20.0, 40.0, 1.0),
-        Some(InteractionId::new(2)),
-        None,
-    ));
-    let map = try_map(&[], regions, vec![]).unwrap();
+    regions.push((rect(40.0, 20.0, 40.0, 1.0), InteractionId::new(2)));
+    let frame = frame_resolving_pointer_regions(presentation, (100.0, 60.0), regions);
 
-    assert_eq!(map.hit_test_candidate_count(20.5), 2);
     assert_eq!(
-        map.hit_test(55.0, 20.5)
-            .map(PresentedPointerRegion::interaction),
-        Some(Some(InteractionId::new(1)))
+        frame
+            .presented_hit_index()
+            .pointer_candidate_count(55.0, 20.5),
+        2
+    );
+    assert_eq!(
+        resolved_interaction(&frame, 55.0, 20.5),
+        Some(InteractionId::new(1))
     );
 }
 
 #[test]
 fn presented_pointer_hit_index_stores_each_staggered_region_once() {
-    let mut regions = vec![PresentedPointerRegion::new(
-        rect(50.0, 0.0, 30.0, 40.0),
-        Some(InteractionId::new(1)),
-        None,
-    )];
+    // If this fails, rows whose tops differ by a fraction of a pixel each open
+    // their own bucket carrying every earlier region, and the index that was
+    // supposed to prune the search stores it quadratically instead.
+    let presentation = crate::PresentationId::new(31);
+    let mut regions = vec![(rect(50.0, 0.0, 30.0, 40.0), InteractionId::new(1))];
     for index in 1..100 {
-        regions.push(PresentedPointerRegion::new(
+        regions.push((
             rect(40.0, index as f32 * 0.4, 50.0, 10.0),
-            Some(InteractionId::new(100 + index)),
-            None,
+            InteractionId::new(100 + index),
         ));
     }
-    let map = try_map(&[], regions, vec![]).unwrap();
+    let frame = frame_resolving_pointer_regions(presentation, (100.0, 60.0), regions);
 
-    assert_eq!(map.hit_index_entry_count(), 100);
+    assert_eq!(frame.presented_hit_index().pointer_index_entry_count(), 100);
     assert_eq!(
-        map.hit_test(55.0, 20.0)
-            .map(PresentedPointerRegion::interaction),
-        Some(Some(InteractionId::new(1)))
-    );
-
-    let wire = serde_json::to_string(&map).unwrap();
-    let decoded: PresentedPointerMap = serde_json::from_str(&wire).unwrap();
-    assert_eq!(decoded.hit_index_entry_count(), 100);
-    assert_eq!(
-        decoded
-            .hit_test(55.0, 20.0)
-            .map(PresentedPointerRegion::interaction),
-        Some(Some(InteractionId::new(1)))
+        resolved_interaction(&frame, 55.0, 20.0),
+        Some(InteractionId::new(1))
     );
 }
 
@@ -1488,9 +1533,12 @@ fn frame_glyph_buffer_contextually_validates_deserialized_pointer_maps_before_in
     assert_eq!(
         mismatched
             .presented_pointer()
-            .hit_test(25.0, 5.0)
-            .map(PresentedPointerRegion::interaction),
-        Some(Some(InteractionId::new(55)))
+            .regions()
+            .iter()
+            .map(PresentedPointerRegion::interaction)
+            .collect::<Vec<_>>(),
+        vec![Some(InteractionId::new(55))],
+        "a rejected install leaves the previously published map in place"
     );
 
     let mut matching = crate::FrameGlyphBuffer::with_size(100.0, 50.0);
@@ -1503,9 +1551,11 @@ fn frame_glyph_buffer_contextually_validates_deserialized_pointer_maps_before_in
     assert_eq!(
         matching
             .presented_pointer()
-            .hit_test(5.0, 5.0)
-            .map(PresentedPointerRegion::interaction),
-        Some(Some(InteractionId::new(77)))
+            .regions()
+            .iter()
+            .map(PresentedPointerRegion::interaction)
+            .collect::<Vec<_>>(),
+        vec![Some(InteractionId::new(77))]
     );
 }
 

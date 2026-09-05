@@ -482,8 +482,17 @@ fn frame_display_state_carries_pointer_map_into_materialized_snapshot() {
     let materialized = state.materialize();
 
     let hit = materialized
-        .presented_pointer()
-        .hit_test(4.0, 8.0)
+        .resolve_presented_hit(crate::PresentedHitQuery::new(
+            crate::InteractionProjection::settled(materialized.presentation_id)
+                .map(
+                    crate::GeometryPoint::<crate::RootSurfaceSpace, crate::LogicalPixels>::from_px(
+                        4.0, 8.0,
+                    )
+                    .expect("a finite surface point"),
+                )
+                .expect("a settled projection maps every finite point"),
+        ))
+        .expect("a query about the materialized presentation is coherent")
         .expect("transported pointer region");
     assert_eq!(hit.interaction(), Some(crate::InteractionId::new(7)));
 }
