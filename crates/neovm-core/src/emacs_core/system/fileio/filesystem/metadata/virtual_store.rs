@@ -1,9 +1,25 @@
 //! Explicit single-user semantics for stores without POSIX ownership or hard links.
 
 use super::super::EditorFileSystem;
+use super::super::{FileEntryKind, FileMetadata, FileMode};
 use super::{FileAttributeSnapshot, FilePrincipal};
 use std::io;
 use std::path::Path;
+
+impl FileMode {
+    /// Effective access for the sole virtual user, not host POSIX permissions.
+    /// No execute permission for files: these stores cannot launch programs.
+    /// Directories are searchable; immutable entries are never writable.
+    pub fn single_user_virtual(metadata: FileMetadata) -> Self {
+        let write = if metadata.readonly { 0 } else { 0o200 };
+        let search = if metadata.kind == FileEntryKind::Directory {
+            0o100
+        } else {
+            0
+        };
+        Self::from_bits_truncate(0o400 | write | search)
+    }
+}
 
 impl FileAttributeSnapshot {
     /// Attributes for a single-user virtual store without hard links.
