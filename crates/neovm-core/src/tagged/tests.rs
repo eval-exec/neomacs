@@ -789,3 +789,26 @@ fn alloc_roundtrip_cost_probe() {
     // Report via panic! so nextest surfaces the dump (profiling aid pattern).
     panic!("ALLOC ROUND-TRIP PROBE (profiling aid, not a failure)\n{out}");
 }
+
+/// `tagged/gc.rs` was split from 18,077 lines: 8,116 lines of inline test
+/// modules moved to `gc/<name>.rs`, then allocation, mark-sweep, concurrent
+/// marking, incremental marking, the cons block allocator, the arena pages,
+/// and the background GC thread each went to a child module. What remains is
+/// the `TaggedHeap` struct, the post-mark ownership verification gate, the
+/// marker-chain and vector-link helpers, `Drop`, and the module declarations.
+/// New collector work goes in the child module for its domain, or a new one;
+/// this ceiling keeps the root from silently re-absorbing them.
+#[test]
+fn gc_root_stays_a_facade_after_the_domain_split() {
+    const CEILING: usize = 3_000;
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/tagged/gc.rs");
+    let lines = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+        .lines()
+        .count();
+    assert!(
+        lines <= CEILING,
+        "tagged/gc.rs is {lines} lines (ceiling {CEILING}); put the new code in the gc/ child \
+         module for its domain instead of growing the root"
+    );
+}
