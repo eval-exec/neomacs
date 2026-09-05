@@ -383,7 +383,7 @@ fn webview_glyph_hit_test(
 /// Takes the witnessed point for the same reason: a shader is handed `u`/`v` as
 /// the place a user is pointing at, and a raw surface position stops naming
 /// that place the moment the surface's pane starts moving.
-fn surface_glyph_hit_test(
+pub(in crate::render_thread) fn surface_glyph_hit_test(
     glyphs: &[FrameGlyph],
     point: PresentationFramePoint,
 ) -> Option<(u32, f32, f32)> {

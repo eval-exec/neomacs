@@ -203,6 +203,30 @@ fn render_frame_window_contents_to_surface(
     if !pane_blits.is_empty() {
         render.mark_dirty();
     }
+    // Re-resolve what the pointer is over, but only while panes are moving.
+    //
+    // Hover is otherwise resolved when a pointer event arrives, which is
+    // correct at that instant and goes stale immediately afterwards if the
+    // pointer holds still while a pane slides under it: no event fires, so the
+    // shader keeps the `u`/`v` of a pane position that has since moved on. The
+    // projection this frame just sampled is the answer, so ask it here.
+    //
+    // Costs nothing when nothing is moving, which is almost always: an empty
+    // placement list skips it, and so does a frame with no shader surface to
+    // route to — the search reads every glyph in the frame.
+    if !pane_blits.is_empty()
+        && renderer.has_shader_surfaces()
+        && let Some((glyphs, point)) = render.glyph_hit_target(
+            render.emacs_frame_id,
+            render.mouse_pos.0,
+            render.mouse_pos.1,
+        )
+        && let Some((surface_id, u, v)) =
+            super::pointer_events::surface_glyph_hit_test(glyphs, point)
+    {
+        renderer.surface_mouse_hover(surface_id, u, v);
+    }
+
     // A morph draws the composed frame once and then places it a pane at a
     // time, which needs the frame in a texture rather than straight on the
     // surface.
