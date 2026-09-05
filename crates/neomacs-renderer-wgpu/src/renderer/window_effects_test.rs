@@ -1,7 +1,7 @@
 use super::*;
 use crate::effect_config::EffectsConfig;
 use neomacs_display_protocol::frame_glyphs::{FrameGlyphBuffer, WindowInfo};
-use neomacs_display_protocol::frame_time::{FrameSample, observe_platform_now};
+use neomacs_display_protocol::frame_time::{EventTime, FrameSample, observe_platform_now};
 use neomacs_display_protocol::types::Rect;
 use std::time::Duration;
 
@@ -803,4 +803,190 @@ fn test_empty_frame_glyphs() {
     assert_eq!(emit_mode_line_gradient(&ctx).len(), 0);
     assert_eq!(emit_window_corner_fold(&ctx).len(), 0);
     assert_eq!(emit_frosted_window_border(&ctx).len(), 0);
+}
+
+// ========================================================================
+// emit_window_breathing_border phase tests
+//
+// The breath phase was pinned at zero for the life of this effect (it
+// measured the interval from "now" to "now"), so the border sat at a
+// constant opacity halfway between min and max while still asking for a
+// redraw every frame. These pin the property that broke: the phase has to
+// move as the frame sample advances, and `cycle_ms` has to set how fast.
+// ========================================================================
+
+/// Build a ctx whose ambient anchor is `anchor` and whose frame is presented
+/// exactly `offset` after it.
+///
+/// The phase under test is then a pure function of `offset`: the frame
+/// interval is zero, and no wall-clock duration elapses between the anchor and
+/// the sample, so the result does not depend on when the test happens to run.
+fn phase_ctx<'a>(
+    effects: &'a EffectsConfig,
+    frame_glyphs: &'a FrameGlyphBuffer,
+    anchor: EventTime,
+    offset: Duration,
+) -> EffectCtx<'a> {
+    EffectCtx {
+        effects,
+        frame_glyphs,
+        animated_cursor: &None,
+        cursor_visible: false,
+        mouse_pos: (0.0, 0.0),
+        surface_width: 800,
+        surface_height: 600,
+        aurora_start: anchor,
+        frame_sample: FrameSample::new(anchor.plus(offset), Duration::ZERO),
+        frame_seq: 1,
+        scale_factor: 1.0,
+        logical_w: 800.0,
+        logical_h: 600.0,
+        renderer_width: 800.0,
+        renderer_height: 600.0,
+    }
+}
+
+fn breathing_glyphs() -> FrameGlyphBuffer {
+    let mut fgb = FrameGlyphBuffer::default();
+    fgb.window_infos.push(test_window_info(
+        1,
+        Rect::new(0.0, 0.0, 800.0, 600.0),
+        true,
+        false,
+        false,
+        20.0,
+    ));
+    fgb
+}
+
+fn border_alpha(verts: &[RectVertex]) -> f32 {
+    verts.first().expect("border always emits").color[3]
+}
+
+#[test]
+fn test_breathing_border_phase_varies_across_frame_samples() {
+    let mut config = EffectsConfig::default();
+    config.breathing_border.enabled = true;
+    config.breathing_border.min_opacity = 0.0;
+    config.breathing_border.max_opacity = 1.0;
+    config.breathing_border.cycle_ms = 1000;
+
+    let fgb = breathing_glyphs();
+    // One anchor; every sample below is derived from it by an exact offset.
+    let anchor = observe_platform_now();
+    let alpha_at = |offset: Duration| {
+        let ctx = phase_ctx(&config, &fgb, anchor, offset);
+        let (verts, needs_redraw) = emit_window_breathing_border(&ctx);
+        assert!(needs_redraw, "the breath always asks for the next frame");
+        border_alpha(&verts)
+    };
+
+    // Quarter-cycle points of a 1s breath: rising midpoint, inhale peak,
+    // falling midpoint, exhale trough.
+    let start = alpha_at(Duration::from_millis(0));
+    let inhale = alpha_at(Duration::from_millis(250));
+    let falling = alpha_at(Duration::from_millis(500));
+    let exhale = alpha_at(Duration::from_millis(750));
+
+    // The property that was broken: the phase moves.
+    assert!(
+        (inhale - start).abs() > 0.01,
+        "phase pinned: inhale {inhale} == start {start}"
+    );
+    assert!((start - 0.5).abs() < 1e-4, "sin(0) midpoint: {start}");
+    assert!(
+        (inhale - 1.0).abs() < 1e-4,
+        "sin(pi/2) = max_opacity: {inhale}"
+    );
+    assert!((falling - 0.5).abs() < 1e-4, "sin(pi) midpoint: {falling}");
+    assert!(
+        (exhale - 0.0).abs() < 1e-4,
+        "sin(3pi/2) = min_opacity: {exhale}"
+    );
+}
+
+#[test]
+fn test_breathing_border_period_comes_from_cycle_ms() {
+    let fgb = breathing_glyphs();
+    let anchor = observe_platform_now();
+    let alpha_for = |cycle_ms: u32, offset: Duration| {
+        let mut config = EffectsConfig::default();
+        config.breathing_border.enabled = true;
+        config.breathing_border.min_opacity = 0.0;
+        config.breathing_border.max_opacity = 1.0;
+        config.breathing_border.cycle_ms = cycle_ms;
+        let ctx = phase_ctx(&config, &fgb, anchor, offset);
+        border_alpha(&emit_window_breathing_border(&ctx).0)
+    };
+
+    // A 1s breath peaks at 250ms; a 3s breath (the configured default period)
+    // does not peak until 750ms and is still rising at 250ms.
+    let fast_peak = alpha_for(1000, Duration::from_millis(250));
+    let slow_early = alpha_for(3000, Duration::from_millis(250));
+    let slow_peak = alpha_for(3000, Duration::from_millis(750));
+    assert!(
+        (fast_peak - 1.0).abs() < 1e-4,
+        "1s breath peaks: {fast_peak}"
+    );
+    assert!(
+        (slow_peak - 1.0).abs() < 1e-4,
+        "3s breath peaks later: {slow_peak}"
+    );
+    assert!(
+        slow_early < fast_peak - 0.05,
+        "a longer cycle must be slower: {slow_early} vs {fast_peak}"
+    );
+
+    // A full cycle later the phase has come back round.
+    let one_cycle_on = alpha_for(1000, Duration::from_millis(1250));
+    assert!(
+        (one_cycle_on - fast_peak).abs() < 1e-4,
+        "phase is periodic in cycle_ms: {one_cycle_on} vs {fast_peak}"
+    );
+}
+
+#[test]
+fn test_breathing_border_stays_within_configured_opacity_band() {
+    let mut config = EffectsConfig::default();
+    config.breathing_border.enabled = true;
+    // The shipped defaults.
+    config.breathing_border.min_opacity = 0.05;
+    config.breathing_border.max_opacity = 0.3;
+    config.breathing_border.cycle_ms = 3000;
+
+    let fgb = breathing_glyphs();
+    let anchor = observe_platform_now();
+    let mut lo = f32::MAX;
+    let mut hi = f32::MIN;
+    for step in 0..60u64 {
+        let ctx = phase_ctx(&config, &fgb, anchor, Duration::from_millis(step * 50));
+        let a = border_alpha(&emit_window_breathing_border(&ctx).0);
+        assert!(a.is_finite(), "alpha not finite at step {step}: {a}");
+        lo = lo.min(a);
+        hi = hi.max(a);
+    }
+    assert!(lo >= 0.05 - 1e-4 && hi <= 0.3 + 1e-4, "band [{lo}, {hi}]");
+    // Swept a full 3s cycle, so it must have reached both ends of the band.
+    assert!((lo - 0.05).abs() < 0.01, "reaches min_opacity: {lo}");
+    assert!((hi - 0.3).abs() < 0.01, "reaches max_opacity: {hi}");
+}
+
+#[test]
+fn test_breathing_border_zero_cycle_holds_still() {
+    // A zero period names no cycle. It must hold the phase rather than divide
+    // by zero and paint a NaN alpha.
+    let mut config = EffectsConfig::default();
+    config.breathing_border.enabled = true;
+    config.breathing_border.min_opacity = 0.0;
+    config.breathing_border.max_opacity = 1.0;
+    config.breathing_border.cycle_ms = 0;
+
+    let fgb = breathing_glyphs();
+    let anchor = observe_platform_now();
+    for offset in [0u64, 250, 750] {
+        let ctx = phase_ctx(&config, &fgb, anchor, Duration::from_millis(offset));
+        let alpha = border_alpha(&emit_window_breathing_border(&ctx).0);
+        assert!(alpha.is_finite(), "alpha not finite: {alpha}");
+        assert!((alpha - 0.5).abs() < 1e-4, "held at midpoint: {alpha}");
+    }
 }
