@@ -196,7 +196,7 @@ impl HostInputWaitBackend for BrowserWorkerTransport {
         self.publish_latest_frame()?;
         match browser_host::wait(timeout).map_err(HostInputWaitError::new)? {
             HostWake::Input => self.submit_input_batch(),
-            HostWake::TimedOut => Ok(()),
+            HostWake::TimedOut | HostWake::Ready => Ok(()),
         }
     }
 }

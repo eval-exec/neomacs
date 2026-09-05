@@ -15,6 +15,7 @@ const MAX_RUNTIME_RESOURCE_ID_BYTES: usize = 128;
 pub(crate) enum HostWake {
     Input,
     TimedOut,
+    Ready,
 }
 
 #[link(wasm_import_module = "neomacs_host")]
@@ -89,6 +90,7 @@ pub(crate) fn wait(timeout: Duration) -> Result<HostWake, String> {
     match imported_wait_for_input(timeout.as_secs_f64() * 1000.0) {
         1 => Ok(HostWake::Input),
         2 => Ok(HostWake::TimedOut),
+        3 => Ok(HostWake::Ready),
         other => Err(format!("browser host returned unknown wake code {other}")),
     }
 }
