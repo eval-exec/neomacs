@@ -100,6 +100,15 @@ impl EditorFileSystem for EditorFileSystemNamespace {
 
     fn access(&self, path: &Path, mode: AccessMode) -> bool {
         if self.runtime_store_for(path).is_some() {
+            if let AccessMode::Existing(permissions) = mode {
+                return self.runtime_node(path).is_some_and(|node| {
+                    permissions.is_satisfied_by(
+                        true,
+                        false,
+                        matches!(node, RuntimeResourceNode::Directory),
+                    )
+                });
+            }
             return match self.runtime_node(path) {
                 Some(RuntimeResourceNode::File(_)) => {
                     matches!(mode, AccessMode::Exists | AccessMode::Read)

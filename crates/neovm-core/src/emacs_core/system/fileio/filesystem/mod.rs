@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
+mod access;
 mod browser_layout;
 mod memory;
 mod mounts;
@@ -13,6 +14,7 @@ mod native;
 mod tests;
 mod virtual_path;
 
+pub use access::{AccessMode, AccessPermissions};
 pub use browser_layout::BrowserFileSystemLayout;
 pub use memory::MemoryFileSystem;
 pub use mounts::MountTableFileSystem;
@@ -135,16 +137,6 @@ pub struct FileSystemSpace {
     pub available_bytes: i64,
 }
 
-/// Access predicate requested by a Lisp filesystem primitive.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AccessMode {
-    Exists,
-    Read,
-    /// The entry is writable, or a missing entry can be created in its parent.
-    WriteOrCreate,
-    Execute,
-    ReadAndSearch,
-}
 
 /// Placement semantics for one complete file write.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

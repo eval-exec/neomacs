@@ -1105,7 +1105,6 @@ pub(crate) fn path_has_module_suffix_for_os(path: &str, os: &str) -> bool {
             .is_some_and(|secondary| path.ends_with(secondary))
 }
 
-
 /// `(read-coding-system PROMPT &optional DEFAULT-CODING-SYSTEM)`
 ///
 /// Faithful port of GNU's `Fread_coding_system` (src/coding.c): binds
@@ -1203,11 +1202,6 @@ fn read_coding_system_via_completing_read(
         name.as_bytes(),
     )))
 }
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // Tests
