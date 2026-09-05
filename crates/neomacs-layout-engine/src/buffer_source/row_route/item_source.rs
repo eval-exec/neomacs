@@ -25,7 +25,11 @@ pub(crate) struct BufferPlainItemSource {
 
 impl BufferPlainItemSource {
     /// Source over `[start, line_end)` text plus the newline row break at
-    /// `line_end` — the full row, as the shadow renderer consumes it.
+    /// `line_end` — the full row, as the shadow renderer consumes it. The
+    /// single-segment shape only the shadow-equivalence tests need; execution
+    /// always builds a source through
+    /// [`with_row_break_segments`](Self::with_row_break_segments).
+    #[cfg(test)]
     pub(crate) fn with_row_break<B: LayoutBufferView + ?Sized>(
         buffer_id: BufferId,
         buffer: &B,
