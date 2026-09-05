@@ -1,18 +1,12 @@
-//! `EditorFileSystem` adapter for origin-private browser storage.
-
-use std::ffi::OsString;
-use std::io::{self, ErrorKind};
-use std::path::{Path, PathBuf};
-
-use neovm_core::emacs_core::fileio::{
-    AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, FileStability, FileTimestamp,
-    WriteMode, WriteRequest,
-};
+//! Checked filesystem host results; no Lisp or Dired policy.
 
 use crate::browser_host;
+use neovm_core::emacs_core::fileio::{FileEntryKind, FileMetadata, FileStability, FileTimestamp};
+use std::io::{self, ErrorKind};
+use std::path::Path;
 
 const MAX_RESULT_BYTES: usize = 512 * 1024 * 1024;
-const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
+pub(super) const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -92,11 +86,7 @@ impl HostFileKind {
     }
 }
 
-/// Persistent OPFS root supplied by the browser Worker.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct BrowserOpfsFileSystem;
-
-fn path_string(path: &Path) -> io::Result<&str> {
+pub(super) fn path_string(path: &Path) -> io::Result<&str> {
     let path = path.to_str().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidInput,
@@ -112,7 +102,7 @@ fn path_string(path: &Path) -> io::Result<&str> {
     Ok(path)
 }
 
-fn complete(status: u32) -> io::Result<()> {
+pub(super) fn complete(status: u32) -> io::Result<()> {
     let status = HostStatus::parse(status)?;
     if status == HostStatus::Ok {
         return Ok(());
@@ -137,7 +127,7 @@ fn result_len() -> io::Result<u64> {
     Ok(length as u64)
 }
 
-fn current_metadata() -> io::Result<FileMetadata> {
+pub(super) fn current_metadata() -> io::Result<FileMetadata> {
     let kind = match HostFileKind::current()? {
         HostFileKind::File => FileEntryKind::File,
         HostFileKind::Directory => FileEntryKind::Directory,
@@ -158,7 +148,7 @@ fn current_metadata() -> io::Result<FileMetadata> {
     })
 }
 
-fn read_result_bytes() -> io::Result<Vec<u8>> {
+pub(super) fn read_result_bytes() -> io::Result<Vec<u8>> {
     let length = usize::try_from(result_len()?).map_err(|_| {
         io::Error::new(
             ErrorKind::InvalidData,
@@ -173,116 +163,4 @@ fn read_result_bytes() -> io::Result<Vec<u8>> {
     }
     browser_host::filesystem_result_bytes(length)
         .map_err(|message| io::Error::new(ErrorKind::InvalidData, message))
-}
-
-impl EditorFileSystem for BrowserOpfsFileSystem {
-    fn metadata(&self, path: &Path, _follow_links: bool) -> io::Result<FileMetadata> {
-        complete(browser_host::filesystem_stat(path_string(path)?))?;
-        current_metadata()
-    }
-
-    fn access(&self, path: &Path, mode: AccessMode) -> bool {
-        match self.metadata(path, true) {
-            Ok(metadata) => match mode {
-                AccessMode::Existing(permissions) => permissions.is_satisfied_by(
-                    true,
-                    !metadata.readonly,
-                    metadata.kind == FileEntryKind::Directory,
-                ),
-                AccessMode::Exists | AccessMode::Read | AccessMode::WriteOrCreate => true,
-                AccessMode::Execute | AccessMode::ReadAndSearch => {
-                    metadata.kind == FileEntryKind::Directory
-                }
-            },
-            Err(error)
-                if error.kind() == ErrorKind::NotFound && mode == AccessMode::WriteOrCreate =>
-            {
-                path.parent().is_some_and(|parent| {
-                    self.metadata(parent, true)
-                        .is_ok_and(|metadata| metadata.kind == FileEntryKind::Directory)
-                })
-            }
-            Err(_) => false,
-        }
-    }
-
-    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        complete(browser_host::filesystem_read(path_string(path)?))?;
-        read_result_bytes()
-    }
-
-    fn read_directory(&self, path: &Path) -> io::Result<Vec<OsString>> {
-        complete(browser_host::filesystem_read_directory(path_string(path)?))?;
-        let bytes = read_result_bytes()?;
-        serde_json::from_slice::<Vec<String>>(&bytes)
-            .map(|names| names.into_iter().map(OsString::from).collect())
-            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
-    }
-
-    fn write(
-        &self,
-        path: &Path,
-        contents: &[u8],
-        request: WriteRequest,
-    ) -> io::Result<FileMetadata> {
-        let (mode, offset) = match request.mode {
-            WriteMode::Truncate => (1, 0),
-            WriteMode::Append => (2, 0),
-            WriteMode::At(offset) => (3, offset),
-            WriteMode::CreateNew => (4, 0),
-        };
-        u32::try_from(contents.len()).map_err(|_| {
-            io::Error::new(
-                ErrorKind::InvalidInput,
-                "browser filesystem write exceeds the Wasm32 transfer limit",
-            )
-        })?;
-        if offset > JAVASCRIPT_MAX_SAFE_INTEGER {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                "browser filesystem offset exceeds JavaScript's exact integer range",
-            ));
-        }
-        complete(browser_host::filesystem_write(
-            path_string(path)?,
-            contents,
-            mode,
-            offset,
-            request.sync,
-        ))?;
-        current_metadata()
-    }
-
-    fn create_directory(&self, path: &Path, parents: bool) -> io::Result<()> {
-        complete(browser_host::filesystem_create_directory(
-            path_string(path)?,
-            parents,
-        ))
-    }
-
-    fn remove_file(&self, path: &Path) -> io::Result<()> {
-        complete(browser_host::filesystem_remove_file(path_string(path)?))
-    }
-
-    fn remove_directory(&self, path: &Path, recursive: bool) -> io::Result<()> {
-        complete(browser_host::filesystem_remove_directory(
-            path_string(path)?,
-            recursive,
-        ))
-    }
-
-    fn rename(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()> {
-        complete(browser_host::filesystem_rename(
-            path_string(from)?,
-            path_string(to)?,
-            replace,
-        ))
-    }
-
-    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        complete(browser_host::filesystem_canonicalize(path_string(path)?))?;
-        String::from_utf8(read_result_bytes()?)
-            .map(PathBuf::from)
-            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
-    }
 }
