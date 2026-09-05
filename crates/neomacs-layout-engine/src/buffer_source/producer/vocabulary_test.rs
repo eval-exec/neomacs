@@ -271,7 +271,6 @@ fn a_row_break_step_item_becomes_a_row_break_element() {
     let item = step_item(
         buffer_span(12, 13),
         DisplayItemKind::RowBreak(DisplayRowBreak {
-            reason: DisplayRowBreakReason::ExplicitNewline,
             line_height: Default::default(),
             line_spacing: Default::default(),
         }),
@@ -285,7 +284,6 @@ fn a_row_break_step_item_becomes_a_row_break_element() {
         panic!("a RowBreak item must produce a RowBreak element");
     };
 
-    assert_eq!(row_break.reason(), DisplayRowBreakReason::ExplicitNewline);
     assert_eq!(row_break.position().stamp(), GlyphProvenance::buffer(12));
 }
 
@@ -363,7 +361,6 @@ fn end_of_text_is_the_producers_own_terminator_never_a_bridged_item() {
         DisplayItemKind::SourceMappedText(DisplaySourceMappedText::new("a")),
         DisplayItemKind::ControlChar { ch: '\u{1}' },
         DisplayItemKind::RowBreak(DisplayRowBreak {
-            reason: DisplayRowBreakReason::ExplicitNewline,
             line_height: Default::default(),
             line_spacing: Default::default(),
         }),
