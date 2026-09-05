@@ -32,6 +32,17 @@ fn names(value: Value) -> Vec<String> {
 }
 
 #[test]
+fn virtual_attributes_support_gnu_ls_lisp_numeric_columns() {
+    let mut eval = virtual_editor();
+    assert_eq!(
+        eval.eval_str(r##"(let ((a (file-attributes "/virtual-completion/alpha.el")))
+          (format "%d %d %d" (nth 1 a) (nth 2 a) (nth 3 a)))"##)
+            .unwrap().as_utf8_str(),
+        Some("1 0 0")
+    );
+}
+
+#[test]
 fn file_attributes_describe_virtual_files_without_host_metadata() {
     let mut eval = virtual_editor();
     assert_eq!(
@@ -58,9 +69,9 @@ fn file_attributes_describe_virtual_files_without_host_metadata() {
         )
         .unwrap(),
         Value::list(vec![
-            Value::NIL,
-            Value::NIL,
-            Value::NIL,
+            Value::fixnum(1),
+            Value::string("virtual"),
+            Value::string("virtual"),
             Value::NIL,
             Value::T,
             Value::NIL,

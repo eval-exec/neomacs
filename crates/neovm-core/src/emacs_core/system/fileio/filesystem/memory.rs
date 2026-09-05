@@ -113,6 +113,10 @@ fn remove_tree(nodes: &mut BTreeMap<VirtualPath, MemoryNode>, root: &VirtualPath
 }
 
 impl EditorFileSystem for MemoryFileSystem {
+    fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
+        super::FileAttributeSnapshot::read_single_user_virtual(self, path)
+    }
+
     fn metadata(&self, path: &Path, _follow_links: bool) -> io::Result<FileMetadata> {
         let path = VirtualPath::parse(path)?;
         self.nodes
