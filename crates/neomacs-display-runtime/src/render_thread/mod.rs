@@ -29,6 +29,9 @@ mod terminal_commands;
 mod terminal_expansion;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "texture_discipline_test.rs"]
+mod texture_discipline_test;
 
 mod thread_handle;
 #[cfg(test)]

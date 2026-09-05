@@ -8,7 +8,9 @@ use super::super::video_cache::VideoCache;
 #[cfg(all(feature = "webview", target_os = "linux"))]
 use super::super::webview_cache::WgpuWebViewCache;
 use super::dynamic_buffer::FrameVertexArena;
-use super::snapshot_pool::{SnapshotSize, texture_bytes};
+use super::full_frame_texture::FullFrameTexture;
+use super::gpu_budget::UnpooledTexture;
+use super::snapshot_pool::SnapshotSize;
 use crate::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex};
 
 /// All render pipelines. The `stencil_*` variants are identical to their base
@@ -39,80 +41,69 @@ pub(crate) struct Pipelines {
 
 /// The format of the stencil clip target.
 ///
-/// Named once so the descriptor that allocates the texture and the arithmetic
-/// that charges it to the GPU budget cannot come to describe different things.
-const STENCIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Stencil8;
-
-/// What a stencil clip target of this size costs the GPU budget.
-///
 /// A stencil texel is one byte, not the four a colour attachment costs, so a
 /// full-frame target is about 3.7 MB at 2560x1440 rather than 15. Small beside
 /// a glyph atlas, and still real: a ceiling is only worth consulting if it can
 /// say what is under it, and an allocation nobody counts is headroom the pool
 /// believes it can hand out twice.
-pub(crate) fn stencil_clip_bytes(width: u32, height: u32) -> u64 {
-    let size = SnapshotSize::new(width.max(1), height.max(1))
-        .expect("a dimension clamped to at least one is non-zero");
-    texture_bytes(size, STENCIL_FORMAT)
+pub(crate) const STENCIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Stencil8;
+
+/// The size a stencil clip target is actually allocated at for a window of
+/// `width` by `height` device pixels.
+///
+/// wgpu rejects a zero extent, so a degenerate window still gets one texel.
+/// Named separately from the constructor only so a test with no GPU can ask
+/// what the clamp does; the constructor is its sole production caller, which
+/// keeps this one description of the size rather than a second one.
+pub(crate) fn stencil_clip_size(width: u32, height: u32) -> SnapshotSize {
+    SnapshotSize::new(width.max(1), height.max(1))
+        .expect("a dimension clamped to at least one is non-zero")
 }
 
 /// Stencil texture/view used to clip child frames to rounded corners.
 /// Recreated on resize.
 pub(crate) struct StencilTargets {
-    /// Held, never read, exactly as a pool slot holds its own: this is the
-    /// handle the GPU budget was charged for, and the allocation's lifetime
-    /// should be a fact of this struct rather than a consequence of wgpu's
-    /// internal refcounting behind the view.
-    _texture: wgpu::Texture,
-    pub(crate) view: wgpu::TextureView,
-    budget_bytes: u64,
+    /// A [`FullFrameTexture`] rather than a raw handle: this is the one
+    /// renderer-owned allocation that tracks the window size, so it has to
+    /// carry its own census category and cost. The arithmetic that charges it
+    /// used to live in a separate function beside the descriptor, which is two
+    /// descriptions of one texture and therefore two things that can drift.
+    pub(crate) texture: FullFrameTexture,
 }
 
 impl StencilTargets {
     /// A clip target covering `width` by `height` device pixels.
     ///
     /// The renderer reaches this only through
-    /// `WgpuRenderer::install_stencil_targets`, which charges the GPU budget in
-    /// the same statement that installs the result — so there is one place a
-    /// stencil target starts being used and it is the place that pays for it.
+    /// `WgpuRenderer::install_stencil_targets`, which reports the GPU budget
+    /// in the same statement that installs the result — so there is one place
+    /// a stencil target starts being used and it is the place that pays for it.
+    ///
+    /// Clamps rather than refusing a zero dimension: `resize` already returns
+    /// early on one, and the clamp is what lets [`Self::placeholder`] exist at
+    /// all.
     pub(crate) fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let width = width.max(1);
-        let height = height.max(1);
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Stencil Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: STENCIL_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let size = stencil_clip_size(width, height);
         Self {
-            _texture: texture,
-            view,
-            budget_bytes: stencil_clip_bytes(width, height),
+            texture: FullFrameTexture::allocate(
+                device,
+                UnpooledTexture::StencilClip,
+                "Stencil Texture",
+                size,
+                STENCIL_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            ),
         }
     }
 
     /// A one-texel target for the moment before the renderer exists.
     ///
     /// The renderer is built by a struct literal, and a literal cannot call
-    /// the method that charges the budget. Starting from a target that costs a
+    /// the method that reports the budget. Starting from a target that costs a
     /// byte, then installing the real one, keeps `install_stencil_targets` the
     /// single allocation site rather than the second of two.
     pub(crate) fn placeholder(device: &wgpu::Device) -> Self {
         Self::new(device, 1, 1)
-    }
-
-    /// What this target costs, measured at the size it was created with.
-    pub(crate) const fn budget_bytes(&self) -> u64 {
-        self.budget_bytes
     }
 }
 
