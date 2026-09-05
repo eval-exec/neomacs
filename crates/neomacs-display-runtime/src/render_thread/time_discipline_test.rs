@@ -41,7 +41,7 @@ fn allowlist() -> BTreeMap<&'static str, &'static str> {
              frame sample would make it read zero.",
         ),
         (
-            "src/render_thread/render_pass.rs",
+            "src/render_thread/render_pass/mod.rs",
             "Closes the CPU render-work span begun by begin_fps_cpu_span.",
         ),
         (
