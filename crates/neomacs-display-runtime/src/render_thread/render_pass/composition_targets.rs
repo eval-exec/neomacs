@@ -16,8 +16,8 @@
 use crate::render_thread::frame_stats;
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_renderer_wgpu::{
-    BudgetExceeded, SnapshotLease, SnapshotSize, UnpooledTexture, WgpuGlyphAtlas, WgpuRenderer,
-    texture_bytes,
+    BudgetExceeded, GpuBudgetOwner, SnapshotLease, SnapshotSize, UnpooledTexture, WgpuGlyphAtlas,
+    WgpuRenderer, texture_bytes,
 };
 
 /// Lease the intermediate composition texture for the full-frame post
@@ -98,7 +98,7 @@ pub(super) fn report_unpooled_gpu_textures(
     renderer: &mut WgpuRenderer,
     render: &GuiFrameRenderState,
 ) {
-    let owner = render.emacs_frame_id;
+    let owner = GpuBudgetOwner::FrameWindow(render.emacs_frame_id);
     let retained_static_bytes = render
         .compositor
         .retained_static
@@ -118,7 +118,7 @@ pub(super) fn report_unpooled_gpu_textures(
     renderer.record_unpooled_texture(owner, UnpooledTexture::GlyphAtlas, atlas_bytes);
     let budget = renderer.gpu_budget();
     tracing::trace!(
-        owner,
+        ?owner,
         pooled_bytes = budget.pooled_bytes(),
         unpooled_bytes = budget.unpooled_bytes(),
         limit_bytes = budget.limit_bytes().get(),
