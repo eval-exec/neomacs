@@ -98,8 +98,11 @@ fn a_texture_the_render_thread_owns_outside_the_pool_shrinks_what_the_pool_may_a
     // half of the render thread's GPU memory.
     let bytes = texture_bytes(size(8, 8), FORMAT);
     let mut pool = pool(bytes * 2);
-    pool.budget_mut()
-        .record_unpooled(1, UnpooledTexture::GlyphAtlas, bytes + 1);
+    pool.budget_mut().record_unpooled(
+        crate::renderer::gpu_budget::GpuBudgetOwner::FrameWindow(1),
+        UnpooledTexture::GlyphAtlas,
+        bytes + 1,
+    );
     acquire(&mut pool, size(8, 8)).expect_err("the atlas already took more than half the ceiling");
 }
 
