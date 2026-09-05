@@ -382,3 +382,24 @@ fn eval_mod_stays_a_facade_after_the_domain_split() {
          eval/ child module for its domain instead of growing the facade"
     );
 }
+
+/// `system/process/mod.rs` was split from 17,770 lines into domain child
+/// modules (types, builtins, helpers, bootstrap_vars) because it was the
+/// crate's second-largest file and a heavy merge-conflict surface (453
+/// commits, 62 in a recent month). What remains is the module's imports and
+/// the child/test declarations. New process work goes in the child module for
+/// its domain, or a new one; this ceiling keeps the facade honest.
+#[test]
+fn process_mod_stays_a_facade_after_the_domain_split() {
+    const CEILING: usize = 1_500;
+    let path = emacs_core_root().join("system/process/mod.rs");
+    let lines = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+        .lines()
+        .count();
+    assert!(
+        lines <= CEILING,
+        "system/process/mod.rs is {lines} lines (ceiling {CEILING}); put the new code in the \
+         process/ child module for its domain instead of growing the facade"
+    );
+}
