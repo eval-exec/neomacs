@@ -2956,7 +2956,6 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
         axis: PixelCalcAxis,
     ) -> Option<f32> {
         match length {
-            DisplayLength::Columns(cols) => Some(f32::from(*cols) * self.layout.char_width_px),
             DisplayLength::Pixels(px) => Some(*px),
             DisplayLength::Em(em) => Some(*em * em_px.max(1.0)),
             // `:width`/`:height` arithmetic forms route through the single

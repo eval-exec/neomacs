@@ -184,9 +184,9 @@ impl OutputRowMetricsRequest {
 }
 
 impl OutputRowLifecycleRequest {
-    // Called through the output-builder layer, which is feature-selected out of
-    // some workspace builds but exercised by layout tests and full builds.
-    #[allow(dead_code)]
+    // Only `OutputBuilder::begin_output_row`, itself `#[cfg(test)]`, opens a row
+    // this way; window output opens rows through `begin_text_at`.
+    #[cfg(test)]
     pub(crate) fn begin(row: usize, role: GlyphRowRole, mode_line: bool) -> Self {
         Self::Begin(OutputRowBeginRequest::new(row, role, mode_line))
     }

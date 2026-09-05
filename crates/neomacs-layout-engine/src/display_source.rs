@@ -53,7 +53,7 @@ impl<'a> DisplaySourceContext<'a> {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn with_face_resolver(resolver: &'a mut dyn DisplayItemFaceResolver) -> Self {
         Self {
             face_resolver: Some(resolver),
@@ -2862,7 +2862,10 @@ impl LispStringSourceStack {
         }
     }
 
-    #[allow(dead_code)]
+    /// Where the innermost live replacement string is reading from. Reached
+    /// through `BufferTextSourceCursor::source_position`, which is itself
+    /// `#[cfg(test)]`.
+    #[cfg(test)]
     pub(crate) fn source_position(&self) -> DisplaySourcePosition {
         self.frames
             .last()
@@ -2870,7 +2873,7 @@ impl LispStringSourceStack {
             .unwrap_or_else(|| DisplaySourcePosition::synthetic(0, 0))
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
@@ -3169,7 +3172,7 @@ impl LispStringSourceFrame {
         self.char_byte_offsets.len().saturating_sub(1)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn source_position(&self) -> DisplaySourcePosition {
         DisplaySourcePosition::lisp_string(
             self.source_id,
