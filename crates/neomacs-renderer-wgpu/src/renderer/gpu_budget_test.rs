@@ -122,7 +122,10 @@ fn a_stencil_clip_target_is_charged_one_byte_per_texel_rather_than_a_colour_texe
     let (width, height) = (2560u32, 1440u32);
 
     assert_eq!(
-        crate::renderer::resources::stencil_clip_bytes(width, height),
+        crate::renderer::snapshot_pool::texture_bytes(
+            crate::renderer::resources::stencil_clip_size(width, height),
+            crate::renderer::resources::STENCIL_FORMAT,
+        ),
         u64::from(width) * u64::from(height),
     );
 }
@@ -132,5 +135,11 @@ fn a_stencil_clip_target_is_charged_for_the_one_texel_a_degenerate_size_still_al
     // `StencilTargets` clamps each dimension to at least one because wgpu
     // rejects a zero-sized texture, so a zero-sized window still costs a
     // texel. Reporting zero here would be a figure no texture matches.
-    assert_eq!(crate::renderer::resources::stencil_clip_bytes(0, 0), 1);
+    assert_eq!(
+        crate::renderer::snapshot_pool::texture_bytes(
+            crate::renderer::resources::stencil_clip_size(0, 0),
+            crate::renderer::resources::STENCIL_FORMAT,
+        ),
+        1
+    );
 }

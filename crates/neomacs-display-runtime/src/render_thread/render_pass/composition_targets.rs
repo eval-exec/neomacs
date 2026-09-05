@@ -17,7 +17,7 @@ use crate::render_thread::frame_stats;
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_renderer_wgpu::{
     BudgetExceeded, GpuBudgetOwner, SnapshotLease, SnapshotSize, UnpooledTexture, WgpuGlyphAtlas,
-    WgpuRenderer, texture_bytes,
+    WgpuRenderer,
 };
 
 /// Lease the intermediate composition texture for the full-frame post
@@ -99,23 +99,16 @@ pub(super) fn report_unpooled_gpu_textures(
     render: &GuiFrameRenderState,
 ) {
     let owner = GpuBudgetOwner::FrameWindow(render.emacs_frame_id);
-    let retained_static_bytes = render
-        .compositor
-        .retained_static
-        .as_ref()
-        .and_then(|retained| SnapshotSize::new(retained.width, retained.height))
-        .map_or(0, |size| texture_bytes(size, renderer.surface_format()));
-    renderer.record_unpooled_texture(
-        owner,
-        UnpooledTexture::RetainedStaticScene,
-        retained_static_bytes,
-    );
+    match render.compositor.retained_static.as_ref() {
+        Some(retained) => renderer.record_full_frame_texture(owner, &retained.texture),
+        None => renderer.retire_full_frame_texture(owner, UnpooledTexture::RetainedStaticScene),
+    }
     let atlas_bytes = render
         .compositor
         .glyph_atlas
         .as_ref()
         .map_or(0, WgpuGlyphAtlas::resident_bytes);
-    renderer.record_unpooled_texture(owner, UnpooledTexture::GlyphAtlas, atlas_bytes);
+    renderer.record_glyph_atlas_bytes(owner, atlas_bytes);
     let budget = renderer.gpu_budget();
     tracing::trace!(
         ?owner,

@@ -31,6 +31,8 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
+use super::full_frame_texture::FullFrameTexture;
+
 /// Who holds an unpooled full-frame texture.
 ///
 /// Not every one of them belongs to a frame window. The stencil clip target is
@@ -53,7 +55,12 @@ pub enum GpuBudgetOwner {
 ///
 /// The variants are exhaustive on purpose: adding a full-frame texture to the
 /// render thread should force a decision about which side of the budget it
-/// lands on, rather than quietly landing on neither.
+/// lands on, rather than quietly landing on neither. Being exhaustive was not
+/// enough on its own — an enum only prompts a decision from someone who
+/// happens to look at it — so
+/// [`FullFrameTexture::allocate`](super::full_frame_texture::FullFrameTexture::allocate)
+/// takes one of these by value and there is no other way to allocate a
+/// full-frame texture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnpooledTexture {
     /// The cursorless retained scene one frame window blits on compositor-only
@@ -187,12 +194,13 @@ impl GpuBudget {
     /// Set semantics, not accumulate: re-reporting the same `(owner, kind)`
     /// replaces the previous figure, so the per-frame re-report cannot inflate
     /// the census, and `0` retires the entry.
-    pub(crate) fn record_unpooled(
-        &mut self,
-        owner: GpuBudgetOwner,
-        kind: UnpooledTexture,
-        bytes: u64,
-    ) {
+    ///
+    /// Private to the budget, and deliberately: it is the one signature that
+    /// can pair any category with any number, which is exactly the mistake
+    /// [`record_full_frame_texture`](Self::record_full_frame_texture) exists to
+    /// make unrepresentable. Reporters reach it through the narrow methods
+    /// below.
+    fn record_unpooled(&mut self, owner: GpuBudgetOwner, kind: UnpooledTexture, bytes: u64) {
         let previous = if bytes == 0 {
             self.unpooled.remove(&(owner, kind))
         } else {
@@ -200,6 +208,42 @@ impl GpuBudget {
         }
         .unwrap_or(0);
         self.unpooled_bytes = self.unpooled_bytes.saturating_sub(previous) + bytes;
+    }
+
+    /// Report what one full-frame texture currently costs `owner`.
+    ///
+    /// Both halves of the census entry come from the texture itself, so a
+    /// reporter cannot charge a category to the wrong number of bytes, nor
+    /// keep charging a size the allocation no longer has.
+    pub(crate) fn record_full_frame_texture(
+        &mut self,
+        owner: GpuBudgetOwner,
+        texture: &FullFrameTexture,
+    ) {
+        self.record_unpooled(owner, texture.kind(), texture.budget_bytes());
+    }
+
+    /// Retire `owner`'s census entry for `kind`, which it no longer holds.
+    ///
+    /// Separate from the report above because an absent texture has no kind to
+    /// ask for; naming the category is all this can do, and there is no byte
+    /// count to get wrong.
+    pub(crate) fn retire_full_frame_texture(
+        &mut self,
+        owner: GpuBudgetOwner,
+        kind: UnpooledTexture,
+    ) {
+        self.record_unpooled(owner, kind, 0);
+    }
+
+    /// Report what every resident glyph-atlas page of one frame window costs.
+    ///
+    /// The atlas is the one census entry that is not a single texture — it is
+    /// a page count that grows and shrinks — so it reports bytes directly
+    /// instead of a [`FullFrameTexture`], and gets its own method rather than
+    /// a category argument nobody else may pass.
+    pub(crate) fn record_glyph_atlas_bytes(&mut self, owner: GpuBudgetOwner, bytes: u64) {
+        self.record_unpooled(owner, UnpooledTexture::GlyphAtlas, bytes);
     }
 
     /// Retire every census entry belonging to a frame window that is gone.

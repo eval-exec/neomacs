@@ -28,6 +28,8 @@ mod dynamic_buffer;
 mod effect_common;
 mod effects_state;
 mod frame_pass;
+mod full_frame_texture;
+pub use full_frame_texture::FullFrameTexture;
 mod fx_state;
 mod glyphs;
 mod gpu_budget;
@@ -1276,13 +1278,11 @@ impl WgpuRenderer {
     /// Set semantics make repetition exact: a window resized back to a size it
     /// held before re-states the same figure rather than adding to it.
     fn install_stencil_targets(&mut self, width: u32, height: u32) {
-        self.stencil = StencilTargets::new(&self.device, width, height);
-        let bytes = self.stencil.budget_bytes();
-        self.snapshots.budget_mut().record_unpooled(
-            GpuBudgetOwner::Renderer,
-            UnpooledTexture::StencilClip,
-            bytes,
-        );
+        let targets = StencilTargets::new(&self.device, width, height);
+        self.snapshots
+            .budget_mut()
+            .record_full_frame_texture(GpuBudgetOwner::Renderer, &targets.texture);
+        self.stencil = targets;
     }
 
     /// Resize the render target, reapplying only what the new geometry
@@ -2075,15 +2075,33 @@ impl WgpuRenderer {
     /// Report what one full-frame texture the pool does not hand out costs
     /// its owner right now. Re-reporting replaces the previous figure, so
     /// this is meant to be called from live state once per frame.
-    pub fn record_unpooled_texture(
-        &mut self,
-        owner: GpuBudgetOwner,
-        kind: UnpooledTexture,
-        bytes: u64,
-    ) {
+    ///
+    /// Takes the texture rather than a category and a byte count: both come
+    /// from the allocation itself, so a reporter cannot charge the wrong
+    /// number to a category or keep charging a size the texture no longer has.
+    pub fn record_full_frame_texture(&mut self, owner: GpuBudgetOwner, texture: &FullFrameTexture) {
         self.snapshots
             .budget_mut()
-            .record_unpooled(owner, kind, bytes);
+            .record_full_frame_texture(owner, texture);
+    }
+
+    /// Retire `owner`'s census entry for a full-frame texture it no longer
+    /// holds, so a released allocation stops counting against the ceiling.
+    pub fn retire_full_frame_texture(&mut self, owner: GpuBudgetOwner, kind: UnpooledTexture) {
+        self.snapshots
+            .budget_mut()
+            .retire_full_frame_texture(owner, kind);
+    }
+
+    /// Report what every resident glyph-atlas page of one frame window costs.
+    ///
+    /// The atlas is bytes rather than a [`FullFrameTexture`] because it is a
+    /// page count, not one allocation — see
+    /// [`UnpooledTexture::GlyphAtlas`].
+    pub fn record_glyph_atlas_bytes(&mut self, owner: GpuBudgetOwner, bytes: u64) {
+        self.snapshots
+            .budget_mut()
+            .record_glyph_atlas_bytes(owner, bytes);
     }
 
     /// Retire every census entry for a frame window that no longer exists.

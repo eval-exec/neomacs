@@ -114,7 +114,13 @@ Submodule charters — a new file needs one of these to belong:
 4. **Make the illegal state unrepresentable before adding a check.**
    `PresentedHitQuery` takes a witnessed point rather than two `f32`s because a
    validating constructor can be bypassed and a missing constructor cannot.
-5. **A config value that Lisp can set must be scalar.** The effect registry is
+5. **Every GPU texture states which budget bounds it.** A texture sized to a
+   frame window goes through `FullFrameTexture::allocate`, which cannot be
+   called without naming the `UnpooledTexture` category it is counted under; a
+   content-sized one (image, video frame, WebView surface, atlas page) is
+   bounded by `media_budget` instead. `texture_discipline_test.rs` in each of
+   the two crates fails the build on a raw `create_texture` that did neither.
+6. **A config value that Lisp can set must be scalar.** The effect registry is
    serde reflection over `VisualConfig` and carries only scalars plus
    `Duration`; a field that serializes to an object breaks
    `neomacs-effects-apply` for every effect, not just its own.

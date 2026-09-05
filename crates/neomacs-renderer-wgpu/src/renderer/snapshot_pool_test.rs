@@ -1,5 +1,4 @@
 use super::*;
-use crate::renderer::gpu_budget::UnpooledTexture;
 
 /// The pool's payload in these tests. Nothing about reuse, eviction or
 /// accounting depends on the payload being a real texture, and a GPU test
@@ -98,9 +97,8 @@ fn a_texture_the_render_thread_owns_outside_the_pool_shrinks_what_the_pool_may_a
     // half of the render thread's GPU memory.
     let bytes = texture_bytes(size(8, 8), FORMAT);
     let mut pool = pool(bytes * 2);
-    pool.budget_mut().record_unpooled(
+    pool.budget_mut().record_glyph_atlas_bytes(
         crate::renderer::gpu_budget::GpuBudgetOwner::FrameWindow(1),
-        UnpooledTexture::GlyphAtlas,
         bytes + 1,
     );
     acquire(&mut pool, size(8, 8)).expect_err("the atlas already took more than half the ceiling");

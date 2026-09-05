@@ -308,7 +308,7 @@ impl WgpuRenderer {
                             depth_slice: None,
                         })],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.stencil.view,
+                            view: self.stencil.texture.view(),
                             depth_ops: None,
                             stencil_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(0),
