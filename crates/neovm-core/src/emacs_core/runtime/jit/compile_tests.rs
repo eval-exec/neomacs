@@ -5179,17 +5179,34 @@ fn regalloc_knob_maps_spellings_to_allocators() {
 fn regalloc_policy_is_forced_then_shape_then_request() {
     use super::lowering::{RegallocChoice, RegallocPolicy, choose_regalloc};
     let (a, f) = (RegallocPolicy::Auto, RegallocPolicy::Full);
-    assert_eq!(choose_regalloc(None, a, false), RegallocChoice::Fast);
-    assert_eq!(choose_regalloc(None, a, true), RegallocChoice::Full);
-    assert_eq!(choose_regalloc(None, f, false), RegallocChoice::Full);
+    assert_eq!(choose_regalloc(None, a, false, false), RegallocChoice::Fast);
+    assert_eq!(choose_regalloc(None, a, true, false), RegallocChoice::Full);
+    assert_eq!(choose_regalloc(None, f, false, false), RegallocChoice::Full);
     assert_eq!(
-        choose_regalloc(Some(RegallocChoice::Fast), f, true),
+        choose_regalloc(Some(RegallocChoice::Fast), f, true, false),
         RegallocChoice::Fast
     );
     assert_eq!(
-        choose_regalloc(Some(RegallocChoice::Full), a, false),
+        choose_regalloc(Some(RegallocChoice::Full), a, false, false),
         RegallocChoice::Full
     );
+    // Call-heavy: fast even with a loop, even for a Full (OSR/re-tier) request.
+    assert_eq!(choose_regalloc(None, a, true, true), RegallocChoice::Fast);
+    assert_eq!(choose_regalloc(None, f, true, true), RegallocChoice::Fast);
+    assert_eq!(
+        choose_regalloc(Some(RegallocChoice::Full), a, false, true),
+        RegallocChoice::Full
+    );
+    // The classifier behind it: more (non-intrinsified) calls than arithmetic.
+    let length = crate::emacs_core::intern::intern("length");
+    assert!(body_is_call_heavy(
+        &[Op::Constant(0), Op::CallBuiltinSym(length, 1), Op::Return],
+        &[Value::string("abc")]
+    ));
+    assert!(!body_is_call_heavy(
+        &[Op::StackRef(0), Op::Add1, Op::Return],
+        &[]
+    ));
     // Back-edge detection: any jump to its own index or earlier.
     assert!(!has_back_edge(&[
         Op::Constant(0),

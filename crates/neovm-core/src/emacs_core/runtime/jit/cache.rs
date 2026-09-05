@@ -288,7 +288,11 @@ fn compile_osr_leaf(
     }
     // A loop that is already running gets the full allocator: its work per
     // entry is unbounded, so the code quality is worth the compile.
-    let _regalloc = RegallocScope::enter(super::compile::regalloc_for(RegallocPolicy::Full, ops));
+    let _regalloc = RegallocScope::enter(super::compile::regalloc_for(
+        RegallocPolicy::Full,
+        ops,
+        &func.constants,
+    ));
     let leaf = match super::compile::lower_leaf_full_osr(
         ops,
         &func.constants,
@@ -487,13 +491,17 @@ pub(crate) fn evict_inline_dependents(sym: SymId) {
     COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
         for id in dependents {
-            // Disjointness (spec-slot pointer safety): only INLINED-into caller
-            // leaves are ever in a dep set, and resolve_compiled_leaf_ptr refuses to
-            // cache an inlined leaf's pointer in a spec slot — so evicting one here
-            // can never dangle a baked SpecSlot.leaf raw pointer.
+            // Disjointness (spec-slot pointer safety): only leaves that RECORDED
+            // inline deps are ever in a dep set, and resolve_compiled_leaf_ptr
+            // refuses to cache such a leaf's pointer in a spec slot — so evicting
+            // one here can never dangle a baked SpecSlot.leaf raw pointer. The
+            // predicate is the dep list, NOT `inline_epoch`: a baseline leaf with
+            // an inlined bit-op (LEVEL-B, `inline_arith_callee_syms`) records
+            // deps and deliberately no epoch, and the 2026-09-05 gate-off census
+            // tripped the epoch-based version of this assertion on exactly that.
             debug_assert!(
-                !matches!(cache.get(id), Some(CacheEntry::Compiled(l)) if l.inline_epoch().is_none()),
-                "precise eviction must only touch inlined leaves (spec-slot pointer safety)"
+                !matches!(cache.get(id), Some(CacheEntry::Compiled(l)) if l.inline_deps().is_empty()),
+                "precise eviction must only touch leaves that recorded inline deps (spec-slot pointer safety)"
             );
             cache.remove(id);
         }
@@ -863,11 +871,16 @@ pub fn try_run_compiled(
         // keeps it when a stale inline makes it recompile: the tier is
         // earned, not re-decided. Never under a forced allocator, which
         // would rebuild `Fast` forever.
-        let (prev_regalloc, prev_bypassed) = match cache.get(id) {
-            Some(CacheEntry::Compiled(l)) => (Some(l.regalloc), l.profit_gate_bypassed),
-            _ => (None, false),
+        let (prev_regalloc, prev_bypassed, prev_call_heavy) = match cache.get(id) {
+            Some(CacheEntry::Compiled(l)) => {
+                (Some(l.regalloc), l.profit_gate_bypassed, l.call_heavy)
+            }
+            _ => (None, false, false),
         };
+        // A call-heavy body stays on the fast allocator however hot it gets:
+        // its time is in its shim calls, not in the code around them.
         let retier = prev_regalloc == Some(RegallocChoice::Fast)
+            && !prev_call_heavy
             && forced_regalloc().is_none()
             && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
         if stale || retier {
@@ -984,7 +997,7 @@ pub(crate) fn resolve_compiled_leaf_ptr(
             // fast path (they are never epoch-stale, so the per-entry eviction
             // never drops them — only a wholesale clear() can, and that cannot
             // fire mid-native-execution; see resolve_compiled_leaf_ptr).
-            CacheEntry::Compiled(leaf) if leaf.inline_epoch().is_none() => Some(Rc::as_ptr(leaf)),
+            CacheEntry::Compiled(leaf) if leaf.inline_deps().is_empty() => Some(Rc::as_ptr(leaf)),
             _ => None,
         }
     })
@@ -1426,7 +1439,64 @@ mod tests {
         assert!(matches!(rt.dispatch_sized(3), Plan::Compiled));
         let _ = try_run_compiled(ctx, &f, Value::NIL, &[]);
         assert_eq!(cache_entry_kind_for_test(id), "compiled");
+        // Call-heavy: the fast allocator, and no re-tier however hot.
+        if forced_regalloc().is_none() && std::env::var_os("NEOVM_JIT_REGALLOC_CALLHEAVY").is_none()
+        {
+            use crate::emacs_core::jit::compile::lowering::RegallocChoice;
+            assert_eq!(compiled_regalloc_for_test(id), Some(RegallocChoice::Fast));
+            if let Some(retier_at) = crate::emacs_core::jit::retier_heat() {
+                rt.set_heat_for_test(retier_at);
+                let _ = try_run_compiled(ctx, &f, Value::NIL, &[]);
+                assert_eq!(
+                    compiled_regalloc_for_test(id),
+                    Some(RegallocChoice::Fast),
+                    "call-heavy bodies are never re-tiered"
+                );
+            }
+        }
         force_profit_defer_for_test(None);
+    }
+
+    /// A baseline leaf that inlined a bit-op records `logand` as an inline
+    /// dep with no epoch (LEVEL-B). Redefining `logand` must evict it through
+    /// the precise path without tripping the disjointness assertion, which
+    /// used to test the epoch instead of the dep list.
+    #[test]
+    fn level_b_inlined_bit_op_leaf_is_evicted_on_redefinition_without_panicking() {
+        if !super::super::compile::jit_inline_arith_on() {
+            return; // NEOVM_JIT_INLINE_ARITH=off
+        }
+        let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+        let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
+        let logand = crate::emacs_core::intern::intern("logand");
+        // (lambda () (logand 6 3)) → 2, with the bit-op inlined as a native op.
+        let f = nullary_fn(
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Constant(2),
+                Op::Call(2),
+                Op::Return,
+            ],
+            vec![
+                Value::from_sym_id(logand),
+                Value::make_int(6),
+                Value::make_int(3),
+            ],
+        );
+        // The minimal harness defines no `logand` subr, so the native run may
+        // signal void-function through the generic path; the compile — and the
+        // dep it registered — is what this test is about.
+        let _ = try_run_compiled(ctx, &f, Value::NIL, &[]);
+        let id = f.jit_runtime().compiled_id().expect("compiled");
+        assert_eq!(cache_entry_kind_for_test(id), "compiled");
+        let inlined =
+            INLINE_DEPS.with(|m| m.borrow().get(&logand).is_some_and(|s| s.contains(&id)));
+        if !inlined {
+            return; // this build did not inline the bit-op; nothing to evict
+        }
+        evict_inline_dependents(logand);
+        assert_eq!(cache_entry_kind_for_test(id), "none", "evicted precisely");
     }
 
     #[test]

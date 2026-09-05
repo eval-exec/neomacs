@@ -256,6 +256,15 @@ pub struct CompiledLeaf {
     /// body that proved hot): a recompile of this id keeps the bypass, or a
     /// stale-inline rebuild would meet the gate again and be deferred anew.
     pub(crate) profit_gate_bypassed: bool,
+    /// The body has more calls than arithmetic (`compile::body_is_call_heavy`):
+    /// compiled with the fast allocator and never re-tiered (see
+    /// `lowering::choose_regalloc`).
+    pub(crate) call_heavy: bool,
+    /// Cranelift IR instructions the body lowered to (diagnostics: the IR
+    /// expansion per bytecode op is what the compile cost tracks).
+    pub(crate) clif_insts: u32,
+    /// Cranelift IR blocks the body lowered to.
+    pub(crate) clif_blocks: u32,
     /// Number of fixed slots the native code reads from the args pointer at
     /// entry: `nonrest` parameters (required + optional, nil-padded) plus one
     /// slot for the `&rest` list when present. [`call`](Self::call) normalizes
@@ -555,6 +564,9 @@ impl CompiledLeaf {
             tier: LeafTier::Aot,
             regalloc: super::lowering::RegallocChoice::Full,
             profit_gate_bypassed: false,
+            call_heavy: false,
+            clif_insts: 0,
+            clif_blocks: 0,
             arity: meta.arity,
             required: meta.required,
             has_rest: meta.has_rest,

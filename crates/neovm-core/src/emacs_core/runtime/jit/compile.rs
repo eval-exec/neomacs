@@ -248,9 +248,11 @@ pub fn compile_bytecode_function(f: &ByteCodeFunction) -> Result<CompiledLeaf, C
 /// helps), call-heavy (inlining helps), or dispatch/alloc-bound (an MIR tier
 /// helps little)? Set `NEOVM_JIT_PROFILE=<path>` to append one CSV row per
 /// compile attempt: `ops,arith,calls,alloc,listops,varops,preds,backedges,
-/// has_loop,compiled,inlinable,arity,reason,fingerprint,compile_us`
-/// (`reason` = the `CompileError` or `-`; `fingerprint` = the first symbol
-/// constants; `compile_us` = wall time of the attempt). Used to justify (or
+/// has_loop,compiled,inlinable,arity,reason,fingerprint,compile_us,call_heavy,
+/// clif_insts,clif_blocks` (`reason` = the `CompileError` or `-`;
+/// `fingerprint` = the first symbol constants; `compile_us` = wall time of
+/// the attempt; `clif_*` = the Cranelift IR the body lowered to, 0 if it
+/// did not). Used to justify (or
 /// not) the optimizing Tier-2 investment, and by the 2026-09-05 census
 /// (`tmp/rr/wf2/census/report.py`).
 fn jit_profile_path() -> Option<&'static str> {
@@ -304,13 +306,16 @@ fn force_cbsym_generic() -> bool {
 fn jit_profile_emit(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
-    error: Option<&CompileError>,
+    result: Result<&CompiledLeaf, &CompileError>,
     elapsed: std::time::Duration,
+    call_heavy: bool,
 ) {
     let Some(path) = jit_profile_path() else {
         return;
     };
+    let error = result.err();
     let compiled = error.is_none();
+    let (clif_insts, clif_blocks) = result.map_or((0, 0), |l| (l.clif_insts, l.clif_blocks));
     // The rejection kind (`-` when compiled) and a fingerprint — the first
     // symbol constants — so a census can name the body without a symbol name.
     let reason = error.map_or_else(|| "-".to_string(), |e| format!("{e:?}"));
@@ -393,7 +398,7 @@ fn jit_profile_emit(
         None => 0,
     };
     let line = format!(
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
         ops.len(),
         arith,
         calls,
@@ -409,6 +414,9 @@ fn jit_profile_emit(
         reason,
         fingerprint,
         elapsed.as_micros(),
+        u8::from(call_heavy),
+        clif_insts,
+        clif_blocks,
     );
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -513,7 +521,7 @@ pub(crate) fn force_inline_arith_for_test(on: bool) {
 /// change elsewhere); `NEOVM_JIT_INLINE_ARITH=off` is the kill switch. AOT
 /// always keeps the shim (its loader owns arm/disarm — an inline op has no
 /// per-site epoch).
-fn jit_inline_arith_on() -> bool {
+pub(crate) fn jit_inline_arith_on() -> bool {
     #[cfg(test)]
     if let Some(o) = INLINE_ARITH_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
@@ -678,6 +686,14 @@ fn body_is_jit_profitable(ops: &[Op], constants: &[Value]) -> bool {
     if !jit_profit_gate_on() || BYPASS_PROFIT_GATE.with(|b| b.get()) {
         return true;
     }
+    !body_is_call_heavy(ops, constants)
+}
+
+/// The profitability gate's shape test: more (non-intrinsified) calls than
+/// arithmetic ops. Such a body's runtime is its shim calls, so it gains
+/// little from register-allocation quality (`lowering::choose_regalloc`) and
+/// its compile is deferred until it can amortize (`profit_defer_factor`).
+pub(crate) fn body_is_call_heavy(ops: &[Op], constants: &[Value]) -> bool {
     let relax = jit_gate_relax_on();
     // The intrinsifiable bit-op `Op::Call` sites (logand/logior/logxor/ash/lognot),
     // which lower to native ops — counted as arith below, not calls. Ascending
@@ -734,7 +750,7 @@ fn body_is_jit_profitable(ops: &[Op], constants: &[Value]) -> bool {
             _ => {}
         }
     }
-    calls <= arith
+    calls > arith
 }
 
 pub fn compile_bytecode_function_with(
@@ -776,6 +792,35 @@ thread_local! {
     /// The compile in progress bypasses `body_is_jit_profitable` (scoped by
     /// [`compile_bytecode_function_requested`]; `false` outside it).
     static BYPASS_PROFIT_GATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The compile in progress is of a call-heavy body (same scope).
+    static ACTIVE_CALL_HEAVY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the compile in progress is of a call-heavy body.
+pub(crate) fn call_heavy_now() -> bool {
+    ACTIVE_CALL_HEAVY.with(|b| b.get())
+}
+
+thread_local! {
+    /// (instructions, blocks) of the Cranelift function most recently handed
+    /// to `define_function` on this thread; the leaf constructors that follow
+    /// it read it (diagnostics only).
+    static LAST_CLIF_SIZE: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Record the IR size of the function about to be defined.
+pub(crate) fn note_clif_size(func: &cranelift_codegen::ir::Function) {
+    LAST_CLIF_SIZE.with(|c| {
+        c.set((
+            func.dfg.num_insts() as u32,
+            func.layout.blocks().count() as u32,
+        ))
+    });
+}
+
+/// The IR size recorded by the last [`note_clif_size`].
+pub(crate) fn clif_size_now() -> (u32, u32) {
+    LAST_CLIF_SIZE.with(|c| c.get())
 }
 
 /// Whether the compile in progress bypasses the profitability gate.
@@ -789,19 +834,28 @@ pub fn compile_bytecode_function_requested(
     obarray: Option<&Obarray>,
     request: CompileRequest,
 ) -> Result<CompiledLeaf, CompileError> {
-    let _scope = lowering::RegallocScope::enter(regalloc_for(request.regalloc, f.executable_ops()));
-    let outer_bypass = BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate));
-    struct RestoreBypass(bool);
-    impl Drop for RestoreBypass {
+    let call_heavy = body_is_call_heavy(f.executable_ops(), &f.constants);
+    let _scope = lowering::RegallocScope::enter(regalloc_for_shape(
+        request.regalloc,
+        f.executable_ops(),
+        call_heavy,
+    ));
+    let outer = (
+        BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
+        ACTIVE_CALL_HEAVY.with(|b| b.replace(call_heavy)),
+    );
+    struct Restore((bool, bool));
+    impl Drop for Restore {
         fn drop(&mut self) {
-            BYPASS_PROFIT_GATE.with(|b| b.set(self.0));
+            BYPASS_PROFIT_GATE.with(|b| b.set(self.0.0));
+            ACTIVE_CALL_HEAVY.with(|b| b.set(self.0.1));
         }
     }
-    let _restore = RestoreBypass(outer_bypass);
+    let _restore = Restore(outer);
     let started = std::time::Instant::now();
     let result = compile_bytecode_function_inner(f, obarray);
     if jit_profile_path().is_some() {
-        jit_profile_emit(f, obarray, result.as_ref().err(), started.elapsed());
+        jit_profile_emit(f, obarray, result.as_ref(), started.elapsed(), call_heavy);
     }
     result
 }
@@ -824,8 +878,32 @@ pub(crate) fn has_back_edge(ops: &[Op]) -> bool {
 pub(crate) fn regalloc_for(
     policy: lowering::RegallocPolicy,
     ops: &[Op],
+    constants: &[Value],
 ) -> lowering::RegallocChoice {
-    lowering::choose_regalloc(lowering::forced_regalloc(), policy, has_back_edge(ops))
+    regalloc_for_shape(policy, ops, body_is_call_heavy(ops, constants))
+}
+
+/// [`regalloc_for`] with the call-heavy verdict already known.
+fn regalloc_for_shape(
+    policy: lowering::RegallocPolicy,
+    ops: &[Op],
+    call_heavy: bool,
+) -> lowering::RegallocChoice {
+    lowering::choose_regalloc(
+        lowering::forced_regalloc(),
+        policy,
+        has_back_edge(ops),
+        call_heavy && !callheavy_uses_full_allocator(),
+    )
+}
+
+/// `NEOVM_JIT_REGALLOC_CALLHEAVY=full`: give call-heavy bodies the full
+/// allocator like any other loop body (the pre-2026-09-05 behavior; the A/B
+/// knob for the call-heavy → fast rule).
+fn callheavy_uses_full_allocator() -> bool {
+    use std::sync::OnceLock;
+    static FULL: OnceLock<bool> = OnceLock::new();
+    *FULL.get_or_init(|| std::env::var("NEOVM_JIT_REGALLOC_CALLHEAVY").as_deref() == Ok("full"))
 }
 
 /// Max instruction budget (excluding `Arg`s) for an inlined callee body. Small
@@ -2843,6 +2921,9 @@ pub fn lower_leaf_full_osr(
         tier: LeafTier::Baseline,
         regalloc: lowering::active_regalloc_choice(),
         profit_gate_bypassed: profit_gate_bypassed_now(),
+        call_heavy: call_heavy_now(),
+        clif_insts: clif_size_now().0,
+        clif_blocks: clif_size_now().1,
         arity,
         // Plain fixed-arity defaults; compile_bytecode_function overrides for
         // &optional/&rest lambda lists.
@@ -3742,6 +3823,7 @@ fn build_leaf_fn<M: Module>(
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
     let mut ctx = module.make_context();
     ctx.func = func;
+    note_clif_size(&ctx.func);
     module
         .define_function(fid, &mut ctx)
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;

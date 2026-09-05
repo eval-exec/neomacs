@@ -48,7 +48,7 @@
 //! | `NEOVM_JIT_SIZE_UNIT` | Override [`RuntimeState::SIZE_UNIT`] (64): the ops-per-unit divisor scaling the tier-up threshold by body size. |
 //! | `NEOVM_JIT_MAX_OPS` | Override [`RuntimeState::MAX_TIER_OPS`] (256): largest body that tiers at all; `0` = uncapped (the mid-end campaign's acceptance configuration). |
 //! | `NEOVM_JIT_REGALLOC` | Force one Cranelift register allocator for every JIT compile: `backtracking` (regalloc2 ion) or `single_pass` (fastalloc). Unset = the policy in `lowering::choose_regalloc` (fast for straight-line bodies, full for loops/OSR, re-tier when hot). |
-//! | `NEOVM_JIT_PROFIT_DEFER` | Override [`RuntimeState::PROFIT_DEFER_FACTOR`] (8): a body the profitability gate refuses tiers up anyway at `factor × hot_threshold()` calls (`0` = never, the former veto). |
+//! | `NEOVM_JIT_PROFIT_DEFER` | Override [`RuntimeState::PROFIT_DEFER_FACTOR`] (4): a body the profitability gate refuses tiers up anyway at `factor × hot_threshold()` calls (`0` = never, the former veto). |
 //! | `NEOVM_JIT_RETIER_FACTOR` | Override [`RuntimeState::RETIER_FACTOR`] (16): a fast-allocator leaf is rebuilt with the full allocator at `factor × hot_threshold()` heat; `0` = never. |
 //! | `NEOVM_JIT_REGALLOC_CHECKER=1` | Run regalloc2's checker after every allocation (verification harness for the allocator choice). |
 //!
@@ -672,25 +672,26 @@ impl RuntimeState {
     /// veto (a refused body never compiles); `K` defers the compile to
     /// `K × hot_threshold()` calls instead.
     ///
-    /// Chosen by a same-binary sweep (2026-09-05, instructions, medians of 3,
-    /// every run checked for exit status and output; `tmp/rr/wf2/ab-defer2.sh`),
-    /// each arm vs the veto:
+    /// Chosen by same-binary sweeps (2026-09-05, instructions, medians of 3,
+    /// every run checked for exit status and output; `tmp/rr/wf2/ab-k.sh`),
+    /// each arm vs the veto, with call-heavy bodies on the fast allocator:
     ///
-    /// | fixture                      | gate off | K=8    | K=16   |
-    /// |------------------------------|----------|--------|--------|
-    /// | org editing, 5 passes        | +6.48%   | +0.13% | +0.16% |
-    /// | org editing, 25 passes       | −3.27%   | −1.47% | −1.28% |
-    /// | org editing, 50 passes       | −8.57%   | −2.31% | −2.22% |
-    /// | byte-compile cc-engine.el    | +4.13%   | −0.55% | −0.34% |
-    /// | 3M-call benchmark            | +0.00%   | +0.00% | +0.00% |
-    /// | 200-function compile fixture | +20.02%  | +0.49% | +0.00% |
+    /// | fixture                      | K=2    | K=4    | K=8    |
+    /// |------------------------------|--------|--------|--------|
+    /// | org editing, 5 passes        | −0.05% | −0.13% | −0.23% |
+    /// | org editing, 25 passes       | −1.71% | −1.58% | −1.58% |
+    /// | org editing, 50 passes       | −3.36% | −3.18% | −2.50% |
+    /// | byte-compile cc-engine.el    | −0.86% | −1.13% | −0.72% |
+    /// | 3M-call benchmark            | +0.00% | +0.00% | −0.00% |
+    /// | 200-function compile fixture | +0.61% | +0.48% | +0.31% |
     ///
     /// A call-heavy body runs faster native (~830 instructions per entry on
-    /// org) but costs ~38M instructions to compile, so admitting it at the
-    /// flat threshold (gate off) wins in long sessions and loses in short
-    /// ones. 8 takes a quarter of the long-session win at no measurable cost
-    /// to any short session; the rest of that win is the compile cost per op.
-    pub const PROFIT_DEFER_FACTOR: u32 = 8;
+    /// org) but its compile is dear, so admitting it at the flat threshold
+    /// (gate off) wins in long sessions and loses in short ones: org 5 passes
+    /// +3.1%, 50 passes −7.0%, the compile fixture +10.6%. 4 takes most of
+    /// the long-session win and the best byte-compile point while every
+    /// short session stays within half a percent of the veto.
+    pub const PROFIT_DEFER_FACTOR: u32 = 4;
 
     /// Default [`max_tier_ops`].
     ///

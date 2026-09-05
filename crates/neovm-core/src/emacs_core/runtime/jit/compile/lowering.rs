@@ -986,6 +986,9 @@ pub(crate) fn lower_mir_pure(m: &mir::MirFunction) -> Result<CompiledLeaf, Compi
         tier: LeafTier::Mir,
         regalloc: active_regalloc_choice(),
         profit_gate_bypassed: super::profit_gate_bypassed_now(),
+        call_heavy: super::call_heavy_now(),
+        clif_insts: super::clif_size_now().0,
+        clif_blocks: super::clif_size_now().1,
         arity: m.arity,
         required: m.arity,
         has_rest: false,
@@ -1155,9 +1158,17 @@ pub(crate) fn choose_regalloc(
     forced: Option<RegallocChoice>,
     policy: RegallocPolicy,
     has_back_edge: bool,
+    call_heavy: bool,
 ) -> RegallocChoice {
     if let Some(forced) = forced {
         return forced;
+    }
+    // A call-heavy body's runtime is its shim calls, whatever it does around
+    // them; the full allocator would spend ~90% of a ~38M-instruction compile
+    // (regalloc2 ion, org editing probe 2026-09-05) improving code that is
+    // not where the time goes. Fast even when it loops, and never re-tiered.
+    if call_heavy {
+        return RegallocChoice::Fast;
     }
     if policy == RegallocPolicy::Full || has_back_edge {
         RegallocChoice::Full
@@ -1826,6 +1837,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
     let mut ctx = module.make_context();
     ctx.func = func;
+    super::note_clif_size(&ctx.func);
     module
         .define_function(fid, &mut ctx)
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
