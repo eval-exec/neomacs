@@ -646,9 +646,11 @@ fn frame_render_state_drains_runtime_hints_once_for_render_clone() {
         },
         intent: neomacs_display_protocol::ContentTransitionIntent::Replace,
     });
-    frame.add_effect_hint(WindowEffectHint::TextFadeIn {
+    frame.add_effect_hint(WindowEffectHint::LineAnimation {
         window_id: neomacs_display_protocol::types::DisplayWindowId::new(7),
         bounds: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 80.0, 80.0),
+        edit_y: 32.0,
+        offset: 16.0,
     });
 
     let first = GuiFrameRenderState::take_frame_for_render(&mut frame);

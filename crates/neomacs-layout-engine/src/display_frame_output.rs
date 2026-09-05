@@ -640,10 +640,6 @@ impl<'a> WindowFrameInfoEffectsRenderRequest<'a> {
         }
 
         if prev.buffer_id != curr.buffer_id {
-            state.add_effect_hint(WindowEffectHint::TextFadeIn {
-                window_id: curr.window_id,
-                bounds: curr.bounds,
-            });
             return;
         }
 
@@ -656,16 +652,6 @@ impl<'a> WindowFrameInfoEffectsRenderRequest<'a> {
         } else {
             -1
         };
-        let delta = (curr.window_start - prev.window_start).unsigned_abs() as f32;
-        state.add_effect_hint(WindowEffectHint::TextFadeIn {
-            window_id: curr.window_id,
-            bounds: curr.bounds,
-        });
-        state.add_effect_hint(WindowEffectHint::ScrollVelocityFade {
-            window_id: curr.window_id,
-            bounds: curr.bounds,
-            delta,
-        });
     }
 }
 

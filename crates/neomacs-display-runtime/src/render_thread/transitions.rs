@@ -278,7 +278,44 @@ fn apply_scroll_effects(
     if effects.scroll_momentum.enabled {
         renderer.trigger_scroll_momentum(window, scroll.bounds, direction, now.into_instant());
     }
+    if effects.scroll_velocity_fade.enabled {
+        renderer.trigger_scroll_velocity_fade(
+            window,
+            scroll.bounds,
+            velocity_fade_intensity(scroll),
+            now.into_instant(),
+        );
+    }
 }
+
+/// How strongly to fade a window for how fast it scrolled, in `0.0..=1.0`.
+///
+/// The producer used to pass a raw count of characters scrolled, which the
+/// renderer divided by a magic 50.0 to get an opacity. A character count is not
+/// a distance: the same scroll produced a different fade in a narrow window
+/// than a wide one, and a line of long lines faded differently from a line of
+/// short ones.
+///
+/// A measured displacement is a distance, so it can be normalized honestly —
+/// against roughly one viewport, so a full-page scroll saturates.
+///
+/// When the distance is not measurable the intensity saturates. That is
+/// deliberate policy rather than a fabricated measurement: something moved the
+/// viewport far enough that no row survived, or the layout changed underneath,
+/// and both are the fast, disruptive motion this effect exists to soften. It
+/// also keeps the effect firing where it fires today.
+fn velocity_fade_intensity(
+    scroll: &crate::render_thread::frame_compositor::continuity::ScrollObservation,
+) -> f32 {
+    let saturation = (scroll.bounds.height * VELOCITY_FADE_SATURATION_FRACTION).max(1.0);
+    scroll
+        .displacement
+        .exact_pixels()
+        .map_or(1.0, |pixels| (pixels / saturation).clamp(0.0, 1.0))
+}
+
+/// The share of a window's height a scroll must cover to fade at full strength.
+const VELOCITY_FADE_SATURATION_FRACTION: f32 = 1.0;
 
 /// Crossfade the frame because its theme changed.
 ///
@@ -410,25 +447,6 @@ fn apply_effect_hint(
     now: neomacs_display_protocol::frame_time::EventTime,
 ) {
     match hint {
-        WindowEffectHint::TextFadeIn { window_id, bounds } => {
-            if effects.text_fade_in.enabled {
-                renderer.trigger_text_fade_in(window_id.get(), *bounds, now.into_instant());
-            }
-        }
-        WindowEffectHint::ScrollVelocityFade {
-            window_id,
-            bounds,
-            delta,
-        } => {
-            if effects.scroll_velocity_fade.enabled {
-                renderer.trigger_scroll_velocity_fade(
-                    window_id.get(),
-                    *bounds,
-                    *delta,
-                    now.into_instant(),
-                );
-            }
-        }
         WindowEffectHint::LineAnimation {
             bounds,
             edit_y,
@@ -479,6 +497,15 @@ pub(super) fn detect_frame_transitions(
     {
         renderer.start_window_fade(selection.window.get(), selection.bounds);
         *frame_dirty = true;
+    }
+    if pending.accept_derived_effects && effects.text_fade_in.enabled {
+        for replaced in &pending.shown_text_replaced {
+            renderer.trigger_text_fade_in(
+                replaced.window.get(),
+                replaced.bounds,
+                now.into_instant(),
+            );
+        }
     }
     for scroll in &pending.scrolls {
         if pending.accept_derived_effects {

@@ -175,3 +175,60 @@ impl GuiFrameRenderState {
         }
     }
 }
+
+/// A window is showing text it was not showing before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::render_thread) struct ShownTextReplaced {
+    pub(in crate::render_thread) window: DisplayWindowId,
+    /// The window's own rect. The fade covers mode-line glyphs too, which is
+    /// what it did as a producer hint.
+    pub(in crate::render_thread) bounds: Rect,
+}
+
+impl GuiFrameRenderState {
+    /// Record which windows are showing different text than before.
+    ///
+    /// This needs its own predicate rather than riding on `measure_scroll`,
+    /// which skips a window whose `window_start` is unchanged. That skip is
+    /// right for a scroll and wrong here: `switch-to-buffer` between two
+    /// buffers displayed from the same character position is the common case,
+    /// and it changes every glyph while moving the viewport not at all.
+    pub(in crate::render_thread) fn observe_shown_text(
+        &mut self,
+        next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
+    ) {
+        self.compositor.pending.shown_text_replaced.clear();
+        let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next) else {
+            return;
+        };
+        let previous_by_window: std::collections::HashMap<_, _> = previous
+            .window_infos
+            .iter()
+            .map(|info| (info.window_id, info))
+            .collect();
+
+        for curr in &next.window_infos {
+            if curr.is_minibuffer {
+                continue;
+            }
+            let Some(prev) = previous_by_window.get(&curr.window_id) else {
+                continue;
+            };
+            if prev.buffer_id == 0 || curr.buffer_id == 0 {
+                continue;
+            }
+            let replaced =
+                prev.buffer_id != curr.buffer_id || prev.window_start != curr.window_start;
+            if !replaced {
+                continue;
+            }
+            self.compositor
+                .pending
+                .shown_text_replaced
+                .push(ShownTextReplaced {
+                    window: curr.window_id,
+                    bounds: curr.bounds,
+                });
+        }
+    }
+}

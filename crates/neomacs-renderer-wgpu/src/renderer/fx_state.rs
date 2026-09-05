@@ -126,8 +126,13 @@ pub(crate) struct ClickHaloEntry {
 pub(crate) struct ScrollVelocityFadeEntry {
     pub(crate) window_id: i64,
     pub(crate) bounds: Rect,
-    /// Scroll delta magnitude (characters scrolled)
-    pub(crate) velocity: f32,
+    /// How strongly to fade, in `0.0..=1.0`.
+    ///
+    /// Normalized by the caller. It used to be a raw count of characters
+    /// scrolled, divided here by a magic 50.0 to become an opacity — a
+    /// character count is not a distance, so the same scroll produced a
+    /// different fade in a narrow window than a wide one.
+    pub(crate) intensity: f32,
     pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
@@ -795,7 +800,7 @@ mod effect_category_tests {
                 width: 1.0,
                 height: 1.0,
             },
-            velocity: 1.0,
+            intensity: 1.0,
             started: now,
             duration: Duration::from_millis(100),
         });
