@@ -2188,16 +2188,16 @@ fn named_builtin_ops_run_natively() {
 
 #[test]
 fn cbsym_classifier_selects_shipset_by_name() {
-    // R2 COMMIT 1: `find_spec_sites` classifies CallBuiltinSym sites BY NAME
-    // (Tier-A read / Tier-B dispatch-skip), allowlist only, keyed at the
-    // op's own index. Nothing consumes these kinds yet (the lowering ignores
-    // them) — this pins the classifier itself.
+    // `find_spec_sites` classifies CallBuiltinSym sites BY NAME, keyed at the
+    // op's own index: the read set is Tier-A, every other plain builtin is
+    // Tier-B (direct dispatch, GNU inline-opcode semantics), and only the
+    // VM-owned special names stay generic.
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::intern;
     let ev = Context::new();
     let point = Op::CallBuiltinSym(intern("point"), 0);
     let insert = Op::CallBuiltinSym(intern("insert"), 1);
-    let car = Op::CallBuiltinSym(intern("car"), 1); // real builtin, NOT shipped
+    let car = Op::CallBuiltinSym(intern("car"), 1); // plain builtin outside the old allowlist
     let gc = Op::CallBuiltinSym(intern("garbage-collect"), 0); // special name
     let goto = Op::CallBuiltinSym(intern("goto-char"), 1);
     let mbeg = Op::CallBuiltinSym(intern("match-beginning"), 1);
@@ -2216,7 +2216,11 @@ fn cbsym_classifier_selects_shipset_by_name() {
         Some(SpecCalleeKind::CbsymTierB),
         "insert -> Tier-B dispatch-skip"
     );
-    assert!(!sites.contains_key(&2), "car is not in the R2 ship set");
+    assert_eq!(
+        sites.get(&2).map(|s| s.kind),
+        Some(SpecCalleeKind::CbsymTierB),
+        "every plain builtin dispatches directly (car -> Tier-B)"
+    );
     assert!(
         !sites.contains_key(&3),
         "garbage-collect is a dispatch_vm_builtin_unrooted special name"
@@ -2234,7 +2238,7 @@ fn cbsym_classifier_selects_shipset_by_name() {
         "match-beginning -> Tier-A (does a byte->char conversion; must delegate)"
     );
     // Every classified CBSym site reports `is_cbsym`; none report `is_round1_subr`.
-    for idx in [0u32, 1, 4, 5] {
+    for idx in [0u32, 1, 2, 4, 5] {
         let k = sites[&(idx as usize)].kind;
         assert!(k.is_cbsym(), "{idx}: classified kind is CBSym");
         assert!(!k.is_round1_subr(), "{idx}: not an Op::Call subr kind");
@@ -2366,7 +2370,7 @@ fn cbsym_intrinsic_ops_no_longer_veto_profitability() {
     // R2 COMMIT 3: an intrinsifiable CallBuiltinSym op no longer counts as a
     // call in `body_is_jit_profitable`, so a buffer-op-heavy loop that USED
     // to be NotProfitable (calls > arith) now tiers. A genuine call still
-    // vetoes; a non-shipped CBSym still counts.
+    // vetoes; a special-name CBSym (generic path) still counts.
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::intern;
     let _ev = Context::new(); // populate the subr table for cbsym_spec_kind
@@ -2385,10 +2389,14 @@ fn cbsym_intrinsic_ops_no_longer_veto_profitability() {
         !body_is_jit_profitable(&[Op::Constant(0), Op::Call(0), Op::Return], &[]),
         "a real call-dominated body still declines"
     );
-    // A non-shipped CBSym (`car`) is NOT intrinsified, so it still counts.
+    // A VM-owned special (`garbage-collect`) stays on the generic path, so it
+    // still counts.
     assert!(
-        !body_is_jit_profitable(&[Op::CallBuiltinSym(intern("car"), 1), Op::Return], &[]),
-        "a non-intrinsifiable CBSym still counts as a call"
+        !body_is_jit_profitable(
+            &[Op::CallBuiltinSym(intern("garbage-collect"), 0), Op::Return],
+            &[]
+        ),
+        "a generic-path CBSym still counts as a call"
     );
 }
 
@@ -2414,12 +2422,14 @@ fn gate_relax_lets_user_call_heavy_bodies_tier() {
         Op::Call(0),
         Op::Return,
     ];
-    // 4 non-intrinsified builtin calls (car), 0 arith — the font-lock shape.
+    // 4 name-based builtin calls (`Op::CallBuiltin`, the override-aware op),
+    // 0 arith — the font-lock shape. GNU inline opcodes (`Op::CallBuiltinSym`)
+    // dispatch their primitive directly and no longer count as calls.
     let builtin_heavy = [
-        Op::CallBuiltinSym(intern("car"), 1),
-        Op::CallBuiltinSym(intern("car"), 1),
-        Op::CallBuiltinSym(intern("car"), 1),
-        Op::CallBuiltinSym(intern("car"), 1),
+        Op::CallBuiltin(0, 1),
+        Op::CallBuiltin(0, 1),
+        Op::CallBuiltin(0, 1),
+        Op::CallBuiltin(0, 1),
         Op::Return,
     ];
 

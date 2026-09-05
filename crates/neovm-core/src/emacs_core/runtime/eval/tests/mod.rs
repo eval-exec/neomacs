@@ -17090,13 +17090,16 @@ fn jit_cbsym_spec_inplace_rewrite_to_nonbuiltin_bounces_like_interp() {
     assert!(r.is_nil());
 }
 
-/// Must-nail #4: `(backtrace-frames)` inside an after-change hook fired by a
-/// COMPILED Tier-B `insert` shows the frame's function as `#<subr insert>` (a
-/// SUBR value — `funcall_general` pushes `subr_from_sym_id`, NOT the symbol) ==
-/// the interpreter.
+/// Must-nail #4: an after-change hook fired by a Tier-B `insert` walks the
+/// same backtrace compiled and interpreted, and neither shows an `insert`
+/// frame: GNU's `Binsert` opcode calls `Finsert` directly without
+/// `record_in_backtrace` (bytecode.c), so `mapbacktrace` from the hook sees
+/// only the enclosing function. Verified against GNU 31.0.90 `--batch` with
+/// `tmp/rr/wf2/callbench/frame-probe.el` (byte-compiled `(insert x)`,
+/// `(funcall 'insert x)` and `(insert x x)` all report `no-subr-frame`).
 #[cfg(feature = "jit")]
 #[test]
-fn jit_cbsym_spec_insert_backtrace_shows_subr_frame_like_interp() {
+fn jit_cbsym_spec_insert_pushes_no_backtrace_frame_like_gnu() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     let mut ev = Context::new();
@@ -17128,11 +17131,11 @@ fn jit_cbsym_spec_insert_backtrace_shows_subr_frame_like_interp() {
     let cap_cold = run(&mut ev, false);
     assert_eq!(
         cap_hot, cap_cold,
-        "the insert backtrace frame is identical compiled vs interp"
+        "the insert backtrace is identical compiled vs interp"
     );
-    assert!(
-        cap_hot.contains("#<subr insert>"),
-        "the insert frame is a SUBR (#<subr insert>), not a symbol; got {cap_hot}"
+    assert_eq!(
+        cap_hot, "no-subr-frame",
+        "GNU's inline Binsert pushes no backtrace frame; got {cap_hot}"
     );
 }
 

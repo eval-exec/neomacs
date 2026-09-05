@@ -1476,35 +1476,14 @@ fn cbsym_spec_kind(sym: SymId, _nargs: usize) -> Option<SpecCalleeKind> {
     if let Some(which) = tier_a {
         return Some(SpecCalleeKind::CbsymTierA { which });
     }
-    // Tier-B: plain builtins reached via `neovm_jit_cbsym_spec` (dispatch skip).
-    if matches!(
-        name,
-        "length"
-            | "insert"
-            | "set-marker"
-            | "goto-char"
-            | "delete-region"
-            | "forward-line"
-            | "forward-char"
-            | "buffer-substring"
-            | "set-buffer"
-            | "skip-chars-forward"
-            | "skip-chars-backward"
-            | "current-column"
-            | "widen"
-            | "indent-to"
-            // Residual-coverage audit (task A PART 2): `end-of-line` is a
-            // dedicated-opcode CBSym motion builtin (GNU op 127) at 2.37% in the
-            // font-lock SUBR-MIX — the ONLY member of its own loop's motion set
-            // (forward-line/forward-char/current-column, all already Tier-B) left
-            // on the generic path. Point-moving side effect (not a pure read ->
-            // NOT Tier-A); the Tier-B dispatch-skip reproduces the CBSym
-            // interpreter arm exactly, byte-identical, as its siblings do.
-            | "end-of-line"
-    ) {
-        return Some(SpecCalleeKind::CbsymTierB);
-    }
-    None
+    // Tier-B: every other plain builtin reaches its primitive through
+    // `neovm_jit_cbsym_spec`, which dispatches it directly like the
+    // interpreter's `Op::CallBuiltinSym` arm (GNU inline-opcode semantics: no
+    // funcall, no backtrace frame). An allowlist used to gate this while the
+    // shim still went through `funcall_general`; the direct dispatch is the
+    // same code for every builtin, so the only exclusions left are the
+    // specials above and entries without a Rust function pointer.
+    entry.function.map(|_| SpecCalleeKind::CbsymTierB)
 }
 
 /// Per-site speculation state, baked into generated code by raw address and

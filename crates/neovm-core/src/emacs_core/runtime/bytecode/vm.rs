@@ -467,6 +467,7 @@ thread_local! {
     static OPCODE_DISPATCH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MUTATING_WRITEBACK_CLASSIFICATION_COUNT: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    static INLINE_BUILTIN_DIRECT_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -545,6 +546,16 @@ fn reset_mutating_writeback_classification_count() {
 #[cfg(test)]
 fn mutating_writeback_classification_count() -> usize {
     MUTATING_WRITEBACK_CLASSIFICATION_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_inline_builtin_direct_count() {
+    INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn inline_builtin_direct_count() -> usize {
+    INLINE_BUILTIN_DIRECT_COUNT.with(std::cell::Cell::get)
 }
 
 use crate::emacs_core::eval::SpecBinding;
@@ -5132,39 +5143,8 @@ impl<'a> Vm<'a> {
                         vm_profile::bump_entry(*sym, vm_profile::ENTRY_CALLBUILTINSYM);
                         let n = *n as usize;
                         let args_start = stk!().len().saturating_sub(n);
-                        let writeback_args = (stk!()
-                            .get(args_start)
-                            .is_some_and(|value| value.is_string())
-                            && Self::mutates_first_arg_sym(*sym))
-                        .then(|| stk!()[args_start..].iter().copied().collect::<LispArgVec>());
-                        // GNU-parity: opcodes 0140-0177 (decode.rs:295-303)
-                        // dispatch *directly* to their C implementations
-                        // (bytecode.c:1412-1545), bypassing the symbol's
-                        // function cell and advice table. `(advice-add
-                        // 'point ...)` deliberately does not fire when
-                        // bytecode calls `(point)` via Bpoint — GNU docs
-                        // this as a limitation of advice on
-                        // bytecode-inlined primitives. Routing these
-                        // through maybe_call_named_function_cell (which
-                        // consults the symbol's function cell) would make
-                        // neomacs MORE advisable than GNU, breaking parity.
-                        let result = vm_try!(
-                            self.dispatch_vm_builtin_by_id_from_stack(func, *sym, args_start, n)
-                        );
-                        if let Some(writeback_args) = writeback_args.as_ref() {
-                            let root_scope = self.ctx.save_vm_roots();
-                            self.push_dynamic_vm_root(result);
-                            for value in writeback_args.iter().copied() {
-                                self.push_dynamic_vm_root(value);
-                            }
-                            self.maybe_writeback_mutating_first_arg(
-                                crate::emacs_core::intern::resolve_sym(*sym),
-                                None,
-                                writeback_args,
-                                &result,
-                            );
-                            self.ctx.restore_vm_roots(root_scope);
-                        }
+                        let result =
+                            vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n));
                         stk!().truncate(args_start);
                         stk_push!(result);
                         poll_quit!();
@@ -7621,6 +7601,112 @@ impl<'a> Vm<'a> {
     }
 
     /// Dispatch to builtin functions from the VM.
+    /// Dispatch an `Op::CallBuiltinSym` from the operand stack. Kept out of
+    /// `run_loop`'s body so the giant dispatch match stays small: a registered
+    /// builtin takes GNU's inline-opcode path (direct primitive call, no
+    /// backtrace frame, no arity check); everything else keeps the framed
+    /// [`Self::dispatch_vm_builtin_by_id_from_stack`] path with the
+    /// string-mutation writeback. Arguments live in `ctx.bc_buf[args_start..]`;
+    /// the caller truncates and pushes the result.
+    #[inline(never)]
+    fn dispatch_call_builtin_sym(
+        &mut self,
+        func: &ByteCodeFunction,
+        sym: SymId,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        // GNU-parity: opcodes 0140-0177 (decode.rs) dispatch *directly* to
+        // their C implementations (bytecode.c:1412-1545), bypassing the
+        // symbol's function cell and advice table. `(advice-add 'point ...)`
+        // deliberately does not fire when bytecode calls `(point)` via Bpoint;
+        // routing these through the function cell would make neomacs MORE
+        // advisable than GNU, breaking parity.
+        if let Some(function) = Self::inline_builtin_function(sym) {
+            return self.call_inline_builtin(function, sym, args_start, nargs);
+        }
+        let writeback_args = (self
+            .ctx
+            .bc_buf
+            .get(args_start)
+            .is_some_and(|value| value.is_string())
+            && Self::mutates_first_arg_sym(sym))
+        .then(|| {
+            self.ctx.bc_buf[args_start..args_start + nargs]
+                .iter()
+                .copied()
+                .collect::<LispArgVec>()
+        });
+        let result = self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs);
+        if let Some(writeback_args) = writeback_args.as_ref() {
+            let result = result?;
+            let root_scope = self.ctx.save_vm_roots();
+            self.push_dynamic_vm_root(result);
+            for value in writeback_args.iter().copied() {
+                self.push_dynamic_vm_root(value);
+            }
+            self.maybe_writeback_mutating_first_arg(
+                crate::emacs_core::intern::resolve_sym(sym),
+                None,
+                writeback_args,
+                &result,
+            );
+            self.ctx.restore_vm_roots(root_scope);
+            return Ok(result);
+        }
+        result
+    }
+
+    /// The Rust primitive a GNU inline opcode calls directly (bytecode.c
+    /// `Bpoint`..`Bwiden`, `Bset_marker`..`Bdowncase`): the symbol's registered
+    /// builtin entry. `None` for the VM-owned specials, which need `self`, and
+    /// for anything not registered as a plain builtin; those keep the framed
+    /// path of [`Self::dispatch_vm_builtin_by_id_from_stack`].
+    #[inline]
+    pub(crate) fn inline_builtin_function(sym: SymId) -> Option<SubrFn> {
+        let entry = lookup_global_subr_entry(sym)?;
+        if entry.dispatch_kind != SubrDispatchKind::Builtin
+            || Self::vm_special_builtin_ids().contains(&sym)
+        {
+            return None;
+        }
+        entry.function
+    }
+
+    /// GNU inline-opcode semantics: call the primitive on the operand-stack
+    /// arguments with no backtrace frame, no arity check and no eval-depth
+    /// accounting, then route a signal through the condition handlers exactly
+    /// as the framed path does.
+    pub(crate) fn call_inline_builtin_from_stack(
+        ctx: &mut crate::emacs_core::eval::Context,
+        function: SubrFn,
+        sym: SymId,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        let result =
+            Self::dispatch_builtin_subr_from_stack_args_unchecked(ctx, function, args_start, nargs)
+                .unwrap_or_else(|| {
+                    Err(signal(
+                        LispCondition::VoidFunction,
+                        vec![Value::from_sym_id(sym)],
+                    ))
+                });
+        ctx.dispatch_signal_result_if_needed(result)
+    }
+
+    fn call_inline_builtin(
+        &mut self,
+        function: SubrFn,
+        sym: SymId,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        Self::call_inline_builtin_from_stack(self.ctx, function, sym, args_start, nargs)
+    }
+
     fn dispatch_vm_builtin_unrooted(&mut self, name: &str, args: LispArgVec) -> EvalResult {
         // VM-internal bytecode operations that are not real Elisp builtins.
         match name {
