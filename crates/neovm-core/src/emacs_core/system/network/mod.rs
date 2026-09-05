@@ -8,6 +8,8 @@
 //! - Pipe-based IPC
 //! - Process output buffer management
 
+pub(crate) mod http;
+
 #[cfg(test)]
 use crate::emacs_core::error::LispCondition;
 use std::collections::HashMap;

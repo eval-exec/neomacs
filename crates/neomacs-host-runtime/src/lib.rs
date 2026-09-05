@@ -7,4 +7,5 @@
 #![deny(missing_docs)]
 
 pub mod process;
+pub mod network;
 pub mod time;
