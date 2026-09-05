@@ -18,7 +18,7 @@ impl WgpuRenderer {
         let frame_glyphs = params.frame_glyphs;
         let cursor_visible = params.cursor_visible;
         let animated_cursor = params.animated_cursor;
-        let mouse_pos = params.mouse_pos;
+        let hovered_scroll_bar = params.hovered_scroll_bar;
         // === Collect cursor bg rect for inverse video (drawn before text) ===
         // For filled box cursor (style 0), we draw the cursor background BEFORE text
         // so the character under the cursor can be re-drawn with inverse colors on top.
@@ -103,9 +103,14 @@ impl WgpuRenderer {
                         (*x, *y + *thumb_start, *width, *thumb_size)
                     };
 
-                    // Check hover: brighten thumb if mouse is over the scroll bar area
-                    let (mx, my) = mouse_pos;
-                    let hovered = mx >= *x && mx <= *x + *width && my >= *y && my <= *y + *height;
+                    // Brighten the thumb of the bar the compositor says the
+                    // pointer is over. Recognising it by identity rather than
+                    // by comparing the pointer's coordinates with this rect is
+                    // the whole point: the two live in different spaces for as
+                    // long as this bar's pane is moving, and nothing at this
+                    // draw site could tell.
+                    let hovered = hovered_scroll_bar
+                        .is_some_and(|bar| glyph.scroll_bar_identity() == Some(bar));
                     let bright = self.effects.scroll_bar.hover_brightness;
                     let effective_thumb = if hovered {
                         Color::new(

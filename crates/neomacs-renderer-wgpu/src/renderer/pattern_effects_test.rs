@@ -11,7 +11,6 @@ fn make_ctx<'a>(effects: &'a EffectsConfig, fgb: &'a FrameGlyphBuffer) -> Effect
         frame_glyphs: fgb,
         animated_cursor: &None,
         cursor_visible: false,
-        mouse_pos: (0.0, 0.0),
         surface_width: 800,
         surface_height: 600,
         aurora_start: observe_platform_now(),

@@ -16,8 +16,6 @@ pub(super) struct EffectCtx<'a> {
     pub frame_glyphs: &'a FrameGlyphBuffer,
     pub animated_cursor: &'a Option<AnimatedCursor>,
     pub cursor_visible: bool,
-    #[allow(dead_code)]
-    pub mouse_pos: (f32, f32),
     pub surface_width: u32,
     pub surface_height: u32,
     pub aurora_start: EventTime,

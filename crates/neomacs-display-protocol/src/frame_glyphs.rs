@@ -126,6 +126,35 @@ pub struct MaterializedFaceData {
     pub overstrike: bool,
 }
 
+/// Which scroll bar, of all the ones a presentation draws.
+///
+/// A window draws at most one scroll bar per axis, so naming the window and
+/// the axis names the bar. Two crates need this vocabulary: the compositor
+/// answers "which scroll bar is the pointer over" against the projection that
+/// placed the panes, and the renderer recognises the same bar while walking
+/// the glyphs. Neither can pass the other a pointer position instead — the
+/// glyph rects are in the destination presentation and a pointer position is
+/// on the root surface, and while a pane is in motion those are different
+/// pixels.
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+pub struct ScrollBarIdentity {
+    window: DisplayWindowId,
+    /// Matches `FrameGlyph::ScrollBar::horizontal`; a window's two bars differ
+    /// in nothing else.
+    horizontal: bool,
+}
+
+impl ScrollBarIdentity {
+    /// Deliberately the whole surface: this is an identity, and the only thing
+    /// anyone does with it is compare it to another one. Accessors for the
+    /// window and the axis would be a second way to describe a bar, which is
+    /// how the two sides come to disagree.
+    #[must_use]
+    pub const fn new(window: DisplayWindowId, horizontal: bool) -> Self {
+        Self { window, horizontal }
+    }
+}
+
 /// A single glyph to render
 #[derive(Debug, Clone, PartialEq)]
 pub enum FrameGlyph {
@@ -520,6 +549,24 @@ impl FrameGlyph {
     /// Left edge of this glyph's cell; see [`FrameGlyph::cell_rect`].
     pub fn cell_x(&self) -> Option<f32> {
         self.cell_rect().map(|(x, ..)| x)
+    }
+
+    /// This glyph's identity as a scroll bar, if it is one.
+    ///
+    /// The producer and the drawing adapter both need to name "that scroll
+    /// bar" without sharing a pointer position: the compositor resolves which
+    /// one a pointer is over, and the renderer has to recognise the same bar
+    /// while walking the glyphs. Deriving both from this one accessor is what
+    /// keeps them from disagreeing about what identity means.
+    pub fn scroll_bar_identity(&self) -> Option<ScrollBarIdentity> {
+        match self {
+            FrameGlyph::ScrollBar {
+                window_id,
+                horizontal,
+                ..
+            } => Some(ScrollBarIdentity::new(*window_id, *horizontal)),
+            _ => None,
+        }
     }
 
     /// Owning window id for any window-attached glyph. `None` for the

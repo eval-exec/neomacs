@@ -707,7 +707,7 @@ impl RenderApp {
             && !render.has_pointer_paint_damage()
             && std::env::var_os("NEOMACS_DISABLE_RETAINED_STATIC").is_none()
         {
-            let mouse_pos = render.mouse_pos;
+            let hovered_scroll_bar = render.hovered_scroll_bar(&frame);
             let generation = render.compositor.current_scene_generation;
             let retained_valid = matches!(
                 &render.compositor.retained_static,
@@ -767,7 +767,7 @@ impl RenderApp {
                 present_mapping,
                 cursor_visible,
                 animated_cursor,
-                mouse_pos,
+                hovered_scroll_bar,
             );
             // Filled-box cursors are inverse-video: the retained scene has the
             // character in its normal color, so each filled-box cell (box plus
@@ -782,7 +782,6 @@ impl RenderApp {
                     &composition_view,
                     present_mapping,
                     animated_cursor,
-                    mouse_pos,
                 );
             }
             super::frame_stats::count(&super::frame_stats::COMPOSITE_ONLY_FRAMES);
@@ -792,7 +791,7 @@ impl RenderApp {
                     &surface_view,
                     native.width,
                     native.height,
-                    mouse_pos,
+                    render.mouse_pos,
                 );
             }
             render.finish_pointer_paint_render();
@@ -1103,6 +1102,7 @@ impl RenderApp {
     ) {
         super::frame_stats::count(&super::frame_stats::ROOT_GLYPH_PASSES);
         let pointer_selection = render.pointer_selection_for(frame);
+        let hovered_scroll_bar = render.hovered_scroll_bar(frame);
         if let Some(atlas) = render.compositor.glyph_atlas.as_mut() {
             atlas.set_current_frame_fonts(frame.font_bindings());
         }
@@ -1115,7 +1115,7 @@ impl RenderApp {
                 present_mapping,
                 cursor_visible,
                 root_animated_cursor,
-                render.mouse_pos,
+                hovered_scroll_bar,
                 bg_gradient,
                 pointer_selection,
                 render.compositor.current_row_damage.as_ref(),
@@ -1345,7 +1345,6 @@ impl RenderApp {
         surface_view: &wgpu::TextureView,
         present_mapping: neomacs_display_protocol::PresentMapping,
         animated_cursor: Option<crate::core::types::AnimatedCursor>,
-        mouse_pos: (f32, f32),
     ) {
         let Some(atlas) = render.compositor.glyph_atlas.as_mut() else {
             return;
@@ -1362,7 +1361,6 @@ impl RenderApp {
                 present_mapping,
                 true,
                 animated_cursor,
-                mouse_pos,
                 cell.scissor,
             );
         }

@@ -153,7 +153,7 @@ fn gnu_box_line_width_is_one_device_pixel_at_two_x_scale() {
         mapping_for_scale(&frame, W, H, scale),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -307,7 +307,7 @@ fn offscreen_frame_renders_background_and_cursor() {
         mapping_for(&frame, W, H),
         true,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -408,7 +408,7 @@ fn primary_frame_inline_image_samples_only_its_source_slice() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -505,7 +505,7 @@ fn unboxed_image_face_background_fills_the_glyph_box_extent() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -573,7 +573,7 @@ fn stale_presentation_is_clipped_at_native_scale_after_surface_growth() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -608,7 +608,7 @@ fn ime_preedit_cjk_background_covers_the_shaped_run() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -703,7 +703,7 @@ fn negative_box_line_width_paints_an_inset_border() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -770,7 +770,7 @@ fn negative_box_border_does_not_cover_a_one_cell_glyph() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -878,7 +878,7 @@ fn primary_frame_rounded_extend_box_has_no_terminal_vertical_edge() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -922,7 +922,7 @@ fn primary_frame_sharp_extend_box_has_no_terminal_vertical_edge() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -966,7 +966,7 @@ fn cursor_visible_false_suppresses_cursor() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -1073,7 +1073,7 @@ fn presented_pointer_integration_image_relief_flips_edge_polarity_without_moving
             mapping_for(&frame, W, H),
             false,
             None,
-            (36.0, 32.0),
+            None,
             None,
             selection,
             None,
@@ -1223,7 +1223,7 @@ fn composite_matches_full_render() {
         mapping_for(&frame, W, H),
         true,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -1239,7 +1239,7 @@ fn composite_matches_full_render() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -1247,14 +1247,8 @@ fn composite_matches_full_render() {
     let (tc, vc) = make_tex(&h.renderer, "composite");
     let bg = h.renderer.create_texture_bind_group(&vs);
     h.renderer.blit_texture_to_view(&bg, &vc, W, H);
-    h.renderer.render_cursor_only(
-        &vc,
-        &frame,
-        mapping_for(&frame, W, H),
-        true,
-        None,
-        (0.0, 0.0),
-    );
+    h.renderer
+        .render_cursor_only(&vc, &frame, mapping_for(&frame, W, H), true, None, None);
     let comp = read_tex(&h.renderer, &tc);
 
     // Compare: allow tiny per-channel tolerance for the sRGB blit round-trip.
@@ -1308,7 +1302,7 @@ fn retained_static_reused_across_cursor_colors() {
         mapping_for(&frame_a, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -1318,26 +1312,14 @@ fn retained_static_reused_across_cursor_colors() {
     // Composite the SAME retained scene with the red then blue cursor.
     let (tr, vr) = make_tex(&h.renderer, "comp-red");
     h.renderer.blit_texture_to_view(&bg, &vr, W, H);
-    h.renderer.render_cursor_only(
-        &vr,
-        &frame_a,
-        mapping_for(&frame_a, W, H),
-        true,
-        None,
-        (0.0, 0.0),
-    );
+    h.renderer
+        .render_cursor_only(&vr, &frame_a, mapping_for(&frame_a, W, H), true, None, None);
     let red = read_tex(&h.renderer, &tr);
 
     let (tb, vb) = make_tex(&h.renderer, "comp-blue");
     h.renderer.blit_texture_to_view(&bg, &vb, W, H);
-    h.renderer.render_cursor_only(
-        &vb,
-        &frame_b,
-        mapping_for(&frame_b, W, H),
-        true,
-        None,
-        (0.0, 0.0),
-    );
+    h.renderer
+        .render_cursor_only(&vb, &frame_b, mapping_for(&frame_b, W, H), true, None, None);
     let blue = read_tex(&h.renderer, &tb);
 
     // Outside the cursor slot (x>=16), the two composites are bit-identical.
@@ -1433,7 +1415,7 @@ fn filled_box_composite_matches_full_render() {
         mapping_for(&frame, W, H),
         true,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -1449,7 +1431,7 @@ fn filled_box_composite_matches_full_render() {
         mapping_for(&frame, W, H),
         false,
         None,
-        (0.0, 0.0),
+        None,
         None,
         None,
         None,
@@ -1459,14 +1441,8 @@ fn filled_box_composite_matches_full_render() {
     h.renderer.blit_texture_to_view(&bg, &vc, W, H);
     // Match the runtime sequence exactly: render_cursor_only draws the box
     // (cursor_bg) unscissored, then the scissored cell redraw adds box + char.
-    h.renderer.render_cursor_only(
-        &vc,
-        &frame,
-        mapping_for(&frame, W, H),
-        true,
-        None,
-        (0.0, 0.0),
-    );
+    h.renderer
+        .render_cursor_only(&vc, &frame, mapping_for(&frame, W, H), true, None, None);
     // cursor cell = the glyph cell (20,16,10,18)
     h.renderer.render_frame_cell_loaded(
         &vc,
@@ -1475,7 +1451,6 @@ fn filled_box_composite_matches_full_render() {
         mapping_for(&frame, W, H),
         true,
         None,
-        (0.0, 0.0),
         (20, 16, 10, 18),
     );
     let comp = read_tex(&h.renderer, &tc);
@@ -1518,7 +1493,7 @@ fn filled_box_vertical_motion_keeps_destination_text_normal_until_arrival() {
             mapping_for(&frame, W, H),
             visible,
             animated_cursor,
-            (0.0, 0.0),
+            None,
             None,
             None,
             None,
@@ -1584,7 +1559,7 @@ fn child_filled_box_motion_uses_the_same_inverse_video_contract() {
             mapping_for(&frame, W, H),
             false,
             None,
-            (0.0, 0.0),
+            None,
             None,
             None,
             None,
@@ -1662,7 +1637,6 @@ fn filled_box_cell_redraw_ignores_stale_cell_below_resized_surface() {
         mapping_for(&frame, W, 8),
         true,
         None,
-        (0.0, 0.0),
         (20, 16, 10, 18),
     );
 }
