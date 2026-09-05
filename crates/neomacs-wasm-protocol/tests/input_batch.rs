@@ -65,6 +65,97 @@ fn malformed_pointer_rejects_the_whole_browser_batch() {
 }
 
 #[test]
+fn pointer_wire_rejects_invalid_geometry_actions_and_presentations() {
+    use neomacs_display_protocol::{
+        PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, ScrollDelta,
+    };
+    let valid = PositionedPointerInput {
+        position: PointerPosition {
+            x: 10.0,
+            y: 20.0,
+            target_frame_id: 1,
+        },
+        target: PointerTarget::Presented {
+            presentation: 1,
+            hit: None,
+        },
+        action: PointerAction::Move { modifiers: 0 },
+    };
+    let mut invalid_x = valid.clone();
+    invalid_x.position.x = f32::NAN;
+    let mut invalid_y = valid.clone();
+    invalid_y.position.y = f32::INFINITY;
+    let cases = [
+        invalid_x,
+        invalid_y,
+        PositionedPointerInput {
+            target: PointerTarget::Unpresented,
+            ..valid.clone()
+        },
+        PositionedPointerInput {
+            target: PointerTarget::Presented {
+                presentation: 0,
+                hit: None,
+            },
+            ..valid.clone()
+        },
+        PositionedPointerInput {
+            action: PointerAction::Button {
+                button: 0,
+                pressed: true,
+                modifiers: 0,
+            },
+            ..valid.clone()
+        },
+        PositionedPointerInput {
+            action: PointerAction::Button {
+                button: 6,
+                pressed: true,
+                modifiers: 0,
+            },
+            ..valid.clone()
+        },
+        PositionedPointerInput {
+            action: PointerAction::Move { modifiers: 16 },
+            ..valid.clone()
+        },
+        PositionedPointerInput {
+            action: PointerAction::Scroll {
+                delta: ScrollDelta::Pixels {
+                    x: f32::INFINITY,
+                    y: 0.0,
+                },
+                modifiers: 0,
+            },
+            ..valid.clone()
+        },
+    ];
+    let mut payloads = cases
+        .iter()
+        .map(|pointer| {
+            let mut payload = Vec::new();
+            ciborium::ser::into_writer(pointer, &mut payload).unwrap();
+            payload
+        })
+        .collect::<Vec<_>>();
+    let mut trailing = Vec::new();
+    ciborium::ser::into_writer(&valid, &mut trailing).unwrap();
+    trailing.push(0);
+    payloads.push(trailing);
+    for payload in payloads {
+        let batch = BrowserInputBatch::new(
+            InputBatchSequence::new(1).unwrap(),
+            vec![BrowserInputEvent::Pointer { payload }],
+        )
+        .unwrap();
+        assert_eq!(
+            batch.try_into_frontend_batch(),
+            Err(InvalidBrowserInputBatch::InvalidPointer { event_index: 0 })
+        );
+    }
+}
+
+#[test]
 fn browser_batch_becomes_one_ordered_editor_input_batch() {
     let sequence = InputBatchSequence::new(7).expect("positive sequence");
     let batch = BrowserInputBatch::new(
