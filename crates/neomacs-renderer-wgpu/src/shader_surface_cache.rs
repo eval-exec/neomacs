@@ -239,6 +239,17 @@ impl ShaderSurfaceCache {
         self.surfaces.get(&id)
     }
 
+    /// Whether any shader surface exists at all.
+    ///
+    /// Every routing entry point here no-ops on an id it does not hold, so an
+    /// empty cache means no pointer position can reach a uniform. Sessions
+    /// without a single shader surface are the common case, and this lets the
+    /// pointer path skip searching a frame's glyphs for one.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.surfaces.is_empty()
+    }
+
     fn clamp_size(width: u32, height: u32, scale: f32) -> (u32, u32) {
         let scale = if scale.is_finite() && scale > 0.0 {
             scale

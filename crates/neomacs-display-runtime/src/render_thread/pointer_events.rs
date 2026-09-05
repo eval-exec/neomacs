@@ -14,6 +14,7 @@ use crate::core::frame_glyphs::FrameGlyph;
 use crate::thread_comm::{
     InputEvent, PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, ScrollDelta,
 };
+use neomacs_display_protocol::PresentationFramePoint;
 use neomacs_display_protocol::frame_chrome::{ChromeAction, FrameChromeKind};
 #[cfg(feature = "webview")]
 use neomacs_webview::{
@@ -49,6 +50,25 @@ pub(super) enum PointerOwner {
 mod webview_tests {
     use super::*;
 
+    /// Where a pointer at surface `(x, y)` lands while nothing is moving.
+    ///
+    /// A settled projection is the identity, so a fixture built with this
+    /// reads exactly as it did when this hit test took two `f32`s — and,
+    /// unlike two `f32`s, it had to come from a projection to exist.
+    fn settled_frame_point(x: f32, y: f32) -> PresentationFramePoint {
+        neomacs_display_protocol::InteractionProjection::settled(
+            neomacs_display_protocol::PresentationId::new(1),
+        )
+        .map(
+            neomacs_display_protocol::GeometryPoint::<
+                neomacs_display_protocol::RootSurfaceSpace,
+                neomacs_display_protocol::LogicalPixels,
+            >::from_px(x, y)
+            .expect("a fixture's coordinates are finite"),
+        )
+        .expect("the identity of a finite point stays representable")
+    }
+
     fn presentation(
         x: f32,
         y: f32,
@@ -83,7 +103,7 @@ mod webview_tests {
         );
 
         assert_eq!(
-            webview_glyph_hit_test(&glyphs.glyphs, 42.5, 75.0),
+            webview_glyph_hit_test(&glyphs.glyphs, settled_frame_point(42.5, 75.0)),
             Some(WebViewPointerHit {
                 view: neomacs_display_protocol::WebViewId::new(91),
                 position: WebContentPoint::new(32.5, 55.0),
@@ -107,8 +127,11 @@ mod webview_tests {
             presentation(10.0, 20.0, content, 100.0),
         );
 
-        assert_eq!(webview_glyph_hit_test(&glyphs.glyphs, 15.0, 25.0), None);
-        assert!(webview_glyph_hit_test(&glyphs.glyphs, 25.0, 35.0).is_some());
+        assert_eq!(
+            webview_glyph_hit_test(&glyphs.glyphs, settled_frame_point(15.0, 25.0)),
+            None
+        );
+        assert!(webview_glyph_hit_test(&glyphs.glyphs, settled_frame_point(25.0, 35.0)).is_some());
     }
 
     /// A slot cropped at the right edge does not shrink the pointer target:
@@ -131,16 +154,118 @@ mod webview_tests {
         );
 
         assert_eq!(
-            webview_glyph_hit_test(&glyphs.glyphs, 350.0, 20.0),
+            webview_glyph_hit_test(&glyphs.glyphs, settled_frame_point(350.0, 20.0)),
             Some(WebViewPointerHit {
                 view: neomacs_display_protocol::WebViewId::new(91),
                 position: WebContentPoint::new(342.0, 10.0),
             })
         );
         assert_eq!(
-            webview_glyph_hit_test(&glyphs.glyphs, 450.0, 20.0),
+            webview_glyph_hit_test(&glyphs.glyphs, settled_frame_point(450.0, 20.0)),
             None,
             "past the clip nothing of the widget is visible"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shader_surface_tests {
+    use super::*;
+    use crate::core::frame_glyphs::FrameGlyphBuffer;
+    use crate::render_thread::frame_windows::GuiFrameRenderState;
+    use neomacs_display_protocol::{
+        DisplayWindowId, GeometryPoint, GeometryRect, InteractionProjection, LiveDisplayWindowId,
+        LogicalPixels, PaneProjection, PresentationFrameSpace, PresentationId, RootSurfaceSpace,
+        SurfaceId,
+        types::{Color, DisplayFrameId},
+    };
+
+    const FRAME: u64 = 0x42;
+    /// The surface whose destination rect the pointer is really over.
+    const POINTED_AT: u32 = 1;
+    /// The surface sitting at the pointer's *unprojected* coordinates.
+    const AT_RAW_COORDINATES: u32 = 2;
+
+    fn frame_with_two_surfaces(presentation: PresentationId) -> FrameGlyphBuffer {
+        let mut frame = FrameGlyphBuffer::with_size(800.0, 600.0);
+        frame.set_frame_identity(
+            DisplayFrameId::new(FRAME),
+            DisplayFrameId::new(0),
+            0.0,
+            0.0,
+            0,
+            false,
+            0.0,
+            Color::BLACK,
+            false,
+            1.0,
+        );
+        frame.presentation_id = presentation;
+        frame.add_surface(SurfaceId::new(POINTED_AT), 40.0, 20.0, 40.0, 40.0);
+        frame.add_surface(SurfaceId::new(AT_RAW_COORDINATES), 240.0, 20.0, 80.0, 40.0);
+        frame
+    }
+
+    fn render_showing_two_surfaces(presentation: PresentationId) -> GuiFrameRenderState {
+        let mut render = GuiFrameRenderState::new_without_device(
+            FRAME,
+            false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        );
+        render.set_current_frame(
+            Some(frame_with_two_surfaces(presentation)),
+            None,
+            Default::default(),
+            Default::default(),
+        );
+        render
+    }
+
+    /// A pane drawn 200px right of where its content belongs, as one is
+    /// partway through a horizontal `split-window`.
+    fn pane_displaced_by_200px(presentation: PresentationId) -> InteractionProjection {
+        let pane = PaneProjection::new(
+            LiveDisplayWindowId::try_from(DisplayWindowId::new(4))
+                .expect("a non-zero window id is live"),
+            GeometryRect::<RootSurfaceSpace, LogicalPixels>::new(200.0, 0.0, 400.0, 600.0)
+                .expect("a fixture's pane rect is valid geometry"),
+            GeometryPoint::<PresentationFrameSpace, LogicalPixels>::from_px(0.0, 0.0)
+                .expect("the frame origin is a valid content origin"),
+        )
+        .expect("a 200px translation is representable");
+        InteractionProjection::new(presentation, vec![pane])
+    }
+
+    #[test]
+    fn the_shader_surface_a_pointer_reaches_is_the_one_drawn_under_it_while_its_pane_moves() {
+        // Both `iMouse` routes — the press in `handle_mouse_input` and the
+        // hover in `handle_cursor_moved` — come through
+        // `surface_target_for_frame_window`. If it stopped projecting, a click
+        // or hover mid-`split-window` would drive the shader sitting at the
+        // pointer's raw coordinates instead of the one under the pointer, and
+        // every other test here would still pass: they run against settled
+        // frames, where the projection is the identity.
+        let presentation = PresentationId::new(11);
+        let mut render = render_showing_two_surfaces(presentation);
+        render.compositor.interaction = Some(pane_displaced_by_200px(presentation));
+
+        assert_eq!(
+            RenderApp::surface_target_for_frame_window(&render, FRAME, 260.0, 40.0),
+            Some((POINTED_AT, 0.5, 0.5)),
+            "surface x=260 is 60px into the destination, the middle of the first surface"
+        );
+    }
+
+    #[test]
+    fn a_settled_frame_reaches_the_shader_surface_at_the_pointers_own_coordinates() {
+        // The other half of the claim: projecting must displace nothing while
+        // nothing is moving, which is every frame outside a layout morph.
+        let render = render_showing_two_surfaces(PresentationId::new(11));
+
+        assert_eq!(
+            RenderApp::surface_target_for_frame_window(&render, FRAME, 260.0, 40.0),
+            Some((AT_RAW_COORDINATES, 0.25, 0.5)),
+            "with no pane in motion the pointer is over the surface its own coordinates name"
         );
     }
 }
@@ -212,9 +337,19 @@ impl WebViewDeliveryTarget {
     }
 }
 
-/// Search a glyph buffer for an inline WebView at the given local coordinates.
+/// Search a glyph buffer for an inline WebView under `point`.
+///
+/// Takes the witnessed point rather than coordinates for the reason
+/// [`PresentedHitQuery`](neomacs_display_protocol::PresentedHitQuery) does:
+/// the widget rects belong to the destination presentation, so a pointer
+/// position that has not been through the projection names a different pixel
+/// for as long as the widget's pane is moving.
 #[cfg(feature = "webview")]
-fn webview_glyph_hit_test(glyphs: &[FrameGlyph], x: f32, y: f32) -> Option<WebViewPointerHit> {
+fn webview_glyph_hit_test(
+    glyphs: &[FrameGlyph],
+    point: PresentationFramePoint,
+) -> Option<WebViewPointerHit> {
+    let point = point.in_frame_space();
     for glyph in glyphs.iter().rev() {
         // The pointer target is the widget itself, GNU `xww->width` by
         // `xww->height` at the glyph origin, minus what the text-area clip
@@ -226,12 +361,6 @@ fn webview_glyph_hit_test(glyphs: &[FrameGlyph], x: f32, y: f32) -> Option<WebVi
             ..
         } = glyph
         {
-            let Ok(point) = neomacs_display_protocol::GeometryPoint::<
-                neomacs_display_protocol::FrameSpace,
-                neomacs_display_protocol::LogicalPixels,
-            >::from_px(x, y) else {
-                continue;
-            };
             let Ok(Some(visible)) = presentation.resolve_visible(None) else {
                 continue;
             };
@@ -246,11 +375,20 @@ fn webview_glyph_hit_test(glyphs: &[FrameGlyph], x: f32, y: f32) -> Option<WebVi
     None
 }
 
-/// Search a glyph buffer for an inline shader surface at the given local
-/// coordinates (the `webview_glyph_hit_test` mirror for `iMouse` click state).
-/// Returns `(surface_id, u, v)` — the pointer's normalized position inside
-/// the glyph rect (top-left origin) — if found.
-fn surface_glyph_hit_test(glyphs: &[FrameGlyph], x: f32, y: f32) -> Option<(u32, f32, f32)> {
+/// Search a glyph buffer for an inline shader surface under `point` (the
+/// `webview_glyph_hit_test` mirror, for `iMouse`). Returns `(surface_id, u, v)`
+/// — the pointer's normalized position inside the glyph rect (top-left origin)
+/// — if found.
+///
+/// Takes the witnessed point for the same reason: a shader is handed `u`/`v` as
+/// the place a user is pointing at, and a raw surface position stops naming
+/// that place the moment the surface's pane starts moving.
+fn surface_glyph_hit_test(
+    glyphs: &[FrameGlyph],
+    point: PresentationFramePoint,
+) -> Option<(u32, f32, f32)> {
+    let point = point.in_frame_space();
+    let (x, y) = (point.x(), point.y());
     for glyph in glyphs.iter().rev() {
         if let FrameGlyph::Surface {
             surface_id,
@@ -394,37 +532,31 @@ impl RenderApp {
         }
     }
 
-    fn glyphs_for_frame_window_pointer_target(
-        window_state: &GuiFrameWindowState,
-        target_fid: u64,
-    ) -> Option<&[FrameGlyph]> {
-        if target_fid == window_state.render.emacs_frame_id {
-            window_state
-                .render
-                .compositor
-                .current_frame
-                .as_ref()
-                .map(|frame| frame.glyphs.as_slice())
-        } else {
-            window_state
-                .render
-                .compositor
-                .child_frames
-                .frames
-                .get(&target_fid)
-                .map(|entry| entry.frame.glyphs.as_slice())
-        }
-    }
-
     #[cfg(feature = "webview")]
     fn webview_target_for_frame_window(
-        window_state: &GuiFrameWindowState,
+        render: &super::frame_windows::GuiFrameRenderState,
         target_fid: u64,
         ev_x: f32,
         ev_y: f32,
     ) -> Option<WebViewPointerHit> {
-        Self::glyphs_for_frame_window_pointer_target(window_state, target_fid)
-            .and_then(|glyphs| webview_glyph_hit_test(glyphs, ev_x, ev_y))
+        let (glyphs, point) = render.glyph_hit_target(target_fid, ev_x, ev_y)?;
+        webview_glyph_hit_test(glyphs, point)
+    }
+
+    /// The shader surface under a pointer at frame-local `(x, y)`, and where
+    /// inside it the pointer is.
+    ///
+    /// The one route from a pointer position to a surface's `iMouse`: press and
+    /// hover both come through here, so the two cannot answer differently about
+    /// the same pixel.
+    fn surface_target_for_frame_window(
+        render: &super::frame_windows::GuiFrameRenderState,
+        target_fid: u64,
+        x: f32,
+        y: f32,
+    ) -> Option<(u32, f32, f32)> {
+        let (glyphs, point) = render.glyph_hit_target(target_fid, x, y)?;
+        surface_glyph_hit_test(glyphs, point)
     }
 
     fn frame_window_menu_bar_hit_test(
@@ -1157,7 +1289,7 @@ impl RenderApp {
                     #[cfg(feature = "webview")]
                     if state == ElementState::Pressed {
                         let hit = Self::webview_target_for_frame_window(
-                            window_state,
+                            &window_state.render,
                             target_fid,
                             ev_x,
                             ev_y,
@@ -1183,9 +1315,12 @@ impl RenderApp {
                     // mirror of the Xwidget search above. Render-thread
                     // internal, like hover; the Lisp event below is unchanged.
                     if state == ElementState::Pressed
-                        && let Some((surface_id, u, v)) =
-                            Self::glyphs_for_frame_window_pointer_target(window_state, target_fid)
-                                .and_then(|glyphs| surface_glyph_hit_test(glyphs, ev_x, ev_y))
+                        && let Some((surface_id, u, v)) = Self::surface_target_for_frame_window(
+                            &window_state.render,
+                            target_fid,
+                            ev_x,
+                            ev_y,
+                        )
                         && let Some(renderer) = self.renderer.as_mut()
                     {
                         renderer.surface_mouse_press(surface_id, u, v);
@@ -1503,10 +1638,40 @@ impl RenderApp {
             let (ev_x, ev_y, target_fid) = pointer_owner
                 .raw_target()
                 .unwrap_or_else(|| Self::pointer_target_for_frame_window(window_state, lx, ly));
+            // iMouse hover state (docs/display-engine/SHADER_SURFACES.md):
+            // resolved here rather than while drawing, because which surface
+            // the pointer is over is a question about the composition, and the
+            // renderer is handed the answer. Deciding it at draw time from the
+            // raw pointer position compared it against glyph rects belonging to
+            // the destination presentation, which is a different pixel for as
+            // long as the surface's pane is moving. Outside every surface
+            // nothing is written, so iMouse persists at the last hover position.
+            //
+            // The surface search reads every glyph in the frame, and unlike the
+            // press it now runs on each pointer motion, so it is asked only
+            // when a shader surface exists to route to.
+            if let Some(renderer) = self.renderer.as_mut()
+                && renderer.has_shader_surfaces()
+                && let Some((surface_id, u, v)) = Self::surface_target_for_frame_window(
+                    &window_state.render,
+                    target_fid,
+                    ev_x,
+                    ev_y,
+                )
+            {
+                renderer.surface_mouse_hover(surface_id, u, v);
+            }
             #[cfg(feature = "webview")]
             {
                 let hit = pointer_capture.map_or_else(
-                    || Self::webview_target_for_frame_window(window_state, target_fid, ev_x, ev_y),
+                    || {
+                        Self::webview_target_for_frame_window(
+                            &window_state.render,
+                            target_fid,
+                            ev_x,
+                            ev_y,
+                        )
+                    },
                     |capture| {
                         Some(WebViewPointerHit {
                             view: capture.target.view(),
@@ -1613,8 +1778,8 @@ impl RenderApp {
             });
             #[cfg(feature = "webview")]
             let webview_delivery =
-                Self::webview_target_for_frame_window(window_state, target_fid, ev_x, ev_y).map(
-                    |hit| {
+                Self::webview_target_for_frame_window(&window_state.render, target_fid, ev_x, ev_y)
+                    .map(|hit| {
                         let delta = match delta {
                             ScrollDelta::Lines { x, y } => WebViewScrollDelta::Lines { x, y },
                             ScrollDelta::Pixels { x, y } => WebViewScrollDelta::Pixels { x, y },
@@ -1627,8 +1792,7 @@ impl RenderApp {
                                 modifiers: Self::webview_modifiers(self.modifiers),
                             },
                         )
-                    },
-                );
+                    });
             let position = PointerPosition {
                 x: ev_x,
                 y: ev_y,

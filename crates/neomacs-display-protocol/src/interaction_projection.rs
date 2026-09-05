@@ -29,7 +29,8 @@
 
 use crate::frame_chrome::PresentationId;
 use crate::geometry::{
-    GeometryError, GeometryPoint, GeometryRect, LogicalPixels, RootSurfaceSpace, SpaceTranslation,
+    FrameSpace, GeometryError, GeometryPoint, GeometryRect, LogicalPixels, RootSurfaceSpace,
+    SpaceTranslation,
 };
 use crate::types::LiveDisplayWindowId;
 
@@ -83,6 +84,20 @@ impl PresentationFramePoint {
     #[must_use]
     pub fn y(self) -> f32 {
         self.point.y()
+    }
+
+    /// The same point, named in the space the glyph buffer was laid out in.
+    ///
+    /// [`PresentationFrameSpace`] and [`FrameSpace`] are one space under two
+    /// names: the projection maps into it, and the layout pass emits every
+    /// glyph rect in it. Reconciling the names once, here, is what lets a hit
+    /// test over glyphs demand a witnessed point instead of two `f32`s — each
+    /// call site that instead rebuilt a `FrameSpace` point from coordinates
+    /// would be a place raw ones could be substituted.
+    #[must_use]
+    pub fn in_frame_space(self) -> GeometryPoint<FrameSpace, LogicalPixels> {
+        GeometryPoint::try_from_units(self.point.x_unit(), self.point.y_unit())
+            .expect("a validated logical-pixel pair stays valid when its space is renamed")
     }
 }
 
