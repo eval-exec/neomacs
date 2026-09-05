@@ -562,7 +562,10 @@ fn installing_an_edited_presentation_leaves_one_measured_reflow_pending() {
     ];
     install(&mut render, &window(7, 2), &after);
 
-    let pending = render.take_pending_continuity(true);
+    let pending = render.take_pending_continuity(
+        &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+        true,
+    );
     assert_eq!(pending.reflows.len(), 1);
     let reflow = pending.reflows[0];
     assert_eq!(reflow.window, DisplayWindowId::new(1));
@@ -591,7 +594,15 @@ fn the_minibuffer_is_never_measured_for_a_reflow() {
     let after = [text_row(0xC1, 16.0), text_row(0xC2, 32.0)];
     install(&mut render, &mini_after, &after);
 
-    assert!(render.take_pending_continuity(true).reflows.is_empty());
+    assert!(
+        render
+            .take_pending_continuity(
+                &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+                true
+            )
+            .reflows
+            .is_empty()
+    );
 }
 
 #[test]
@@ -609,7 +620,15 @@ fn an_ambiguous_shift_leaves_nothing_pending_rather_than_a_guess() {
         &window(7, 2),
         &[text_row(0xD1, 16.0), text_row(0xD2, 64.0)],
     );
-    assert!(render.take_pending_continuity(true).reflows.is_empty());
+    assert!(
+        render
+            .take_pending_continuity(
+                &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+                true
+            )
+            .reflows
+            .is_empty()
+    );
 }
 
 #[test]
@@ -625,9 +644,24 @@ fn a_second_pass_over_one_install_observes_no_reflow() {
         &window(7, 2),
         &[text_row(0xE1, 16.0), text_row(0xE2, 32.0)],
     );
-    assert_eq!(render.take_pending_continuity(true).reflows.len(), 1);
+    assert_eq!(
+        render
+            .take_pending_continuity(
+                &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+                true
+            )
+            .reflows
+            .len(),
+        1
+    );
     assert!(
-        render.take_pending_continuity(true).reflows.is_empty(),
+        render
+            .take_pending_continuity(
+                &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+                true
+            )
+            .reflows
+            .is_empty(),
         "re-arming the slide on every render pass would sustain a redraw loop"
     );
 }
@@ -669,7 +703,10 @@ fn a_commit_superseded_before_it_was_drawn_does_not_become_the_thing_the_next_on
     let third = [text_row(0xF1, 32.0), text_row(0xF2, 48.0)];
     install_without_composing(&mut render, &window(7, 3), &third);
 
-    let pending = render.take_pending_continuity(true);
+    let pending = render.take_pending_continuity(
+        &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+        true,
+    );
     assert_eq!(pending.reflows.len(), 1);
     assert!(
         (pending.reflows[0].pixels - 32.0).abs() < f32::EPSILON,
@@ -704,7 +741,13 @@ fn an_observation_survives_a_commit_that_supersedes_it_before_any_frame_drew() {
     );
 
     assert_eq!(
-        render.take_pending_continuity(true).reflows.len(),
+        render
+            .take_pending_continuity(
+                &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+                true
+            )
+            .reflows
+            .len(),
         1,
         "the displacement is still pending, not cleared by the commit after it"
     );

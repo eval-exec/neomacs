@@ -1086,7 +1086,15 @@ impl GuiFrameRenderState {
         changed
     }
 
-    pub(super) fn take_current_frame_for_render(&mut self) -> Option<FrameGlyphBuffer> {
+    /// Take the retained presentation to draw from.
+    ///
+    /// Takes the acquisition proof because this drains the frame's one-shot
+    /// transition hints: doing it above a surface-loss return would consume
+    /// them for a frame that is then abandoned, and they would never be drawn.
+    pub(super) fn take_current_frame_for_render(
+        &mut self,
+        _acquired: &super::render_pass::surface::SurfaceAcquired,
+    ) -> Option<FrameGlyphBuffer> {
         let current_frame = self.compositor.current_frame.as_mut()?;
         let mut frame = Self::take_frame_for_render(current_frame);
         #[cfg(feature = "neo-term")]

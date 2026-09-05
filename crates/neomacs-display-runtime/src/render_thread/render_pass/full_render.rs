@@ -29,6 +29,7 @@ use neomacs_renderer_wgpu::{PaneBlit, SnapshotLease, WgpuRenderer};
 /// presentation puts them. Chrome is drawn last, onto the placed result.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn through_composition_ring(
+    acquired: &super::surface::SurfaceAcquired,
     renderer: &mut WgpuRenderer,
     native: &GuiFrameNativeWindowState,
     render: &mut GuiFrameRenderState,
@@ -51,7 +52,7 @@ pub(super) fn through_composition_ring(
         false,
     );
 
-    detect_transitions(renderer, render, frame, accept_derived_effects);
+    detect_transitions(acquired, renderer, render, frame, accept_derived_effects);
     if render.compositor.renderer_effects.needs_redraw() {
         render.mark_dirty();
     }
@@ -115,6 +116,7 @@ pub(super) fn through_composition_ring(
 /// refused a slot.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn onto_target(
+    acquired: &super::surface::SurfaceAcquired,
     renderer: &mut WgpuRenderer,
     native: &GuiFrameNativeWindowState,
     render: &mut GuiFrameRenderState,
@@ -134,7 +136,7 @@ pub(super) fn onto_target(
         cursor_visible,
         true,
     );
-    detect_transitions(renderer, render, frame, accept_derived_effects);
+    detect_transitions(acquired, renderer, render, frame, accept_derived_effects);
     render.mark_active_visuals_dirty();
 }
 
@@ -146,13 +148,20 @@ pub(super) fn onto_target(
 /// earlier, because the surface-acquisition paths in the draw order can return
 /// before this point — and an observation dropped on one of those would lose
 /// the scroll measured at install, with no later chance to plan it.
+/// Drain the observations measured at install and plan what they imply.
+///
+/// Takes the acquisition proof because the drain is one-shot: running it above
+/// a surface-loss return would consume the scroll, reflow or text replacement
+/// measured at install for a frame that is then abandoned, and no later frame
+/// would get another chance to animate it.
 fn detect_transitions(
+    acquired: &super::surface::SurfaceAcquired,
     renderer: &mut WgpuRenderer,
     render: &mut GuiFrameRenderState,
     frame: &mut crate::core::frame_glyphs::FrameGlyphBuffer,
     accept_derived_effects: bool,
 ) {
-    let pending_continuity = render.take_pending_continuity(accept_derived_effects);
+    let pending_continuity = render.take_pending_continuity(acquired, accept_derived_effects);
     renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
         detect_frame_transitions(
             renderer,

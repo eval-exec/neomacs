@@ -410,7 +410,10 @@ fn taking_pending_continuity_leaves_nothing_for_a_second_pass() {
         },
     });
 
-    let first = render.take_pending_continuity(true);
+    let first = render.take_pending_continuity(
+        &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+        true,
+    );
     assert_eq!(
         first.scrolls.len(),
         1,
@@ -425,7 +428,10 @@ fn taking_pending_continuity_leaves_nothing_for_a_second_pass() {
     // saw the observation again, every derived effect would re-arm, report
     // needs_redraw, and schedule yet another pass — a loop with no editor
     // activity behind it.
-    let second = render.take_pending_continuity(true);
+    let second = render.take_pending_continuity(
+        &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+        true,
+    );
     assert!(
         second.scrolls.is_empty(),
         "a second pass over one install must observe nothing"
@@ -442,7 +448,12 @@ fn the_quality_plan_decides_whether_derived_effects_run() {
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     assert!(
-        !render.take_pending_continuity(false).accept_derived_effects,
+        !render
+            .take_pending_continuity(
+                &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+                false
+            )
+            .accept_derived_effects,
         "a degraded frame declines compositor-derived effects, as it did producer hints"
     );
 }

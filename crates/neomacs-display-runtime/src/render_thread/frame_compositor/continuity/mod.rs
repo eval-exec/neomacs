@@ -112,6 +112,7 @@ impl GuiFrameRenderState {
     /// frame the ordinary way, with no offscreen and no per-pane blit.
     pub(in crate::render_thread) fn sample_pane_layout(
         &mut self,
+        _acquired: &crate::render_thread::render_pass::surface::SurfaceAcquired,
         frame: neomacs_display_protocol::frame_time::FrameSample,
     ) -> PaneLayoutComposition {
         let Some(morph) = self.compositor.pane_morph.as_ref() else {
@@ -272,6 +273,7 @@ impl GuiFrameRenderState {
     /// resulting redraw request sustains itself.
     pub(in crate::render_thread) fn take_pending_continuity(
         &mut self,
+        _acquired: &crate::render_thread::render_pass::surface::SurfaceAcquired,
         accept_derived_effects: bool,
     ) -> super::PendingContinuity {
         let mut pending = std::mem::take(&mut self.compositor.pending);
