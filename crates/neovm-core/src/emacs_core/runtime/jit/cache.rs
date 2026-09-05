@@ -19,6 +19,7 @@
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use super::compile::{
@@ -375,6 +376,20 @@ fn register_inline_deps(id: u64, leaf: &CompiledLeaf) {
     }
 }
 
+/// Generation of NotCompilable verdicts. `RuntimeState::mark_native_rejected`
+/// stamps a rejected function with the current value and the tier dispatcher
+/// answers `Interpret` for it without probing this cache while the stamp is
+/// current; [`clear`] bumps it, so a verdict is forgotten exactly when the
+/// cache itself forgets (a heap change) and the next call re-consults the
+/// cache as before. Process-global on purpose: a clear on any thread makes
+/// every thread re-probe, which only ever re-finds `NotCompilable`.
+static REJECTION_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// The current NotCompilable generation (see [`REJECTION_EPOCH`]).
+pub(crate) fn rejection_epoch() -> u64 {
+    REJECTION_EPOCH.load(Ordering::Relaxed)
+}
+
 /// The cache-miss JIT compile — the synchronous eval-thread stall this tier
 /// pays once per function. Meters the stall into [`stats`] (timing ONLY the
 /// compile call; an AOT-served miss never reaches here), records the precise
@@ -390,7 +405,17 @@ fn compile_cache_entry(id: u64, func: &ByteCodeFunction, obarray: Option<&Obarra
             register_inline_deps(id, &leaf);
             CacheEntry::Compiled(Rc::new(leaf))
         }
-        Err(_) => CacheEntry::NotCompilable,
+        Err(_) => {
+            // Remember the verdict where the dispatcher can see it. Measured
+            // on the org editing probe (callgrind, 2026-09-05): 18 of the 21
+            // functions that reached tier-up were rejected, and their ~80,000
+            // later hot calls each still took the whole seam trip — argument
+            // copy, scratch-root save/restore, cache probe, fallback — to be
+            // told `NotCompilable` again; that trip was the bulk of the JIT's
+            // +1.0% instruction tax on that workload.
+            func.jit_runtime().mark_native_rejected(rejection_epoch());
+            CacheEntry::NotCompilable
+        }
     }
 }
 
@@ -677,6 +702,8 @@ pub(crate) fn clear() {
     COMPILED.with(|c| c.borrow_mut().clear());
     INLINE_DEPS.with(|m| m.borrow_mut().clear());
     OSR_CACHE.with(|c| c.borrow_mut().clear());
+    // Every remembered NotCompilable verdict is now as stale as the cache.
+    REJECTION_EPOCH.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Tier-up entry point: run `func`'s body as native code if possible.
@@ -1153,6 +1180,42 @@ mod tests {
         f.constants = constants.into();
         f.max_stack = 16;
         f
+    }
+
+    /// A body the JIT rejects is remembered on its runtime: after the one
+    /// rejected compile the tier dispatcher answers `Interpret` for it without
+    /// probing this cache again, until the cache forgets its verdicts.
+    #[test]
+    fn rejected_body_is_remembered_on_its_runtime() {
+        use crate::emacs_core::jit::Plan;
+        // A body with no `Return` is rejected (`CompileError::NoReturn`) at
+        // the pipeline's first scan; the verdict's kind is irrelevant here,
+        // only that the cache records `NotCompilable` for it.
+        let f = nullary_fn(vec![Op::Nil], vec![]);
+        let rt = f.jit_runtime();
+        let len = f.executable_ops().len();
+        rt.set_hot_for_test();
+        assert!(
+            matches!(rt.dispatch_sized(len), Plan::Compiled),
+            "hot and unjudged: the dispatcher consults the cache"
+        );
+        assert_eq!(
+            try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+            None,
+            "the rejected body falls back to the interpreter"
+        );
+        assert!(!is_compiled_for_test(
+            rt.compiled_id().expect("the probe assigned an id")
+        ));
+        assert!(
+            matches!(rt.dispatch_sized(len), Plan::Interpret),
+            "the verdict is remembered: no more seam trips"
+        );
+        clear();
+        assert!(
+            matches!(rt.dispatch_sized(len), Plan::Compiled),
+            "the cache forgot its verdicts, so the dispatcher probes again"
+        );
     }
 
     #[test]

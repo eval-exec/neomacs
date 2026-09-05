@@ -259,6 +259,17 @@ pub struct RuntimeState {
     /// Coarse invocation hotness (saturating at `u32::MAX`). The feedback that
     /// later phases use to decide when to tier a function up.
     heat: AtomicU32,
+    /// The `cache::rejection_epoch()` at which the JIT rejected this body as
+    /// `NotCompilable` (0 = never). While it equals the live epoch the
+    /// dispatcher answers `Interpret` outright: the cache would answer
+    /// `NotCompilable` and fall back to the interpreter anyway, so the seam
+    /// trip it saves (argument copy, root save/restore, probe) is pure waste.
+    /// `cache::clear` bumps the epoch (the cache would retry, so does this);
+    /// a grown `make-closure` prefix resets it with its eviction. Without the
+    /// `jit` feature there is no cache to reject anything, so it is only ever
+    /// written.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    native_rejected_epoch: AtomicU64,
     /// Per-call-site type/target feedback (Phase 1). The optimizing tier reads
     /// this to speculate direct/inlined calls.
     feedback: FeedbackVec,
@@ -498,6 +509,7 @@ impl RuntimeState {
     pub const fn new() -> Self {
         Self {
             heat: AtomicU32::new(0),
+            native_rejected_epoch: AtomicU64::new(0),
             feedback: FeedbackVec::new(),
             compiled_id: AtomicU64::new(0),
             aot_prewarmed: std::sync::atomic::AtomicBool::new(false),
@@ -522,7 +534,36 @@ impl RuntimeState {
     pub fn note_patched_prefix(&self, n: usize) -> Option<u64> {
         let n = u32::try_from(n).unwrap_or(u32::MAX);
         let prev = self.patched_prefix.fetch_max(n, Ordering::Relaxed);
-        if n > prev { self.compiled_id() } else { None }
+        if n > prev {
+            // The caller evicts the cached verdict for this id; forget ours
+            // too, so the next dispatch re-consults the cache like before.
+            self.native_rejected_epoch.store(0, Ordering::Relaxed);
+            self.compiled_id()
+        } else {
+            None
+        }
+    }
+
+    /// Record that the JIT rejected this body (`CacheEntry::NotCompilable`)
+    /// under NotCompilable generation `epoch` — see `native_rejected_epoch`.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn mark_native_rejected(&self, epoch: u64) {
+        self.native_rejected_epoch.store(epoch, Ordering::Relaxed);
+    }
+
+    /// Whether a remembered `NotCompilable` verdict is still current, i.e. a
+    /// cache probe would only re-find it.
+    #[inline]
+    fn native_rejected(&self) -> bool {
+        #[cfg(feature = "jit")]
+        {
+            let stamped = self.native_rejected_epoch.load(Ordering::Relaxed);
+            stamped != 0 && stamped == super::jit::cache::rejection_epoch()
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            false
+        }
     }
 
     /// Record one invocation and decide how to run it. The caller MUST handle
@@ -531,8 +572,9 @@ impl RuntimeState {
     /// Counts the invocation and returns [`Plan::Compiled`] once the function
     /// crosses [`hot_threshold`] (default [`Runtime::HOT_THRESHOLD`]), else
     /// [`Plan::Interpret`]. The compiled plan only means "the JIT may run this"
-    /// — the cache still falls back to the interpreter for non-compilable
-    /// bodies and on deopt.
+    /// — the cache still falls back to the interpreter on deopt, and a body
+    /// the cache has rejected as `NotCompilable` is remembered here
+    /// (`native_rejected_epoch`) so it answers `Interpret` without the trip.
     /// Default [`size_unit`]: bodies up to this many ops tier at the flat
     /// `hot_threshold()`; larger ones need proportionally more calls. Tuned on
     /// the fontify gate (font-lock closures now tier since `make-closure`
@@ -583,6 +625,11 @@ impl RuntimeState {
         if self.aot_prewarmed.load(Ordering::Relaxed) {
             return Plan::Compiled;
         }
+        if self.native_rejected() {
+            #[cfg(feature = "jit")]
+            super::jit::stats::record_dispatch(false);
+            return Plan::Interpret;
+        }
         let cap = max_tier_ops();
         if cap != 0 && ops_len > cap as usize {
             return Plan::Interpret;
@@ -623,7 +670,11 @@ impl RuntimeState {
         let prev = self.heat.load(Ordering::Relaxed);
         let now = prev.saturating_add(1);
         self.heat.store(now, Ordering::Relaxed);
-        if now >= hot_threshold() || self.aot_prewarmed.load(Ordering::Relaxed) {
+        if self.aot_prewarmed.load(Ordering::Relaxed) {
+            Plan::Compiled
+        } else if self.native_rejected() {
+            Plan::Interpret
+        } else if now >= hot_threshold() {
             Plan::Compiled
         } else {
             Plan::Interpret
@@ -948,6 +999,38 @@ mod tests {
             }
             assert!(matches!(huge.dispatch_sized(cap), Plan::Compiled));
         }
+    }
+
+    /// A `NotCompilable` verdict is remembered on the runtime: a hot body the
+    /// JIT rejected answers `Interpret` without a cache probe, until the cache
+    /// forgets its verdicts (`clear`, a heap change) or a grown `make-closure`
+    /// prefix evicts the id — then it re-consults exactly as before.
+    #[cfg(feature = "jit")]
+    #[test]
+    fn rejected_body_interprets_without_a_cache_probe_until_the_cache_clears() {
+        let rt = Runtime::new();
+        rt.set_hot_for_test();
+        assert!(matches!(rt.dispatch(), Plan::Compiled));
+        assert!(matches!(rt.dispatch_sized(1), Plan::Compiled));
+        rt.mark_native_rejected(super::cache::rejection_epoch());
+        assert!(matches!(rt.dispatch(), Plan::Interpret));
+        assert!(matches!(rt.dispatch_sized(1), Plan::Interpret));
+        // Heat still accrues (OSR's `is_hot` is unaffected by the verdict).
+        assert!(rt.is_hot());
+        // The cache forgets: so must we.
+        super::cache::clear();
+        assert!(matches!(rt.dispatch(), Plan::Compiled));
+        assert!(matches!(rt.dispatch_sized(1), Plan::Compiled));
+        // A grown patched prefix evicts the leaf and the verdict with it.
+        rt.mark_native_rejected(super::cache::rejection_epoch());
+        assert!(matches!(rt.dispatch(), Plan::Interpret));
+        let _ = rt.compiled_id_or_assign();
+        assert!(rt.note_patched_prefix(1).is_some());
+        assert!(matches!(rt.dispatch(), Plan::Compiled));
+        // A prewarmed leaf is never rejected; the prewarm wins.
+        rt.mark_native_rejected(super::cache::rejection_epoch());
+        rt.mark_aot_prewarmed();
+        assert!(matches!(rt.dispatch(), Plan::Compiled));
     }
 
     /// Cite-and-overturn of the former `clone_starts_cold` pin: a clone (what
