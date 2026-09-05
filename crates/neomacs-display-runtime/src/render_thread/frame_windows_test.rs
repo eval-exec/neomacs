@@ -567,10 +567,8 @@ fn frame_render_state_syncs_visual_cursor_config_from_defaults() {
         .visual_cursors
         .get(&7)
         .expect("visual cursor");
-    assert!(!render.cursor.anim_enabled);
-    assert!(!visual.anim_enabled);
-    assert_eq!(visual.trail_size, 17.0);
-    assert!(!visual.size_transition_enabled);
+    assert_eq!(render.cursor.config_snapshot(), defaults.config_snapshot());
+    assert_eq!(visual.config_snapshot(), defaults.config_snapshot());
     assert!(render.compositor.dirty);
 }
 
