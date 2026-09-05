@@ -10,6 +10,7 @@ std::cfg_select! {
         mod browser_host;
         mod editor_session;
         mod network;
+        mod startup;
     }
     _ => {}
 }
