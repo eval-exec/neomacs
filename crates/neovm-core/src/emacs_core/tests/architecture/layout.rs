@@ -358,3 +358,27 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
         violations.join("\n")
     );
 }
+
+/// `runtime/eval/mod.rs` was split from 19,565 lines into domain child modules
+/// (gc_pacing, command_loop, apply, construct, special_forms, specpdl,
+/// signal_dispatch, vm_shared, pdump_reconstruct, macroexpand) because a
+/// single file taking 7% of all commits was the repository's largest
+/// merge-conflict surface and every investigation paid a navigation tax
+/// across ten domains. What remains is the `Context` struct, its types, the
+/// accessor surface, and the public evaluation API. New evaluator work goes
+/// in the child module for its domain, or a new one; this ceiling keeps the
+/// facade from silently re-absorbing them.
+#[test]
+fn eval_mod_stays_a_facade_after_the_domain_split() {
+    const CEILING: usize = 8_000;
+    let path = emacs_core_root().join("runtime/eval/mod.rs");
+    let lines = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+        .lines()
+        .count();
+    assert!(
+        lines <= CEILING,
+        "runtime/eval/mod.rs is {lines} lines (ceiling {CEILING}); put the new code in the \
+         eval/ child module for its domain instead of growing the facade"
+    );
+}
