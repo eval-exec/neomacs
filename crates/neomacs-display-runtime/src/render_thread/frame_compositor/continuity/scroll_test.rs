@@ -401,12 +401,9 @@ fn taking_pending_continuity_leaves_nothing_for_a_second_pass() {
     );
     render.compositor.pending.scrolls.push(ScrollObservation {
         window: DisplayWindowId::new(3),
-        region: neomacs_display_protocol::PresentedWindowRegions {
-            text_body: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 100.0, 100.0),
-            ..Default::default()
-        }
-        .buffer_viewport()
-        .expect("a positive body yields a viewport"),
+        bounds: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 100.0, 120.0),
+        same_buffer: true,
+        transition: None,
         displacement: ScrollDisplacement::NoOverlap {
             direction: ScrollDirection::TowardBufferEnd,
         },
@@ -446,5 +443,33 @@ fn the_quality_plan_decides_whether_derived_effects_run() {
     assert!(
         !render.take_pending_continuity(false).accept_derived_effects,
         "a degraded frame declines compositor-derived effects, as it did producer hints"
+    );
+}
+
+#[test]
+fn an_observation_without_compatible_pixels_plans_no_transition() {
+    // A window whose buffer-owned region changed — a tab line appeared, or it
+    // was split — cannot have retained pixels blitted into it. That
+    // disqualifies the slide, but the window still scrolled, so effects that
+    // draw over it are still entitled to know.
+    let observation = ScrollObservation {
+        window: DisplayWindowId::new(3),
+        bounds: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 100.0, 120.0),
+        same_buffer: true,
+        displacement: ScrollDisplacement::Exact {
+            pixels: 48.0,
+            direction: ScrollDirection::TowardBufferEnd,
+            anchors: std::num::NonZeroUsize::new(1).expect("one"),
+        },
+        transition: None,
+    };
+    assert_eq!(
+        observation.displacement.exact_pixels(),
+        Some(48.0),
+        "the measurement stands on its own"
+    );
+    assert!(
+        observation.transition.is_none(),
+        "but there is nothing safe to blit"
     );
 }
