@@ -34,7 +34,6 @@ use crate::display_status_line::{
 use crate::display_text_window_row_lifecycle::{TextWindowBeginRequest, TextWindowFinishState};
 use crate::font::metrics::FontMetricsService;
 use crate::frame_face_arena::FrameFaceAttempt;
-use crate::hit_test::HitRow;
 use crate::incremental_layout::{
     CursorOnlyReplay, RetainedChrome, RetainedTextWindowCursor, ScrollReplay,
 };
@@ -806,21 +805,6 @@ impl BufferSourceOutputSetup {
                 prev_row_bottom = row.pixel_y + row.height_px;
             }
 
-            // Reconstruct the per-row hit-test map from the retained rows (row
-            // geometry + buffer span — point-independent). `charpos_end` is one
-            // past the row's last position, matching the body walk.
-            let hit_rows: Vec<HitRow> = replay
-                .body_rows
-                .iter()
-                .filter(|(_, row)| row.displays_text)
-                .map(|(_, row)| HitRow {
-                    y_start: row.pixel_y,
-                    y_end: row.pixel_y + row.height_px,
-                    charpos_start: row.start_charpos as i64,
-                    charpos_end: row.end_charpos as i64 + 1,
-                })
-                .collect();
-
             let (mut output, evaluator) = output.into_parts();
             // Phase A admitted every replaying window's retained faces and
             // reserved their complete frame-wide ID range before any fresh face
@@ -955,7 +939,7 @@ impl BufferSourceOutputSetup {
                 Err(outcome) => return outcome,
             };
             tail_context.finish_and_install(
-                TextWindowFinishState::new(output, output_emitter, evaluator, hit_rows),
+                TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
                 window_snapshots,
             );
@@ -1176,24 +1160,8 @@ impl BufferSourceOutputSetup {
                 Err(outcome) => return outcome,
             };
 
-            // Hit map: the walk produced the exposed rows' hit; reconstruct the
-            // reused rows' hit from their shifted geometry.
-            let mut hit_rows = std::mem::take(&mut walk_setup.hit_rows);
-            for (_, row) in &scroll.reused_rows {
-                if row.displays_text {
-                    hit_rows.push(HitRow {
-                        y_start: row.pixel_y,
-                        y_end: row.pixel_y + row.height_px,
-                        charpos_start: row.start_charpos as i64,
-                        charpos_end: row.end_charpos as i64 + 1,
-                    });
-                }
-            }
-            // The walk produced exposed rows then we appended reused rows; restore
-            // top-to-bottom (y-ascending) order to match a full rebuild.
-            hit_rows.sort_by(|a, b| a.y_start.total_cmp(&b.y_start));
             tail_context.finish_and_install(
-                TextWindowFinishState::new(output, output_emitter, evaluator, hit_rows),
+                TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
                 window_snapshots,
             );
@@ -1389,12 +1357,7 @@ impl BufferSourceOutputSetup {
             Err(outcome) => return outcome,
         };
         tail_context.finish_and_install(
-            TextWindowFinishState::new(
-                output,
-                output_emitter,
-                evaluator,
-                std::mem::take(&mut walk_setup.hit_rows),
-            ),
+            TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,
             window_snapshots,
         );

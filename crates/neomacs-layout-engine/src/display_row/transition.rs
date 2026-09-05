@@ -1,8 +1,8 @@
 use crate::display_row::builder::DisplayRowPosition;
 use crate::display_row::geometry::{
     DisplayRowBoundaryTarget, DisplayRowFlagKind, DisplayRowFlags, DisplayRowGeometryDefaults,
-    DisplayRowGeometryState, DisplayRowHitRange, DisplayRowLimit, DisplayRowVisibilityLimit,
-    DisplayRowYPositions, DisplayRowYRecording,
+    DisplayRowGeometryState, DisplayRowLimit, DisplayRowVisibilityLimit, DisplayRowYPositions,
+    DisplayRowYRecording,
 };
 use crate::display_row::lisp_string::DisplayRowPrefixRequest;
 use crate::display_row::source_render::{TextRowOutputRenderState, TextRowSourceRenderState};
@@ -10,7 +10,7 @@ use crate::display_row::walk_state::{
     HorizontalScrollSkipState, LineNumberRenderState, TextRowTransitionStatePolicy,
     TrailingWhitespaceRenderState, WordWrapRenderState,
 };
-use crate::hit_test::HitRow;
+use crate::types::LayoutCharPos0;
 use crate::window_output::{DisplayTextRowGeometryTransition, DisplayTextRowTransition};
 
 pub(crate) struct DisplayRowBoundaryTransitionRequest<'a> {
@@ -19,7 +19,7 @@ pub(crate) struct DisplayRowBoundaryTransitionRequest<'a> {
 }
 
 pub(crate) struct DisplayRowLineBreakTransitionRequest<'a> {
-    hit_range: DisplayRowHitRange,
+    next_row_start: LayoutCharPos0,
     defaults: DisplayRowGeometryDefaults,
     row_base: usize,
     col: usize,
@@ -44,7 +44,6 @@ pub(crate) struct DisplayRowTextWindowEmitContext<'a, 'emit> {
     row_geometry: &'emit mut DisplayRowGeometryState,
     row_flags: &'emit mut DisplayRowFlags,
     row_limit: DisplayRowLimit,
-    hit_rows: &'emit mut Vec<HitRow>,
     output_render: TextRowOutputRenderState<'emit>,
 }
 
@@ -95,7 +94,7 @@ pub(crate) enum DisplayRowOverflowTransitionKind {
 
 pub(crate) struct DisplayRowOverflowTransitionRequest<'a> {
     kind: DisplayRowOverflowTransitionKind,
-    hit_range: DisplayRowHitRange,
+    next_row_start: LayoutCharPos0,
     defaults: DisplayRowGeometryDefaults,
     row_base: usize,
     col: usize,
@@ -118,11 +117,9 @@ impl<'a> DisplayRowBoundaryTransitionRequest<'a> {
     pub(crate) fn emit_with_output(
         self,
         row_geometry: &mut DisplayRowGeometryState,
-        hit_rows: &mut Vec<HitRow>,
         output_render: TextRowOutputRenderState<'_>,
     ) -> DisplayTextRowTransition {
-        let geometry_transition =
-            row_geometry.finish_boundary_and_record_hit(self.target, hit_rows);
+        let geometry_transition = row_geometry.finish_boundary(self.target);
         output_render.transition_text_row_with_limit(geometry_transition, self.max_rows)
     }
 }
@@ -145,12 +142,12 @@ impl<'a> DisplayRowTransitionRequestContext<'a> {
     pub(crate) fn line_break(
         self,
         plan: DisplayRowLineBreakTransitionPlan,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         position: DisplayRowPosition,
         line_spacing: f32,
     ) -> DisplayRowLineBreakTransitionRequest<'a> {
         plan.request(
-            hit_range,
+            next_row_start,
             self.defaults,
             self.row_base,
             position,
@@ -163,11 +160,11 @@ impl<'a> DisplayRowTransitionRequestContext<'a> {
     pub(crate) fn overflow(
         self,
         plan: DisplayRowOverflowTransitionPlan,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         position: DisplayRowPosition,
     ) -> DisplayRowOverflowTransitionRequest<'a> {
         plan.request(
-            hit_range,
+            next_row_start,
             self.defaults,
             self.row_base,
             position,
@@ -187,7 +184,6 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
         row_geometry: &'emit mut DisplayRowGeometryState,
         row_flags: &'emit mut DisplayRowFlags,
         row_limit: DisplayRowLimit,
-        hit_rows: &'emit mut Vec<HitRow>,
         output_render: TextRowOutputRenderState<'emit>,
     ) -> Self {
         Self {
@@ -198,7 +194,6 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
             row_geometry,
             row_flags,
             row_limit,
-            hit_rows,
             output_render,
         }
     }
@@ -212,7 +207,6 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
         row_geometry: &'emit mut DisplayRowGeometryState,
         row_flags: &'emit mut DisplayRowFlags,
         row_limit: DisplayRowLimit,
-        hit_rows: &'emit mut Vec<HitRow>,
         source_render: &'emit mut TextRowSourceRenderState<'emit>,
     ) -> Self {
         Self::new(
@@ -223,7 +217,6 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
             row_geometry,
             row_flags,
             row_limit,
-            hit_rows,
             source_render.output_render(),
         )
     }
@@ -231,7 +224,7 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
     pub(crate) fn emit_line_break(
         self,
         plan: DisplayRowLineBreakTransitionPlan,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         position: DisplayRowPosition,
         line_spacing: f32,
     ) -> DisplayTextRowTransition {
@@ -241,20 +234,20 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
             self.row_y_positions.recording(),
             self.max_rows,
         )
-        .line_break(plan, hit_range, position, line_spacing)
-        .emit_with_output(self.row_geometry, self.hit_rows, self.output_render)
+        .line_break(plan, next_row_start, position, line_spacing)
+        .emit_with_output(self.row_geometry, self.output_render)
     }
 
     pub(crate) fn emit_line_break_then_row_start(
         self,
         plan: DisplayRowLineBreakTransitionPlan,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         position: DisplayRowPosition,
         line_spacing: f32,
         render_state: DisplayRowTransitionRenderState<'_>,
         col: &mut usize,
     ) -> DisplayTextRowTransition {
-        let transition = self.emit_line_break(plan, hit_range, position, line_spacing);
+        let transition = self.emit_line_break(plan, next_row_start, position, line_spacing);
         if !transition.is_exhausted() {
             render_state.apply_line_break_row_start(plan, col);
         }
@@ -264,7 +257,7 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
     pub(crate) fn emit_overflow(
         self,
         plan: DisplayRowOverflowTransitionPlan,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         position: DisplayRowPosition,
     ) -> DisplayTextRowTransition {
         DisplayRowTransitionRequestContext::new(
@@ -273,12 +266,11 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
             self.row_y_positions.recording(),
             self.max_rows,
         )
-        .overflow(plan, hit_range, position)
+        .overflow(plan, next_row_start, position)
         .emit_with_output(
             self.row_geometry,
             self.row_flags,
             self.row_limit,
-            self.hit_rows,
             self.output_render,
         )
     }
@@ -286,12 +278,12 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
     pub(crate) fn emit_overflow_then_row_start(
         self,
         plan: DisplayRowOverflowTransitionPlan,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         position: DisplayRowPosition,
         render_state: DisplayRowTransitionRenderState<'_>,
         col: &mut usize,
     ) -> DisplayTextRowTransition {
-        let transition = self.emit_overflow(plan, hit_range, position);
+        let transition = self.emit_overflow(plan, next_row_start, position);
         if !transition.is_exhausted() {
             render_state.apply_overflow_row_start(plan, col);
         }
@@ -420,7 +412,7 @@ impl DisplayRowLineBreakTransitionPlan {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn request<'a>(
         self,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         defaults: DisplayRowGeometryDefaults,
         row_base: usize,
         position: DisplayRowPosition,
@@ -429,7 +421,7 @@ impl DisplayRowLineBreakTransitionPlan {
         max_rows: usize,
     ) -> DisplayRowLineBreakTransitionRequest<'a> {
         DisplayRowLineBreakTransitionRequest::new(
-            hit_range,
+            next_row_start,
             defaults,
             row_base,
             self.row_start_col(),
@@ -444,7 +436,7 @@ impl DisplayRowLineBreakTransitionPlan {
 impl<'a> DisplayRowLineBreakTransitionRequest<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         defaults: DisplayRowGeometryDefaults,
         row_base: usize,
         col: usize,
@@ -454,7 +446,7 @@ impl<'a> DisplayRowLineBreakTransitionRequest<'a> {
         max_rows: usize,
     ) -> Self {
         Self {
-            hit_range,
+            next_row_start,
             defaults,
             row_base,
             col,
@@ -467,7 +459,7 @@ impl<'a> DisplayRowLineBreakTransitionRequest<'a> {
 
     fn boundary_target(self) -> DisplayRowBoundaryTarget<'a> {
         DisplayRowBoundaryTarget::line_break(
-            self.hit_range,
+            self.next_row_start,
             self.defaults,
             self.row_base,
             self.col,
@@ -480,23 +472,18 @@ impl<'a> DisplayRowLineBreakTransitionRequest<'a> {
     pub(crate) fn finish_geometry(
         self,
         row_geometry: &mut DisplayRowGeometryState,
-        hit_rows: &mut Vec<HitRow>,
     ) -> DisplayTextRowGeometryTransition {
-        row_geometry.finish_boundary_and_record_hit(self.boundary_target(), hit_rows)
+        row_geometry.finish_boundary(self.boundary_target())
     }
 
     pub(crate) fn emit_with_output(
         self,
         row_geometry: &mut DisplayRowGeometryState,
-        hit_rows: &mut Vec<HitRow>,
         output_render: TextRowOutputRenderState<'_>,
     ) -> DisplayTextRowTransition {
         let max_rows = self.max_rows;
-        DisplayRowBoundaryTransitionRequest::new(self.boundary_target(), max_rows).emit_with_output(
-            row_geometry,
-            hit_rows,
-            output_render,
-        )
+        DisplayRowBoundaryTransitionRequest::new(self.boundary_target(), max_rows)
+            .emit_with_output(row_geometry, output_render)
     }
 }
 
@@ -544,7 +531,7 @@ impl DisplayRowOverflowTransitionPlan {
 
     pub(crate) fn request<'a>(
         self,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         defaults: DisplayRowGeometryDefaults,
         row_base: usize,
         position: DisplayRowPosition,
@@ -554,7 +541,7 @@ impl DisplayRowOverflowTransitionPlan {
         match self.kind {
             DisplayRowOverflowTransitionKind::Truncation => {
                 DisplayRowOverflowTransitionRequest::truncation(
-                    hit_range,
+                    next_row_start,
                     defaults,
                     row_base,
                     self.row_start_col(),
@@ -566,7 +553,7 @@ impl DisplayRowOverflowTransitionPlan {
             DisplayRowOverflowTransitionKind::VisualWrap(break_kind) => {
                 DisplayRowOverflowTransitionRequest::visual_wrap(
                     break_kind,
-                    hit_range,
+                    next_row_start,
                     defaults,
                     row_base,
                     self.row_start_col(),
@@ -581,7 +568,7 @@ impl DisplayRowOverflowTransitionPlan {
 
 impl<'a> DisplayRowOverflowTransitionRequest<'a> {
     pub(crate) fn truncation(
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         defaults: DisplayRowGeometryDefaults,
         row_base: usize,
         col: usize,
@@ -591,7 +578,7 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
     ) -> Self {
         Self {
             kind: DisplayRowOverflowTransitionKind::Truncation,
-            hit_range,
+            next_row_start,
             defaults,
             row_base,
             col,
@@ -604,7 +591,7 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn visual_wrap(
         break_kind: VisualWrapBreak,
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         defaults: DisplayRowGeometryDefaults,
         row_base: usize,
         col: usize,
@@ -614,7 +601,7 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
     ) -> Self {
         Self {
             kind: DisplayRowOverflowTransitionKind::VisualWrap(break_kind),
-            hit_range,
+            next_row_start,
             defaults,
             row_base,
             col,
@@ -627,7 +614,7 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
     fn boundary_target(self) -> DisplayRowBoundaryTarget<'a> {
         match self.kind {
             DisplayRowOverflowTransitionKind::Truncation => DisplayRowBoundaryTarget::truncation(
-                self.hit_range,
+                self.next_row_start,
                 self.defaults,
                 self.row_base,
                 self.col,
@@ -636,7 +623,7 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
             ),
             DisplayRowOverflowTransitionKind::VisualWrap(_) => {
                 DisplayRowBoundaryTarget::visual_wrap(
-                    self.hit_range,
+                    self.next_row_start,
                     self.defaults,
                     self.row_base,
                     self.col,
@@ -652,7 +639,6 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
         row_geometry: &mut DisplayRowGeometryState,
         row_flags: &mut DisplayRowFlags,
         row_limit: DisplayRowLimit,
-        hit_rows: &mut Vec<HitRow>,
         output_render: TextRowOutputRenderState<'_>,
     ) -> DisplayTextRowTransition {
         match self.kind {
@@ -683,7 +669,7 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
         let kind = self.kind;
         let max_rows = self.max_rows;
         let transition = DisplayRowBoundaryTransitionRequest::new(self.boundary_target(), max_rows)
-            .emit_with_output(row_geometry, hit_rows, output_render);
+            .emit_with_output(row_geometry, output_render);
         if matches!(kind, DisplayRowOverflowTransitionKind::VisualWrap(_))
             && !transition.is_exhausted()
         {

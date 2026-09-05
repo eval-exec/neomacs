@@ -343,7 +343,7 @@ fn walk_setup_initializes_source_position_and_geometry_state() {
     assert_eq!(setup.row_geometry.y(), 32.0);
     assert_eq!(setup.row_geometry.height(), 16.0);
     assert_eq!(setup.row_geometry.ascent(), 11.0);
-    assert_eq!(setup.hit_row_range.start(), 17);
+    assert_eq!(setup.row_source_start.start(), 17);
 }
 
 #[test]

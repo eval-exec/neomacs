@@ -10,8 +10,8 @@ use crate::display_row::append_context::RightEdgeMarkerColumn;
 use crate::display_row::builder::DisplayRowGlyphCheckpoint;
 use crate::display_row::builder::DisplayRowPosition;
 use crate::display_row::geometry::{
-    DisplayRowExtendState, DisplayRowGeometryDefaults, DisplayRowGeometryState, DisplayRowHitRange,
-    DisplayRowLimit, DisplayRowVisibilityLimit,
+    DisplayRowExtendState, DisplayRowGeometryDefaults, DisplayRowGeometryState, DisplayRowLimit,
+    DisplayRowVisibilityLimit,
 };
 use crate::display_row::metrics::DisplayRowMeasuredFaceMetrics;
 use crate::display_row::source_render::TextRowSourceRenderState;
@@ -20,7 +20,7 @@ use crate::display_row::transition::{
     DisplayRowTransitionContinuation, DisplayRowTransitionRenderState,
 };
 use crate::display_row::walk_state::{
-    FaceScanCheckpoint, HitRowRangeTracker, LineNumberRenderState, WordWrapBreakCandidate,
+    DisplayRowSourceStart, FaceScanCheckpoint, LineNumberRenderState, WordWrapBreakCandidate,
     WordWrapRenderState, sync_position_after_row_transition,
 };
 use crate::display_source::{DisplaySourceStepChar, DisplaySourceTextPosition};
@@ -31,7 +31,7 @@ use crate::display_source_overflow::{
     DisplaySourceSpecialCharOverflowAction, DisplaySourceTextCharOverflowAction,
 };
 use crate::neovm_bridge::LayoutBufferView;
-use crate::types::LineWrapMode;
+use crate::types::{LayoutCharPos0, LineWrapMode};
 use crate::window_output::{DisplayTextRowTransition, WindowOutputEmitter};
 use neomacs_display_protocol::types::Color;
 use neovm_core::buffer::EmacsBytePos;
@@ -188,7 +188,7 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
             source_render,
             row_build,
             mut row_carryover,
-            hit_capture,
+            row_source_start,
             face_scan,
             row_y_positions,
             ..
@@ -228,12 +228,11 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                     row_build.row_geometry,
                     row_build.row_flags,
                     context.row_limit,
-                    hit_capture.hit_rows,
                     &mut source_render,
                 )
                 .emit_overflow_then_row_start(
                     transition,
-                    hit_capture.hit_row_range.range_to(progress.charpos()),
+                    LayoutCharPos0::new(progress.charpos()),
                     row_position,
                     row_carryover.render_state(context.has_prefix),
                     progress.row_progress_mut().col_mut(),
@@ -259,7 +258,7 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 // the row; without this they would remain drawn, splitting the
                 // word. GNU keeps whole words by rewinding its iterator to the
                 // boundary; this is the glyph-side of that rewind. (The
-                // display-point/hit metadata is rewound to the same boundary by
+                // display-point metadata is rewound to the same boundary by
                 // `apply_before_row_transition` below.)
                 source_render.restore_glyph_checkpoint(word_wrap_action.glyph_checkpoint());
                 word_wrap_action.restore_row_extend(row_build.row_extend, row_build.row_geometry);
@@ -305,19 +304,18 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                     row_build.row_geometry,
                     row_build.row_flags,
                     context.row_limit,
-                    hit_capture.hit_rows,
                     &mut source_render,
                 )
                 .emit_overflow(
                     transition,
-                    hit_capture.hit_row_range.range_to(progress.charpos()),
+                    LayoutCharPos0::new(progress.charpos()),
                     progress.row_position(),
                 );
                 let continuation = word_wrap_action.apply_after_row_transition_and_prefix(
                     row_transition,
                     transition,
                     &mut source_position,
-                    hit_capture.hit_row_range,
+                    row_source_start,
                     face_scan,
                     row_build.row_geometry,
                     context.row_visibility_limit,
@@ -374,12 +372,11 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                     row_build.row_geometry,
                     row_build.row_flags,
                     context.row_limit,
-                    hit_capture.hit_rows,
                     &mut source_render,
                 )
                 .emit_overflow_then_row_start(
                     transition,
-                    hit_capture.hit_row_range.range_to(progress.charpos()),
+                    LayoutCharPos0::new(progress.charpos()),
                     row_position,
                     row_carryover.render_state(context.has_prefix),
                     progress.row_progress_mut().col_mut(),
@@ -387,7 +384,7 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 let continuation = character_wrap_action.apply_after_visible_row_transition(
                     row_transition,
                     &mut source_position,
-                    hit_capture.hit_row_range,
+                    row_source_start,
                     face_scan,
                     row_build.row_geometry,
                     context.row_visibility_limit,
@@ -477,12 +474,12 @@ impl BufferSourceTruncationSkipAction {
         row_transition: DisplayTextRowTransition,
         synced_charpos: i64,
         position: &mut DisplaySourceTextPosition,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
     ) -> DisplayRowTransitionContinuation {
         if row_transition.is_exhausted() {
             return DisplayRowTransitionContinuation::Exhausted;
         }
-        sync_position_after_row_transition(synced_charpos, position, hit_row_range);
+        sync_position_after_row_transition(synced_charpos, position, row_source_start);
         DisplayRowTransitionContinuation::Continue
     }
 }
@@ -556,11 +553,11 @@ impl BufferSourceWordWrapAction {
     pub(crate) fn apply_after_row_transition(
         self,
         position: &mut DisplaySourceTextPosition,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
         face_scan: &mut FaceScanCheckpoint,
     ) {
         *position = self.source_position();
-        hit_row_range.advance_to(position.charpos());
+        row_source_start.advance_to(position.charpos());
         face_scan.invalidate();
     }
 
@@ -569,7 +566,7 @@ impl BufferSourceWordWrapAction {
         row_transition: DisplayTextRowTransition,
         transition: DisplayRowOverflowTransitionPlan,
         position: &mut DisplaySourceTextPosition,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
         face_scan: &mut FaceScanCheckpoint,
         row_geometry: &DisplayRowGeometryState,
         row_visibility_limit: DisplayRowVisibilityLimit,
@@ -578,7 +575,7 @@ impl BufferSourceWordWrapAction {
         if row_transition.is_exhausted() {
             return DisplayRowTransitionContinuation::Exhausted;
         }
-        self.apply_after_row_transition(position, hit_row_range, face_scan);
+        self.apply_after_row_transition(position, row_source_start, face_scan);
         render_state.apply_overflow_prefix(transition);
         DisplayRowTransitionContinuation::after_visible_row_transition(
             row_transition,
@@ -618,13 +615,14 @@ impl BufferSourceSpecialWrapAction {
         row_extend.clear();
     }
 
-    pub(crate) fn hit_range_and_advance(
+    /// The charpos the continuation row starts at, taken before the tracker
+    /// is advanced onto it so the two can never disagree.
+    pub(crate) fn next_row_start_and_advance(
         self,
-        hit_row_range: &mut HitRowRangeTracker,
-    ) -> DisplayRowHitRange {
-        let hit_range = hit_row_range.range_to(self.charpos);
-        hit_row_range.advance_to(self.charpos);
-        hit_range
+        row_source_start: &mut DisplayRowSourceStart,
+    ) -> LayoutCharPos0 {
+        row_source_start.advance_to(self.charpos);
+        LayoutCharPos0::new(self.charpos)
     }
 
     pub(crate) fn transition_continuation(
@@ -685,11 +683,11 @@ impl BufferSourceCharacterWrapAction {
     pub(crate) fn apply_after_row_transition(
         self,
         position: &mut DisplaySourceTextPosition,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
         face_scan: &mut FaceScanCheckpoint,
     ) {
         self.rewind_source_state(position);
-        hit_row_range.advance_to(position.charpos());
+        row_source_start.advance_to(position.charpos());
         face_scan.invalidate();
     }
 
@@ -697,7 +695,7 @@ impl BufferSourceCharacterWrapAction {
         self,
         row_transition: DisplayTextRowTransition,
         position: &mut DisplaySourceTextPosition,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
         face_scan: &mut FaceScanCheckpoint,
         row_geometry: &DisplayRowGeometryState,
         row_visibility_limit: DisplayRowVisibilityLimit,
@@ -705,7 +703,7 @@ impl BufferSourceCharacterWrapAction {
         if row_transition.is_exhausted() {
             return DisplayRowTransitionContinuation::Exhausted;
         }
-        self.apply_after_row_transition(position, hit_row_range, face_scan);
+        self.apply_after_row_transition(position, row_source_start, face_scan);
         DisplayRowTransitionContinuation::after_visible_row_transition(
             row_transition,
             row_geometry,
@@ -819,7 +817,7 @@ impl<'a> BufferSourceSpecialOverflowRenderRequest<'a> {
             source_render,
             row_build,
             mut row_carryover,
-            hit_capture,
+            row_source_start,
             row_y_positions,
             ..
         } = state;
@@ -855,12 +853,11 @@ impl<'a> BufferSourceSpecialOverflowRenderRequest<'a> {
                     row_build.row_geometry,
                     row_build.row_flags,
                     context.row_limit,
-                    hit_capture.hit_rows,
                     &mut source_render,
                 )
                 .emit_overflow_then_row_start(
                     transition,
-                    hit_capture.hit_row_range.range_to(progress.charpos()),
+                    LayoutCharPos0::new(progress.charpos()),
                     row_position,
                     row_carryover.render_state(context.has_prefix),
                     progress.row_progress_mut().col_mut(),
@@ -874,7 +871,7 @@ impl<'a> BufferSourceSpecialOverflowRenderRequest<'a> {
                     row_transition,
                     synced_charpos,
                     &mut source_position,
-                    hit_capture.hit_row_range,
+                    row_source_start,
                 );
                 source_walk
                     .source_position_update(source_position)
@@ -892,8 +889,8 @@ impl<'a> BufferSourceSpecialOverflowRenderRequest<'a> {
                     progress.row_progress_mut().x_mut(),
                     context.content_x,
                 );
-                let hit_range =
-                    special_wrap_action.hit_range_and_advance(hit_capture.hit_row_range);
+                let next_row_start =
+                    special_wrap_action.next_row_start_and_advance(row_source_start);
                 let row_position = progress.row_position();
                 let row_transition = DisplayRowTextWindowEmitContext::from_source_render(
                     context.row_geometry_defaults,
@@ -903,12 +900,11 @@ impl<'a> BufferSourceSpecialOverflowRenderRequest<'a> {
                     row_build.row_geometry,
                     row_build.row_flags,
                     context.row_limit,
-                    hit_capture.hit_rows,
                     &mut source_render,
                 )
                 .emit_overflow_then_row_start(
                     transition,
-                    hit_range,
+                    next_row_start,
                     row_position,
                     row_carryover.render_state(context.has_prefix),
                     progress.row_progress_mut().col_mut(),

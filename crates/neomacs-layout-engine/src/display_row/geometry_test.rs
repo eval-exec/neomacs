@@ -206,12 +206,6 @@ fn display_row_geometry_cursor_advances_row_position_and_resets_metrics() {
         measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
     });
 
-    let hit_row = cursor.hit_row(11, 22);
-    assert_eq!(hit_row.y_start, 42.0);
-    assert_eq!(hit_row.y_end, 66.0);
-    assert_eq!(hit_row.charpos_start, 11);
-    assert_eq!(hit_row.charpos_end, 22);
-
     let finished = cursor.finish_and_advance_to_next_row(
         DisplayRowGeometryDefaults {
             text_y: 10.0,
@@ -298,12 +292,7 @@ fn display_row_geometry_state_builds_cursor_after_row_y_adjustment() {
     };
 
     let cursor = geometry.with_row_y(48.0).cursor();
-    let hit_row = cursor.hit_row(11, 22);
 
-    assert_eq!(hit_row.y_start, 48.0);
-    assert_eq!(hit_row.y_end, 72.0);
-    assert_eq!(hit_row.charpos_start, 11);
-    assert_eq!(hit_row.charpos_end, 22);
     assert_eq!(
         cursor.finish_current_row(),
         DisplayTextRowMetrics {
@@ -865,8 +854,12 @@ fn display_row_geometry_cursor_finishes_and_builds_next_display_text_row_begin()
     );
 }
 
+/// If this claim is false a continuation row opens at the wrong buffer
+/// position, and every position the row publishes downstream — cursor
+/// placement, `window-end`, mouse hit resolution — is off by the span the
+/// finished row covered.
 #[test]
-fn display_row_geometry_state_can_finish_boundary_and_record_hit_row() {
+fn finishing_a_row_boundary_advances_the_geometry_and_stamps_the_next_row_start() {
     let mut geometry = DisplayRowGeometryState {
         row: 2,
         y: 42.0,
@@ -876,38 +869,26 @@ fn display_row_geometry_state_can_finish_boundary_and_record_hit_row() {
         measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
     };
     let mut row_y_positions = DisplayRowYPositions::with_first_row(8.0, 16.0);
-    let mut hit_rows = Vec::new();
 
-    let transition = geometry.finish_boundary_and_record_hit(
-        DisplayRowBoundaryTarget::visual_wrap(
-            DisplayRowHitRange {
-                charpos_start: 11,
-                charpos_end: 22,
-            },
-            DisplayRowGeometryDefaults {
-                text_y: 10.0,
-                height: 16.0,
-                ascent: 12.0,
-                measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
-            },
-            5,
-            7,
-            13.0,
-            row_y_positions.recording(),
-        ),
-        &mut hit_rows,
-    );
+    let transition = geometry.finish_boundary(DisplayRowBoundaryTarget::visual_wrap(
+        LayoutCharPos0::new(22),
+        DisplayRowGeometryDefaults {
+            text_y: 10.0,
+            height: 16.0,
+            ascent: 12.0,
+            measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
+        },
+        5,
+        7,
+        13.0,
+        row_y_positions.recording(),
+    ));
 
     assert_eq!(geometry.row, 3);
     assert_eq!(geometry.y, 10.0 + 3.0 * 16.0 + 11.0);
     assert_eq!(geometry.row_extra_y, 11.0);
     assert_eq!(geometry.height, 16.0);
     assert_eq!(geometry.ascent, 12.0);
-    assert_eq!(hit_rows.len(), 1);
-    assert_eq!(hit_rows[0].y_start, 42.0);
-    assert_eq!(hit_rows[0].y_end, 66.0);
-    assert_eq!(hit_rows[0].charpos_start, 11);
-    assert_eq!(hit_rows[0].charpos_end, 22);
     assert_eq!(
         transition.begin_row,
         DisplayTextRowBegin {
@@ -933,29 +914,22 @@ fn display_row_geometry_transition_target_groups_truncation_transition_and_commi
         measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
     };
     let mut row_y_positions = DisplayRowYPositions::with_first_row(8.0, 16.0);
-    let mut hit_rows = Vec::new();
 
-    let transition = geometry.finish_boundary_and_record_hit(
-        DisplayRowBoundaryTarget::new(
-            DisplayRowHitRange {
-                charpos_start: 0,
-                charpos_end: 0,
+    let transition = geometry.finish_boundary(DisplayRowBoundaryTarget::new(
+        LayoutCharPos0::new(0),
+        DisplayRowGeometryTransitionTarget::truncation(
+            DisplayRowGeometryDefaults {
+                text_y: 10.0,
+                height: 16.0,
+                ascent: 12.0,
+                measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
             },
-            DisplayRowGeometryTransitionTarget::truncation(
-                DisplayRowGeometryDefaults {
-                    text_y: 10.0,
-                    height: 16.0,
-                    ascent: 12.0,
-                    measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
-                },
-                5,
-                7,
-                13.0,
-                row_y_positions.recording(),
-            ),
+            5,
+            7,
+            13.0,
+            row_y_positions.recording(),
         ),
-        &mut hit_rows,
-    );
+    ));
 
     assert_eq!(
         transition,
@@ -994,30 +968,23 @@ fn display_row_geometry_transition_target_line_break_constructor_sets_kind() {
         measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
     };
     let mut row_y_positions = DisplayRowYPositions::with_first_row(8.0, 16.0);
-    let mut hit_rows = Vec::new();
 
-    let transition = geometry.finish_boundary_and_record_hit(
-        DisplayRowBoundaryTarget::new(
-            DisplayRowHitRange {
-                charpos_start: 0,
-                charpos_end: 0,
+    let transition = geometry.finish_boundary(DisplayRowBoundaryTarget::new(
+        LayoutCharPos0::new(0),
+        DisplayRowGeometryTransitionTarget::line_break(
+            DisplayRowGeometryDefaults {
+                text_y: 10.0,
+                height: 16.0,
+                ascent: 12.0,
+                measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
             },
-            DisplayRowGeometryTransitionTarget::line_break(
-                DisplayRowGeometryDefaults {
-                    text_y: 10.0,
-                    height: 16.0,
-                    ascent: 12.0,
-                    measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
-                },
-                5,
-                7,
-                13.0,
-                4.0,
-                row_y_positions.recording(),
-            ),
+            5,
+            7,
+            13.0,
+            4.0,
+            row_y_positions.recording(),
         ),
-        &mut hit_rows,
-    );
+    ));
 
     assert_eq!(
         transition.begin_row,
@@ -1034,6 +1001,9 @@ fn display_row_geometry_transition_target_line_break_constructor_sets_kind() {
     assert_eq!(row_y_positions.recorded(), &[8.0, 10.0 + 3.0 * 16.0 + 15.0]);
 }
 
+/// If this claim is false a boundary taken with no y-recording sink (the
+/// overlay-string row break) stops reporting the finished row's own metrics,
+/// and the row it closed is published with the next row's height.
 #[test]
 fn display_row_geometry_state_can_finish_boundary_without_row_y_recording() {
     let mut geometry = DisplayRowGeometryState {
@@ -1045,11 +1015,8 @@ fn display_row_geometry_state_can_finish_boundary_without_row_y_recording() {
         measurement_mode: DisplayRowMeasurementMode::ConcreteFont,
     };
 
-    let boundary = geometry.finish_boundary_in_place(DisplayRowBoundaryTarget::line_break(
-        DisplayRowHitRange {
-            charpos_start: 11,
-            charpos_end: 22,
-        },
+    let transition = geometry.finish_boundary(DisplayRowBoundaryTarget::line_break(
+        LayoutCharPos0::new(22),
         DisplayRowGeometryDefaults {
             text_y: 10.0,
             height: 16.0,
@@ -1063,67 +1030,13 @@ fn display_row_geometry_state_can_finish_boundary_without_row_y_recording() {
         DisplayRowYRecording::None,
     ));
 
-    assert_eq!(boundary.hit_row.y_start, 42.0);
-    assert_eq!(boundary.hit_row.y_end, 66.0);
+    assert_eq!(transition.finished_row.y, 42.0);
+    assert_eq!(transition.finished_row.height, 24.0);
     assert_eq!(geometry.row, 3);
     assert_eq!(geometry.y, 10.0 + 3.0 * 16.0 + 13.0);
     assert_eq!(geometry.row_extra_y, 13.0);
     assert_eq!(geometry.height, 16.0);
     assert_eq!(geometry.ascent, 12.0);
-}
-
-#[test]
-fn display_row_boundary_transition_records_hit_row_and_returns_geometry_transition() {
-    let boundary = DisplayRowBoundaryTransition {
-        hit_row: HitRow {
-            y_start: 42.0,
-            y_end: 66.0,
-            charpos_start: 11,
-            charpos_end: 22,
-        },
-        transition: DisplayTextRowGeometryTransition {
-            finished_row: DisplayTextRowMetrics {
-                y: 42.0,
-                height: 24.0,
-                ascent: 18.0,
-            },
-            begin_row: DisplayTextRowBegin {
-                display_row_index: 8,
-                row: 3,
-                col: 7,
-                y: 69.0,
-                x: 13.0,
-                start_charpos: LayoutCharPos0::new(21),
-            },
-        },
-    };
-    let mut hit_rows = Vec::new();
-
-    let transition = boundary.record_hit_row(&mut hit_rows);
-
-    assert_eq!(hit_rows.len(), 1);
-    assert_eq!(hit_rows[0].y_start, 42.0);
-    assert_eq!(hit_rows[0].y_end, 66.0);
-    assert_eq!(hit_rows[0].charpos_start, 11);
-    assert_eq!(hit_rows[0].charpos_end, 22);
-    assert_eq!(
-        transition,
-        DisplayTextRowGeometryTransition {
-            finished_row: DisplayTextRowMetrics {
-                y: 42.0,
-                height: 24.0,
-                ascent: 18.0,
-            },
-            begin_row: DisplayTextRowBegin {
-                display_row_index: 8,
-                row: 3,
-                col: 7,
-                y: 69.0,
-                x: 13.0,
-                start_charpos: LayoutCharPos0::new(21),
-            },
-        }
-    );
 }
 
 #[test]
@@ -1165,8 +1078,10 @@ fn display_row_geometry_defaults_build_row_y_fallback() {
     );
 }
 
+/// If this claim is false a line break advances the pen like a truncation (or
+/// vice versa), so the row below starts at the wrong y and the wrong charpos.
 #[test]
-fn display_row_boundary_target_constructors_encode_boundary_kind_and_hit_range() {
+fn a_boundary_target_constructor_encodes_its_advance_kind_and_the_next_row_start() {
     let defaults = DisplayRowGeometryDefaults {
         text_y: 10.0,
         height: 16.0,
@@ -1176,10 +1091,7 @@ fn display_row_boundary_target_constructors_encode_boundary_kind_and_hit_range()
 
     let mut line_break_y_positions = DisplayRowYPositions::with_first_row(8.0, 16.0);
     let line_break = DisplayRowBoundaryTarget::line_break(
-        DisplayRowHitRange {
-            charpos_start: 11,
-            charpos_end: 22,
-        },
+        LayoutCharPos0::new(22),
         defaults,
         5,
         7,
@@ -1189,10 +1101,7 @@ fn display_row_boundary_target_constructors_encode_boundary_kind_and_hit_range()
     );
     let mut truncation_y_positions = DisplayRowYPositions::with_first_row(8.0, 16.0);
     let truncation = DisplayRowBoundaryTarget::truncation(
-        DisplayRowHitRange {
-            charpos_start: 11,
-            charpos_end: 22,
-        },
+        LayoutCharPos0::new(22),
         defaults,
         5,
         7,
@@ -1201,10 +1110,7 @@ fn display_row_boundary_target_constructors_encode_boundary_kind_and_hit_range()
     );
     let mut visual_wrap_y_positions = DisplayRowYPositions::with_first_row(8.0, 16.0);
     let visual_wrap = DisplayRowBoundaryTarget::visual_wrap(
-        DisplayRowHitRange {
-            charpos_start: 11,
-            charpos_end: 22,
-        },
+        LayoutCharPos0::new(22),
         defaults,
         5,
         7,
@@ -1212,8 +1118,7 @@ fn display_row_boundary_target_constructors_encode_boundary_kind_and_hit_range()
         visual_wrap_y_positions.recording(),
     );
 
-    assert_eq!(line_break.hit_range.charpos_start, 11);
-    assert_eq!(line_break.hit_range.charpos_end, 22);
+    assert_eq!(line_break.next_row_start, LayoutCharPos0::new(22));
     assert!(matches!(
         line_break.transition.kind,
         DisplayRowAdvanceKind::LineBreak { line_spacing: 4.0 }

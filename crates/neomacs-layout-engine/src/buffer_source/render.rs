@@ -29,7 +29,7 @@ use crate::display_row::walk_state::TextRowTransitionStatePolicy;
 use crate::display_source::DisplaySourceStepChar;
 use crate::display_source::DisplaySourceStepItem;
 use crate::neovm_bridge::LayoutBufferView;
-use crate::types::WindowParams;
+use crate::types::{LayoutCharPos0, WindowParams};
 
 pub(crate) fn emit_nested_source_visual_wrap(
     loop_context: BufferSourceLoopRequestContext,
@@ -40,7 +40,7 @@ pub(crate) fn emit_nested_source_visual_wrap(
         mut source_render,
         row_build,
         mut row_carryover,
-        hit_capture,
+        row_source_start,
         face_scan,
         row_y_positions,
         surface,
@@ -63,7 +63,7 @@ pub(crate) fn emit_nested_source_visual_wrap(
     row_build.row_extend.clear();
 
     let charpos = progress.charpos();
-    let hit_range = hit_capture.hit_row_range.range_to(charpos);
+    let next_row_start = LayoutCharPos0::new(charpos);
     // A nested display source that runs past the right edge is broken
     // mid-element, the branch where GNU produces IT_CONTINUATION
     // (src/xdisp.c:26421-26432).
@@ -80,12 +80,11 @@ pub(crate) fn emit_nested_source_visual_wrap(
         row_build.row_geometry,
         row_build.row_flags,
         loop_context.row_limit(),
-        hit_capture.hit_rows,
         &mut source_render,
     )
     .emit_overflow_then_row_start(
         transition,
-        hit_range,
+        next_row_start,
         row_position,
         row_carryover.render_state(loop_context.has_prefix()),
         progress.row_progress_mut().col_mut(),
@@ -94,7 +93,7 @@ pub(crate) fn emit_nested_source_visual_wrap(
         return DisplayRowTransitionContinuation::Exhausted;
     }
 
-    hit_capture.hit_row_range.advance_to(charpos);
+    row_source_start.advance_to(charpos);
     face_scan.invalidate();
     DisplayRowTransitionContinuation::after_visible_row_transition(
         row_transition,
@@ -226,8 +225,7 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
                 col,
                 self.state.row_build.row_geometry,
                 self.state.cursor_info,
-                self.state.hit_capture.hit_rows,
-                self.state.hit_capture.hit_row_range,
+                self.state.row_source_start,
                 self.state.row_y_positions,
                 self.state.face_ids,
                 self.state.row_carryover.line_numbers,

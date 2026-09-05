@@ -507,31 +507,25 @@ fn trailing_whitespace_render_state_tracks_enabled_marker_and_background() {
     assert_eq!(disabled.start_marker(), DisplayRowStartMarker::Inactive);
 }
 
+/// If this claim is false the walk finishes a row that consumed no source,
+/// publishing an empty display row between two real ones (GNU's
+/// `row->used[TEXT_AREA] == 0` guard in `display_line`).
 #[test]
-fn hit_row_range_tracker_builds_ranges_and_tracks_pending_finish() {
-    let mut tracker = HitRowRangeTracker::new(10);
+fn a_row_may_be_finished_only_once_the_walk_has_advanced_past_its_source_start() {
+    let mut tracker = DisplayRowSourceStart::new(10);
 
-    assert_eq!(
-        tracker.range_to(14),
-        DisplayRowHitRange {
-            charpos_start: 10,
-            charpos_end: 14,
-        }
-    );
+    assert_eq!(tracker.start(), 10);
     assert!(!tracker.should_finish_current_row(10, false));
     assert!(tracker.should_finish_current_row(11, false));
+    // Emitted output finishes the row even at a standstill: a prefix, a line
+    // number or an overlay string is content the row already carries.
     assert!(tracker.should_finish_current_row(10, true));
 
     tracker.advance_to(14);
 
-    assert_eq!(
-        tracker.range_to(20),
-        DisplayRowHitRange {
-            charpos_start: 14,
-            charpos_end: 20,
-        }
-    );
+    assert_eq!(tracker.start(), 14);
     assert!(!tracker.should_finish_current_row(14, false));
+    assert!(tracker.should_finish_current_row(15, false));
 }
 
 #[test]

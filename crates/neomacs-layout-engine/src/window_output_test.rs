@@ -41,7 +41,7 @@ use crate::display_row::geometry::{
     DisplayRowGeometryState, DisplayRowLimit, DisplayRowYPositions,
 };
 use crate::display_row::text_output::TextRowOutput;
-use crate::display_row::walk_state::HitRowRangeTracker;
+use crate::display_row::walk_state::DisplayRowSourceStart;
 use crate::display_status_line::DisplayRowOutputProgress;
 use crate::output::builder::DisplayOutputBuilder;
 use crate::types::LayoutCharPos0;
@@ -1252,8 +1252,11 @@ fn display_text_row_metrics_finish_and_end_closes_matrix_row() {
     assert_eq!(state.window_matrices[0].matrix.rows.len(), 1);
 }
 
+/// If this claim is false the last row of a window is published with the
+/// default character height rather than its own measured one, and everything
+/// laid out below it in the frame shifts.
 #[test]
-fn finish_pending_text_window_row_records_hit_and_row_metrics() {
+fn finishing_a_pending_text_window_row_publishes_its_measured_row_metrics() {
     let mut eval = Context::new();
     let buf_id = eval
         .buffer_manager()
@@ -1289,8 +1292,7 @@ fn finish_pending_text_window_row_records_hit_and_row_metrics() {
 
     let row_geometry = DisplayRowGeometryState::new(0, 4.0, 0.0, 18.0, 13.0);
     let row_y_positions = DisplayRowYPositions::with_first_row(4.0, 18.0);
-    let mut hit_row_range = HitRowRangeTracker::new(2);
-    let mut hit_rows = Vec::new();
+    let mut row_source_start = DisplayRowSourceStart::new(2);
 
     let finished = finish_pending_text_window_row(
         TextWindowOutputTarget::from_builder(&mut builder),
@@ -1303,15 +1305,11 @@ fn finish_pending_text_window_row_records_hit_and_row_metrics() {
             text_y: 4.0,
             char_height: 18.0,
             charpos: 5,
-            hit_row_range: &mut hit_row_range,
-            hit_rows: &mut hit_rows,
+            row_source_start: &mut row_source_start,
         },
     );
 
     assert!(finished);
-    assert_eq!(hit_rows.len(), 1);
-    assert_eq!(hit_rows[0].charpos_start, 2);
-    assert_eq!(hit_rows[0].charpos_end, 5);
     assert_eq!(emitter.rows().len(), 1);
     assert_eq!(emitter.row_metrics()[0].pixel_y(), 4.0);
     assert_eq!(emitter.row_metrics()[0].height(), 18.0);

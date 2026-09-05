@@ -17,12 +17,11 @@ use crate::display_row::special_glyphs::{
     install_text_window_terminal_right_border,
 };
 use crate::display_row::walk_state::{
-    HitRowRangeTracker, next_window_start_for_partially_visible_point_row,
+    DisplayRowSourceStart, next_window_start_for_partially_visible_point_row,
     next_window_start_for_point_line_continuation, next_window_start_from_visible_rows,
     visible_rows_below,
 };
 use crate::display_status_line::ChromeRowRenderServices;
-use crate::hit_test::HitRow;
 use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
 use crate::scroll_policy::{
     ForwardScroll, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
@@ -263,8 +262,7 @@ pub(crate) struct TextWindowTailFinalizeState<'a, 'emit> {
     cursor_info: &'emit mut CursorCaptureState,
     row_geometry: &'a DisplayRowGeometryState,
     row_y_positions: &'a DisplayRowYPositions,
-    hit_row_range: &'emit mut HitRowRangeTracker,
-    hit_rows: &'emit mut Vec<HitRow>,
+    row_source_start: &'emit mut DisplayRowSourceStart,
     output_render: TextRowOutputRenderState<'emit>,
 }
 
@@ -322,7 +320,6 @@ pub(crate) struct TextWindowFinishState<'a> {
     output: TextWindowOutputTarget<'a>,
     output_emitter: WindowOutputEmitter,
     evaluator: &'a mut Context,
-    hit_rows: Vec<HitRow>,
 }
 
 pub(crate) struct TextWindowFinishOutput {
@@ -408,16 +405,14 @@ impl<'a, 'emit> TextWindowTailFinalizeState<'a, 'emit> {
         cursor_info: &'emit mut CursorCaptureState,
         row_geometry: &'a DisplayRowGeometryState,
         row_y_positions: &'a DisplayRowYPositions,
-        hit_row_range: &'emit mut HitRowRangeTracker,
-        hit_rows: &'emit mut Vec<HitRow>,
+        row_source_start: &'emit mut DisplayRowSourceStart,
         output_render: TextRowOutputRenderState<'emit>,
     ) -> Self {
         Self {
             cursor_info,
             row_geometry,
             row_y_positions,
-            hit_row_range,
-            hit_rows,
+            row_source_start,
             output_render,
         }
     }
@@ -442,13 +437,11 @@ impl<'a> TextWindowFinishState<'a> {
         output: TextWindowOutputTarget<'a>,
         output_emitter: WindowOutputEmitter,
         evaluator: &'a mut Context,
-        hit_rows: Vec<HitRow>,
     ) -> Self {
         Self {
             output,
             output_emitter,
             evaluator,
-            hit_rows,
         }
     }
 
@@ -459,7 +452,7 @@ impl<'a> TextWindowFinishState<'a> {
         mode_line_height: i64,
         header_line_height: i64,
         tab_line_height: i64,
-    ) -> (Vec<HitRow>, WindowDisplaySnapshot) {
+    ) -> WindowDisplaySnapshot {
         close_text_window_output(self.output);
         let snapshot = self.output_emitter.finish_snapshot_with_geometry(
             self.evaluator,
@@ -469,7 +462,7 @@ impl<'a> TextWindowFinishState<'a> {
             header_line_height,
             tab_line_height,
         );
-        (self.hit_rows, snapshot)
+        snapshot
     }
 }
 
@@ -597,8 +590,7 @@ impl<'a> TextWindowTailFinalizeRequest<'a> {
             cursor_info,
             row_geometry,
             row_y_positions,
-            hit_row_range,
-            hit_rows,
+            row_source_start,
             output_render,
         } = state;
         let context = self.context;
@@ -660,8 +652,7 @@ impl<'a> TextWindowTailFinalizeRequest<'a> {
                         text_y: context.text_y,
                         char_height: context.char_h,
                         charpos: context.charpos,
-                        hit_row_range,
-                        hit_rows,
+                        row_source_start,
                     },
                 );
 
@@ -1011,7 +1002,7 @@ impl TextWindowFinishRequest {
         self,
         state: TextWindowFinishState<'_>,
     ) -> TextWindowFinishOutput {
-        let (_hit_rows, snapshot) = state.finish_snapshot(
+        let snapshot = state.finish_snapshot(
             self.cell_origin,
             self.regions,
             self.mode_line_height,

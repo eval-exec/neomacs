@@ -28,13 +28,12 @@ use crate::display_row::special_glyphs::{
     TextWindowRightEdgeMarkers, install_text_window_right_edge_markers,
 };
 use crate::display_row::text_output::{TextOutputSpan, TextRowOutput};
-use crate::display_row::walk_state::HitRowRangeTracker;
+use crate::display_row::walk_state::DisplayRowSourceStart;
 use crate::display_text_output_install::{
     DisplayOutputRowStoredMetrics, DisplayOutputTextRowMetricsInstallRequest,
     DisplayOutputTextWindowBeginInstallRequest, TextWindowRowDecorationRequest,
     install_output_resolved_face,
 };
-use crate::hit_test::HitRow;
 use crate::neovm_bridge::ResolvedFace;
 use crate::output::builder::DisplayOutputBuilder;
 use crate::output::install_request::{
@@ -293,8 +292,7 @@ pub(crate) struct TextWindowPendingRowFinish<'a> {
     pub(crate) text_y: f32,
     pub(crate) char_height: f32,
     pub(crate) charpos: i64,
-    pub(crate) hit_row_range: &'a mut HitRowRangeTracker,
-    pub(crate) hit_rows: &'a mut Vec<HitRow>,
+    pub(crate) row_source_start: &'a mut DisplayRowSourceStart,
 }
 
 pub(crate) struct TextWindowOutputTarget<'a> {
@@ -543,7 +541,7 @@ pub(crate) fn finish_pending_text_window_row(
     let has_pending_row_output = output_emitter.current_row_has_output();
     let within_row_limit = request.row_geometry.is_within_row_limit(request.row_limit);
     let should_finish = request
-        .hit_row_range
+        .row_source_start
         .should_finish_current_row(request.charpos, has_pending_row_output);
     if !within_row_limit || !should_finish {
         // Row begin precedes the visible-loop guard so a changed concrete font
@@ -567,9 +565,6 @@ pub(crate) fn finish_pending_text_window_row(
         request.char_height,
     );
     let row_cursor = request.row_geometry.with_row_y(row_y_start).cursor();
-    request
-        .hit_rows
-        .push(row_cursor.hit_row(request.hit_row_range.start(), request.charpos));
     finish_text_window_row(output, output_emitter, row_cursor.finish_current_row());
     true
 }

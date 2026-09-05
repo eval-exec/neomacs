@@ -30,14 +30,14 @@ use crate::display_row::transition::{
     DisplayRowLineBreakTransitionRequest, DisplayRowTransitionContinuation,
 };
 use crate::display_row::walk_state::{
-    FaceScanCheckpoint, HitRowRangeTracker, LineNumberRenderState,
+    DisplayRowSourceStart, FaceScanCheckpoint, LineNumberRenderState,
 };
 use crate::display_source::LispStringSourceOrigin;
 use crate::frame_face_arena::FrameFaceAttempt;
-use crate::hit_test::HitRow;
 use crate::neovm_bridge::{
     LayoutBufferView, OverlayDisplayString, ResolvedFace, RustTextPropAccess,
 };
+use crate::types::LayoutCharPos0;
 use neovm_core::buffer::CharPos0;
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::value::get_string_text_properties_table_for_value;
@@ -257,8 +257,7 @@ pub(crate) struct OverlayStringRenderState<'a> {
     pub(crate) col: &'a mut usize,
     pub(crate) geometry: &'a mut DisplayRowGeometryState,
     pub(crate) cursor_info: &'a mut CursorCaptureState,
-    pub(crate) hit_rows: &'a mut Vec<HitRow>,
-    pub(crate) hit_row_range: &'a mut HitRowRangeTracker,
+    pub(crate) row_source_start: &'a mut DisplayRowSourceStart,
     pub(crate) row_y_positions: &'a mut DisplayRowYPositions,
     pub(crate) face_ids: &'a mut FrameFaceAttempt,
     continuation_row_prelude_state: Option<BufferSourceContinuationRowPreludeState<'a>>,
@@ -277,8 +276,7 @@ impl<'a> OverlayStringRenderState<'a> {
         col: &'a mut usize,
         geometry: &'a mut DisplayRowGeometryState,
         cursor_info: &'a mut CursorCaptureState,
-        hit_rows: &'a mut Vec<HitRow>,
-        hit_row_range: &'a mut HitRowRangeTracker,
+        row_source_start: &'a mut DisplayRowSourceStart,
         row_y_positions: &'a mut DisplayRowYPositions,
         face_ids: &'a mut FrameFaceAttempt,
     ) -> Self {
@@ -288,8 +286,7 @@ impl<'a> OverlayStringRenderState<'a> {
             col,
             geometry,
             cursor_info,
-            hit_rows,
-            hit_row_range,
+            row_source_start,
             row_y_positions,
             face_ids,
             continuation_row_prelude_state: None,
@@ -445,8 +442,7 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
         col: &mut usize,
         geometry: &mut DisplayRowGeometryState,
         cursor_info: &mut CursorCaptureState,
-        hit_rows: &mut Vec<HitRow>,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
         row_y_positions: &mut DisplayRowYPositions,
         face_ids: &mut FrameFaceAttempt,
         line_numbers: &mut LineNumberRenderState,
@@ -470,8 +466,7 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
             col,
             geometry,
             cursor_info,
-            hit_rows,
-            hit_row_range,
+            row_source_start,
             row_y_positions,
             face_ids,
             line_numbers,
@@ -491,8 +486,7 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
         col: &mut usize,
         geometry: &mut DisplayRowGeometryState,
         cursor_info: &mut CursorCaptureState,
-        hit_rows: &mut Vec<HitRow>,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
         row_y_positions: &mut DisplayRowYPositions,
         face_ids: &mut FrameFaceAttempt,
         line_numbers: &mut LineNumberRenderState,
@@ -504,8 +498,7 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
             col,
             geometry,
             cursor_info,
-            hit_rows,
-            hit_row_range,
+            row_source_start,
             row_y_positions,
             face_ids,
         )
@@ -550,7 +543,7 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
     ) -> DisplayRowTransitionContinuation {
         let content_x = self.row_context.content_x();
         let geometry_transition = DisplayRowLineBreakTransitionRequest::new(
-            state.hit_row_range.range_to(self.anchor_charpos),
+            LayoutCharPos0::new(self.anchor_charpos),
             self.row_context
                 .geometry_defaults(state.source_render.measurement_mode()),
             self.row_context.row_base,
@@ -560,9 +553,9 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
             DisplayRowYRecording::None,
             self.row_context.max_rows,
         )
-        .finish_geometry(state.geometry, state.hit_rows);
+        .finish_geometry(state.geometry);
 
-        state.hit_row_range.advance_to(self.anchor_charpos);
+        state.row_source_start.advance_to(self.anchor_charpos);
         let row_transition = state
             .source_render
             .output_render()

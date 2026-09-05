@@ -9,7 +9,7 @@ use crate::display_row::geometry::{
 use crate::display_row::overlay_string::BufferOverlayStringTextRowRenderContext;
 use crate::display_row::source_render::TextRowSourceRenderState;
 use crate::display_row::walk_state::{
-    FaceScanCheckpoint, HitRowRangeTracker, LineNumberRenderState,
+    DisplayRowSourceStart, FaceScanCheckpoint, LineNumberRenderState,
 };
 use crate::display_source_progress::DisplaySourceRowProgressState;
 use crate::display_text_window_row_lifecycle::{
@@ -19,7 +19,6 @@ use crate::display_text_window_row_lifecycle::{
     TextWindowVisibilityRetryRequest,
 };
 use crate::frame_face_arena::FrameFaceAttempt;
-use crate::hit_test::HitRow;
 use crate::neovm_bridge::{LayoutBufferView, ResolvedFace, RustBufferAccess};
 use crate::scroll_policy::ScrollPolicy;
 use crate::types::WindowParams;
@@ -308,8 +307,7 @@ pub(crate) fn render_buffer_source_tail_and_decide_retry<
     mut row_progress: DisplaySourceRowProgressState<'emit>,
     row_geometry: &'emit mut DisplayRowGeometryState,
     cursor_info: &'emit mut CursorCaptureState,
-    hit_rows: &'emit mut Vec<HitRow>,
-    hit_row_range: &'emit mut HitRowRangeTracker,
+    row_source_start: &'emit mut DisplayRowSourceStart,
     row_y_positions: &'rows mut DisplayRowYPositions,
     face_ids: &'emit mut FrameFaceAttempt,
     line_numbers: &'emit mut LineNumberRenderState,
@@ -334,8 +332,7 @@ where
             row_progress.reborrow(),
             row_geometry,
             cursor_info,
-            hit_rows,
-            hit_row_range,
+            row_source_start,
             row_y_positions,
             face_ids,
             line_numbers,
@@ -349,8 +346,7 @@ where
             cursor_info,
             row_geometry,
             row_y_positions,
-            hit_row_range,
-            hit_rows,
+            row_source_start,
             source_render.output_render(),
         ));
 
