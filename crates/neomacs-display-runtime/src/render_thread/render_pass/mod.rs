@@ -121,8 +121,6 @@ fn render_frame_window_contents(
     }
 }
 
-impl RenderApp {}
-
 #[allow(clippy::too_many_arguments)]
 fn render_frame_window_contents_to_surface(
     renderer: &mut WgpuRenderer,
@@ -133,37 +131,6 @@ fn render_frame_window_contents_to_surface(
     toolbar: &ToolbarResources,
     extra_line_spacing: f32,
     extra_letter_spacing: f32,
-    compositor_only_hint: bool,
-    render_policy: &crate::render_thread::render_quality::RenderQualityPolicy,
-    device_lost: &mut crate::render_thread::device_loss::DeviceLossDetector,
-) -> Result<RenderedFrameSurface, FrameRenderFailure> {
-    render_frame_window_contents_to_acquired_surface(
-        renderer,
-        window_state,
-        bg_gradient,
-        child_frame_style,
-        scroll_indicators_enabled,
-        toolbar,
-        extra_line_spacing,
-        extra_letter_spacing,
-        None,
-        compositor_only_hint,
-        render_policy,
-        device_lost,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_frame_window_contents_to_acquired_surface(
-    renderer: &mut WgpuRenderer,
-    window_state: &mut GuiFrameWindowState,
-    bg_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
-    child_frame_style: &ChildFrameStyle,
-    scroll_indicators_enabled: bool,
-    toolbar: &ToolbarResources,
-    extra_line_spacing: f32,
-    extra_letter_spacing: f32,
-    output: Option<wgpu::SurfaceTexture>,
     compositor_only_hint: bool,
     render_policy: &crate::render_thread::render_quality::RenderQualityPolicy,
     device_lost: &mut crate::render_thread::device_loss::DeviceLossDetector,
@@ -198,12 +165,8 @@ fn render_frame_window_contents_to_acquired_surface(
     let feature_plan =
         render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
 
-    let output = match output {
-        Some(output) => output,
-        None => {
-            surface::acquire_current_texture(&native.surface, device_lost, render.emacs_frame_id)?
-        }
-    };
+    let output =
+        surface::acquire_current_texture(&native.surface, device_lost, render.emacs_frame_id)?;
 
     // Placed here, after the surface is in hand: `sample_pane_layout`
     // advances the motion and republishes the projection, and every path
