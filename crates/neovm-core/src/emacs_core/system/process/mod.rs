@@ -519,6 +519,10 @@ use crate::heap_types::LispString;
 mod raw_bytes_tests;
 
 mod builtins;
+// Compile the process-free implementation in native tests too, so its Lisp
+// argument and timer contracts remain covered without a browser build.
+#[cfg(test)]
+mod portable_wait;
 pub(crate) use builtins::*;
 
 mod bootstrap;
