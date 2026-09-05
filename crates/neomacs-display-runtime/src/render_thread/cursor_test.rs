@@ -273,10 +273,10 @@ fn default_state_positions_at_origin() {
 #[test]
 fn default_state_velocities_zero() {
     let state = CursorState::new(t0());
-    assert_eq!(state.velocity_x, 0.0);
-    assert_eq!(state.velocity_y, 0.0);
-    assert_eq!(state.velocity_w, 0.0);
-    assert_eq!(state.velocity_h, 0.0);
+    for (i, spring) in state.corner_springs.iter().enumerate() {
+        assert_eq!(spring.vx, 0.0, "corner {i} starts with vx");
+        assert_eq!(spring.vy, 0.0, "corner {i} starts with vy");
+    }
 }
 
 #[test]
@@ -463,6 +463,61 @@ fn snap_same_position_is_noop_on_values() {
     assert!(!state.animating);
 }
 
+#[test]
+fn snap_brings_corner_springs_to_rest() {
+    let mut state = CursorState::new(t0());
+    state.animating = true;
+    for spring in &mut state.corner_springs {
+        spring.vx = 420.0;
+        spring.vy = -270.0;
+    }
+
+    let target = make_target(300.0, 400.0, 80.0, 40.0, CursorStyle::FilledBox);
+    state.snap(&target);
+
+    for (i, spring) in state.corner_springs.iter().enumerate() {
+        assert_eq!(spring.vx, 0.0, "corner {i} kept vx across snap");
+        assert_eq!(spring.vy, 0.0, "corner {i} kept vy across snap");
+    }
+}
+
+#[test]
+fn tick_animation_completing_off_the_spring_path_still_rests_the_springs() {
+    // The spring style's own settle path parks the springs, so a completion
+    // reached through any other style has to leave the same state behind.
+    let base = t0();
+    let mut state = CursorState::new(base);
+    state.anim_enabled = true;
+    state.animating = true;
+    state.anim_style = CursorAnimStyle::Exponential;
+    state.anim_speed = 15.0;
+    // Already inside the exponential style's settle threshold, so this tick
+    // finishes the animation.
+    state.current_x = 100.0;
+    state.current_y = 100.0;
+    state.current_w = 10.0;
+    state.current_h = 20.0;
+    state.target = Some(make_target(
+        100.0,
+        100.0,
+        10.0,
+        20.0,
+        CursorStyle::FilledBox,
+    ));
+    state.last_anim_time = base;
+    for spring in &mut state.corner_springs {
+        spring.vx = 88.0;
+        spring.vy = -88.0;
+    }
+
+    assert!(state.tick_animation(base.plus(Duration::from_millis(16))));
+    assert!(!state.animating, "exponential animation did not complete");
+    for (i, spring) in state.corner_springs.iter().enumerate() {
+        assert_eq!(spring.vx, 0.0, "corner {i} kept vx through completion");
+        assert_eq!(spring.vy, 0.0, "corner {i} kept vy through completion");
+    }
+}
+
 // ---------------------------------------------------------------
 // reset_blink
 // ---------------------------------------------------------------
@@ -543,6 +598,60 @@ fn tick_animation_returns_false_when_no_target() {
     state.animating = true;
     state.target = None;
     assert!(!state.tick_animation(base));
+}
+
+#[test]
+fn tick_animation_target_cleared_then_restored_takes_a_single_interval_step() {
+    fn exponential_state(anchor: neomacs_display_protocol::frame_time::EventTime) -> CursorState {
+        let mut state = CursorState::new(anchor);
+        state.anim_enabled = true;
+        state.animating = true;
+        state.anim_style = CursorAnimStyle::Exponential;
+        state.anim_speed = 15.0;
+        state.current_x = 0.0;
+        state.current_y = 0.0;
+        state.current_w = 10.0;
+        state.current_h = 20.0;
+        state.last_anim_time = anchor;
+        state
+    }
+
+    let base = t0();
+    let frame = Duration::from_millis(16);
+    let target = make_target(200.0, 300.0, 10.0, 20.0, CursorStyle::FilledBox);
+
+    // One uninterrupted frame of motion, for comparison.
+    let mut uninterrupted = exponential_state(base);
+    uninterrupted.target = Some(target.clone());
+    assert!(uninterrupted.tick_animation(base.plus(frame)));
+
+    // The same single frame of motion, but the tick one frame earlier found
+    // the target cleared and moved nothing.
+    let mut interrupted = exponential_state(base);
+    interrupted.target = None;
+    assert!(!interrupted.tick_animation(base.plus(frame)));
+    interrupted.target = Some(target.clone());
+    assert!(interrupted.tick_animation(base.plus(frame).plus(frame)));
+
+    // Non-vacuous: the frame has to move the cursor, but not all the way,
+    // or two step sizes could agree by both being nothing.
+    assert!(
+        uninterrupted.current_x > 1.0 && uninterrupted.current_x < 199.0,
+        "expected partial travel toward x=200, got {}",
+        uninterrupted.current_x
+    );
+    assert!(
+        (interrupted.current_x - uninterrupted.current_x).abs() < 1e-3,
+        "step after a target-cleared tick reached x={} but one 16ms step is x={}",
+        interrupted.current_x,
+        uninterrupted.current_x
+    );
+    assert!(
+        (interrupted.current_y - uninterrupted.current_y).abs() < 1e-3,
+        "step after a target-cleared tick reached y={} but one 16ms step is y={}",
+        interrupted.current_y,
+        uninterrupted.current_y
+    );
 }
 
 // ---------------------------------------------------------------
@@ -984,6 +1093,44 @@ fn tick_animation_zero_duration_completes_immediately() {
     assert_eq!(state.current_w, 15.0);
     assert_eq!(state.current_h, 25.0);
     assert!(!state.animating);
+}
+
+#[test]
+fn tick_animation_non_positive_duration_completes_at_once() {
+    // Zero elapsed over a zero duration is 0.0/0.0, which only completed
+    // before because `f32::min` discards NaN; a negative duration is the case
+    // that accident never covered -- it interpolated backwards and never
+    // reached 1.0 at all.
+    for duration in [0.0f32, -0.5] {
+        let base = t0();
+        let mut state = CursorState::new(base);
+        state.anim_enabled = true;
+        state.animating = true;
+        state.anim_style = CursorAnimStyle::Linear;
+        state.anim_duration = duration;
+        state.start_x = 0.0;
+        state.start_y = 0.0;
+        state.start_w = 5.0;
+        state.start_h = 10.0;
+        state.target = Some(make_target(
+            500.0,
+            600.0,
+            15.0,
+            25.0,
+            CursorStyle::FilledBox,
+        ));
+        state.anim_start_time = base;
+        state.last_anim_time = base;
+
+        // Ticked at the animation's own start moment: elapsed is exactly zero.
+        assert!(state.tick_animation(base));
+
+        assert_eq!(state.current_x, 500.0, "duration {duration}");
+        assert_eq!(state.current_y, 600.0, "duration {duration}");
+        assert_eq!(state.current_w, 15.0, "duration {duration}");
+        assert_eq!(state.current_h, 25.0, "duration {duration}");
+        assert!(!state.animating, "duration {duration} kept animating");
+    }
 }
 
 #[test]

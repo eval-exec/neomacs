@@ -75,11 +75,6 @@ pub(super) struct CursorState {
     pub(super) start_w: f32,
     pub(super) start_h: f32,
     pub(super) anim_start_time: neomacs_display_protocol::frame_time::EventTime,
-    // For critically-damped spring: velocity per axis
-    pub(super) velocity_x: f32,
-    pub(super) velocity_y: f32,
-    pub(super) velocity_w: f32,
-    pub(super) velocity_h: f32,
     // 4-corner spring trail state (TL, TR, BR, BL)
     pub(super) corner_springs: [CornerSpring; 4],
     pub(super) trail_size: f32,
@@ -127,10 +122,6 @@ impl CursorState {
             start_w: 0.0,
             start_h: 0.0,
             anim_start_time: at,
-            velocity_x: 0.0,
-            velocity_y: 0.0,
-            velocity_w: 0.0,
-            velocity_h: 0.0,
             corner_springs: [CornerSpring {
                 x: 0.0,
                 y: 0.0,
@@ -247,10 +238,6 @@ impl CursorState {
             self.start_w = self.current_w;
             self.start_h = self.current_h;
             self.anim_start_time = at;
-            self.velocity_x = 0.0;
-            self.velocity_y = 0.0;
-            self.velocity_w = 0.0;
-            self.velocity_h = 0.0;
 
             if self.anim_style == CursorAnimStyle::CriticallyDampedSpring {
                 let new_corners = Self::target_corners(&new_target);
@@ -408,13 +395,18 @@ impl CursorState {
         if !self.anim_enabled || !self.animating {
             return false;
         }
+
+        // The anchor belongs to the integrator, so it advances on every tick
+        // this gate admits -- including one that finds no target. Leaving it
+        // behind there would make the next tick with a target measure `dt`
+        // across both intervals and take a doubled, visible step.
+        let dt = at.saturating_since(self.last_anim_time).as_secs_f32();
+        self.last_anim_time = at;
+
         let target = match self.target.as_ref() {
             Some(t) => t.clone(),
             None => return false,
         };
-
-        let dt = at.saturating_since(self.last_anim_time).as_secs_f32();
-        self.last_anim_time = at;
 
         match self.anim_style {
             CursorAnimStyle::Exponential => {
@@ -487,20 +479,29 @@ impl CursorState {
 
                 if all_settled {
                     let target_corners = Self::target_corners(&target);
-                    for (spring, target) in
+                    for (spring, corner) in
                         self.corner_springs.iter_mut().zip(target_corners.iter())
                     {
-                        spring.x = target.0;
-                        spring.y = target.1;
-                        spring.vx = 0.0;
-                        spring.vy = 0.0;
+                        spring.x = corner.0;
+                        spring.y = corner.1;
                     }
+                    // Velocities are cleared by `snap`, which every style's
+                    // completion path shares.
                     self.snap(&target);
                 }
             }
             style => {
                 let elapsed = at.saturating_since(self.anim_start_time).as_secs_f32();
-                let raw_t = (elapsed / self.anim_duration).min(1.0);
+                // A duration that is not positive means "no animation": finish
+                // at once. Dividing by it would leave completion to float edge
+                // cases -- 0.0/0.0 is NaN and only snaps because `f32::min`
+                // discards NaN, and a negative duration would run backwards
+                // and never reach 1.0 at all.
+                let raw_t = if self.anim_duration > 0.0 {
+                    (elapsed / self.anim_duration).min(1.0)
+                } else {
+                    1.0
+                };
                 let t = match style {
                     CursorAnimStyle::EaseOutQuad => ease_out_quad(raw_t),
                     CursorAnimStyle::EaseOutCubic => ease_out_cubic(raw_t),
@@ -522,12 +523,21 @@ impl CursorState {
         true
     }
 
-    /// Snap cursor to target and stop animating
+    /// Snap cursor to target and stop animating.
+    ///
+    /// This is the single exit from cursor motion -- every style's completion
+    /// path ends here -- so it also brings the per-corner springs to rest.
+    /// A spring left with velocity by one style's completion check would carry
+    /// that velocity into the next animation.
     pub(super) fn snap(&mut self, target: &CursorTarget) {
         self.current_x = target.x;
         self.current_y = target.y;
         self.current_w = target.width;
         self.current_h = target.height;
+        for spring in &mut self.corner_springs {
+            spring.vx = 0.0;
+            spring.vy = 0.0;
+        }
         self.animating = false;
     }
 
