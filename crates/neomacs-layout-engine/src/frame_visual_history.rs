@@ -7,7 +7,7 @@
 //! an accepted presentation is committed.
 
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
-use neomacs_display_protocol::types::{Color, DisplayWindowId};
+use neomacs_display_protocol::types::DisplayWindowId;
 use neovm_core::window::FrameId;
 use rustc_hash::FxHashMap;
 
