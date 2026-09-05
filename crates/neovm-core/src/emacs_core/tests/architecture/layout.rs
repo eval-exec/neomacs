@@ -327,7 +327,13 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
         "tagged/tests.rs",
         "emacs_core/runtime/value/mod.rs",
     ];
-    let allowed_prefix = "emacs_core/runtime/pdump/";
+    let allowed_prefixes = [
+        "emacs_core/runtime/pdump/",
+        // The tagged heap owns bytecode objects. Its implementation was split
+        // from tagged/gc.rs into this subsystem directory without moving the
+        // representation boundary.
+        "tagged/gc/",
+    ];
 
     let mut files = Vec::new();
     rust_files_below(&src_root, &mut files);
@@ -339,7 +345,9 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
             .to_string_lossy()
             .replace('\\', "/");
         if allowed_exact.contains(&relative.as_str())
-            || relative.starts_with(allowed_prefix)
+            || allowed_prefixes
+                .iter()
+                .any(|prefix| relative.starts_with(prefix))
             || is_test_source(Path::new(&relative))
         {
             continue;

@@ -67,5 +67,5 @@ impl Backend for UnsupportedBackend {
 }
 
 #[cfg(test)]
-#[path = "unsupported_test.rs"]
+#[path = "tests/unsupported.rs"]
 mod tests;

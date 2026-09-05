@@ -267,5 +267,5 @@ fn merge_ordered<T, Control>(
 }
 
 #[cfg(test)]
-#[path = "delivery_test.rs"]
+#[path = "tests/delivery.rs"]
 mod tests;
