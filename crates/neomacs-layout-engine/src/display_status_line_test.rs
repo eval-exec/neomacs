@@ -753,8 +753,9 @@ fn tab_bar_pointer_appearance_body_and_close_share_whole_tab_mouse_face() {
     plan.install_into(&mut frame, FrameRect::new(0.0, 0.0, 80.0, 18.0).unwrap())
         .unwrap();
 
-    let body = frame.presented_pointer().hit_test(4.0, 9.0).unwrap();
-    let close = frame.presented_pointer().hit_test(12.0, 9.0).unwrap();
+    let [body, close] = frame.presented_pointer().regions() else {
+        panic!("the plan publishes one region for the tab body and one for its close box");
+    };
     assert_ne!(body.interaction(), close.interaction());
     assert_eq!(body.appearance(), close.appearance());
     let appearance = frame
@@ -838,7 +839,9 @@ fn tab_bar_pointer_appearance_add_image_uses_resolved_raised_and_sunken_relief()
         .unwrap();
     frame.install_presented_pointer_source_map(&source).unwrap();
 
-    let hit = frame.presented_pointer().hit_test(12.0, 45.0).unwrap();
+    let [hit] = frame.presented_pointer().regions() else {
+        panic!("one tab item publishes one pointer region");
+    };
     let appearance = frame
         .presented_pointer()
         .appearance(hit.appearance().unwrap())

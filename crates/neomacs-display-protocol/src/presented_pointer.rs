@@ -958,6 +958,33 @@ impl PresentedHitIndex {
         &self.string_positions
     }
 
+    /// Pointer regions this index would examine for a hit at `(x, y)`.
+    ///
+    /// Separate from [`Self::candidate_count`] because the pointer buckets are
+    /// built at bind time from a different vector; a pruning claim proved
+    /// against the semantic buckets says nothing about them.
+    #[cfg(test)]
+    pub(crate) fn pointer_candidate_count(&self, x: f32, y: f32) -> usize {
+        let mut count = 0;
+        for_each_presented_hit_candidate(
+            &self.pointer_buckets,
+            x,
+            y,
+            |index| self.pointer_regions[index].bounds(),
+            |_| count += 1,
+        );
+        count
+    }
+
+    /// Pointer regions this index holds, however many buckets they landed in.
+    #[cfg(test)]
+    pub(crate) fn pointer_index_entry_count(&self) -> usize {
+        self.pointer_buckets
+            .iter()
+            .map(|bucket| bucket.candidates.len())
+            .sum()
+    }
+
     #[cfg(test)]
     pub(crate) fn candidate_count(&self, x: f32, y: f32) -> usize {
         let mut count = 0;
@@ -2062,17 +2089,6 @@ impl std::error::Error for PresentedPointerMapError {}
 pub struct PresentedPointerMap {
     regions: Vec<PresentedPointerRegion>,
     appearances: Vec<PresentedPointerAppearance>,
-    #[serde(skip)]
-    row_buckets: Vec<PointerRowBucket>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct PointerRowBucket {
-    top: f32,
-    bottom: f32,
-    prefix_max_bottom: f32,
-    candidates: Vec<usize>,
-    prefix_max_right: Vec<f32>,
 }
 
 impl PresentedPointerMap {
@@ -2081,7 +2097,6 @@ impl PresentedPointerMap {
         Self {
             regions: Vec::new(),
             appearances: Vec::new(),
-            row_buckets: Vec::new(),
         }
     }
 
@@ -2092,11 +2107,9 @@ impl PresentedPointerMap {
         let mut map = Self {
             regions,
             appearances,
-            row_buckets: Vec::new(),
         };
         map.validate_intrinsic()?;
         map.rebuild_damage_bounds();
-        map.rebuild_hit_index();
         Ok(map)
     }
 
@@ -2267,126 +2280,6 @@ impl PresentedPointerMap {
             .ok()
             .and_then(|index| self.appearances.get(index))
     }
-
-    /// Returns the first published region containing `(x, y)`.
-    ///
-    /// Rectangle edges are half-open, matching frame chrome hit testing. Input
-    /// order defines stable priority if producers publish overlapping regions.
-    #[must_use]
-    pub fn hit_test(&self, x: f32, y: f32) -> Option<&PresentedPointerRegion> {
-        if !x.is_finite() || !y.is_finite() {
-            return None;
-        }
-        let mut bucket_end = self.row_buckets.partition_point(|bucket| bucket.top <= y);
-        let mut best = None;
-        while bucket_end > 0 {
-            let bucket_index = bucket_end - 1;
-            let bucket = &self.row_buckets[bucket_index];
-            if bucket.prefix_max_bottom <= y {
-                break;
-            }
-            if y < bucket.bottom {
-                let mut candidate_end = bucket
-                    .candidates
-                    .partition_point(|&index| self.regions[index].bounds.x() <= x);
-                while candidate_end > 0 {
-                    let candidate_position = candidate_end - 1;
-                    if bucket.prefix_max_right[candidate_position] <= x {
-                        break;
-                    }
-                    let region_index = bucket.candidates[candidate_position];
-                    let bounds = self.regions[region_index].bounds;
-                    if x < bounds.x() + bounds.width() {
-                        best = Some(
-                            best.map_or(region_index, |current: usize| current.min(region_index)),
-                        );
-                    }
-                    candidate_end -= 1;
-                }
-            }
-            bucket_end -= 1;
-        }
-        best.map(|index| &self.regions[index])
-    }
-
-    fn rebuild_hit_index(&mut self) {
-        let mut entries: Vec<_> = self
-            .regions
-            .iter()
-            .enumerate()
-            .map(|(index, region)| {
-                let bounds = region.bounds;
-                (bounds.y(), bounds.y() + bounds.height(), index)
-            })
-            .collect();
-        entries.sort_by(|left, right| {
-            left.0
-                .total_cmp(&right.0)
-                .then(left.1.total_cmp(&right.1))
-                .then(left.2.cmp(&right.2))
-        });
-
-        self.row_buckets.clear();
-        for (top, bottom, region_index) in entries {
-            let starts_new_bucket = self.row_buckets.last().is_none_or(|bucket| {
-                bucket.top.total_cmp(&top).is_ne() || bucket.bottom.total_cmp(&bottom).is_ne()
-            });
-            if starts_new_bucket {
-                self.row_buckets.push(PointerRowBucket {
-                    top,
-                    bottom,
-                    prefix_max_bottom: bottom,
-                    candidates: Vec::new(),
-                    prefix_max_right: Vec::new(),
-                });
-            }
-            self.row_buckets
-                .last_mut()
-                .expect("bucket was just created")
-                .candidates
-                .push(region_index);
-        }
-
-        let mut prefix_max_bottom = 0.0_f32;
-        for bucket in &mut self.row_buckets {
-            prefix_max_bottom = prefix_max_bottom.max(bucket.bottom);
-            bucket.prefix_max_bottom = prefix_max_bottom;
-            bucket.candidates.sort_by(|&left, &right| {
-                self.regions[left]
-                    .bounds
-                    .x()
-                    .total_cmp(&self.regions[right].bounds.x())
-                    .then(left.cmp(&right))
-            });
-            let mut prefix_max_right = 0.0_f32;
-            bucket.prefix_max_right = bucket
-                .candidates
-                .iter()
-                .map(|&index| {
-                    let bounds = self.regions[index].bounds;
-                    prefix_max_right = prefix_max_right.max(bounds.x() + bounds.width());
-                    prefix_max_right
-                })
-                .collect();
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn hit_test_candidate_count(&self, y: f32) -> usize {
-        self.row_buckets
-            .iter()
-            .filter(|bucket| bucket.top <= y && y < bucket.bottom)
-            .map(|bucket| bucket.candidates.len())
-            .sum()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn hit_index_entry_count(&self) -> usize {
-        self.row_buckets
-            .iter()
-            .map(|bucket| bucket.candidates.len())
-            .sum()
-    }
 }
 
 #[derive(serde::Deserialize)]
@@ -2404,11 +2297,9 @@ impl<'de> serde::Deserialize<'de> for PresentedPointerMap {
         let mut map = Self {
             regions: raw.regions,
             appearances: raw.appearances,
-            row_buckets: Vec::new(),
         };
         map.validate_intrinsic().map_err(serde::de::Error::custom)?;
         map.rebuild_damage_bounds();
-        map.rebuild_hit_index();
         Ok(map)
     }
 }
