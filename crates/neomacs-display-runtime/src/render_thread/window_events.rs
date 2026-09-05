@@ -682,14 +682,8 @@ impl RenderApp {
             WindowEvent::DroppedFile(path) => {
                 if let Some(path_str) = path.to_str() {
                     tracing::info!("File dropped: {}", path_str);
-                    let mouse_pos = self
-                        .frame_windows
-                        .get_by_winit(window_id)
-                        .map_or((0.0, 0.0), |window_state| window_state.render.mouse_pos);
                     self.comms.send_input(InputEvent::FileDrop {
                         paths: vec![path_str.to_string()],
-                        x: mouse_pos.0,
-                        y: mouse_pos.1,
                     });
                 }
             }

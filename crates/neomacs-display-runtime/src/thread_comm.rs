@@ -196,11 +196,20 @@ pub enum InputEvent {
     MenuSelection {
         index: i32,
     },
-    /// File(s) dropped onto the window
+    /// File(s) dropped onto the window.
+    ///
+    /// Carries no position. GNU builds a drop's position with
+    /// `make_lispy_position` (src/keyboard.c, `DRAG_N_DROP_EVENT`) — the same
+    /// posn a mouse click gets, naming the window, the part of it, and the
+    /// buffer position under the pointer — so the eventual target here is the
+    /// presentation-qualified route `PresentedPointer` already takes, not a
+    /// pair of surface coordinates. A pair sitting here would be the wrong
+    /// answer waiting to be used: it is the pointer's position on the root
+    /// surface, while everything a drop has to be resolved against belongs to
+    /// the presentation, and the two are different pixels for the length of a
+    /// pane morph.
     FileDrop {
         paths: Vec<String>,
-        x: f32,
-        y: f32,
     },
     /// Toolbar button clicked (index into toolbar items)
     ToolBarClick {
@@ -1118,3 +1127,7 @@ impl RenderComms {
 #[cfg(test)]
 #[path = "thread_comm_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "positioned_input_test.rs"]
+mod positioned_input_test;
