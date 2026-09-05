@@ -3837,6 +3837,11 @@ impl LayoutEngine {
                 // phases are exempt: their start is a probe, and a commit of
                 // the same position re-runs the producer *without* the probe
                 // continuation, which can legitimately converge differently.
+                //
+                // A zero budget is the producer's signal to finish at the
+                // committed start (`ViewportDecision::resolve_with_budget`,
+                // GNU `redisplay_window`'s `done:`), so the retry below is
+                // the last attempt for this leaf.
                 let reattempting_current_start =
                     !matches!(&viewport_resolution, ViewportResolutionPhase::Measure(_))
                         && resolved_start.get() == params.window_start;
