@@ -69,6 +69,16 @@ fn evaluator_with_files(files: impl IntoIterator<Item = (&'static str, &'static 
 }
 
 #[test]
+fn runtime_resource_attributes_support_gnu_ls_lisp_columns() {
+    let mut evaluator = evaluator_with_files([("/neomacs/lisp/probe.el", b"nil".as_slice())]);
+    for path in ["/neomacs", "/neomacs/lisp", "/neomacs/lisp/probe.el"] {
+        assert_eq!(evaluator.eval_str(&format!(r##"(let ((a (file-attributes {path:?})))
+          (format "%d %d %d" (nth 1 a) (nth 2 a) (nth 3 a)))"##))
+          .unwrap().as_utf8_str(), Some("1 0 0"));
+    }
+}
+
+#[test]
 fn file_attributes_describe_immutable_runtime_resources() {
     let mut evaluator = evaluator_with_files([("/neomacs/lisp/probe.el", b"nil".as_slice())]);
     assert_eq!(evaluator.eval_str(r##"(let ((a (file-attributes "/neomacs/lisp/probe.el")))
@@ -76,7 +86,7 @@ fn file_attributes_describe_immutable_runtime_resources() {
         (nth 8 (file-attributes "/neomacs/lisp"))
         (equal a (cdr (assoc "probe.el" (directory-files-and-attributes "/neomacs/lisp"))))))"##).unwrap(),
       Value::list(vec![Value::fixnum(12), Value::fixnum(3), Value::string("-r--r--r--"),
-        Value::NIL, Value::NIL, Value::NIL, Value::string("dr-xr-xr-x"), Value::T]));
+        Value::fixnum(0), Value::fixnum(0), Value::NIL, Value::string("dr-xr-xr-x"), Value::T]));
 }
 
 #[test]
