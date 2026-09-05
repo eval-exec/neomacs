@@ -10,10 +10,19 @@
 //! [`LineEndContext`], resolve the returned [`LineEndPlan`] against their face
 //! services, and apply the [`ResolvedLineEndPlan`] to the glyph row.
 //!
+//! A wrapped or truncated row never gets here. GNU calls
+//! `append_space_for_newline` only from `display_line`'s
+//! `ITERATOR_AT_END_OF_LINE_P` branch, and every overflow exit
+//! (xdisp.c:26324-26435) calls `extend_face_to_end_of_line` on its own;
+//! neomacs matches that shape, with `buffer_source/overflow.rs` and
+//! `buffer_source/render.rs` calling
+//! `TextRowSourceRenderState::extend_face_to_end_of_line` directly. So "this
+//! is a real line end" is a property of reaching [`plan`] at all, not a field
+//! on its context.
+//!
 //! Rules encoded here (and nowhere else):
 //! - the appended newline glyph exists only on terminal rows
-//!   ([`DisplayRowMeasurementMode::LogicalCells`]) at a real newline
-//!   ([`DisplayRowBreakReason::ExplicitNewline`]) with room left on the row;
+//!   ([`DisplayRowMeasurementMode::LogicalCells`]) with room left on the row;
 //! - the `display-fill-column-indicator` merge is checked at the PRE-advance
 //!   pen column: when the pen sits exactly at the indicator column, the
 //!   appended glyph IS the indicator character with the indicator face (GNU
@@ -26,7 +35,6 @@
 //!   (it carries the extend background through its gap and tail itself).
 
 use crate::display_current_row_output::DisplayCurrentRowMutation;
-use crate::display_item::DisplayRowBreakReason;
 use crate::display_row::face_state::DisplayRowMeasurementMode;
 use crate::display_row::finalizer::RowExtendFill;
 use crate::display_row::trailing_whitespace::HighlightTrailingWhitespaceMutation;
@@ -98,7 +106,6 @@ pub(crate) fn extend_fill_runs(
 /// Everything the line-end decision needs, as pure data.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct LineEndContext {
-    pub(crate) reason: DisplayRowBreakReason,
     /// Face carried by the newline itself (`it->face_id` in GNU): the
     /// appended terminal space keeps this face.
     pub(crate) newline_face_id: FaceId,
@@ -183,12 +190,11 @@ impl LineEndPlan {
 /// item-renderer finalizer consume it.
 pub(crate) fn plan(ctx: &LineEndContext) -> LineEndPlan {
     let mut steps = Vec::new();
-    let at_real_newline = ctx.reason == DisplayRowBreakReason::ExplicitNewline;
 
-    // GNU highlights trailing whitespace only at a true line end, before the
-    // appended glyph (the appended glyph has no buffer position, so GNU's
-    // walk would skip it — appending first would still be wrong for order).
-    if ctx.trailing_whitespace_enabled && at_real_newline {
+    // GNU highlights trailing whitespace before the appended glyph (the
+    // appended glyph has no buffer position, so GNU's walk would skip it —
+    // appending first would still be wrong for order).
+    if ctx.trailing_whitespace_enabled {
         steps.push(LineEndStep::HighlightTrailingWhitespace);
     }
 
@@ -196,11 +202,10 @@ pub(crate) fn plan(ctx: &LineEndContext) -> LineEndPlan {
         .indicator
         .filter(|indicator| indicator.col >= 0 && ctx.char_width > 0.0);
 
-    // GNU append_space_for_newline: terminal rows only, real newline only,
-    // and only when the row has room left.
-    let append = ctx.measurement_mode == DisplayRowMeasurementMode::LogicalCells
-        && at_real_newline
-        && ctx.remaining_px() > 0.0;
+    // GNU append_space_for_newline: terminal rows only, and only when the row
+    // has room left.
+    let append =
+        ctx.measurement_mode == DisplayRowMeasurementMode::LogicalCells && ctx.remaining_px() > 0.0;
     // Indicator merge is decided at the PRE-advance pen column.
     let merged =
         append && indicator.is_some_and(|indicator| ctx.pen_col == i64::from(indicator.col));
@@ -598,7 +603,6 @@ mod tests {
 
     fn terminal_ctx() -> LineEndContext {
         LineEndContext {
-            reason: DisplayRowBreakReason::ExplicitNewline,
             newline_face_id: NEWLINE_FACE,
             measurement_mode: DisplayRowMeasurementMode::LogicalCells,
             pen_x: 24.0,
@@ -829,20 +833,6 @@ mod tests {
             &[LineEndStep::IndicatorFill { from_x: 24.0 }],
             "the merge exists only when a glyph is appended (terminal rows)"
         );
-    }
-
-    #[test]
-    fn wrap_and_truncate_rows_get_no_appended_glyph() {
-        for reason in [DisplayRowBreakReason::Wrap, DisplayRowBreakReason::Truncate] {
-            let mut ctx = with_extend(terminal_ctx());
-            ctx.reason = reason;
-            let plan = plan(&ctx);
-            assert_eq!(
-                plan.steps(),
-                &[LineEndStep::ExtendFill { from_x: 24.0 }],
-                "reason {reason:?} must not append the newline space"
-            );
-        }
     }
 
     #[test]

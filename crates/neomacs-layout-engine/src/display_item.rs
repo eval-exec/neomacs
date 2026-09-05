@@ -1589,9 +1589,17 @@ fn display_replacement_ascent(value: f32) -> f32 {
     }
 }
 
+/// A display item that ends the current row because the SOURCE ends the line.
+///
+/// GNU distinguishes this from a wrap or a truncation structurally rather than
+/// by a stored reason: `display_line` reaches `append_space_for_newline` only
+/// inside its `ITERATOR_AT_END_OF_LINE_P` branch (src/xdisp.c:26525-26533),
+/// while every wrap and truncation exit calls `extend_face_to_end_of_line`
+/// directly (src/xdisp.c:26324-26435). Neomacs mirrors that: a wrapped or
+/// truncated row never reaches [`crate::display_row::line_end::plan`] at all,
+/// so there is no non-newline row break to name.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayRowBreak {
-    pub(crate) reason: DisplayRowBreakReason,
     pub(crate) line_height: DisplayLineHeightPolicy,
     pub(crate) line_spacing: DisplayLineSpacingPolicy,
 }
@@ -1687,7 +1695,6 @@ impl DisplayLineSpacingPolicy {
 impl DisplayRowBreak {
     pub(crate) const fn explicit_newline() -> Self {
         Self {
-            reason: DisplayRowBreakReason::ExplicitNewline,
             line_height: DisplayLineHeightPolicy::Default,
             line_spacing: DisplayLineSpacingPolicy::Inherit,
         }
@@ -1705,19 +1712,6 @@ impl DisplayRowBreak {
         self.line_spacing = line_spacing;
         self
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DisplayRowBreakReason {
-    ExplicitNewline,
-    /// Reached only by the line-end plan's own tests: nothing in the pipeline
-    /// yet stamps a row break with the reason it wrapped or truncated, so
-    /// `line_end.rs` constructs these to pin the plan's contract for the row
-    /// shapes that carry no newline.
-    #[cfg(test)]
-    Wrap,
-    #[cfg(test)]
-    Truncate,
 }
 
 #[cfg(test)]

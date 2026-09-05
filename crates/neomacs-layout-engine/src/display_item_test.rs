@@ -140,13 +140,7 @@ fn display_item_row_break_is_a_typed_item() {
         DisplayItemKind::RowBreak(DisplayRowBreak::explicit_newline()),
     );
 
-    assert!(matches!(
-        row_break.kind,
-        DisplayItemKind::RowBreak(DisplayRowBreak {
-            reason: DisplayRowBreakReason::ExplicitNewline,
-            ..
-        })
-    ));
+    assert!(matches!(row_break.kind, DisplayItemKind::RowBreak(_)));
 }
 
 struct StaticItemSource {

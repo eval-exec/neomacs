@@ -4,7 +4,7 @@ use crate::display_face_policy::BaseFacePolicy;
 use crate::display_item::{
     BufferDisplayReplacementSource, DisplayItem, DisplayItemKind, DisplayLineHeightPolicy,
     DisplayLineSpacingPolicy, DisplayPointerAppearance, DisplayPropertyReplacementDescriptor,
-    DisplayRowBreakReason, DisplayStringBoxBoundaries,
+    DisplayStringBoxBoundaries,
 };
 #[cfg(test)]
 use crate::display_origin::DisplayOrigin;
@@ -87,7 +87,6 @@ impl<M: DisplayRowRenderPolicy> DisplayRowRenderPolicy
         face: &ResolvedFace,
     ) -> bool {
         if let DisplayItemKind::RowBreak(row_break) = item.kind {
-            debug_assert_eq!(row_break.reason, DisplayRowBreakReason::ExplicitNewline);
             self.produced_row_break = Some(DisplayReplacementStringLineBreak::from_resolved_face(
                 face_id,
                 face,

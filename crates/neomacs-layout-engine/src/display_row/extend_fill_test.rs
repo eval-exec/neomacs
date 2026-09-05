@@ -6,6 +6,10 @@
 //! just the trailing stretch; an empty row first gains a leading face-anchor
 //! space glyph then the stretch; an R2L row moves the logical trailing fill
 //! to the physical left and reverses its source-side edge ownership.
+//!
+//! This fill is also the whole line end of a wrapped or truncated row, which
+//! is why the appended-glyph contract is pinned here rather than on a break
+//! reason nothing stamps.
 
 use super::RowExtendFill;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
@@ -26,6 +30,13 @@ fn fill() -> RowExtendFill {
 
 fn text_glyphs(row: &GlyphRow) -> &[Glyph] {
     &row.glyphs[GlyphArea::Text.index()]
+}
+
+fn char_glyph_count(row: &GlyphRow) -> usize {
+    text_glyphs(row)
+        .iter()
+        .filter(|glyph| matches!(glyph.glyph_type, GlyphType::Char { .. }))
+        .count()
 }
 
 #[test]
@@ -52,6 +63,35 @@ fn non_empty_row_gets_only_trailing_stretch() {
     assert_eq!(last.pixel_height, 16.0);
     assert_eq!(last.pixel_ascent, 12.0);
     assert!(row.displays_text);
+}
+
+/// The lone line-end effect of a wrapped or truncated row.
+///
+/// GNU reaches `append_space_for_newline` only from `display_line`'s
+/// `ITERATOR_AT_END_OF_LINE_P` branch (xdisp.c:26525-26533); every wrap and
+/// truncation exit (xdisp.c:26324-26435) calls `extend_face_to_end_of_line`
+/// alone, and this fill IS that call — `buffer_source/overflow.rs` and
+/// `buffer_source/render.rs` invoke it without going near the line-end plan.
+/// If this claim is false, a continued row grows a trailing space GNU never
+/// puts there, which shifts the continuation marker and widens the buffer span
+/// the row reports.
+#[test]
+fn the_wrap_and_truncate_line_end_fill_appends_no_character_glyph() {
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.glyphs[GlyphArea::Text.index()]
+        .push(Glyph::char('a', FaceId::new(1), 0).with_pixel_width(8.0));
+    row.glyphs[GlyphArea::Text.index()]
+        .push(Glyph::char('b', FaceId::new(1), 1).with_pixel_width(8.0));
+
+    let chars_before = char_glyph_count(&row);
+
+    assert!(fill().apply_to(&mut row));
+
+    assert_eq!(
+        char_glyph_count(&row),
+        chars_before,
+        "the overflow exit must not append the newline space"
+    );
 }
 
 #[test]

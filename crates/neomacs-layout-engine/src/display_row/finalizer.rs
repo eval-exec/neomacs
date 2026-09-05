@@ -100,7 +100,6 @@ impl DisplayRowLineEndFinalizer {
             .iter()
             .find(|face| face.face_id == self.row_break_face_id && face.extend);
         let ctx = LineEndContext {
-            reason: self.row_break.reason,
             newline_face_id: self.row_break_face_id,
             measurement_mode: self.measurement_mode,
             pen_x: 0.0,

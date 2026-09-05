@@ -2,10 +2,10 @@ use crate::display_item::{
     BufferDisplayReplacementSource, DisplayGlyphless, DisplayItem, DisplayItemKind,
     DisplayItemLayout, DisplayLength, DisplayLineHeightPolicy, DisplayLineSpacingPolicy,
     DisplayMediaReplacement, DisplayPointerAppearance, DisplayPointerOccurrence,
-    DisplayPointerSourceRange, DisplayRowBreak, DisplayRowBreakReason, DisplaySourceMappedText,
-    DisplaySourcePosition, DisplayStretch, DisplayStretchWidth, DisplayStringBoxBoundaries,
-    DisplayTextComposition, DisplayTextRun, GlyphlessJoinerPolicy, GlyphlessMethod, RenderFaceRef,
-    SourceSpan, glyphless_method_for_char,
+    DisplayPointerSourceRange, DisplayRowBreak, DisplaySourceMappedText, DisplaySourcePosition,
+    DisplayStretch, DisplayStretchWidth, DisplayStringBoxBoundaries, DisplayTextComposition,
+    DisplayTextRun, GlyphlessJoinerPolicy, GlyphlessMethod, RenderFaceRef, SourceSpan,
+    glyphless_method_for_char,
 };
 use crate::display_origin::{DisplayOrigin, DisplayPropertySource, OverlayStringKind};
 use crate::display_property::{
@@ -856,11 +856,7 @@ impl DisplaySourceItem {
     pub(crate) fn direct_source_char(&self) -> Option<char> {
         match &self.item.kind {
             DisplayItemKind::TextRun(run) => run.text.chars().next(),
-            DisplayItemKind::RowBreak(row_break)
-                if row_break.reason == DisplayRowBreakReason::ExplicitNewline =>
-            {
-                Some('\n')
-            }
+            DisplayItemKind::RowBreak(_) => Some('\n'),
             DisplayItemKind::ControlChar { ch } => Some(*ch),
             DisplayItemKind::Glyphless(glyphless) => Some(glyphless.ch),
             DisplayItemKind::SourceMappedText(mapped) => self.source_char.or_else(|| {
@@ -929,11 +925,7 @@ impl DisplaySourceItem {
     }
 
     pub(crate) fn is_explicit_line_break(&self) -> bool {
-        matches!(
-            self.item.kind,
-            DisplayItemKind::RowBreak(row_break)
-                if row_break.reason == DisplayRowBreakReason::ExplicitNewline
-        )
+        matches!(self.item.kind, DisplayItemKind::RowBreak(_))
     }
 
     #[cfg(test)]

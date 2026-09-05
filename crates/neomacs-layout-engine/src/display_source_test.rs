@@ -4,9 +4,9 @@ use crate::buffer_source::text_source::{BufferTextCursorItem, BufferTextSourceCu
 use crate::display_item::{
     BufferDisplayReplacementSource, DisplayGlyphless, DisplayImageItem, DisplayItem,
     DisplayItemFaceOverlay, DisplayItemKind, DisplayLength, DisplayMediaReplacement,
-    DisplayRowBreakReason, DisplaySourceId, DisplaySourceMappedFaceRun, DisplaySourceMappedText,
-    DisplaySourcePosition, DisplayStretch, DisplayStretchWidth, DisplayTextRun, GlyphlessMethod,
-    RenderFaceRef, SourceSpan,
+    DisplaySourceId, DisplaySourceMappedFaceRun, DisplaySourceMappedText, DisplaySourcePosition,
+    DisplayStretch, DisplayStretchWidth, DisplayTextRun, GlyphlessMethod, RenderFaceRef,
+    SourceSpan,
 };
 use crate::display_property::DisplayReplacementProperty;
 use crate::display_source::DisplaySourceTextPosition;
@@ -3050,9 +3050,7 @@ fn typed_buffer_source_events_match_expected_plain_text_coordinates() {
                     charpos += 1;
                 }
             }
-            DisplayItemKind::RowBreak(row_break)
-                if row_break.reason == DisplayRowBreakReason::ExplicitNewline =>
-            {
+            DisplayItemKind::RowBreak(_) => {
                 typed.push(('\n', byte_offset, charpos));
                 byte_offset += 1;
                 charpos += 1;
@@ -3095,9 +3093,7 @@ fn typed_buffer_source_events_match_expected_control_and_glyphless_coordinates()
                     charpos += 1;
                 }
             }
-            DisplayItemKind::RowBreak(row_break)
-                if row_break.reason == DisplayRowBreakReason::ExplicitNewline =>
-            {
+            DisplayItemKind::RowBreak(_) => {
                 typed.push(('\n', byte_offset, charpos));
                 byte_offset += 1;
                 charpos += 1;
@@ -3163,9 +3159,7 @@ fn typed_buffer_source_events_match_expected_face_property_coordinates() {
                     charpos += 1;
                 }
             }
-            DisplayItemKind::RowBreak(row_break)
-                if row_break.reason == DisplayRowBreakReason::ExplicitNewline =>
-            {
+            DisplayItemKind::RowBreak(_) => {
                 typed.push(('\n', byte_offset, charpos));
                 byte_offset += 1;
                 charpos += 1;
