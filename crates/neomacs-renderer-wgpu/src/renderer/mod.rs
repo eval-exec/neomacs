@@ -187,8 +187,6 @@ pub struct WgpuRenderer {
     pub(super) fx: EffectsState,
     /// Free-running animation clocks (transferred with preserve-if-unset semantics)
     pub(super) clocks: EffectClocks,
-    /// Effect animation durations (configuration; not transferred)
-    pub(super) durations: EffectDurations,
     /// Ambient clocks shared by every frame context (not transferred)
     pub(super) ambient: AmbientClocks,
     /// Cached per-row text vertex streams for RowDamage-driven reuse
@@ -1188,7 +1186,6 @@ impl WgpuRenderer {
             effects: crate::effect_config::EffectsConfig::default(),
             fx: EffectsState::default(),
             clocks: EffectClocks::default(),
-            durations: EffectDurations::default(),
             ambient: AmbientClocks::default(),
             row_reuse: row_reuse::RowReuseCache::default(),
             glyph_stats: GlyphRenderStats::new(),
