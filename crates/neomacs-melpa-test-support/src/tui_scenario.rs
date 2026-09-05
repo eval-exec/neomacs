@@ -5,13 +5,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use neomacs_tui_tests::{
-    RawTerminalSnapshot, TuiLaunch, TuiRecordingScope, TuiSession,
+    QUIET_NATIVE_COMP_EVAL, RawTerminalSnapshot, TuiLaunch, TuiRecordingScope, TuiSession,
     assert_raw_terminal_snapshots_eq, compare_session_displays,
 };
 
 use crate::{EmacsRuntime, MelpaSandbox, PreparedPackageSet};
-
-const QUIET_GNU_NATIVE_COMP: &str = "--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent)(push'(native-compiler)warning-suppress-types)(mapc'kill-process(process-list)))";
 
 /// Terminal color capability shared by both editors in a package parity pair.
 ///
@@ -393,7 +391,7 @@ fn editor_launch(
 ) -> TuiLaunch {
     let mut launch = TuiLaunch::new(runtime.executable.as_os_str()).args(["-nw", "-Q"]);
     if gnu {
-        launch = launch.arg("-no-comp-spawn").arg(QUIET_GNU_NATIVE_COMP);
+        launch = launch.arg("-no-comp-spawn").arg(QUIET_NATIVE_COMP_EVAL);
     }
     let mut launch = launch
         .arg("--load")

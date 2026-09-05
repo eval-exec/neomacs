@@ -46,6 +46,20 @@ use recording::{RecordingIdentity, RecordingPolicy, SessionRecording, TerminalSi
 pub const COLS: u16 = 160;
 pub const ROWS: u16 = 50;
 
+/// One `--eval` argv element that silences GNU's async native-comp chatter
+/// (jit compilation, warning reports, and any compiler subprocess) so the
+/// oracle screen stays focused on the behavior under test.
+///
+/// Every form here must evaluate cleanly on ANY GNU build. An error in the
+/// startup `--eval` aborts GNU's startup sequence before the *scratch*
+/// message is inserted, painting an empty buffer whose echo area holds the
+/// error -- every pair comparison against that session then fails (CI's
+/// `emacs-nox` 29.3, where `warning-suppress-types` is void because
+/// warnings.el is not preloaded and comp-run.el -- which `(defvar
+/// warning-suppress-types)` -- only loads in native-comp builds). Hence the
+/// `boundp` guard; `set` on an unbound symbol is safe.
+pub const QUIET_NATIVE_COMP_EVAL: &str = "--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent)(when(boundp'warning-suppress-types)(push'(native-compiler)warning-suppress-types))(mapc'kill-process(process-list)))";
+
 /// Initial terminal identity and geometry for a TUI process.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiTerminalConfig {
@@ -503,9 +517,8 @@ impl TuiSession {
         // Keep the GNU oracle focused on TUI behavior.  On NixOS the async
         // native compiler can fail after startup and pop *Warnings*, which
         // pollutes the rendered screen unrelated to the command under test.
-        let quiet_native_comp = "--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent)(push'(native-compiler)warning-suppress-types)(mapc'kill-process(process-list)))";
         let launch = TuiLaunch::new("emacs")
-            .args(["-nw", "-Q", "-no-comp-spawn", quiet_native_comp])
+            .args(["-nw", "-Q", "-no-comp-spawn", QUIET_NATIVE_COMP_EVAL])
             .args(extra_args.split_whitespace());
         Self::spawn_launch_with_erase_char(launch, "GNU", erase)
     }
