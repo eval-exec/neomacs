@@ -249,7 +249,12 @@ impl RenderApp {
                 &gpu.adapter,
             );
         }
-        self.frame_windows.process_destroys();
+        let destroyed = self.frame_windows.process_destroys();
+        if let Some(renderer) = self.renderer.as_mut() {
+            for frame_id in destroyed {
+                renderer.forget_gpu_budget_owner(frame_id);
+            }
+        }
 
         self.poll_frame();
         #[cfg(feature = "webview")]

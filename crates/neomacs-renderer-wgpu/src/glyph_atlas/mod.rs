@@ -2740,6 +2740,16 @@ impl WgpuGlyphAtlas {
     pub fn atlas_page_counts(&self) -> (usize, usize, usize) {
         self.atlas_pages.page_counts()
     }
+
+    /// Bytes every resident atlas page occupies on the GPU.
+    ///
+    /// This is the render thread's largest single per-window GPU consumer —
+    /// up to 288 MiB against about 59 MiB for every full-frame texture
+    /// combined — so a memory ceiling that could not see it would be
+    /// measuring the wrong half.
+    pub fn resident_bytes(&self) -> u64 {
+        self.atlas_pages.resident_bytes()
+    }
 }
 
 fn key_uses_default_font_metrics(key: &GlyphKey, default_font_size: f32) -> bool {

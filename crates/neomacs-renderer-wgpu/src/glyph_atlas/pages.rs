@@ -59,6 +59,18 @@ impl GlyphAtlasPages {
         (self.alpha.len(), self.subpixel.len(), self.color.len())
     }
 
+    pub fn resident_bytes(&self) -> u64 {
+        let page_bytes = |pages: usize, bytes_per_pixel: u32| -> u64 {
+            pages as u64
+                * u64::from(self.config.page_size)
+                * u64::from(self.config.page_size)
+                * u64::from(bytes_per_pixel)
+        };
+        page_bytes(self.alpha.len(), AlphaMask::BYTES_PER_PIXEL)
+            + page_bytes(self.subpixel.len(), SubpixelMask::BYTES_PER_PIXEL)
+            + page_bytes(self.color.len(), ColorRgba::BYTES_PER_PIXEL)
+    }
+
     fn create_page_texture(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
