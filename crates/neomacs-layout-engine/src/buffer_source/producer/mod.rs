@@ -16,8 +16,8 @@
 //!   mirroring GNU's `SAVE_IT` / `RESTORE_IT`. No production path calls it:
 //!   its consumers are the stream-equivalence harness and the producer unit
 //!   tests, which need to replay a producer from an exact seating to compare
-//!   two walks. It is deliberately retained as harness support, not as a
-//!   production mechanism.
+//!   two walks. It is `#[cfg(test)]` for exactly that reason — harness support,
+//!   not a production mechanism.
 
 pub(crate) mod frame;
 pub(crate) mod vocabulary;
@@ -41,6 +41,7 @@ use neovm_core::buffer::{BufferId, CharPos0};
 /// producer exactly, which a bare position rewind cannot express. Harness and
 /// unit-test support only — see the module docs for why the wrap retry uses
 /// the typed position-rewind methods instead.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProducerSnapshot {
     cursor_char_pos: CharPos0,
@@ -64,10 +65,10 @@ pub(crate) struct BufferElementProducer<'request, B: LayoutBufferView> {
 }
 
 impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
-    /// Producer with no window context (tests / non-window callers). The
-    /// redisplay path uses [`new_for_window`](Self::new_for_window) so overlay
-    /// `window` properties are honored.
-    #[allow(dead_code)] // retained for non-window callers and focused tests
+    /// Producer with no window context. The redisplay path uses
+    /// [`new_for_window`](Self::new_for_window) so overlay `window` properties
+    /// are honored, so only focused tests seat a producer this way.
+    #[cfg(test)]
     pub(crate) fn new(
         buffer_id: BufferId,
         buffer: &'request B,
@@ -99,6 +100,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
     }
 
     /// Save the producer's seating for a later [`restore`](Self::restore).
+    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> ProducerSnapshot {
         ProducerSnapshot {
             cursor_char_pos: self.source_cursor.current_char_pos(),
@@ -108,6 +110,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
     }
 
     /// Reinstate a saved seating (GNU `RESTORE_IT`).
+    #[cfg(test)]
     pub(crate) fn restore(&mut self, snapshot: ProducerSnapshot) {
         let ProducerSnapshot {
             cursor_char_pos,

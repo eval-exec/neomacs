@@ -180,9 +180,9 @@ pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
 
 impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     /// Cursor with no window context (overlay `window` properties unrestricted).
-    /// Used by tests and any non-window caller; the redisplay path uses
-    /// [`new_for_window`](Self::new_for_window).
-    #[allow(dead_code)] // retained for non-window callers and focused tests
+    /// The redisplay path uses [`new_for_window`](Self::new_for_window), so only
+    /// focused tests seat a cursor this way.
+    #[cfg(test)]
     pub(crate) fn new(
         buffer_id: BufferId,
         buffer: &'a B,
@@ -309,7 +309,9 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         });
     }
 
-    /// The live batching-decline extent, for the producer's snapshot.
+    /// The live batching-decline extent, read only by the producer's
+    /// `#[cfg(test)]` snapshot.
+    #[cfg(test)]
     pub(crate) fn char_granularity_end(&self) -> Option<CharPos0> {
         self.char_granularity_end
     }
