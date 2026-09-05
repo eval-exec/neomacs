@@ -433,15 +433,18 @@ impl GuiFrameRenderState {
     ///
     /// Must be consulted BEFORE [`Self::take_current_frame_for_render`], which
     /// drains the hints out of the retained frame.
-    pub(super) fn current_frame_theme_transition_hint(&self) -> Option<bool> {
-        self.compositor.current_frame.as_ref().map(|frame| {
-            frame.effect_hints.iter().any(|hint| {
-                matches!(
-                    hint,
-                    crate::core::frame_glyphs::WindowEffectHint::ThemeTransition { .. }
-                )
-            })
-        })
+    /// Whether this frame must render through the transition offscreen because
+    /// a theme change is waiting to be drawn.
+    ///
+    /// Read before the pending observations are drained. If it were read after,
+    /// it would always say no, `use_transition_offscreen` would be false, and
+    /// the crossfade would render down a branch that cannot show it — silently.
+    /// The `Option` distinguishes "no frame yet" from "no theme change".
+    pub(super) fn pending_theme_change(&self) -> Option<bool> {
+        self.compositor
+            .current_frame
+            .as_ref()
+            .map(|_| self.compositor.pending.theme.is_some())
     }
 
     /// Hit-tests pointer semantics from the immutable buffer currently shown
@@ -869,6 +872,7 @@ impl GuiFrameRenderState {
         // while both sets of anchors are still in hand.
         self.measure_scroll(frame.as_ref(), &scroll_anchors);
         self.observe_selection_change(frame.as_ref());
+        self.observe_theme_change(frame.as_ref());
         self.compositor.scroll_anchors = scroll_anchors;
         let before = self.active_pointer_damage();
         let previous_presentation = self

@@ -237,13 +237,6 @@ impl FrameOutputOwner {
         request.render_and_apply(self.frame_output_target());
     }
 
-    pub(crate) fn render_theme_transition_hint(
-        &mut self,
-        request: FrameThemeTransitionHintRenderRequest,
-    ) {
-        request.render_and_apply(self.frame_output_target());
-    }
-
     pub(crate) fn render_frame_content_transition_hint(
         &mut self,
         request: FrameContentTransitionHintRenderRequest<'_>,
@@ -373,14 +366,6 @@ impl<'a> FrameOutputTarget<'a> {
             }
         }
         None
-    }
-
-    fn content_height_before_minibuffer(&self, frame_height: f32) -> f32 {
-        self.builder
-            .window_infos()
-            .iter()
-            .find(|w| w.is_minibuffer)
-            .map_or(frame_height, |w| w.bounds.y)
     }
 }
 
@@ -745,38 +730,6 @@ impl<'a> FrameLineAnimationHintsRenderRequest<'a> {
     }
 }
 
-pub(crate) struct FrameThemeTransitionHintRenderRequest {
-    previous_background: Option<Color>,
-    frame_width: f32,
-    frame_height: f32,
-}
-
-impl FrameThemeTransitionHintRenderRequest {
-    pub(crate) fn new(
-        previous_background: Option<Color>,
-        frame_width: f32,
-        frame_height: f32,
-    ) -> Self {
-        Self {
-            previous_background,
-            frame_width,
-            frame_height,
-        }
-    }
-
-    pub(crate) fn render_and_apply(self, mut state: FrameOutputTarget<'_>) {
-        let current_background = state.background_color();
-        if let Some(previous_background) = self.previous_background
-            && color_changed_for_theme_transition(previous_background, current_background)
-        {
-            let full_h = state.content_height_before_minibuffer(self.frame_height);
-            state.add_effect_hint(WindowEffectHint::ThemeTransition {
-                bounds: Rect::new(0.0, 0.0, self.frame_width, full_h),
-            });
-        }
-    }
-}
-
 pub(crate) struct FrameContentTransitionHintRenderRequest<'a> {
     prev_window_infos: &'a HashMap<DisplayWindowId, WindowInfo>,
     curr_window_infos: &'a HashMap<DisplayWindowId, WindowInfo>,
@@ -872,12 +825,6 @@ fn non_minibuffer_content_regions(
             .then_with(|| left_id.cmp(right_id))
     });
     (!regions.is_empty()).then(|| regions.into_iter().map(|(_, region)| region).collect())
-}
-
-fn color_changed_for_theme_transition(previous: Color, current: Color) -> bool {
-    (current.r - previous.r).abs() > 0.02
-        || (current.g - previous.g).abs() > 0.02
-        || (current.b - previous.b).abs() > 0.02
 }
 
 fn non_minibuffer_window_ids(
