@@ -9,6 +9,62 @@ use neomacs_wasm_protocol::{
 };
 
 #[test]
+fn pointer_batch_preserves_presentation_ids_and_atomic_event_order() {
+    use neomacs_display_protocol::{
+        PointerAction, PointerPosition, PointerTarget, PositionedPointerInput,
+    };
+    let pointer = PositionedPointerInput {
+        position: PointerPosition {
+            x: 25.0,
+            y: 12.0,
+            target_frame_id: 9_007_199_254_740_993,
+        },
+        target: PointerTarget::Presented {
+            presentation: 9_007_199_254_740_995,
+            hit: None,
+        },
+        action: PointerAction::Button {
+            button: 1,
+            pressed: true,
+            modifiers: 2,
+        },
+    };
+    let mut payload = Vec::new();
+    ciborium::ser::into_writer(&pointer, &mut payload).unwrap();
+    let batch = BrowserInputBatch::new(
+        InputBatchSequence::new(1).unwrap(),
+        vec![BrowserInputEvent::Pointer { payload }],
+    )
+    .unwrap();
+    let wire = serde_json::to_string(&batch).unwrap();
+    let decoded: BrowserInputBatch = serde_json::from_str(&wire).unwrap();
+    assert_eq!(
+        decoded.try_into_frontend_batch().unwrap().events(),
+        &[neomacs_wasm_protocol::ValidatedBrowserInputEvent::Pointer(
+            pointer
+        )]
+    );
+}
+
+#[test]
+fn malformed_pointer_rejects_the_whole_browser_batch() {
+    let batch = BrowserInputBatch::new(
+        InputBatchSequence::new(1).unwrap(),
+        vec![
+            BrowserInputEvent::text_committed("must not be delivered", 1),
+            BrowserInputEvent::Pointer {
+                payload: vec![0xff],
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        batch.try_into_frontend_batch(),
+        Err(InvalidBrowserInputBatch::InvalidPointer { event_index: 1 })
+    );
+}
+
+#[test]
 fn browser_batch_becomes_one_ordered_editor_input_batch() {
     let sequence = InputBatchSequence::new(7).expect("positive sequence");
     let batch = BrowserInputBatch::new(
@@ -45,6 +101,7 @@ fn browser_batch_becomes_one_ordered_editor_input_batch() {
                 presentation: FrontendPresentationId::new(99),
             },
         ]
+        .map(neomacs_wasm_protocol::ValidatedBrowserInputEvent::Host)
     );
 }
 

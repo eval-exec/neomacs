@@ -9,6 +9,8 @@ description = "Typed browser/Worker transport protocol for Neomacs WebAssembly"
 
 [dependencies]
 neomacs-app.workspace = true
+neomacs-display-protocol.workspace = true
+ciborium.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
