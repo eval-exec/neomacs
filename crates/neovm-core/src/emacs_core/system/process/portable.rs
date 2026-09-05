@@ -9,13 +9,13 @@
 //! Lisp error GNU raises from `callproc.c` on such hosts.
 //!
 //! Everything that is host-independent lives in the sibling modules shared
-//! with the native backend (`nproc`, `async_callback`, `bootstrap_vars`,
+//! with the native backend (`nproc`, `async_callback`, `bootstrap`,
 //! `system_processes`), so GNU policy is edited once.
 
 #[path = "async_callback.rs"]
 mod async_callback;
-#[path = "bootstrap_vars.rs"]
-mod bootstrap_vars;
+#[path = "bootstrap.rs"]
+mod bootstrap;
 #[path = "nproc.rs"]
 mod nproc;
 #[path = "system_processes.rs"]
@@ -28,7 +28,7 @@ use crate::emacs_core::value::Value;
 use crate::gc_trace::GcTrace;
 
 pub(crate) use async_callback::AsyncCallbackKind;
-pub use bootstrap_vars::register_bootstrap_vars;
+pub use bootstrap::register_bootstrap_vars;
 pub(crate) use nproc::builtin_num_processors;
 pub(crate) use system_processes::{builtin_list_system_processes, builtin_process_attributes};
 
