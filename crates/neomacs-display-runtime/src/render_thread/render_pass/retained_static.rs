@@ -16,11 +16,12 @@
 //! happen — the caller has already established that, and the eligibility rule
 //! is where that establishment is written down.
 
+use super::FrameDrawInputs;
 use crate::render_thread::frame_stats;
 use crate::render_thread::frame_windows::{
     GuiFrameNativeWindowState, GuiFrameRenderState, RetainedCursorCell, RetainedStatic,
 };
-use crate::render_thread::state::{ChildFrameStyle, PointerAppearanceState, ToolbarResources};
+use crate::render_thread::state::PointerAppearanceState;
 use neomacs_renderer_wgpu::WgpuRenderer;
 
 /// Whether this frame may be composed from the retained static scene:
@@ -75,14 +76,8 @@ pub(super) fn draw(
     render: &mut GuiFrameRenderState,
     composition_view: &wgpu::TextureView,
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
-    present_mapping: neomacs_display_protocol::PresentMapping,
+    inputs: &FrameDrawInputs<'_>,
     cursor_visible: bool,
-    root_animated_cursor: Option<crate::core::types::AnimatedCursor>,
-    animated_cursor: Option<crate::core::types::AnimatedCursor>,
-    bg_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
-    child_frame_style: &ChildFrameStyle,
-    scroll_indicators_enabled: bool,
-    toolbar: &ToolbarResources,
     mouse_pos: (f32, f32),
 ) {
     let generation = render.compositor.current_scene_generation;
@@ -109,15 +104,9 @@ pub(super) fn draw(
             render,
             &retained_view,
             frame,
-            present_mapping,
+            inputs,
             false,
-            root_animated_cursor,
-            animated_cursor,
-            bg_gradient,
             true,
-            child_frame_style,
-            scroll_indicators_enabled,
-            toolbar,
         );
         let cells = build_filled_box_cursor_cells(
             frame,
@@ -141,9 +130,9 @@ pub(super) fn draw(
     renderer.render_cursor_only(
         composition_view,
         frame,
-        present_mapping,
+        inputs.present_mapping,
         cursor_visible,
-        animated_cursor,
+        inputs.animated_cursor,
         mouse_pos,
     );
     // Filled-box cursors are inverse-video: the retained scene has the
@@ -157,8 +146,8 @@ pub(super) fn draw(
             renderer,
             render,
             composition_view,
-            present_mapping,
-            animated_cursor,
+            inputs.present_mapping,
+            inputs.animated_cursor,
             mouse_pos,
         );
     }
