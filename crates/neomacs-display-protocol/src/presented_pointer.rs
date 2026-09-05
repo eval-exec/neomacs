@@ -474,7 +474,7 @@ impl PresentedUnifiedHit {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PresentedHit {
     region: PresentedHitRegion,
     text_position: Option<PresentedTextPosition>,

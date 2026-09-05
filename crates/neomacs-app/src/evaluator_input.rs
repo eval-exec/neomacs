@@ -4,6 +4,89 @@ use neovm_core::keyboard::{self, InputEvent};
 
 use crate::frontend_event::FrontendEvent;
 
+impl EvaluatorInputBatch<'static> {
+    pub fn from_positioned_pointer(
+        input: neomacs_display_protocol::PositionedPointerInput,
+    ) -> Self {
+        use neomacs_display_protocol::{PointerAction, PointerTarget, ScrollDelta};
+        use neovm_core::keyboard::{InputEvent as KbInputEvent, MouseButton};
+        let position = input.position;
+        let observation = match input.target {
+            PointerTarget::Presented { presentation, hit } => Some(KbInputEvent::PresentedRegion {
+                presentation,
+                hit,
+                x: position.x,
+                y: position.y,
+                target_frame_id: position.target_frame_id,
+            }),
+            PointerTarget::Unpresented => None,
+        };
+        let action = match input.action {
+            PointerAction::Button {
+                button,
+                pressed,
+                modifiers,
+                ..
+            } => {
+                let button = match button {
+                    1 => MouseButton::Left,
+                    2 => MouseButton::Middle,
+                    3 => MouseButton::Right,
+                    4 => MouseButton::Button4,
+                    5 => MouseButton::Button5,
+                    _ => return EvaluatorInputBatch::empty(),
+                };
+                if pressed {
+                    KbInputEvent::MousePress {
+                        button,
+                        x: position.x,
+                        y: position.y,
+                        modifiers: keyboard::render_modifiers_to_modifiers(modifiers),
+                        target_frame_id: position.target_frame_id,
+                    }
+                } else {
+                    KbInputEvent::MouseRelease {
+                        button,
+                        x: position.x,
+                        y: position.y,
+                        target_frame_id: position.target_frame_id,
+                    }
+                }
+            }
+            PointerAction::Move { modifiers } => KbInputEvent::MouseMove {
+                x: position.x,
+                y: position.y,
+                modifiers: keyboard::render_modifiers_to_modifiers(modifiers),
+                target_frame_id: position.target_frame_id,
+            },
+            PointerAction::Scroll {
+                delta, modifiers, ..
+            } => {
+                let modifiers = keyboard::render_modifiers_to_modifiers(modifiers);
+                match delta {
+                    ScrollDelta::Lines { x, y } => KbInputEvent::MouseScroll {
+                        delta_x: x,
+                        delta_y: y,
+                        x: position.x,
+                        y: position.y,
+                        modifiers,
+                        target_frame_id: position.target_frame_id,
+                    },
+                    ScrollDelta::Pixels { x, y } => KbInputEvent::PixelScroll {
+                        delta_x: x,
+                        delta_y: y,
+                        x: position.x,
+                        y: position.y,
+                        modifiers,
+                        target_frame_id: position.target_frame_id,
+                    },
+                }
+            }
+        };
+        EvaluatorInputBatch::ordered(observation, action)
+    }
+}
+
 /// Allocation-free, lazily expanded evaluator input produced by one host event.
 ///
 /// Ordinary events stay inline. A committed IME string borrows the frontend
