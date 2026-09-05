@@ -9,11 +9,23 @@
 //! keeps that coordinate space and its source object inseparable. The final
 //! row representation registers the string occurrence once and gives each glyph
 //! a compact typed token plus its string index.
+//!
+//! The provenance half is production code. The ELEMENT half —
+//! [`ProducedElement`] and the payload structs under it — is the still-unbuilt
+//! half of the producer inversion: production still walks
+//! `BufferSourceConsumedItem`, and the element vocabulary is reached only by
+//! the stream-equivalence harness (`stream_harness_test.rs`), which converts
+//! today's items into elements to prove the two legs of a walk agree. It is
+//! `#[cfg(test)]` rather than deleted because that harness is the standing
+//! proof for the rungs that will eventually make production produce elements
+//! directly; the `#[ignore]`d harness cases name the rungs still outstanding.
 
+#[cfg(test)]
 use crate::display_item::{
-    DisplayItem, DisplayItemKind, DisplayRowBreakReason, DisplaySourcePosition,
-    DisplayStretchWidth, RenderFaceRef, SourceSpan,
+    DisplayItem, DisplayItemKind, DisplayRowBreakReason, DisplayStretchWidth, RenderFaceRef,
 };
+use crate::display_item::{DisplaySourcePosition, SourceSpan};
+#[cfg(test)]
 use crate::display_source::{DisplaySourceStepItem, DisplaySourceTextPosition};
 pub(crate) use neomacs_display_protocol::glyph_matrix::{
     GlyphStringBufferRange, GlyphStringId as ProducedStringId, RedisplayGlyphProvenance,
@@ -64,6 +76,7 @@ impl ProducedGlyphProvenance {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn line_end() -> Self {
         Self::Redisplay(RedisplayGlyphProvenance::LineEnd)
     }
@@ -72,10 +85,12 @@ impl ProducedGlyphProvenance {
         Self::Redisplay(RedisplayGlyphProvenance::Mark)
     }
 
+    #[cfg(test)]
     pub(crate) const fn empty_line_newline(charpos: usize) -> Self {
         Self::Redisplay(RedisplayGlyphProvenance::EmptyLineNewline { charpos })
     }
 
+    #[cfg(test)]
     pub(crate) const fn buffer_charpos(self) -> Option<usize> {
         match self {
             Self::Buffer { charpos } => Some(charpos),
@@ -99,6 +114,7 @@ impl ProducedGlyphProvenance {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn legacy_charpos(self) -> usize {
         match self {
             Self::Buffer { charpos } => charpos,
@@ -114,6 +130,7 @@ impl ProducedGlyphProvenance {
 /// The producer's scan track: charpos plus byte index, ALWAYS through buffer
 /// text (GNU `it->current.pos`). The walk's existing position type — the
 /// producer does not get a second, drifting copy.
+#[cfg(test)]
 pub(crate) type BufferScanPos = DisplaySourceTextPosition;
 
 /// What a produced element, and every glyph it makes, is attributed to. GNU's
@@ -122,6 +139,7 @@ pub(crate) type BufferScanPos = DisplaySourceTextPosition;
 /// Mirrors the renderer's private `DisplayTextSourceMapping` (builder.rs): do a
 /// run's glyphs advance the stamp per character, or does every glyph carry the
 /// run's start?
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RunStamping {
     /// Buffer text: glyph N carries start + N.
@@ -198,12 +216,14 @@ pub(crate) fn source_mapped_text_glyph(
 /// advanced independently by accident. `scan` always walks buffer text; `stamp`
 /// is what the next element's glyphs carry, and differs from `scan` exactly
 /// while a producer frame is active.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProducerPosition {
     scan: BufferScanPos,
     stamp: ProducedGlyphProvenance,
 }
 
+#[cfg(test)]
 impl ProducerPosition {
     /// Producing buffer text: the stamp IS the scan position.
     pub(crate) fn buffer_at(scan: BufferScanPos) -> Self {
@@ -238,6 +258,7 @@ impl ProducerPosition {
 
 /// One display element: the typed output of GNU's `get_next_display_element`.
 /// Payloads start at what the legacy bridge below can fill and grow per rung.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ProducedElement {
     /// One character, buffer- or string-stamped per its position.
@@ -255,6 +276,7 @@ pub(crate) enum ProducedElement {
     EndOfText,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProducedChar {
     position: ProducerPosition,
@@ -263,6 +285,7 @@ pub(crate) struct ProducedChar {
     avoid_cursor: bool,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProducedRun {
     position: ProducerPosition,
@@ -271,6 +294,7 @@ pub(crate) struct ProducedRun {
     stamping: RunStamping,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProducedStretch {
     position: ProducerPosition,
@@ -279,12 +303,14 @@ pub(crate) struct ProducedStretch {
     avoid_cursor: bool,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProducedRowBreak {
     position: ProducerPosition,
     reason: DisplayRowBreakReason,
 }
 
+#[cfg(test)]
 impl ProducedChar {
     pub(crate) const fn position(&self) -> ProducerPosition {
         self.position
@@ -304,6 +330,7 @@ impl ProducedChar {
     }
 }
 
+#[cfg(test)]
 impl ProducedRun {
     pub(crate) const fn position(&self) -> ProducerPosition {
         self.position
@@ -331,6 +358,7 @@ impl ProducedRun {
     }
 }
 
+#[cfg(test)]
 impl ProducedStretch {
     pub(crate) const fn position(&self) -> ProducerPosition {
         self.position
@@ -349,6 +377,7 @@ impl ProducedStretch {
     }
 }
 
+#[cfg(test)]
 impl ProducedRowBreak {
     pub(crate) const fn position(&self) -> ProducerPosition {
         self.position
@@ -359,6 +388,7 @@ impl ProducedRowBreak {
     }
 }
 
+#[cfg(test)]
 impl ProducedElement {
     /// Bridge from today's item vocabulary at a known scan position. Kinds the
     /// element vocabulary does not model yet (glyphless, media replacements)
