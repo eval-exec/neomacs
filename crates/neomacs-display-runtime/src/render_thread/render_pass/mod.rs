@@ -5,18 +5,18 @@
 
 pub(in crate::render_thread) mod chrome;
 mod composition_targets;
+mod present;
 mod retained_static;
 mod scene;
 mod surface;
 
 use self::surface::FrameRenderFailure;
-use super::frame_sched::PresentResult;
+use super::RenderApp;
 use super::frame_windows::{
     FrameLifecycle, GuiFrameNativeWindowState, GuiFrameRenderState, GuiFrameWindowState,
 };
 use super::state::{ChildFrameStyle, ToolbarResources};
 use super::transitions::{detect_frame_transitions, render_frame_transitions};
-use super::{RenderApp, surface_readback};
 use crate::core::types::DisplayFrameId;
 use neomacs_renderer_wgpu::{SnapshotSize, WgpuRenderer};
 
@@ -424,162 +424,5 @@ impl RenderApp {
             frame,
             projection: pane_projection,
         })
-    }
-
-    /// Render and present one top-level frame window, preserving the precise
-    /// outcome for the frame coordinator.
-    ///
-    /// `compositor_only_hint` is set when the frame coordinator's plan is
-    /// compositor-only; it enables the retained-static fast path (blit the
-    /// retained scene, sample dynamic cursor/post state) when the scene is
-    /// eligible, skipping the glyph pipeline.
-    pub(super) fn render_frame_window_hinted(
-        &mut self,
-        emacs_frame_id: u64,
-        compositor_only_hint: bool,
-    ) -> PresentResult {
-        self.render_frame_window_impl(emacs_frame_id, compositor_only_hint)
-    }
-
-    fn render_frame_window_impl(
-        &mut self,
-        emacs_frame_id: u64,
-        compositor_only_hint: bool,
-    ) -> PresentResult {
-        if self.lifecycle_flags.shutdown_requested {
-            return PresentResult::Skipped;
-        }
-        self.prepare_frame_state_for_render();
-
-        let bg_gradient = if self.effects.bg_gradient.enabled {
-            Some((
-                self.effects.bg_gradient.top,
-                self.effects.bg_gradient.bottom,
-            ))
-        } else {
-            None
-        };
-
-        let is_primary_frame = self.frame_windows.is_primary_frame_id(emacs_frame_id);
-        let Some(renderer) = self.renderer.as_mut() else {
-            return PresentResult::Timeout;
-        };
-        let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) else {
-            return PresentResult::Timeout;
-        };
-        #[cfg(feature = "video")]
-        renderer.begin_video_surface_render();
-        window_state
-            .render
-            .compositor
-            .transitions
-            .apply_policy(self.transition_policy);
-
-        let rendered = Self::render_frame_window_contents_to_surface(
-            renderer,
-            window_state,
-            bg_gradient,
-            &self.child_frame_style,
-            self.scroll_indicators_enabled,
-            &self.toolbar,
-            self.extra_line_spacing,
-            self.extra_letter_spacing,
-            compositor_only_hint,
-            &self.render_policy,
-            &mut self.device_lost,
-        );
-        let RenderedFrameSurface {
-            output,
-            frame,
-            projection,
-        } = match rendered {
-            Ok(rendered) => rendered,
-            Err(failure) => {
-                #[cfg(feature = "video")]
-                renderer.cancel_video_surface_render();
-                return failure.present_result();
-            }
-        };
-        if is_primary_frame {
-            let (w, h) = self
-                .frame_windows
-                .get(emacs_frame_id)
-                .map(|ws| ws.native_size())
-                .unwrap_or((0, 0));
-            surface_readback::maybe_log_first_frame_surface_readback(
-                &mut self.debug_first_frame_readback_pending,
-                &output.texture,
-                renderer,
-                &frame,
-                w,
-                h,
-            );
-            surface_readback::maybe_log_debug_surface_readback(
-                &mut self.debug_surface_readback_frames_remaining,
-                &output.texture,
-                renderer,
-                &frame,
-                w,
-                h,
-            );
-        }
-        let (child_frame_ids, removed_child_frame_ids) = self
-            .frame_windows
-            .get_mut(emacs_frame_id)
-            .map(|window_state| {
-                let child_frame_ids = window_state
-                    .render
-                    .compositor
-                    .child_frames
-                    .sorted_for_rendering()
-                    .to_vec();
-                let removed_child_frame_ids = std::mem::take(
-                    &mut window_state
-                        .render
-                        .compositor
-                        .pending_child_frame_removals_to_present,
-                );
-                (child_frame_ids, removed_child_frame_ids)
-            })
-            .unwrap_or_default();
-        if !child_frame_ids.is_empty() || !removed_child_frame_ids.is_empty() {
-            tracing::debug!(
-                parent_frame_id = emacs_frame_id,
-                child_frame_ids = ?child_frame_ids,
-                removed_child_frame_ids = ?removed_child_frame_ids,
-                "child_frame_lifecycle: present_begin"
-            );
-        }
-        // Let winit arm platform pacing (the Wayland surface frame
-        // callback) for the upcoming present; a no-op elsewhere.
-        if let Some(window) = self
-            .frame_windows
-            .get(emacs_frame_id)
-            .and_then(|window_state| window_state.window())
-        {
-            window.pre_present_notify();
-        }
-        renderer.queue().present(output);
-        // Published here and nowhere else: the projection describes the pixels
-        // that were just handed to the compositor, so this is the first instant
-        // at which "what is on screen" is a fact rather than an intention.
-        if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
-            window_state.render.publish_presented_projection(projection);
-        }
-        #[cfg(feature = "video")]
-        renderer.finish_presented_video_surface();
-        super::frame_stats::note_present(
-            neomacs_display_protocol::frame_time::observe_platform_now(),
-        );
-
-        if !child_frame_ids.is_empty() || !removed_child_frame_ids.is_empty() {
-            tracing::debug!(
-                parent_frame_id = emacs_frame_id,
-                child_frame_ids = ?child_frame_ids,
-                removed_child_frame_ids = ?removed_child_frame_ids,
-                "child_frame_lifecycle: present_done"
-            );
-        }
-        PresentResult::Presented
     }
 }
