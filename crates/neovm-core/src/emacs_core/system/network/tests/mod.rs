@@ -192,67 +192,6 @@ fn open_connection_refused() {
     assert!(result.is_err());
 }
 
-// -- URL parser ---------------------------------------------------------
-
-#[test]
-fn parse_http_url_basic() {
-    crate::test_utils::init_test_tracing();
-    let (host, port, path) = parse_http_url("http://example.com/foo").unwrap();
-    assert_eq!(host, "example.com");
-    assert_eq!(port, 80);
-    assert_eq!(path, "/foo");
-}
-
-#[test]
-fn parse_http_url_with_port() {
-    crate::test_utils::init_test_tracing();
-    let (host, port, path) = parse_http_url("http://example.com:8080/bar").unwrap();
-    assert_eq!(host, "example.com");
-    assert_eq!(port, 8080);
-    assert_eq!(path, "/bar");
-}
-
-#[test]
-fn parse_http_url_no_path() {
-    crate::test_utils::init_test_tracing();
-    let (host, port, path) = parse_http_url("http://example.com").unwrap();
-    assert_eq!(host, "example.com");
-    assert_eq!(port, 80);
-    assert_eq!(path, "/");
-}
-
-#[test]
-fn parse_https_url() {
-    crate::test_utils::init_test_tracing();
-    let (host, port, path) = parse_http_url("https://secure.example.com/api").unwrap();
-    assert_eq!(host, "secure.example.com");
-    assert_eq!(port, 443);
-    assert_eq!(path, "/api");
-}
-
-#[test]
-fn parse_url_unsupported_scheme() {
-    crate::test_utils::init_test_tracing();
-    let result = parse_http_url("ftp://example.com/file");
-    assert!(result.is_err());
-}
-
-#[test]
-fn parse_url_empty_host() {
-    crate::test_utils::init_test_tracing();
-    let result = parse_http_url("http:///path");
-    assert!(result.is_err());
-}
-
-#[test]
-fn parse_url_deep_path() {
-    crate::test_utils::init_test_tracing();
-    let (host, port, path) = parse_http_url("http://host.com/a/b/c?q=1").unwrap();
-    assert_eq!(host, "host.com");
-    assert_eq!(port, 80);
-    assert_eq!(path, "/a/b/c?q=1");
-}
-
 // -- Helper function tests ----------------------------------------------
 
 #[test]
@@ -388,25 +327,4 @@ fn list_connections_empty() {
     crate::test_utils::init_test_tracing();
     let nm = NetworkManager::new();
     assert!(nm.list_connections().is_empty());
-}
-
-// -- url_retrieve_synchronously with bad URL scheme ---------------------
-
-#[test]
-fn url_retrieve_bad_scheme() {
-    crate::test_utils::init_test_tracing();
-    let mut nm = NetworkManager::new();
-    let result = nm.url_retrieve_synchronously("ftp://example.com");
-    assert!(result.is_err());
-}
-
-// -- url_retrieve_synchronously with refused port ------------------------
-
-#[test]
-fn url_retrieve_refused_port() {
-    crate::test_utils::init_test_tracing();
-    let mut nm = NetworkManager::new();
-    // Port 1 on localhost should refuse connections.
-    let result = nm.url_retrieve_synchronously("http://127.0.0.1:1/path");
-    assert!(result.is_err());
 }

@@ -4,7 +4,6 @@
 //! - TCP client connections (open-network-stream)
 //! - Process filters (async output handlers)
 //! - Process sentinels (state change handlers)
-//! - URL fetching (basic HTTP)
 //! - Pipe-based IPC
 //! - Process output buffer management
 
@@ -347,95 +346,6 @@ impl NetworkManager {
             .map(|c| !c.output_buffer.is_empty())
             .unwrap_or(false)
     }
-
-    // -- URL fetching -------------------------------------------------------
-
-    /// Perform a basic synchronous HTTP GET.  Connects to the host on port
-    /// 80 (or 443 not yet supported), sends a minimal HTTP/1.0 request, and
-    /// returns the entire response body.
-    pub fn url_retrieve_synchronously(&mut self, url: &str) -> Result<String, String> {
-        // Parse scheme, host, port, path from the URL.
-        let (host, port, path) = parse_http_url(url)?;
-
-        let addr_str = format!("{}:{}", host, port);
-        let addrs: Vec<_> = addr_str
-            .to_socket_addrs()
-            .map_err(|e| format!("DNS resolution failed for {}: {}", host, e))?
-            .collect();
-
-        if addrs.is_empty() {
-            return Err(format!("No addresses found for {}", host));
-        }
-
-        let mut stream = TcpStream::connect_timeout(&addrs[0], Duration::from_secs(30))
-            .map_err(|e| format!("Connection to {}:{} failed: {}", host, port, e))?;
-
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-
-        let request = format!(
-            "GET {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            path, host,
-        );
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|e| format!("Write error: {}", e))?;
-
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .map_err(|e| format!("Read error: {}", e))?;
-
-        let response_str = String::from_utf8_lossy(&response).into_owned();
-
-        // Split headers from body at the first \r\n\r\n.
-        if let Some(pos) = response_str.find("\r\n\r\n") {
-            Ok(response_str[pos + 4..].to_string())
-        } else {
-            // No header/body separator found; return everything.
-            Ok(response_str)
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// URL parsing helper
-// ---------------------------------------------------------------------------
-
-/// Very basic HTTP URL parser.  Returns (host, port, path).
-fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
-    let rest = if let Some(stripped) = url.strip_prefix("http://") {
-        stripped
-    } else if let Some(stripped) = url.strip_prefix("https://") {
-        // We note the scheme but don't actually do TLS.
-        stripped
-    } else {
-        return Err(format!("Unsupported URL scheme in: {}", url));
-    };
-
-    let default_port: u16 = if url.starts_with("https://") { 443 } else { 80 };
-
-    // Split host(+port) from path.
-    let (hostport, path) = match rest.find('/') {
-        Some(idx) => (&rest[..idx], &rest[idx..]),
-        None => (rest, "/"),
-    };
-
-    // Split host from port.
-    let (host, port) = if let Some(colon_idx) = hostport.rfind(':') {
-        let port_str = &hostport[colon_idx + 1..];
-        let port: u16 = port_str
-            .parse()
-            .map_err(|_| format!("Invalid port in URL: {}", port_str))?;
-        (&hostport[..colon_idx], port)
-    } else {
-        (hostport, default_port)
-    };
-
-    if host.is_empty() {
-        return Err("Empty host in URL".to_string());
-    }
-
-    Ok((host.to_string(), port, path.to_string()))
 }
 
 // ---------------------------------------------------------------------------
