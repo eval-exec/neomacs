@@ -9,7 +9,7 @@ description = "Cross-platform embedded web content for Neomacs"
 
 [features]
 default = []
-webview = ["dep:bindgen", "dep:glib", "dep:pkg-config"]
+webview = ["dep:bindgen", "dep:glib", "dep:pkg-config", "dep:udev"]
 
 [dependencies]
 bitflags.workspace = true
@@ -32,7 +32,7 @@ raw-window-handle.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = { workspace = true, optional = true }
-udev = "0.9"
+udev = { version = "0.9", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle.workspace = true
