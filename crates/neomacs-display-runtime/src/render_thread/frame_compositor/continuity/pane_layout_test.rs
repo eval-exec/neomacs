@@ -791,3 +791,41 @@ fn a_reflow_ghost_never_answers_a_hit_test() {
         "one pane, one transform — the ghost is not a place you can click"
     );
 }
+
+#[test]
+fn a_retarget_that_ends_the_motion_still_hands_out_the_settled_projection() {
+    // This composition places nothing, so the render pass takes its
+    // compositor-only fast path. That path must still carry the projection:
+    // the motion just ended, and the transform in force is otherwise the
+    // morph's last mid-motion one, which would answer every later hit test
+    // about panes that have since arrived.
+    let mut render = empty_render();
+    render.compositor.pane_motion = linear_100ms();
+    let origin = origin();
+    install(
+        &mut render,
+        &[window(1, rect(0.0, 0.0, 800.0, 600.0))],
+        origin,
+    );
+    install(
+        &mut render,
+        &[window(1, rect(0.0, 0.0, 400.0, 600.0))],
+        origin,
+    );
+    // Let it arrive, then commit the layout it already reached.
+    install(
+        &mut render,
+        &[window(1, rect(0.0, 0.0, 400.0, 600.0))],
+        origin,
+    );
+
+    let composition = render.sample_pane_layout(frame_at(origin, 200));
+    assert!(
+        composition.blits.is_empty(),
+        "nothing left to place, so the fast path is eligible"
+    );
+    assert!(
+        composition.projection.is_some(),
+        "and yet there is a transform the next hit test must use"
+    );
+}
