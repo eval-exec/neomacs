@@ -11,6 +11,7 @@
 
 pub(in crate::render_thread) mod scroll;
 pub(in crate::render_thread) mod selection;
+pub(in crate::render_thread) mod theme;
 
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_display_protocol::frame_glyphs::BufferViewportRegion;
@@ -127,5 +128,25 @@ impl GuiFrameRenderState {
             }
             _ => None,
         };
+    }
+}
+
+impl GuiFrameRenderState {
+    /// Record whether the frame's theme changed into the presentation being
+    /// installed.
+    ///
+    /// Only a positive detection overwrites the pending value. Recomputing it
+    /// unconditionally would clear a change detected on a presentation that was
+    /// then superseded before any frame drew it, and the user would change
+    /// theme and see nothing.
+    pub(in crate::render_thread) fn observe_theme_change(
+        &mut self,
+        next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
+    ) {
+        if let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next)
+            && let Some(change) = theme::theme_change(previous, next)
+        {
+            self.compositor.pending.theme = Some(change);
+        }
     }
 }

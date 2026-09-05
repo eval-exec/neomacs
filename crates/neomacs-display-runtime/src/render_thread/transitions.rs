@@ -252,6 +252,44 @@ fn plan_transition_hint(
     }
 }
 
+/// Crossfade the frame because its theme changed.
+///
+/// Every condition the hint arm applied is kept: the config gate, the
+/// re-entry guard that lets a running theme transition finish rather than
+/// restarting it, and the configured duration and easing.
+fn start_theme_transition(
+    renderer: &WgpuRenderer,
+    transitions: &mut TransitionState,
+    effects: &neomacs_display_protocol::EffectsConfig,
+    theme: crate::render_thread::frame_compositor::continuity::theme::ThemeChange,
+    now: neomacs_display_protocol::frame_time::EventTime,
+    width: u32,
+    height: u32,
+) {
+    if !effects.theme_transition.enabled {
+        return;
+    }
+    if transitions.active.contains_key(&TransitionKey::Theme) {
+        return;
+    }
+    let plan = TransitionPlan {
+        duration: effects.theme_transition.duration,
+        easing: effects.theme_transition.easing,
+        bounds: theme.bounds,
+        effect: ResolvedTransitionEffect::Directionless(DirectionlessTransitionEffect::Crossfade),
+    };
+    start_transition(
+        renderer,
+        transitions,
+        TransitionKey::Theme,
+        TransitionSource::Theme,
+        SynchronizedTransitionPlan::from_single(plan),
+        now,
+        width,
+        height,
+    );
+}
+
 /// Plan a scroll transition from a measured viewport displacement.
 ///
 /// Only an exact measurement animates. An ambiguous or non-overlapping scroll
@@ -339,12 +377,9 @@ fn start_transition(
 
 fn apply_effect_hint(
     renderer: &mut WgpuRenderer,
-    transitions: &mut TransitionState,
     effects: &neomacs_display_protocol::EffectsConfig,
     hint: &WindowEffectHint,
     now: neomacs_display_protocol::frame_time::EventTime,
-    width: u32,
-    height: u32,
 ) {
     match hint {
         WindowEffectHint::TextFadeIn { window_id, bounds } => {
@@ -409,32 +444,6 @@ fn apply_effect_hint(
                 );
             }
         }
-        WindowEffectHint::ThemeTransition { bounds } => {
-            if !effects.theme_transition.enabled {
-                return;
-            }
-            if transitions.active.contains_key(&TransitionKey::Theme) {
-                return;
-            }
-            let plan = TransitionPlan {
-                duration: effects.theme_transition.duration,
-                easing: effects.theme_transition.easing,
-                bounds: *bounds,
-                effect: ResolvedTransitionEffect::Directionless(
-                    DirectionlessTransitionEffect::Crossfade,
-                ),
-            };
-            start_transition(
-                renderer,
-                transitions,
-                TransitionKey::Theme,
-                TransitionSource::Theme,
-                SynchronizedTransitionPlan::from_single(plan),
-                now,
-                width,
-                height,
-            );
-        }
     }
 }
 
@@ -460,6 +469,11 @@ pub(super) fn detect_frame_transitions(
     // Scroll transitions come from a measurement the compositor made when the
     // presentation was installed, not from anything the producer declared.
     if pending.accept_derived_effects
+        && let Some(theme) = pending.theme
+    {
+        start_theme_transition(renderer, transitions, effects, theme, now, width, height);
+    }
+    if pending.accept_derived_effects
         && let Some(selection) = pending.selection
         && effects.window_switch_fade.enabled
     {
@@ -483,7 +497,7 @@ pub(super) fn detect_frame_transitions(
         );
     }
     for hint in &effect_hints {
-        apply_effect_hint(renderer, transitions, effects, hint, now, width, height);
+        apply_effect_hint(renderer, effects, hint, now);
     }
 }
 
