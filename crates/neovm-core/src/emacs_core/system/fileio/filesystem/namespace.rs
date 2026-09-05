@@ -90,6 +90,12 @@ impl EditorFileSystemNamespace {
 }
 
 impl EditorFileSystem for EditorFileSystemNamespace {
+    fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
+        if self.runtime_store_for(path).is_some() {
+            return super::FileAttributeSnapshot::read(self, path);
+        }
+        self.host.attributes(path)
+    }
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata> {
         if self.runtime_store_for(path).is_some() {
             return self.require_runtime_node(path).map(Self::runtime_metadata);
