@@ -48,6 +48,16 @@ cargo nextest run -p neomacs-tui-tests --release --no-fail-fast
 The TUI harness uses `target/release/neomacs` by default, regardless of the
 Cargo test profile. Set `NEOMACS_TUI_NEOMACS_BIN` to use a different binary.
 
+The GNU side of every pair comparison is whichever `emacs` is first on `PATH`,
+and it must be the parity reference pinned in `parity-reference.toml`
+(Emacs 31.0.90, the revision the Lisp tree is synced to). Newer releases
+change what the shared Lisp renders: Emacs 31.0.91 and 31.1 dropped the
+`min-width` padding from `mode-line-position`, so against them almost every
+TUI pair test fails on the mode-line row. CI compiles that exact commit in
+`.github/actions/setup-gnu-emacs`; locally, build the `emacs-31.0.90` tag
+without native compilation and put its `bin` first on `PATH` for the TUI
+and GUI suites.
+
 Set `NEOMACS_TUI_RECORD=on` to write an asciicast v3 recording for every
 `TuiSession`. Recording is disabled by default. Core parity tests are grouped
 by Rust test name and package parity tests by package scenario:

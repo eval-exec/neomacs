@@ -1,34 +1,98 @@
 name: 'Set up GNU Emacs oracle'
 description: >-
-  Install the pinned GNU Emacs that every GNU-vs-Neomacs comparison runs
-  against. Replaces the old apt emacs-nox (29.3 on ubuntu-24.04), which
-  version-skewed against the local pinned reference and the lisp tree:
-  29.3's initial-scratch-message says "visit it with \[find-file]" while
-  Emacs 31 says "visit it with `\[find-file]'" — one row that sits on every
-  pair test's initial screen. The local pinned reference is the Emacs
-  31.0.90 pretest built 2026-06-10; nix-emacs-ci publishes no pretests, so
-  this installs 31.1, the fixed release cut from the same emacs-31 branch
-  (verified to carry the same startup.el scratch message). The build is
-  minimal (no window-system, no native compilation), which matches the
-  pinned reference's no-native-comp configuration for TUI/batch oracles;
-  GUI-frame comparisons against GNU need an X-capable build, which no CI
-  profile has ever provided (emacs-nox included).
+  Install the GNU Emacs that every GNU-vs-Neomacs comparison runs against:
+  the parity reference pinned in parity-reference.toml, built from that exact
+  emacs-mirror commit. Nothing else will do. The lisp tree is synced to
+  emacs-31.0.90, and Emacs 31.0.91/31.1 removed the `display (min-width ...)`
+  padding from `mode-line-position` (emacs commit 388adcc570b), so against
+  31.1 every TUI pair test disagrees on the mode-line row of every screen:
+  889 of 942 tests failed on main. The earlier apt emacs-nox 29.3 disagreed
+  on the *scratch* buffer's first row instead. nix-emacs-ci publishes no
+  pretests, so the reference is compiled here from source and cached by
+  commit; a dedicated ci.yml job warms that cache before the shards that
+  spawn GNU start, and a cache hit costs one restore. The build is TTY/batch
+  only (no window system, no native compilation), matching the pinned
+  reference's configuration; GUI-frame comparisons against GNU need an
+  X-capable build, which no CI profile has ever provided.
 
 runs:
   using: 'composite'
   steps:
-    - name: Install GNU Emacs 31.1
-      # master 2026-09-05. Self-installs Nix only when the runner has none
-      # (MELPA jobs install their own Nix first via install-nix-action).
-      uses: purcell/setup-emacs@34c6ded44899fd1bf74d2889558befd1750e61a7
-      with:
-        version: 31.1
-
-    - name: Record and smoke the oracle build
+    - name: Read the pinned GNU reference
+      id: pin
       shell: bash
       run: |
-        # A divergence is only meaningful against a known GNU version: record
-        # it in the log, then fail at this environment seam (the check that
-        # used to live in setup-linux.sh) instead of inside an oracle test.
-        emacs --version | head -n 1
-        emacs --batch --quick --eval '(kill-emacs 0)'
+        # The action names no version of its own: parity-reference.toml is
+        # the single record of which GNU the parity numbers are about, and a
+        # re-pin there (cargo run -p xtask -- pin-reference) moves CI with it.
+        set -euo pipefail
+        pin="$GITHUB_WORKSPACE/parity-reference.toml"
+        version="$(sed -n 's/^emacs_version = "\(.*\)"$/\1/p' "$pin")"
+        commit="$(sed -n 's/^mirror_commit = "\(.*\)"$/\1/p' "$pin")"
+        if [[ ! "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "parity-reference.toml does not pin emacs_version and mirror_commit" >&2
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "commit=$commit" >> "$GITHUB_OUTPUT"
+        # actions/cache restores as the runner user, and /opt is root's.
+        sudo mkdir -p /opt/gnu-emacs-oracle
+        sudo chown "$(id -u):$(id -g)" /opt/gnu-emacs-oracle
+
+    - name: Restore the cached oracle build
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: /opt/gnu-emacs-oracle
+        # Keyed on the commit and on this file, so a re-pin or a configure
+        # change rebuilds instead of serving the previous oracle.
+        key: gnu-emacs-oracle-${{ runner.os }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('.github/actions/setup-gnu-emacs/action.yml') }}
+
+    - name: Build GNU Emacs from the pinned commit
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        EMACS_COMMIT: ${{ steps.pin.outputs.commit }}
+        EMACS_VERSION: ${{ steps.pin.outputs.version }}
+      run: |
+        set -euo pipefail
+        # Build tools only; the libraries come from scripts/ci/setup-linux.sh,
+        # which every caller runs first (its build package set carries
+        # gnutls, ncurses and libxml2 development headers).
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends autoconf texinfo make gcc
+        src="$(mktemp -d)"
+        git -C "$src" init -q
+        # Fetch the commit itself, not the tag: the tag is documentation, the
+        # commit is the identity the parity numbers were measured against.
+        git -C "$src" fetch -q --depth 1 https://github.com/emacs-mirror/emacs.git "$EMACS_COMMIT"
+        git -C "$src" checkout -q FETCH_HEAD
+        cd "$src"
+        ./autogen.sh
+        ./configure --prefix=/opt/gnu-emacs-oracle \
+          --without-x --without-pgtk --without-native-compilation \
+          --with-gnutls=ifavailable --with-xml2=ifavailable \
+          --with-tree-sitter=ifavailable --with-libgmp=ifavailable \
+          --with-sound=no --without-dbus --without-gconf --without-gsettings \
+          --without-libsystemd --without-selinux --without-gpm \
+          --without-sqlite3
+        make -j"$(nproc)"
+        make install
+        rm -rf "$src"
+
+    - name: Put the oracle on PATH and prove its version
+      shell: bash
+      env:
+        EMACS_VERSION: ${{ steps.pin.outputs.version }}
+      run: |
+        # A divergence is only meaningful against a known GNU version, so
+        # this fails at the environment seam, not inside an oracle test, and
+        # it checks the version rather than merely that an emacs runs.
+        set -euo pipefail
+        echo "/opt/gnu-emacs-oracle/bin" >> "$GITHUB_PATH"
+        got="$(/opt/gnu-emacs-oracle/bin/emacs --batch --quick --eval '(princ emacs-version)')"
+        if [[ "$got" != "$EMACS_VERSION" ]]; then
+          echo "GNU oracle reports emacs-version $got, parity-reference.toml pins $EMACS_VERSION" >&2
+          exit 1
+        fi
+        /opt/gnu-emacs-oracle/bin/emacs --version | head -n 1

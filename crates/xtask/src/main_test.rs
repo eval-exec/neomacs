@@ -700,13 +700,31 @@ fn linux_ci_setup_profiles_expose_capabilities_and_reject_unknown_profiles() {
     );
 
     let oracle = packages("oracle");
-    for package in ["liblcms2-dev", "emacs-nox", "libfaketime"] {
+    for package in ["liblcms2-dev", "libfaketime"] {
         assert!(oracle.lines().any(|candidate| candidate == package));
+    }
+
+    // GNU Emacs is never an apt package: the apt emacs-nox (29.3 on
+    // ubuntu-24.04) version-skews against the Emacs 31 reference the lisp
+    // tree and parity-reference.toml track.  Every GNU-vs-Neomacs comparison
+    // runs the build that .github/actions/setup-gnu-emacs installs.
+    for profile in [
+        "build",
+        "build-no-gstreamer",
+        "oracle",
+        "ecosystem",
+        "release",
+    ] {
+        assert!(
+            !packages(profile)
+                .lines()
+                .any(|package| package == "emacs-nox"),
+            "profile {profile} must not install the apt emacs-nox"
+        );
     }
 
     let ecosystem = packages("ecosystem");
     for package in [
-        "emacs-nox",
         "gnupg",
         "xvfb",
         "xauth",
@@ -1148,7 +1166,9 @@ fn ci_uses_one_typed_sharded_nextest_workflow_for_core_oracle_and_tui() {
     assert!(oracle.contains("uses: ./.github/workflows/nextest-shards.yml"));
     assert!(oracle.contains("suite: oracle"));
     let tui = github_workflow_job(workflow, "neomacs-tui-tests");
-    assert!(tui.contains("needs: [neomacs-test-runtime, neomacs-workspace-test-archive]"));
+    assert!(tui.contains(
+        "needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]"
+    ));
     assert!(tui.contains("uses: ./.github/workflows/nextest-shards.yml"));
     assert!(tui.contains("suite: tui"));
 }
@@ -1188,13 +1208,16 @@ fn ci_runs_offline_melpa_parity_from_shared_artifacts() {
     ));
     let job = github_workflow_job(workflow, "neomacs-melpa-tests");
 
-    assert!(job.contains("needs: [neomacs-test-runtime, neomacs-workspace-test-archive]"));
+    assert!(job.contains(
+        "needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]"
+    ));
     assert!(!job.contains("if: ${{ false }}"));
     assert!(job.contains("name: neomacs-test-runtime-linux-x86_64"));
     assert!(job.contains("tar xzf neomacs-test-runtime-linux-x86_64.tar.gz"));
     assert!(job.contains("name: neomacs-workspace-tests-nextest-archive-linux-x86_64"));
     assert!(job.contains("NEOMACS_BIN: ${{ github.workspace }}/target/release/neomacs"));
-    assert!(job.contains("NEOMACS_MELPA_ORACLE_EMACS: /usr/bin/emacs"));
+    assert!(job.contains(&format!("NEOMACS_MELPA_ORACLE_EMACS: {GNU_ORACLE_EMACS}")));
+    assert!(job.contains("uses: ./.github/actions/setup-gnu-emacs"));
     assert!(job.contains("run: scripts/ci/setup-linux.sh ecosystem"));
     for suite in ["batch", "tui", "gui"] {
         assert!(job.contains(&format!("suite: {suite}")));
@@ -1232,10 +1255,83 @@ fn ci_executes_display_stack_and_real_gui_tests_from_shared_artifacts() {
     assert!(display.contains("protocol)|package(neomacs-display-runtime)"));
 
     let gui = github_workflow_job(workflow, "neomacs-gui-tests");
-    assert!(gui.contains("needs: [neomacs-test-runtime, neomacs-workspace-test-archive]"));
+    assert!(gui.contains(
+        "needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]"
+    ));
     assert!(gui.contains("NEOMACS_GUI_TEST_BACKEND: x11"));
-    assert!(gui.contains("NEOMACS_GUI_TEST_GNU_EMACS: /usr/bin/emacs"));
+    assert!(gui.contains(&format!("NEOMACS_GUI_TEST_GNU_EMACS: {GNU_ORACLE_EMACS}")));
+    assert!(gui.contains("uses: ./.github/actions/setup-gnu-emacs"));
     assert!(gui.contains("package(neomacs-gui-tests)"));
+}
+
+/// Where `.github/actions/setup-gnu-emacs` installs the GNU oracle.  The
+/// path carries no version on purpose: the version is read from
+/// parity-reference.toml, so a re-pin changes one file.
+const GNU_ORACLE_EMACS: &str = "/opt/gnu-emacs-oracle/bin/emacs";
+
+/// The GNU oracle CI runs against is the parity reference the lisp tree and
+/// every published parity number track, and nothing else.  Emacs 31.1 (and
+/// 31.0.91) removed the `display (min-width ...)` padding from
+/// `mode-line-position` (emacs commit 388adcc570b), so against any newer
+/// GNU every TUI pair test disagrees on the mode-line row; the old apt
+/// emacs-nox 29.3 disagreed on the scratch buffer's first row.  The action
+/// therefore takes the tag and commit from parity-reference.toml at run
+/// time instead of naming a version of its own, and CI warms one cached
+/// build in a dedicated job before the shards that spawn GNU start.
+#[test]
+fn gnu_oracle_action_builds_the_pinned_parity_reference() {
+    let action = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/actions/setup-gnu-emacs/action.yml"
+    ));
+    let reference = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/parity-reference.toml"
+    ));
+    let pinned = |key: &str| -> String {
+        reference
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key} = ")))
+            .unwrap_or_else(|| panic!("parity-reference.toml must pin {key}"))
+            .trim_matches('"')
+            .to_string()
+    };
+    assert_eq!(pinned("emacs_version"), "31.0.90");
+    assert_eq!(pinned("mirror_commit").len(), 40);
+
+    // The action derives both identities from the pin file rather than
+    // repeating them, so a re-pin cannot leave CI on a stale oracle.
+    assert!(action.contains("parity-reference.toml"));
+    assert!(action.contains("emacs_version"));
+    assert!(action.contains("mirror_commit"));
+    assert!(!action.contains("purcell/setup-emacs"));
+    assert!(!action.contains("apt-get install -y --no-install-recommends emacs"));
+    for stale in ["31.1", "31.0.91", "29.3"] {
+        assert!(
+            !action.contains(&format!("version: {stale}")),
+            "the action must not name a GNU version of its own ({stale})"
+        );
+    }
+    assert!(action.contains("/opt/gnu-emacs-oracle"));
+    assert!(action.contains("--without-native-compilation"));
+    assert!(action.contains("--without-x"));
+    assert!(action.contains("actions/cache@"));
+    // The smoke step must prove the version, not just that an emacs runs.
+    assert!(action.contains("emacs-version"));
+
+    let workflow = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/workflows/ci.yml"
+    ));
+    let warm = github_workflow_job(workflow, "gnu-emacs-oracle");
+    assert!(warm.contains("uses: ./.github/actions/setup-gnu-emacs"));
+    for job in ["neomacs-tui-tests", "neomacs-prefix-face-tui-parity"] {
+        let spawns_gnu = github_workflow_job(workflow, job);
+        assert!(
+            spawns_gnu.contains("gnu-emacs-oracle]"),
+            "{job} spawns GNU and must wait for the warmed oracle cache"
+        );
+    }
 }
 
 #[test]
@@ -1247,7 +1343,9 @@ fn ci_runs_live_melpa_only_as_an_explicit_canary() {
     let job = github_workflow_job(workflow, "neomacs-melpa-live-canary");
 
     assert!(workflow.contains("schedule:"));
-    assert!(job.contains("needs: [neomacs-test-runtime, neomacs-workspace-test-archive]"));
+    assert!(job.contains(
+        "needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]"
+    ));
     assert!(job.contains("github.event_name == 'schedule'"));
     assert!(job.contains("github.event_name == 'workflow_dispatch'"));
     assert!(job.contains("- *download_test_runtime"));
