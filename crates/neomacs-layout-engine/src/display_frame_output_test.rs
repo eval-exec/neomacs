@@ -424,7 +424,7 @@ fn window_frame_info_request_emits_background_and_window_info() {
 }
 
 #[test]
-fn window_frame_info_effects_request_emits_scroll_effect_hints() {
+fn a_scroll_emits_only_the_hints_the_producer_still_owns() {
     let params = window_params();
     let mut prev = window_info(&params);
     prev.window_start = 11;
@@ -449,7 +449,11 @@ fn window_frame_info_effects_request_emits_scroll_effect_hints() {
 
     let state = builder.finish(80, 24, 8.0, 16.0);
     assert_eq!(curr_infos.len(), 1);
-    assert_eq!(state.effect_hints.len(), 4);
+    // Was 4. The compositor now measures viewport motion itself and derives the
+    // line-spacing and momentum effects from it, so the producer no longer
+    // names them. What remains is the text fade and the velocity fade, whose
+    // conversions are still to come.
+    assert_eq!(state.effect_hints.len(), 2);
 }
 
 #[test]

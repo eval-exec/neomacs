@@ -661,16 +661,6 @@ impl<'a> WindowFrameInfoEffectsRenderRequest<'a> {
             window_id: curr.window_id,
             bounds: curr.bounds,
         });
-        state.add_effect_hint(WindowEffectHint::ScrollLineSpacing {
-            window_id: curr.window_id,
-            bounds: curr.bounds,
-            direction,
-        });
-        state.add_effect_hint(WindowEffectHint::ScrollMomentum {
-            window_id: curr.window_id,
-            bounds: curr.bounds,
-            direction,
-        });
         state.add_effect_hint(WindowEffectHint::ScrollVelocityFade {
             window_id: curr.window_id,
             bounds: curr.bounds,
