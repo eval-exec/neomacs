@@ -174,7 +174,8 @@ fn parse_wholenump_count(arg: Option<&Value>) -> Result<Option<usize>, Flow> {
 ///   string   for a symlink (the link target)
 ///
 /// Times use the representation selected by `time_output`.
-/// If ID-FORMAT is non-nil and not 'integer, UID/GID are returned as strings.
+/// If ID-FORMAT requests strings, resolved names are returned; GNU falls back
+/// to numeric IDs when name lookup fails.
 /// Virtual stores can lack POSIX fields: unknown fields are nil, and unknown
 /// permission bits are `?`. A missing entry instead returns nil for the whole
 /// result. In particular, absent identity must not become a shared zero inode.
@@ -195,10 +196,10 @@ fn build_file_attributes(
         FileAttributeType::Other => Value::NIL,
     };
     let principal = |owner: Option<FilePrincipal>| match owner {
-        Some(owner) if id_format.ids_as_strings() => {
-            Value::string(owner.name.unwrap_or_else(|| owner.id.to_string()))
+        Some(FilePrincipal { name: Some(name), .. }) if id_format.ids_as_strings() => {
+            Value::string(name)
         }
-        Some(owner) => Value::fixnum(owner.id),
+        Some(owner) => Value::make_integer(owner.id.into()),
         None => Value::NIL,
     };
     let timestamp = |time: Option<FileTimestamp>| {
@@ -206,7 +207,7 @@ fn build_file_attributes(
             .unwrap_or(Value::NIL)
     };
     let integer = |number: Option<u64>| {
-        number.map(|number| Value::fixnum(number as i64)).unwrap_or(Value::NIL)
+        number.map(|number| Value::make_integer(number.into())).unwrap_or(Value::NIL)
     };
     let mode = match attributes.mode {
         Some(mode) => format_attribute_mode(mode.bits(), &attributes.kind),
@@ -227,7 +228,7 @@ fn build_file_attributes(
         timestamp(attributes.accessed),
         timestamp(attributes.modified),
         timestamp(attributes.changed),
-        Value::fixnum(attributes.len as i64),
+        Value::make_integer(attributes.len.into()),
         Value::string(mode),
         Value::bool(attributes.legacy_group_change),
         integer(attributes.identity.map(|id| id.inode)),
