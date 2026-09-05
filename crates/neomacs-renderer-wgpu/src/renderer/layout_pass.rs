@@ -16,15 +16,23 @@
 //! width they never asked to read at. Sampling one finished picture keeps the
 //! text exactly as it will be when the motion ends; only its position moves.
 //!
-//! # Why the source region is the pane's destination rect
+//! # Why the source region is anchored at the pane's destination origin
 //!
 //! A pane shows its destination content throughout the motion — that is what
-//! makes the interaction projection a plain translation. The region of the
-//! composed picture it samples is therefore its *destination* rect, and the
-//! quad it draws into is its *current* rect. When a pane is still larger than
-//! its destination the two differ in size, and the content is drawn at its
-//! natural scale from the top-left rather than stretched: stretching would
-//! resample the glyphs and read as a zoom.
+//! makes the interaction projection a plain translation. So the region of the
+//! composed picture it samples starts at its *destination* origin, extends by
+//! its *current* size, and is drawn into its *current* rect at natural scale.
+//! Stretching destination-sized content to fit would resample the glyphs and
+//! read as a zoom.
+//!
+//! One consequence is worth naming, because it looks like a bug and is not.
+//! A pane still larger than its destination samples past its destination edge,
+//! into the region the picture gives to whatever sits there — its new
+//! neighbour, or the mode line and echo area below. As the pane's quad narrows
+//! toward its final size, that borrowed strip narrows with it and the real
+//! neighbour is uncovered underneath. The result reads as the old window
+//! shrinking to reveal the new one, which is what a split looks like, and it
+//! is why the quad itself is the clip: there is nothing to draw outside it.
 
 use crate::renderer::{GlyphVertex, WgpuRenderer};
 use neomacs_display_protocol::types::Rect;
@@ -55,7 +63,27 @@ impl WgpuRenderer {
             return;
         }
 
-        let mut vertices = Vec::with_capacity(panes.len() * 6);
+        let corner = |x: f32, y: f32, u: f32, v: f32| GlyphVertex {
+            position: [x, y],
+            tex_coords: [u, v],
+            color: [1.0, 1.0, 1.0, 1.0],
+        };
+
+        let mut vertices = Vec::with_capacity((panes.len() + 1) * 6);
+        // The composed frame, unmoved, underneath everything. Panes are not the
+        // whole frame: the echo area is excluded from every morph, and the tab
+        // bar, tool bar and frame padding belong to no pane at all. Drawing only
+        // the panes over a cleared target would make all of that disappear for
+        // the length of the motion.
+        vertices.extend_from_slice(&[
+            corner(0.0, 0.0, 0.0, 0.0),
+            corner(frame_width, 0.0, 1.0, 0.0),
+            corner(frame_width, frame_height, 1.0, 1.0),
+            corner(0.0, 0.0, 0.0, 0.0),
+            corner(frame_width, frame_height, 1.0, 1.0),
+            corner(0.0, frame_height, 0.0, 1.0),
+        ]);
+
         for pane in panes {
             // The pane samples its own size from the picture, not its
             // destination's: while it is still wider than it will end up, it
@@ -69,11 +97,6 @@ impl WgpuRenderer {
             let y0 = pane.bounds.y;
             let x1 = pane.bounds.x + pane.bounds.width;
             let y1 = pane.bounds.y + pane.bounds.height;
-            let corner = |x: f32, y: f32, u: f32, v: f32| GlyphVertex {
-                position: [x, y],
-                tex_coords: [u, v],
-                color: [1.0, 1.0, 1.0, 1.0],
-            };
             vertices.extend_from_slice(&[
                 corner(x0, y0, u0, v0),
                 corner(x1, y0, u1, v0),
@@ -104,10 +127,11 @@ impl WgpuRenderer {
                     view: destination,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // Cleared, not loaded: mid-morph the panes do not tile
-                        // the frame, and whatever was on screen underneath is a
-                        // picture of the *previous* layout. Leaving it visible
-                        // through the gaps would show two layouts at once.
+                        // Cleared rather than loaded: whatever was on the
+                        // target is a picture of the *previous* frame, and
+                        // letting it show through would put two layouts on
+                        // screen at once. The base quad above covers the target
+                        // completely, so nothing is left cleared.
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },

@@ -294,3 +294,130 @@ fn at_rest_the_projection_is_the_identity_the_settled_frame_would_use() {
     assert!((mapped.x() - 500.0).abs() < 1e-3);
     assert!((mapped.y() - 10.0).abs() < 1e-3);
 }
+
+// =======================================================================
+// The compositor path: install, sample, settle
+// =======================================================================
+
+fn empty_render() -> crate::render_thread::frame_windows::GuiFrameRenderState {
+    crate::render_thread::frame_windows::GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    )
+}
+
+/// Install a presentation whose panes are `windows`, measuring the morph
+/// against whatever is already retained.
+fn install(
+    render: &mut crate::render_thread::frame_windows::GuiFrameRenderState,
+    windows: &[WindowInfo],
+    at: EventTime,
+) {
+    let mut frame = crate::core::frame_glyphs::FrameGlyphBuffer::with_size(800.0, 600.0);
+    frame.presentation_id = neomacs_display_protocol::PresentationId::new(1);
+    frame.window_infos = windows.to_vec();
+    render.measure_pane_layout(Some(&frame), at);
+    render.compositor.current_frame = Some(frame);
+}
+
+#[test]
+fn a_split_installs_a_morph_that_settles_and_is_dropped() {
+    let mut render = empty_render();
+    render.compositor.pane_motion = linear_100ms();
+    let origin = origin();
+
+    install(
+        &mut render,
+        &[window(1, rect(0.0, 0.0, 800.0, 600.0))],
+        origin,
+    );
+    assert!(
+        render.compositor.pane_morph.is_none(),
+        "the first install has no previous layout to have moved from"
+    );
+
+    install(
+        &mut render,
+        &[
+            window(1, rect(0.0, 0.0, 400.0, 600.0)),
+            window(2, rect(400.0, 0.0, 400.0, 600.0)),
+        ],
+        origin,
+    );
+    assert!(render.compositor.pane_morph.is_some());
+
+    // Mid-motion: two placements, and a projection that is not the identity.
+    let blits = render.sample_pane_layout(frame_at(origin, 50));
+    assert_eq!(blits.len(), 2);
+    assert!(render.compositor.pane_morph.is_some(), "still travelling");
+
+    // The last frame still draws the panes — at their destination — and only
+    // then is the morph dropped, so nothing is left to re-arm on the next pass.
+    let blits = render.sample_pane_layout(frame_at(origin, 100));
+    assert_eq!(blits.len(), 2);
+    assert!(render.compositor.pane_morph.is_none(), "settled");
+
+    assert!(
+        render.sample_pane_layout(frame_at(origin, 150)).is_empty(),
+        "a settled frame composes the ordinary way, with no offscreen"
+    );
+}
+
+#[test]
+fn a_disabled_policy_installs_no_morph_at_all() {
+    // Not merely a faster path: with no morph there is no offscreen, no
+    // per-pane blit, and the pass composes exactly as it did before the
+    // feature existed.
+    let mut render = empty_render();
+    render.compositor.pane_motion = neomacs_display_protocol::motion_spec::MotionSpec::Instant;
+    let origin = origin();
+    install(
+        &mut render,
+        &[window(1, rect(0.0, 0.0, 800.0, 600.0))],
+        origin,
+    );
+    install(
+        &mut render,
+        &[window(1, rect(0.0, 0.0, 400.0, 600.0))],
+        origin,
+    );
+    assert!(render.compositor.pane_morph.is_none());
+    assert!(render.sample_pane_layout(frame_at(origin, 0)).is_empty());
+}
+
+#[test]
+fn the_settled_projection_replaces_the_morphs_on_the_last_frame() {
+    // The last frame of a motion and the first frame after it must resolve a
+    // click to the same place; a one-pixel shift exactly as the motion ended
+    // would be maddening to diagnose from a bug report.
+    let mut render = empty_render();
+    render.compositor.pane_motion = linear_100ms();
+    let origin = origin();
+    install(
+        &mut render,
+        &[window(1, rect(0.0, 0.0, 800.0, 600.0))],
+        origin,
+    );
+    install(
+        &mut render,
+        &[window(1, rect(400.0, 0.0, 400.0, 600.0))],
+        origin,
+    );
+
+    let surface = neomacs_display_protocol::GeometryPoint::<
+        neomacs_display_protocol::RootSurfaceSpace,
+        neomacs_display_protocol::LogicalPixels,
+    >::from_px(500.0, 10.0)
+    .expect("a finite point");
+
+    render.sample_pane_layout(frame_at(origin, 100));
+    let after_last_frame = render
+        .compositor
+        .interaction
+        .as_ref()
+        .expect("a projection")
+        .map(surface)
+        .expect("a mapped point");
+    assert!((after_last_frame.x() - 500.0).abs() < 1e-3);
+}
