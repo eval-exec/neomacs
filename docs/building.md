@@ -135,6 +135,10 @@ python3 crates/neomacs-wasm/tests/browser_hidpi_smoke.py \
 # Exercise editing and persistent storage in the assembled product.
 python3 crates/neomacs-wasm/tests/browser_opfs_smoke.py \
   --headless --url http://127.0.0.1:4174/
+
+# Load bundled dark/light Modus themes and verify rendered background pixels.
+python3 crates/neomacs-wasm/tests/browser_theme_smoke.py \
+  --headless --url http://127.0.0.1:4173/
 ```
 
 Add user-visible workflows such as buffer, window, and file commands to the
