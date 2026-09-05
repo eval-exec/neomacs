@@ -194,8 +194,6 @@ pub enum CompletionTable {
     #[allow(clippy::type_complexity)]
     // callable is the public dynamic-completion representation
     Function(Box<dyn Fn(&LispString) -> Vec<LispString>>),
-    /// File name completion rooted at a directory.
-    FileNames { directory: LispString },
     /// Buffer name completion (candidates supplied externally).
     BufferNames,
     /// Symbol name completion (candidates supplied externally).
@@ -213,25 +211,10 @@ impl CompletionTable {
         match self {
             CompletionTable::List(v) => v.clone(),
             CompletionTable::Function(f) => f(input),
-            CompletionTable::FileNames { directory } => list_files_in_dir(directory),
             CompletionTable::BufferNames => Vec::new(),
             CompletionTable::SymbolNames => Vec::new(),
             CompletionTable::Alist(pairs) => pairs.iter().map(|(k, _)| k.clone()).collect(),
         }
-    }
-}
-
-/// Best-effort listing of file names in `dir`.  Returns an empty vec on I/O error.
-fn list_files_in_dir(dir: &LispString) -> Vec<LispString> {
-    let Some(dir) = dir.as_utf8_str() else {
-        return Vec::new();
-    };
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .map(|e| LispString::from_utf8(&e.file_name().to_string_lossy()))
-            .collect(),
-        Err(_) => Vec::new(),
     }
 }
 
