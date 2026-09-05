@@ -3,10 +3,16 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
+    <meta name="color-scheme" content="light dark">
     <title>Neomacs</title>
   </head>
   <body>
+    <header id="browser-titlebar">
+      <span id="browser-window-title"><img id="browser-window-icon" alt="">Neomacs</span>
+      <span id="browser-window-controls" aria-hidden="true">
+        <span>−</span><span>□</span><span>×</span>
+      </span>
+    </header>
     <main id="browser-shell">
       <p id="browser-status" role="status">Loading Neomacs…</p>
       <textarea
@@ -27,6 +33,7 @@
         link.type = "image/svg+xml";
         link.href = new URL(url, document.baseURI).href;
         document.head.append(link);
+        document.querySelector("#browser-window-icon").src = link.href;
       }
 
       function installStylesheet(url) {
