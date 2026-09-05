@@ -1,6 +1,5 @@
 //! Evaluator-owned namespace joining immutable product resources to host storage.
 
-use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -145,15 +144,15 @@ impl EditorFileSystem for EditorFileSystemNamespace {
                 RuntimeResourceNode::File(_) => Err(io::Error::from(ErrorKind::NotADirectory)),
             };
         }
-        let mut entries = self
-            .host
-            .read_directory(path)?
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        if let Some(mount_child) = self.runtime_mount_child_of(path) {
-            entries.insert(mount_child);
+        // Preserve traversal order: completion and directory-files NOSORT/COUNT
+        // observe it. Only Lisp operations requesting sorting should sort.
+        let mut entries = self.host.read_directory(path)?;
+        if let Some(mount_child) = self.runtime_mount_child_of(path)
+            && !entries.contains(&mount_child)
+        {
+            entries.push(mount_child);
         }
-        Ok(entries.into_iter().collect())
+        Ok(entries)
     }
 
     fn write(
