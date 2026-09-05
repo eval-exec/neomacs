@@ -124,8 +124,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     configure_interactive_gui_startup(&mut evaluator, surface, &invocation)
         .map_err(|error| format!("failed to configure browser startup: {error:?}"))?;
 
-    evaluator.eval_str(r#"(progn (require 'url-neomacs-http) (url-neomacs-http-enable))"#)
-        .map_err(|error| format!("failed to initialize browser HTTP: {error:?}"))?;
+    crate::startup::configure_lisp(&mut evaluator)?;
 
     let (mut session, frontend) = EditorSession::attach(
         evaluator,
