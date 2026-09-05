@@ -535,8 +535,9 @@ impl RenderApp {
         // acquired — the acquisition has several early-return paths, so
         // materializing it earlier was work thrown away outright on any
         // lost/outdated/occluded surface.
+        // Must be read before `take_pending_continuity` below drains it.
         let frame_has_theme_transition = render
-            .current_frame_theme_transition_hint()
+            .pending_theme_change()
             .ok_or(FrameRenderFailure::AwaitingContent)?;
         let animated_cursor = render.cursor.animated_cursor();
         let root_animated_cursor = animated_cursor

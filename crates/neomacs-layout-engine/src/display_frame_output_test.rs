@@ -534,31 +534,6 @@ fn frame_line_animation_request_uses_cursor_y_for_buffer_size_change() {
 }
 
 #[test]
-fn frame_theme_transition_request_uses_content_height_before_minibuffer() {
-    let params = window_params();
-    let info = window_info(&params);
-    let mut mini = info.clone();
-    mini.window_id = DisplayWindowId::new(99);
-    mini.is_minibuffer = true;
-    mini.bounds = Rect::new(0.0, 96.0, 180.0, 24.0);
-    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
-    builder.set_output_background_color(Color::new(0.2, 0.0, 0.0, 1.0));
-    builder.add_output_window_info(info.clone());
-    builder.add_output_window_info(mini.clone());
-    install_skipped_geometry(&mut builder, info.window_id, info.bounds);
-    install_skipped_geometry(&mut builder, mini.window_id, mini.bounds);
-
-    FrameThemeTransitionHintRenderRequest::new(Some(Color::new(0.0, 0.0, 0.0, 1.0)), 180.0, 140.0)
-        .render_and_apply(FrameOutputTarget::from_builder(&mut builder));
-
-    let state = builder.finish(80, 24, 8.0, 16.0);
-    assert!(matches!(
-        state.effect_hints.as_slice(),
-        [WindowEffectHint::ThemeTransition { bounds }] if bounds.height == 96.0
-    ));
-}
-
-#[test]
 fn frame_topology_transition_request_emits_content_replacement() {
     let params = window_params();
     let prev = window_info(&params);

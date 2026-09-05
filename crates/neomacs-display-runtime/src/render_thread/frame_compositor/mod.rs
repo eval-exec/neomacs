@@ -96,6 +96,12 @@ pub(in crate::render_thread) struct PendingContinuity {
     pub(in crate::render_thread) scrolls: Vec<continuity::ScrollObservation>,
     /// Whether the frame's selection moved to another window.
     pub(in crate::render_thread) selection: Option<continuity::selection::SelectionObservation>,
+    /// Whether the frame's theme changed.
+    ///
+    /// Sticky until consumed: a theme change detected on a presentation that is
+    /// then superseded before any frame draws must not be lost, or the user
+    /// changes theme and sees no transition.
+    pub(in crate::render_thread) theme: Option<continuity::theme::ThemeChange>,
     /// Whether this frame's quality plan admits compositor-derived effects —
     /// the role `RenderFeaturePlan::accept_effect_hints` played for producer
     /// hints.
