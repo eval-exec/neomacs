@@ -1759,7 +1759,7 @@ fn frame_chrome_toolbar_origin_comes_from_authoritative_band_bounds() {
     )
     .expect("frame chrome");
 
-    let bounds = crate::render_thread::render_pass::frame_chrome_toolbar_bounds(&frame)
+    let bounds = crate::render_thread::render_pass::chrome::frame_chrome_toolbar_bounds(&frame)
         .expect("toolbar band");
     assert_eq!(bounds.y(), 19.0);
     assert_eq!(bounds.height(), 41.0);
