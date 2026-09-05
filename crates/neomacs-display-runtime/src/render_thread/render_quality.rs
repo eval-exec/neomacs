@@ -94,7 +94,7 @@ impl FramePostDisposition {
 pub(super) struct RenderFeaturePlan {
     pub(super) use_transition_offscreen: bool,
     pub(super) accept_transition_hints: bool,
-    pub(super) accept_effect_hints: bool,
+    pub(super) accept_derived_effects: bool,
     pub(super) accept_cursor_effects: bool,
     pub(super) apply_frame_post: bool,
 }
@@ -106,9 +106,6 @@ impl RenderFeaturePlan {
     pub(super) fn prepare_frame(self, frame: &mut FrameGlyphBuffer) {
         if !self.accept_transition_hints {
             frame.transition_hints.clear();
-        }
-        if !self.accept_effect_hints {
-            frame.effect_hints.clear();
         }
         if !self.accept_cursor_effects {
             frame.cursor_effects_by_window.clear();
@@ -212,7 +209,7 @@ impl RenderQualityPolicy {
             use_transition_offscreen: full
                 && (self.transition_policy().needs_offscreen() || frame_has_theme_transition),
             accept_transition_hints: full,
-            accept_effect_hints: full,
+            accept_derived_effects: full,
             accept_cursor_effects: full,
             apply_frame_post: self.frame_post_active(frame_post_installed),
         }
@@ -304,7 +301,7 @@ mod tests {
             RenderFeaturePlan {
                 use_transition_offscreen: false,
                 accept_transition_hints: false,
-                accept_effect_hints: false,
+                accept_derived_effects: false,
                 accept_cursor_effects: false,
                 apply_frame_post: false,
             }

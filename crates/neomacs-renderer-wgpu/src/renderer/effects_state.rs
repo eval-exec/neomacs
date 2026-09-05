@@ -17,13 +17,19 @@ impl WgpuRenderer {
         self.effects.inactive_dim.opacity = opacity;
     }
 
-    /// Start a line animation for a window
+    /// Slide the rows an edit displaced back from where they used to be.
+    ///
+    /// `first_moved_y` is the top of the displaced run and `pixels` is how far it
+    /// moved, both measured by the compositor from the two presentations. The
+    /// animation runs the displacement backwards: the rows are drawn at their old
+    /// position and settle onto the new one.
     pub fn start_line_animation(
         &mut self,
         window_bounds: Rect,
-        edit_y: f32,
-        offset: f32,
+        first_moved_y: f32,
+        pixels: f32,
         duration_ms: u32,
+        now: EventTime,
     ) {
         // Remove any existing animation for this window region
         self.fx.line_anim.active.retain(|a| {
@@ -32,11 +38,9 @@ impl WgpuRenderer {
         });
         self.fx.line_anim.active.push(LineAnimEntry {
             window_bounds,
-            edit_y,
-            initial_offset: offset,
-            // TRIGGER SIGNATURE: should take the `EventTime` of the edit that
-            // caused the slide; with no time parameter it mints its own.
-            started: observe_platform_now(),
+            edit_y: first_moved_y,
+            initial_offset: -pixels,
+            started: now,
             duration: std::time::Duration::from_millis(duration_ms as u64),
         });
     }

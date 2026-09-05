@@ -296,6 +296,7 @@ impl RenderApp {
         row_damage: neomacs_renderer_wgpu::FrameRowDamage,
         cursor_config: CursorConfigSnapshot,
         scroll_anchors: crate::render_thread::frame_compositor::ScrollAnchorsByWindow,
+        reflow_imprints: crate::render_thread::frame_compositor::ReflowImprintsByWindow,
     ) -> FrameIngestOutcome {
         Self::ingest_top_level_render_frame(
             &mut window_state.render,
@@ -303,6 +304,7 @@ impl RenderApp {
             row_damage,
             cursor_config,
             scroll_anchors,
+            reflow_imprints,
         )
     }
 
@@ -312,6 +314,7 @@ impl RenderApp {
         row_damage: neomacs_renderer_wgpu::FrameRowDamage,
         cursor_config: CursorConfigSnapshot,
         scroll_anchors: crate::render_thread::frame_compositor::ScrollAnchorsByWindow,
+        reflow_imprints: crate::render_thread::frame_compositor::ReflowImprintsByWindow,
     ) -> FrameIngestOutcome {
         use neomacs_display_protocol::frame_chrome::FrameChromeKind;
         if frame.frame_chrome.band(FrameChromeKind::MenuBar).is_none() {
@@ -333,7 +336,12 @@ impl RenderApp {
         render
             .cursor
             .reset_blink(neomacs_display_protocol::frame_time::observe_platform_now());
-        let presentation = render.set_current_frame(Some(frame), Some(row_damage), scroll_anchors);
+        let presentation = render.set_current_frame(
+            Some(frame),
+            Some(row_damage),
+            scroll_anchors,
+            reflow_imprints,
+        );
         let cursor_sync = Self::sync_render_cursor(render, cursor_config);
         render.sync_visual_cursors_from_current_frame(
             |cursor| cursor.apply_config(cursor_config),
@@ -551,6 +559,10 @@ impl RenderApp {
                     crate::render_thread::frame_compositor::continuity::scroll::anchors_by_window(
                         &display_state,
                     );
+                let reflow_imprints =
+                    crate::render_thread::frame_compositor::continuity::reflow::imprints_by_window(
+                        &display_state,
+                    );
                 let frame = display_state.materialize();
                 // Row-damage summary for the renderer's vertex reuse. Built from
                 // exactly this display_state (the one `frame` was materialized
@@ -764,6 +776,7 @@ impl RenderApp {
                             row_damage,
                             cursor_config,
                             scroll_anchors,
+                            reflow_imprints,
                         );
                         if let Some(cursor_sync) = outcome.cursor {
                             Self::update_frame_window_cursor_side_effects(
@@ -945,6 +958,7 @@ impl RenderApp {
                             row_damage,
                             cursor_config,
                             scroll_anchors,
+                            reflow_imprints,
                         );
                         if let Some(transition) = outcome.presentation {
                             self.comms.send_input(

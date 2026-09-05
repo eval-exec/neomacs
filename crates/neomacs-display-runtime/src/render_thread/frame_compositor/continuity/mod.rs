@@ -9,6 +9,7 @@
 //! supply provenance only where pixels genuinely cannot say (that a buffer
 //! replacement was a navigation, for instance).
 
+pub(in crate::render_thread) mod reflow;
 pub(in crate::render_thread) mod scroll;
 pub(in crate::render_thread) mod selection;
 pub(in crate::render_thread) mod theme;
@@ -229,6 +230,74 @@ impl GuiFrameRenderState {
                     window: curr.window_id,
                     bounds: curr.bounds,
                 });
+        }
+    }
+}
+
+/// One window's rows displaced by an edit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::render_thread) struct ReflowObservation {
+    pub(in crate::render_thread) window: DisplayWindowId,
+    pub(in crate::render_thread) bounds: Rect,
+    /// Where the displaced run begins, in the new presentation.
+    pub(in crate::render_thread) first_moved_y: f32,
+    /// How far it moved, signed: positive is down the screen.
+    pub(in crate::render_thread) pixels: f32,
+}
+
+impl GuiFrameRenderState {
+    /// Measure which windows had rows displaced by an edit.
+    ///
+    /// Deliberately separate from `measure_scroll`, and with the opposite
+    /// requirement on the modification tick: a scroll needs the text unchanged
+    /// to match rows by character position, while a reflow only exists because
+    /// the text *did* change, and matches rows by content instead.
+    pub(in crate::render_thread) fn measure_reflow(
+        &mut self,
+        next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
+        next_imprints: &super::ReflowImprintsByWindow,
+    ) {
+        self.compositor.pending.reflows.clear();
+        let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next) else {
+            return;
+        };
+        let previous_by_window: std::collections::HashMap<_, _> = previous
+            .window_infos
+            .iter()
+            .map(|info| (info.window_id, info))
+            .collect();
+
+        for curr in &next.window_infos {
+            if curr.is_minibuffer {
+                continue;
+            }
+            let Some(prev) = previous_by_window.get(&curr.window_id) else {
+                continue;
+            };
+            let measured = reflow::shift(
+                prev,
+                curr,
+                self.compositor
+                    .reflow_imprints
+                    .get(&curr.window_id)
+                    .map_or(&[][..], Vec::as_slice),
+                next_imprints
+                    .get(&curr.window_id)
+                    .map_or(&[][..], Vec::as_slice),
+            );
+            if let reflow::RowShift::Shifted {
+                pixels,
+                first_moved_y,
+                ..
+            } = measured
+            {
+                self.compositor.pending.reflows.push(ReflowObservation {
+                    window: curr.window_id,
+                    bounds: curr.bounds,
+                    first_moved_y,
+                    pixels,
+                });
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 use neomacs_display_protocol::effect_config::EffectsConfig;
 use neomacs_display_protocol::frame_glyphs::{
     ContentTransitionHint, CursorStyle, DisplaySlotId, PhysCursor, PresentedWindowGeometry,
-    WindowEffectHint, WindowInfo,
+    WindowInfo,
 };
 use neomacs_display_protocol::glyph_matrix::{
     CursorItem, CursorItemRole, FaceFillItem, ScrollBarItem,
@@ -93,7 +93,6 @@ pub(crate) enum OutputFrameArtifactInstallRequest {
     ScrollBar(ScrollBarItem),
     WindowInfo(WindowInfo),
     TransitionHint(ContentTransitionHint),
-    EffectHint(WindowEffectHint),
     PhysCursor(PhysCursor),
 }
 
@@ -148,7 +147,6 @@ pub(crate) struct OutputTextWindowDisplayRangeInstallRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OutputRetryCheckpointRestoreRequest {
     pub(crate) transition_hints_len: usize,
-    pub(crate) effect_hints_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,10 +182,9 @@ impl OutputTextWindowDisplayRangeInstallRequest {
 }
 
 impl OutputRetryCheckpointRestoreRequest {
-    pub(crate) fn new(transition_hints_len: usize, effect_hints_len: usize) -> Self {
+    pub(crate) fn new(transition_hints_len: usize) -> Self {
         Self {
             transition_hints_len,
-            effect_hints_len,
         }
     }
 }

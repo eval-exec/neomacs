@@ -17,7 +17,7 @@ use neomacs_display_protocol::frame_chrome::{
 use neomacs_display_protocol::frame_glyphs::{
     BufferTransitionTarget, BufferViewportRegion, ContentTransitionHint, GlyphRowRole,
     PresentedCellOrigin as ProtocolCellOrigin, PresentedWindowGeometry as ProtocolWindowGeometry,
-    WindowEffectHint, WindowInfo, derive_buffer_replacement_hint,
+    WindowInfo, derive_buffer_replacement_hint,
 };
 use neomacs_display_protocol::glyph_matrix::{FrameDisplayState, ScrollBarItem};
 use neomacs_display_protocol::types::FaceId;
@@ -230,13 +230,6 @@ impl FrameOutputOwner {
         request.render_and_apply(self.frame_output_target(), render_services);
     }
 
-    pub(crate) fn render_line_animation_hints(
-        &mut self,
-        request: FrameLineAnimationHintsRenderRequest<'_>,
-    ) {
-        request.render_and_apply(self.frame_output_target());
-    }
-
     pub(crate) fn render_frame_content_transition_hint(
         &mut self,
         request: FrameContentTransitionHintRenderRequest<'_>,
@@ -285,10 +278,6 @@ impl<'a> FrameOutputTarget<'a> {
         self.builder.set_output_background_color(color);
     }
 
-    fn background_color(&self) -> Color {
-        *self.builder.background_color()
-    }
-
     fn set_font_pixel_size(&mut self, font_pixel_size: f32) {
         self.builder.set_output_font_pixel_size(font_pixel_size);
     }
@@ -314,20 +303,12 @@ impl<'a> FrameOutputTarget<'a> {
         self.builder.window_infos().last().cloned()
     }
 
-    fn window_infos(&self) -> &[WindowInfo] {
-        self.builder.window_infos()
-    }
-
     fn add_transition_hint(&mut self, hint: ContentTransitionHint) {
         self.builder.add_output_transition_hint(hint);
     }
 
     fn transition_hints(&self) -> &[ContentTransitionHint] {
         self.builder.transition_hints()
-    }
-
-    fn add_effect_hint(&mut self, hint: WindowEffectHint) {
-        self.builder.add_output_effect_hint(hint);
     }
 
     fn add_border(
@@ -345,27 +326,6 @@ impl<'a> FrameOutputTarget<'a> {
 
     fn add_scroll_bar(&mut self, item: ScrollBarItem) {
         self.builder.add_output_scroll_bar(item);
-    }
-
-    fn window_cursor_y(&self, info: &WindowInfo) -> Option<f32> {
-        let in_window = |x: f32, y: f32, hollow: bool| -> bool {
-            !hollow
-                && x >= info.bounds.x
-                && x < info.bounds.x + info.bounds.width
-                && y >= info.bounds.y
-                && y < info.bounds.y + info.bounds.height
-        };
-        if let Some(phys) = self.builder.phys_cursor()
-            && in_window(phys.x, phys.y, phys.style.is_hollow())
-        {
-            return Some(phys.y);
-        }
-        for cursor in self.builder.cursors() {
-            if in_window(cursor.x, cursor.y, cursor.style.is_hollow()) {
-                return Some(cursor.y);
-            }
-        }
-        None
     }
 }
 
@@ -574,14 +534,13 @@ impl<'a> WindowFrameInfoEffectsRenderRequest<'a> {
 
     pub(crate) fn render_latest_and_apply(
         self,
-        mut state: FrameOutputTarget<'_>,
+        state: FrameOutputTarget<'_>,
         curr_window_infos: &mut HashMap<DisplayWindowId, WindowInfo>,
     ) -> NavigationIntentObservation {
         let Some(curr) = state.latest_window_info() else {
             return NavigationIntentObservation::None;
         };
-        let used_navigation = self.record_transition_hint(state.reborrow(), &curr);
-        self.record_effect_hints(state, &curr);
+        let used_navigation = self.record_transition_hint(state, &curr);
         curr_window_infos.insert(curr.window_id, curr);
         used_navigation
     }
@@ -625,84 +584,6 @@ impl<'a> WindowFrameInfoEffectsRenderRequest<'a> {
         };
         state.add_transition_hint(hint);
         observation
-    }
-
-    fn record_effect_hints(&self, mut state: FrameOutputTarget<'_>, curr: &WindowInfo) {
-        if curr.is_minibuffer {
-            return;
-        }
-
-        let Some(prev) = self.prev_window_infos.get(&curr.window_id) else {
-            return;
-        };
-        if prev.buffer_id == 0 || curr.buffer_id == 0 {
-            return;
-        }
-
-        if prev.buffer_id != curr.buffer_id {
-            return;
-        }
-
-        if prev.window_start == curr.window_start {
-            return;
-        }
-
-        let direction = if curr.window_start > prev.window_start {
-            1
-        } else {
-            -1
-        };
-    }
-}
-
-pub(crate) struct FrameLineAnimationHintsRenderRequest<'a> {
-    prev_window_infos: &'a HashMap<DisplayWindowId, WindowInfo>,
-    curr_window_infos: &'a HashMap<DisplayWindowId, WindowInfo>,
-}
-
-impl<'a> FrameLineAnimationHintsRenderRequest<'a> {
-    pub(crate) fn new(
-        prev_window_infos: &'a HashMap<DisplayWindowId, WindowInfo>,
-        curr_window_infos: &'a HashMap<DisplayWindowId, WindowInfo>,
-    ) -> Self {
-        Self {
-            prev_window_infos,
-            curr_window_infos,
-        }
-    }
-
-    pub(crate) fn render_and_apply(self, mut state: FrameOutputTarget<'_>) {
-        for (window_id, curr) in self.curr_window_infos {
-            if curr.is_minibuffer {
-                continue;
-            }
-            let Some(prev) = self.prev_window_infos.get(window_id) else {
-                continue;
-            };
-            if prev.buffer_id == 0 || curr.buffer_id == 0 {
-                continue;
-            }
-            if prev.buffer_id != curr.buffer_id
-                || prev.window_start != curr.window_start
-                || prev.buffer_size == curr.buffer_size
-            {
-                continue;
-            }
-
-            if let Some(edit_y) = state.window_cursor_y(curr) {
-                let offset = if curr.buffer_size > prev.buffer_size {
-                    -curr.char_height
-                } else {
-                    curr.char_height
-                };
-                state.add_effect_hint(WindowEffectHint::LineAnimation {
-                    window_id: curr.window_id,
-                    bounds: curr.bounds,
-                    edit_y: edit_y + curr.char_height,
-                    offset,
-                });
-            }
-        }
     }
 }
 
