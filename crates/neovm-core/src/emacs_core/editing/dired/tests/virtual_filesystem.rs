@@ -32,6 +32,16 @@ fn names(value: Value) -> Vec<String> {
 }
 
 #[test]
+fn virtual_file_modes_match_the_single_user_access_policy() {
+    let mut eval = virtual_editor();
+    assert_eq!(eval.eval_str(r##"(list
+      (file-modes "/virtual-completion/alpha.el")
+      (file-modes "/virtual-completion/alpha-dir")
+      (file-modes "/virtual-completion/missing"))"##).unwrap(),
+      Value::list(vec![Value::fixnum(0o600), Value::fixnum(0o700), Value::NIL]));
+}
+
+#[test]
 fn virtual_attributes_support_gnu_ls_lisp_numeric_columns() {
     let mut eval = virtual_editor();
     assert_eq!(
@@ -78,7 +88,7 @@ fn file_attributes_describe_virtual_files_without_host_metadata() {
             Value::NIL,
             Value::T,
             Value::NIL,
-            Value::string("-?????????"),
+            Value::string("-rw-------"),
             Value::NIL,
             Value::NIL
         ])
