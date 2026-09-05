@@ -634,16 +634,16 @@ fn write_font_oracle_diff(
 }
 
 /// GNU `deactivate-mark` (emacs-31.0.90 lisp/simple.el:7056-7066) republishes
-/// the region to PRIMARY only when `gui-backend-selection-owner-p` says this
-/// Emacs owns it or nobody does.  With a process-local PRIMARY (macOS,
-/// Windows) ownership must therefore follow our own `gui-set-selection`, as
-/// GNU NS (nsselect.m:494-511) and w32 (w32-win.el:449-451) report it.
+/// the region to PRIMARY only when this process owns it or nobody does.  This
+/// test makes both supported ownership contracts exact: macOS/Windows use a
+/// process-local PRIMARY, while Linux reports ownership as unobservable and
+/// conservatively preserves a possibly foreign selection.
 #[test]
 fn real_gui_primary_selection_follows_deactivate_mark_after_prior_ownership() {
     let Some(backend) = requested_backend() else {
         eprintln!(
             "skipping PRIMARY ownership regression; set \
-             NEOMACS_GUI_TEST_BACKEND=wayland, x11 or macos to run it"
+             NEOMACS_GUI_TEST_BACKEND=wayland, x11, macos or windows to run it"
         );
         return;
     };
@@ -685,16 +685,47 @@ fn real_gui_primary_selection_follows_deactivate_mark_after_prior_ownership() {
     assert_eq!(state["error"], serde_json::Value::Null, "{state:#}");
     assert_eq!(state["window_system"], "neo");
     assert_eq!(state["select_active_regions"], true);
-    assert_eq!(state["owned_before"], true, "{state:#}");
-    assert_eq!(state["after_deactivate"], "new", "{state:#}");
-    assert_eq!(state["owner_p"], true, "{state:#}");
-    assert_eq!(state["exists_p"], true, "{state:#}");
+    let process_local_primary = matches!(backend, GuiBackend::Macos | GuiBackend::Windows);
+    let expected_owner = if process_local_primary {
+        "this-process"
+    } else {
+        "unknown"
+    };
+    let expected_after_deactivate = if process_local_primary { "new" } else { "old" };
+
+    assert_eq!(state["owner_before"], expected_owner, "{state:#}");
+    assert_eq!(state["owned_before"], process_local_primary, "{state:#}");
     assert_eq!(
-        state["after_disown_value"],
-        serde_json::Value::Null,
+        state["after_deactivate"], expected_after_deactivate,
         "{state:#}"
     );
-    assert_eq!(state["after_disown_owner_p"], false, "{state:#}");
+    assert_eq!(state["owner_after"], expected_owner, "{state:#}");
+    assert_eq!(state["owner_p"], process_local_primary, "{state:#}");
+    assert_eq!(state["exists_p"], true, "{state:#}");
+    assert_eq!(state["empty_owner"], expected_owner, "{state:#}");
+    assert_eq!(state["empty_exists_p"], true, "{state:#}");
+    assert_eq!(state["disown_tested"], process_local_primary, "{state:#}");
+    if process_local_primary {
+        assert_eq!(
+            state["after_disown_value"],
+            serde_json::Value::Null,
+            "{state:#}"
+        );
+        assert_eq!(state["after_disown_owner"], "none", "{state:#}");
+        assert_eq!(state["after_disown_owner_p"], false, "{state:#}");
+    } else {
+        assert_eq!(
+            state["after_disown_value"],
+            serde_json::Value::Null,
+            "{state:#}"
+        );
+        assert_eq!(
+            state["after_disown_owner"],
+            serde_json::Value::Null,
+            "{state:#}"
+        );
+        assert_eq!(state["after_disown_owner_p"], false, "{state:#}");
+    }
 
     let stdout = std::fs::read_to_string(&result.artifacts.stdout).expect("stdout artifact");
     let stderr = std::fs::read_to_string(&result.artifacts.stderr).expect("stderr artifact");
