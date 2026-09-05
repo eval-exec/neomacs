@@ -20,7 +20,9 @@ use super::portable_assets::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 7] = [
+pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 9] = [
+    "network/http.mjs",
+    "network/host.mjs",
     "browser-input.mjs",
     "editor-worker.js",
     "main.js",
@@ -364,6 +366,9 @@ fn generate_bindings(input_wasm: &Path, output: &Path) -> Result<()> {
 fn copy_web_bundle_sources(repo_root: &Path, output: &Path) -> Result<()> {
     let source_root = repo_root.join("crates/neomacs-wasm/web");
     for filename in WEB_BUNDLE_SOURCE_FILES {
+        if let Some(parent) = output.join(filename).parent() {
+            fs::create_dir_all(parent)?;
+        }
         copy_nonempty_file(
             &source_root.join(filename),
             &output.join(filename),
