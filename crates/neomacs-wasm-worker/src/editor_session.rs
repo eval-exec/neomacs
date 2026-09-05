@@ -182,7 +182,10 @@ impl BrowserWorkerTransport {
         })?;
         let sequence = batch.sequence();
         for event in batch.into_events() {
-            self.input.submit(&event).map_err(|error| {
+            match event {
+                neomacs_wasm_protocol::ValidatedBrowserInputEvent::Host(event) => self.input.submit(&event),
+                neomacs_wasm_protocol::ValidatedBrowserInputEvent::Pointer(event) => self.input.submit_pointer(event),
+            }.map_err(|error| {
                 HostInputWaitError::new(format!("failed to submit browser input: {error}"))
             })?;
         }
