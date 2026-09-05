@@ -385,11 +385,20 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      # A release workspace test archive links several large test binaries.
-      # Bound compiler and linker parallelism to fit the hosted runner.
-      CARGO_BUILD_JOBS: "1"
+      # A release workspace test archive links 96 test binaries (37 from
+      # neomacs-tui-tests alone), each statically linking neovm-core and
+      # Cranelift. Linking, not compiling, dominates this job (~21 of 29
+      # minutes), so: lld runs multi-threaded, rustc and links share the
+      # runner's 4 cores (binaries are stripped of debuginfo, which keeps
+      # concurrent link RSS well below 16 GB), and test code uses relaxed
+      # codegen-units — the perf-critical neomacs runtime ships from the
+      # separate test-runtime job, never from these harness binaries.
+      # If this OOMs on a hosted runner, halve CARGO_BUILD_JOBS before
+      # ever re-serializing the linker.
+      CARGO_BUILD_JOBS: "4"
       CARGO_PROFILE_RELEASE_LTO: "false"
-      RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C link-arg=-Wl,--threads=1"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       TMPDIR: ${{ github.workspace }}/tmp
     steps:
       - *checkout
