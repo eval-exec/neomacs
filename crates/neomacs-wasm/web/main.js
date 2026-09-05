@@ -1,5 +1,7 @@
 import init, {
   install_worker_presentation,
+  browser_pointer_input,
+  set_presentation_callback,
   wait_for_first_editor_presentation,
   worker_protocol_version,
 } from "./neomacs_wasm.js";
@@ -76,6 +78,16 @@ function installFrame(payload) {
   const receipt = install_worker_presentation(new Uint8Array(payload));
   const presentation = receipt.presentation;
   const target = receipt.target;
+  receipt.free();
+  if (pendingPresentation !== null) {
+    enqueueInput([{ type: "presentation-discarded", ...pendingPresentation }]);
+  }
+  pendingPresentation = { presentation, target };
+}
+
+let pendingPresentation = null;
+function didPresentFrame(presentation, target) {
+  if (pendingPresentation?.presentation === presentation) pendingPresentation = null;
   const events = [{ type: "presentation-activated", presentation, target }];
   if (activePresentation !== null) {
     events.push({ type: "presentation-retired", presentation: activePresentation });
@@ -108,6 +120,7 @@ async function start() {
     init,
     new URL("./neomacs_wasm_bg.wasm", import.meta.url),
   );
+  set_presentation_callback(didPresentFrame);
   void observeFirstEditorPresentation(
     wait_for_first_editor_presentation,
     (presentation) => {
@@ -142,6 +155,7 @@ async function start() {
         enqueueInput,
         targetFrame: () => targetFrame,
         sendViewport,
+        observePointer: browser_pointer_input,
       });
       sendViewport();
       flushInput();
