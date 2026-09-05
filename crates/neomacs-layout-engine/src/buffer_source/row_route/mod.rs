@@ -491,6 +491,7 @@ impl PlainRowPlan {
     }
 
     /// Whether the row elides invisible spans.
+    #[cfg(test)]
     pub(crate) fn has_elision(&self) -> bool {
         !self.elided.is_empty()
     }
@@ -502,6 +503,7 @@ impl PlainRowPlan {
 
     /// Whether the row contains a composed grapheme cluster (a zero-width
     /// extender merged into its base glyph).
+    #[cfg(test)]
     pub(crate) fn has_composed(&self) -> bool {
         !self.composed.is_empty()
     }
@@ -530,6 +532,7 @@ impl PlainRowPlan {
     }
 
     /// Whether the row contains a routed `display` replacement.
+    #[cfg(test)]
     pub(crate) fn has_replacement(&self) -> bool {
         !self.replacements.is_empty()
     }
@@ -547,6 +550,7 @@ impl PlainRowPlan {
     }
 
     /// Whether the row carries an overlay-string anchor.
+    #[cfg(test)]
     pub(crate) fn has_overlay_strings(&self) -> bool {
         !self.overlay_strings.is_empty()
     }
@@ -557,6 +561,7 @@ impl PlainRowPlan {
 
     /// Whether the row renders as more than one run (face segments, elision
     /// gaps, or replacement spans splitting the line).
+    #[cfg(test)]
     pub(crate) fn is_segmented(&self) -> bool {
         !self.face_boundaries.is_empty() || !self.elided.is_empty() || !self.replacements.is_empty()
     }

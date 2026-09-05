@@ -710,6 +710,7 @@ impl DisplaySourceStepItem {
         &mut self.item
     }
 
+    #[cfg(test)]
     pub(crate) fn is_multi_char_text_run(&self) -> bool {
         let DisplayItemKind::TextRun(run) = &self.item.kind else {
             return false;
@@ -764,6 +765,7 @@ impl DisplaySourceStepItem {
         DisplaySourceStepItem::new(first, text_start_byte)
     }
 
+    #[cfg(test)]
     pub(crate) fn split_text_run_items(
         self,
         text_start_byte: usize,
@@ -1006,6 +1008,7 @@ impl DisplaySourceItem {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn split_text_run_items(
         self,
         text_start_byte: usize,

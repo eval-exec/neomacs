@@ -386,6 +386,7 @@ pub(crate) fn resolve_routed_position_face<B: LayoutBufferView>(
 }
 
 /// A routed row face segment: `[start, end)` rendered with `face_id`.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct RoutedRowFaceSegment {
     pub(crate) start: CharPos0,
@@ -398,6 +399,7 @@ pub(crate) struct RoutedRowFaceSegment {
 /// [`resolve_routed_position_face`] — one segment per property-change stretch,
 /// each carrying the realized face id the buffer pipeline's checkpoint
 /// resolution produces for that span.
+#[cfg(test)]
 pub(crate) fn plan_row_face_segments<B: LayoutBufferView>(
     buffer: &B,
     face_resolver: &FaceResolver,
