@@ -613,6 +613,12 @@ jobs:
             --url http://127.0.0.1:4174/ \
             --artifacts-dir "$TMPDIR/browser-smoke-artifacts"
 
+          "$TMPDIR/browser-smoke-venv/bin/python" \
+            crates/neomacs-wasm/tests/browser_http_editor_smoke.py \
+            --headless \
+            --url http://127.0.0.1:4174/ \
+            --artifacts-dir "$TMPDIR/browser-smoke-artifacts"
+
       - name: Upload browser smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
