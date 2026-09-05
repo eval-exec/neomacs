@@ -22,6 +22,7 @@ wgpu.workspace = true
 wgpu-hal.workspace = true
 naga.workspace = true
 tracing.workspace = true
+thiserror.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
 ash.workspace = true
