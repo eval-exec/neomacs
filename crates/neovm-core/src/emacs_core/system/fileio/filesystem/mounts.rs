@@ -111,6 +111,15 @@ fn namespace_metadata() -> FileMetadata {
 }
 
 impl EditorFileSystem for MountTableFileSystem {
+    fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
+        match self.route(path) {
+            Ok((mount, relative)) => mount.filesystem.attributes(&relative),
+            Err(error) if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? => {
+                super::FileAttributeSnapshot::read(self, path)
+            }
+            Err(error) => Err(error),
+        }
+    }
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata> {
         match self.route(path) {
             Ok((mount, relative)) => mount.filesystem.metadata(&relative, follow_links),
@@ -200,8 +209,14 @@ impl EditorFileSystem for MountTableFileSystem {
     }
 
     fn mode(&self, path: &Path, follow_links: bool) -> io::Result<FileMode> {
-        let (mount, relative) = self.route(path)?;
-        mount.filesystem.mode(&relative, follow_links)
+        match self.route(path) {
+            Ok((mount, relative)) => mount.filesystem.mode(&relative, follow_links),
+            Err(error) if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? => {
+                // Namespace ancestors are readable/searchable, but immutable.
+                Ok(FileMode::from_bits_truncate(0o555))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn set_mode(&self, path: &Path, mode: FileMode, follow_links: bool) -> io::Result<()> {

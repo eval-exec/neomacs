@@ -69,6 +69,17 @@ fn evaluator_with_files(files: impl IntoIterator<Item = (&'static str, &'static 
 }
 
 #[test]
+fn file_attributes_describe_immutable_runtime_resources() {
+    let mut evaluator = evaluator_with_files([("/neomacs/lisp/probe.el", b"nil".as_slice())]);
+    assert_eq!(evaluator.eval_str(r##"(let ((a (file-attributes "/neomacs/lisp/probe.el")))
+      (list (length a) (nth 7 a) (nth 8 a) (nth 2 a) (nth 5 a) (nth 10 a)
+        (nth 8 (file-attributes "/neomacs/lisp"))
+        (equal a (cdr (assoc "probe.el" (directory-files-and-attributes "/neomacs/lisp"))))))"##).unwrap(),
+      Value::list(vec![Value::fixnum(12), Value::fixnum(3), Value::string("-r--r--r--"),
+        Value::NIL, Value::NIL, Value::NIL, Value::string("dr-xr-xr-x"), Value::T]));
+}
+
+#[test]
 fn filename_completion_recognizes_runtime_resource_directories() {
     let mut evaluator = evaluator_with_files([
         ("/neomacs/lisp/alpha.el", b"nil".as_slice()),
