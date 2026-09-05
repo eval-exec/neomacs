@@ -339,7 +339,6 @@ pub(crate) struct BufferOverlayStringTextRowRenderContext<'a> {
 }
 
 impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         enabled: bool,
         window_id: u64,
