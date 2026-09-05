@@ -1,3 +1,22 @@
+/// A surface point in a presentation composed with nothing in motion.
+///
+/// The production path builds the same value by mapping through the projection
+/// the frame was drawn with; a settled projection maps by identity, so these
+/// tests state the point they mean while still going through the real witness
+/// rather than around it.
+fn settled_point(
+    presentation: crate::PresentationId,
+    x: f32,
+    y: f32,
+) -> crate::PresentationFramePoint {
+    crate::InteractionProjection::settled(presentation)
+        .map(
+            crate::GeometryPoint::<crate::RootSurfaceSpace, crate::LogicalPixels>::from_px(x, y)
+                .expect("a finite surface point"),
+        )
+        .expect("a settled projection maps every finite point")
+}
+
 use super::*;
 use crate::DisplayFrameId;
 use crate::face::Face;
@@ -2985,7 +3004,11 @@ fn semantic_hit_index_survives_transport_and_materialization() {
     let frame = decoded.materialize();
     let hit = frame
         .presented_hit_index()
-        .resolve(crate::PresentedHitQuery::new(presentation, 10.0, 20.0))
+        .resolve(crate::PresentedHitQuery::new(settled_point(
+            presentation,
+            10.0,
+            20.0,
+        )))
         .unwrap()
         .unwrap();
     assert_eq!(hit.region().kind(), crate::PresentedRegionKind::TextBody);

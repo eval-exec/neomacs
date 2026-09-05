@@ -1,3 +1,24 @@
+/// A surface point in a presentation composed with nothing in motion.
+///
+/// The production path builds the same value by mapping through the projection
+/// the frame was drawn with; a settled projection maps by identity, so these
+/// tests state the point they mean while still going through the real witness.
+fn settled_point(
+    presentation: neomacs_display_protocol::PresentationId,
+    x: f32,
+    y: f32,
+) -> neomacs_display_protocol::PresentationFramePoint {
+    neomacs_display_protocol::InteractionProjection::settled(presentation)
+        .map(
+            neomacs_display_protocol::GeometryPoint::<
+                neomacs_display_protocol::RootSurfaceSpace,
+                neomacs_display_protocol::LogicalPixels,
+            >::from_px(x, y)
+            .expect("a finite surface point"),
+        )
+        .expect("a settled projection maps every finite point")
+}
+
 use super::*;
 
 #[test]
@@ -177,7 +198,11 @@ fn presented_tab_line_hit_joins_renderer_string_index_with_rooted_lisp_value() {
     )
     .unwrap();
     let hit = hit_index
-        .resolve(PresentedHitQuery::new(protocol_presentation, 44.0, 8.0))
+        .resolve(PresentedHitQuery::new(settled_point(
+            protocol_presentation,
+            44.0,
+            8.0,
+        )))
         .unwrap()
         .unwrap();
     let regions = PresentedWindowRegions {
@@ -312,9 +337,7 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
     )
     .unwrap()
     .resolve(neomacs_display_protocol::PresentedHitQuery::new(
-        neomacs_display_protocol::PresentationId::new(1),
-        22.0,
-        12.0,
+        settled_point(neomacs_display_protocol::PresentationId::new(1), 22.0, 12.0),
     ))
     .unwrap();
 
@@ -405,9 +428,11 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
     )
     .unwrap()
     .resolve(neomacs_display_protocol::PresentedHitQuery::new(
-        neomacs_display_protocol::PresentationId::new(1),
-        185.0,
-        40.0,
+        settled_point(
+            neomacs_display_protocol::PresentationId::new(1),
+            185.0,
+            40.0,
+        ),
     ))
     .unwrap();
     eval.handle_read_char_input_event(
@@ -1513,7 +1538,11 @@ fn presented_mouse_position_over_the_inactive_echo_area_reports_the_mini_windows
         )],
     )
     .unwrap()
-    .resolve(PresentedHitQuery::new(presentation, 1230.0, 586.0))
+    .resolve(PresentedHitQuery::new(settled_point(
+        presentation,
+        1230.0,
+        586.0,
+    )))
     .unwrap();
     eval.command_loop
         .keyboard
@@ -1630,7 +1659,11 @@ fn geometry_only_echo_area_hit_cannot_publish_live_minibuffer_help_echo() {
         )],
     )
     .unwrap()
-    .resolve(PresentedHitQuery::new(presentation, 52.0, 112.0))
+    .resolve(PresentedHitQuery::new(settled_point(
+        presentation,
+        52.0,
+        112.0,
+    )))
     .unwrap();
     eval.command_loop
         .keyboard
