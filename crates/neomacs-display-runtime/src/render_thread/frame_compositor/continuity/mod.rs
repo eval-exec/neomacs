@@ -59,16 +59,26 @@ impl GuiFrameRenderState {
         now: neomacs_display_protocol::frame_time::EventTime,
     ) {
         let spec = self.compositor.pane_motion;
-        let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next) else {
+        let (Some(previous), Some(next)) = (self.compositor.baseline.as_ref(), next) else {
             self.compositor.pane_morph = None;
             return;
         };
-        self.compositor.pane_morph = pane_layout::PaneLayoutMorph::try_new(
+        let measured = pane_layout::PaneLayoutMorph::try_new(
             &previous.window_infos,
             &next.window_infos,
             spec,
             now,
         );
+        // Only *replace* a morph when this presentation actually rearranged the
+        // panes. `try_new` returns `None` for a commit that left the layout
+        // alone, and almost every commit does: a keystroke redrawing the
+        // buffer, the echo area clearing, a mode-line clock tick. Assigning
+        // that `None` through would cancel whatever is in flight, so the panes
+        // would snap to their destination on the first keypress after a
+        // `split-window` — which is to say, on essentially every split.
+        if let Some(measured) = measured {
+            self.compositor.pane_morph = Some(measured);
+        }
     }
 
     /// Place the panes for the frame about to be drawn.
@@ -136,7 +146,7 @@ impl GuiFrameRenderState {
         next_anchors: &super::ScrollAnchorsByWindow,
     ) {
         self.compositor.pending.scrolls.clear();
-        let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next) else {
+        let (Some(previous), Some(next)) = (self.compositor.baseline.as_ref(), next) else {
             return;
         };
         let previous_by_window: std::collections::HashMap<_, _> = previous
@@ -223,7 +233,7 @@ impl GuiFrameRenderState {
         &mut self,
         next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
     ) {
-        self.compositor.pending.selection = match (self.compositor.current_frame.as_ref(), next) {
+        self.compositor.pending.selection = match (self.compositor.baseline.as_ref(), next) {
             (Some(previous), Some(next)) => {
                 selection::observe_selection(&previous.window_infos, &next.window_infos)
             }
@@ -244,7 +254,7 @@ impl GuiFrameRenderState {
         &mut self,
         next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
     ) {
-        if let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next)
+        if let (Some(previous), Some(next)) = (self.compositor.baseline.as_ref(), next)
             && let Some(change) = theme::theme_change(previous, next)
         {
             self.compositor.pending.theme = Some(change);
@@ -274,7 +284,7 @@ impl GuiFrameRenderState {
         next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
     ) {
         self.compositor.pending.shown_text_replaced.clear();
-        let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next) else {
+        let (Some(previous), Some(next)) = (self.compositor.baseline.as_ref(), next) else {
             return;
         };
         let previous_by_window: std::collections::HashMap<_, _> = previous
@@ -333,7 +343,7 @@ impl GuiFrameRenderState {
         next_imprints: &super::ReflowImprintsByWindow,
     ) {
         self.compositor.pending.reflows.clear();
-        let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next) else {
+        let (Some(previous), Some(next)) = (self.compositor.baseline.as_ref(), next) else {
             return;
         };
         let previous_by_window: std::collections::HashMap<_, _> = previous
