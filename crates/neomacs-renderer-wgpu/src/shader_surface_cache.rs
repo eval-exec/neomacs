@@ -16,9 +16,12 @@ use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use bytemuck::Zeroable;
+
 use crate::shader_surface::{
-    SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceChannelSource, SurfaceShaderLanguage,
-    SurfaceUniformInit, compose_surface_glsl, compose_surface_wgsl, uniform_accessor_name,
+    SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceChannelSource, SurfaceContract,
+    SurfaceShaderLanguage, SurfaceUniformInit, SurfaceUniforms, compose_surface_glsl,
+    compose_surface_wgsl, uniform_accessor_name,
 };
 
 /// Build the render pipeline for a composed surface shader in either dialect.
@@ -324,9 +327,10 @@ impl ShaderSurfaceCache {
             .iter()
             .map(|u| (u.name.clone(), u.components))
             .collect();
+        let contract = SurfaceContract::default();
         let source = match language {
-            SurfaceShaderLanguage::Wgsl => compose_surface_wgsl(user_source, &names),
-            SurfaceShaderLanguage::Glsl => compose_surface_glsl(user_source, &names),
+            SurfaceShaderLanguage::Wgsl => compose_surface_wgsl(user_source, &names, contract),
+            SurfaceShaderLanguage::Glsl => compose_surface_glsl(user_source, &names, contract),
         };
         let pipeline = build_surface_pipeline(
             device,
@@ -752,19 +756,19 @@ impl ShaderSurfaceCache {
             surface.frame_index = surface.frame_index.wrapping_add(1);
             surface.dirty = false;
 
-            let mut uniforms = [0.0f32; (SURFACE_UNIFORM_BYTES / 4) as usize];
-            uniforms[0] = surface.width_px as f32;
-            uniforms[1] = surface.height_px as f32;
-            uniforms[2] = surface.scale;
-            // uniforms[3] reserved.
-            uniforms[4..8].copy_from_slice(&surface.mouse);
-            uniforms[8] = surface.elapsed;
-            uniforms[9] = if animating { surface_dt } else { 0.0 };
-            uniforms[10] = surface.frame_index as f32;
-            for (slot, value) in surface.custom.iter().enumerate() {
-                uniforms[12 + slot * 4..12 + slot * 4 + 4].copy_from_slice(value);
-            }
-            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&uniforms));
+            let mut values = SurfaceUniforms::zeroed();
+            values.i_resolution = [
+                surface.width_px as f32,
+                surface.height_px as f32,
+                surface.scale,
+                0.0,
+            ];
+            values.i_mouse = surface.mouse;
+            values.i_time = surface.elapsed;
+            values.i_time_delta = if animating { surface_dt } else { 0.0 };
+            values.i_frame = surface.frame_index as f32;
+            values.custom = surface.custom;
+            queue.write_buffer(buffer, 0, bytemuck::bytes_of(&values));
             pending.push(*id);
         }
 

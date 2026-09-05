@@ -20,9 +20,11 @@ use std::collections::HashMap;
 
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample, observe_platform_now};
 
+use bytemuck::Zeroable;
+
 use crate::shader_surface::{
     SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceShaderLanguage, SurfaceUniformInit,
-    uniform_accessor_name,
+    SurfaceUniforms, uniform_accessor_name,
 };
 use crate::shader_surface_cache::build_surface_pipeline;
 
@@ -178,19 +180,17 @@ impl FramePost {
         self.last = Some(now);
         self.frame_index = self.frame_index.wrapping_add(1);
 
-        let mut uniforms = [0.0f32; (SURFACE_UNIFORM_BYTES / 4) as usize];
-        uniforms[0] = width_px as f32;
-        uniforms[1] = height_px as f32;
-        uniforms[2] = scale;
-        uniforms[4] = mouse.0;
-        uniforms[5] = mouse.1;
-        uniforms[8] = now.saturating_since(self.start).as_secs_f32();
-        uniforms[9] = dt;
-        uniforms[10] = self.frame_index as f32;
-        for (slot, value) in self.custom.iter().enumerate() {
-            uniforms[12 + slot * 4..12 + slot * 4 + 4].copy_from_slice(value);
-        }
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniforms));
+        let mut values = SurfaceUniforms::zeroed();
+        values.i_resolution = [width_px as f32, height_px as f32, scale, 0.0];
+        values.i_mouse = [mouse.0, mouse.1, 0.0, 0.0];
+        // `saturating_since`, not `duration_since`: the frame time is an
+        // injected observation and a non-monotonic platform clock must clamp to
+        // zero rather than panic in the render loop.
+        values.i_time = now.saturating_since(self.start).as_secs_f32();
+        values.i_time_delta = dt;
+        values.i_frame = self.frame_index as f32;
+        values.custom = self.custom;
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&values));
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Frame Post Bind Group"),
