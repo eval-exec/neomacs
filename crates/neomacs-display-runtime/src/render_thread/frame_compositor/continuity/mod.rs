@@ -15,15 +15,32 @@ pub(in crate::render_thread) mod theme;
 
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_display_protocol::frame_glyphs::BufferViewportRegion;
-use neomacs_display_protocol::types::DisplayWindowId;
+use neomacs_display_protocol::types::{DisplayWindowId, Rect};
 
 /// One window's viewport motion between two presentations.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::render_thread) struct ScrollObservation {
     pub(in crate::render_thread) window: DisplayWindowId,
-    /// The buffer-owned pixels a transition may animate within.
-    pub(in crate::render_thread) region: BufferViewportRegion,
+    /// The window's own rect, mode line included. Effects that draw *over* a
+    /// window rather than blitting its pixels use this.
+    pub(in crate::render_thread) bounds: Rect,
+    /// Whether the same buffer is shown on both sides.
+    pub(in crate::render_thread) same_buffer: bool,
     pub(in crate::render_thread) displacement: scroll::ScrollDisplacement,
+    /// Present only when the two presentations describe compatible pixels.
+    ///
+    /// A transition blits the retained image of the previous presentation into
+    /// the new one's clip, so it needs both to own the same region. Effects that
+    /// merely draw over the window — momentum glow, line spacing, velocity fade
+    /// — sample nothing and must not inherit that restriction.
+    pub(in crate::render_thread) transition: Option<TransitionInputs>,
+}
+
+/// What a transition needs beyond the observation itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::render_thread) struct TransitionInputs {
+    /// The buffer-owned pixels the slide animates within.
+    pub(in crate::render_thread) region: BufferViewportRegion,
 }
 
 impl GuiFrameRenderState {
@@ -64,20 +81,26 @@ impl GuiFrameRenderState {
             if prev.window_start == curr.window_start {
                 continue;
             }
-            // A transition samples retained pixels from the previous
-            // presentation and draws them inside the new one's clip. If the two
-            // describe different buffer-owned regions -- after a tab, header or
-            // mode line appeared, or the window was split -- those pixels are
-            // not compatible inputs, so there is nothing safe to animate.
-            let (Some(previous_region), Some(region)) = (
-                prev.geometry.buffer_viewport(),
-                curr.geometry.buffer_viewport(),
-            ) else {
-                continue;
-            };
-            if previous_region != region {
+            // The producer's guard: a zero buffer id means "no buffer", and
+            // comparing positions across one is meaningless.
+            if prev.buffer_id == 0 || curr.buffer_id == 0 {
                 continue;
             }
+            // A transition blits retained pixels from the previous presentation
+            // into the new one's clip. If the two describe different
+            // buffer-owned regions -- after a tab, header or mode line
+            // appeared, or the window was split -- those pixels are not
+            // compatible inputs. That disqualifies a *transition*, not the
+            // observation: effects that draw over the window still apply.
+            let transition = match (
+                prev.geometry.buffer_viewport(),
+                curr.geometry.buffer_viewport(),
+            ) {
+                (Some(previous_region), Some(region)) if previous_region == region => {
+                    Some(TransitionInputs { region })
+                }
+                _ => None,
+            };
             let displacement = scroll::displacement(
                 prev,
                 curr,
@@ -91,8 +114,10 @@ impl GuiFrameRenderState {
             );
             self.compositor.pending.scrolls.push(ScrollObservation {
                 window: curr.window_id,
-                region,
+                bounds: curr.bounds,
+                same_buffer: prev.buffer_id == curr.buffer_id,
                 displacement,
+                transition,
             });
         }
     }
