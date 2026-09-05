@@ -17,9 +17,10 @@ const NAMED_KEY_SYMBOLS = new Map([
 
 /** Sample editor geometry in browser logical (CSS) pixels. */
 export function observeBrowserViewport(browser) {
+  const bounds = browser.document?.querySelector("#browser-shell")?.getBoundingClientRect();
   return {
-    width: Math.max(1, Math.round(browser.innerWidth)),
-    height: Math.max(1, Math.round(browser.innerHeight)),
+    width: Math.max(1, Math.round(bounds?.width ?? browser.innerWidth)),
+    height: Math.max(1, Math.round(bounds?.height ?? browser.innerHeight)),
     scale_factor: browser.devicePixelRatio || 1,
   };
 }
