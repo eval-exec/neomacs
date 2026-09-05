@@ -41,6 +41,7 @@ fn terminal_scene_commands_schedule_repositioning_and_final_removal() {
         Some(FrameGlyphBuffer::with_size(800.0, 600.0)),
         None,
         Default::default(),
+        Default::default(),
     );
     let retained_terminal_glyph = FrameGlyph::Border {
         window_id: DisplayWindowId::new(0),

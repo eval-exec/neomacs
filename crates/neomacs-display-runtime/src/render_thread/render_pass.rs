@@ -822,7 +822,7 @@ impl RenderApp {
             // return, and observations dropped on one of those would lose the
             // scroll measured at install with no later chance to plan it.
             let pending_continuity =
-                render.take_pending_continuity(feature_plan.accept_effect_hints);
+                render.take_pending_continuity(feature_plan.accept_derived_effects);
             renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
                 detect_frame_transitions(
                     renderer,
@@ -890,7 +890,7 @@ impl RenderApp {
             // return, and observations dropped on one of those would lose the
             // scroll measured at install with no later chance to plan it.
             let pending_continuity =
-                render.take_pending_continuity(feature_plan.accept_effect_hints);
+                render.take_pending_continuity(feature_plan.accept_derived_effects);
             renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
                 detect_frame_transitions(
                     renderer,

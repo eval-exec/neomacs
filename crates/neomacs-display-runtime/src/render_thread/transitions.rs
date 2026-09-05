@@ -1,8 +1,6 @@
 //! Renderer-owned state for snapshot-based window transitions.
 
-use crate::core::frame_glyphs::{
-    BufferTransitionTarget, ContentTransitionHint, FrameGlyphBuffer, WindowEffectHint,
-};
+use crate::core::frame_glyphs::{BufferTransitionTarget, ContentTransitionHint, FrameGlyphBuffer};
 use neomacs_display_protocol::{
     DirectionlessTransitionEffect, DisplayWindowId, Rect, ResolvedTransitionEffect,
     TransitionEasing, TransitionPlan, TransitionPolicy,
@@ -440,31 +438,6 @@ fn start_transition(
     );
 }
 
-fn apply_effect_hint(
-    renderer: &mut WgpuRenderer,
-    effects: &neomacs_display_protocol::EffectsConfig,
-    hint: &WindowEffectHint,
-    now: neomacs_display_protocol::frame_time::EventTime,
-) {
-    match hint {
-        WindowEffectHint::LineAnimation {
-            bounds,
-            edit_y,
-            offset,
-            ..
-        } => {
-            if effects.line_animation.enabled {
-                renderer.start_line_animation(
-                    *bounds,
-                    *edit_y,
-                    *offset,
-                    effects.line_animation.duration_ms,
-                );
-            }
-        }
-    }
-}
-
 pub(super) fn detect_frame_transitions(
     renderer: &mut WgpuRenderer,
     transitions: &mut TransitionState,
@@ -475,7 +448,7 @@ pub(super) fn detect_frame_transitions(
     width: u32,
     height: u32,
 ) {
-    let (transition_hints, effect_hints) = frame.take_runtime_hints();
+    let transition_hints = frame.take_transition_hints();
     // One sample for the whole frame: a transition detected and rendered in the
     // same frame starts at progress 0 rather than at whatever the gap between
     // two clock reads happened to be.
@@ -526,8 +499,17 @@ pub(super) fn detect_frame_transitions(
             height,
         );
     }
-    for hint in &effect_hints {
-        apply_effect_hint(renderer, effects, hint, now);
+    if pending.accept_derived_effects && effects.line_animation.enabled {
+        for reflow in &pending.reflows {
+            renderer.start_line_animation(
+                reflow.bounds,
+                reflow.first_moved_y,
+                reflow.pixels,
+                effects.line_animation.duration_ms,
+                now,
+            );
+            *frame_dirty = true;
+        }
     }
 }
 

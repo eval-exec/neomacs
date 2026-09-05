@@ -1199,6 +1199,7 @@ fn adopted_primary_pointer_target_uses_real_frame_id() {
             Some(FrameGlyphBuffer::with_size(800.0, 600.0)),
             None,
             Default::default(),
+            Default::default(),
         );
     };
 
@@ -1242,6 +1243,7 @@ fn unknown_secondary_frame_snapshot_does_not_fall_back_to_primary() {
         ws.render.set_current_frame(
             Some(FrameGlyphBuffer::with_size(800.0, 600.0)),
             None,
+            Default::default(),
             Default::default(),
         );
     };

@@ -6,14 +6,13 @@
 //! where it was. That vertical push is a different fact from a scroll, and the
 //! two cannot be measured the same way.
 //!
-//! The producer currently declares this rather than measuring it. Its
-//! `WindowEffectHint::LineAnimation` carries an `edit_y` taken from the cursor
-//! (plus one line height) and an `offset` that is a constant `±char_height`
-//! whose sign comes from whether `buffer_size` grew. Neither number was
-//! observed: the cursor is not where rows moved, an edit that wraps or unwraps
-//! a line moves them by more than one line height, and an image or a
-//! variable-height row moves them by something else again. This module
-//! measures both from the rows themselves.
+//! The producer used to declare this rather than measure it. Its
+//! `LineAnimation` hint carried an `edit_y` taken from the cursor (plus one line
+//! height) and an `offset` that was a constant `±char_height` whose sign came
+//! from whether `buffer_size` grew. Neither number was observed: the cursor is
+//! not where rows moved, an edit that wraps or unwraps a line moves them by more
+//! than one line height, and an image or a variable-height row moves them by
+//! something else again. This module measures both from the rows themselves.
 //!
 //! # Content identity, not character positions
 //!
@@ -101,6 +100,10 @@ pub(in crate::render_thread) enum RowShift {
 
 impl RowShift {
     /// The vertical delta, when it was measured rather than assumed.
+    ///
+    /// `measure_reflow` matches the variant directly — the point of making the
+    /// outcome an enum — so this exists for tests that assert the numeric answer.
+    #[cfg(test)]
     pub(in crate::render_thread) const fn shifted_pixels(self) -> Option<f32> {
         match self {
             Self::Shifted { pixels, .. } => Some(pixels),
