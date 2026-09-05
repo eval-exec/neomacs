@@ -77,6 +77,8 @@ pub mod terminal;
 pub mod video;
 #[path = "display/window_cmds/mod.rs"]
 pub mod window_cmds;
+#[path = "display/window_edge_drag/mod.rs"]
+pub mod window_edge_drag;
 #[path = "display/xdisp/mod.rs"]
 pub mod xdisp;
 #[path = "display/xfaces/mod.rs"]

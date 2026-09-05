@@ -5035,6 +5035,12 @@ impl crate::emacs_core::eval::Context {
                 focused,
                 emacs_frame_id,
             } => {
+                if !focused {
+                    // A frame that loses focus mid-drag never sees the button
+                    // come up, and a session nothing closes would suppress
+                    // motion for the rest of the session.
+                    self.window_edge_drag.abandoned();
+                }
                 self.timer_resume_idle();
                 if let Some(event) = self.make_lispy_focus_event(focused, emacs_frame_id) {
                     if self.execute_special_event_if_bound(event)? {
@@ -5095,6 +5101,17 @@ impl crate::emacs_core::eval::Context {
                 target_frame_id,
             } => {
                 self.clear_current_message_for_keyboard_input();
+                // A drag of a window edge begins here, at the moment the
+                // command loop consumes the press rather than the moment the
+                // render thread saw it. Redisplay runs between two of these
+                // reads, so a session opened here covers exactly the
+                // presentations the drag goes on to cause. Deciding it on the
+                // render thread instead would race the drag's own frames: the
+                // release is observed there while the last commits are still
+                // in flight on the frame channel, and they would animate.
+                if let Some(grab) = self.grabbed_window_edge(button, x, y, target_frame_id) {
+                    self.window_edge_drag.grabbed(grab);
+                }
                 // Keyboard audit Finding 12: compute the click
                 // count for this press based on the previous
                 // click state and update `last_mouse_click` so
@@ -5121,6 +5138,7 @@ impl crate::emacs_core::eval::Context {
                 target_frame_id,
             } => {
                 self.clear_current_message_for_keyboard_input();
+                self.window_edge_drag.released(button);
                 // Use the click count recorded on the matching
                 // press so the release event carries the same
                 // double/triple modifier. Keyboard audit F12.
@@ -6640,6 +6658,40 @@ impl crate::emacs_core::eval::Context {
                 })
             }
         }
+    }
+
+    /// The window edge this press took hold of, if it landed on one.
+    ///
+    /// Guarded exactly as `make_presented_mouse_position` guards: an
+    /// observation belongs to this press only if it names the same frame, the
+    /// same coordinates and the presentation still on screen. Without that a
+    /// stale observation left by an earlier pointer event would open a drag on
+    /// a press that landed in the text body.
+    fn grabbed_window_edge(
+        &self,
+        button: MouseButton,
+        x: f32,
+        y: f32,
+        target_frame_id: u64,
+    ) -> Option<crate::emacs_core::window_edge_drag::WindowEdgeGrab> {
+        let observation = self
+            .command_loop
+            .keyboard
+            .kboard
+            .presented_mouse_observation?;
+        let frame_id = self.event_frame_id(target_frame_id)?;
+        let frame = self.frames.get(frame_id)?;
+        if observation.frame_id != frame_id.0
+            || observation.x.to_bits() != x.to_bits()
+            || observation.y.to_bits() != y.to_bits()
+            || frame.active_presentation().map(|id| id.get()) != Some(observation.presentation)
+        {
+            return None;
+        }
+        crate::emacs_core::window_edge_drag::WindowEdgeGrab::of(
+            button,
+            observation.hit?.region().kind(),
+        )
     }
 
     fn make_presented_mouse_position(

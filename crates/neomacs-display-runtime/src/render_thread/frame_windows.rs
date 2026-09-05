@@ -962,14 +962,20 @@ impl GuiFrameRenderState {
         // about the same moment, so they must not each mint a slightly later
         // time and disagree about when the presentation arrived.
         let installed_at = neomacs_display_protocol::frame_time::observe_platform_now();
-        // Measure viewport motion against the presentation being replaced,
-        // while both sets of anchors are still in hand.
-        self.measure_scroll(frame.as_ref(), &scroll_anchors);
+        // Selection and theme are observed unconditionally: neither is layout
+        // motion, and a theme changed mid-drag must still cross-fade.
         self.observe_selection_change(frame.as_ref());
         self.observe_theme_change(frame.as_ref());
-        self.observe_shown_text(frame.as_ref());
-        self.measure_reflow(frame.as_ref(), &reflow_imprints);
-        self.measure_pane_layout(frame.as_ref(), installed_at);
+        // Viewport, reflow and pane motion are all measured against the
+        // presentation being replaced, while both sets of anchors are still in
+        // hand — but only when this presentation is something to travel to.
+        super::frame_compositor::layout_continuity::LayoutContinuity::of(
+            frame.as_ref(),
+            &scroll_anchors,
+            &reflow_imprints,
+            installed_at,
+        )
+        .apply(self);
         // Staged, not installed: these describe the incoming presentation, and
         // they become the baseline only if a frame is actually drawn from it.
         self.compositor.incoming_reflow_imprints = reflow_imprints;
