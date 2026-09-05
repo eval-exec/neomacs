@@ -32,9 +32,24 @@ extern "C" {
     fn browser_wall_time_milliseconds() -> f64;
     #[wasm_bindgen(js_namespace = console, js_name = error)]
     fn browser_console_error(message: &str);
+    #[wasm_bindgen(js_name = setTimeout)]
+    fn set_timeout(callback: &JsValue, milliseconds: i32) -> i32;
+    #[wasm_bindgen(js_name = clearTimeout)]
+    fn clear_timeout(id: i32);
+    #[wasm_bindgen(js_namespace = document, js_name = hasFocus)]
+    fn document_has_focus() -> bool;
 }
 
 thread_local! {
+    static PRESENTATION_CALLBACK: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
+    static ANIMATION_TIMER: RefCell<Option<i32>> = const { RefCell::new(None) };
+    static ANIMATION_CALLBACK: Closure<dyn FnMut()> = Closure::new(|| {
+        ANIMATION_TIMER.with(|slot| *slot.borrow_mut() = None);
+        WORKER_WINDOW.with(|slot| {
+            if let Some(window) = slot.borrow().as_ref() { window.request_redraw(); }
+        });
+    });
+    static POINTER_FRONTEND: RefCell<std::rc::Weak<RefCell<Option<PresentedFrontend>>>> = RefCell::new(std::rc::Weak::new());
     static WORKER_FRAME: RefCell<Option<FrameGlyphBuffer>> = const { RefCell::new(None) };
     static WORKER_WINDOW: RefCell<Option<SurfaceWindow>> = const { RefCell::new(None) };
     static FIRST_EDITOR_PRESENTATION: RefCell<FirstEditorPresentationLatch> =
@@ -48,6 +63,7 @@ struct BrowserFrontend {
 }
 
 struct PresentedFrontend {
+    displayed: Option<Rc<FrameGlyphBuffer>>,
     renderer: SurfaceFrameRenderer,
     bootstrap: PortableBootstrapFrameBuilder,
     frame: Option<BrowserPresentationFrame>,
@@ -55,13 +71,14 @@ struct PresentedFrontend {
 
 enum BrowserPresentationFrame {
     Bootstrap(FrameGlyphBuffer),
-    Editor(FrameGlyphBuffer),
+    Editor(Rc<FrameGlyphBuffer>),
 }
 
 impl BrowserPresentationFrame {
     fn glyphs(&self) -> &FrameGlyphBuffer {
         match self {
-            Self::Bootstrap(frame) | Self::Editor(frame) => frame,
+            Self::Bootstrap(frame) => frame,
+            Self::Editor(frame) => frame,
         }
     }
 
@@ -85,6 +102,7 @@ impl BrowserPresentationFrame {
 impl PresentedFrontend {
     fn new(renderer: SurfaceFrameRenderer) -> Result<Self, BrowserPresentationFailure> {
         let mut this = Self {
+            displayed: None,
             renderer,
             bootstrap: PortableBootstrapFrameBuilder::new(),
             frame: None,
@@ -103,6 +121,11 @@ impl PresentedFrontend {
     }
 
     fn resize_frame(&mut self) -> Result<(), BrowserPresentationFailure> {
+        // Keep displayed content and pointer hits coherent while the Worker
+        // prepares new geometry. SurfaceFrameRenderer clips the old frame.
+        if matches!(self.frame, Some(BrowserPresentationFrame::Editor(_))) {
+            return Ok(());
+        }
         let size = self
             .renderer
             .logical_size()
@@ -126,12 +149,69 @@ fn report_presentation_failure(failure: BrowserPresentationFailure) {
 
 impl Default for BrowserFrontend {
     fn default() -> Self {
+        let presented = Rc::new(RefCell::new(None));
+        POINTER_FRONTEND.with(|slot| *slot.borrow_mut() = Rc::downgrade(&presented));
         Self {
             lifecycle: FrontendLifecycle::new(),
             window: None,
-            presented: Rc::new(RefCell::new(None)),
+            presented,
         }
     }
+}
+
+/// Resolve a browser pointer against the immutable frame currently displayed.
+/// CBOR carries 64-bit source/presentation identities losslessly through JS.
+#[wasm_bindgen]
+pub fn browser_pointer_input(
+    x: f32,
+    y: f32,
+    button: u32,
+    pressed: bool,
+    modifiers: u32,
+) -> Result<Vec<u8>, JsValue> {
+    use neomacs_display_protocol::{
+        PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, PresentedHitQuery,
+    };
+    if !x.is_finite() || !y.is_finite() || button > 5 {
+        return Err(JsValue::from_str("invalid browser pointer"));
+    }
+    POINTER_FRONTEND.with(|slot| {
+        let Some(frontend) = slot.borrow().upgrade() else {
+            return Ok(Vec::new());
+        };
+        let state = frontend.borrow();
+        let Some(frame) = state.as_ref().and_then(|state| state.displayed.as_ref()) else {
+            return Ok(Vec::new());
+        };
+        let hit = frame
+            .resolve_presented_hit(PresentedHitQuery::new(frame.presentation_id, x, y))
+            .map_err(|error| JsValue::from_str(&format!("{error:?}")))?
+            .and_then(|hit| hit.semantic());
+        let input = PositionedPointerInput {
+            position: PointerPosition {
+                x,
+                y,
+                target_frame_id: frame.frame_placement.frame().get(),
+            },
+            target: PointerTarget::Presented {
+                presentation: frame.presentation_id.get(),
+                hit,
+            },
+            action: if button == 0 {
+                PointerAction::Move { modifiers }
+            } else {
+                PointerAction::Button {
+                    button,
+                    pressed,
+                    modifiers,
+                }
+            },
+        };
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&input, &mut bytes)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        Ok(bytes)
+    })
 }
 
 impl ApplicationHandler for BrowserFrontend {
@@ -192,6 +272,15 @@ impl ApplicationHandler for BrowserFrontend {
         }
 
         match event {
+            WindowEvent::Focused(focused) => {
+                let _ = focused; // Canvas focus differs from hidden-text-input focus.
+                schedule_animation(None);
+                if document_has_focus()
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+            }
             WindowEvent::CloseRequested => {
                 if self.lifecycle.transition(LifecycleEvent::ExitRequested) == LifecycleAction::Exit
                 {
@@ -233,7 +322,7 @@ impl ApplicationHandler for BrowserFrontend {
                     return;
                 };
                 if let Some(frame) = WORKER_FRAME.with(|slot| slot.borrow_mut().take()) {
-                    presented.frame = Some(BrowserPresentationFrame::Editor(frame));
+                    presented.frame = Some(BrowserPresentationFrame::Editor(Rc::new(frame)));
                 }
                 let Some(frame) = presented.frame.as_ref() else {
                     return;
@@ -258,6 +347,40 @@ impl ApplicationHandler for BrowserFrontend {
                 };
                 FIRST_EDITOR_PRESENTATION
                     .with(|latch| latch.borrow_mut().observe(provenance, attempt));
+                schedule_animation(
+                    if document_has_focus() && matches!(outcome, PresentationOutcome::Presented) {
+                        presented
+                            .renderer
+                            .animation_interval(frame.glyphs(), cursor_visibility)
+                    } else {
+                        None
+                    },
+                );
+                if matches!(outcome, PresentationOutcome::Presented)
+                    && let BrowserPresentationFrame::Editor(frame) = frame
+                    && presented
+                        .displayed
+                        .as_ref()
+                        .is_none_or(|old| old.presentation_id != frame.presentation_id)
+                {
+                    let frame = Rc::clone(frame);
+                    let id = frame.presentation_id.get().to_string();
+                    let target = frame.frame_placement.frame().get().to_string();
+                    presented.displayed = Some(frame);
+                    PRESENTATION_CALLBACK.with(|slot| {
+                        if let Some(callback) = slot.borrow().as_ref() {
+                            if let Err(error) = callback.call2(
+                                &JsValue::NULL,
+                                &JsValue::from_str(&id),
+                                &JsValue::from_str(&target),
+                            ) {
+                                browser_console_error(&format!(
+                                    "presentation feedback failed: {error:?}"
+                                ));
+                            }
+                        }
+                    });
+                }
                 if outcome.should_request_redraw()
                     && let Some(window) = self.window.as_ref()
                 {
@@ -267,6 +390,25 @@ impl ApplicationHandler for BrowserFrontend {
             _ => {}
         }
     }
+}
+
+#[wasm_bindgen]
+pub fn set_presentation_callback(callback: js_sys::Function) {
+    PRESENTATION_CALLBACK.with(|slot| *slot.borrow_mut() = Some(callback));
+}
+
+fn schedule_animation(interval: Option<std::time::Duration>) {
+    ANIMATION_TIMER.with(|slot| {
+        if let Some(id) = slot.borrow_mut().take() {
+            clear_timeout(id);
+        }
+        if let Some(interval) = interval {
+            let id = ANIMATION_CALLBACK.with(|callback| {
+                set_timeout(callback.as_ref(), interval.as_millis().max(1) as i32)
+            });
+            *slot.borrow_mut() = Some(id);
+        }
+    });
 }
 
 /// Validate and install one evaluator presentation transferred by the editor

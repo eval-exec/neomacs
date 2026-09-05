@@ -63,6 +63,7 @@ impl SurfaceCursorVisibility {
 /// Product adapters forward window lifecycle events here; they do not own
 /// swapchain recovery, render pipelines, font replay, or device-scale math.
 pub struct SurfaceFrameRenderer {
+    cursor: neomacs_renderer_wgpu::cursor::CursorState,
     surface: SurfaceRuntime,
     renderer: WgpuRenderer,
     glyph_atlas: WgpuGlyphAtlas,
@@ -97,6 +98,7 @@ impl SurfaceFrameRenderer {
         }
 
         Ok(Self {
+            cursor: Default::default(),
             surface,
             renderer,
             glyph_atlas,
@@ -148,6 +150,27 @@ impl SurfaceFrameRenderer {
 
         self.glyph_atlas
             .set_current_frame_fonts(frame.font_bindings());
+        self.renderer
+            .set_frame_sample_time(neomacs_host_runtime::time::Instant::now());
+        if cursor_visibility.is_visible()
+            && let Some(cursor) = frame.active_cursor()
+        {
+            self.cursor
+                .set_target(neomacs_renderer_wgpu::cursor::CursorTarget {
+                    window_id: cursor.window_id.get(),
+                    x: cursor.x,
+                    y: cursor.y,
+                    width: cursor.width,
+                    height: cursor.height,
+                    style: cursor.style,
+                    frame_id: frame.frame_placement.frame().get(),
+                });
+            self.cursor.tick_animation();
+            self.cursor.tick_size_animation();
+        } else {
+            self.cursor.clear_target();
+        }
+        let animated_cursor = self.cursor.animated_cursor();
         let Self {
             surface,
             renderer,
@@ -162,7 +185,7 @@ impl SurfaceFrameRenderer {
                     glyph_atlas,
                     mapping,
                     cursor_visibility.is_visible(),
-                    None,
+                    animated_cursor,
                     (-1.0, -1.0),
                     None,
                     None,
@@ -170,6 +193,34 @@ impl SurfaceFrameRenderer {
                 );
             })
             .map_err(Into::into)
+    }
+
+    /// Compositor-only work; never asks the VM for another layout frame.
+    pub fn animation_interval(
+        &self,
+        frame: &FrameGlyphBuffer,
+        visibility: SurfaceCursorVisibility,
+    ) -> Option<std::time::Duration> {
+        if !visibility.is_visible() {
+            return None;
+        }
+        let motion_rate = self.cursor.is_animating().then_some(60);
+        let cycle_rate = frame
+            .window_cursors
+            .iter()
+            .filter(|cursor| !cursor.style.is_hollow())
+            .filter_map(|cursor| {
+                let cycle = &frame
+                    .effective_window_cursor_effects(cursor.window_id, &self.renderer.effects)
+                    .cursor_color_cycle;
+                cycle.enabled.then_some(u32::from(cycle.fps.get()).min(60))
+            })
+            .max();
+        motion_rate
+            .into_iter()
+            .chain(cycle_rate)
+            .max()
+            .map(|rate| std::time::Duration::from_secs_f64(1.0 / f64::from(rate)))
     }
 }
 
