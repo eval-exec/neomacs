@@ -7,7 +7,8 @@
 //!
 //! - `surface` — getting the swapchain texture, and naming how that fails.
 //! - `composition_targets` — the offscreen textures a frame composes through.
-//! - `retained_static` — the compositor-only fast path.
+//! - `retained_static`, `full_render` — the three composition strategies: the
+//!   compositor-only fast path, and the two that run the glyph pipeline.
 //! - `scene` — the editor's own picture: glyphs, child frames, content overlays.
 //! - `chrome` — the window-level overlays drawn over it.
 //! - `present` — handing the result to the platform and publishing what it
@@ -16,8 +17,8 @@
 //! Must not: know how any single phase draws. When a body here grows past
 //! "call the phase, check the outcome", it belongs in a phase.
 //!
-//! Three orderings in this file are load-bearing, and each is commented where
-//! it happens because the `?` between them is what makes it matter:
+//! Three orderings are load-bearing, and each is commented where it happens
+//! because the `?` between them is what makes it matter:
 //!
 //! 1. The frame itself is materialized *after* the surface is acquired.
 //!    Acquisition has several early returns, so taking the frame first is work
@@ -26,9 +27,10 @@
 //!    reason: it advances the motion and produces the projection hit testing
 //!    will answer from. Sampling above the early returns would leave a
 //!    projection describing a frame nobody composed.
-//! 3. The continuity drain runs *after* the surface-loss paths. An observation
-//!    dropped on one of those would lose the scroll measured at install, with
-//!    no later chance to plan it.
+//! 3. The continuity drain runs *after* the surface-loss paths — it is in
+//!    `full_render::detect_transitions`, below every `?` here. An observation
+//!    dropped on one of those returns would lose the scroll measured at
+//!    install, with no later chance to plan it.
 //!
 //! None of the three is enforced by a type today. Moving a call across one of
 //! them compiles.
@@ -261,8 +263,13 @@ fn render_frame_window_contents_to_surface(
     // The retained-static fast path is a whole composition strategy; it
     // owns its own eligibility rule and its own draw. What the draw order
     // keeps is the decision to take it and the tail every strategy shares.
+    // Read once, so the composite and the frame-post step provably see one
+    // value. The scroll-bar highlight takes the *projected* answer rather than
+    // this raw position — the two differ whenever a pane is in motion, which is
+    // the bug that put the highlight on the wrong thumb.
     let mouse_pos = render.mouse_pos;
     if retained_static::is_eligible(compositor_only_hint, &pane_blits, render) {
+        let hovered_scroll_bar = render.hovered_scroll_bar(&frame);
         retained_static::draw(
             renderer,
             native,
@@ -271,7 +278,7 @@ fn render_frame_window_contents_to_surface(
             &frame,
             &inputs,
             cursor_visible,
-            mouse_pos,
+            hovered_scroll_bar,
         );
         if frame_post_active {
             renderer.frame_post_to_view(

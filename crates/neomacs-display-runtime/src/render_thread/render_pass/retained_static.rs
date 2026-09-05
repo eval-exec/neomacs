@@ -78,7 +78,7 @@ pub(super) fn draw(
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
     inputs: &FrameDrawInputs<'_>,
     cursor_visible: bool,
-    mouse_pos: (f32, f32),
+    hovered_scroll_bar: Option<neomacs_display_protocol::ScrollBarIdentity>,
 ) {
     let generation = render.compositor.current_scene_generation;
     let retained_valid = matches!(
@@ -133,7 +133,7 @@ pub(super) fn draw(
         inputs.present_mapping,
         cursor_visible,
         inputs.animated_cursor,
-        mouse_pos,
+        hovered_scroll_bar,
     );
     // Filled-box cursors are inverse-video: the retained scene has the
     // character in its normal color, so each filled-box cell (box plus
@@ -148,7 +148,6 @@ pub(super) fn draw(
             composition_view,
             inputs.present_mapping,
             inputs.animated_cursor,
-            mouse_pos,
         );
     }
     frame_stats::count(&frame_stats::COMPOSITE_ONLY_FRAMES);
@@ -231,7 +230,6 @@ fn composite_filled_box_cursor_cells(
     surface_view: &wgpu::TextureView,
     present_mapping: neomacs_display_protocol::PresentMapping,
     animated_cursor: Option<crate::core::types::AnimatedCursor>,
-    mouse_pos: (f32, f32),
 ) {
     let Some(atlas) = render.compositor.glyph_atlas.as_mut() else {
         return;
@@ -248,7 +246,6 @@ fn composite_filled_box_cursor_cells(
             present_mapping,
             true,
             animated_cursor,
-            mouse_pos,
             cell.scissor,
         );
     }
