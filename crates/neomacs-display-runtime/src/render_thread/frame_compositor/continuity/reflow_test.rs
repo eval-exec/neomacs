@@ -503,12 +503,32 @@ fn install(
     rows: &[GlyphRow],
 ) {
     let mut frame = crate::core::frame_glyphs::FrameGlyphBuffer::with_size(800.0, 600.0);
+    frame.presentation_id = next_presentation(render);
     frame.window_infos.push(info.clone());
     let mut by_window = std::collections::HashMap::default();
     by_window.insert(info.window_id, imprints(rows));
     render.measure_reflow(Some(&frame), &by_window);
-    render.compositor.reflow_imprints = by_window;
+    render.compositor.incoming_reflow_imprints = by_window;
     render.compositor.current_frame = Some(frame);
+    // Say the frame reached the screen. The measurement baseline advances only
+    // on composition, so a test that installed without composing would be
+    // measuring the next presentation against one the user never saw — which
+    // is the very thing that advance rule exists to prevent.
+    render.begin_presentable_render();
+}
+
+/// A presentation id one past whatever is retained, so each install is a
+/// distinct presentation — promotion is idempotent per presentation, so reusing
+/// an id would silently skip advancing the baseline.
+fn next_presentation(
+    render: &crate::render_thread::frame_windows::GuiFrameRenderState,
+) -> neomacs_display_protocol::PresentationId {
+    let last = render
+        .compositor
+        .current_frame
+        .as_ref()
+        .map_or(0, |frame| frame.presentation_id.get());
+    neomacs_display_protocol::PresentationId::new(last + 1)
 }
 
 fn empty_render() -> crate::render_thread::frame_windows::GuiFrameRenderState {
@@ -608,5 +628,83 @@ fn a_second_pass_over_one_install_observes_no_reflow() {
     assert!(
         render.take_pending_continuity(true).reflows.is_empty(),
         "re-arming the slide on every render pass would sustain a redraw loop"
+    );
+}
+
+/// Install `windows`/`rows` WITHOUT composing, the way `poll_frame` does when
+/// two commits arrive between ticks.
+fn install_without_composing(
+    render: &mut crate::render_thread::frame_windows::GuiFrameRenderState,
+    info: &WindowInfo,
+    rows: &[GlyphRow],
+) {
+    let mut frame = crate::core::frame_glyphs::FrameGlyphBuffer::with_size(800.0, 600.0);
+    frame.presentation_id = next_presentation(render);
+    frame.window_infos.push(info.clone());
+    let mut by_window = std::collections::HashMap::default();
+    by_window.insert(info.window_id, imprints(rows));
+    render.measure_reflow(Some(&frame), &by_window);
+    render.compositor.incoming_reflow_imprints = by_window;
+    render.compositor.current_frame = Some(frame);
+}
+
+#[test]
+fn a_commit_superseded_before_it_was_drawn_does_not_become_the_thing_the_next_one_is_measured_against()
+ {
+    // `poll_frame` drains the whole channel, so two commits arriving between
+    // ticks are both installed and only the second is ever drawn. Measuring
+    // against the presentation that was never composed reports the motion from
+    // a picture nobody saw; the user's eye travelled the whole distance, from
+    // the last frame on screen to this one.
+    let mut render = empty_render();
+    let first = [text_row(0xF1, 0.0), text_row(0xF2, 16.0)];
+    install(&mut render, &window(7, 1), &first);
+
+    // Commit two: rows slide 16px. Installed, never composed.
+    let second = [text_row(0xF1, 16.0), text_row(0xF2, 32.0)];
+    install_without_composing(&mut render, &window(7, 2), &second);
+
+    // Commit three: another 16px. This is the frame that will actually draw.
+    let third = [text_row(0xF1, 32.0), text_row(0xF2, 48.0)];
+    install_without_composing(&mut render, &window(7, 3), &third);
+
+    let pending = render.take_pending_continuity(true);
+    assert_eq!(pending.reflows.len(), 1);
+    assert!(
+        (pending.reflows[0].pixels - 32.0).abs() < f32::EPSILON,
+        "measured from the last composed frame, not from the commit in between: \
+         got {}px, expected the full 32px the viewer's eye travelled",
+        pending.reflows[0].pixels
+    );
+}
+
+#[test]
+fn an_observation_survives_a_commit_that_supersedes_it_before_any_frame_drew() {
+    // Each measurement clears its own pending list first, so before the
+    // baseline advance rule a second commit wiped the first one's findings.
+    // A reflow that happened would simply never animate whenever the editor
+    // batched two commits - which is under load, exactly when it shows.
+    let mut render = empty_render();
+    install(
+        &mut render,
+        &window(7, 1),
+        &[text_row(0xE1, 0.0), text_row(0xE2, 16.0)],
+    );
+    install_without_composing(
+        &mut render,
+        &window(7, 2),
+        &[text_row(0xE1, 16.0), text_row(0xE2, 32.0)],
+    );
+    // A commit that moves nothing further - a keystroke redrawing the buffer.
+    install_without_composing(
+        &mut render,
+        &window(7, 3),
+        &[text_row(0xE1, 16.0), text_row(0xE2, 32.0)],
+    );
+
+    assert_eq!(
+        render.take_pending_continuity(true).reflows.len(),
+        1,
+        "the displacement is still pending, not cleared by the commit after it"
     );
 }

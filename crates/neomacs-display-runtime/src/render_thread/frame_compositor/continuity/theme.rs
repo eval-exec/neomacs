@@ -40,7 +40,7 @@ fn content_height_before_minibuffer(frame: &FrameGlyphBuffer) -> f32 {
 /// opacity is a window-manager property a user may animate on its own, and
 /// treating it as a theme change would crossfade the frame every time it faded.
 pub(in crate::render_thread) fn theme_change(
-    previous: &FrameGlyphBuffer,
+    previous: &super::super::MeasurementBaseline,
     next: &FrameGlyphBuffer,
 ) -> Option<ThemeChange> {
     let before = previous.background;
