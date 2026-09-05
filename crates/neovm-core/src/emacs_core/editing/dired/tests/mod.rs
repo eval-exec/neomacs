@@ -2,6 +2,8 @@ use super::*;
 use crate::emacs_core::value::ValueKind;
 use std::io::Write;
 
+mod virtual_filesystem;
+
 // Test helpers hold the Context alive in a thread_local so the
 // heap objects in the returned Value survive until the next call.
 // Previously the bare `let mut eval = ...; builtin(...)` pattern

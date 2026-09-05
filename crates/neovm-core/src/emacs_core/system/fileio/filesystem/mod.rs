@@ -170,6 +170,8 @@ pub trait EditorFileSystem {
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata>;
     fn access(&self, path: &Path, mode: AccessMode) -> bool;
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+    /// Entry names without dot entries. Wrappers preserve backend traversal
+    /// order; the calling Lisp operation decides whether to sort the result.
     fn read_directory(&self, path: &Path) -> io::Result<Vec<OsString>>;
     fn write(
         &self,
