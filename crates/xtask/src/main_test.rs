@@ -1712,7 +1712,7 @@ fn windows_releases_ship_the_gnu_compatible_shell_proxy() {
     );
     assert!(
         installed_contract.contains("Remove-Item Env:SHELL")
-            && installed_contract.contains("shell-command-to-string \"whoami\"")
+            && installed_contract.contains(r#"shell-command-to-string \"whoami\""#)
             && installed_contract.contains("cmdproxy\\.exe"),
         "the installed Windows contract must exercise M-! without SHELL"
     );
