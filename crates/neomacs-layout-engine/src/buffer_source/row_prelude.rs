@@ -113,14 +113,15 @@ impl BufferSourceRowPreludeRequestContext {
         )
     }
 
-    pub(crate) fn char_width(self) -> f32 {
-        self.fallback_metrics.char_width()
-    }
-
     pub(crate) fn continuation_row_prelude(self) -> BufferSourceContinuationRowPreludeRequest {
         BufferSourceContinuationRowPreludeRequest {
             line_number_prefix: self.line_number_prefix_request(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn char_width(self) -> f32 {
+        self.fallback_metrics.char_width()
     }
 
     #[cfg(test)]
