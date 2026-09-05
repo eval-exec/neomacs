@@ -6,6 +6,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod device_request;
+pub mod cursor;
 pub mod external_buffer;
 pub mod frame_post;
 pub mod glyph_atlas;
