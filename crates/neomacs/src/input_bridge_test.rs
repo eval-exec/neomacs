@@ -1,3 +1,24 @@
+/// A surface point in a presentation composed with nothing in motion.
+///
+/// See the note on the display-protocol copy: a settled projection maps by
+/// identity, so this states the point directly while still going through the
+/// witness the production path uses.
+fn settled_point(
+    presentation: neomacs_display_protocol::PresentationId,
+    x: f32,
+    y: f32,
+) -> neomacs_display_protocol::PresentationFramePoint {
+    neomacs_display_protocol::InteractionProjection::settled(presentation)
+        .map(
+            neomacs_display_protocol::GeometryPoint::<
+                neomacs_display_protocol::RootSurfaceSpace,
+                neomacs_display_protocol::LogicalPixels,
+            >::from_px(x, y)
+            .expect("a finite surface point"),
+        )
+        .expect("a settled projection maps every finite point")
+}
+
 use super::*;
 
 fn convert_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
@@ -458,9 +479,7 @@ fn positioned_wheel_expands_to_observation_then_scroll_without_recomputing_the_h
     )
     .unwrap()
     .resolve(neomacs_display_protocol::PresentedHitQuery::new(
-        neomacs_display_protocol::PresentationId::new(9),
-        5.0,
-        25.0,
+        settled_point(neomacs_display_protocol::PresentationId::new(9), 5.0, 25.0),
     ))
     .unwrap();
     let events: Vec<_> = super::convert_display_event(&DisplayEvent::PositionedPointer(
