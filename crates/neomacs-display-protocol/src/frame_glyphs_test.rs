@@ -98,6 +98,7 @@ fn make_window_info(window_id: i64, buffer_id: u64, window_start: i64, bounds: R
                 ..PresentedWindowRegions::default()
             },
         },
+        line_number_field: None,
         mode_line_height,
         header_line_height: 0.0,
         tab_line_height: 0.0,
@@ -2063,4 +2064,37 @@ fn stipple_from_xbm_parses_hex_and_char_token_forms() {
     // Too few bytes for the declared size => rejected.
     let short = "#define g_width 8\n#define g_height 4\nstatic char g_bits[] = { 0x01 };\n";
     assert_eq!(StipplePattern::from_xbm_source(short), None);
+}
+
+/// The renderer reads `line_number_field` off a `WindowInfo` that reached it
+/// through serialization, so a field that does not survive the wire leaves the
+/// pulse with nothing to pair with `text_body.x`.
+#[test]
+fn a_measured_line_number_field_survives_a_window_info_serde_round_trip() {
+    let mut info = make_window_info(7, 3, 1, Rect::new(0.0, 0.0, 400.0, 200.0));
+    info.line_number_field = LineNumberFieldWidth::measured(27.5);
+
+    let json = serde_json::to_string(&info).expect("serialize window info");
+    let decoded: WindowInfo = serde_json::from_str(&json).expect("deserialize window info");
+
+    assert_eq!(decoded.line_number_field, info.line_number_field);
+    assert_eq!(
+        decoded.line_number_field.map(LineNumberFieldWidth::px),
+        Some(27.5)
+    );
+}
+
+/// A window that laid no line-number glyphs must be unable to express a
+/// paintable band: were it `Some(0.0)`, every consumer would have to remember
+/// to test for zero, and the one that forgets paints over buffer text.
+#[test]
+fn an_unmeasured_line_number_field_cannot_become_a_paintable_band() {
+    assert_eq!(LineNumberFieldWidth::measured(0.0), None);
+    assert_eq!(LineNumberFieldWidth::measured(-4.0), None);
+    assert_eq!(LineNumberFieldWidth::measured(f32::NAN), None);
+    assert_eq!(LineNumberFieldWidth::measured(f32::INFINITY), None);
+    assert_eq!(
+        LineNumberFieldWidth::measured(12.0).map(LineNumberFieldWidth::px),
+        Some(12.0)
+    );
 }

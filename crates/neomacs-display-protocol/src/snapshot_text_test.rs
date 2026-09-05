@@ -82,6 +82,7 @@ fn golden_state() -> FrameDisplayState {
         buffer_modiff: crate::presentation_origin::BufferModiff::default(),
         bounds: Rect::new(0.0, 0.0, 128.0, 32.0),
         geometry: Default::default(),
+        line_number_field: None,
         mode_line_height: 16.0,
         header_line_height: 0.0,
         tab_line_height: 0.0,

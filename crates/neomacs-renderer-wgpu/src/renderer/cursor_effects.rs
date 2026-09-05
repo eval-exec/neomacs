@@ -8,6 +8,7 @@ use super::super::vertex::RectVertex;
 use super::effect_common::effect_entity_seed;
 use super::effect_common::{EffectCtx, ambient_cycle_phase, find_cursor_pos, push_rect};
 use super::{CursorParticle, MatrixColumn, RippleWaveEntry, SonarPingEntry, SparkleBurstEntry};
+use neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry;
 use neomacs_display_protocol::frame_time::EventTime;
 use neomacs_display_protocol::types::Color;
 
@@ -202,37 +203,62 @@ pub(super) fn emit_cursor_magnetism(
 
 /// Emit line number pulse overlay on the cursor line.
 ///
-/// Renders a pulsing highlight over the line-number gutter area of the
-/// cursor's current row, using a sinusoidal brightness cycle.
+/// Renders a pulsing highlight over the line-number field of the cursor's
+/// current row, using a sinusoidal brightness cycle.
 /// Returns (vertices, needs_continuous_redraw).
 pub(super) fn emit_line_number_pulse(ctx: &EffectCtx) -> (Vec<RectVertex>, bool) {
     if !ctx.effects.line_number_pulse.enabled {
         return (Vec::new(), false);
     }
+    let Some(anim) = ctx.animated_cursor else {
+        return (Vec::new(), false);
+    };
+    // The band lights the line number of the row the cursor sits on, so the
+    // window it belongs to is the one the animated cursor names.  `selected`
+    // names the echo area whenever a minibuffer is active, which would put the
+    // band on a different window than the cursor it follows.
+    let Some(win_info) = ctx
+        .frame_glyphs
+        .window_infos
+        .iter()
+        .find(|info| info.window_id == anim.window_id)
+    else {
+        return (Vec::new(), false);
+    };
+    // A window that reserved no line-number field has no band to light, and
+    // painting one anyway would cover buffer text.
+    let Some(field) = win_info.line_number_field else {
+        return (Vec::new(), false);
+    };
+    // The field starts where the text area starts.  A left scroll bar, a left
+    // fringe and a left display margin all sit between that and `bounds.x`.
+    let PresentedWindowGeometry::Complete { regions, .. } = win_info.geometry else {
+        return (Vec::new(), false);
+    };
     let mut verts = Vec::new();
-    let mut needs_redraw = false;
-    if let Some(anim) = ctx.animated_cursor {
-        // Free-running: the gutter pulse has no trigger event, so its phase is
-        // the session-start anchor aged against this frame's sample, one full
-        // cycle every `cycle_ms` (2s by default).
-        let phase = ambient_cycle_phase(ctx, ctx.effects.line_number_pulse.cycle_ms);
-        let pulse = ((phase * std::f64::consts::TAU).sin() * 0.5 + 0.5) as f32;
-        let alpha = ctx.effects.line_number_pulse.intensity * pulse;
-        let (pr, pg, pb) = ctx.effects.line_number_pulse.color;
-        if alpha > 0.001 {
-            for win_info in &ctx.frame_glyphs.window_infos {
-                if !win_info.selected {
-                    continue;
-                }
-                let b = &win_info.bounds;
-                let gutter_width = 40.0_f32;
-                let c = Color::new(pr, pg, pb, alpha);
-                push_rect(&mut verts, b.x, anim.y, gutter_width, anim.height, &c);
-            }
-        }
-        needs_redraw = true;
+    // Free-running: the band has no trigger event, so its phase is the
+    // session-start anchor aged against this frame's sample, one full cycle
+    // every `cycle_ms`. Reading a clock here instead would pin the phase — the
+    // `Instant::now()` / `.elapsed()` pair this replaced sat one line apart and
+    // always measured zero, so the "pulse" rendered as a constant.
+    let phase = ambient_cycle_phase(ctx, ctx.effects.line_number_pulse.cycle_ms);
+    let pulse = ((phase * std::f64::consts::TAU).sin() * 0.5 + 0.5) as f32;
+    let alpha = ctx.effects.line_number_pulse.intensity * pulse;
+    let (pr, pg, pb) = ctx.effects.line_number_pulse.color;
+    if alpha > 0.001 {
+        let c = Color::new(pr, pg, pb, alpha);
+        push_rect(
+            &mut verts,
+            regions.text_body.x,
+            anim.y,
+            field.px(),
+            anim.height,
+            &c,
+        );
     }
-    (verts, needs_redraw)
+    // The cycle keeps running through the trough where alpha rounds away, so
+    // the demand for the next frame outlives this frame's empty vertex list.
+    (verts, true)
 }
 
 /// Emit cursor spotlight / radial gradient overlay vertices.

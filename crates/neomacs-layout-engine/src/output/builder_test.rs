@@ -28,6 +28,7 @@ fn install_test_text_body_hit_index(
                 ),
                 bounds,
                 geometry: neomacs_display_protocol::PresentedWindowGeometry::default(),
+                line_number_field: None,
                 mode_line_height: 0.0,
                 header_line_height: 0.0,
                 tab_line_height: 0.0,

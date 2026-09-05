@@ -86,6 +86,7 @@ fn presented_window(id: i64) -> crate::frame_glyphs::WindowInfo {
         buffer_modiff: crate::presentation_origin::BufferModiff::new(1),
         bounds: crate::types::Rect::new(0.0, 0.0, 800.0, 600.0),
         geometry: crate::PresentedWindowGeometry::default(),
+        line_number_field: None,
         mode_line_height: 20.0,
         header_line_height: 0.0,
         tab_line_height: 0.0,
