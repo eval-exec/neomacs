@@ -30,10 +30,20 @@ fn color_rgb_tuple(color: neomacs_display_protocol::types::Color) -> (f32, f32, 
     (color.r, color.g, color.b)
 }
 
-type RenderedFrameSurface = (
-    wgpu::SurfaceTexture,
-    crate::core::frame_glyphs::FrameGlyphBuffer,
-);
+/// A frame drawn and ready to present.
+///
+/// `projection` rides here rather than being stored when it is computed. It
+/// describes where the panes were placed *in this frame*, and it is the answer
+/// hit testing must give — so it becomes visible only once the pixels it
+/// describes have actually been presented. Publishing it at sample time
+/// instead would leave it describing a frame that a later `?` abandoned, and a
+/// pointer event arriving before the next successful render would resolve
+/// against pixels nobody saw.
+struct RenderedFrameSurface {
+    output: wgpu::SurfaceTexture,
+    frame: crate::core::frame_glyphs::FrameGlyphBuffer,
+    projection: Option<neomacs_display_protocol::InteractionProjection>,
+}
 
 /// Failures before a frame reaches `present`, kept distinct until the frame
 /// coordinator consumes them.  In particular, missing editor content is not a
@@ -612,7 +622,9 @@ impl RenderApp {
         // transform hit testing uses and the geometry this pass draws come
         // from one sample of one motion rather than from two evaluations that
         // could land on different sides of a frame boundary.
-        let pane_blits = render.sample_pane_layout(renderer.frame_sample());
+        let composition = render.sample_pane_layout(renderer.frame_sample());
+        let pane_projection = composition.projection.clone();
+        let pane_blits = composition.blits;
         if !pane_blits.is_empty() {
             render.mark_dirty();
         }
@@ -781,7 +793,11 @@ impl RenderApp {
             render.finish_pointer_paint_render();
             renderer.set_scale_factor(old_scale_factor);
             renderer.resize(old_width, old_height);
-            return Ok((output, frame));
+            return Ok(RenderedFrameSurface {
+                output,
+                frame,
+                projection: None,
+            });
         }
 
         if need_offscreen {
@@ -960,7 +976,11 @@ impl RenderApp {
         render.finish_pointer_paint_render();
         renderer.set_scale_factor(old_scale_factor);
         renderer.resize(old_width, old_height);
-        Ok((output, frame))
+        Ok(RenderedFrameSurface {
+            output,
+            frame,
+            projection: pane_projection,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1531,7 +1551,11 @@ impl RenderApp {
             &self.render_policy,
             &mut self.device_lost,
         );
-        let (output, frame) = match rendered {
+        let RenderedFrameSurface {
+            output,
+            frame,
+            projection,
+        } = match rendered {
             Ok(rendered) => rendered,
             Err(failure) => {
                 #[cfg(feature = "video")]
@@ -1599,6 +1623,12 @@ impl RenderApp {
             window.pre_present_notify();
         }
         renderer.queue().present(output);
+        // Published here and nowhere else: the projection describes the pixels
+        // that were just handed to the compositor, so this is the first instant
+        // at which "what is on screen" is a fact rather than an intention.
+        if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
+            window_state.render.publish_presented_projection(projection);
+        }
         #[cfg(feature = "video")]
         renderer.finish_presented_video_surface();
         super::frame_stats::note_present(
