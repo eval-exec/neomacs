@@ -5259,3 +5259,37 @@ fn entry_compiles_pick_the_allocator_by_shape_and_request() {
     let leaf = compile_bytecode_function_with(&lp, None).expect("loop body compiles");
     assert_eq!(leaf.regalloc, RegallocChoice::Full);
 }
+
+/// Code the byte-compiler leaves after an unconditional exit is unreachable:
+/// no entry depth, so the leaf lowering must not index it (it panicked with
+/// "no entry found for key" on ebrowse/eglot/wdired/texinfo bodies once the
+/// profitability gate stopped vetoing them). It lowers to a trap and the
+/// reachable code runs as before.
+#[test]
+fn unreachable_block_after_an_exit_lowers_without_panicking() {
+    use crate::emacs_core::eval::Context;
+    for ops in [
+        // (lambda () 7) followed by dead code after the return.
+        vec![Op::Constant(0), Op::Return, Op::Constant(0), Op::Return],
+        // A goto over dead code to the real return.
+        vec![
+            Op::Goto(3),
+            Op::Constant(0),
+            Op::Return,
+            Op::Constant(0),
+            Op::Return,
+        ],
+    ] {
+        let mut f = nullary();
+        f.ops = ops;
+        f.constants = vec![Value::make_int(7)].into();
+        let leaf = compile_bytecode_function_with(&f, None)
+            .expect("dead code must not break the lowering");
+        let mut ev = Context::new_minimal_vm_harness();
+        let ctx_ptr = &mut ev as *mut Context as *mut u8;
+        assert_eq!(
+            leaf.call(ctx_ptr, &[]),
+            NativeRun::Ok(Value::make_int(7).bits())
+        );
+    }
+}

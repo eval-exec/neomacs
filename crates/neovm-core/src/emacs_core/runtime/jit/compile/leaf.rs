@@ -252,6 +252,10 @@ pub struct CompiledLeaf {
     /// The register allocator that built it: a `Fast` leaf re-tiers to `Full`
     /// once hot (`cache::try_run_compiled`); AOT leaves are always `Full`.
     pub(crate) regalloc: super::lowering::RegallocChoice,
+    /// Compiled with the profitability gate bypassed (a deferred call-heavy
+    /// body that proved hot): a recompile of this id keeps the bypass, or a
+    /// stale-inline rebuild would meet the gate again and be deferred anew.
+    pub(crate) profit_gate_bypassed: bool,
     /// Number of fixed slots the native code reads from the args pointer at
     /// entry: `nonrest` parameters (required + optional, nil-padded) plus one
     /// slot for the `&rest` list when present. [`call`](Self::call) normalizes
@@ -550,6 +554,7 @@ impl CompiledLeaf {
         CompiledLeaf {
             tier: LeafTier::Aot,
             regalloc: super::lowering::RegallocChoice::Full,
+            profit_gate_bypassed: false,
             arity: meta.arity,
             required: meta.required,
             has_rest: meta.has_rest,

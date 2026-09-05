@@ -438,7 +438,7 @@ pub(crate) fn force_profit_gate_for_test(on: bool) {
 /// Is the JIT profitability gate enabled? Default yes; `NEOVM_JIT_PROFIT=off`
 /// disables it, so the gate can be A/B-measured against the old behavior in a
 /// single build.
-fn jit_profit_gate_on() -> bool {
+pub(crate) fn jit_profit_gate_on() -> bool {
     #[cfg(test)]
     if let Some(o) = PROFIT_GATE_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
@@ -675,7 +675,7 @@ fn inline_arith_callee_syms(
 /// shape (hot arithmetic/control loops — the 7x microbenchmark) clears this, and
 /// call-free bodies always pass (`0 <= 0`).
 fn body_is_jit_profitable(ops: &[Op], constants: &[Value]) -> bool {
-    if !jit_profit_gate_on() {
+    if !jit_profit_gate_on() || BYPASS_PROFIT_GATE.with(|b| b.get()) {
         return true;
     }
     let relax = jit_gate_relax_on();
@@ -751,7 +751,53 @@ pub fn compile_bytecode_function_tiered(
     obarray: Option<&Obarray>,
     policy: lowering::RegallocPolicy,
 ) -> Result<CompiledLeaf, CompileError> {
-    let _scope = lowering::RegallocScope::enter(regalloc_for(policy, f.executable_ops()));
+    compile_bytecode_function_requested(
+        f,
+        obarray,
+        CompileRequest {
+            regalloc: policy,
+            bypass_profit_gate: false,
+        },
+    )
+}
+
+/// What a compile is asked to do beyond the body itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompileRequest {
+    /// The register allocator policy (`lowering::choose_regalloc`).
+    pub regalloc: lowering::RegallocPolicy,
+    /// Compile a body the profitability gate would refuse: the deferred
+    /// re-attempt of a call-heavy body that has since proven hot enough to
+    /// amortize its compile (`RuntimeState::profit_deferred_heat`).
+    pub bypass_profit_gate: bool,
+}
+
+thread_local! {
+    /// The compile in progress bypasses `body_is_jit_profitable` (scoped by
+    /// [`compile_bytecode_function_requested`]; `false` outside it).
+    static BYPASS_PROFIT_GATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the compile in progress bypasses the profitability gate.
+pub(crate) fn profit_gate_bypassed_now() -> bool {
+    BYPASS_PROFIT_GATE.with(|b| b.get())
+}
+
+/// [`compile_bytecode_function_tiered`] with the full [`CompileRequest`].
+pub fn compile_bytecode_function_requested(
+    f: &ByteCodeFunction,
+    obarray: Option<&Obarray>,
+    request: CompileRequest,
+) -> Result<CompiledLeaf, CompileError> {
+    let _scope = lowering::RegallocScope::enter(regalloc_for(request.regalloc, f.executable_ops()));
+    let outer_bypass = BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate));
+    struct RestoreBypass(bool);
+    impl Drop for RestoreBypass {
+        fn drop(&mut self) {
+            BYPASS_PROFIT_GATE.with(|b| b.set(self.0));
+        }
+    }
+    let _restore = RestoreBypass(outer_bypass);
     let started = std::time::Instant::now();
     let result = compile_bytecode_function_inner(f, obarray);
     if jit_profile_path().is_some() {
@@ -2796,6 +2842,7 @@ pub fn lower_leaf_full_osr(
     Ok(CompiledLeaf {
         tier: LeafTier::Baseline,
         regalloc: lowering::active_regalloc_choice(),
+        profit_gate_bypassed: profit_gate_bypassed_now(),
         arity,
         // Plain fixed-arity defaults; compile_bytecode_function overrides for
         // &optional/&rest lambda lists.
@@ -3260,8 +3307,19 @@ fn build_leaf_fn<M: Module>(
         for &l in &cfg.leaders {
             let blk = block_for[&l];
             fb.switch_to_block(blk);
-            // Materialize the incoming operand stack from the slot variables.
-            let depth = cfg.entry_depth[&l];
+            // An unreachable block — no path from the entry, so the dataflow
+            // gave it no entry depth: the byte-compiler emits code after an
+            // unconditional exit that nothing targets (ebrowse, eglot, wdired,
+            // texinfo, ns-win all have one) — lowers to a trap. Nothing it
+            // does can run, and anything reachable only through it is
+            // unreachable too, so skipping it leaves every jump target with
+            // a depth. Indexing here panicked ("no entry found for key") the
+            // moment the profitability gate stopped vetoing such bodies.
+            let Some(&depth) = cfg.entry_depth.get(&l) else {
+                fb.ins()
+                    .trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+                continue;
+            };
             let mut stack: Vec<ClifValue> = (0..depth).map(|k| fb.use_var(vars[k])).collect();
             // Cross-op unboxing: incoming slots are tagged (loaded from vars). Raw
             // (untagged) fixnums live only WITHIN a block; the mask resets to

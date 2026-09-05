@@ -16,8 +16,8 @@
 //!   dead functions linger until thread exit (a bounded leak), never a
 //!   use-after-free.
 
-use super::compile::compile_bytecode_function_tiered;
 use super::compile::lowering::{RegallocChoice, RegallocPolicy, RegallocScope, forced_regalloc};
+use super::compile::{CompileError, CompileRequest, compile_bytecode_function_requested};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -43,6 +43,10 @@ enum CacheEntry {
     Compiled(Rc<CompiledLeaf>),
     /// The body is outside the baseline JIT's supported subset; never retried.
     NotCompilable,
+    /// The profitability gate refused the body for now; its runtime carries
+    /// the heat at which the compile is retried with the gate bypassed
+    /// (`RuntimeState::profit_deferred_heat`). Interpreted until then.
+    Deferred,
 }
 
 /// Dense per-thread compiled-leaf store indexed by `compiled_id`. Ids are
@@ -376,9 +380,26 @@ pub(crate) static OSR_TRANSFER_COUNT: std::sync::atomic::AtomicU64 =
 /// Called ONLY from the cache compile-miss path ([`compile_cache_entry`]), so
 /// it runs once per compile, never on the hot dispatch path.
 fn register_inline_deps(id: u64, leaf: &CompiledLeaf) {
+    // A recompiled id (re-tier, stale inline, deferred re-attempt) may no
+    // longer inline what its previous leaf did: forget the old membership
+    // first, or a later redefinition finds a non-inlined leaf in a dep set
+    // (the `evict_inline_dependents` invariant; tripped by the 2026-09-05
+    // gate-off census run).
+    forget_inline_deps(id);
     for &sym in leaf.inline_deps() {
         INLINE_DEPS.with(|m| m.borrow_mut().entry(sym).or_default().insert(id));
     }
+}
+
+/// Drop `id` from every inline-dependency set (empty sets are removed).
+fn forget_inline_deps(id: u64) {
+    INLINE_DEPS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.retain(|_, ids| {
+            ids.remove(&id);
+            !ids.is_empty()
+        });
+    });
 }
 
 /// Generation of NotCompilable verdicts. `RuntimeState::mark_native_rejected`
@@ -405,15 +426,25 @@ fn compile_cache_entry(
     id: u64,
     func: &ByteCodeFunction,
     obarray: Option<&Obarray>,
-    policy: RegallocPolicy,
+    request: CompileRequest,
 ) -> CacheEntry {
     let started = Instant::now();
-    let result = compile_bytecode_function_tiered(func, obarray, policy);
+    let result = compile_bytecode_function_requested(func, obarray, request);
     stats::record_compile(started.elapsed(), func.executable_ops().len(), &result);
     match result {
         Ok(leaf) => {
             register_inline_deps(id, &leaf);
             CacheEntry::Compiled(Rc::new(leaf))
+        }
+        Err(CompileError::NotProfitable) if super::profit_defer_factor() != 0 => {
+            // Not a verdict, a deferral: come back once the body has the
+            // calls to amortize its compile (see `profit_deferred_heat`).
+            let rt = func.jit_runtime();
+            let at = super::hot_threshold()
+                .saturating_mul(super::profit_defer_factor())
+                .max(rt.heat().saturating_add(1));
+            rt.defer_tier_up(at);
+            CacheEntry::Deferred
         }
         Err(_) => {
             // Remember the verdict where the dispatcher can see it. Measured
@@ -467,6 +498,17 @@ pub(crate) fn evict_inline_dependents(sym: SymId) {
             cache.remove(id);
         }
     });
+}
+
+/// Test-only: what the cache holds for `id`.
+#[cfg(test)]
+pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
+    COMPILED.with(|c| match c.borrow().get(id) {
+        Some(CacheEntry::Compiled(_)) => "compiled",
+        Some(CacheEntry::NotCompilable) => "not-compilable",
+        Some(CacheEntry::Deferred) => "deferred",
+        None => "none",
+    })
 }
 
 /// Test-only: the register allocator of the leaf cached for `id`, if any.
@@ -543,7 +585,15 @@ pub(crate) fn compile_and_cache_jit_leaf(
     obarray: Option<&Obarray>,
 ) -> Option<u64> {
     let id = func.jit_runtime().compiled_id_or_assign();
-    let entry = compile_cache_entry(id, func, obarray, RegallocPolicy::Auto);
+    let entry = compile_cache_entry(
+        id,
+        func,
+        obarray,
+        CompileRequest {
+            regalloc: RegallocPolicy::Auto,
+            bypass_profit_gate: false,
+        },
+    );
     let compiled = matches!(entry, CacheEntry::Compiled(_));
     COMPILED.with(|c| {
         c.borrow_mut().insert(id, entry);
@@ -813,9 +863,9 @@ pub fn try_run_compiled(
         // keeps it when a stale inline makes it recompile: the tier is
         // earned, not re-decided. Never under a forced allocator, which
         // would rebuild `Fast` forever.
-        let prev_regalloc = match cache.get(id) {
-            Some(CacheEntry::Compiled(l)) => Some(l.regalloc),
-            _ => None,
+        let (prev_regalloc, prev_bypassed) = match cache.get(id) {
+            Some(CacheEntry::Compiled(l)) => (Some(l.regalloc), l.profit_gate_bypassed),
+            _ => (None, false),
         };
         let retier = prev_regalloc == Some(RegallocChoice::Fast)
             && forced_regalloc().is_none()
@@ -830,6 +880,20 @@ pub fn try_run_compiled(
             RegallocPolicy::Full
         } else {
             RegallocPolicy::Auto
+        };
+        // A deferred body whose deferral ran out compiles now, gate bypassed;
+        // one whose deferral still holds stays interpreted (the dispatcher
+        // does not probe for it, but the funcall seam and tests may).
+        let deferred = matches!(cache.get(id), Some(CacheEntry::Deferred));
+        if deferred && !func.jit_runtime().profit_deferral_expired() {
+            return None;
+        }
+        if deferred {
+            cache.remove(id);
+        }
+        let request = CompileRequest {
+            regalloc: policy,
+            bypass_profit_gate: deferred || prev_bypassed,
         };
         match cache.get_or_insert_with(id, || {
             // R1c-6: consult AOT FIRST (additive — a miss/error falls through to
@@ -860,7 +924,7 @@ pub fn try_run_compiled(
                     return CacheEntry::Compiled(Rc::new(leaf));
                 }
             }
-            compile_cache_entry(id, func, obarray, policy)
+            compile_cache_entry(id, func, obarray, request)
         }) {
             // Only run native for a valid call (lambda-list range); a mismatch
             // is a wrong-arg-count call the interpreter must signal.
@@ -903,7 +967,15 @@ pub(crate) fn resolve_compiled_leaf_ptr(
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
             let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
-            compile_cache_entry(id, func, obarray, RegallocPolicy::Auto)
+            compile_cache_entry(
+                id,
+                func,
+                obarray,
+                CompileRequest {
+                    regalloc: RegallocPolicy::Auto,
+                    bypass_profit_gate: false,
+                },
+            )
         }) {
             // INLINED leaves must NOT be fast-path-cached in a spec slot: their
             // validity depends on an inlined callee's epoch, which the caller's
@@ -1293,6 +1365,68 @@ mod tests {
             Some(RegallocChoice::Full),
             "and stays full"
         );
+    }
+
+    /// A body the profitability gate refuses is DEFERRED, not vetoed, when the
+    /// factor is set: the dispatcher interprets it without probing until its
+    /// heat reaches the deferral point, then the compile runs with the gate
+    /// bypassed and the body runs native. With the factor at 0 it is refused
+    /// for good, as before.
+    #[test]
+    fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
+        use crate::emacs_core::jit::{Plan, force_profit_defer_for_test, hot_threshold};
+        if !super::super::compile::jit_profit_gate_on() {
+            return; // NEOVM_JIT_PROFIT=off: nothing is ever unprofitable
+        }
+        let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+        let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
+        // (lambda () (length "abc")): one builtin call, no arithmetic → the gate refuses it.
+        let body = || {
+            nullary_fn(
+                vec![
+                    Op::Constant(0),
+                    Op::CallBuiltinSym(crate::emacs_core::intern::intern("length"), 1),
+                    Op::Return,
+                ],
+                vec![Value::string("abc")],
+            )
+        };
+        // Factor 0: the veto — NotCompilable, remembered on the runtime.
+        force_profit_defer_for_test(Some(0));
+        let f = body();
+        let rt = f.jit_runtime();
+        rt.set_hot_for_test();
+        assert_eq!(try_run_compiled(ctx, &f, Value::NIL, &[]).unwrap(), None);
+        let id = rt.compiled_id().expect("id assigned");
+        assert_eq!(cache_entry_kind_for_test(id), "not-compilable");
+        assert!(matches!(rt.dispatch_sized(3), Plan::Interpret));
+        // Factor 4: deferred to 4× the threshold, interpreted meanwhile.
+        force_profit_defer_for_test(Some(4));
+        let f = body();
+        let rt = f.jit_runtime();
+        rt.set_hot_for_test();
+        assert_eq!(try_run_compiled(ctx, &f, Value::NIL, &[]).unwrap(), None);
+        let id = rt.compiled_id().expect("id assigned");
+        assert_eq!(cache_entry_kind_for_test(id), "deferred");
+        assert!(
+            matches!(rt.dispatch_sized(3), Plan::Interpret),
+            "deferred: no probe"
+        );
+        assert_eq!(
+            try_run_compiled(ctx, &f, Value::NIL, &[]).unwrap(),
+            None,
+            "a probe anyway: still deferred"
+        );
+        assert_eq!(cache_entry_kind_for_test(id), "deferred");
+        // The deferral runs out: the compile runs with the gate bypassed and
+        // the body is cached as compiled. (Its native run's builtin dispatch is
+        // not this test's claim — the minimal harness cannot serve `length`
+        // through the generic shim path — so the run's outcome is not asserted.)
+        rt.set_heat_for_test(hot_threshold().saturating_mul(4));
+        assert!(matches!(rt.dispatch_sized(3), Plan::Compiled));
+        let _ = try_run_compiled(ctx, &f, Value::NIL, &[]);
+        assert_eq!(cache_entry_kind_for_test(id), "compiled");
+        force_profit_defer_for_test(None);
     }
 
     #[test]

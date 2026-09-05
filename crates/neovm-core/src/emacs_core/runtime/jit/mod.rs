@@ -48,6 +48,7 @@
 //! | `NEOVM_JIT_SIZE_UNIT` | Override [`RuntimeState::SIZE_UNIT`] (64): the ops-per-unit divisor scaling the tier-up threshold by body size. |
 //! | `NEOVM_JIT_MAX_OPS` | Override [`RuntimeState::MAX_TIER_OPS`] (256): largest body that tiers at all; `0` = uncapped (the mid-end campaign's acceptance configuration). |
 //! | `NEOVM_JIT_REGALLOC` | Force one Cranelift register allocator for every JIT compile: `backtracking` (regalloc2 ion) or `single_pass` (fastalloc). Unset = the policy in `lowering::choose_regalloc` (fast for straight-line bodies, full for loops/OSR, re-tier when hot). |
+//! | `NEOVM_JIT_PROFIT_DEFER` | Override [`RuntimeState::PROFIT_DEFER_FACTOR`] (8): a body the profitability gate refuses tiers up anyway at `factor × hot_threshold()` calls (`0` = never, the former veto). |
 //! | `NEOVM_JIT_RETIER_FACTOR` | Override [`RuntimeState::RETIER_FACTOR`] (16): a fast-allocator leaf is rebuilt with the full allocator at `factor × hot_threshold()` heat; `0` = never. |
 //! | `NEOVM_JIT_REGALLOC_CHECKER=1` | Run regalloc2's checker after every allocation (verification harness for the allocator choice). |
 //!
@@ -273,6 +274,15 @@ pub struct RuntimeState {
     /// written.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     native_rejected_epoch: AtomicU64,
+    /// Heat at which a body the profitability gate refused (`NotProfitable`)
+    /// is compiled anyway (0 = not deferred). A call-heavy body RUNS faster
+    /// native but its compile is dear (org editing probe, 2026-09-05: ~38M
+    /// instructions per admitted body vs ~830 saved per native entry), so it
+    /// pays off only past ~18k calls: the gate was +6.4% on a 5-pass session
+    /// and −8.8% on a 50-pass one. Deferring to `profit_defer_factor() ×
+    /// hot_threshold()` lets long sessions win without taxing short ones.
+    /// The dispatcher answers `Interpret` without a cache probe until then.
+    profit_deferred_heat: AtomicU32,
     /// Per-call-site type/target feedback (Phase 1). The optimizing tier reads
     /// this to speculate direct/inlined calls.
     feedback: FeedbackVec,
@@ -332,6 +342,35 @@ pub fn size_unit() -> u32 {
             .and_then(|s| s.parse().ok())
             .unwrap_or(RuntimeState::SIZE_UNIT)
     })
+}
+
+/// `NEOVM_JIT_PROFIT_DEFER`: the factor a profitability-refused body's tier-up
+/// is deferred by (× [`hot_threshold`]); `0` = refuse forever, as before.
+/// Defaults to [`RuntimeState::PROFIT_DEFER_FACTOR`].
+pub fn profit_defer_factor() -> u32 {
+    #[cfg(test)]
+    if let Some(forced) = PROFIT_DEFER_TEST_OVERRIDE.with(|c| c.get()) {
+        return forced;
+    }
+    static FACTOR: OnceLock<u32> = OnceLock::new();
+    *FACTOR.get_or_init(|| {
+        std::env::var("NEOVM_JIT_PROFIT_DEFER")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(RuntimeState::PROFIT_DEFER_FACTOR)
+    })
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PROFIT_DEFER_TEST_OVERRIDE: std::cell::Cell<Option<u32>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test-only: pin [`profit_defer_factor`] for this thread.
+#[cfg(test)]
+pub(crate) fn force_profit_defer_for_test(factor: Option<u32>) {
+    PROFIT_DEFER_TEST_OVERRIDE.with(|c| c.set(factor));
 }
 
 /// Heat at which a fast-allocator leaf is rebuilt with the full allocator
@@ -527,6 +566,7 @@ impl RuntimeState {
         Self {
             heat: AtomicU32::new(0),
             native_rejected_epoch: AtomicU64::new(0),
+            profit_deferred_heat: AtomicU32::new(0),
             feedback: FeedbackVec::new(),
             compiled_id: AtomicU64::new(0),
             aot_prewarmed: std::sync::atomic::AtomicBool::new(false),
@@ -559,6 +599,25 @@ impl RuntimeState {
         } else {
             None
         }
+    }
+
+    /// Defer this body's tier-up to `heat` (see `profit_deferred_heat`).
+    pub(crate) fn defer_tier_up(&self, heat: u32) {
+        self.profit_deferred_heat.store(heat, Ordering::Relaxed);
+    }
+
+    /// Whether a profitability deferral is still holding at heat `now`.
+    #[inline]
+    fn tier_up_deferred(&self, now: u32) -> bool {
+        let at = self.profit_deferred_heat.load(Ordering::Relaxed);
+        at != 0 && now < at
+    }
+
+    /// Whether this body's deferral has run out: it was deferred and its heat
+    /// has reached the deferral point, so the next compile bypasses the gate.
+    pub(crate) fn profit_deferral_expired(&self) -> bool {
+        let at = self.profit_deferred_heat.load(Ordering::Relaxed);
+        at != 0 && self.heat() >= at
     }
 
     /// Record that the JIT rejected this body (`CacheEntry::NotCompilable`)
@@ -609,6 +668,30 @@ impl RuntimeState {
     /// (hundreds to a few thousand calls) never pay the second compile.
     pub const RETIER_FACTOR: u32 = 16;
 
+    /// Default [`profit_defer_factor`]: `0` keeps the profitability gate a
+    /// veto (a refused body never compiles); `K` defers the compile to
+    /// `K × hot_threshold()` calls instead.
+    ///
+    /// Chosen by a same-binary sweep (2026-09-05, instructions, medians of 3,
+    /// every run checked for exit status and output; `tmp/rr/wf2/ab-defer2.sh`),
+    /// each arm vs the veto:
+    ///
+    /// | fixture                      | gate off | K=8    | K=16   |
+    /// |------------------------------|----------|--------|--------|
+    /// | org editing, 5 passes        | +6.48%   | +0.13% | +0.16% |
+    /// | org editing, 25 passes       | −3.27%   | −1.47% | −1.28% |
+    /// | org editing, 50 passes       | −8.57%   | −2.31% | −2.22% |
+    /// | byte-compile cc-engine.el    | +4.13%   | −0.55% | −0.34% |
+    /// | 3M-call benchmark            | +0.00%   | +0.00% | +0.00% |
+    /// | 200-function compile fixture | +20.02%  | +0.49% | +0.00% |
+    ///
+    /// A call-heavy body runs faster native (~830 instructions per entry on
+    /// org) but costs ~38M instructions to compile, so admitting it at the
+    /// flat threshold (gate off) wins in long sessions and loses in short
+    /// ones. 8 takes a quarter of the long-session win at no measurable cost
+    /// to any short session; the rest of that win is the compile cost per op.
+    pub const PROFIT_DEFER_FACTOR: u32 = 8;
+
     /// Default [`max_tier_ops`].
     ///
     /// Originally (2026-08-28) the same 352-op font-lock matcher cost ~80 ms
@@ -650,7 +733,7 @@ impl RuntimeState {
         if self.aot_prewarmed.load(Ordering::Relaxed) {
             return Plan::Compiled;
         }
-        if self.native_rejected() {
+        if self.native_rejected() || self.tier_up_deferred(now) {
             #[cfg(feature = "jit")]
             super::jit::stats::record_dispatch(false);
             return Plan::Interpret;
@@ -697,7 +780,7 @@ impl RuntimeState {
         self.heat.store(now, Ordering::Relaxed);
         if self.aot_prewarmed.load(Ordering::Relaxed) {
             Plan::Compiled
-        } else if self.native_rejected() {
+        } else if self.native_rejected() || self.tier_up_deferred(now) {
             Plan::Interpret
         } else if now >= hot_threshold() {
             Plan::Compiled
@@ -1062,6 +1145,28 @@ mod tests {
         rt.mark_native_rejected(super::cache::rejection_epoch());
         rt.mark_aot_prewarmed();
         assert!(matches!(rt.dispatch(), Plan::Compiled));
+    }
+
+    /// A profitability deferral holds the dispatcher at `Interpret` (no cache
+    /// probe) until the deferral heat, then reports itself expired so the
+    /// next compile bypasses the gate; `0` (the veto) never defers.
+    #[test]
+    fn deferred_body_interprets_until_the_deferral_heat() {
+        let rt = Runtime::new();
+        rt.set_hot_for_test();
+        assert!(matches!(rt.dispatch(), Plan::Compiled));
+        let at = hot_threshold().saturating_mul(4);
+        rt.defer_tier_up(at);
+        assert!(!rt.profit_deferral_expired());
+        assert!(matches!(rt.dispatch(), Plan::Interpret));
+        assert!(matches!(rt.dispatch_sized(1), Plan::Interpret));
+        rt.set_heat_for_test(at.saturating_sub(1));
+        assert!(
+            matches!(rt.dispatch(), Plan::Compiled),
+            "the bump reaches the deferral heat"
+        );
+        assert!(rt.profit_deferral_expired());
+        assert!(matches!(rt.dispatch_sized(1), Plan::Compiled));
     }
 
     /// Cite-and-overturn of the former `clone_starts_cold` pin: a clone (what

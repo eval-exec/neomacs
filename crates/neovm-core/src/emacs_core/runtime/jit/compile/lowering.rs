@@ -985,6 +985,7 @@ pub(crate) fn lower_mir_pure(m: &mir::MirFunction) -> Result<CompiledLeaf, Compi
     Ok(CompiledLeaf {
         tier: LeafTier::Mir,
         regalloc: active_regalloc_choice(),
+        profit_gate_bypassed: super::profit_gate_bypassed_now(),
         arity: m.arity,
         required: m.arity,
         has_rest: false,
