@@ -138,3 +138,32 @@ test("worker HTTP requests complete as owned metadata and binary bytes", async (
   host.http_cancel(id);
   assert.equal(host.http_poll(id), 3);
 });
+
+test("cancelled worker requests release capacity and ignore late completions", async (t) => {
+  const completions = [];
+  t.mock.method(globalThis, "fetch", (_url, options) => new Promise((resolve) => {
+    completions.push({ resolve, signal: options.signal });
+  }));
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  let wakes = 0;
+  const host = createHttpHostImports(() => memory, () => { wakes++; });
+  const request = new TextEncoder().encode(JSON.stringify({
+    url: "https://example.invalid/", method: "GET", headers: [], hasBody: false,
+  }));
+  new Uint8Array(memory.buffer).set(request);
+  const start = () => host.http_start(0, request.length, 0, 0);
+  const ids = Array.from({ length: 8 }, start);
+  assert.ok(ids.every(id => id > 0));
+  assert.equal(start(), 0);
+  host.http_cancel(ids[0]);
+  assert.equal(completions[0].signal.aborted, true);
+  const replacement = start();
+  assert.ok(replacement > ids[7]);
+  // This deliberately uncooperative external Fetch mock completes after abort.
+  completions[0].resolve(new Response("late response"));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(host.http_poll(ids[0]), 3);
+  assert.equal(host.http_poll(replacement), 0);
+  assert.equal(wakes, 0);
+  for (const id of [...ids, replacement]) host.http_cancel(id);
+});
