@@ -119,6 +119,22 @@ impl Default for ScrollTransitionConfig {
     }
 }
 
+/// How panes travel when a layout change moves them.
+///
+/// Splitting a window, deleting one, or resizing the frame rearranges every
+/// pane at once; installed as a single presentation that arrives as a jump.
+/// `movement` says whether — and how — the compositor carries them there
+/// instead.
+///
+/// It defaults to [`MotionSpec::Instant`](crate::motion_spec::MotionSpec::Instant),
+/// which is not merely "fast": a caller that sees an instant spec builds no
+/// motion at all, so the whole morph path costs nothing until someone opts in.
+/// That is also what a reduced-motion preference resolves to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PaneMotionConfig {
+    pub movement: crate::motion_spec::MotionSpec,
+}
+
 /// Desired visual configuration owned by the evaluator and published as one
 /// snapshot to the render thread.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -132,4 +148,6 @@ pub struct VisualConfig {
     pub cursor_size_transition: CursorSizeTransitionConfig,
     pub buffer_transition: BufferTransitionConfig,
     pub scroll_transition: ScrollTransitionConfig,
+    #[serde(default)]
+    pub pane_motion: PaneMotionConfig,
 }

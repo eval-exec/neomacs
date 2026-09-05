@@ -195,6 +195,17 @@ impl RenderQualityPolicy {
         &self.effective_visual_config
     }
 
+    /// How panes travel under this policy.
+    pub(super) fn pane_motion(&self) -> neomacs_display_protocol::motion_spec::MotionSpec {
+        // A reduced-quality plan declines every compositor-derived effect; a
+        // pane morph is one, and one of the most expensive.
+        if self.mode == QualityMode::Full {
+            self.effective_visual_config.pane_motion.movement
+        } else {
+            neomacs_display_protocol::motion_spec::MotionSpec::Instant
+        }
+    }
+
     pub(super) fn transition_policy(&self) -> TransitionPolicy {
         TransitionPolicy::from(&self.effective_visual_config)
     }
@@ -222,6 +233,10 @@ fn software_compat_visual_config(requested: &VisualConfig) -> VisualConfig {
     effective.cursor_size_transition.enabled = false;
     effective.buffer_transition.enabled = false;
     effective.scroll_transition.enabled = false;
+    // A software adapter redraws the whole surface for every frame of a morph.
+    // Instant is the honest setting there, and it also costs nothing: the
+    // compositor builds no motion at all for it.
+    effective.pane_motion.movement = neomacs_display_protocol::motion_spec::MotionSpec::Instant;
 
     let disable_effects = effective
         .effects
