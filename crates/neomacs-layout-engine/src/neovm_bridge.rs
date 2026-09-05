@@ -226,6 +226,7 @@ impl LayoutBufferSnapshot {
         }
     }
 
+    #[cfg(test)]
     pub fn from_buffer_with_obarray(buffer: &Buffer, obarray: &Obarray) -> Self {
         Self::from_buffer_for_window(buffer, obarray, None)
     }

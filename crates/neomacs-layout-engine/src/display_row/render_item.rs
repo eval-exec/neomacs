@@ -1,8 +1,8 @@
 use crate::display_item::{
-    DisplayItem, DisplayItemKind, DisplayTextComposition, DisplayTextRun, RenderFaceRef, SourceSpan,
+    DisplayItem, DisplayItemKind, DisplayTextComposition, DisplayTextRun, SourceSpan,
 };
 #[cfg(test)]
-use crate::display_item::{DisplaySourceMappedText, DisplaySourcePosition};
+use crate::display_item::{DisplaySourceMappedText, DisplaySourcePosition, RenderFaceRef};
 use crate::display_row::builder::DisplayRowAppendProgress;
 
 pub(crate) struct DisplayRowRenderItem {
@@ -25,6 +25,7 @@ impl DisplayRowRenderItem {
         &self.source_item
     }
 
+    #[cfg(test)]
     pub(crate) fn row_face(&self) -> RenderFaceRef {
         self.row_item.face
     }
