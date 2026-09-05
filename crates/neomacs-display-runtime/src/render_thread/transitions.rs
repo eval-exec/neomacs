@@ -252,6 +252,34 @@ fn plan_transition_hint(
     }
 }
 
+/// Run the effects that draw *over* a scrolled window.
+///
+/// Unlike the slide, these sample no retained pixels, so they apply to any
+/// window whose viewport moved — including one whose buffer-owned region
+/// changed, where a slide has nothing safe to blit.
+///
+/// `same_buffer` gates them: replacing what a window shows is a content change,
+/// not a scroll, and dragging a momentum glow across it would describe motion
+/// that did not happen.
+fn apply_scroll_effects(
+    renderer: &mut WgpuRenderer,
+    effects: &neomacs_display_protocol::EffectsConfig,
+    scroll: &crate::render_thread::frame_compositor::continuity::ScrollObservation,
+    now: neomacs_display_protocol::frame_time::EventTime,
+) {
+    if !scroll.same_buffer {
+        return;
+    }
+    let window = scroll.window.get();
+    let direction = scroll.displacement.direction().sign();
+    if effects.scroll_line_spacing.enabled {
+        renderer.trigger_scroll_line_spacing(window, scroll.bounds, direction, now.into_instant());
+    }
+    if effects.scroll_momentum.enabled {
+        renderer.trigger_scroll_momentum(window, scroll.bounds, direction, now.into_instant());
+    }
+}
+
 /// Crossfade the frame because its theme changed.
 ///
 /// Every condition the hint arm applied is kept: the config gate, the
@@ -387,34 +415,6 @@ fn apply_effect_hint(
                 renderer.trigger_text_fade_in(window_id.get(), *bounds, now.into_instant());
             }
         }
-        WindowEffectHint::ScrollLineSpacing {
-            window_id,
-            bounds,
-            direction,
-        } => {
-            if effects.scroll_line_spacing.enabled {
-                renderer.trigger_scroll_line_spacing(
-                    window_id.get(),
-                    *bounds,
-                    *direction,
-                    now.into_instant(),
-                );
-            }
-        }
-        WindowEffectHint::ScrollMomentum {
-            window_id,
-            bounds,
-            direction,
-        } => {
-            if effects.scroll_momentum.enabled {
-                renderer.trigger_scroll_momentum(
-                    window_id.get(),
-                    *bounds,
-                    *direction,
-                    now.into_instant(),
-                );
-            }
-        }
         WindowEffectHint::ScrollVelocityFade {
             window_id,
             bounds,
@@ -481,6 +481,9 @@ pub(super) fn detect_frame_transitions(
         *frame_dirty = true;
     }
     for scroll in &pending.scrolls {
+        if pending.accept_derived_effects {
+            apply_scroll_effects(renderer, effects, scroll, now);
+        }
         let Some(planned) = plan_scroll(&transitions.policy, scroll) else {
             continue;
         };

@@ -31,6 +31,17 @@ pub(in crate::render_thread) enum ScrollDirection {
 }
 
 impl ScrollDirection {
+    /// The renderer's sign convention: positive toward the buffer's end.
+    ///
+    /// Written once here rather than recomputed from `window_start` ordering
+    /// wherever an effect needs it.
+    pub(in crate::render_thread) const fn sign(self) -> i32 {
+        match self {
+            Self::TowardBufferStart => -1,
+            Self::TowardBufferEnd => 1,
+        }
+    }
+
     pub(in crate::render_thread) const fn transition_direction(self) -> TransitionDirection {
         match self {
             Self::TowardBufferStart => TransitionDirection::Backward,
