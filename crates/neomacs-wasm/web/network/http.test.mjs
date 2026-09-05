@@ -28,17 +28,31 @@ test("HTTP retrieval preserves binary error-page bytes and response metadata", a
 });
 
 test("cancelling a response interrupts body consumption", { timeout: 5000 }, async (t) => {
-  let started;
-  const received = new Promise((resolve) => { started = resolve; });
-  const url = await endpoint(t, (_request, response) => {
-    response.writeHead(200);
-    response.write("partial");
-    started();
+  // Control the external Fetch boundary, not timing on the server: the second
+  // pull proves that the consumer has read the first chunk and needs more.
+  let waitingForMore;
+  const consumed = new Promise((resolve) => { waitingForMore = resolve; });
+  t.mock.method(globalThis, "fetch", async (_url, { signal }) => {
+    let sent = false;
+    const stream = new ReadableStream({
+      start(controller) {
+        signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+      },
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        } else {
+          waitingForMore();
+        }
+      },
+    }, { highWaterMark: 0 });
+    return new Response(stream);
   });
   const controller = new AbortController();
-  const pending = fetchHttp({ url }, { signal: controller.signal });
+  const pending = fetchHttp({ url: "https://fixture.invalid" }, { signal: controller.signal });
   const rejected = assert.rejects(pending, { name: "AbortError" });
-  await received;
+  await consumed;
   controller.abort();
   await rejected;
 });
