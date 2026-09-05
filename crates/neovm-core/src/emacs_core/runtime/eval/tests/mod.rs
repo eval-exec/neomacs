@@ -2879,7 +2879,9 @@ fn presentation_retirement_does_not_preempt_timer_batches() {
     ev.input_rx = Some(rx);
 
     let outcome = ev
-        .wait_for_command_input(Some(neomacs_host_runtime::time::Instant::now() + Duration::from_millis(50)))
+        .wait_for_command_input(Some(
+            neomacs_host_runtime::time::Instant::now() + Duration::from_millis(50),
+        ))
         .expect("wait should reach its deadline");
 
     assert_eq!(
