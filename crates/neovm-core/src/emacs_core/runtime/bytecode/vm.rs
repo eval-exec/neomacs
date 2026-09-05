@@ -1692,6 +1692,13 @@ pub struct Vm<'a> {
     recent_interpreter_call: RecentInterpreterCall,
     #[cfg(feature = "jit")]
     bytecode_tier_policy: BytecodeTierPolicy,
+    /// Isolation knobs, read once per VM (see `jit::jit_bcall_tier_skipped` /
+    /// `jit::jit_bcall_cache_forced`); a field load on the hot path, never an
+    /// env read.
+    #[cfg(feature = "jit")]
+    bcall_tier_skipped: bool,
+    #[cfg(feature = "jit")]
+    bcall_cache_forced: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1824,6 +1831,10 @@ impl<'a> Vm<'a> {
             recent_interpreter_call: RecentInterpreterCall::EMPTY,
             #[cfg(feature = "jit")]
             bytecode_tier_policy: BytecodeTierPolicy::for_process(),
+            #[cfg(feature = "jit")]
+            bcall_tier_skipped: crate::emacs_core::jit::jit_bcall_tier_skipped(),
+            #[cfg(feature = "jit")]
+            bcall_cache_forced: crate::emacs_core::jit::jit_bcall_cache_forced(),
         }
     }
 
@@ -3076,7 +3087,9 @@ impl<'a> Vm<'a> {
         callee: Value,
     ) -> BytecodeStackCallDispatch {
         #[cfg(feature = "jit")]
-        if self.bytecode_tier_policy == BytecodeTierPolicy::InterpreterOnly {
+        if self.bytecode_tier_policy == BytecodeTierPolicy::InterpreterOnly
+            || self.bcall_tier_skipped
+        {
             return BytecodeStackCallDispatch::Interpret;
         }
 
@@ -7241,6 +7254,7 @@ impl<'a> Vm<'a> {
         #[cfg(feature = "jit")]
         {
             self.bytecode_tier_policy == BytecodeTierPolicy::InterpreterOnly
+                || self.bcall_cache_forced
         }
         #[cfg(not(feature = "jit"))]
         {

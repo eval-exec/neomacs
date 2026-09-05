@@ -409,6 +409,31 @@ pub fn force_call_feedback_for_test(on: bool) {
 /// the consuming tier is wired, flip this default (or gate it on that tier being
 /// active) and the feedback flows again. `NEOVM_JIT_CALL_FEEDBACK=on` re-enables
 /// it now for A/B measurement and for the feedback tests.
+/// ISOLATION KNOB (measurement only). `NEOVM_JIT_BCALL_TIER=off`: on the
+/// adaptive policy, `Op::Call` no longer consults the tier dispatcher
+/// (`dispatch_bytecode_call_from_stack` -> `dispatch_sized`: one function call
+/// plus the heat atomics and threshold arithmetic) -- it interprets directly,
+/// exactly as the interpreter-only policy does at that site, while the monomorphic
+/// call cache still stays UNPOPULATED. Isolates the dispatcher's per-call cost
+/// from the cache-miss cost. Functions called only through Bcall can no longer
+/// tier up while this is set.
+pub fn jit_bcall_tier_skipped() -> bool {
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("NEOVM_JIT_BCALL_TIER").as_deref() == Ok("off"))
+}
+
+/// ISOLATION KNOB (measurement only). `NEOVM_JIT_BCALL_CACHE=on`: on the
+/// adaptive policy, the call-target resolver populates the one-entry
+/// monomorphic cache (`RecentInterpreterCall`) for iteratively-enterable
+/// bytecode callees, as the interpreter-only policy does, so the repeated call
+/// takes the cached fast path and reaches neither the resolver nor the tier
+/// dispatcher. Isolates the cache-miss + re-resolve cost. Cached callees stop
+/// accumulating Bcall heat while this is set.
+pub fn jit_bcall_cache_forced() -> bool {
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("NEOVM_JIT_BCALL_CACHE").as_deref() == Ok("on"))
+}
+
 #[inline]
 pub fn call_feedback_collection_enabled() -> bool {
     #[cfg(test)]
