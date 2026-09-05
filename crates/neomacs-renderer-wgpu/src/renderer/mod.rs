@@ -34,7 +34,7 @@ mod gpu_budget;
 pub use gpu_budget::{BudgetExceeded, GpuBudget, UnpooledTexture};
 mod layer_backgrounds;
 mod layout_pass;
-pub use layout_pass::PaneBlit;
+pub use layout_pass::{PaneBlit, PaneSource};
 mod layer_chrome;
 mod layer_effects;
 mod layer_media;

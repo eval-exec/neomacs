@@ -190,6 +190,18 @@ impl TransitionState {
             }
         }
     }
+
+    /// The composition before the current one, if the ring has one yet.
+    ///
+    /// A pane the destination no longer contains has pixels only here, so this
+    /// is what a departing pane fades out of. `None` on the first frame a
+    /// window ever composes, which is why a departing pane with no previous
+    /// composition is dropped rather than faded from an unwritten texture.
+    pub(super) fn previous_composition(&self) -> Option<&SnapshotLease> {
+        self.compositions
+            .as_ref()
+            .and_then(CompositionRing::previous)
+    }
 }
 
 fn plan_transition_hint(
