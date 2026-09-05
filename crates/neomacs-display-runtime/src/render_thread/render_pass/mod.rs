@@ -4,6 +4,7 @@
 #![allow(clippy::type_complexity)]
 
 pub(in crate::render_thread) mod chrome;
+mod scene;
 mod surface;
 
 use self::surface::FrameRenderFailure;
@@ -16,8 +17,8 @@ use super::transitions::{detect_frame_transitions, render_frame_transitions};
 use super::{RenderApp, surface_readback};
 use crate::core::types::DisplayFrameId;
 use neomacs_renderer_wgpu::{
-    BudgetExceeded, GpuBudgetOwner, SnapshotLease, SnapshotSize, UnpooledTexture, WgpuGlyphAtlas,
-    WgpuRenderer, texture_bytes,
+    BudgetExceeded, SnapshotLease, SnapshotSize, UnpooledTexture, WgpuGlyphAtlas, WgpuRenderer,
+    texture_bytes,
 };
 
 /// A frame drawn and ready to present.
@@ -135,28 +136,6 @@ mod retained_static_pointer_tests {
 }
 
 impl RenderApp {
-    fn render_frame_common_overlays(
-        renderer: &mut WgpuRenderer,
-        surface_view: &wgpu::TextureView,
-        frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
-        glyph_atlas: &mut WgpuGlyphAtlas,
-        width: u32,
-        height: u32,
-        scroll_indicators_enabled: bool,
-    ) {
-        if renderer.effects.breadcrumb.enabled {
-            renderer.render_breadcrumbs(surface_view, frame, glyph_atlas);
-        }
-
-        if scroll_indicators_enabled {
-            renderer.render_scroll_indicators(surface_view, &frame.window_infos, width, height);
-        }
-
-        if renderer.effects.window_watermark.enabled {
-            renderer.render_window_watermarks(surface_view, frame, glyph_atlas);
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn render_frame_window_contents_to_surface(
         renderer: &mut WgpuRenderer,
@@ -337,7 +316,7 @@ impl RenderApp {
             && !render.has_pointer_paint_damage()
             && std::env::var_os("NEOMACS_DISABLE_RETAINED_STATIC").is_none()
         {
-            let hovered_scroll_bar = render.hovered_scroll_bar(&frame);
+            let mouse_pos = render.mouse_pos;
             let generation = render.compositor.current_scene_generation;
             let retained_valid = matches!(
                 &render.compositor.retained_static,
@@ -397,7 +376,7 @@ impl RenderApp {
                 present_mapping,
                 cursor_visible,
                 animated_cursor,
-                hovered_scroll_bar,
+                mouse_pos,
             );
             // Filled-box cursors are inverse-video: the retained scene has the
             // character in its normal color, so each filled-box cell (box plus
@@ -412,6 +391,7 @@ impl RenderApp {
                     &composition_view,
                     present_mapping,
                     animated_cursor,
+                    mouse_pos,
                 );
             }
             super::frame_stats::count(&super::frame_stats::COMPOSITE_ONLY_FRAMES);
@@ -421,7 +401,7 @@ impl RenderApp {
                     &surface_view,
                     native.width,
                     native.height,
-                    render.mouse_pos,
+                    mouse_pos,
                 );
             }
             render.finish_pointer_paint_render();
@@ -581,134 +561,6 @@ impl RenderApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_frame_root_glyphs(
-        renderer: &mut WgpuRenderer,
-        render: &mut GuiFrameRenderState,
-        surface_view: &wgpu::TextureView,
-        frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
-        present_mapping: neomacs_display_protocol::PresentMapping,
-        cursor_visible: bool,
-        root_animated_cursor: Option<crate::core::types::AnimatedCursor>,
-        bg_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
-    ) {
-        super::frame_stats::count(&super::frame_stats::ROOT_GLYPH_PASSES);
-        let pointer_selection = render.pointer_selection_for(frame);
-        let hovered_scroll_bar = render.hovered_scroll_bar(frame);
-        if let Some(atlas) = render.compositor.glyph_atlas.as_mut() {
-            atlas.set_current_frame_fonts(frame.font_bindings());
-        }
-        renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
-            renderer.set_idle_dim_alpha(render.overlays.idle_dim.current_alpha);
-            renderer.render_frame_glyphs(
-                surface_view,
-                frame,
-                render.compositor.glyph_atlas.as_mut().unwrap(),
-                present_mapping,
-                cursor_visible,
-                root_animated_cursor,
-                hovered_scroll_bar,
-                bg_gradient,
-                pointer_selection,
-                render.compositor.current_row_damage.as_ref(),
-            );
-        });
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_frame_content_overlays(
-        renderer: &mut WgpuRenderer,
-        native: &GuiFrameNativeWindowState,
-        render: &mut GuiFrameRenderState,
-        surface_view: &wgpu::TextureView,
-        frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
-        cursor_visible: bool,
-        animated_cursor: Option<crate::core::types::AnimatedCursor>,
-        child_frame_style: &ChildFrameStyle,
-        scroll_indicators_enabled: bool,
-    ) {
-        let pointer_appearance = render.pointer_appearance;
-        renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
-            for &child_id in render.compositor.child_frames.sorted_for_rendering() {
-                if let Some(child_entry) = render.compositor.child_frames.frames.get(&child_id) {
-                    if child_entry.frame.font_catalog_generation != frame.font_catalog_generation {
-                        tracing::debug!(
-                            frame_id = child_id,
-                            child_generation = child_entry.frame.font_catalog_generation.get(),
-                            root_generation = frame.font_catalog_generation.get(),
-                            "skipping retained child frame from a stale font catalog generation"
-                        );
-                        continue;
-                    }
-                    let neomacs_display_protocol::PresentedClip::Rect(clip_in_root) =
-                        child_entry.clip_in_root
-                    else {
-                        continue;
-                    };
-                    let pointer_selection = pointer_appearance.selection_for(&child_entry.frame);
-                    if let Some(atlas) = render.compositor.glyph_atlas.as_mut() {
-                        atlas.set_current_frame_fonts(child_entry.frame.font_bindings());
-                    }
-                    tracing::debug!(
-                        parent_frame_id = render.emacs_frame_id,
-                        frame_id = child_id,
-                        x = child_entry.abs_x,
-                        y = child_entry.abs_y,
-                        width = child_entry.frame.width,
-                        height = child_entry.frame.height,
-                        glyphs = child_entry.frame.glyphs.len(),
-                        "child_frame_lifecycle: render_child_frame_start"
-                    );
-                    renderer.render_child_frame(
-                        surface_view,
-                        &child_entry.frame,
-                        child_entry.abs_x,
-                        child_entry.abs_y,
-                        clip_in_root,
-                        render.compositor.glyph_atlas.as_mut().unwrap(),
-                        native.width,
-                        native.height,
-                        cursor_visible,
-                        animated_cursor.filter(|ac| ac.frame_id == DisplayFrameId::new(child_id)),
-                        child_frame_style.corner_radius,
-                        child_frame_style.shadow_enabled,
-                        child_frame_style.shadow_layers,
-                        child_frame_style.shadow_offset,
-                        child_frame_style.shadow_opacity,
-                        pointer_selection,
-                    );
-                    tracing::debug!(
-                        parent_frame_id = render.emacs_frame_id,
-                        frame_id = child_id,
-                        "child_frame_lifecycle: render_child_frame_done"
-                    );
-                }
-            }
-        });
-        if render.compositor.renderer_effects.needs_redraw() {
-            render.mark_dirty();
-        }
-
-        if let Some(atlas) = render.compositor.glyph_atlas.as_mut() {
-            atlas.set_current_frame_fonts(frame.font_bindings());
-        }
-
-        renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
-            Self::render_frame_common_overlays(
-                renderer,
-                surface_view,
-                frame,
-                render.compositor.glyph_atlas.as_mut().unwrap(),
-                native.width,
-                native.height,
-                scroll_indicators_enabled,
-            );
-        });
-        if render.compositor.renderer_effects.needs_redraw() {
-            render.mark_dirty();
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn render_frame_window_contents(
         renderer: &mut WgpuRenderer,
         native: &GuiFrameNativeWindowState,
@@ -725,7 +577,7 @@ impl RenderApp {
         scroll_indicators_enabled: bool,
         toolbar: &ToolbarResources,
     ) {
-        Self::render_frame_root_glyphs(
+        scene::render_frame_root_glyphs(
             renderer,
             render,
             surface_view,
@@ -836,6 +688,7 @@ impl RenderApp {
         surface_view: &wgpu::TextureView,
         present_mapping: neomacs_display_protocol::PresentMapping,
         animated_cursor: Option<crate::core::types::AnimatedCursor>,
+        mouse_pos: (f32, f32),
     ) {
         let Some(atlas) = render.compositor.glyph_atlas.as_mut() else {
             return;
@@ -852,6 +705,7 @@ impl RenderApp {
                 present_mapping,
                 true,
                 animated_cursor,
+                mouse_pos,
                 cell.scissor,
             );
         }
@@ -960,7 +814,7 @@ impl RenderApp {
     /// a charge/refund pair drifts the first time a release site is added
     /// without a matching refund.
     fn report_unpooled_gpu_textures(renderer: &mut WgpuRenderer, render: &GuiFrameRenderState) {
-        let owner = GpuBudgetOwner::FrameWindow(render.emacs_frame_id);
+        let owner = render.emacs_frame_id;
         let retained_static_bytes = render
             .compositor
             .retained_static
@@ -980,7 +834,7 @@ impl RenderApp {
         renderer.record_unpooled_texture(owner, UnpooledTexture::GlyphAtlas, atlas_bytes);
         let budget = renderer.gpu_budget();
         tracing::trace!(
-            ?owner,
+            owner,
             pooled_bytes = budget.pooled_bytes(),
             unpooled_bytes = budget.unpooled_bytes(),
             limit_bytes = budget.limit_bytes().get(),
