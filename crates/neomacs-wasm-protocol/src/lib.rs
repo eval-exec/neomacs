@@ -15,10 +15,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Wire contract understood by this browser frontend and editor Worker.
 ///
-/// Version 3 keeps browser-observed viewport geometry separate from
-/// editor-owned font-cell measurement. Device scale remains an independent
-/// observation applied by the renderer.
-pub const WORKER_PROTOCOL_VERSION: u16 = 3;
+/// Version 4 adds presentation-qualified pointer input, encoded with CBOR so
+/// JavaScript cannot round source or presentation identities.
+pub const WORKER_PROTOCOL_VERSION: u16 = 4;
 
 /// Browser color preference sampled for the initial editor frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -261,6 +260,8 @@ impl BrowserKeyState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum BrowserInputEvent {
+    /// CBOR preserves presentation and object IDs without JavaScript rounding.
+    Pointer { payload: Vec<u8> },
     /// Logical keyboard input after browser-key translation.
     Key {
         symbol: u32,
@@ -347,8 +348,11 @@ impl BrowserInputEvent {
         Self::PresentationRetired { presentation }
     }
 
-    fn try_into_frontend(self) -> Result<FrontendEvent, InvalidFrontendObservation> {
-        Ok(match self {
+    fn try_into_frontend(self) -> Result<ValidatedBrowserInputEvent, InvalidFrontendObservation> {
+        Ok(ValidatedBrowserInputEvent::Host(match self {
+            Self::Pointer { payload } => {
+                return decode_pointer(&payload).map(ValidatedBrowserInputEvent::Pointer);
+            }
             Self::Key {
                 symbol,
                 modifiers,
@@ -400,13 +404,43 @@ impl BrowserInputEvent {
             Self::PresentationRetired { presentation } => FrontendEvent::PresentationRetired {
                 presentation: FrontendPresentationId::new(presentation),
             },
-        })
+        }))
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InvalidFrontendObservation {
     InvalidScaleFactor,
+    InvalidPointer,
+}
+
+fn decode_pointer(
+    payload: &[u8],
+) -> Result<neomacs_display_protocol::PositionedPointerInput, InvalidFrontendObservation> {
+    use neomacs_display_protocol::{PointerAction, PointerTarget, ScrollDelta};
+    let mut reader = std::io::Cursor::new(payload);
+    let pointer: neomacs_display_protocol::PositionedPointerInput =
+        ciborium::de::from_reader(&mut reader)
+            .map_err(|_| InvalidFrontendObservation::InvalidPointer)?;
+    let action_valid = match pointer.action {
+        PointerAction::Button {
+            button, modifiers, ..
+        } => (1..=5).contains(&button) && modifiers & !15 == 0,
+        PointerAction::Move { modifiers } => modifiers & !15 == 0,
+        PointerAction::Scroll { delta, modifiers } => {
+            let (ScrollDelta::Lines { x, y } | ScrollDelta::Pixels { x, y }) = delta;
+            x.is_finite() && y.is_finite() && modifiers & !15 == 0
+        }
+    };
+    if reader.position() != payload.len() as u64
+        || !action_valid
+        || !pointer.position.x.is_finite()
+        || !pointer.position.y.is_finite()
+        || !matches!(pointer.target, PointerTarget::Presented { presentation, .. } if presentation != 0)
+    {
+        return Err(InvalidFrontendObservation::InvalidPointer);
+    }
+    Ok(pointer)
 }
 
 /// A browser callback batch before editor-boundary validation.
@@ -442,6 +476,9 @@ impl BrowserInputBatch {
                 Err(InvalidFrontendObservation::InvalidScaleFactor) => {
                     return Err(InvalidBrowserInputBatch::InvalidScaleFactor { event_index });
                 }
+                Err(InvalidFrontendObservation::InvalidPointer) => {
+                    return Err(InvalidBrowserInputBatch::InvalidPointer { event_index });
+                }
             }
         }
         Ok(ValidatedFrontendInputBatch {
@@ -454,15 +491,24 @@ impl BrowserInputBatch {
 /// Browser batch rejected before reaching the editor session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InvalidBrowserInputBatch {
+    InvalidPointer {
+        event_index: usize,
+    },
     /// A message with no observations is not an input batch.
     Empty,
     /// A viewport observation carried a non-finite or non-positive scale.
-    InvalidScaleFactor { event_index: usize },
+    InvalidScaleFactor {
+        event_index: usize,
+    },
 }
 
 impl Display for InvalidBrowserInputBatch {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPointer { event_index } => write!(
+                formatter,
+                "invalid pointer at browser input event {event_index}"
+            ),
             Self::Empty => formatter.write_str("browser input batch must not be empty"),
             Self::InvalidScaleFactor { event_index } => write!(
                 formatter,
@@ -478,7 +524,13 @@ impl std::error::Error for InvalidBrowserInputBatch {}
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedFrontendInputBatch {
     sequence: InputBatchSequence,
-    events: Vec<FrontendEvent>,
+    events: Vec<ValidatedBrowserInputEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ValidatedBrowserInputEvent {
+    Host(FrontendEvent),
+    Pointer(neomacs_display_protocol::PositionedPointerInput),
 }
 
 impl ValidatedFrontendInputBatch {
@@ -490,12 +542,12 @@ impl ValidatedFrontendInputBatch {
 
     /// Editor-session observations in browser delivery order.
     #[must_use]
-    pub fn events(&self) -> &[FrontendEvent] {
+    pub fn events(&self) -> &[ValidatedBrowserInputEvent] {
         &self.events
     }
 
     /// Consume the batch for submission to an editor input port.
-    pub fn into_events(self) -> impl ExactSizeIterator<Item = FrontendEvent> {
+    pub fn into_events(self) -> impl ExactSizeIterator<Item = ValidatedBrowserInputEvent> {
         self.events.into_iter()
     }
 }
