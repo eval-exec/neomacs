@@ -603,22 +603,24 @@ fn input_event_menu_selection_construction() {
 }
 
 #[test]
-fn input_event_file_drop_construction() {
+fn a_file_drop_reports_the_dropped_paths_and_nothing_that_stands_in_for_a_posn() {
+    // A drop's position is GNU's `make_lispy_position` posn, resolved against
+    // the presentation the way `PresentedPointer` resolves a click. If this
+    // variant regained a bare coordinate pair, the day drops are wired to a
+    // window position the nearest thing to hand would be the pointer's raw
+    // surface coordinates, which name a different pixel for the length of a
+    // pane morph.
     let event = InputEvent::FileDrop {
         paths: vec![
             "/home/user/file.txt".to_string(),
             "/tmp/image.png".to_string(),
         ],
-        x: 100.0,
-        y: 200.0,
     };
     match event {
-        InputEvent::FileDrop { paths, x, y } => {
+        InputEvent::FileDrop { paths } => {
             assert_eq!(paths.len(), 2);
             assert_eq!(paths[0], "/home/user/file.txt");
             assert_eq!(paths[1], "/tmp/image.png");
-            assert_eq!(x, 100.0);
-            assert_eq!(y, 200.0);
         }
         _ => panic!("Wrong variant"),
     }
