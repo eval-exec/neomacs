@@ -6715,30 +6715,22 @@ impl crate::emacs_core::eval::Context {
         }
         let hit = observation.hit?;
         let region = hit.region();
-        let area = match region.kind() {
-            neomacs_display_protocol::PresentedRegionKind::TextBody => None,
-            neomacs_display_protocol::PresentedRegionKind::LeftMargin => Some("left-margin"),
-            neomacs_display_protocol::PresentedRegionKind::RightMargin => Some("right-margin"),
-            neomacs_display_protocol::PresentedRegionKind::LeftFringe => Some("left-fringe"),
-            neomacs_display_protocol::PresentedRegionKind::RightFringe => Some("right-fringe"),
-            neomacs_display_protocol::PresentedRegionKind::LeftScrollBar
-            | neomacs_display_protocol::PresentedRegionKind::RightScrollBar => {
-                Some("vertical-scroll-bar")
-            }
-            neomacs_display_protocol::PresentedRegionKind::HorizontalScrollBar => {
-                Some("horizontal-scroll-bar")
-            }
-            neomacs_display_protocol::PresentedRegionKind::TabLine => Some("tab-line"),
-            neomacs_display_protocol::PresentedRegionKind::HeaderLine => Some("header-line"),
-            neomacs_display_protocol::PresentedRegionKind::ModeLine => Some("mode-line"),
-            neomacs_display_protocol::PresentedRegionKind::RightDivider => Some("vertical-line"),
-            neomacs_display_protocol::PresentedRegionKind::BottomDivider => {
-                Some("horizontal-scroll-bar")
-            }
-            neomacs_display_protocol::PresentedRegionKind::MenuBar => Some("menu-bar"),
-            neomacs_display_protocol::PresentedRegionKind::ToolBar => Some("tool-bar"),
-            neomacs_display_protocol::PresentedRegionKind::CompactBar => Some("menu-bar"),
-            neomacs_display_protocol::PresentedRegionKind::TabBar => Some("tab-bar"),
+        // Delegated, not re-derived: `WindowPart::posn` is GNU's own table
+        // (src/keyboard.c:5900-5990), and the hand-written copy that used to
+        // live here had drifted from it on both dividers.
+        let area = match crate::window::part::window_part_of_region(region.kind()) {
+            Some(part) => part.area_symbol(),
+            // Not part of a window at all — the frame bars replace the window
+            // in GNU's posn, so they name themselves.
+            None => match region.kind() {
+                neomacs_display_protocol::PresentedRegionKind::ToolBar => Some("tool-bar"),
+                neomacs_display_protocol::PresentedRegionKind::TabBar => Some("tab-bar"),
+                // A compact bar is a menu bar that has swallowed the tab bar,
+                // and GNU has no posn for the combination.
+                neomacs_display_protocol::PresentedRegionKind::MenuBar
+                | neomacs_display_protocol::PresentedRegionKind::CompactBar => Some("menu-bar"),
+                _ => None,
+            },
         };
         let Some(window_id) = region.window() else {
             return Some(Self::mouse_posn_descriptor_value(MousePosnDescriptor {
