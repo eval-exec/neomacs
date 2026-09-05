@@ -1,0 +1,105 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import test from "node:test";
+
+import { fetchHttp } from "./http.mjs";
+
+async function endpoint(t, handler) {
+  const server = createServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => {
+    server.closeAllConnections();
+    server.close(resolve);
+  }));
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+test("HTTP retrieval preserves binary error-page bytes and response metadata", async (t) => {
+  const url = await endpoint(t, (_request, response) => {
+    response.writeHead(404, { "Content-Type": "application/octet-stream" });
+    response.end(Buffer.from([0, 128, 255, 10]));
+  });
+
+  const response = await fetchHttp({ url });
+  assert.equal(response.status, 404);
+  assert.equal(response.url, `${url}/`);
+  assert.equal(new Map(response.headers).get("content-type"), "application/octet-stream");
+  assert.deepEqual(response.body, new Uint8Array([0, 128, 255, 10]));
+});
+
+test("cancelling a response interrupts body consumption", { timeout: 5000 }, async (t) => {
+  let started;
+  const received = new Promise((resolve) => { started = resolve; });
+  const url = await endpoint(t, (_request, response) => {
+    response.writeHead(200);
+    response.write("partial");
+    started();
+  });
+  const controller = new AbortController();
+  const pending = fetchHttp({ url }, { signal: controller.signal });
+  const rejected = assert.rejects(pending, { name: "AbortError" });
+  await received;
+  controller.abort();
+  await rejected;
+});
+
+test("POST sends the supplied method, headers, and binary body", async (t) => {
+  const url = await endpoint(t, async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    response.writeHead(request.method === "POST" && request.headers["x-test"] === "yes" ? 201 : 400);
+    response.end(Buffer.concat(chunks));
+  });
+  const response = await fetchHttp({
+    url, method: "POST", headers: [["X-Test", "yes"]], body: new Uint8Array([0, 255]),
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(response.body, new Uint8Array([0, 255]));
+});
+
+test("redirects return the final document URL for resolving relative links", async (t) => {
+  const url = await endpoint(t, (request, response) => {
+    if (request.url === "/") {
+      response.writeHead(302, { Location: "/document/" });
+      response.end();
+    } else {
+      response.end("document");
+    }
+  });
+  const response = await fetchHttp({ url });
+  assert.equal(response.url, `${url}/document/`);
+  assert.equal(new TextDecoder().decode(response.body), "document");
+});
+
+test("empty responses and bodies exactly at the limit are accepted", async (t) => {
+  const url = await endpoint(t, (request, response) => {
+    if (request.url === "/empty") response.writeHead(204);
+    response.end(request.url === "/empty" ? undefined : "123");
+  });
+  assert.equal((await fetchHttp({ url: `${url}/empty` }, { maxResponseBytes: 0 })).body.length, 0);
+  assert.deepEqual((await fetchHttp({ url }, { maxResponseBytes: 3 })).body, new Uint8Array([49, 50, 51]));
+});
+
+test("invalid response limits fail before issuing a request", async () => {
+  for (const maxResponseBytes of [-1, NaN, Infinity, 0.5]) {
+    await assert.rejects(fetchHttp({ url: "https://invalid.invalid" }, { maxResponseBytes }), {
+      name: "RangeError",
+    });
+  }
+});
+
+test("response limit is enforced without trusting Content-Length", async (t) => {
+  const url = await endpoint(t, (_request, response) => {
+    response.write("123");
+    response.end("456");
+  });
+  await assert.rejects(fetchHttp({ url }, { maxResponseBytes: 5 }), {
+    name: "HttpResponseTooLargeError",
+  });
+});
+
+test("HTTP transport rejects non-HTTP URLs", async () => {
+  await assert.rejects(fetchHttp({ url: "data:text/plain,not-http" }), {
+    name: "TypeError",
+  });
+});
