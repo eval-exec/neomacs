@@ -135,6 +135,22 @@ class BrowserEditorHarness:
         return cursor
 
     def assert_active_cursor_painted(self, description: str) -> dict[str, object]:
+        """Check a cursor over empty text, allowing render-local motion/colors."""
+        deadline = time.monotonic() + self.timeout
+        while True:
+            cursor, observation = self._observe_active_cursor_paint(description)
+            sampled = observation.get("sampled", 0)
+            matching = observation.get("matching", 0)
+            if sampled > 0 and matching * 2 >= sampled:
+                return cursor
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"browser did not paint the active cursor for {description}; "
+                    f"observation={observation!r}; cursor={cursor!r}"
+                )
+            time.sleep(0.05)
+
+    def _observe_active_cursor_paint(self, description: str):
         cursor = self.assert_active_cursor(description)
         canvas = self.driver.find_element("css selector", "canvas")
         screenshot = canvas.screenshot_as_base64
@@ -160,23 +176,23 @@ class BrowserEditorHarness:
               const context = raster.getContext("2d");
               context.drawImage(image, 0, 0);
               const pixels = context.getImageData(x, y, width, height).data;
-              const expected = [
-                Math.round(cursor.color.r * 255),
-                Math.round(cursor.color.g * 255),
-                Math.round(cursor.color.b * 255),
-              ];
+              // The immutable frame contains GNU's base cursor color, not the
+              // compositor's cycling color. Compare with the empty cell just
+              // beyond the end-of-text cursor instead.
+              const backgroundX = Math.min(image.naturalWidth - 1,
+                Math.floor((cursor.x + cursor.width * 1.5) * scaleX));
+              const background = Array.from(context.getImageData(backgroundX, y, 1, 1).data);
               let matching = 0;
               for (let offset = 0; offset < pixels.length; offset += 4) {
-                if (Math.abs(pixels[offset] - expected[0]) <= 24
-                    && Math.abs(pixels[offset + 1] - expected[1]) <= 24
-                    && Math.abs(pixels[offset + 2] - expected[2]) <= 24) {
+                if ([0, 1, 2].some(channel =>
+                    Math.abs(pixels[offset + channel] - background[channel]) > 24)) {
                   matching += 1;
                 }
               }
               done({
                 matching,
                 sampled: pixels.length / 4,
-                expected,
+                background,
                 sampleRect: {x, y, width, height},
                 imageSize: {
                   width: image.naturalWidth,
@@ -190,14 +206,7 @@ class BrowserEditorHarness:
             screenshot,
             cursor,
         )
-        sampled = observation.get("sampled", 0)
-        matching = observation.get("matching", 0)
-        if sampled == 0 or matching * 2 < sampled:
-            raise RuntimeError(
-                f"browser did not paint the active cursor for {description}; "
-                f"observation={observation!r}; cursor={cursor!r}"
-            )
-        return cursor
+        return cursor, observation
 
     @staticmethod
     def matrix_text(entry: dict[str, object]) -> str:

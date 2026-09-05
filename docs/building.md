@@ -139,6 +139,13 @@ python3 crates/neomacs-wasm/tests/browser_opfs_smoke.py \
 # Load bundled dark/light Modus themes and verify rendered background pixels.
 python3 crates/neomacs-wasm/tests/browser_theme_smoke.py \
   --headless --url http://127.0.0.1:4173/
+
+# Mouse point/window selection, idle cursor colors, and intermediate motion pixels.
+python3 crates/neomacs-wasm/tests/browser_cursor_smoke.py --headless --mode mouse
+python3 crates/neomacs-wasm/tests/browser_cursor_smoke.py --headless --mode color
+python3 crates/neomacs-wasm/tests/browser_cursor_smoke.py --headless --mode motion
+# Use real Chrome device scaling and check its canvas backing size too.
+python3 crates/neomacs-wasm/tests/browser_cursor_smoke.py --headless --mode mouse --scale 1.75
 ```
 
 Add user-visible workflows such as buffer, window, and file commands to the
