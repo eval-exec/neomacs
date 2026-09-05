@@ -35,9 +35,12 @@ fn names(value: Value) -> Vec<String> {
 fn virtual_attributes_support_gnu_ls_lisp_numeric_columns() {
     let mut eval = virtual_editor();
     assert_eq!(
-        eval.eval_str(r##"(let ((a (file-attributes "/virtual-completion/alpha.el")))
-          (format "%d %d %d" (nth 1 a) (nth 2 a) (nth 3 a)))"##)
-            .unwrap().as_utf8_str(),
+        eval.eval_str(
+            r##"(let ((a (file-attributes "/virtual-completion/alpha.el")))
+          (format "%d %d %d" (nth 1 a) (nth 2 a) (nth 3 a)))"##
+        )
+        .unwrap()
+        .as_utf8_str(),
         Some("1 0 0")
     );
 }
@@ -148,6 +151,31 @@ fn mounted_native_attributes_preserve_links_permissions_and_identity() {
             Value::T,
             Value::T
         ])
+    );
+}
+
+#[test]
+fn virtual_directory_unknown_modtime_does_not_stat_a_non_file_buffer() {
+    use crate::emacs_core::fileio::MountTableFileSystem;
+    let mut mounts = MountTableFileSystem::new();
+    mounts
+        .mount(
+            Path::new("/virtual-mount/home"),
+            Box::new(MemoryFileSystem::new()),
+        )
+        .unwrap();
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(mounts));
+    // GNU dired-readin uses this exact call in a buffer with no visited file.
+    // An integer zero is GNU's unknown-modtime flag, not an observed epoch.
+    assert_eq!(
+        eval.eval_str(
+            r##"(progn
+      (set-visited-file-modtime (nth 5 (file-attributes "/virtual-mount")))
+      (visited-file-modtime))"##
+        )
+        .unwrap(),
+        Value::fixnum(0)
     );
 }
 
