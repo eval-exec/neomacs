@@ -5,7 +5,8 @@ use super::*;
 /// separated from the GPU submission around it so it can be asserted without
 /// a device.
 ///
-/// Kept in step with `render_pane_layout` by
+/// Alpha is omitted here: it is per-pane and orthogonal to the geometry these
+/// tests assert. Kept in step with `render_pane_layout` by
 /// [`the_helper_matches_what_the_pass_emits`], which reads the source.
 fn quad(pane: PaneBlit, frame: (f32, f32)) -> Vec<([f32; 2], [f32; 2])> {
     let (fw, fh) = frame;
@@ -34,6 +35,8 @@ fn a_settled_pane_samples_exactly_the_region_it_covers() {
     let pane = PaneBlit {
         bounds: Rect::new(400.0, 0.0, 400.0, 600.0),
         content_origin: (400.0, 0.0),
+        source: PaneSource::Destination,
+        opacity: 1.0,
     };
     let corners = quad(pane, (800.0, 600.0));
     assert_eq!(corners[0], ([400.0, 0.0], [0.5, 0.0]));
@@ -48,6 +51,8 @@ fn a_pane_drawn_away_from_its_content_still_samples_its_content() {
     let pane = PaneBlit {
         bounds: Rect::new(200.0, 0.0, 400.0, 600.0),
         content_origin: (400.0, 0.0),
+        source: PaneSource::Destination,
+        opacity: 1.0,
     };
     let corners = quad(pane, (800.0, 600.0));
     assert_eq!(corners[0].0, [200.0, 0.0], "drawn where the motion puts it");
@@ -66,6 +71,8 @@ fn an_oversized_pane_shows_more_of_the_row_rather_than_a_stretched_copy() {
     let pane = PaneBlit {
         bounds: Rect::new(0.0, 0.0, 600.0, 600.0),
         content_origin: (0.0, 0.0),
+        source: PaneSource::Destination,
+        opacity: 1.0,
     };
     let corners = quad(pane, (800.0, 600.0));
     assert_eq!(
@@ -80,10 +87,14 @@ fn every_pane_maps_its_own_region_independently() {
     let left = PaneBlit {
         bounds: Rect::new(0.0, 0.0, 400.0, 600.0),
         content_origin: (0.0, 0.0),
+        source: PaneSource::Destination,
+        opacity: 1.0,
     };
     let right = PaneBlit {
         bounds: Rect::new(400.0, 0.0, 400.0, 600.0),
         content_origin: (400.0, 0.0),
+        source: PaneSource::Destination,
+        opacity: 1.0,
     };
     let l = quad(left, (800.0, 600.0));
     let r = quad(right, (800.0, 600.0));
@@ -119,6 +130,8 @@ fn nothing_is_submitted_for_a_frame_with_no_size() {
     let pane = PaneBlit {
         bounds: Rect::new(0.0, 0.0, 10.0, 10.0),
         content_origin: (0.0, 0.0),
+        source: PaneSource::Destination,
+        opacity: 1.0,
     };
     let corners = quad(pane, (800.0, 600.0));
     assert!(
@@ -137,12 +150,55 @@ fn the_pass_draws_the_whole_frame_underneath_the_panes() {
     // `split-window`.
     let source = include_str!("layout_pass.rs");
     assert!(
-        source.contains("corner(frame_width, frame_height, 1.0, 1.0),"),
+        source.contains("corner(frame_width, frame_height, 1.0, 1.0, 1.0),"),
         "the base quad covering the composed frame is gone; \
          everything outside a pane would be cleared away"
     );
     assert!(
         source.contains("Vec::with_capacity((panes.len() + 1) * 6)"),
         "the vertex count no longer accounts for the base quad"
+    );
+}
+
+#[test]
+fn a_departing_pane_reads_from_the_previous_composition() {
+    // A deleted window is absent from the destination presentation entirely,
+    // so the composed picture holds no pixels for it. Sampling the destination
+    // would show whatever replaced it, wearing the departing pane's geometry;
+    // without the previous composition it can only vanish outright.
+    let source = include_str!("layout_pass.rs");
+    assert!(
+        source.contains("PaneSource::Previous if previous.is_some()"),
+        "departing quads no longer select the previous composition"
+    );
+    assert!(
+        source.contains("pass.set_bind_group(1, previous, &[]);"),
+        "the second draw no longer rebinds to the previous composition"
+    );
+}
+
+#[test]
+fn departing_panes_are_drawn_after_the_panes_that_remain() {
+    // A bind group cannot change within a draw call, so the two sources are
+    // two draws and their order is fixed by construction. A pane on its way out
+    // should read as lying over what replaces it, not under it.
+    let source = include_str!("layout_pass.rs");
+    let destination_draw = source
+        .find("pass.draw(0..destination_vertices, 0..1);")
+        .expect("the destination draw is still first");
+    let departing_draw = source
+        .find("pass.draw(destination_vertices..vertices.len() as u32, 0..1);")
+        .expect("the departing draw still exists");
+    assert!(destination_draw < departing_draw);
+}
+
+#[test]
+fn a_pane_with_no_previous_composition_to_read_is_dropped_rather_than_faded_from_nothing() {
+    // The first frame a window is ever drawn on has no history. Binding an
+    // unwritten texture would fade the pane in from whatever that memory held.
+    let source = include_str!("layout_pass.rs");
+    assert!(
+        source.contains("PaneSource::Previous => {}"),
+        "a departing pane with no previous composition is no longer dropped"
     );
 }

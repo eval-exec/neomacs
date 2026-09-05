@@ -163,6 +163,8 @@ impl GuiFrameRenderState {
                 .map(|placement| neomacs_renderer_wgpu::PaneBlit {
                     bounds: placement.bounds,
                     content_origin: placement.content_origin,
+                    source: placement.source,
+                    opacity: placement.opacity,
                 })
                 .collect(),
             projection: Some(projection),
