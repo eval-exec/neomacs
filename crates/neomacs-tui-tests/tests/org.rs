@@ -7,7 +7,7 @@
 //! `lisp/org/org-table.el`; `C-c C-c` reaches it through
 //! `org-ctrl-c-ctrl-c`.
 
-mod support;
+use crate::support;
 
 use std::time::Duration;
 use support::*;

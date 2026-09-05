@@ -1,7 +1,7 @@
 #![cfg(unix)]
 //! TUI comparison tests: eval elisp.
 
-mod support;
+use crate::support;
 use neomacs_tui_tests::TuiSession;
 use std::time::Duration;
 use support::*;

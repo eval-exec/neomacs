@@ -5,7 +5,7 @@
 //! `project-find-file` reads a file from the current project and
 //! `project-dired` opens Dired at `project-root`.
 
-mod support;
+use crate::support;
 
 use neomacs_tui_tests::TuiTempDirectory;
 use std::fs;

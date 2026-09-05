@@ -8,9 +8,16 @@ publish = false
 
 # This crate exists only for its integration tests.
 # `src/lib.rs` provides the shared test harness (TuiSession, screen
-# diffing, key translation). Each file in `tests/` is a test binary
-# that exercises a specific area of TUI behaviour and compares the
-# rendered output of GNU Emacs against Neomacs.
+# diffing, key translation). Every file in `tests/` is a module of the
+# ONE `tui` test binary (rooted at `tests/tui.rs`): each used to be its
+# own binary, which meant 37 separate static links of neovm-core and
+# Cranelift for zero benefit — nextest executes every test in its own
+# process regardless of how many binaries contain them.
+autotests = false
+
+[[test]]
+name = "tui"
+path = "tests/tui.rs"
 
 [target.'cfg(unix)'.dependencies]
 vt100 = "0.16"

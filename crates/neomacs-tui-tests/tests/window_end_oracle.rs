@@ -5,7 +5,7 @@
 //! exercise the same redisplay/query boundary, and a Rust-only layout test
 //! cannot establish GNU compatibility.
 
-mod support;
+use crate::support;
 
 use neomacs_tui_tests::TuiSession;
 use std::fs;

@@ -6,7 +6,7 @@
 // Reports whether neomacs has non-default face colours matching GNU.
 #![allow(dead_code)]
 
-mod support;
+use crate::support;
 use neomacs_tui_tests::*;
 use std::ffi::OsString;
 use std::path::PathBuf;

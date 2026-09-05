@@ -792,7 +792,7 @@ jobs:
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            -E 'package(neomacs-tui-tests) and test(=line_and_wrap_prefix_named_face_remapping_match_gnu)' \
+            -E 'package(neomacs-tui-tests) and test(~line_and_wrap_prefix_named_face_remapping_match_gnu)' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --no-fail-fast
 

@@ -17,7 +17,7 @@
 //! * **The overlay arrow is genuinely unimplemented on our TTY**, which the
 //!   test below caught immediately (see its own comment).
 
-mod support;
+use crate::support;
 use std::time::Duration;
 use support::*;
 

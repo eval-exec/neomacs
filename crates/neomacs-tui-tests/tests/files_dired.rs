@@ -1,7 +1,7 @@
 #![cfg(unix)]
 //! TUI comparison tests: files dired.
 
-mod support;
+use crate::support;
 use neomacs_tui_tests::*;
 use std::fs;
 use std::time::Duration;

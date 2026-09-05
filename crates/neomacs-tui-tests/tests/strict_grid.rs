@@ -1,7 +1,7 @@
 #![cfg(unix)]
 //! End-to-end exact-display comparisons of Neomacs vs GNU Emacs.
 
-mod support;
+use crate::support;
 use neomacs_tui_tests::*;
 use std::time::Duration;
 use support::*;

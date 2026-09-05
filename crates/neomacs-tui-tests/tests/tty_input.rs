@@ -5,7 +5,7 @@
 //! `neovm-core` cover decoding and translation in isolation; this suite owns
 //! the complete frontend -> bridge -> evaluator -> command-loop seam.
 
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

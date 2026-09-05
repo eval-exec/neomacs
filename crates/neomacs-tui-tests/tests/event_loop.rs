@@ -25,7 +25,7 @@
 //! its own process group — the actual fix — lives in the `child_isolation_tests`
 //! unit test in `crates/neovm-core/src/emacs_core/system/callproc/mod.rs`.
 
-mod support;
+use crate::support;
 use neomacs_tui_tests::*;
 use std::fs;
 use std::time::Duration;

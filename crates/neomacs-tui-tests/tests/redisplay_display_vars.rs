@@ -18,7 +18,7 @@
 //! neomacs grid would still show the pre-change layout and diverge from
 //! GNU.
 
-mod support;
+use crate::support;
 
 use neomacs_tui_tests::TuiSession;
 use std::time::Duration;

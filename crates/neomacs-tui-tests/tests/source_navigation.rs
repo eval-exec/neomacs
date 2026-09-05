@@ -4,7 +4,7 @@
 //! GNU behavior here is driven by `lisp/progmodes/xref.el`,
 //! `lisp/progmodes/elisp-mode.el`, and `lisp/emacs-lisp/find-func.el`.
 
-mod support;
+use crate::support;
 
 use std::time::Duration;
 use support::*;

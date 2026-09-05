@@ -11,7 +11,7 @@
 //! overlays, but the underlying frame visibility state and the
 //! `(frame-visible-p)` predicate are still meaningful and must match.
 
-mod support;
+use crate::support;
 
 use std::time::Duration;
 use support::*;

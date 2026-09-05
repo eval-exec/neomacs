@@ -1,7 +1,7 @@
 #![cfg(unix)]
 //! TUI comparison tests: basic.
 
-mod support;
+use crate::support;
 use neomacs_tui_tests::*;
 use std::time::Duration;
 use support::*;

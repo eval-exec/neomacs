@@ -2,7 +2,7 @@
 //! Regression coverage for issue #254: quitting `M-x` must dismiss its
 //! `*Completions*` popup window.
 
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

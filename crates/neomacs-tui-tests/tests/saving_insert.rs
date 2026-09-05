@@ -1,7 +1,7 @@
 #![cfg(unix)]
 //! TUI comparison tests: saving insert.
 
-mod support;
+use crate::support;
 use std::fs;
 use std::time::Duration;
 use support::*;

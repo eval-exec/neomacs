@@ -6,7 +6,7 @@
 //! rendered output. These tests exercise GNU Emacs's `(featurep
 //! 'tty-child-frames)` feature and serve as a spec for NeoMacs.
 
-mod support;
+use crate::support;
 use neomacs_tui_tests::*;
 use std::time::Duration;
 use support::{assert_pair_exact_display, boot_pair, eval_expression, read_both, send_both};

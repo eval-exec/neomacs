@@ -1,7 +1,7 @@
 #![cfg(unix)]
 //! TUI comparison tests: mark region fill.
 
-mod support;
+use crate::support;
 use std::time::Duration;
 use support::*;
 

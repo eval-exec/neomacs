@@ -1,7 +1,7 @@
 #![cfg(unix)]
 //! TUI comparison tests: replace sort.
 
-mod support;
+use crate::support;
 use std::time::Duration;
 use support::*;
 

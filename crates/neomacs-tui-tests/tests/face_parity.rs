@@ -8,7 +8,7 @@
 //! assertion retries until the two screens agree or a deadline passes,
 //! because face painting can land a frame later than the text.
 
-mod support;
+use crate::support;
 use neomacs_tui_tests::TuiTempDirectory;
 use std::fs;
 use std::time::Duration;

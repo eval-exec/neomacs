@@ -9,7 +9,7 @@
 //!   * point at EOB, no trailing newline  -> centering, `text_cols/2`  (hscroll 220)
 //!   * point before a trailing newline    -> end-of-line, `text_cols-4` (hscroll 144)
 //! Both must equal live GNU's `window-hscroll`.
-mod support;
+use crate::support;
 
 use neomacs_tui_tests::TuiSession;
 use std::time::Duration;

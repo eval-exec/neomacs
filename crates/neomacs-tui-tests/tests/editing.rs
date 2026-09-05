@@ -6,7 +6,7 @@
 //! (`lisp/simple.el`) and may run electric indentation from
 //! `lisp/electric.el`.
 
-mod support;
+use crate::support;
 
 use neomacs_tui_tests::TuiSession;
 use std::fs;

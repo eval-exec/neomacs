@@ -27,7 +27,7 @@
 //! PTYs and asserts the rendered vt100 grids match (the established pattern in
 //! registers_bookmarks.rs / replace_sort.rs).
 
-mod support;
+use crate::support;
 use std::time::Duration;
 use support::*;
 

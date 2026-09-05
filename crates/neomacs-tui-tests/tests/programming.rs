@@ -5,7 +5,7 @@
 //! `lisp/newcomment.el`, `lisp/imenu.el`, and
 //! `lisp/progmodes/elisp-mode.el`.
 
-mod support;
+use crate::support;
 
 use std::time::Duration;
 use support::*;
