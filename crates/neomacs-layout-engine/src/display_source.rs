@@ -3661,12 +3661,6 @@ pub(crate) fn classify_text_source_char(character: EmacsChar) -> TextSourceCharC
     TextSourceCharClassification::Text(ch)
 }
 
-pub(crate) fn display_item_kind_for_text_source_char(
-    character: EmacsChar,
-) -> Option<DisplayItemKind> {
-    display_item_kind_for_text_source_char_with_tty_mapping(character, None)
-}
-
 pub(crate) fn display_item_kind_for_text_source_char_with_tty_mapping(
     character: EmacsChar,
     tty_mapping: Option<GlyphlessMethod>,
