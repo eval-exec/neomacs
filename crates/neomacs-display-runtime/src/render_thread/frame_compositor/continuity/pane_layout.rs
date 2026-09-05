@@ -302,10 +302,13 @@ impl PaneLayoutMorph {
     pub(in crate::render_thread) fn sample(&self, frame: FrameSample) -> LayoutSample {
         let motion = self.motion.sample(frame);
         LayoutSample {
-            panes: self
-                .changes()
-                .filter_map(|change| PanePlacement::at(change, motion))
-                .collect(),
+            panes: {
+                let mut panes = Vec::new();
+                for change in self.changes() {
+                    place(change, motion, &mut panes);
+                }
+                panes
+            },
             motion,
         }
     }
@@ -335,7 +338,10 @@ fn lerp(from: f32, to: f32, t: f32) -> f32 {
 }
 
 impl PanePlacement {
-    /// Where `change` puts its pane at `motion`, or `None` if it draws nothing.
+    /// Where `change` puts its pane at `motion`.
+    ///
+    /// Usually one placement; two while a pane whose *width* changed is
+    /// crossfading its old wrapping into its new one. See [`Self::place`].
     fn at(change: PaneChange, motion: MotionSample) -> Option<Self> {
         Some(match change {
             PaneChange::Persisted { window, from, to } => {
@@ -388,6 +394,44 @@ impl PanePlacement {
     }
 }
 
+/// How much a width must change for the text inside to be worth crossfading.
+///
+/// Below this a reflow either did not happen or moved nothing a reader would
+/// notice, and crossfading two nearly identical pictures only costs a texture
+/// and softens the glyphs for the duration.
+const REFLOW_WIDTH_EPSILON: f32 = 1.0;
+
+/// Every placement `change` contributes at `motion`.
+///
+/// A pane that only *moved* contributes one: its text did not rewrap, so the
+/// destination picture is correct for it at every instant. A pane whose width
+/// changed contributes two, because its text did rewrap — the destination
+/// picture shows the new line breaks, and using it alone means the wrapping
+/// snaps to its final shape on the very first frame while the geometry spends
+/// the whole motion catching up. The second placement is the *previous*
+/// picture at the same rect, fading out, so the old wrapping is still visible
+/// while the pane is still the old shape.
+fn place(change: PaneChange, motion: MotionSample, out: &mut Vec<PanePlacement>) {
+    let Some(destination) = PanePlacement::at(change, motion) else {
+        return;
+    };
+    if let PaneChange::Persisted { window, from, to } = change
+        && (from.width - to.width).abs() > REFLOW_WIDTH_EPSILON
+    {
+        // The outgoing wrapping, anchored where the pane used to be so its
+        // lines sit where the reader last saw them, fading out as the
+        // destination fades in underneath.
+        out.push(PanePlacement {
+            window,
+            bounds: destination.bounds,
+            content_origin: (from.x, from.y),
+            source: neomacs_renderer_wgpu::PaneSource::Previous,
+            opacity: 1.0 - motion.content_mix.get(),
+        });
+    }
+    out.push(destination);
+}
+
 /// Every pane's placement for one frame, from one shared motion sample.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::render_thread) struct LayoutSample {
@@ -407,6 +451,13 @@ impl LayoutSample {
         let panes = self
             .panes
             .iter()
+            // Only destination-sourced placements. A reflow ghost shows the
+            // *previous* presentation's wrapping, so a point inside it does not
+            // name a position in the destination at all — including it would
+            // let a click resolve against text that is on its way off screen.
+            // Mid-crossfade a click therefore resolves to the destination,
+            // which is the layout the user is about to have.
+            .filter(|placement| placement.source == neomacs_renderer_wgpu::PaneSource::Destination)
             .filter_map(|placement| {
                 let clip = neomacs_display_protocol::GeometryRect::<
                     neomacs_display_protocol::RootSurfaceSpace,
