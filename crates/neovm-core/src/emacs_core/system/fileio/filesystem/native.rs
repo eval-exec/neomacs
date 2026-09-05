@@ -10,6 +10,8 @@ use super::{
     FileSystemSpace, FileTimestamp, TemporaryEntry, WriteMode, WriteRequest,
 };
 
+mod attributes;
+
 /// Direct access to the current process's native filesystem namespace.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeFileSystem;
@@ -38,6 +40,9 @@ fn metadata_from_native(metadata: fs::Metadata) -> FileMetadata {
 }
 
 impl EditorFileSystem for NativeFileSystem {
+    fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
+        attributes::read(path)
+    }
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata> {
         let metadata = if follow_links {
             fs::metadata(path)
