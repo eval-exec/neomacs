@@ -854,3 +854,42 @@ fn a_retarget_that_ends_the_motion_still_hands_out_the_settled_projection() {
         "and yet there is a transform the next hit test must use"
     );
 }
+
+#[test]
+fn a_pane_moving_under_a_still_pointer_changes_what_the_pointer_is_over() {
+    // The reason hover has to be re-resolved per frame while panes move.
+    // Hover is otherwise computed when a pointer event arrives; if the user
+    // holds still during a `split-window`, no event fires, and the shader
+    // keeps the u/v of a pane position that has since travelled. The
+    // projection is what makes that observable: the same surface point maps
+    // to a different content position at each instant of the motion.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [window(1, rect(400.0, 0.0, 400.0, 600.0))];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let presentation = neomacs_display_protocol::PresentationId::new(5);
+    let still = neomacs_display_protocol::GeometryPoint::<
+        neomacs_display_protocol::RootSurfaceSpace,
+        neomacs_display_protocol::LogicalPixels,
+    >::from_px(500.0, 10.0)
+    .expect("a finite point");
+
+    let early = morph
+        .sample(frame_at(origin, 25))
+        .projection(presentation)
+        .map(still)
+        .expect("mapped")
+        .x();
+    let late = morph
+        .sample(frame_at(origin, 75))
+        .projection(presentation)
+        .map(still)
+        .expect("mapped")
+        .x();
+    assert!(
+        (early - late).abs() > 1.0,
+        "an unmoved pointer is over different content as the pane travels \
+         ({early} then {late}); resolving hover only on pointer events would \
+         report the first answer for the whole motion"
+    );
+}
