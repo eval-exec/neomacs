@@ -521,6 +521,9 @@ mod raw_bytes_tests;
 mod builtins;
 pub(crate) use builtins::*;
 
+mod bootstrap;
+pub use bootstrap::register_bootstrap_vars;
+
 mod bootstrap_vars;
 pub use bootstrap_vars::*;
 
