@@ -132,6 +132,7 @@ impl BufferSourceTextRunRenderRequest {
             .map(|(prefix, _tail)| prefix)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_if_fits_and_apply<B: LayoutBufferView>(
         self,
         source_item: DisplaySourceStepItem,
@@ -162,6 +163,7 @@ impl BufferSourceTextRunRenderRequest {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_and_apply<B: LayoutBufferView + ?Sized>(
         self,
         source_item: DisplaySourceStepItem,
@@ -337,6 +339,7 @@ fn apply_whole_text_run_trailing_whitespace_state(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_whole_text_run_word_wrap_state(
     text: &str,
     text_origin: DisplaySourceTextOrigin,

@@ -72,6 +72,7 @@ impl<'a, B: LayoutBufferView> Clone for BufferSourceFaceResolutionContext<'a, B>
 impl<'a, B: LayoutBufferView> Copy for BufferSourceFaceResolutionContext<'a, B> {}
 
 impl<'a, B: LayoutBufferView> BufferSourceFaceResolutionContext<'a, B> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         buffer: &'a B,
         face_resolver: &'a FaceResolver,

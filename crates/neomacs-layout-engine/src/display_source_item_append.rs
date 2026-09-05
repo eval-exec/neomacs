@@ -304,6 +304,7 @@ impl DisplaySourceTextCharPreparedAppend {
         Some(DisplaySourceTextCharAppendOutcome { progress })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_to_text_row_and_apply<C: DisplaySourceCharAppendContext + ?Sized>(
         self,
         context: &C,
@@ -582,6 +583,7 @@ impl DisplaySourceSpecialCharPreparedAppend {
     }
 
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_to_text_row_and_apply<C: DisplaySourceCharAppendContext + ?Sized>(
         self,
         context: &C,

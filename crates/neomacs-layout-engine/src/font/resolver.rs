@@ -531,6 +531,7 @@ impl FontResolver {
             .clear();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn resolve_from_spec(
         &self,
         requested_family: &str,

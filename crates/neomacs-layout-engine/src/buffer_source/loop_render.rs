@@ -16,6 +16,7 @@ use crate::neovm_bridge::LayoutBufferView;
 use crate::types::WindowParams;
 
 impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_visible_steps<'request, B: LayoutBufferView>(
         &mut self,
         loop_context: BufferSourceLoopRequestContext,

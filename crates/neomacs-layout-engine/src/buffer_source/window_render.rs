@@ -46,6 +46,7 @@ impl<'a, B> BufferWindowRenderRequest<'a, B>
 where
     B: LayoutBufferView,
 {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         frame_id: FrameId,
         window_id: WindowId,

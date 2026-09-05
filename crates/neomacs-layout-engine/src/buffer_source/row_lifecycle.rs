@@ -167,6 +167,7 @@ impl BufferSourceHscrollSkipAction {
         Some(LayoutCharPos0::new(self.end_charpos()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn capture_line_break_cursor_if_point(
         self,
         target: &mut CursorCaptureState,
@@ -194,6 +195,7 @@ impl BufferSourceHscrollSkipAction {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_after_line_break_row_transition(
         self,
         row_transition: DisplayTextRowTransition,
@@ -2150,6 +2152,7 @@ impl BufferSourceLineBreakSourceAction {
         box_face.continue_on_row(row_geometry.current_row_marker(), content_x);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_after_line_break_row_transition(
         self,
         row_transition: DisplayTextRowTransition,

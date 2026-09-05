@@ -786,6 +786,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
     }
 
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_fragment_step_into_row_with_display_host<S: DisplayItemSource>(
         self,
         renderer: &mut DisplayRowRenderer<'_>,
