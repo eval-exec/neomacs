@@ -96,6 +96,9 @@ let
       pkgs.libwpe-fdo
       pkgs.weston
       pkgs.xdg-dbus-proxy
+      # Runtime library for the `udev` crate, which enumerates DRM render
+      # nodes for the webview reactor's device selection.
+      pkgs.udev
     ]
   );
 in

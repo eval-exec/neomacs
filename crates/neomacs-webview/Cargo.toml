@@ -32,6 +32,7 @@ raw-window-handle.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = { workspace = true, optional = true }
+udev = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle.workspace = true

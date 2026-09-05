@@ -78,6 +78,8 @@ pkgs.mkShell {
       wpeWebkit
       libwpe
       libwpe-fdo
+      # The webview reactor enumerates DRM render nodes with the `udev` crate.
+      udev.dev
     ]
   );
 

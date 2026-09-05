@@ -352,6 +352,85 @@ struct WpeRuntime {
     backend: WpeBackend,
 }
 
+/// Pick the DRM render node the WPE display and WebKit's processes use.
+///
+/// WebKit's own multi-GPU inference has crashed us (gbm_bo_import failure
+/// inside AcceleratedBackingStore), so resolve deterministically:
+///
+/// 1. `WPE_DRM_RENDER_NODE` or `WPE_DRM_DEVICE` — the overrides WebKit
+///    documents for its inference.
+/// 2. udev enumeration of the DRM render nodes: prefer a node whose kernel
+///    driver is not `nvidia`.  WebKit imports web-process buffers through
+///    Mesa's GBM; NVIDIA's proprietary driver does not export buffers Mesa
+///    GBM can import, so on hybrid Intel/NVIDIA laptops the NVIDIA node
+///    crashes the same way the inference does, while the iGPU node works
+///    (verified on a Raptor Lake + RTX 4070 Max-Q machine).
+/// 3. Nothing — single-GPU machines and unknown topologies keep WebKit's
+///    own inference.
+fn select_wpe_device() -> Option<String> {
+    if let Some(path) =
+        std::env::var_os("WPE_DRM_RENDER_NODE").or_else(|| std::env::var_os("WPE_DRM_DEVICE"))
+    {
+        return Some(path.to_string_lossy().into_owned());
+    }
+    let mut enumerator = udev::Enumerator::new().ok()?;
+    enumerator.match_subsystem("drm").ok()?;
+    let mut nodes: Vec<(String, String)> = Vec::new();
+    for device in enumerator.scan_devices().ok()? {
+        let Some(name) = device.devnode().and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        }) else {
+            continue;
+        };
+        if !name.starts_with("renderD") {
+            continue;
+        }
+        nodes.push((name, drm_node_driver(&device)));
+    }
+    // No driver could be determined at all: let WebKit's inference decide
+    // rather than blindly pinning the first node.
+    if nodes.iter().all(|(_, driver)| driver.is_empty()) {
+        return None;
+    }
+    pick_render_node(nodes).map(|name| format!("/dev/dri/{name}"))
+}
+
+/// Kernel driver name of a DRM node, walked up to its PCI ancestor: the
+/// render node and its card device carry no `DRIVER` property of their own.
+fn drm_node_driver(device: &udev::Device) -> String {
+    let mut parent = device.parent();
+    while let Some(node) = parent {
+        if let Some(driver) = node.property_value("DRIVER") {
+            return driver.to_string_lossy().into_owned();
+        }
+        parent = node.parent();
+    }
+    String::new()
+}
+
+/// Choose among `(node_name, kernel_driver)` render nodes.
+///
+/// Prefer a non-NVIDIA driver only when the machine actually offers one;
+/// otherwise keep the first node so a single-GPU machine's selection stays
+/// identical to WebKit's own inference order.
+fn pick_render_node(mut nodes: Vec<(String, String)>) -> Option<String> {
+    nodes.sort();
+    let has_alternatives = nodes
+        .iter()
+        .any(|(_, driver)| !driver.is_empty() && driver != "nvidia");
+    nodes
+        .into_iter()
+        .find(|(_, driver)| {
+            if has_alternatives {
+                !driver.is_empty() && driver != "nvidia"
+            } else {
+                true
+            }
+        })
+        .map(|(name, _)| name)
+}
+
 impl WpeRuntime {
     unsafe fn new(
         config: WebViewSystemConfig,
@@ -361,31 +440,30 @@ impl WpeRuntime {
     ) -> Result<Self, String> {
         // WebKit's headless backend infers a DRM device when none is given,
         // and on multi-GPU machines it can pick the node whose buffers the
-        // web process's importer cannot import (gbm_bo_import failure in
-        // AcceleratedBackingStore, then a WebKit crash).  Honor the same
-        // override WebKit documents for that inference: WPE_DRM_DEVICE.
-        let backend = match std::env::var_os("WPE_DRM_DEVICE") {
+        // importer cannot import (gbm_bo_import failure in
+        // AcceleratedBackingStore, then a WebKit crash).  Resolve the device
+        // explicitly: WPE_DRM_RENDER_NODE / WPE_DRM_DEVICE overrides first,
+        // then the automatic policy below.
+        let selected_device = select_wpe_device();
+        let backend = match &selected_device {
             Some(path) => {
-                let path = path.to_string_lossy().into_owned();
-                tracing::info!("WpeRuntime: using WPE_DRM_DEVICE={path}");
-                WpeBackend::new_with_device(std::ptr::null_mut(), Some(&path))
+                // Export the decision so WebKit's web process — a child of
+                // this process — inherits the same node for its own buffer
+                // allocation instead of inferring one itself.
+                // SAFETY: the reactor owns this process's environment; the
+                // spawn happens before any other thread reads these keys.
+                unsafe {
+                    std::env::set_var("WPE_DRM_DEVICE", path);
+                    std::env::set_var("WPE_DRM_RENDER_NODE", path);
+                }
+                tracing::info!("WpeRuntime: WPE DRM device = {path}");
+                WpeBackend::new_with_device(std::ptr::null_mut(), Some(path))
             }
             None => {
-                if let Ok(entries) = std::fs::read_dir("/dev/dri") {
-                    let nodes = entries
-                        .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
-                        .filter(|name| name.to_string_lossy().starts_with("renderD"))
-                        .count();
-                    if nodes > 1 {
-                        tracing::warn!(
-                            "WpeRuntime: {nodes} render nodes found in /dev/dri; \
-                             WebKit will infer one and may pick a device whose \
-                             buffers cannot be imported (a crash inside \
-                             AcceleratedBackingStore). Set WPE_DRM_DEVICE to \
-                             select the working node explicitly."
-                        );
-                    }
-                }
+                tracing::warn!(
+                    "WpeRuntime: no DRM render node selected; WebKit will infer \
+                     one and may crash on multi-GPU machines"
+                );
                 WpeBackend::new(std::ptr::null_mut())
             }
         }
@@ -781,8 +859,45 @@ fn run_failed_reactor(
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeWpeBufferLease, PendingFrames};
+    use super::{NativeWpeBufferLease, PendingFrames, pick_render_node};
     use crate::{PixelFrame, WebViewFrame};
+
+    #[test]
+    fn render_node_policy_prefers_non_nvidia_driver_when_a_choice_exists() {
+        // Raptor Lake (i915 iGPU) + RTX 4070 Max-Q (nvidia dGPU): WebKit's
+        // inference picked the NVIDIA node and crashed; the policy must pick
+        // the iGPU node.
+        assert_eq!(
+            pick_render_node(vec![
+                ("renderD128".into(), "nvidia".into()),
+                ("renderD129".into(), "i915".into()),
+            ]),
+            Some("renderD129".into())
+        );
+    }
+
+    #[test]
+    fn render_node_policy_keeps_single_gpu_selection() {
+        assert_eq!(
+            pick_render_node(vec![("renderD128".into(), "nvidia".into())]),
+            Some("renderD128".into())
+        );
+        assert_eq!(
+            pick_render_node(vec![("renderD128".into(), "i915".into())]),
+            Some("renderD128".into())
+        );
+    }
+
+    #[test]
+    fn render_node_policy_ignores_unknown_drivers_only_when_alternatives_exist() {
+        assert_eq!(
+            pick_render_node(vec![
+                ("renderD128".into(), String::new()),
+                ("renderD129".into(), "i915".into()),
+            ]),
+            Some("renderD129".into())
+        );
+    }
 
     #[test]
     fn frame_mailbox_keeps_only_the_latest_negotiated_frame() {

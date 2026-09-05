@@ -35,12 +35,12 @@ pub(super) enum WpeFrameTransport {
 impl WpeFrameTransport {
     pub(super) fn resolve(preference: WebViewFrameTransport) -> Self {
         match preference {
-            // Software pixels remain the reliable automatic choice until wgpu
-            // can import a HAL texture with its existing Vulkan image layout.
-            WebViewFrameTransport::Auto | WebViewFrameTransport::SoftwarePixels => {
-                Self::SoftwarePixels
-            }
-            WebViewFrameTransport::DmaBuf => Self::DmaBuf,
+            // The renderer's DMA-BUF importer (webview_cache::update_view via
+            // vulkan_dmabuf) is complete, so the automatic choice prefers the
+            // zero-copy transport.  An unexportable buffer still falls back to
+            // pixels for that frame inside capture_render_buffer.
+            WebViewFrameTransport::Auto | WebViewFrameTransport::DmaBuf => Self::DmaBuf,
+            WebViewFrameTransport::SoftwarePixels => Self::SoftwarePixels,
         }
     }
 }
