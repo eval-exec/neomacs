@@ -237,8 +237,14 @@ impl EditorFileSystem for MountTableFileSystem {
     }
 
     fn file_system_space(&self, path: &Path) -> io::Result<FileSystemSpace> {
-        let (mount, relative) = self.route(path)?;
-        mount.filesystem.file_system_space(&relative)
+        match self.route(path) {
+            Ok((mount, relative)) => mount.filesystem.file_system_space(&relative),
+            Err(error) if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? => {
+                Err(io::Error::new(ErrorKind::Unsupported,
+                    "synthetic mount directories have no storage capacity"))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {

@@ -6915,4 +6915,9 @@ fn file_system_info_returns_nil_when_virtual_capacity_is_unsupported() {
     let mut eval = Context::new();
     eval.install_editor_file_system(Box::new(super::MemoryFileSystem::new()));
     assert_eq!(eval.eval_str(r##"(file-system-info "/")"##).unwrap(), Value::NIL);
+    let mut mounts = super::MountTableFileSystem::new();
+    mounts.mount(std::path::Path::new("/virtual/home"), Box::new(super::MemoryFileSystem::new())).unwrap();
+    eval.install_editor_file_system(Box::new(mounts));
+    assert_eq!(eval.eval_str(r##"(file-system-info "/")"##).unwrap(), Value::NIL);
+    assert_eq!(eval.eval_str(r##"(file-system-info "/virtual")"##).unwrap(), Value::NIL);
 }
