@@ -50,7 +50,7 @@ pub use glyph_atlas::{
 pub use image_cache::{CachedImage, ImageCache, ImageCacheEvent, ImageMetadata, ImageState};
 pub use overlay_state::{MenuPanel, PopupMenuState, TooltipState};
 pub use renderer::{
-    FrameRowDamage, RendererFrameEffects, RowDamageInfo, RowReuseStats, WgpuRenderer,
+    FrameRowDamage, PaneBlit, RendererFrameEffects, RowDamageInfo, RowReuseStats, WgpuRenderer,
     WindowRowDamage,
 };
 pub use shader_surface::{
