@@ -247,7 +247,12 @@ pub fn compile_bytecode_function(f: &ByteCodeFunction) -> Result<CompiledLeaf, C
 /// workload can be characterized — is hot elisp arithmetic-heavy (unboxing
 /// helps), call-heavy (inlining helps), or dispatch/alloc-bound (an MIR tier
 /// helps little)? Set `NEOVM_JIT_PROFILE=<path>` to append one CSV row per
-/// function. Used to justify (or not) the optimizing Tier-2 investment.
+/// compile attempt: `ops,arith,calls,alloc,listops,varops,preds,backedges,
+/// has_loop,compiled,inlinable,arity,reason,fingerprint,compile_us`
+/// (`reason` = the `CompileError` or `-`; `fingerprint` = the first symbol
+/// constants; `compile_us` = wall time of the attempt). Used to justify (or
+/// not) the optimizing Tier-2 investment, and by the 2026-09-05 census
+/// (`tmp/rr/wf2/census/report.py`).
 fn jit_profile_path() -> Option<&'static str> {
     use std::sync::OnceLock;
     static PATH: OnceLock<Option<String>> = OnceLock::new();
@@ -296,10 +301,28 @@ fn force_cbsym_generic() -> bool {
     *FORCE.get_or_init(|| std::env::var("NEOVM_JIT_FORCE_CBSYM_GENERIC").as_deref() == Ok("1"))
 }
 
-fn jit_profile_emit(f: &ByteCodeFunction, obarray: Option<&Obarray>, compiled: bool) {
+fn jit_profile_emit(
+    f: &ByteCodeFunction,
+    obarray: Option<&Obarray>,
+    error: Option<&CompileError>,
+    elapsed: std::time::Duration,
+) {
     let Some(path) = jit_profile_path() else {
         return;
     };
+    let compiled = error.is_none();
+    // The rejection kind (`-` when compiled) and a fingerprint — the first
+    // symbol constants — so a census can name the body without a symbol name.
+    let reason = error.map_or_else(|| "-".to_string(), |e| format!("{e:?}"));
+    let reason = reason.replace(',', ";").replace('\n', " ");
+    let fingerprint: Vec<String> = f
+        .constants
+        .iter()
+        .filter(|v| v.as_symbol_id().is_some())
+        .take(6)
+        .map(|v| crate::emacs_core::print::print_value(v).replace(',', ";"))
+        .collect();
+    let fingerprint = fingerprint.join(" ");
     let ops = f.executable_ops();
     let mut arith = 0u32;
     let mut calls = 0u32;
@@ -370,7 +393,7 @@ fn jit_profile_emit(f: &ByteCodeFunction, obarray: Option<&Obarray>, compiled: b
         None => 0,
     };
     let line = format!(
-        "{},{},{},{},{},{},{},{},{},{},{}\n",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
         ops.len(),
         arith,
         calls,
@@ -382,6 +405,10 @@ fn jit_profile_emit(f: &ByteCodeFunction, obarray: Option<&Obarray>, compiled: b
         u8::from(backedges > 0),
         u8::from(compiled),
         inlinable,
+        f.params.required.len() + f.params.optional.len() + usize::from(f.params.rest.is_some()),
+        reason,
+        fingerprint,
+        elapsed.as_micros(),
     );
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -725,9 +752,10 @@ pub fn compile_bytecode_function_tiered(
     policy: lowering::RegallocPolicy,
 ) -> Result<CompiledLeaf, CompileError> {
     let _scope = lowering::RegallocScope::enter(regalloc_for(policy, f.executable_ops()));
+    let started = std::time::Instant::now();
     let result = compile_bytecode_function_inner(f, obarray);
     if jit_profile_path().is_some() {
-        jit_profile_emit(f, obarray, result.is_ok());
+        jit_profile_emit(f, obarray, result.as_ref().err(), started.elapsed());
     }
     result
 }

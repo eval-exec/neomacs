@@ -1656,10 +1656,27 @@ pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &M
     command.envs(sandbox.process_environment());
 }
 
-fn benchmark_passthrough_environment() -> Vec<(&'static str, std::ffi::OsString)> {
-    BENCHMARK_PASSTHROUGH_ENVIRONMENT
-        .iter()
-        .filter_map(|name| std::env::var_os(name).map(|value| (*name, value)))
+/// Operator-set JIT diagnostic knobs (`NEOVM_JIT_PROFILE`, `NEOVM_JIT_THRESHOLD`,
+/// `NEOVM_JIT_COMPILE_STATS`, ...) reach the editor too: a census of what the
+/// JIT compiles or rejects under a real scenario needs them, and an unset knob
+/// forwards nothing, so a plain benchmark run is unchanged.
+const BENCHMARK_PASSTHROUGH_PREFIX: &str = "NEOVM_JIT_";
+
+pub(crate) fn benchmark_passthrough_environment() -> Vec<(String, std::ffi::OsString)> {
+    passthrough_from(std::env::vars_os())
+}
+
+/// [`benchmark_passthrough_environment`] over an explicit environment (testable).
+pub(crate) fn passthrough_from(
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<(String, std::ffi::OsString)> {
+    vars.into_iter()
+        .filter_map(|(name, value)| {
+            let name = name.into_string().ok()?;
+            let forwarded = BENCHMARK_PASSTHROUGH_ENVIRONMENT.contains(&name.as_str())
+                || name.starts_with(BENCHMARK_PASSTHROUGH_PREFIX);
+            forwarded.then_some((name, value))
+        })
         .collect()
 }
 
