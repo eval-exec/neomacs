@@ -68,6 +68,33 @@ pub(super) fn effect_entity_seed(frame_seq: u64, entity_index: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Free-running animation phase in `[0.0, 1.0)` for an ambient effect.
+///
+/// A pulse or a breath has no trigger event to date itself to, so instead of
+/// ageing an entry's `started` it ages the session-start anchor already on the
+/// context — [`EffectCtx::aurora_start`], the render epoch minted once at
+/// renderer construction — against this frame's sample. Reading it at
+/// presentation rather than at frame time is the same rule every other
+/// phase-bearing effect follows: the phase a viewer perceives is the one that
+/// is on screen when the pixels land.
+///
+/// `cycle_ms` is the effect's configured period, so one full cycle of the
+/// returned phase takes exactly that long. A zero period names no cycle at
+/// all, so it holds the phase still rather than dividing by zero and painting
+/// a NaN alpha.
+#[must_use]
+pub(super) fn ambient_cycle_phase(ctx: &EffectCtx, cycle_ms: u32) -> f64 {
+    let cycle = f64::from(cycle_ms) / 1000.0;
+    if cycle <= 0.0 {
+        return 0.0;
+    }
+    let elapsed = ctx
+        .frame_sample
+        .since_at_presentation(ctx.aurora_start)
+        .as_secs_f64();
+    (elapsed % cycle) / cycle
+}
+
 /// Push a rectangle (6 vertices = 2 triangles) into a vertex buffer.
 /// Free function equivalent of WgpuRenderer::add_rect.
 pub(super) fn push_rect(
