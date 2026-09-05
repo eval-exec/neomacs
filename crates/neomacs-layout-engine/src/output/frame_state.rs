@@ -5,9 +5,7 @@ use crate::output::install_request::{
     OutputWindowMetadataInstallRequest,
 };
 use neomacs_display_protocol::effect_config::EffectsConfig;
-use neomacs_display_protocol::frame_glyphs::{
-    ContentTransitionHint, PhysCursor, WindowEffectHint, WindowInfo,
-};
+use neomacs_display_protocol::frame_glyphs::{ContentTransitionHint, PhysCursor, WindowInfo};
 use neomacs_display_protocol::glyph_matrix::{
     BackgroundItem, BorderItem, CursorItem, FaceFillItem, FrameDisplayState, ScrollBarItem,
 };
@@ -25,7 +23,6 @@ pub(crate) struct OutputFrameBuildState {
     window_infos: Vec<WindowInfo>,
     pending_window_geometry: HashSet<DisplayWindowId>,
     transition_hints: Vec<ContentTransitionHint>,
-    effect_hints: Vec<WindowEffectHint>,
     background_color: Color,
     font_pixel_size: f32,
     frame_id: DisplayFrameId,
@@ -55,7 +52,6 @@ impl OutputFrameBuildState {
             window_infos: Vec::new(),
             pending_window_geometry: HashSet::new(),
             transition_hints: Vec::new(),
-            effect_hints: Vec::new(),
             background_color: Color {
                 r: 0.0,
                 g: 0.0,
@@ -99,7 +95,6 @@ impl OutputFrameBuildState {
         self.window_infos.clear();
         self.pending_window_geometry.clear();
         self.transition_hints.clear();
-        self.effect_hints.clear();
         self.background_color = Color {
             r: 0.0,
             g: 0.0,
@@ -172,7 +167,6 @@ impl OutputFrameBuildState {
             OutputWindowMetadataInstallRequest::RestoreRetryCheckpoint(checkpoint) => {
                 self.transition_hints
                     .truncate(checkpoint.transition_hints_len);
-                self.effect_hints.truncate(checkpoint.effect_hints_len);
             }
         }
     }
@@ -216,7 +210,6 @@ impl OutputFrameBuildState {
             OutputFrameArtifactInstallRequest::TransitionHint(hint) => {
                 self.transition_hints.push(hint);
             }
-            OutputFrameArtifactInstallRequest::EffectHint(hint) => self.effect_hints.push(hint),
             OutputFrameArtifactInstallRequest::PhysCursor(cursor) => {
                 self.phys_cursor = Some(cursor)
             }
@@ -259,20 +252,13 @@ impl OutputFrameBuildState {
         &self.window_infos
     }
 
-    pub(crate) fn transition_hints(&self) -> &[ContentTransitionHint] {
-        &self.transition_hints
-    }
-
-    pub(crate) fn effect_hints(&self) -> &[WindowEffectHint] {
-        &self.effect_hints
-    }
-
-    pub(crate) fn background_color(&self) -> &Color {
-        &self.background_color
-    }
-
+    #[cfg(test)]
     pub(crate) fn cursors(&self) -> &[CursorItem] {
         &self.cursors
+    }
+
+    pub(crate) fn transition_hints(&self) -> &[ContentTransitionHint] {
+        &self.transition_hints
     }
 
     pub(crate) fn phys_cursor(&self) -> Option<&PhysCursor> {
@@ -293,7 +279,6 @@ impl OutputFrameBuildState {
         state.cursor_effects_by_window = self.cursor_effects_by_window;
         state.window_infos = self.window_infos;
         state.transition_hints = self.transition_hints;
-        state.effect_hints = self.effect_hints;
         state.background = self.background_color;
         state.font_pixel_size = self.font_pixel_size;
         let parent = (self.parent_id.get() != 0).then_some(self.parent_id);

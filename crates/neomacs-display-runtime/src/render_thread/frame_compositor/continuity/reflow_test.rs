@@ -486,3 +486,127 @@ fn a_presentation_with_no_matrices_yields_no_imprints() {
     let state = FrameDisplayState::new(80, 24, 8.0, 16.0);
     assert!(imprints_by_window(&state).is_empty());
 }
+
+// =======================================================================
+// The compositor path: two installs, one observation
+// =======================================================================
+
+/// A frame presenting `window`, with `rows` already reduced to imprints.
+///
+/// `measure_reflow` reads the retained frame's `window_infos` and takes the
+/// incoming presentation's imprints separately, mirroring ingest: the imprints
+/// are extracted while the matrices still exist, the buffer that survives has
+/// no rows.
+fn install(
+    render: &mut crate::render_thread::frame_windows::GuiFrameRenderState,
+    info: &WindowInfo,
+    rows: &[GlyphRow],
+) {
+    let mut frame = crate::core::frame_glyphs::FrameGlyphBuffer::with_size(800.0, 600.0);
+    frame.window_infos.push(info.clone());
+    let mut by_window = std::collections::HashMap::default();
+    by_window.insert(info.window_id, imprints(rows));
+    render.measure_reflow(Some(&frame), &by_window);
+    render.compositor.reflow_imprints = by_window;
+    render.compositor.current_frame = Some(frame);
+}
+
+fn empty_render() -> crate::render_thread::frame_windows::GuiFrameRenderState {
+    crate::render_thread::frame_windows::GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    )
+}
+
+#[test]
+fn installing_an_edited_presentation_leaves_one_measured_reflow_pending() {
+    let mut render = empty_render();
+    let before = [
+        text_row(0xB1, 0.0),
+        text_row(0xB2, 16.0),
+        text_row(0xB3, 32.0),
+    ];
+    install(&mut render, &window(7, 1), &before);
+    assert!(
+        render.compositor.pending.reflows.is_empty(),
+        "the first install has no previous presentation to have moved from"
+    );
+
+    // A line was inserted after the first row: the rest slid down 16px.
+    let after = [
+        text_row(0xB1, 0.0),
+        text_row(0xB2, 32.0),
+        text_row(0xB3, 48.0),
+    ];
+    install(&mut render, &window(7, 2), &after);
+
+    let pending = render.take_pending_continuity(true);
+    assert_eq!(pending.reflows.len(), 1);
+    let reflow = pending.reflows[0];
+    assert_eq!(reflow.window, DisplayWindowId::new(1));
+    assert!(
+        (reflow.pixels - 16.0).abs() < f32::EPSILON,
+        "measured, not assumed"
+    );
+    assert!(
+        (reflow.first_moved_y - 32.0).abs() < f32::EPSILON,
+        "the displaced run begins where it now sits, not at the cursor"
+    );
+}
+
+#[test]
+fn the_minibuffer_is_never_measured_for_a_reflow() {
+    // Every `M-x` rewrites the echo area wholesale. Sliding it would fire the
+    // effect on nearly every command, and there is no edit behind it.
+    let mut render = empty_render();
+    let mut mini = window(7, 1);
+    mini.is_minibuffer = true;
+    let before = [text_row(0xC1, 0.0), text_row(0xC2, 16.0)];
+    install(&mut render, &mini, &before);
+
+    let mut mini_after = window(7, 2);
+    mini_after.is_minibuffer = true;
+    let after = [text_row(0xC1, 16.0), text_row(0xC2, 32.0)];
+    install(&mut render, &mini_after, &after);
+
+    assert!(render.take_pending_continuity(true).reflows.is_empty());
+}
+
+#[test]
+fn an_ambiguous_shift_leaves_nothing_pending_rather_than_a_guess() {
+    let mut render = empty_render();
+    install(
+        &mut render,
+        &window(7, 1),
+        &[text_row(0xD1, 0.0), text_row(0xD2, 16.0)],
+    );
+    // Rows that disagree about the distance mean the layout changed as well as
+    // shifting; there is no one displacement to animate.
+    install(
+        &mut render,
+        &window(7, 2),
+        &[text_row(0xD1, 16.0), text_row(0xD2, 64.0)],
+    );
+    assert!(render.take_pending_continuity(true).reflows.is_empty());
+}
+
+#[test]
+fn a_second_pass_over_one_install_observes_no_reflow() {
+    let mut render = empty_render();
+    install(
+        &mut render,
+        &window(7, 1),
+        &[text_row(0xE1, 0.0), text_row(0xE2, 16.0)],
+    );
+    install(
+        &mut render,
+        &window(7, 2),
+        &[text_row(0xE1, 16.0), text_row(0xE2, 32.0)],
+    );
+    assert_eq!(render.take_pending_continuity(true).reflows.len(), 1);
+    assert!(
+        render.take_pending_continuity(true).reflows.is_empty(),
+        "re-arming the slide on every render pass would sustain a redraw loop"
+    );
+}

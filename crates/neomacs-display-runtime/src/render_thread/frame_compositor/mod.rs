@@ -73,29 +73,30 @@ pub(crate) struct FrameCompositor {
     /// rows, and this is the whole of what measuring a scroll against the next
     /// presentation needs.
     pub(super) scroll_anchors: ScrollAnchorsByWindow,
+    /// Row imprints of the presentation currently displayed, for measuring a
+    /// reflow against the next one.
+    pub(super) reflow_imprints: ReflowImprintsByWindow,
     /// Facts measured at the most recent install, consumed exactly once.
     pub(super) pending: PendingContinuity,
 }
 
 /// What the compositor measured when the current presentation was installed.
 ///
-/// Taken by value when a frame consumes it, not borrowed. Producer effect hints
-/// have always been one-shot — `take_runtime_hints` drains them as the frame is
-/// taken for render — but these observations were not, and `detect_frame_transitions`
-/// runs on *every* render pass, not once per install. A second pass over the same
-/// retained presentation would re-arm every effect (each trigger drops its old
-/// entry and pushes a fresh start time), and each re-arm reports `needs_redraw`,
-/// which marks the frame dirty and schedules another pass. That is a loop that
-/// sustains itself with no editor activity at all.
-///
-/// It is latent today only because scroll transitions default to disabled, so the
-/// one existing consumer plans nothing. Draining here is what makes it safe to
-/// move further effects onto this path.
+/// Taken by value when a frame consumes it, not borrowed. `detect_frame_transitions`
+/// runs on *every* render pass, not once per install, so an observation left in
+/// place would be seen again by the next pass over the same retained presentation.
+/// That would re-arm every effect (each trigger drops its old entry and pushes a
+/// fresh start time), and each re-arm reports `needs_redraw`, which marks the frame
+/// dirty and schedules another pass — a loop that sustains itself with no editor
+/// activity at all. Draining at the point of consumption is what makes this path
+/// safe to derive effects from.
 #[derive(Default)]
 pub(in crate::render_thread) struct PendingContinuity {
     pub(in crate::render_thread) scrolls: Vec<continuity::ScrollObservation>,
     /// Windows showing text they were not showing before.
     pub(in crate::render_thread) shown_text_replaced: Vec<continuity::ShownTextReplaced>,
+    /// Windows whose rows were displaced by an edit.
+    pub(in crate::render_thread) reflows: Vec<continuity::ReflowObservation>,
     /// Whether the frame's selection moved to another window.
     pub(in crate::render_thread) selection: Option<continuity::selection::SelectionObservation>,
     /// Whether the frame's theme changed.
@@ -104,11 +105,16 @@ pub(in crate::render_thread) struct PendingContinuity {
     /// then superseded before any frame draws must not be lost, or the user
     /// changes theme and sees no transition.
     pub(in crate::render_thread) theme: Option<continuity::theme::ThemeChange>,
-    /// Whether this frame's quality plan admits compositor-derived effects —
-    /// the role `RenderFeaturePlan::accept_effect_hints` played for producer
-    /// hints.
+    /// Whether this frame's quality plan admits compositor-derived effects. A
+    /// reduced-quality plan measures the same facts but animates none of them.
     pub(in crate::render_thread) accept_derived_effects: bool,
 }
+
+/// Row imprints keyed by the window that offered them.
+pub(in crate::render_thread) type ReflowImprintsByWindow = std::collections::HashMap<
+    neomacs_display_protocol::types::DisplayWindowId,
+    Vec<continuity::reflow::RowImprint>,
+>;
 
 /// Scroll anchors keyed by the window that offered them.
 pub(in crate::render_thread) type ScrollAnchorsByWindow = std::collections::HashMap<
@@ -142,6 +148,7 @@ impl FrameCompositor {
             transitions: TransitionState::default(),
             retained_static: None,
             scroll_anchors: ScrollAnchorsByWindow::default(),
+            reflow_imprints: ReflowImprintsByWindow::default(),
             pending: PendingContinuity::default(),
         }
     }

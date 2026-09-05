@@ -1,6 +1,5 @@
 use super::*;
 use crate::BasicFaceId;
-use crate::TransitionDirection;
 use crate::WebViewId;
 
 // -----------------------------------------------------------------------
@@ -229,7 +228,6 @@ fn clear_all_resets_glyphs_and_metadata() {
     assert!(buf.glyphs.is_empty());
     assert!(buf.window_infos.is_empty());
     assert!(buf.transition_hints.is_empty());
-    assert!(buf.effect_hints.is_empty());
     assert!(buf.active_cursor().is_none());
     assert!(buf.window_cursors.is_empty());
     assert!(buf.faces.is_empty());
@@ -250,7 +248,7 @@ fn clear_all_preserves_frame_dimensions() {
 }
 
 #[test]
-fn take_runtime_hints_drains_transition_and_effect_hints() {
+fn take_transition_hints_drains_them_once() {
     let mut buf = FrameGlyphBuffer::new();
     let region = PresentedWindowRegions {
         text_body: Rect::new(0.0, 0.0, 100.0, 100.0),
@@ -265,18 +263,9 @@ fn take_runtime_hints_drains_transition_and_effect_hints() {
         },
         intent: ContentTransitionIntent::Replace,
     });
-    buf.add_effect_hint(WindowEffectHint::LineAnimation {
-        window_id: DisplayWindowId::new(1),
-        bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
-        edit_y: 32.0,
-        offset: 16.0,
-    });
-
-    let (transition_hints, effect_hints) = buf.take_runtime_hints();
+    let transition_hints = buf.take_transition_hints();
     assert_eq!(transition_hints.len(), 1);
-    assert_eq!(effect_hints.len(), 1);
     assert!(buf.transition_hints.is_empty());
-    assert!(buf.effect_hints.is_empty());
 }
 
 #[test]
