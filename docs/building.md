@@ -146,6 +146,9 @@ python3 crates/neomacs-wasm/tests/browser_cursor_smoke.py --headless --mode colo
 python3 crates/neomacs-wasm/tests/browser_cursor_smoke.py --headless --mode motion
 # Use real Chrome device scaling and check its canvas backing size too.
 python3 crates/neomacs-wasm/tests/browser_cursor_smoke.py --headless --mode mouse --scale 1.75
+
+# GNU Dired: home/runtime listings, navigation, refresh, create/rename/delete.
+python3 crates/neomacs-wasm/tests/browser_dired_smoke.py --headless
 ```
 
 Add user-visible workflows such as buffer, window, and file commands to the
@@ -161,6 +164,19 @@ are not sent. Requests currently allow eight outstanding operations, a 1 MiB
 request body, a 16 MiB decoded response body, and a 30-second host timeout.
 Killing a retrieval buffer cancels its request. Fetch completion transfers
 owned bytes; Lisp callbacks run only on the editor VM thread.
+
+Browser Dired uses GNU's `ls-lisp` implementation, without launching external
+`ls`. OPFS, session-memory entries, and immutable runtime resources explicitly
+share single-user virtual ownership (`virtual`, numeric ID 0) and one link per
+entry; these are virtual namespace semantics, not the host's root identity.
+Native filesystem metadata is unchanged. Unavailable capacity returns `nil`.
+OPFS and session-memory modes describe the virtual user's effective access
+(read/write files, read/write/search directories), not configurable POSIX
+permissions; changing Unix modes remains unsupported. Unknown inode/device
+identities remain absent. An unavailable modification time stays unknown in
+storage metadata and becomes GNU's integer `0` unknown-modtime flag in Lisp; date formatting may
+display the epoch for this fallback, not an observed creation/modification date.
+Actual file modification times reported by storage are preserved.
 
 ## Linux (Arch Linux)
 
