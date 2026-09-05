@@ -2639,3 +2639,77 @@ fn color_components_in_valid_range() {
         );
     }
 }
+
+#[test]
+fn every_effect_in_the_registry_can_report_its_values() {
+    // The registry is pure serde reflection over `VisualConfig`, and a property
+    // that serializes to an object (anything but the `Duration` special case)
+    // makes `effect_values` fail for the *whole* effect — which takes
+    // `neomacs-effect-get` down for it and `neomacs-effects-apply`, which walks
+    // every effect, down entirely. That failure is invisible from the Rust side
+    // until someone asks from Lisp, so it is asserted here instead.
+    let config = VisualConfig::default();
+    for name in config.effect_names() {
+        assert!(
+            config.effect_values(&name).is_ok(),
+            "effect `{name}` has a property the registry cannot represent; \
+             give it scalar fields and convert internally, as `pane-motion` does"
+        );
+    }
+}
+
+#[test]
+fn pane_motion_reaches_the_registry_as_scalars_and_converts_to_a_spec() {
+    use crate::motion_spec::MotionSpec;
+
+    let config = VisualConfig::default();
+    // Sorted, not in declaration order: the registry walks a serde JSON map,
+    // which orders its keys. Which properties exist is the contract here; the
+    // order they arrive in is not.
+    let mut values: Vec<String> = config
+        .effect_values("pane-motion")
+        .expect("pane-motion is a registry effect")
+        .into_iter()
+        .map(|(property, _)| property)
+        .collect();
+    values.sort();
+    assert_eq!(values, vec!["duration", "easing", "enabled"]);
+
+    assert_eq!(
+        config.pane_motion.movement(),
+        MotionSpec::Instant,
+        "disabled means no motion is built at all, not a zero-length one"
+    );
+
+    let enabled = config
+        .apply_effects(&[EffectOperation::set(
+            "pane-motion",
+            [("enabled", EffectValue::Bool(true))],
+        )])
+        .expect("pane-motion accepts its own properties");
+    assert!(matches!(
+        enabled.pane_motion.movement(),
+        MotionSpec::Tween(_)
+    ));
+    // The registry still answers about it with motion on. This is the case
+    // that would break if the config stored a `MotionSpec` directly: every
+    // variant but `Instant` serializes to an object, which the registry cannot
+    // represent, so `neomacs-effect-get` would fail for `pane-motion` — and
+    // `neomacs-effects-apply`, which walks every effect, with it.
+    assert!(enabled.effect_values("pane-motion").is_ok());
+}
+
+#[test]
+fn a_zero_duration_pane_motion_is_instant_rather_than_a_zero_length_tween() {
+    use crate::motion_spec::MotionSpec;
+    let config = VisualConfig::default()
+        .apply_effects(&[EffectOperation::set(
+            "pane-motion",
+            [
+                ("enabled", EffectValue::Bool(true)),
+                ("duration", EffectValue::Number(0.0)),
+            ],
+        )])
+        .expect("pane-motion accepts a zero duration");
+    assert_eq!(config.pane_motion.movement(), MotionSpec::Instant);
+}

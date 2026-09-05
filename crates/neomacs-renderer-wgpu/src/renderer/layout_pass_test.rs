@@ -127,3 +127,22 @@ fn nothing_is_submitted_for_a_frame_with_no_size() {
             .all(|(_, uv)| uv.iter().all(|c| c.is_finite()))
     );
 }
+
+#[test]
+fn the_pass_draws_the_whole_frame_underneath_the_panes() {
+    // Panes are not the whole frame. The echo area is excluded from every
+    // morph by construction, and the tab bar, tool bar and frame padding
+    // belong to no pane at all — so a pass that drew only panes over a cleared
+    // target would make the minibuffer vanish for the length of every
+    // `split-window`.
+    let source = include_str!("layout_pass.rs");
+    assert!(
+        source.contains("corner(frame_width, frame_height, 1.0, 1.0),"),
+        "the base quad covering the composed frame is gone; \
+         everything outside a pane would be cleared away"
+    );
+    assert!(
+        source.contains("Vec::with_capacity((panes.len() + 1) * 6)"),
+        "the vertex count no longer accounts for the base quad"
+    );
+}
