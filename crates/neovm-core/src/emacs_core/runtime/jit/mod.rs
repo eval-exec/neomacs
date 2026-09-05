@@ -381,6 +381,44 @@ pub fn jit_runtime_enabled() -> bool {
     })
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static CALL_FEEDBACK_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force per-call feedback collection on/off on the current thread (tests only).
+#[cfg(test)]
+pub fn force_call_feedback_for_test(on: bool) {
+    CALL_FEEDBACK_TEST_OVERRIDE.with(|c| c.set(Some(on)));
+}
+
+/// Whether the VM records per-call-site target feedback (`record_call`) on the
+/// `Op::Call` hot path.
+///
+/// **Default OFF.** The feedback vector ([`CallFeedback`] / [`FeedbackVec`]) is
+/// the optimizing tier's most important input — `Monomorphic(sym)` is what a
+/// future MIR tier turns into a direct/inlined call. But NO tier consumes it
+/// today: ordinary bytecode-to-bytecode calls never reach the compile seam
+/// (`dispatch_sized` sees ~0.15% of calls), so recording a callee at every call
+/// is pure overhead — measured +7.4% Ir / +14.2% cycles on the 3M-call
+/// microbenchmark and 3–5% Ir on org-editing, feeding a decision nothing reads.
+///
+/// This gate stops the *collection*, not the mechanism: `record_call`,
+/// `call_at`, and the whole `CallFeedback` lattice are retained unchanged. When
+/// the consuming tier is wired, flip this default (or gate it on that tier being
+/// active) and the feedback flows again. `NEOVM_JIT_CALL_FEEDBACK=on` re-enables
+/// it now for A/B measurement and for the feedback tests.
+#[inline]
+pub fn call_feedback_collection_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(o) = CALL_FEEDBACK_TEST_OVERRIDE.with(|c| c.get()) {
+        return o;
+    }
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NEOVM_JIT_CALL_FEEDBACK").as_deref() == Ok("on"))
+}
+
 /// OSR (on-stack replacement): transfer a hot loop in a rarely-/once-called
 /// function into native code MID-execution (the case loop-heat's next-entry
 /// tier-up cannot reach). Default ON since the `mod` arith-intrinsic made the

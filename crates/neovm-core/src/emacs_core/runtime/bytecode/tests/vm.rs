@@ -1117,6 +1117,9 @@ fn vm_records_call_feedback_for_named_callee() {
     let mut eval = Context::new_minimal_vm_harness();
 
     // Callee `vm-feedback-callee`: a bytecode function returning 99.
+    // Collection is off by default until a tier reads the feedback; this test
+    // exercises the mechanism itself, so opt in.
+    crate::emacs_core::jit::force_call_feedback_for_test(true);
     let callee_sym = intern("vm-feedback-callee");
     let mut callee = ByteCodeFunction::new(LambdaParams {
         required: vec![intern("x")],

@@ -3780,8 +3780,11 @@ impl<'a> Vm<'a> {
                         // Only NAMED (symbol) callees carry a SymId; the call-site
                         // index is `pc_local - 1` (pc was advanced past Call above).
                         // GC-safe: a SymId is a stable index, never a heap pointer.
+                        // Gated process-wide until a tier consumes the feedback:
+                        // see `jit::call_feedback_collection_enabled`.
                         #[cfg(feature = "jit")]
                         if self.bytecode_tier_policy.records_call_feedback()
+                            && crate::emacs_core::jit::call_feedback_collection_enabled()
                             && let ValueKind::Symbol(id) = func_val.kind()
                         {
                             func.jit_runtime().record_call(pc_local - 1, ops_len, id);
