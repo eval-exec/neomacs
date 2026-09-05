@@ -371,7 +371,12 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
     assert!(render.compositor.pane_morph.is_some());
 
     // Mid-motion: two placements, and a projection that is not the identity.
-    let blits = render.sample_pane_layout(frame_at(origin, 50)).blits;
+    let blits = render
+        .sample_pane_layout(
+            &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+            frame_at(origin, 50),
+        )
+        .blits;
     // Three, not two: window 1 narrows from 800 to 400, so its old wrapping is
     // crossfaded out alongside the two destination panes.
     assert_eq!(blits.len(), 3);
@@ -379,13 +384,21 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
 
     // The last frame still draws the panes — at their destination — and only
     // then is the morph dropped, so nothing is left to re-arm on the next pass.
-    let blits = render.sample_pane_layout(frame_at(origin, 100)).blits;
+    let blits = render
+        .sample_pane_layout(
+            &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+            frame_at(origin, 100),
+        )
+        .blits;
     assert_eq!(blits.len(), 3);
     assert!(render.compositor.pane_morph.is_none(), "settled");
 
     assert!(
         render
-            .sample_pane_layout(frame_at(origin, 150))
+            .sample_pane_layout(
+                &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+                frame_at(origin, 150)
+            )
             .blits
             .is_empty(),
         "a settled frame composes the ordinary way, with no offscreen"
@@ -413,7 +426,10 @@ fn a_disabled_policy_installs_no_morph_at_all() {
     assert!(render.compositor.pane_morph.is_none());
     assert!(
         render
-            .sample_pane_layout(frame_at(origin, 0))
+            .sample_pane_layout(
+                &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+                frame_at(origin, 0)
+            )
             .blits
             .is_empty()
     );
@@ -444,7 +460,10 @@ fn the_settled_projection_replaces_the_morphs_on_the_last_frame() {
     >::from_px(500.0, 10.0)
     .expect("a finite point");
 
-    let composition = render.sample_pane_layout(frame_at(origin, 100));
+    let composition = render.sample_pane_layout(
+        &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+        frame_at(origin, 100),
+    );
     render.publish_presented_projection(composition.projection);
     let after_last_frame = render
         .compositor
@@ -607,7 +626,10 @@ fn a_sampled_projection_is_not_visible_to_a_hit_test_until_it_has_been_presented
         origin,
     );
 
-    let composition = render.sample_pane_layout(frame_at(origin, 50));
+    let composition = render.sample_pane_layout(
+        &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+        frame_at(origin, 50),
+    );
     assert!(!composition.blits.is_empty(), "the panes are in motion");
     assert!(
         composition.projection.is_some(),
@@ -819,7 +841,10 @@ fn a_retarget_that_ends_the_motion_still_hands_out_the_settled_projection() {
         origin,
     );
 
-    let composition = render.sample_pane_layout(frame_at(origin, 200));
+    let composition = render.sample_pane_layout(
+        &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
+        frame_at(origin, 200),
+    );
     assert!(
         composition.blits.is_empty(),
         "nothing left to place, so the fast path is eligible"

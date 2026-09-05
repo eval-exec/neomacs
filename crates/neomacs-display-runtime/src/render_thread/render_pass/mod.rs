@@ -32,8 +32,9 @@
 //!    dropped on one of those returns would lose the scroll measured at
 //!    install, with no later chance to plan it.
 //!
-//! None of the three is enforced by a type today. Moving a call across one of
-//! them compiles.
+//! All three are enforced by [`surface::SurfaceAcquired`], which only
+//! `surface::acquire_current_texture` can construct and which each of the three
+//! phases requires. Moving one of them above acquisition does not compile.
 
 // Several render entry points carry the recurring `bg_gradient` RGB-pair tuple
 // parameter, which mirrors the renderer-wgpu API surface; a local type alias
@@ -46,7 +47,7 @@ mod full_render;
 mod present;
 mod retained_static;
 mod scene;
-mod surface;
+pub(in crate::render_thread) mod surface;
 
 use self::surface::FrameRenderFailure;
 use super::RenderApp;
@@ -181,7 +182,7 @@ fn render_frame_window_contents_to_surface(
     let feature_plan =
         render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
 
-    let output =
+    let surface::AcquiredSurface { output, acquired } =
         surface::acquire_current_texture(&native.surface, device_lost, render.emacs_frame_id)?;
 
     // Placed here, after the surface is in hand: `sample_pane_layout`
@@ -196,7 +197,7 @@ fn render_frame_window_contents_to_surface(
     // transform hit testing uses and the geometry this pass draws come
     // from one sample of one motion rather than from two evaluations that
     // could land on different sides of a frame boundary.
-    let composition = render.sample_pane_layout(renderer.frame_sample());
+    let composition = render.sample_pane_layout(&acquired, renderer.frame_sample());
     let pane_projection = composition.projection.clone();
     let pane_blits = composition.blits;
     if !pane_blits.is_empty() {
@@ -211,7 +212,7 @@ fn render_frame_window_contents_to_surface(
         .present_mapping()
         .ok_or(FrameRenderFailure::AwaitingContent)?;
     let mut frame = render
-        .take_current_frame_for_render()
+        .take_current_frame_for_render(&acquired)
         .ok_or(FrameRenderFailure::AwaitingContent)?;
     feature_plan.prepare_frame(&mut frame);
     render.begin_presentable_render();
@@ -315,6 +316,7 @@ fn render_frame_window_contents_to_surface(
         .flatten();
     match composition.as_ref() {
         Some(composition) => full_render::through_composition_ring(
+            &acquired,
             renderer,
             native,
             render,
@@ -327,6 +329,7 @@ fn render_frame_window_contents_to_surface(
             &pane_blits,
         ),
         None => full_render::onto_target(
+            &acquired,
             renderer,
             native,
             render,
