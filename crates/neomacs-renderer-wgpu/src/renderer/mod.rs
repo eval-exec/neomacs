@@ -31,7 +31,7 @@ mod frame_pass;
 mod fx_state;
 mod glyphs;
 mod gpu_budget;
-pub use gpu_budget::{BudgetExceeded, GpuBudget, UnpooledTexture};
+pub use gpu_budget::{BudgetExceeded, GpuBudget, GpuBudgetOwner, UnpooledTexture};
 mod layer_backgrounds;
 mod layout_pass;
 pub use layout_pass::{PaneBlit, PaneSource};
@@ -787,10 +787,6 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
 
-        // --- Stencil texture for child frame rounded-corner clipping ---
-        let (stencil_texture, stencil_view) =
-            Self::create_stencil_texture_static(&device, width, height);
-
         // Stencil state for content pipelines: pass only where stencil==reference
         let stencil_read_state = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Stencil8,
@@ -1144,7 +1140,8 @@ impl WgpuRenderer {
             None
         };
 
-        Self {
+        let stencil = StencilTargets::placeholder(&device);
+        let mut renderer = Self {
             device,
             queue,
             surface,
@@ -1172,10 +1169,7 @@ impl WgpuRenderer {
                 stencil_opaque_image: stencil_opaque_image_pipeline,
                 stencil_write: stencil_write_pipeline,
             },
-            stencil: StencilTargets {
-                texture: stencil_texture,
-                view: stencil_view,
-            },
+            stencil,
             glyph_bind_group_layout,
             uniform_buffer,
             uniform_bind_group,
@@ -1209,7 +1203,9 @@ impl WgpuRenderer {
                 neomacs_display_protocol::frame_time::observe_platform_now(),
                 std::time::Duration::from_millis(16),
             ),
-        }
+        };
+        renderer.install_stencil_targets(width, height);
+        renderer
     }
 
     async fn new_async(
@@ -1264,31 +1260,29 @@ impl WgpuRenderer {
         ))
     }
 
-    /// Resize the renderer's surface.
-    /// Create a Stencil8 texture and view for rounded-corner clipping.
-    fn create_stencil_texture_static(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let w = width.max(1);
-        let h = height.max(1);
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Stencil Texture"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Stencil8,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+    /// Allocate the stencil clip target at `width`x`height` and charge it.
+    ///
+    /// The one place a stencil target is allocated, and it charges the budget
+    /// in the same statement — so the census cannot describe a texture other
+    /// than the one that exists, and no future resize path can add a second
+    /// allocation site that forgets to pay for it.
+    ///
+    /// Charged to [`GpuBudgetOwner::Renderer`] rather than to a frame window
+    /// because there is exactly one of these for the whole renderer, resized
+    /// to whichever window is being drawn. Charging it to the window that last
+    /// sized it would uncharge it when that window closed, leaving the budget
+    /// certain it had megabytes of headroom that are still allocated.
+    ///
+    /// Set semantics make repetition exact: a window resized back to a size it
+    /// held before re-states the same figure rather than adding to it.
+    fn install_stencil_targets(&mut self, width: u32, height: u32) {
+        self.stencil = StencilTargets::new(&self.device, width, height);
+        let bytes = self.stencil.budget_bytes();
+        self.snapshots.budget_mut().record_unpooled(
+            GpuBudgetOwner::Renderer,
+            UnpooledTexture::StencilClip,
+            bytes,
+        );
     }
 
     /// Resize the render target, reapplying only what the new geometry
@@ -1322,11 +1316,7 @@ impl WgpuRenderer {
                 surface.configure(&self.device, config);
             }
 
-            // Recreate stencil texture at new size
-            let (stencil_texture, stencil_view) =
-                Self::create_stencil_texture_static(&self.device, width, height);
-            self.stencil.texture = stencil_texture;
-            self.stencil.view = stencil_view;
+            self.install_stencil_targets(width, height);
         }
 
         // Update uniform buffer with logical size so vertex positions from Emacs map correctly
@@ -2085,15 +2075,22 @@ impl WgpuRenderer {
     /// Report what one full-frame texture the pool does not hand out costs
     /// its owner right now. Re-reporting replaces the previous figure, so
     /// this is meant to be called from live state once per frame.
-    pub fn record_unpooled_texture(&mut self, owner: u64, kind: UnpooledTexture, bytes: u64) {
+    pub fn record_unpooled_texture(
+        &mut self,
+        owner: GpuBudgetOwner,
+        kind: UnpooledTexture,
+        bytes: u64,
+    ) {
         self.snapshots
             .budget_mut()
             .record_unpooled(owner, kind, bytes);
     }
 
     /// Retire every census entry for a frame window that no longer exists.
-    pub fn forget_gpu_budget_owner(&mut self, owner: u64) {
-        self.snapshots.budget_mut().forget_owner(owner);
+    pub fn forget_gpu_budget_frame_window(&mut self, frame_window: u64) {
+        self.snapshots
+            .budget_mut()
+            .forget_frame_window(frame_window);
     }
 
     /// Create a bind group for a texture view (usable with image_pipeline)
