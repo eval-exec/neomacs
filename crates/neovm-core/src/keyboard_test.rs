@@ -495,6 +495,247 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
     );
 }
 
+/// A GUI frame whose active presentation has a text body and a right divider.
+fn frame_with_a_divider() -> (crate::emacs_core::Context, crate::window::FrameId, u64) {
+    let mut eval = crate::emacs_core::Context::new();
+    let buffer = eval.buffer_manager_mut().create_buffer("window-edge-drag");
+    eval.buffer_manager_mut().set_current(buffer);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("window-edge-drag", 200, 100, buffer);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame
+            .prepare_and_activate_display_presentation_for_test(
+                crate::window::geometry::PresentationId::new(1),
+                vec![crate::window::WindowDisplaySnapshot {
+                    window_id,
+                    regions: crate::window::PresentedWindowRegions {
+                        outer: neomacs_display_protocol::types::Rect::new(10.0, 5.0, 180.0, 90.0),
+                        text_body: neomacs_display_protocol::types::Rect::new(
+                            20.0, 10.0, 160.0, 70.0,
+                        ),
+                        ..Default::default()
+                    },
+                    regions_materialized: true,
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+    }
+    (eval, frame_id, window_id.0)
+}
+
+/// The observation the render thread delivers ahead of a press at (`x`, `y`).
+fn region_observed_at(
+    window: u64,
+    kind: neomacs_display_protocol::PresentedRegionKind,
+    bounds: neomacs_display_protocol::FrameRect,
+    x: f32,
+    y: f32,
+) -> InputEvent {
+    let hit = neomacs_display_protocol::PresentedHitIndex::from_parts(
+        neomacs_display_protocol::PresentationId::new(1),
+        vec![neomacs_display_protocol::PresentedHitRegion::new(
+            Some(neomacs_display_protocol::DisplayWindowId::new(
+                window as i64,
+            )),
+            kind,
+            bounds,
+            0,
+        )],
+        vec![],
+    )
+    .unwrap()
+    .resolve(neomacs_display_protocol::PresentedHitQuery::new(
+        settled_point(neomacs_display_protocol::PresentationId::new(1), x, y),
+    ))
+    .unwrap();
+    InputEvent::PresentedRegion {
+        presentation: 1,
+        hit,
+        x,
+        y,
+        target_frame_id: 0,
+    }
+}
+
+fn feed(
+    eval: &mut crate::emacs_core::Context,
+    event: InputEvent,
+    frame_id: crate::window::FrameId,
+) {
+    let event = match event {
+        InputEvent::PresentedRegion {
+            presentation,
+            hit,
+            x,
+            y,
+            ..
+        } => InputEvent::PresentedRegion {
+            presentation,
+            hit,
+            x,
+            y,
+            target_frame_id: frame_id.0,
+        },
+        other => other,
+    };
+    eval.handle_read_char_input_event(event, TtyInputDecoding::KeyboardCodingSystem)
+        .unwrap();
+}
+
+#[test]
+fn a_press_on_a_divider_opens_a_drag_that_only_its_release_closes() {
+    // The extent has to be delimited by the events the command loop consumes,
+    // not by the render thread's view of the button: redisplay runs between two
+    // of these reads, so every presentation the drag causes is composed while
+    // the session is open. If the session opened or closed anywhere else, the
+    // drag's last commits would animate toward a position `window.el` had
+    // already clamped, which is the snap-back this suppression exists to remove.
+    let (mut eval, frame_id, window) = frame_with_a_divider();
+    assert_eq!(
+        eval.presentation_origin(),
+        neomacs_display_protocol::presentation_origin::PresentationOrigin::Ordinary,
+        "nothing is being dragged yet"
+    );
+
+    let divider = neomacs_display_protocol::FrameRect::new(182.0, 5.0, 8.0, 75.0).unwrap();
+    feed(
+        &mut eval,
+        region_observed_at(
+            window,
+            neomacs_display_protocol::PresentedRegionKind::RightDivider,
+            divider,
+            185.0,
+            40.0,
+        ),
+        frame_id,
+    );
+    feed(
+        &mut eval,
+        InputEvent::MousePress {
+            button: MouseButton::Left,
+            x: 185.0,
+            y: 40.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        frame_id,
+    );
+    assert!(
+        eval.presentation_origin().suppresses_layout_motion(),
+        "the pointer is holding the divider"
+    );
+
+    // Every pointer movement is its own command-loop iteration, and each one
+    // commits new geometry. None of them ends the drag.
+    feed(
+        &mut eval,
+        InputEvent::MouseMove {
+            x: 185.0,
+            y: 55.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        frame_id,
+    );
+    assert!(eval.presentation_origin().suppresses_layout_motion());
+
+    feed(
+        &mut eval,
+        InputEvent::MouseRelease {
+            button: MouseButton::Left,
+            x: 185.0,
+            y: 60.0,
+            target_frame_id: frame_id.0,
+        },
+        frame_id,
+    );
+    assert_eq!(
+        eval.presentation_origin(),
+        neomacs_display_protocol::presentation_origin::PresentationOrigin::Ordinary,
+        "the hand let go, so the next layout change animates again"
+    );
+}
+
+#[test]
+fn a_press_in_the_text_body_opens_no_drag() {
+    // The grab is the only thing that suppresses motion. If an ordinary click
+    // opened one, the compositor would stop animating for the whole of a
+    // click-drag selection — and, because a press with no matching release
+    // observation is common, potentially long after it.
+    let (mut eval, frame_id, window) = frame_with_a_divider();
+    let body = neomacs_display_protocol::FrameRect::new(20.0, 10.0, 160.0, 70.0).unwrap();
+    feed(
+        &mut eval,
+        region_observed_at(
+            window,
+            neomacs_display_protocol::PresentedRegionKind::TextBody,
+            body,
+            22.0,
+            12.0,
+        ),
+        frame_id,
+    );
+    feed(
+        &mut eval,
+        InputEvent::MousePress {
+            button: MouseButton::Left,
+            x: 22.0,
+            y: 12.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        frame_id,
+    );
+    assert_eq!(
+        eval.presentation_origin(),
+        neomacs_display_protocol::presentation_origin::PresentationOrigin::Ordinary
+    );
+}
+
+#[test]
+fn a_press_whose_observation_describes_another_point_opens_no_drag() {
+    // The observation and the press are two events carrying one pointer
+    // position. Accepting a mismatched pair would let a stale divider
+    // observation open a drag on a press that landed in the text.
+    let (mut eval, frame_id, window) = frame_with_a_divider();
+    let divider = neomacs_display_protocol::FrameRect::new(182.0, 5.0, 8.0, 75.0).unwrap();
+    feed(
+        &mut eval,
+        region_observed_at(
+            window,
+            neomacs_display_protocol::PresentedRegionKind::RightDivider,
+            divider,
+            185.0,
+            40.0,
+        ),
+        frame_id,
+    );
+    feed(
+        &mut eval,
+        InputEvent::MousePress {
+            button: MouseButton::Left,
+            x: 22.0,
+            y: 12.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        frame_id,
+    );
+    assert_eq!(
+        eval.presentation_origin(),
+        neomacs_display_protocol::presentation_origin::PresentationOrigin::Ordinary
+    );
+}
+
 fn presented_pointer_fixture() -> (crate::emacs_core::Context, crate::window::FrameId, u64, u32) {
     let mut eval = crate::emacs_core::Context::new();
     let buffer = eval.buffer_manager_mut().create_buffer("presented-pointer");

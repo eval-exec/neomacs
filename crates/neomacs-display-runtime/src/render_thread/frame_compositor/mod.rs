@@ -25,6 +25,7 @@ use neomacs_renderer_wgpu::{RendererFrameEffects, WgpuGlyphAtlas};
 mod child_frames;
 pub(in crate::render_thread) mod continuity;
 mod cursor;
+pub(in crate::render_thread) mod layout_continuity;
 mod media;
 pub(in crate::render_thread) mod motion;
 mod overlays;

@@ -21,19 +21,6 @@ fn modiff_round_trips_its_tick() {
 }
 
 // =======================================================================
-// InputSerial
-// =======================================================================
-
-#[test]
-fn input_serials_order_by_emission() {
-    let first = InputSerial::FIRST;
-    let second = first.next();
-    let third = second.next();
-    assert!(first < second && second < third);
-    assert_eq!(third.get(), 2);
-}
-
-// =======================================================================
 // InteractionSessionId
 // =======================================================================
 
@@ -79,10 +66,7 @@ fn an_ordinary_presentation_animates_and_belongs_to_no_session() {
 fn an_interactive_resize_presentation_suppresses_motion_for_its_own_session() {
     let session = InteractionSessionId::FIRST;
     let other = session.next();
-    let origin = PresentationOrigin::InteractiveResize {
-        session,
-        through: InputSerial::new(17),
-    };
+    let origin = PresentationOrigin::InteractiveResize { session };
     assert!(origin.suppresses_layout_motion());
     assert!(origin.belongs_to(session));
     assert!(
@@ -97,7 +81,6 @@ fn origin_names_are_stable_for_diagnostics() {
     assert_eq!(name, "ordinary");
     let name: &'static str = PresentationOrigin::InteractiveResize {
         session: InteractionSessionId::FIRST,
-        through: InputSerial::FIRST,
     }
     .into();
     assert_eq!(name, "interactive-resize");
@@ -109,7 +92,6 @@ fn origin_round_trips_through_json() {
         PresentationOrigin::Ordinary,
         PresentationOrigin::InteractiveResize {
             session: InteractionSessionId::FIRST.next(),
-            through: InputSerial::new(9),
         },
     ] {
         let json = serde_json::to_string(&origin).expect("serialize");

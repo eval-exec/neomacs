@@ -53,58 +53,20 @@ impl BufferModiff {
     }
 }
 
-/// Ordering of pointer events as the render thread emitted them.
+/// Causal identity of one drag that moves a window edge.
 ///
-/// Useful for latency diagnostics and for saying which input a presentation
-/// had consumed, but deliberately *not* sufficient to decide what caused one:
-/// a watermark proves what had been consumed before a redisplay, not what
-/// provoked it. A timer-driven redisplay after a drag release carries the
-/// release-era watermark and would be misclassified. That is what
-/// [`InteractionSessionId`] is for.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Default,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-#[repr(transparent)]
-pub struct InputSerial(u64);
-
-impl InputSerial {
-    pub const FIRST: Self = Self(0);
-
-    #[must_use]
-    pub const fn new(serial: u64) -> Self {
-        Self(serial)
-    }
-
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-
-    /// The next serial in emission order.
-    #[must_use]
-    pub const fn next(self) -> Self {
-        Self(self.0.wrapping_add(1))
-    }
-}
-
-/// Causal identity of one interactive command started by a pointer press.
+/// The extent is the pointer button, not a command and not a time window: a
+/// session opens when a press lands on a region whose drag moves a window edge
+/// — a mode, header or tab line, or a divider — and closes when that button is
+/// released. Nothing else can end it, so "caused by this drag" needs no
+/// timestamp comparison and no timeout.
 ///
-/// A divider drag runs entirely inside a single Lisp command: GNU's
-/// `mouse-drag-line` sets `track-mouse`, loops on `read-event` calling
-/// `adjust-window-trailing-edge`, and restores it in an unwind before
-/// returning. Every redisplay the drag causes therefore happens inside that
-/// command's dynamic extent, which gives "caused by this drag" a precise
-/// meaning that no timestamp comparison can.
+/// It is deliberately *not* the dynamic extent of a Lisp command. `mouse.el`'s
+/// `mouse-drag-line` sets `track-mouse` and installs a `set-transient-map`,
+/// then returns: the drag runs one command per pointer movement, and no
+/// command's extent contains it. Nor is it the value of `track-mouse`, which
+/// is a `setq` convention of three particular `mouse-drag-*` commands rather
+/// than a fact about the pointer.
 #[derive(
     Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
 )]
@@ -162,13 +124,13 @@ pub enum PresentationOrigin {
     /// Ordinary redisplay. Normal transition policy applies.
     #[default]
     Ordinary,
-    /// Produced while an interactive resize command was executing.
+    /// Composed while the pointer was holding a window edge.
     ///
-    /// Installed instantly, with no motion, until the session ends.
-    InteractiveResize {
-        session: InteractionSessionId,
-        through: InputSerial,
-    },
+    /// Installed instantly, with no motion, for as long as the drag runs.
+    /// Whichever command the keymap routed the press to is irrelevant: the
+    /// hand is placing this geometry, so the geometry is already where it
+    /// belongs.
+    InteractiveResize { session: InteractionSessionId },
 }
 
 impl PresentationOrigin {
@@ -176,7 +138,7 @@ impl PresentationOrigin {
     #[must_use]
     pub const fn belongs_to(self, session: InteractionSessionId) -> bool {
         match self {
-            Self::InteractiveResize { session: own, .. } => own.get() == session.get(),
+            Self::InteractiveResize { session: own } => own.get() == session.get(),
             Self::Ordinary => false,
         }
     }
