@@ -15,14 +15,38 @@
 //!   and a pooled texture cannot be allocated or released anywhere else.
 //! * `unpooled_bytes` is a census. It covers full-frame GPU objects whose
 //!   owning structs cannot hold a lease, so they report their size instead.
-//!   The render pass re-reports every entry from live state once per frame,
-//!   which is what keeps a census from drifting: a texture that was freed
-//!   reports zero on the next frame rather than staying charged forever.
+//!   The render pass re-reports each frame window's entries from live state
+//!   once per frame, which is what keeps a census from drifting: a texture
+//!   that was freed reports zero on the next frame rather than staying charged
+//!   forever.
+//!
+//! The renderer's own stencil clip target is the one census entry that is not
+//! re-reported per frame, because it does not need to be: it has a single
+//! allocation site, `WgpuRenderer::install_stencil_targets`, which charges it
+//! in the same statement that replaces it. Set semantics do the rest — there
+//! is nothing for a re-report to correct.
 //!
 //! [`SnapshotPool`]: super::snapshot_pool::SnapshotPool
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
+
+/// Who holds an unpooled full-frame texture.
+///
+/// Not every one of them belongs to a frame window. The stencil clip target is
+/// a single texture the renderer resizes to whichever window it is drawing, so
+/// charging it to a window would make it disappear from the census the moment
+/// that window closed — while the texture is still allocated, still
+/// full-frame sized, and about to be resized for the next window. Naming the
+/// two kinds of owner separately is what makes that mistake unrepresentable
+/// rather than a convention about which `u64` to pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum GpuBudgetOwner {
+    /// One GUI frame window, keyed by its Emacs frame id.
+    FrameWindow(u64),
+    /// The renderer itself, for textures shared by every window it draws.
+    Renderer,
+}
 
 /// A full-frame GPU allocation the pool does not hand out, and therefore
 /// cannot count by construction.
@@ -43,6 +67,17 @@ pub enum UnpooledTexture {
     /// bytes of its own; what it actually does is pin atlas glyphs, so the
     /// pages it holds resident are counted here and not twice.
     GlyphAtlas,
+    /// The renderer's `Stencil8` clip target, used to clip child frames to
+    /// rounded corners.
+    ///
+    /// One texture for the whole renderer, recreated at the size of whichever
+    /// window is being drawn — so at a large single window it is full-frame
+    /// sized and permanently resident, which is exactly the shape of thing
+    /// this budget exists to count. It is a byte per texel rather than four,
+    /// which is why it was easy to leave out and why leaving it out was still
+    /// a hole: the ceiling is a ceiling, and a megabyte nobody counts is a
+    /// megabyte the pool believes it can lease twice.
+    StencilClip,
 }
 
 /// Why a request for GPU memory was refused.
@@ -84,7 +119,7 @@ pub struct GpuBudget {
     pooled_bytes: u64,
     /// Keyed by owner so a second frame window adds to the census instead of
     /// replacing the first window's entry.
-    unpooled: BTreeMap<(u64, UnpooledTexture), u64>,
+    unpooled: BTreeMap<(GpuBudgetOwner, UnpooledTexture), u64>,
     /// Maintained alongside `unpooled` so a decision costs no map walk.
     unpooled_bytes: u64,
 }
@@ -152,7 +187,12 @@ impl GpuBudget {
     /// Set semantics, not accumulate: re-reporting the same `(owner, kind)`
     /// replaces the previous figure, so the per-frame re-report cannot inflate
     /// the census, and `0` retires the entry.
-    pub(crate) fn record_unpooled(&mut self, owner: u64, kind: UnpooledTexture, bytes: u64) {
+    pub(crate) fn record_unpooled(
+        &mut self,
+        owner: GpuBudgetOwner,
+        kind: UnpooledTexture,
+        bytes: u64,
+    ) {
         let previous = if bytes == 0 {
             self.unpooled.remove(&(owner, kind))
         } else {
@@ -166,10 +206,16 @@ impl GpuBudget {
     ///
     /// Without this a destroyed window's atlas and retained scene stay charged
     /// forever, and the budget refuses leases for memory nothing holds.
-    pub(crate) fn forget_owner(&mut self, owner: u64) {
+    ///
+    /// Takes a frame id rather than a [`GpuBudgetOwner`] because the
+    /// renderer's own entries have no such moment: its textures outlive every
+    /// window and are released with the renderer. Being unable to name it here
+    /// is the point.
+    pub(crate) fn forget_frame_window(&mut self, frame_window: u64) {
+        let gone = GpuBudgetOwner::FrameWindow(frame_window);
         let mut retired = 0u64;
         self.unpooled.retain(|(entry_owner, _), bytes| {
-            let keep = *entry_owner != owner;
+            let keep = *entry_owner != gone;
             if !keep {
                 retired += *bytes;
             }

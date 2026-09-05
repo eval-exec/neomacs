@@ -19,8 +19,8 @@ use crate::core::types::DisplayFrameId;
 use crate::thread_comm::{MenuBarItem, ToolBarItem};
 use neomacs_display_protocol::frame_chrome::{FrameChromeContent, FrameRect, PositionedChromeItem};
 use neomacs_renderer_wgpu::{
-    BudgetExceeded, PopupMenuState, SnapshotLease, SnapshotSize, TooltipState, UnpooledTexture,
-    WgpuGlyphAtlas, WgpuRenderer, texture_bytes,
+    BudgetExceeded, GpuBudgetOwner, PopupMenuState, SnapshotLease, SnapshotSize, TooltipState,
+    UnpooledTexture, WgpuGlyphAtlas, WgpuRenderer, texture_bytes,
 };
 
 /// Flatten a protocol [`Color`] into the legacy `(r, g, b)` tuple the
@@ -1469,7 +1469,7 @@ impl RenderApp {
     /// a charge/refund pair drifts the first time a release site is added
     /// without a matching refund.
     fn report_unpooled_gpu_textures(renderer: &mut WgpuRenderer, render: &GuiFrameRenderState) {
-        let owner = render.emacs_frame_id;
+        let owner = GpuBudgetOwner::FrameWindow(render.emacs_frame_id);
         let retained_static_bytes = render
             .compositor
             .retained_static
@@ -1489,7 +1489,7 @@ impl RenderApp {
         renderer.record_unpooled_texture(owner, UnpooledTexture::GlyphAtlas, atlas_bytes);
         let budget = renderer.gpu_budget();
         tracing::trace!(
-            owner,
+            ?owner,
             pooled_bytes = budget.pooled_bytes(),
             unpooled_bytes = budget.unpooled_bytes(),
             limit_bytes = budget.limit_bytes().get(),
