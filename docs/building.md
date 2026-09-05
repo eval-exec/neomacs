@@ -124,6 +124,10 @@ cargo check --target wasm32-unknown-unknown -p neomacs-wasm-worker
 # Starts its own controlled endpoints; no editor build or preview is needed.
 python3 crates/neomacs-wasm/tests/browser_http_smoke.py --headless
 
+# Exercise Lisp URL retrieval and EWW through Fetch in the assembled editor.
+python3 crates/neomacs-wasm/tests/browser_http_editor_smoke.py \
+  --headless --url http://127.0.0.1:4174/
+
 # Exercise HiDPI startup and a live viewport/scale change in default Chrome.
 python3 crates/neomacs-wasm/tests/browser_hidpi_smoke.py \
   --headless --url http://127.0.0.1:4174/
@@ -136,6 +140,16 @@ python3 crates/neomacs-wasm/tests/browser_opfs_smoke.py \
 Add user-visible workflows such as buffer, window, and file commands to the
 real-browser smoke test. Keep protocol translation and storage edge cases in
 the faster JavaScript or Rust layers so failures identify the broken boundary.
+
+Browser HTTP uses Fetch through an asynchronous `url-retrieve` loader, not
+emulated TCP processes. Native desktop URL loaders are unchanged. Browser
+CORS, mixed-content, redirect, and forbidden-header rules still apply:
+arbitrary websites that do not allow the editor's origin cannot be read by
+EWW. There is no implicit proxy or security bypass, and browser login cookies
+are not sent. Requests currently allow eight outstanding operations, a 1 MiB
+request body, a 16 MiB decoded response body, and a 30-second host timeout.
+Killing a retrieval buffer cancels its request. Fetch completion transfers
+owned bytes; Lisp callbacks run only on the editor VM thread.
 
 ## Linux (Arch Linux)
 
