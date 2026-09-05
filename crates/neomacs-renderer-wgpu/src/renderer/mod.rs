@@ -18,6 +18,8 @@ use super::webview_cache::WgpuWebViewCache;
 
 mod box_tessellation;
 mod child_frames;
+mod composition_ring;
+pub use composition_ring::CompositionRing;
 mod content;
 mod cursor_effects;
 mod cursor_presentation;
@@ -28,6 +30,8 @@ mod effects_state;
 mod frame_pass;
 mod fx_state;
 mod glyphs;
+mod gpu_budget;
+pub use gpu_budget::{BudgetExceeded, GpuBudget, UnpooledTexture};
 mod layer_backgrounds;
 mod layout_pass;
 pub use layout_pass::PaneBlit;
@@ -41,6 +45,10 @@ mod pointer_override;
 mod resources;
 mod row_reuse;
 mod scissor;
+mod snapshot_pool;
+pub use snapshot_pool::{
+    SnapshotId, SnapshotLease, SnapshotPool, SnapshotResources, SnapshotSize, texture_bytes,
+};
 mod stats;
 mod transitions;
 mod ui_overlays;
@@ -179,6 +187,10 @@ pub struct WgpuRenderer {
     pub(super) frame_post: Option<crate::frame_post::FramePost>,
     /// Unified media memory accounting + surface eviction (media_budget.rs).
     pub(super) media_budget: crate::media_budget::MediaBudget,
+    /// The single owner of every pooled full-frame texture, and the one
+    /// ceiling every full-frame texture the render thread owns is measured
+    /// against (snapshot_pool.rs, gpu_budget.rs).
+    pub(super) snapshots: SnapshotPool,
     /// Which shader surfaces the eviction driver may free (declarative specs
     /// re-resolve on the next redisplay walk; imperative handles cannot).
     pub(super) surface_recreatable: std::collections::HashMap<u32, bool>,
@@ -1180,6 +1192,7 @@ impl WgpuRenderer {
             arenas: VertexArenas::new(),
             frame_post: None,
             media_budget: crate::media_budget::MediaBudget::new(),
+            snapshots: SnapshotPool::new(GpuBudget::new()),
             surface_recreatable: std::collections::HashMap::new(),
             width,
             height,
@@ -1586,29 +1599,6 @@ impl WgpuRenderer {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-    }
-
-    /// Render a scene to an offscreen texture.
-    pub fn render_to_texture(&self, scene: &Scene) -> wgpu::Texture {
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Offscreen Texture"),
-            size: wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.surface_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.render_to_view(&view, scene);
-
-        texture
     }
 
     /// Add a rectangle to the vertex list (6 vertices = 2 triangles).
@@ -2068,31 +2058,42 @@ impl WgpuRenderer {
         &self.pipelines.image
     }
 
-    /// Create an offscreen texture suitable for rendering a full frame
-    pub fn create_offscreen_texture(
-        &self,
-        width: u32,
-        height: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Offscreen Frame"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.surface_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        (tex, view)
+    /// Lease a full-frame texture from the snapshot pool.
+    ///
+    /// This is the only way to allocate one. A raw `create_texture` helper
+    /// beside it would be a hole in the accounting, which is what
+    /// `create_offscreen_texture` used to be.
+    pub fn acquire_snapshot(
+        &mut self,
+        size: SnapshotSize,
+    ) -> Result<SnapshotLease, BudgetExceeded> {
+        let device = &self.device;
+        let layout = self.caches.image.bind_group_layout();
+        let sampler = self.caches.image.sampler();
+        let format = self.surface_format;
+        self.snapshots.acquire(size, format, || {
+            SnapshotResources::create(device, layout, sampler, size, format)
+        })
+    }
+
+    /// What every full-frame GPU texture the render thread owns costs, and
+    /// the ceiling it is measured against.
+    pub fn gpu_budget(&self) -> &GpuBudget {
+        self.snapshots.budget()
+    }
+
+    /// Report what one full-frame texture the pool does not hand out costs
+    /// its owner right now. Re-reporting replaces the previous figure, so
+    /// this is meant to be called from live state once per frame.
+    pub fn record_unpooled_texture(&mut self, owner: u64, kind: UnpooledTexture, bytes: u64) {
+        self.snapshots
+            .budget_mut()
+            .record_unpooled(owner, kind, bytes);
+    }
+
+    /// Retire every census entry for a frame window that no longer exists.
+    pub fn forget_gpu_budget_owner(&mut self, owner: u64) {
+        self.snapshots.budget_mut().forget_owner(owner);
     }
 
     /// Create a bind group for a texture view (usable with image_pipeline)

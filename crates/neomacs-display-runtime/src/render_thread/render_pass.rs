@@ -13,14 +13,15 @@ use super::state::{
     ChildFrameStyle, FpsCounter, GuiChromeInteractionState, ToolbarResources, TypingSpeedState,
     WindowChrome,
 };
-use super::transitions::{
-    detect_frame_transitions, ensure_frame_offscreen_textures, render_frame_transitions,
-};
+use super::transitions::{detect_frame_transitions, render_frame_transitions};
 use super::{RenderApp, surface_readback};
 use crate::core::types::DisplayFrameId;
 use crate::thread_comm::{MenuBarItem, ToolBarItem};
 use neomacs_display_protocol::frame_chrome::{FrameChromeContent, FrameRect, PositionedChromeItem};
-use neomacs_renderer_wgpu::{PopupMenuState, TooltipState, WgpuGlyphAtlas, WgpuRenderer};
+use neomacs_renderer_wgpu::{
+    BudgetExceeded, PopupMenuState, SnapshotLease, SnapshotSize, TooltipState, UnpooledTexture,
+    WgpuGlyphAtlas, WgpuRenderer, texture_bytes,
+};
 
 /// Flatten a protocol [`Color`] into the legacy `(r, g, b)` tuple the
 /// renderer's chrome-overlay draw fns still take. Alpha is dropped: GUI
@@ -658,18 +659,22 @@ impl RenderApp {
         // shade it into the swapchain as the LAST step, so every present is
         // uniformly post-processed (Ghostty semantics — cursor included) and
         // partial-damage frames cannot mix shaded and unshaded regions.
-        let frame_post_active = feature_plan.apply_frame_post;
-        let composition_view = if frame_post_active {
-            Self::ensure_frame_post_src(renderer, render, native.width, native.height)
-        } else {
-            surface_view.clone()
-        };
+        let surface_size = SnapshotSize::new(native.width, native.height);
+        let frame_post_src = feature_plan
+            .apply_frame_post
+            .then(|| {
+                surface_size.and_then(|size| Self::ensure_frame_post_src(renderer, render, size))
+            })
+            .flatten();
+        let frame_post_active = frame_post_src.is_some();
+        let composition_view = frame_post_src.unwrap_or_else(|| surface_view.clone());
         let old_scale_factor = renderer.scale_factor();
         let old_width = renderer.width();
         let old_height = renderer.height();
         renderer.set_scale_factor(native.scale_factor as f32);
         renderer.resize(native.width, native.height);
         let cursor_visible = render.cursor.blink_on;
+        Self::report_unpooled_gpu_textures(renderer, render);
 
         // Stage 4 retained-static fast path: when the coordinator asked for a
         // compositor-only cursor frame and the scene is eligible (no
@@ -800,66 +805,29 @@ impl RenderApp {
             });
         }
 
-        if need_offscreen {
-            render.compositor.transitions.current_is_a =
-                !render.compositor.transitions.current_is_a;
-            ensure_frame_offscreen_textures(
+        // Rotated here rather than at the top of the frame: every path above
+        // returns without composing anything, and advancing for a frame that
+        // is never drawn would retire the picture a transition still needs.
+        let composition = need_offscreen
+            .then(|| Self::advance_frame_composition(renderer, render, surface_size))
+            .flatten();
+        if let Some(composition) = composition.as_ref() {
+            Self::render_frame_window_contents(
                 renderer,
-                &mut render.compositor.transitions,
-                native.width,
-                native.height,
+                native,
+                render,
+                composition.view(),
+                &frame,
+                present_mapping,
+                cursor_visible,
+                root_animated_cursor,
+                animated_cursor,
+                bg_gradient,
+                false,
+                child_frame_style,
+                scroll_indicators_enabled,
+                toolbar,
             );
-
-            let current_view = if render.compositor.transitions.current_is_a {
-                render
-                    .compositor
-                    .transitions
-                    .offscreen_a
-                    .as_ref()
-                    .map(|(_, view, _)| view.clone())
-            } else {
-                render
-                    .compositor
-                    .transitions
-                    .offscreen_b
-                    .as_ref()
-                    .map(|(_, view, _)| view.clone())
-            };
-
-            if let Some(current_view) = current_view {
-                Self::render_frame_window_contents(
-                    renderer,
-                    native,
-                    render,
-                    &current_view,
-                    &frame,
-                    present_mapping,
-                    cursor_visible,
-                    root_animated_cursor,
-                    animated_cursor,
-                    bg_gradient,
-                    false,
-                    child_frame_style,
-                    scroll_indicators_enabled,
-                    toolbar,
-                );
-            }
-
-            let current_bg = if render.compositor.transitions.current_is_a {
-                render
-                    .compositor
-                    .transitions
-                    .offscreen_a
-                    .as_ref()
-                    .map(|(_, _, bg)| bg.clone())
-            } else {
-                render
-                    .compositor
-                    .transitions
-                    .offscreen_b
-                    .as_ref()
-                    .map(|(_, _, bg)| bg.clone())
-            };
 
             // Drained here, not earlier: the surface-acquisition paths above can
             // return, and observations dropped on one of those would lose the
@@ -874,36 +842,32 @@ impl RenderApp {
                     &mut frame,
                     pending_continuity,
                     &mut render.compositor.dirty,
-                    native.width,
-                    native.height,
                 );
             });
             if render.compositor.renderer_effects.needs_redraw() {
                 render.mark_dirty();
             }
 
-            if let Some(current_bg) = current_bg {
-                if pane_blits.is_empty() {
-                    renderer.blit_texture_to_view(
-                        &current_bg,
-                        &composition_view,
-                        native.width,
-                        native.height,
-                    );
-                } else {
-                    // Same picture, placed rather than copied whole: each pane
-                    // reads the region of the composed frame it owns and draws
-                    // it where the motion currently puts it.
-                    renderer.render_pane_layout(
-                        &current_bg,
-                        &composition_view,
-                        (
-                            native.width as f32 / native.scale_factor as f32,
-                            native.height as f32 / native.scale_factor as f32,
-                        ),
-                        &pane_blits,
-                    );
-                }
+            if pane_blits.is_empty() {
+                renderer.blit_texture_to_view(
+                    composition.bind_group(),
+                    &composition_view,
+                    native.width,
+                    native.height,
+                );
+            } else {
+                // Same picture, placed rather than copied whole: each pane
+                // reads the region of the composed frame it owns and draws
+                // it where the motion currently puts it.
+                renderer.render_pane_layout(
+                    composition.bind_group(),
+                    &composition_view,
+                    (
+                        native.width as f32 / native.scale_factor as f32,
+                        native.height as f32 / native.scale_factor as f32,
+                    ),
+                    &pane_blits,
+                );
             }
             render_frame_transitions(
                 renderer,
@@ -957,8 +921,6 @@ impl RenderApp {
                     &mut frame,
                     pending_continuity,
                     &mut render.compositor.dirty,
-                    native.width,
-                    native.height,
                 );
             });
             render.mark_active_visuals_dirty();
@@ -1428,33 +1390,115 @@ impl RenderApp {
         pointer_appearance.active().is_none()
     }
 
-    /// Ensure the window's retained-static texture exists at `width`x`height`
-    /// in the surface format, recreating it on a size change. Leaves the
-    /// generation stamp untouched (the caller sets it after rendering).
-    /// Ensure the intermediate composition texture for the full-frame post
-    /// shader exists at the window's physical size; returns its view.
+    /// Lease the intermediate composition texture for the full-frame post
+    /// shader at the window's physical size; returns its view.
+    ///
+    /// `None` means the budget refused the lease, and the caller composes
+    /// straight to the swapchain without the post shader: one unshaded frame
+    /// is a better answer than a dropped one.
     fn ensure_frame_post_src(
         renderer: &mut WgpuRenderer,
         render: &mut GuiFrameRenderState,
-        width: u32,
-        height: u32,
-    ) -> wgpu::TextureView {
-        let needs_new = match &render.frame_post_src {
-            Some((texture, _)) => texture.width() != width || texture.height() != height,
-            None => true,
-        };
-        if needs_new {
-            let (texture, view) = renderer.create_offscreen_texture(width, height);
-            render.frame_post_src = Some((texture, view));
+        size: SnapshotSize,
+    ) -> Option<wgpu::TextureView> {
+        if !render
+            .frame_post_src
+            .as_ref()
+            .is_some_and(|lease| lease.size() == size)
+        {
+            // Dropped before the acquire so the pool can re-cut the old-size
+            // slot rather than allocate beside it.
+            render.frame_post_src = None;
+            match renderer.acquire_snapshot(size) {
+                Ok(lease) => render.frame_post_src = Some(lease),
+                Err(exceeded) => {
+                    Self::note_refused_full_frame_texture(&exceeded, "frame post source");
+                    return None;
+                }
+            }
         }
         render
             .frame_post_src
             .as_ref()
-            .expect("frame post src just ensured")
-            .1
-            .clone()
+            .map(|lease| lease.view().clone())
     }
 
+    /// Rotate the frame window's composition ring and hand back the slot this
+    /// frame composes into.
+    ///
+    /// `None` degrades the frame to composing straight on the surface, which
+    /// costs the transitions and pane motion for that frame and nothing else.
+    /// GPU pressure is a real state, not a masked bug, so it is counted.
+    fn advance_frame_composition(
+        renderer: &mut WgpuRenderer,
+        render: &mut GuiFrameRenderState,
+        surface_size: Option<SnapshotSize>,
+    ) -> Option<SnapshotLease> {
+        let size = surface_size?;
+        match render
+            .compositor
+            .transitions
+            .advance_compositions(renderer, size)
+        {
+            Ok(lease) => Some(lease),
+            Err(exceeded) => {
+                Self::note_refused_full_frame_texture(&exceeded, "frame composition");
+                None
+            }
+        }
+    }
+
+    fn note_refused_full_frame_texture(exceeded: &BudgetExceeded, what: &'static str) {
+        super::frame_stats::count(&super::frame_stats::FULL_FRAME_TEXTURE_REFUSALS);
+        tracing::debug!(
+            %exceeded,
+            what,
+            "GPU budget refused a full-frame texture; composing without it"
+        );
+    }
+
+    /// Re-report every full-frame GPU texture this window owns that the
+    /// snapshot pool does not hand out.
+    ///
+    /// Derived from live state once per frame rather than registered at
+    /// creation: a census that is re-stated every frame cannot drift, whereas
+    /// a charge/refund pair drifts the first time a release site is added
+    /// without a matching refund.
+    fn report_unpooled_gpu_textures(renderer: &mut WgpuRenderer, render: &GuiFrameRenderState) {
+        let owner = render.emacs_frame_id;
+        let retained_static_bytes = render
+            .compositor
+            .retained_static
+            .as_ref()
+            .and_then(|retained| SnapshotSize::new(retained.width, retained.height))
+            .map_or(0, |size| texture_bytes(size, renderer.surface_format()));
+        renderer.record_unpooled_texture(
+            owner,
+            UnpooledTexture::RetainedStaticScene,
+            retained_static_bytes,
+        );
+        let atlas_bytes = render
+            .compositor
+            .glyph_atlas
+            .as_ref()
+            .map_or(0, WgpuGlyphAtlas::resident_bytes);
+        renderer.record_unpooled_texture(owner, UnpooledTexture::GlyphAtlas, atlas_bytes);
+        let budget = renderer.gpu_budget();
+        tracing::trace!(
+            owner,
+            pooled_bytes = budget.pooled_bytes(),
+            unpooled_bytes = budget.unpooled_bytes(),
+            limit_bytes = budget.limit_bytes().get(),
+            "full-frame GPU texture accounting"
+        );
+    }
+
+    /// Ensure the window's retained-static texture exists at `width`x`height`
+    /// in the surface format, recreating it on a size change. Leaves the
+    /// generation stamp untouched (the caller sets it after rendering).
+    ///
+    /// Not a pool lease: `RetainedStatic` owns a raw texture, and it is
+    /// counted through the [`UnpooledTexture`] census instead.
     fn ensure_retained_static_texture(
         renderer: &WgpuRenderer,
         render: &mut GuiFrameRenderState,

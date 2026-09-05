@@ -48,6 +48,13 @@ pub(super) static RETAINED_STATIC_BUILDS: AtomicU64 = AtomicU64::new(0);
 /// Frames served by the retained-static composite fast path (blit + cursor,
 /// no glyph pipeline).
 pub(super) static COMPOSITE_ONLY_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// Full-frame textures the GPU budget refused. Each one costs that frame its
+/// offscreen composition (so its transitions and pane motion) or its post
+/// shader, and the frame is still drawn. Structurally zero unless the render
+/// thread is genuinely near its ceiling; a nonzero count is the evidence that
+/// distinguishes "the animation is disabled" from "the animation could not be
+/// afforded".
+pub(super) static FULL_FRAME_TEXTURE_REFUSALS: AtomicU64 = AtomicU64::new(0);
 /// Planned frames attributed per demand reason: one increment per reason a
 /// planned frame satisfies, so an idle session's frames can be traced to what
 /// asked for them. Indexed by [`super::frame_sched::DemandReason::index`]; a
@@ -338,6 +345,7 @@ pub(super) fn maybe_log_snapshot(now: EventTime) {
         plan_repaint_layers = snap.plan_repaint_layers,
         plan_rebuild_scene = snap.plan_rebuild_scene,
         retained_static_builds = snap.retained_static_builds,
+        full_frame_texture_refusals = FULL_FRAME_TEXTURE_REFUSALS.load(Ordering::Relaxed),
         composite_only_frames = snap.composite_only_frames,
         last_commit_to_present_us = snap.last_commit_to_present_us,
         max_commit_to_present_us = snap.max_commit_to_present_us,
