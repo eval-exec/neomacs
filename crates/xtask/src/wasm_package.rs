@@ -20,7 +20,7 @@ use super::portable_assets::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 9] = [
+pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 10] = [
     "network/http.mjs",
     "network/host.mjs",
     "browser-input.mjs",
@@ -30,6 +30,7 @@ pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 9] = [
     "style.css",
     "wasm-bootstrap.mjs",
     "worker-assets.mjs",
+    "worker-wait.mjs",
 ];
 const WEB_SHELL_SOURCE: &str = "index.html";
 pub(super) const WEB_REPOSITORY_ASSETS: [(&str, &str); 1] = [(
