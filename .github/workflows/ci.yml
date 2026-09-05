@@ -569,6 +569,11 @@ jobs:
           "$TMPDIR/browser-smoke-venv/bin/python"
           crates/neomacs-wasm/tests/browser_opfs_smoke_test.py
 
+      - name: Exercise HTTP policy in default Chrome
+        run: >-
+          "$TMPDIR/browser-smoke-venv/bin/python"
+          crates/neomacs-wasm/tests/browser_http_smoke.py --headless
+
       - name: Exercise an ordinary warm-cache browser upgrade
         run: |
           "$TMPDIR/browser-smoke-venv/bin/python" \
