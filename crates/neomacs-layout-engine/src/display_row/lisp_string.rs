@@ -710,7 +710,6 @@ pub(crate) struct LispStringSourceRowAppendSessionRequest<'a> {
 }
 
 impl<'a> LispStringSourceRowAppendSessionRequest<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         source_request: LispStringSourceAppendSessionRequest<'a>,
         append_surface: &'a DisplayRowAppendSurface,

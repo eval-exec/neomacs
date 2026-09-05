@@ -61,7 +61,6 @@ impl BufferSourceContinuationRowPreludeRequest {
 }
 
 impl BufferSourceRowPreludeRequestContext {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         line_number_mode: DisplayLineNumbersMode,
         line_number_current_absolute: bool,

@@ -91,7 +91,6 @@ impl DisplaySourceRowAppendState {
 }
 
 impl DisplaySourceNaturalMeasurementRequest {
-    #[allow(clippy::too_many_arguments)]
     fn measure_to_text_row(
         self,
         state: &mut TextRowSourceMeasureState<'_>,
@@ -111,7 +110,6 @@ impl DisplaySourceNaturalMeasurementRequest {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn resolve_to_text_row(
         self,
         state: &mut TextRowSourceMeasureState<'_>,
@@ -624,7 +622,6 @@ pub(crate) struct DisplaySourceSpecialCharAppendOutcome {
 }
 
 impl DisplaySourceSpecialCharAppendOutcome {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn capture_cursor_info_for_main_char_if_point(
         &self,
         target: &mut CursorCaptureState,

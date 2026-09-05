@@ -76,7 +76,6 @@ impl<'rows, 'emit, 'surface>
     /// by the classifier), overlay-string splits (no intersecting overlay
     /// carries a before/after-string — the classifier's overlay allow-list
     /// admits only face-affecting properties).
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_render_plain_row_via_item_renderer<B: LayoutBufferView>(
         &mut self,
         request: PlainRowRouteRequest<'_, B>,

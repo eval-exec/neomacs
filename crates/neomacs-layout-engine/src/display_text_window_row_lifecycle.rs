@@ -404,7 +404,6 @@ impl TextWindowTailFinalizeOutcome {
 }
 
 impl<'a, 'emit> TextWindowTailFinalizeState<'a, 'emit> {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         cursor_info: &'emit mut CursorCaptureState,
         row_geometry: &'a DisplayRowGeometryState,
