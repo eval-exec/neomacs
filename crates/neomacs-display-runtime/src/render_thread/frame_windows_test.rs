@@ -1627,3 +1627,84 @@ fn a_new_window_counts_its_creation_as_activity_so_it_does_not_dim_at_once() {
         std::time::Duration::ZERO
     );
 }
+
+#[test]
+fn a_hit_test_goes_through_the_projection_rather_than_the_raw_surface_point() {
+    use neomacs_display_protocol::{
+        DisplayWindowId, FrameRect, PresentedHitIndex, PresentedHitRegion, PresentedRegionKind,
+        PresentedTextPosition, frame_chrome::PresentationId,
+    };
+
+    // The guard for the whole reason `inverse_map` exists. If a future change
+    // resolved hits straight from the surface coordinates again, every other
+    // test would still pass — they all run against a settled frame, where the
+    // projection is the identity — and only a click landing mid-`split-window`
+    // would show it, by selecting the wrong position.
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    let presentation = PresentationId::new(11);
+    let window = DisplayWindowId::new(4);
+    let mut root = make_frame(0x42, 0);
+    root.presentation_id = presentation;
+    root.install_presented_hit_index(
+        PresentedHitIndex::from_parts(
+            presentation,
+            vec![PresentedHitRegion::new(
+                Some(window),
+                PresentedRegionKind::TextBody,
+                FrameRect::new(0.0, 0.0, 400.0, 600.0).unwrap(),
+                0,
+            )],
+            vec![PresentedTextPosition::new(
+                window,
+                FrameRect::new(60.0, 30.0, 8.0, 16.0).unwrap(),
+                <PhantomBufferPosition>::POSITION,
+                0,
+                0,
+            )],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    render.set_current_frame(Some(root), None, Default::default(), Default::default());
+
+    // The pane is drawn 200px right of where its content belongs: mid-morph of
+    // a horizontal split. A click at surface x=260 is 60px into the content.
+    let pane = neomacs_display_protocol::PaneProjection::new(
+        neomacs_display_protocol::LiveDisplayWindowId::try_from(window).unwrap(),
+        neomacs_display_protocol::GeometryRect::<
+            neomacs_display_protocol::RootSurfaceSpace,
+            neomacs_display_protocol::LogicalPixels,
+        >::new(200.0, 0.0, 400.0, 600.0)
+        .unwrap(),
+        neomacs_display_protocol::GeometryPoint::<
+            neomacs_display_protocol::PresentationFrameSpace,
+            neomacs_display_protocol::LogicalPixels,
+        >::from_px(0.0, 0.0)
+        .unwrap(),
+    )
+    .unwrap();
+    render.compositor.interaction = Some(neomacs_display_protocol::InteractionProjection::new(
+        presentation,
+        vec![pane],
+    ));
+
+    let hit = render
+        .presented_region_hit(0x42, presentation, 260.0, 30.0)
+        .unwrap()
+        .expect("the moving pane still covers the point");
+    assert_eq!(
+        hit.text_position().unwrap().buffer_position(),
+        <PhantomBufferPosition>::POSITION,
+        "the raw surface x would have missed the glyph at content x=60 entirely"
+    );
+}
+
+/// The buffer position the projection test's single glyph carries.
+struct PhantomBufferPosition;
+impl PhantomBufferPosition {
+    const POSITION: i64 = 77;
+}

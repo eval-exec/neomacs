@@ -78,6 +78,13 @@ pub(crate) struct FrameCompositor {
     pub(super) reflow_imprints: ReflowImprintsByWindow,
     /// Facts measured at the most recent install, consumed exactly once.
     pub(super) pending: PendingContinuity,
+    /// How a surface point maps into the presentation currently displayed.
+    ///
+    /// Built alongside the composition it describes, so hit testing asks about
+    /// the pixels that were actually drawn. `None` before the first install;
+    /// while nothing is in motion it is the settled projection, which maps by
+    /// identity — the ordinary case, not a fallback.
+    pub(super) interaction: Option<neomacs_display_protocol::InteractionProjection>,
 }
 
 /// What the compositor measured when the current presentation was installed.
@@ -149,6 +156,7 @@ impl FrameCompositor {
             retained_static: None,
             scroll_anchors: ScrollAnchorsByWindow::default(),
             reflow_imprints: ReflowImprintsByWindow::default(),
+            interaction: None,
             pending: PendingContinuity::default(),
         }
     }
