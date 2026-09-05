@@ -69,6 +69,18 @@ fn evaluator_with_files(files: impl IntoIterator<Item = (&'static str, &'static 
 }
 
 #[test]
+fn filename_completion_recognizes_runtime_resource_directories() {
+    let mut evaluator = evaluator_with_files([
+        ("/neomacs/lisp/alpha.el", b"nil".as_slice()),
+        ("/neomacs/lisp/alpha-dir/child.el", b"nil".as_slice()),
+    ]);
+    let result = evaluator.eval_str(
+        r#"(file-name-completion "alpha-d" "/neomacs/lisp")"#,
+    ).unwrap();
+    assert_eq!(result.as_utf8_str(), Some("alpha-dir/"));
+}
+
+#[test]
 fn integer_lookup_preserves_runtime_mount_read_only_access() {
     let mut evaluator = evaluator_with_files([("/neomacs/lisp/probe.el", b"nil".as_slice())]);
     for (mask, expected) in [
