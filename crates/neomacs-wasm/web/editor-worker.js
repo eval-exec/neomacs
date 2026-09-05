@@ -1,4 +1,5 @@
 import { fetchEditorWorkerAssets } from "./worker-assets.mjs";
+import { createHttpHostImports } from "./network/host.mjs";
 import {
   OriginPrivateFileSystem,
   createOpfsHostImports,
@@ -157,6 +158,7 @@ function hostImports(waitForInput, filesystemImports) {
         message: decodeMemoryString(source, length),
       }),
       ...filesystemImports,
+      ...createHttpHostImports(() => memory, () => pendingJspiWake?.()),
     },
   };
 }
