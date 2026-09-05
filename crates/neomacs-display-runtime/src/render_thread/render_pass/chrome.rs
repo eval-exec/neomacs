@@ -18,7 +18,6 @@
 //! `typing_speed`) report by setting the frame-dirty flag rather than by
 //! scheduling anything themselves.
 
-use super::RenderApp;
 use crate::render_thread::child_frames::ChildFrameManager;
 use crate::render_thread::cursor::CursorTarget;
 use crate::render_thread::frame_windows::{
@@ -348,7 +347,7 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
     scroll_indicators_enabled: bool,
     toolbar: &ToolbarResources,
 ) {
-    RenderApp::render_frame_content_overlays(
+    super::scene::render_frame_content_overlays(
         renderer,
         native,
         render,
