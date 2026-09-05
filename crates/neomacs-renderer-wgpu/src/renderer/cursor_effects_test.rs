@@ -706,3 +706,170 @@ fn test_cursor_glow_layer_count_calculation() {
         validate_vertex_count(&verts);
     }
 }
+
+// ========================================================================
+// emit_line_number_pulse phase tests
+//
+// The pulse phase was pinned at zero for the life of this effect (it
+// measured the interval from "now" to "now"), so it rendered a constant
+// mid-brightness gutter while still asking for a redraw every frame. These
+// pin the property that broke: the phase has to move as the frame sample
+// advances, and `cycle_ms` has to be what sets how fast.
+// ========================================================================
+
+/// Build a ctx whose ambient anchor is `anchor` and whose frame is presented
+/// exactly `offset` after it.
+///
+/// The phase under test is then a pure function of `offset`: the frame
+/// interval is zero, and no wall-clock duration elapses between the anchor and
+/// the sample, so the result does not depend on when the test happens to run.
+fn make_phase_ctx<'a>(
+    effects: &'a EffectsConfig,
+    fgb: &'a FrameGlyphBuffer,
+    animated_cursor: &'a Option<AnimatedCursor>,
+    anchor: EventTime,
+    offset: Duration,
+) -> EffectCtx<'a> {
+    EffectCtx {
+        effects,
+        frame_glyphs: fgb,
+        animated_cursor,
+        cursor_visible: true,
+        mouse_pos: (400.0, 300.0),
+        surface_width: 800,
+        surface_height: 600,
+        aurora_start: anchor,
+        frame_sample: FrameSample::new(anchor.plus(offset), Duration::ZERO),
+        frame_seq: 1,
+        scale_factor: 1.0,
+        logical_w: 800.0,
+        logical_h: 600.0,
+        renderer_width: 800.0,
+        renderer_height: 600.0,
+    }
+}
+
+/// Alpha of the emitted gutter rect, or `None` when the pulse is at a trough
+/// dim enough that the effect emits nothing.
+fn pulse_alpha(verts: &[RectVertex]) -> Option<f32> {
+    verts.first().map(|v| v.color[3])
+}
+
+#[test]
+fn test_line_number_pulse_phase_varies_across_frame_samples() {
+    let mut config = EffectsConfig::default();
+    config.line_number_pulse.enabled = true;
+    config.line_number_pulse.intensity = 0.8;
+    config.line_number_pulse.cycle_ms = 1000;
+
+    let mut fgb = FrameGlyphBuffer::default();
+    fgb.window_infos
+        .push(make_selected_window_info(0.0, 0.0, 800.0, 600.0));
+    let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
+
+    // One anchor; every sample below is derived from it by an exact offset.
+    let anchor = observe_platform_now();
+    let alpha_at = |offset: Duration| {
+        let ctx = make_phase_ctx(&config, &fgb, &anim_cursor, anchor, offset);
+        let (verts, needs_redraw) = emit_line_number_pulse(&ctx);
+        assert!(needs_redraw, "the pulse always asks for the next frame");
+        validate_vertex_count(&verts);
+        pulse_alpha(&verts)
+    };
+
+    // Quarter-cycle points of a 1s cycle: rising midpoint, peak, falling
+    // midpoint, trough.
+    let start = alpha_at(Duration::from_millis(0)).expect("midpoint emits");
+    let peak = alpha_at(Duration::from_millis(250)).expect("peak emits");
+    let falling = alpha_at(Duration::from_millis(500)).expect("midpoint emits");
+    let trough = alpha_at(Duration::from_millis(750));
+
+    // The property that was broken: the phase moves.
+    assert!(
+        (peak - start).abs() > 0.01,
+        "phase pinned: peak {peak} == start {start}"
+    );
+    assert!((start - 0.4).abs() < 1e-4, "sin(0) midpoint: {start}");
+    assert!(
+        (peak - 0.8).abs() < 1e-4,
+        "sin(pi/2) peak = intensity: {peak}"
+    );
+    assert!((falling - 0.4).abs() < 1e-4, "sin(pi) midpoint: {falling}");
+    assert!(
+        trough.is_none(),
+        "sin(3pi/2) trough is fully transparent, so nothing is emitted: {trough:?}"
+    );
+}
+
+#[test]
+fn test_line_number_pulse_period_comes_from_cycle_ms() {
+    let mut fgb = FrameGlyphBuffer::default();
+    fgb.window_infos
+        .push(make_selected_window_info(0.0, 0.0, 800.0, 600.0));
+    let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
+    let anchor = observe_platform_now();
+
+    let peak_offset_for = |cycle_ms: u32, offset: Duration| {
+        let mut config = EffectsConfig::default();
+        config.line_number_pulse.enabled = true;
+        config.line_number_pulse.intensity = 0.8;
+        config.line_number_pulse.cycle_ms = cycle_ms;
+        let ctx = make_phase_ctx(&config, &fgb, &anim_cursor, anchor, offset);
+        pulse_alpha(&emit_line_number_pulse(&ctx).0)
+    };
+
+    // A 1s cycle peaks at 250ms; a 2s cycle is only a quarter of the way to
+    // its own peak by then and does not reach it until 500ms.
+    let fast_peak = peak_offset_for(1000, Duration::from_millis(250)).expect("emits");
+    let slow_early = peak_offset_for(2000, Duration::from_millis(250)).expect("emits");
+    let slow_peak = peak_offset_for(2000, Duration::from_millis(500)).expect("emits");
+    assert!(
+        (fast_peak - 0.8).abs() < 1e-4,
+        "1s cycle peaks: {fast_peak}"
+    );
+    assert!(
+        (slow_peak - 0.8).abs() < 1e-4,
+        "2s cycle peaks later: {slow_peak}"
+    );
+    assert!(
+        slow_early < fast_peak - 0.05,
+        "a longer cycle must be slower: {slow_early} vs {fast_peak}"
+    );
+
+    // A full cycle later the phase has come back round.
+    let one_cycle_on = peak_offset_for(1000, Duration::from_millis(1250)).expect("emits");
+    assert!(
+        (one_cycle_on - fast_peak).abs() < 1e-4,
+        "phase is periodic in cycle_ms: {one_cycle_on} vs {fast_peak}"
+    );
+}
+
+#[test]
+fn test_line_number_pulse_zero_cycle_holds_still() {
+    // A zero period names no cycle. It must hold the phase rather than divide
+    // by zero and paint a NaN alpha.
+    let mut config = EffectsConfig::default();
+    config.line_number_pulse.enabled = true;
+    config.line_number_pulse.intensity = 0.8;
+    config.line_number_pulse.cycle_ms = 0;
+
+    let mut fgb = FrameGlyphBuffer::default();
+    fgb.window_infos
+        .push(make_selected_window_info(0.0, 0.0, 800.0, 600.0));
+    let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
+    let anchor = observe_platform_now();
+
+    for offset in [0u64, 250, 750] {
+        let ctx = make_phase_ctx(
+            &config,
+            &fgb,
+            &anim_cursor,
+            anchor,
+            Duration::from_millis(offset),
+        );
+        let (verts, _) = emit_line_number_pulse(&ctx);
+        validate_vertices(&verts);
+        let alpha = pulse_alpha(&verts).expect("midpoint emits");
+        assert!((alpha - 0.4).abs() < 1e-4, "held at midpoint: {alpha}");
+    }
+}

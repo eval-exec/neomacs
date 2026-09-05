@@ -58,7 +58,7 @@
 //! Offending sites are tagged `FIXME(chrome-insets)` below.
 
 use super::super::vertex::RectVertex;
-use super::effect_common::{EffectCtx, effect_entity_seed, push_rect};
+use super::effect_common::{EffectCtx, ambient_cycle_phase, effect_entity_seed, push_rect};
 use super::{
     ClickHaloEntry, CursorGhostEntry, EdgeGlowEntry, EdgeSnapEntry, HeatMapEntry, RainDrop,
     ScrollMomentumEntry, ScrollVelocityFadeEntry, WindowFadeEntry,
@@ -438,15 +438,10 @@ pub(super) fn emit_window_breathing_border(ctx: &EffectCtx) -> (Vec<RectVertex>,
     if !ctx.effects.breathing_border.enabled {
         return (Vec::new(), false);
     }
-    let cycle = ctx.effects.breathing_border.cycle_ms as f64 / 1000.0;
-    // PRE-EXISTING NO-OP, PRESERVED: this read `Instant::now().elapsed()`, the
-    // interval from "now" to "now", so the breath phase has always been pinned
-    // at zero and the border sits at a constant opacity. Left at zero rather
-    // than re-anchored to the render epoch: giving it a real phase would start
-    // an animation that has never run, a visible change beyond moving this file
-    // onto the frame's time sample.
-    let elapsed = 0.0_f64;
-    let phase = (elapsed % cycle) / cycle;
+    // Free-running: the breath has no trigger event, so its phase is the
+    // session-start anchor aged against this frame's sample, one full breath
+    // every `cycle_ms` (3s by default).
+    let phase = ambient_cycle_phase(ctx, ctx.effects.breathing_border.cycle_ms);
     let breath = ((phase * std::f64::consts::TAU).sin() * 0.5 + 0.5) as f32;
     let alpha = ctx.effects.breathing_border.min_opacity
         + breath

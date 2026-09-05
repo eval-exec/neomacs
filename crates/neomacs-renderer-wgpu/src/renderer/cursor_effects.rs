@@ -6,7 +6,7 @@
 
 use super::super::vertex::RectVertex;
 use super::effect_common::effect_entity_seed;
-use super::effect_common::{EffectCtx, find_cursor_pos, push_rect};
+use super::effect_common::{EffectCtx, ambient_cycle_phase, find_cursor_pos, push_rect};
 use super::{CursorParticle, MatrixColumn, RippleWaveEntry, SonarPingEntry, SparkleBurstEntry};
 use neomacs_display_protocol::frame_time::EventTime;
 use neomacs_display_protocol::types::Color;
@@ -212,15 +212,10 @@ pub(super) fn emit_line_number_pulse(ctx: &EffectCtx) -> (Vec<RectVertex>, bool)
     let mut verts = Vec::new();
     let mut needs_redraw = false;
     if let Some(anim) = ctx.animated_cursor {
-        let cycle = ctx.effects.line_number_pulse.cycle_ms as f64 / 1000.0;
-        // PRE-EXISTING NO-OP, PRESERVED: this read `Instant::now().elapsed()`,
-        // the interval from "now" to "now", so the pulse phase has always been
-        // pinned at zero and this effect renders a constant 50% alpha. Left at
-        // zero rather than re-anchored to the render epoch: giving it a real
-        // phase would start an animation that has never run, which is a visible
-        // change beyond moving this file onto the frame's time sample.
-        let elapsed = 0.0_f64;
-        let phase = (elapsed % cycle) / cycle;
+        // Free-running: the gutter pulse has no trigger event, so its phase is
+        // the session-start anchor aged against this frame's sample, one full
+        // cycle every `cycle_ms` (2s by default).
+        let phase = ambient_cycle_phase(ctx, ctx.effects.line_number_pulse.cycle_ms);
         let pulse = ((phase * std::f64::consts::TAU).sin() * 0.5 + 0.5) as f32;
         let alpha = ctx.effects.line_number_pulse.intensity * pulse;
         let (pr, pg, pb) = ctx.effects.line_number_pulse.color;
