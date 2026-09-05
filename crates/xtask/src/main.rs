@@ -1,5 +1,5 @@
-mod dependency_coherence;
 mod android_package;
+mod dependency_coherence;
 mod gc_stress;
 mod pin_reference;
 mod portable_assets;
