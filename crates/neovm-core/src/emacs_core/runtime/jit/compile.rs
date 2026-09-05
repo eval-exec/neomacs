@@ -2582,6 +2582,49 @@ pub(crate) fn baseline_has_backedge(ops: &[Op], cfg: &Cfg) -> bool {
 /// symbols-with-pos slow path; VarRef/VarSet/VarBind/Unbind hit the variable
 /// machinery; Call/Apply/named-builtins/handlers re-enter elisp. Single source of
 /// truth for both the JIT and the baseline-AOT emit (R2-E).
+/// Whether the body has a residual-rooting site: an op whose lowering stores
+/// live operands into the Context root window before a shim call (calls,
+/// dynamic-variable ops, unbind, window excursion, aset, list, builtin
+/// calls). Every such op dereferences the vmctx, so a body with one is
+/// entered with a real Context — which is what lets the root-window base and
+/// capacity check be hoisted to the entry (`lowering::HoistedRootWin`). A
+/// body without one (a pure loop, run with a null vmctx in tests) keeps the
+/// per-site sequence it never executes.
+pub(crate) fn body_has_rooting_sites(ops: &[Op]) -> bool {
+    count_rooting_sites(ops) > 0
+}
+
+/// How many residual-rooting sites the body has (see
+/// [`body_has_rooting_sites`]). The hoisted root-window prologue costs about
+/// what one site's inline sequence does, so it pays from two sites up, or
+/// from one site inside a loop (measured: hoisting single-site straight-line
+/// bodies cost the 200-function compile fixture +0.34%; not hoisting the
+/// 3M-call benchmark's one-site loop body forfeited its −2.4%).
+pub(crate) fn count_rooting_sites(ops: &[Op]) -> usize {
+    ops.iter().filter(|o| is_rooting_site_op(o)).count()
+}
+
+fn is_rooting_site_op(o: &Op) -> bool {
+    {
+        direct_builtin_spec(o).is_some()
+            || slice_builtin_spec(o).is_some()
+            || matches!(
+                o,
+                Op::Call(_)
+                    | Op::Apply(_)
+                    | Op::CallBuiltin(..)
+                    | Op::CallBuiltinSym(..)
+                    | Op::VarRef(_)
+                    | Op::VarSet(_)
+                    | Op::VarBind(_)
+                    | Op::Unbind(_)
+                    | Op::SaveWindowExcursion
+                    | Op::Aset
+                    | Op::List(_)
+            )
+    }
+}
+
 pub(crate) fn baseline_needs_rt(ops: &[Op], has_backedge: bool) -> bool {
     has_backedge
         || ops.iter().any(|o| {
@@ -3177,7 +3220,7 @@ fn build_leaf_fn<M: Module>(
 
         // Declare the runtime-call machinery into this function if the body
         // re-enters the runtime (`Cons` / `Call`).
-        let rt = if needs_rt {
+        let mut rt = if needs_rt {
             // Declare the JIT-only round-1 subr-speculation shims iff the body has
             // round-1 subr-kind spec sites. The AOT baseline emit classifies ONLY
             // CBSym sites (`find_cbsym_spec_sites`; the `Op::Call` subr pass is
@@ -3238,6 +3281,7 @@ fn build_leaf_fn<M: Module>(
                 call_result_slot,
                 residual_buf_slot,
                 gc_saved_slot,
+                rootwin: None,
             })
         } else {
             None
@@ -3355,8 +3399,25 @@ fn build_leaf_fn<M: Module>(
             meta_depth_addr,
             meta_handlers_addr,
         );
-        if let Some(rt) = &rt {
+        if let Some(rt) = rt.as_mut() {
             fb.def_var(rt.vmctx_var, vmctx_param);
+            // Root-window base + capacity check once per activation instead
+            // of once per site (`lowering::HoistedRootWin`). Only for a body
+            // with rooting sites: those dereference the vmctx anyway, so it is
+            // a real Context; a site-free body may be entered with a null one.
+            // Two sites, or one inside a loop: a single straight-line site
+            // executes once per activation, like the prologue, and its inline
+            // form costs about the same, but a site in a loop runs its check
+            // on every iteration (the 3M-call benchmark: −2.4% hoisted).
+            let sites = count_rooting_sites(ops);
+            if cfg.max_depth > 0 && (sites >= 2 || (sites == 1 && has_back_edge(ops))) {
+                lowering::emit_hoisted_root_window_prologue(
+                    &mut fb,
+                    rt,
+                    vmctx_param,
+                    cfg.max_depth,
+                );
+            }
         }
         fb.def_var(out_var, out_ptr);
         if let Some(slot) = backedge_counter {

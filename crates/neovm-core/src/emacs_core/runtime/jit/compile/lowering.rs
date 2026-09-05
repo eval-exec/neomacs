@@ -611,6 +611,33 @@ pub(crate) fn emit_root_window_stores(
 ) -> ClifValue {
     let (off_ptr, off_top, off_cap) = ctx_rootwin_offsets();
     let vmctx = fb.use_var(rt.vmctx_var);
+    if let Some(h) = rt.rootwin {
+        // Hoisted form (see `HoistedRootWin`): the capacity was checked at
+        // entry for the largest window; only the buffer pointer can have
+        // moved since (a nested grow), so reload it and store.
+        if cfg!(debug_assertions) {
+            // The invariant the hoist rests on: `top` is back at the frame
+            // base whenever a site runs. Debug builds trap if it is not.
+            let top = fb
+                .ins()
+                .load(types::I64, MemFlagsData::trusted(), vmctx, off_top);
+            let moved = fb.ins().icmp(IntCC::NotEqual, top, h.base);
+            fb.ins()
+                .trapnz(moved, cranelift_codegen::ir::TrapCode::unwrap_user(3));
+        }
+        let ptr = fb
+            .ins()
+            .load(rt.ptr_ty, MemFlagsData::trusted(), vmctx, off_ptr);
+        let slot0 = fb.ins().iadd(ptr, h.byte_off);
+        for (i, &v) in to_root.iter().enumerate() {
+            fb.ins()
+                .store(MemFlagsData::trusted(), v, slot0, (i * 8) as i32);
+        }
+        let need = fb.ins().iadd_imm_u(h.base, to_root.len() as i64);
+        fb.ins()
+            .store(MemFlagsData::trusted(), need, vmctx, off_top);
+        return h.base;
+    }
     let base = fb
         .ins()
         .load(types::I64, MemFlagsData::trusted(), vmctx, off_top);
@@ -1343,6 +1370,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                 call_result_slot,
                 residual_buf_slot,
                 gc_saved_slot,
+                rootwin: None,
             })
         } else {
             None
@@ -1870,6 +1898,60 @@ pub(crate) struct RtCtx {
     /// three rooting shims skipped), else the `gc_save` result the post-call
     /// restore consumes. Written and read within one site — reusable.
     pub(crate) gc_saved_slot: StackSlot,
+    /// Root-window state hoisted to the function entry (baseline leaves;
+    /// `None` keeps the per-site sequence): see [`HoistedRootWin`].
+    pub(crate) rootwin: Option<HoistedRootWin>,
+}
+
+/// The residual root window's frame base, loaded once at entry, with its
+/// capacity checked once for the largest window any site can need (the
+/// body's max operand-stack depth). A site then emits one pointer load, its
+/// stores and one `top` update instead of two loads, a compare, a branch, a
+/// grow block and a pointer reload: on the org editing probe the per-site
+/// sequence was ~40% of all CLIF instructions and ~36% of all blocks.
+///
+/// Sound because `top` is invariant between sites within one activation
+/// (every site restores it; a nested activation works above it), so the
+/// base loaded at entry is every site's base, and because capacity only
+/// ever grows, so a nested activation's grow cannot invalidate the entry
+/// check. The buffer POINTER can move on a nested grow, so a site reloads it.
+#[derive(Clone, Copy)]
+pub(crate) struct HoistedRootWin {
+    /// The activation's frame base (`top` at entry).
+    pub(crate) base: ClifValue,
+    /// `base * 8`: the byte offset of slot 0 from the buffer pointer.
+    pub(crate) byte_off: ClifValue,
+}
+
+/// Emit the hoisted root-window prologue into the current (entry) block:
+/// load the frame base, grow the buffer once if `max_slots` more slots may
+/// not fit, and record the base for every site (`RtCtx::rootwin`).
+pub(crate) fn emit_hoisted_root_window_prologue(
+    fb: &mut FunctionBuilder,
+    rt: &mut RtCtx,
+    vmctx: ClifValue,
+    max_slots: usize,
+) {
+    let (_off_ptr, off_top, off_cap) = ctx_rootwin_offsets();
+    let base = fb
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), vmctx, off_top);
+    let need_max = fb.ins().iadd_imm_u(base, max_slots as i64);
+    let cap = fb
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), vmctx, off_cap);
+    let fits = fb.ins().icmp(IntCC::UnsignedLessThanOrEqual, need_max, cap);
+    let grow_blk = fb.create_block();
+    let cont_blk = fb.create_block();
+    fb.ins().brif(fits, cont_blk, &[], grow_blk, &[]);
+    fb.switch_to_block(grow_blk);
+    fb.seal_block(grow_blk);
+    fb.ins().call(rt.refs.rootwin_grow, &[vmctx, need_max]);
+    fb.ins().jump(cont_blk, &[]);
+    fb.switch_to_block(cont_blk);
+    fb.seal_block(cont_blk);
+    let byte_off = fb.ins().ishl_imm_u(base, 3);
+    rt.rootwin = Some(HoistedRootWin { base, byte_off });
 }
 
 /// Callable references to every runtime shim, declared into one function.
