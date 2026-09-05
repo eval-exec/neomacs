@@ -425,3 +425,133 @@ fn the_settled_projection_replaces_the_morphs_on_the_last_frame() {
         .expect("a mapped point");
     assert!((after_last_frame.x() - 500.0).abs() < 1e-3);
 }
+
+// =======================================================================
+// Interruption: a layout change arriving mid-motion
+// =======================================================================
+
+#[test]
+fn a_layout_arriving_mid_motion_carries_the_panes_on_from_where_they_are() {
+    // The defect this replaces: the morph was rebuilt from the *committed*
+    // layout, which is the destination the old motion was still travelling
+    // toward. Every pane snapped forward to a rect it had not reached, then
+    // animated away from it — a jump in the wrong direction, mid-animation.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
+    let mut morph =
+        PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+
+    // Halfway: the pane is 600 wide.
+    let midpoint = placed(&morph.sample(frame_at(origin, 50)), 1).bounds.width;
+    assert!((midpoint - 600.0).abs() < 1e-3);
+
+    // A second layout change arrives, wanting 200 wide.
+    let retargeted = [window(1, rect(0.0, 0.0, 200.0, 600.0))];
+    morph.retarget(
+        &retargeted,
+        linear_100ms(),
+        origin.plus(Duration::from_millis(50)),
+    );
+
+    let spliced = morph
+        .spliced(frame_at(origin, 50))
+        .expect("the retarget still has ground to cover");
+    let resumed = placed(&spliced.sample(frame_at(origin, 50)), 1)
+        .bounds
+        .width;
+    assert!(
+        (resumed - midpoint).abs() < 1e-3,
+        "the spliced motion must start at the width the panes actually had \
+         ({midpoint}), not at the committed 400: got {resumed}"
+    );
+}
+
+#[test]
+fn a_spliced_motion_does_not_stall_at_the_splice() {
+    // Restarting from rest is visible as a hitch: the panes are travelling,
+    // then stop dead for a frame, then accelerate again. The entry rate is
+    // what carries the speed across.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
+    let mut morph =
+        PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let at_splice = morph.sample(frame_at(origin, 50));
+    assert!(
+        at_splice.motion.rate > 0.0,
+        "the motion is moving before it is cut"
+    );
+
+    morph.retarget(
+        &[window(1, rect(0.0, 0.0, 200.0, 600.0))],
+        linear_100ms(),
+        origin.plus(Duration::from_millis(50)),
+    );
+    let spliced = morph
+        .spliced(frame_at(origin, 50))
+        .expect("a spliced morph");
+    let just_after = spliced.sample(frame_at(origin, 51));
+    assert!(
+        just_after.motion.rate > 0.0,
+        "the spliced motion left the splice already moving, rather than from rest"
+    );
+}
+
+#[test]
+fn a_retarget_to_where_the_panes_already_are_ends_the_motion() {
+    // Not every interruption has ground left to cover. A layout that matches
+    // where the panes have arrived should finish, not start a zero-length
+    // motion that still asks for frames.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
+    let mut morph =
+        PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    // Let it arrive, then retarget to the destination it already reached.
+    morph.retarget(
+        &after,
+        linear_100ms(),
+        origin.plus(Duration::from_millis(100)),
+    );
+    assert!(morph.has_pending_retarget());
+    assert!(
+        morph.spliced(frame_at(origin, 100)).is_none(),
+        "nothing left to animate"
+    );
+}
+
+#[test]
+fn a_window_the_new_layout_drops_keeps_the_position_it_had_reached() {
+    // Its record must not come from a presentation two commits old, or step 8
+    // will fade it out from somewhere it never was.
+    let origin = origin();
+    let before = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(400.0, 0.0, 400.0, 600.0)),
+    ];
+    let after = [
+        window(1, rect(0.0, 0.0, 200.0, 600.0)),
+        window(2, rect(200.0, 0.0, 600.0, 600.0)),
+    ];
+    let mut morph =
+        PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let travelled = placed(&morph.sample(frame_at(origin, 50)), 2).bounds;
+
+    morph.retarget(
+        &[window(1, rect(0.0, 0.0, 800.0, 600.0))],
+        linear_100ms(),
+        origin.plus(Duration::from_millis(50)),
+    );
+    let spliced = morph
+        .spliced(frame_at(origin, 50))
+        .expect("a spliced morph");
+    let exited = spliced
+        .changes()
+        .find(|change| matches!(change, PaneChange::Exited { window, .. } if *window == live(2)))
+        .expect("window 2 is recorded as leaving");
+    assert!(
+        matches!(exited, PaneChange::Exited { from, .. } if (from.x - travelled.x).abs() < 1e-3),
+        "the leaving pane is recorded where it had travelled to, not where it started"
+    );
+}

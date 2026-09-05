@@ -20,6 +20,7 @@
 
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
 use neomacs_display_protocol::motion_spec::{MotionSpec, UnitInterval};
+use neomacs_display_protocol::scroll_animation::TransitionEasing;
 
 /// Where a motion is at one instant.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -36,26 +37,61 @@ pub(in crate::render_thread) struct MotionSample {
     /// when the geometry does: blending 120% of the destination is not a
     /// picture of anything.
     pub(in crate::render_thread) content_mix: UnitInterval,
+    /// How fast `progress` is changing, per second.
+    ///
+    /// Carried on the sample rather than recomputed on demand, because an
+    /// interrupted motion must start the next one at the speed this one had,
+    /// and a second evaluation could land on the other side of a tween's clamp
+    /// and report zero for a motion that was still moving.
+    pub(in crate::render_thread) rate: f32,
     /// Whether the motion has reached its destination and can be dropped.
     pub(in crate::render_thread) finished: bool,
 }
 
-impl MotionSample {
-    /// The sample of a motion that is over.
-    pub(in crate::render_thread) fn settled() -> Self {
-        Self {
-            progress: 1.0,
-            content_mix: UnitInterval::ONE,
-            finished: true,
+/// How fast a motion's progress is changing, in progress per second.
+///
+/// Finite by construction: a NaN reaching a `Motion` comes back out as a pane
+/// rect made of NaN, which draws nothing and reads to a user as a blank frame
+/// rather than as a bug worth reporting.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::render_thread) struct ProgressRate(f32);
+
+impl ProgressRate {
+    pub(in crate::render_thread) fn new(value: f32) -> Self {
+        if value.is_finite() {
+            Self(value)
+        } else {
+            // A non-finite rate would come back out as a pane rect made of
+            // NaN, which draws nothing and reads as a blank frame rather than
+            // as a bug worth reporting. Treat it as a standstill.
+            Self(0.0)
         }
+    }
+
+    pub(in crate::render_thread) const fn get(self) -> f32 {
+        self.0
     }
 }
 
-/// A [`MotionSpec`] bound to the moment it started.
+/// A [`MotionSpec`] bound to the moment it started and the speed it started at.
+///
+/// `entry_rate` is a boundary condition fixed once at construction — it is not
+/// a velocity advanced per frame. That is what keeps this a sampler: the same
+/// `Motion` evaluated at the same instant still gives the same answer, however
+/// many frames were drawn, so an interruption changes the curve rather than
+/// introducing state that coalescing and retargeting would have to keep
+/// coherent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::render_thread) struct Motion {
     spec: MotionSpec,
     origin: EventTime,
+    /// The speed this motion inherited, or `None` when it began at rest.
+    ///
+    /// `None` is not the same as `Some(0.0)`, and conflating them is a bug this
+    /// distinction exists to prevent: a motion starting fresh should follow its
+    /// easing curve exactly, while one resuming at a standstill must be bent to
+    /// *depart* at zero — which for most curves is a different shape.
+    entry_rate: Option<ProgressRate>,
 }
 
 /// How close to rest a spring must be, in both value and rate, to be finished.
@@ -81,94 +117,174 @@ impl Motion {
     /// than allocating a snapshot to animate between. Making that a type-level
     /// distinction is what keeps disabled motion actually free.
     pub(in crate::render_thread) fn start(spec: MotionSpec, origin: EventTime) -> Option<Self> {
-        (!spec.is_instant()).then_some(Self { spec, origin })
+        (!spec.is_instant()).then_some(Self {
+            spec,
+            origin,
+            entry_rate: None,
+        })
+    }
+
+    /// A motion starting now at a speed it inherited from one it interrupted.
+    ///
+    /// The distinction from [`Self::start`] is the whole of step 11: a layout
+    /// change arriving mid-motion must carry the panes on from where they were
+    /// last drawn, at the speed they had, rather than restarting them from a
+    /// standstill at a place they never reached.
+    pub(in crate::render_thread) fn resume(
+        spec: MotionSpec,
+        origin: EventTime,
+        entry_rate: ProgressRate,
+    ) -> Option<Self> {
+        (!spec.is_instant()).then_some(Self {
+            spec,
+            origin,
+            entry_rate: Some(entry_rate),
+        })
     }
 
     /// Where the motion is at `frame`.
     pub(in crate::render_thread) fn sample(self, frame: FrameSample) -> MotionSample {
         let seconds = frame.since_at_presentation(self.origin).as_secs_f32();
+        let progress = self.progress_at(seconds);
+        MotionSample {
+            progress,
+            content_mix: UnitInterval::clamp(progress),
+            rate: self.rate_at(seconds),
+            finished: self.finished_at(seconds, progress),
+        }
+    }
+
+    /// How far along the motion is `seconds` after it began.
+    ///
+    /// May exceed 1.0: a spring overshoots, and an interrupted tween carrying
+    /// speed into a shorter distance can too. Clamping here would delete the
+    /// overshoot that makes both read as physical.
+    fn progress_at(self, seconds: f32) -> f32 {
         match self.spec {
-            // `start` rejects it, so a `Motion` can never hold it. Answering
+            // `resume` rejects it, so a `Motion` can never hold it. Answering
             // "already there" is still the only correct answer if one appears.
-            MotionSpec::Instant => MotionSample::settled(),
+            MotionSpec::Instant => 1.0,
             MotionSpec::Tween(tween) => {
                 let duration = tween.duration.as_secs_f32();
-                let linear = (seconds / duration).clamp(0.0, 1.0);
-                let progress = tween.easing.apply(linear);
-                MotionSample {
-                    progress,
-                    content_mix: UnitInterval::clamp(progress),
-                    finished: linear >= 1.0,
-                }
+                let u = (seconds / duration).clamp(0.0, 1.0);
+                // A tween asked to start already moving gets a bump ADDED to
+                // its easing rather than a rescaled duration. `u(1-u)^2` and
+                // its derivative are both zero at u = 1, so the curve still
+                // arrives exactly at the destination exactly at its duration;
+                // only its departure changes. Rescaling the duration instead
+                // would let an interruption silently change how long the
+                // motion takes, and there is no duration at all that gives
+                // ease-in-out a non-zero departure.
+                let eased = tween.easing.apply(u);
+                let Some(entry) = self.entry_rate else {
+                    return eased;
+                };
+                let excess = entry.get() * duration - easing_initial_rate(tween.easing);
+                let bump = excess.clamp(-MAX_ENTRY_BUMP, MAX_ENTRY_BUMP);
+                eased + bump * u * (1.0 - u) * (1.0 - u)
             }
-            MotionSpec::Spring(spring) => {
-                let omega = spring.omega.get();
-                let zeta = spring.damping.get();
-                let progress = spring_progress(omega, zeta, seconds);
-                let rate = spring_rate(omega, zeta, seconds);
-                MotionSample {
-                    progress,
-                    content_mix: UnitInterval::clamp(progress),
-                    finished: (progress - 1.0).abs() < SPRING_REST_EPSILON
-                        && rate.abs() < SPRING_REST_EPSILON,
-                }
-            }
+            MotionSpec::Spring(spring) => spring_progress(
+                spring.omega.get(),
+                spring.damping.get(),
+                self.entry_rate.map_or(0.0, ProgressRate::get),
+                seconds,
+            ),
             MotionSpec::Deceleration(deceleration) => {
-                // Displacement of a first-order decay, normalized so that the
-                // total distance travelled is 1: x(t) = 1 - e^(-friction * t).
-                let friction = deceleration.friction.get();
-                let remaining = (-friction * seconds).exp();
-                MotionSample {
-                    progress: 1.0 - remaining,
-                    content_mix: UnitInterval::clamp(1.0 - remaining),
-                    finished: remaining < DECELERATION_REST_EPSILON,
-                }
+                // Displacement of a first-order decay, normalized so the total
+                // distance travelled is 1: x(t) = 1 - e^(-friction * t).
+                1.0 - (-deceleration.friction.get() * seconds).exp()
             }
             // `MotionSpec` is `#[non_exhaustive]`, so a variant added later
             // reaches this sampler before anyone teaches it the curve. Settling
             // immediately is the one safe answer: it shows the destination,
             // which is always correct, where guessing a curve from the wrong
             // variant would animate to somewhere nobody asked for.
-            _ => MotionSample::settled(),
+            _ => 1.0,
+        }
+    }
+
+    /// How fast progress is changing `seconds` in.
+    ///
+    /// A central difference over [`Self::progress_at`] rather than a derivative
+    /// per variant. Differentiating each closed form by hand would duplicate
+    /// four cases that must stay consistent with the curves they differentiate,
+    /// and a numeric difference cannot drift away from the function it is taken
+    /// over. Rest and hand-off are both threshold questions, where the exact
+    /// derivative buys nothing.
+    fn rate_at(self, seconds: f32) -> f32 {
+        const H: f32 = 1e-4;
+        let before = (seconds - H).max(0.0);
+        (self.progress_at(seconds + H) - self.progress_at(before)) / (H + seconds - before)
+    }
+
+    fn finished_at(self, seconds: f32, progress: f32) -> bool {
+        match self.spec {
+            MotionSpec::Instant => true,
+            MotionSpec::Tween(tween) => seconds >= tween.duration.as_secs_f32(),
+            // Both conditions are needed. An under-damped spring passes through
+            // its target on every bounce while still moving fast, so value
+            // alone would stop the motion mid-swing.
+            MotionSpec::Spring(_) => {
+                (progress - 1.0).abs() < SPRING_REST_EPSILON
+                    && self.rate_at(seconds).abs() < SPRING_REST_EPSILON
+            }
+            // A decay has no target to converge on, so its end has to come from
+            // the decay itself falling below what a pixel can show.
+            MotionSpec::Deceleration(deceleration) => {
+                (-deceleration.friction.get() * seconds).exp() < DECELERATION_REST_EPSILON
+            }
+            _ => true,
         }
     }
 }
 
-/// A second-order spring's normalized displacement at `t`, from rest to target.
+/// How far a tween's departure may be bent to match an inherited speed.
 ///
-/// Sampled analytically rather than integrated, which is what lets the same
-/// motion be evaluated at any instant without replaying the frames between.
-fn spring_progress(omega: f32, zeta: f32, t: f32) -> f32 {
+/// Unbounded, a fast interruption into a long duration produces a bump that
+/// overshoots the destination absurdly before easing back. This is generous
+/// enough to look continuous and small enough to stay on screen.
+const MAX_ENTRY_BUMP: f32 = 2.0;
+
+/// The initial slope of an easing curve, in progress per unit of normalized
+/// time, so the bump can be sized against the departure the curve already has.
+fn easing_initial_rate(easing: TransitionEasing) -> f32 {
+    const H: f32 = 1e-4;
+    easing.apply(H) / H
+}
+
+/// A second-order spring's normalized displacement at `t`.
+///
+/// `v0` is the entry rate: the speed the value already had when this motion
+/// took over. A spring is the one curve where an inherited velocity is exact
+/// rather than approximated — it is a boundary condition of the same ODE, so
+/// the closed forms below simply gain a `v0` term and the result is still the
+/// analytic solution, evaluable at any instant without replaying the frames
+/// between.
+fn spring_progress(omega: f32, zeta: f32, v0: f32, t: f32) -> f32 {
     if t <= 0.0 {
         return 0.0;
     }
-    if zeta < 1.0 {
+    // Solved for the error e = 1 - x, which starts at e(0) = 1 with
+    // e'(0) = -v0, so that x(0) = 0 and x'(0) = v0 for every damping regime.
+    let error = if zeta < 1.0 {
         // Under-damped: oscillates toward the target, and the overshoot is the
         // point — it is what makes the motion read as physical.
         let damped = omega * (1.0 - zeta * zeta).sqrt();
         let envelope = (-zeta * omega * t).exp();
-        1.0 - envelope * ((damped * t).cos() + (zeta * omega / damped) * (damped * t).sin())
+        envelope * ((damped * t).cos() + (zeta * omega - v0) / damped * (damped * t).sin())
     } else if (zeta - 1.0).abs() < f32::EPSILON {
         // Critically damped: the fastest approach with no overshoot at all.
-        1.0 - (1.0 + omega * t) * (-omega * t).exp()
+        (1.0 + (omega - v0) * t) * (-omega * t).exp()
     } else {
         // Over-damped: two real roots, no oscillation, slower than critical.
         let root = omega * (zeta * zeta - 1.0).sqrt();
         let fast = -zeta * omega + root;
         let slow = -zeta * omega - root;
-        1.0 - (slow * (fast * t).exp() - fast * (slow * t).exp()) / (slow - fast)
-    }
-}
-
-/// The spring's rate of change at `t`, for deciding when it has come to rest.
-fn spring_rate(omega: f32, zeta: f32, t: f32) -> f32 {
-    // Differentiating each closed form above would duplicate three cases that
-    // must stay consistent with `spring_progress`; a central difference cannot
-    // drift away from it, and rest is a threshold question where the exact
-    // derivative buys nothing.
-    const H: f32 = 1e-4;
-    (spring_progress(omega, zeta, t + H) - spring_progress(omega, zeta, (t - H).max(0.0)))
-        / (H + (t - (t - H).max(0.0)))
+        let a = (slow + v0) / (slow - fast);
+        let b = 1.0 - a;
+        a * (fast * t).exp() + b * (slow * t).exp()
+    };
+    1.0 - error
 }
 
 #[cfg(test)]

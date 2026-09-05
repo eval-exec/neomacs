@@ -63,20 +63,27 @@ impl GuiFrameRenderState {
             self.compositor.pane_morph = None;
             return;
         };
-        let measured = pane_layout::PaneLayoutMorph::try_new(
+        // A morph already in flight is retargeted rather than replaced. Its
+        // panes are somewhere between their old and new rects, and only a
+        // frame knows where; the splice therefore happens at the next sample,
+        // which has one. Replacing it here would restart them from the
+        // committed layout — the destination the old motion was still
+        // travelling toward — so every pane would snap forward to a place it
+        // had not reached and then animate away from it.
+        if let Some(in_flight) = self.compositor.pane_morph.as_mut() {
+            in_flight.retarget(&next.window_infos, spec, now);
+            return;
+        }
+        // Only *start* a morph when this presentation actually rearranged the
+        // panes. `try_new` returns `None` for a commit that left the layout
+        // alone, and almost every commit does: a keystroke redrawing the
+        // buffer, the echo area clearing, a mode-line clock tick.
+        if let Some(measured) = pane_layout::PaneLayoutMorph::try_new(
             &previous.window_infos,
             &next.window_infos,
             spec,
             now,
-        );
-        // Only *replace* a morph when this presentation actually rearranged the
-        // panes. `try_new` returns `None` for a commit that left the layout
-        // alone, and almost every commit does: a keystroke redrawing the
-        // buffer, the echo area clearing, a mode-line clock tick. Assigning
-        // that `None` through would cancel whatever is in flight, so the panes
-        // would snap to their destination on the first keypress after a
-        // `split-window` — which is to say, on essentially every split.
-        if let Some(measured) = measured {
+        ) {
             self.compositor.pane_morph = Some(measured);
         }
     }
@@ -107,6 +114,24 @@ impl GuiFrameRenderState {
             self.compositor.pane_morph = None;
             return Vec::new();
         };
+        // Apply any layout committed since the last frame, starting the new
+        // motion from where these panes are right now.
+        if let Some(spliced) = morph.spliced(frame) {
+            self.compositor.pane_morph = Some(spliced);
+        } else if morph.has_pending_retarget() {
+            // The retarget left nothing to animate: the panes are already where
+            // the new layout wants them. The motion is over.
+            self.compositor.pane_morph = None;
+            self.compositor.interaction = Some(
+                neomacs_display_protocol::InteractionProjection::settled(presentation),
+            );
+            return Vec::new();
+        }
+        let morph = self
+            .compositor
+            .pane_morph
+            .as_ref()
+            .expect("the morph was present at the top of this function");
         let sample = morph.sample(frame);
         self.compositor.interaction = Some(sample.projection(presentation));
         if sample.motion.finished {

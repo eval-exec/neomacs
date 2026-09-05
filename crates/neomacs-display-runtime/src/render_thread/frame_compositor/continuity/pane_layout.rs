@@ -90,6 +90,25 @@ pub(in crate::render_thread) struct PaneLayoutMorph {
     motion: Motion,
     first: PaneChange,
     additional: Vec<PaneChange>,
+    /// A layout committed while these panes were still travelling.
+    ///
+    /// Recorded rather than applied, because a splice must start the next
+    /// motion from where the panes were last *placed*, and only a frame knows
+    /// that instant. An install carries an `EventTime` and no `FrameSample`;
+    /// the next sample has one. Holding it here is what lets the splice happen
+    /// at the moment it can be done correctly instead of the moment it was
+    /// requested.
+    pending: Option<PendingRetarget>,
+}
+
+/// Where the panes must go next, once there is a frame to splice at.
+#[derive(Clone, Debug, PartialEq)]
+struct PendingRetarget {
+    /// Destination rects ordered by window id, so a spliced morph is as
+    /// reproducible as `try_new`'s sort makes a fresh one.
+    destination: Vec<(LiveDisplayWindowId, Rect)>,
+    spec: MotionSpec,
+    requested: EventTime,
 }
 
 /// Rects closer than this are the same rect.
@@ -180,7 +199,99 @@ impl PaneLayoutMorph {
             motion,
             first,
             additional: changes.collect(),
+            pending: None,
         })
+    }
+
+    /// Record that `next` arrived while these panes were still moving.
+    ///
+    /// Replacing the morph outright is what the code did before, and it made
+    /// the panes jump: the replacement's `from` rects came from the committed
+    /// presentation, which is the *destination* the old motion was still
+    /// travelling toward, so every pane snapped forward to a place it had not
+    /// reached and then animated away from it.
+    pub(in crate::render_thread) fn retarget(
+        &mut self,
+        next: &[WindowInfo],
+        spec: MotionSpec,
+        requested: EventTime,
+    ) {
+        let mut destination: Vec<(LiveDisplayWindowId, Rect)> =
+            panes_by_window(next).into_iter().collect();
+        destination.sort_by_key(|(window, _)| window.get());
+        self.pending = Some(PendingRetarget {
+            destination,
+            spec,
+            requested,
+        });
+    }
+
+    /// The morph to carry on with at `frame`, applying any pending retarget.
+    ///
+    /// Returns `None` when the retarget leaves nothing to animate — the panes
+    /// are already where the new layout wants them, so the motion is over.
+    pub(in crate::render_thread) fn spliced(&self, frame: FrameSample) -> Option<Self> {
+        let pending = self.pending.as_ref()?;
+        let sample = self.motion.sample(frame);
+        // Where the panes actually are on screen right now. This, not the
+        // committed layout, is what the next motion must start from.
+        let placed: std::collections::HashMap<LiveDisplayWindowId, Rect> = self
+            .changes()
+            .filter_map(|change| PanePlacement::at(change, sample))
+            .map(|placement| (placement.window, placement.bounds))
+            .collect();
+
+        let mut changes = Vec::new();
+        for (window, to) in &pending.destination {
+            match placed.get(window) {
+                Some(&from) if rect_changed(from, *to) => changes.push(PaneChange::Persisted {
+                    window: *window,
+                    from,
+                    to: *to,
+                }),
+                Some(_) => {}
+                None => changes.push(PaneChange::Entered {
+                    window: *window,
+                    to: *to,
+                }),
+            }
+        }
+        // A window the new layout drops keeps its record at the position it had
+        // reached, so step 8 has something to fade rather than a rect from a
+        // presentation two commits old.
+        for (window, from) in &placed {
+            if !pending.destination.iter().any(|(id, _)| id == window) {
+                changes.push(PaneChange::Exited {
+                    window: *window,
+                    from: *from,
+                });
+            }
+        }
+        changes.sort_by_key(|change| change.window().get());
+
+        // Hand the speed across so the panes do not visibly stall at the
+        // splice. One shared rate for one shared motion: with a single scalar
+        // progress driving independent per-pane lerps, per-pane velocity
+        // continuity is not expressible, and claiming it would be a lie about
+        // what the motion does.
+        let motion = Motion::resume(
+            pending.spec,
+            pending.requested,
+            super::super::motion::ProgressRate::new(sample.rate),
+        )?;
+        let mut changes = changes.into_iter();
+        let first = changes.next()?;
+        Some(Self {
+            motion,
+            first,
+            additional: changes.collect(),
+            pending: None,
+        })
+    }
+
+    /// Whether a layout arrived while these panes were still travelling.
+    pub(in crate::render_thread) const fn has_pending_retarget(&self) -> bool {
+        self.pending.is_some()
     }
 
     pub(in crate::render_thread) fn changes(&self) -> impl Iterator<Item = PaneChange> + '_ {
