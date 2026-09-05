@@ -1,6 +1,7 @@
 use std::io;
 use std::io::Write;
 
+use neomacs_display_protocol::SelectionOwner;
 use neomacs_display_runtime::thread_comm::{LifecycleCommand, RenderCommand};
 use neovm_core::emacs_core::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
 
@@ -48,6 +49,10 @@ impl DisplayHost for TtyPopupDisplayHost {
     }
 
     fn primary_selection_text(&mut self) -> Result<Option<String>, String> {
+        Err("PRIMARY selection is unavailable in TTY mode".to_owned())
+    }
+
+    fn primary_selection_owner(&mut self) -> Result<SelectionOwner, String> {
         Err("PRIMARY selection is unavailable in TTY mode".to_owned())
     }
 

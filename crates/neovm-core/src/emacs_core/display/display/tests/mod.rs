@@ -13,6 +13,7 @@ use crate::emacs_core::terminal::pure::{
     builtin_terminal_parameter, builtin_terminal_parameters, builtin_tty_top_frame,
     builtin_tty_type, reset_terminal_thread_locals, terminal_handle_value,
 };
+use neomacs_display_protocol::SelectionOwner;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -157,6 +158,26 @@ impl DisplayHost for FailingClipboardDisplayHost {
     fn primary_selection_text(&mut self) -> Result<Option<String>, String> {
         Err("system clipboard unavailable".to_owned())
     }
+
+    fn primary_selection_owner(&mut self) -> Result<SelectionOwner, String> {
+        Err("system clipboard unavailable".to_owned())
+    }
+}
+
+struct SelectionOwnerDisplayHost(SelectionOwner);
+
+impl DisplayHost for SelectionOwnerDisplayHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn primary_selection_owner(&mut self) -> Result<SelectionOwner, String> {
+        Ok(self.0)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -220,6 +241,7 @@ fn gui_clipboard_errors_are_visible_instead_of_returning_cached_text() {
         "(neomacs-clipboard-get)",
         r#"(neomacs-primary-selection-set "new")"#,
         "(neomacs-primary-selection-get)",
+        "(neomacs-primary-selection-owner)",
     ] {
         let err = eval
             .eval_str(form)
@@ -230,6 +252,52 @@ fn gui_clipboard_errors_are_visible_instead_of_returning_cached_text() {
         assert_eq!(resolve_sym(symbol), "error");
         assert_eq!(data, vec![Value::string("system clipboard unavailable")]);
     }
+}
+
+#[test]
+fn primary_selection_owner_reports_every_typed_host_state_to_lisp() {
+    crate::test_utils::init_test_tracing();
+
+    for (owner, expected_symbol) in [
+        (SelectionOwner::ThisProcess, "this-process"),
+        (SelectionOwner::OtherProcess, "other-process"),
+        (SelectionOwner::None, "none"),
+        (SelectionOwner::Unknown, "unknown"),
+    ] {
+        let mut eval = crate::emacs_core::Context::new();
+        eval.set_display_host(Box::new(SelectionOwnerDisplayHost(owner)));
+        assert_eq!(
+            eval.eval_str("(neomacs-primary-selection-owner)")
+                .expect("ownership query should succeed"),
+            Value::symbol(expected_symbol)
+        );
+    }
+}
+
+#[test]
+fn headless_primary_selection_ownership_tracks_even_an_empty_value() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::Context::new();
+
+    assert_eq!(
+        eval.eval_str("(neomacs-primary-selection-owner)")
+            .expect("initial ownership query"),
+        Value::symbol("none")
+    );
+    eval.eval_str(r#"(neomacs-primary-selection-set "")"#)
+        .expect("own empty PRIMARY");
+    assert_eq!(
+        eval.eval_str("(neomacs-primary-selection-owner)")
+            .expect("owned ownership query"),
+        Value::symbol("this-process")
+    );
+    eval.eval_str("(neomacs-primary-selection-set nil)")
+        .expect("disown PRIMARY");
+    assert_eq!(
+        eval.eval_str("(neomacs-primary-selection-owner)")
+            .expect("vacant ownership query"),
+        Value::symbol("none")
+    );
 }
 
 #[test]

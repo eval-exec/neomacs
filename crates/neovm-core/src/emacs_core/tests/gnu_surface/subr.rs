@@ -215,7 +215,7 @@ const BOTH_EDITORS_DECLARE_IT: &[BothEditorsDeclareItButTheDocTableCannotSeeIt] 
 /// `mapatoms` list of names whose `symbol-function` satisfies
 /// `subr-primitive-p` and subtracting one from the other.
 ///
-/// 23 xwidget names + `x-load-color-file` + 39 port names = 63.
+/// 23 xwidget names + `x-load-color-file` + 40 port names = 64.
 const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
     DeclaredHere {
         name: "delete-xwidget-view",
@@ -343,6 +343,10 @@ const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
     },
     DeclaredHere {
         name: "neomacs-primary-selection-get",
+        why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
+    },
+    DeclaredHere {
+        name: "neomacs-primary-selection-owner",
         why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
     },
     DeclaredHere {
@@ -591,7 +595,7 @@ fn port_namespace_rows_really_are_in_the_ports_namespace() {
     }
     assert!(
         !DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU.is_empty(),
-        "the table is empty; this build declares 39 primitives of its own, so an \
+        "the table is empty; this build declares 40 primitives of its own, so an \
          empty table is a deleted table rather than a clean one"
     );
 }

@@ -168,6 +168,7 @@ DISPLAY is the name of the display Emacs should connect to."
 ;; Primary selection integration
 (declare-function neomacs-primary-selection-set "neomacsfns.c" (text))
 (declare-function neomacs-primary-selection-get "neomacsfns.c" ())
+(declare-function neomacs-primary-selection-owner "neomacsfns.c" ())
 
 (defun neomacs--sync-cursor-blink ()
   "Sync `blink-cursor-mode' state to the render thread."
@@ -260,14 +261,6 @@ Also suppresses the Emacs-side blink timer since the render thread handles it."
     (yank)))
 
 ;; Selection protocol (CLIPBOARD + PRIMARY)
-(defvar neo--owns-primary-selection nil
-  "Non-nil while this Emacs owns PRIMARY on the Neomacs display.
-Set by `gui-backend-set-selection' and cleared when it disowns PRIMARY.
-GNU keeps the same record next to its store: the w32 port answers
-`gui-backend-selection-owner-p' from the `x-selections' property it wrote
-\(lisp/term/w32-win.el:364-367, :449-451) and the NS port compares the
-pasteboard change count it recorded when it wrote (nsselect.m:494-511).")
-
 (cl-defmethod gui-backend-set-selection (selection value
                                          &context (window-system neo))
   "Set SELECTION to VALUE on the Neomacs display.
@@ -281,27 +274,26 @@ SELECTION is a symbol like `CLIPBOARD' or `PRIMARY'."
         (neomacs-clipboard-set text)))
      ((eq selection 'PRIMARY)
       (when (fboundp 'neomacs-primary-selection-set)
-        (neomacs-primary-selection-set text)
-        (setq neo--owns-primary-selection (and text t)))))))
+        (neomacs-primary-selection-set text))))))
 
 (cl-defmethod gui-backend-selection-owner-p (selection
                                              &context (window-system neo))
   "Return non-nil if this Emacs owns SELECTION on the Neomacs display.
-nil means PRIMARY, as in GNU (nsselect.m:506, w32-win.el:450).  Only
-PRIMARY is tracked, like the w32 port: the system CLIPBOARD changes hands
-without notice, so this reports nil for it, and `gui--selection-value-internal'
-only trusts this predicate for CLIPBOARD on x and haiku anyway
-\(lisp/select.el:230-236).
+nil means PRIMARY, as in GNU (nsselect.m:506, w32-win.el:450).  Ownership of
+PRIMARY comes from the native backend that owns its state.  The
+system CLIPBOARD changes hands without notice, so this reports nil for it,
+and `gui--selection-value-internal' only trusts this predicate for CLIPBOARD
+on x and haiku anyway (lisp/select.el:230-236).
 
 `deactivate-mark' (lisp/simple.el:7056-7066) republishes the region to
 PRIMARY only when this predicate holds or nobody owns PRIMARY; without it
 an earlier PRIMARY value stayed stale on displays whose PRIMARY is
-process-local.  Declared divergence: on Linux PRIMARY is a real X11 or
-Wayland selection that another client may take after us, which GNU
-detects through `x-selection-owner-p' (x-win.el:1359-1361); the display
-backend exposes no owner query, so that hand-over is not observed here."
+process-local.  On Linux, an ownership result of `unknown' is conservative:
+it must not be treated as ours and bypass GNU's Bug#11772 foreign-owner
+guard."
   (and (memq selection '(nil PRIMARY))
-       neo--owns-primary-selection))
+       (fboundp 'neomacs-primary-selection-owner)
+       (eq (neomacs-primary-selection-owner) 'this-process)))
 
 (cl-defmethod gui-backend-get-selection (selection-symbol _target-type
                                           &context (window-system neo)
@@ -317,7 +309,7 @@ backend exposes no owner query, so that hand-over is not observed here."
 
 (cl-defmethod gui-backend-selection-exists-p (selection
                                               &context (window-system neo))
-  "Return non-nil if SELECTION has content on the Neomacs display."
+  "Return non-nil if SELECTION exists on the Neomacs display."
   (cond
    ((eq selection 'CLIPBOARD)
     (when (fboundp 'neomacs-clipboard-get)
@@ -325,8 +317,7 @@ backend exposes no owner query, so that hand-over is not observed here."
         (and text (not (string-empty-p text))))))
    ((eq selection 'PRIMARY)
     (when (fboundp 'neomacs-primary-selection-get)
-      (let ((text (neomacs-primary-selection-get)))
-        (and text (not (string-empty-p text))))))))
+      (not (null (neomacs-primary-selection-get)))))))
 
 (defcustom x-display-cursor-at-start-of-preedit-string nil
   "If non-nil, display the cursor at the start of any pre-edit text."

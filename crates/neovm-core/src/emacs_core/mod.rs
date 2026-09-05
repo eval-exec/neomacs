@@ -428,7 +428,7 @@ pub(crate) struct MenuBarPopupAnchor {
 
 // Re-export the main public API
 pub use bytecode::{ByteCodeFunction, Vm as ByteVm};
-pub use display_host::{DisplayHost, GraphicalFaceAttribute};
+pub use display_host::{DisplayHost, GraphicalFaceAttribute, SelectionOwner};
 pub use error::{
     EvalError, format_eval_result, format_eval_result_bytes_with_eval,
     format_eval_result_with_eval, print_value_bytes_with_eval, print_value_with_eval,

@@ -20,7 +20,7 @@ use super::{
     run_gnu_startup, runtime_mode_from_program_name, source_bootstrap_loadup_invocation,
     startup_dimensions, sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
 };
-use neomacs_display_protocol::{VideoId, WebViewId};
+use neomacs_display_protocol::{SelectionOwner, VideoId, WebViewId};
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageRenderState, SharedImageRenderState,
 };
@@ -3439,6 +3439,15 @@ fn primary_window_display_host_round_trips_clipboard_requests_through_renderer()
         };
         assert_eq!(selection, ClipboardSelection::Primary);
         reply.send(Ok(Some("selected".to_owned()))).unwrap();
+
+        let RenderCommand::Clipboard(ClipboardCommand::GetOwnership {
+            selection, reply, ..
+        }) = cmd_rx.recv().unwrap()
+        else {
+            panic!("expected PRIMARY ownership command");
+        };
+        assert_eq!(selection, ClipboardSelection::Primary);
+        reply.send(Ok(SelectionOwner::OtherProcess)).unwrap();
     });
     let mut host = PrimaryWindowDisplayHost {
         cmd_tx: cmd_tx.clone(),
@@ -3466,6 +3475,10 @@ fn primary_window_display_host_round_trips_clipboard_requests_through_renderer()
         neovm_core::emacs_core::DisplayHost::primary_selection_text(&mut host).unwrap(),
         Some("selected".to_owned())
     );
+    assert_eq!(
+        neovm_core::emacs_core::DisplayHost::primary_selection_owner(&mut host).unwrap(),
+        SelectionOwner::OtherProcess
+    );
     worker.join().unwrap();
 }
 
@@ -3490,6 +3503,10 @@ fn tty_display_host_reports_clipboard_as_unsupported() {
     );
     assert_eq!(
         neovm_core::emacs_core::DisplayHost::primary_selection_text(&mut host),
+        Err("PRIMARY selection is unavailable in TTY mode".to_owned())
+    );
+    assert_eq!(
+        neovm_core::emacs_core::DisplayHost::primary_selection_owner(&mut host),
         Err("PRIMARY selection is unavailable in TTY mode".to_owned())
     );
 }
@@ -4274,6 +4291,66 @@ fn neo_selection_backend_forwards_nil_to_disown_clipboard_and_primary() {
         .unwrap_or_else(|err| format!("{err:?}"));
 
     assert_eq!(rendered, "((clipboard nil) (primary nil))");
+}
+
+#[test]
+fn neo_selection_backend_uses_backend_owned_primary_ownership_state() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+
+    let rendered = eval
+        .eval_str(
+            r#"
+        (progn
+          (require 'cl-lib)
+          (load "term/neo-win.el" nil t)
+          (let ((window-system 'neo)
+                (native-owner 'this-process))
+            (cl-letf (((symbol-function 'neomacs-primary-selection-set)
+                       (lambda (_value) nil))
+                      ((symbol-function 'neomacs-primary-selection-owner)
+                       (lambda () native-owner)))
+              (gui-backend-set-selection 'PRIMARY "selected")
+              (list
+               (and (gui-backend-selection-owner-p 'PRIMARY) t)
+               (progn
+                 (setq native-owner 'other-process)
+                 (and (gui-backend-selection-owner-p 'PRIMARY) t))
+               (progn
+                 (setq native-owner 'none)
+                 (and (gui-backend-selection-owner-p nil) t))
+               (progn
+                 (setq native-owner 'unknown)
+                 (and (gui-backend-selection-owner-p 'PRIMARY) t))))))
+        "#,
+        )
+        .map(|value| print_value_with_eval(&mut eval, &value))
+        .unwrap_or_else(|err| format!("{err:?}"));
+
+    assert_eq!(rendered, "(t nil nil nil)");
+}
+
+#[test]
+fn neo_selection_backend_treats_an_owned_empty_primary_as_existing() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+
+    let rendered = eval
+        .eval_str(
+            r#"
+        (progn
+          (require 'cl-lib)
+          (load "term/neo-win.el" nil t)
+          (let ((window-system 'neo))
+            (cl-letf (((symbol-function 'neomacs-primary-selection-get)
+                       (lambda () "")))
+              (and (gui-backend-selection-exists-p 'PRIMARY) t))))
+        "#,
+        )
+        .map(|value| print_value_with_eval(&mut eval, &value))
+        .unwrap_or_else(|err| format!("{err:?}"));
+
+    assert_eq!(rendered, "t");
 }
 
 #[test]
