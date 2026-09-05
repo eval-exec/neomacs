@@ -1,8 +1,8 @@
 //! Shared mutable state for buffer text visible-loop rendering.
 //!
 //! The state is grouped into sub-structs by what the loop does with each
-//! group — the row under construction, hit capture, what a row break carries
-//! across, and the surface-scoped context — so that a site naming one group
+//! group — the row under construction, what a row break carries across, and
+//! the surface-scoped context — so that a site naming one group
 //! says which part of the walk it touches. Each group reborrows like the
 //! whole, so handing a group on is the same move as handing the state on.
 
@@ -17,13 +17,12 @@ use crate::display_row::overlay_string::BufferOverlayStringTextRowRenderContext;
 use crate::display_row::source_render::TextRowSourceRenderState;
 use crate::display_row::transition::DisplayRowTransitionRenderState;
 use crate::display_row::walk_state::{
-    BoxFaceRowState, FaceScanCheckpoint, HitRowRangeTracker, HorizontalScrollSkipState,
+    BoxFaceRowState, DisplayRowSourceStart, FaceScanCheckpoint, HorizontalScrollSkipState,
     InvisibleTextScanCheckpoint, LineNumberRenderState, TrailingWhitespaceRenderState,
     WordWrapRenderState,
 };
 use crate::display_source_progress::DisplaySourceProgressState;
 use crate::frame_face_arena::FrameFaceAttempt;
-use crate::hit_test::HitRow;
 
 pub(crate) enum BeyondAccessibleEndLinePrefixCapture<'a> {
     Ignored,
@@ -57,17 +56,6 @@ pub(crate) struct BufferSourceRowBuildState<'emit> {
     pub(crate) row_flags: &'emit mut DisplayRowFlags,
     pub(crate) row_extend: &'emit mut DisplayRowExtendState,
     pub(crate) box_face: &'emit mut BoxFaceRowState,
-}
-
-/// Hit-test capture for the window being laid out.
-///
-/// `hit_row_range` holds the charpos the current row started at; it is what
-/// closes an entry appended to the frame-scoped `hit_rows`. Neither is
-/// meaningful without the other, and a row emitted from one while the range
-/// came from another is an off-by-one-row hit map.
-pub(crate) struct BufferSourceHitCaptureState<'emit> {
-    pub(crate) hit_rows: &'emit mut Vec<HitRow>,
-    pub(crate) hit_row_range: &'emit mut HitRowRangeTracker,
 }
 
 /// The walk state a row transition carries across a row break.
@@ -121,25 +109,6 @@ impl<'emit> BufferSourceRowBuildState<'emit> {
             row_flags: self.row_flags,
             row_extend: self.row_extend,
             box_face: self.box_face,
-        }
-    }
-}
-
-impl<'emit> BufferSourceHitCaptureState<'emit> {
-    pub(crate) fn new(
-        hit_rows: &'emit mut Vec<HitRow>,
-        hit_row_range: &'emit mut HitRowRangeTracker,
-    ) -> Self {
-        Self {
-            hit_rows,
-            hit_row_range,
-        }
-    }
-
-    pub(crate) fn reborrow(&mut self) -> BufferSourceHitCaptureState<'_> {
-        BufferSourceHitCaptureState {
-            hit_rows: self.hit_rows,
-            hit_row_range: self.hit_row_range,
         }
     }
 }
@@ -203,7 +172,7 @@ pub(crate) struct BufferSourceLoopMutableState<'rows, 'emit, 'surface> {
     pub(crate) progress: DisplaySourceProgressState<'emit>,
     pub(crate) source_render: TextRowSourceRenderState<'emit>,
     pub(crate) row_build: BufferSourceRowBuildState<'emit>,
-    pub(crate) hit_capture: BufferSourceHitCaptureState<'emit>,
+    pub(crate) row_source_start: &'emit mut DisplayRowSourceStart,
     pub(crate) row_carryover: BufferSourceRowCarryoverState<'emit>,
     pub(crate) face_scan: &'emit mut FaceScanCheckpoint,
     pub(crate) row_y_positions: &'rows mut DisplayRowYPositions,
@@ -220,7 +189,7 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
         progress: DisplaySourceProgressState<'emit>,
         source_render: TextRowSourceRenderState<'emit>,
         row_build: BufferSourceRowBuildState<'emit>,
-        hit_capture: BufferSourceHitCaptureState<'emit>,
+        row_source_start: &'emit mut DisplayRowSourceStart,
         row_carryover: BufferSourceRowCarryoverState<'emit>,
         face_scan: &'emit mut FaceScanCheckpoint,
         row_y_positions: &'rows mut DisplayRowYPositions,
@@ -233,7 +202,7 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
             progress,
             source_render,
             row_build,
-            hit_capture,
+            row_source_start,
             row_carryover,
             face_scan,
             row_y_positions,
@@ -267,7 +236,7 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
             progress: self.progress.reborrow(),
             source_render: self.source_render.reborrow(),
             row_build: self.row_build.reborrow(),
-            hit_capture: self.hit_capture.reborrow(),
+            row_source_start: self.row_source_start,
             row_carryover: self.row_carryover.reborrow(),
             face_scan: self.face_scan,
             row_y_positions: self.row_y_positions,

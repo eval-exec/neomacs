@@ -2,7 +2,6 @@ use crate::display_item::RenderFaceRef;
 use crate::display_pixel_calc::PixelCalcContext;
 use crate::display_row::builder::{DisplayRowLayout, DisplayTabPolicy};
 use crate::display_row::face_state::DisplayRowMeasurementMode;
-use crate::hit_test::HitRow;
 use crate::types::LayoutCharPos0;
 use crate::window_output::{
     DisplayTextRowBegin, DisplayTextRowGeometryTransition, DisplayTextRowMetrics,
@@ -389,31 +388,9 @@ pub(crate) struct DisplayRowGeometryTransitionTarget<'a> {
     row_y_recording: DisplayRowYRecording<'a>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct DisplayRowHitRange {
-    pub(crate) charpos_start: i64,
-    pub(crate) charpos_end: i64,
-}
-
 pub(crate) struct DisplayRowBoundaryTarget<'a> {
-    hit_range: DisplayRowHitRange,
+    next_row_start: LayoutCharPos0,
     transition: DisplayRowGeometryTransitionTarget<'a>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct DisplayRowBoundaryTransition {
-    pub(crate) hit_row: HitRow,
-    pub(crate) transition: DisplayTextRowGeometryTransition,
-}
-
-impl DisplayRowBoundaryTransition {
-    pub(crate) fn record_hit_row(
-        self,
-        hit_rows: &mut Vec<HitRow>,
-    ) -> DisplayTextRowGeometryTransition {
-        hit_rows.push(self.hit_row);
-        self.transition
-    }
 }
 
 impl DisplayRowYFallback {
@@ -540,17 +517,17 @@ impl<'a> DisplayRowGeometryTransitionTarget<'a> {
 
 impl<'a> DisplayRowBoundaryTarget<'a> {
     pub(crate) fn new(
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         transition: DisplayRowGeometryTransitionTarget<'a>,
     ) -> Self {
         Self {
-            hit_range,
+            next_row_start,
             transition,
         }
     }
 
     pub(crate) fn line_break(
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         defaults: DisplayRowGeometryDefaults,
         row_base: usize,
         col: usize,
@@ -559,7 +536,7 @@ impl<'a> DisplayRowBoundaryTarget<'a> {
         row_y_recording: DisplayRowYRecording<'a>,
     ) -> Self {
         Self::new(
-            hit_range,
+            next_row_start,
             DisplayRowGeometryTransitionTarget::line_break(
                 defaults,
                 row_base,
@@ -572,7 +549,7 @@ impl<'a> DisplayRowBoundaryTarget<'a> {
     }
 
     pub(crate) fn truncation(
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         defaults: DisplayRowGeometryDefaults,
         row_base: usize,
         col: usize,
@@ -580,7 +557,7 @@ impl<'a> DisplayRowBoundaryTarget<'a> {
         row_y_recording: DisplayRowYRecording<'a>,
     ) -> Self {
         Self::new(
-            hit_range,
+            next_row_start,
             DisplayRowGeometryTransitionTarget::truncation(
                 defaults,
                 row_base,
@@ -592,7 +569,7 @@ impl<'a> DisplayRowBoundaryTarget<'a> {
     }
 
     pub(crate) fn visual_wrap(
-        hit_range: DisplayRowHitRange,
+        next_row_start: LayoutCharPos0,
         defaults: DisplayRowGeometryDefaults,
         row_base: usize,
         col: usize,
@@ -600,7 +577,7 @@ impl<'a> DisplayRowBoundaryTarget<'a> {
         row_y_recording: DisplayRowYRecording<'a>,
     ) -> Self {
         Self::new(
-            hit_range,
+            next_row_start,
             DisplayRowGeometryTransitionTarget::visual_wrap(
                 defaults,
                 row_base,
@@ -820,20 +797,18 @@ impl DisplayRowGeometryState {
         self.y + glyph_y_offset
     }
 
-    pub(crate) fn finish_boundary_in_place(
+    pub(crate) fn finish_boundary(
         &mut self,
         target: DisplayRowBoundaryTarget<'_>,
-    ) -> DisplayRowBoundaryTransition {
+    ) -> DisplayTextRowGeometryTransition {
         let mut row_cursor = DisplayRowGeometryCursor::from_state(*self);
-        let hit_row =
-            row_cursor.hit_row(target.hit_range.charpos_start, target.hit_range.charpos_end);
         let transition = row_cursor.finish_and_begin_next_display_text_row(
             target.transition.defaults,
             target.transition.kind,
             target.transition.row_base,
             target.transition.col,
             target.transition.x,
-            LayoutCharPos0::new(target.hit_range.charpos_end),
+            target.next_row_start,
         );
         *self = row_cursor.state();
         match target.transition.row_y_recording {
@@ -842,19 +817,7 @@ impl DisplayRowGeometryState {
                 row_y_positions.push(self.y);
             }
         }
-        DisplayRowBoundaryTransition {
-            hit_row,
-            transition,
-        }
-    }
-
-    pub(crate) fn finish_boundary_and_record_hit(
-        &mut self,
-        target: DisplayRowBoundaryTarget<'_>,
-        hit_rows: &mut Vec<HitRow>,
-    ) -> DisplayTextRowGeometryTransition {
-        self.finish_boundary_in_place(target)
-            .record_hit_row(hit_rows)
+        transition
     }
 }
 
@@ -1007,15 +970,6 @@ impl DisplayRowGeometryCursor {
             row_extra_y: state.row_extra_y,
             metrics: CurrentDisplayRowMetrics::new(state.height, state.ascent),
             measurement_mode: state.measurement_mode,
-        }
-    }
-
-    pub(crate) fn hit_row(&self, charpos_start: i64, charpos_end: i64) -> HitRow {
-        HitRow {
-            y_start: self.y,
-            y_end: self.y + self.metrics.height(),
-            charpos_start,
-            charpos_end,
         }
     }
 
