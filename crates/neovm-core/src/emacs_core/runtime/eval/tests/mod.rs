@@ -15908,7 +15908,13 @@ fn jit_subr_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     if hot {
         f.jit_runtime().set_hot_for_test();
     }
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 /// Debug-build snapshot of the three subr-spec counters (entries/fast/generic).
@@ -16823,7 +16829,13 @@ fn jit_cbsym_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     if hot {
         f.jit_runtime().set_hot_for_test();
     }
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 /// Debug-build snapshot of the R2 CBSym-spec counters (entries/fast/generic).
@@ -17840,7 +17852,13 @@ fn jit_bench_fib_value(sym_name: &str, tier: BenchTier) -> Value {
     f.constants = vec![Value::make_int(2), fib_sym, Value::make_int(1)].into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 /// Body-dominated control benchmark: a countdown accumulator loop (pure
@@ -17877,7 +17895,13 @@ fn jit_bench_loop_value(tier: BenchTier) -> Value {
     f.constants = vec![Value::make_int(0)].into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 /// A >256-op loop body in the 352-op font-lock matcher's SHAPE (arith chunks
@@ -17957,7 +17981,13 @@ fn jit_bench_big_body_value(tier: BenchTier) -> Value {
     .into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 /// Run with the cap lifted so the Hot copy actually tiers:
@@ -18141,7 +18171,13 @@ fn jit_bench_call_bound_caller(tier: BenchTier) -> Value {
     f.constants = vec![Value::make_int(0), Value::symbol("jit-bench-cbleaf")].into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
@@ -18243,7 +18279,13 @@ fn jit_bench_builtin_bound_caller(tier: BenchTier) -> Value {
     f.constants = vec![Value::make_int(0)].into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
@@ -19251,7 +19293,13 @@ fn vm_bench_call_loop_caller(callee_designator: Value) -> Value {
     ];
     f.constants = vec![Value::make_int(0), callee_designator].into();
     f.max_stack = 16;
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 /// Warm once, then min wall-clock of `iters` calls of `f(n)` (mirrors
@@ -19376,7 +19424,13 @@ fn vm_bench_varref_loop_caller(var_sym: Value) -> Value {
     ];
     f.constants = vec![Value::make_int(0), var_sym].into();
     f.max_stack = 16;
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 /// Task-4 Step-2 GATE bench (BLV side): per-read cost of `Op::VarRef` on a
@@ -19444,7 +19498,13 @@ fn varref_reader_fn(sym: Value) -> Value {
     f.ops = vec![Op::VarRef(1), Op::Return];
     f.constants = vec![Value::NIL, sym].into();
     f.max_stack = 4;
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 /// Read `reader` (a [`varref_reader_fn`] value) several times and return the
@@ -19641,7 +19701,13 @@ fn jit_bench_cbsym_value(tier: BenchTier) -> Value {
     .into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
@@ -19700,7 +19766,13 @@ fn jit_bench_cbsym_goto_value(tier: BenchTier) -> Value {
     f.constants = vec![Value::make_int(0), Value::make_int(1)].into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
@@ -19763,7 +19835,13 @@ fn jit_bench_subr_value(tier: BenchTier) -> Value {
     .into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
@@ -19837,7 +19915,13 @@ fn jit_bench_many_value(tier: BenchTier) -> Value {
     .into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
@@ -19913,7 +19997,13 @@ fn jit_bench_pred_value(tier: BenchTier) -> Value {
     .into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
@@ -19972,7 +20062,13 @@ fn jit_bench_cons_value(tier: BenchTier) -> Value {
     f.constants = vec![Value::make_int(0)].into();
     f.max_stack = 16;
     tier.apply(f.jit_runtime());
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
@@ -24401,7 +24497,13 @@ fn jit_closure_prototype(
     f.ops = ops;
     f.constants = consts.into();
     f.max_stack = 16;
-    Value::make_bytecode(f)
+    let v = Value::make_bytecode(f);
+    // The caller holds `v` in a Rust local across evaluations that can
+    // collect; the collector is precise (no stack scan), so root it here or
+    // `NEOVM_GC_STRESS=1` frees the function the test is about to call
+    // (the interpreter then dispatches on freed ops: SIGSEGV, rr-proven).
+    crate::emacs_core::eval::push_scratch_gc_root(v);
+    v
 }
 
 #[cfg(feature = "jit")]
