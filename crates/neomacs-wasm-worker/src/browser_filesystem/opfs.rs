@@ -1,6 +1,8 @@
 //! EditorFileSystem implementation backed by origin-private browser storage.
 
-use super::protocol::{JAVASCRIPT_MAX_SAFE_INTEGER, complete, current_metadata, path_string, read_result_bytes};
+use super::protocol::{
+    JAVASCRIPT_MAX_SAFE_INTEGER, complete, current_metadata, path_string, read_result_bytes,
+};
 use crate::browser_host;
 use neovm_core::emacs_core::fileio::{
     AccessMode, EditorFileSystem, FileEntryKind, FileMetadata, WriteMode, WriteRequest,
@@ -14,6 +16,15 @@ use std::path::{Path, PathBuf};
 pub(crate) struct BrowserOpfsFileSystem;
 
 impl EditorFileSystem for BrowserOpfsFileSystem {
+    fn mode(
+        &self,
+        path: &Path,
+        follow_links: bool,
+    ) -> io::Result<neovm_core::emacs_core::fileio::FileMode> {
+        self.metadata(path, follow_links)
+            .map(neovm_core::emacs_core::fileio::FileMode::single_user_virtual)
+    }
+
     fn attributes(
         &self,
         path: &Path,
