@@ -4,6 +4,7 @@
 #![allow(clippy::type_complexity)]
 
 pub(in crate::render_thread) mod chrome;
+mod composition_targets;
 mod retained_static;
 mod scene;
 mod surface;
@@ -17,10 +18,7 @@ use super::state::{ChildFrameStyle, ToolbarResources};
 use super::transitions::{detect_frame_transitions, render_frame_transitions};
 use super::{RenderApp, surface_readback};
 use crate::core::types::DisplayFrameId;
-use neomacs_renderer_wgpu::{
-    BudgetExceeded, SnapshotLease, SnapshotSize, UnpooledTexture, WgpuGlyphAtlas, WgpuRenderer,
-    texture_bytes,
-};
+use neomacs_renderer_wgpu::{SnapshotSize, WgpuRenderer};
 
 /// A frame drawn and ready to present.
 ///
@@ -225,7 +223,9 @@ impl RenderApp {
         let frame_post_src = feature_plan
             .apply_frame_post
             .then(|| {
-                surface_size.and_then(|size| Self::ensure_frame_post_src(renderer, render, size))
+                surface_size.and_then(|size| {
+                    composition_targets::ensure_frame_post_src(renderer, render, size)
+                })
             })
             .flatten();
         let frame_post_active = frame_post_src.is_some();
@@ -236,7 +236,7 @@ impl RenderApp {
         renderer.set_scale_factor(native.scale_factor as f32);
         renderer.resize(native.width, native.height);
         let cursor_visible = render.cursor.blink_on;
-        Self::report_unpooled_gpu_textures(renderer, render);
+        composition_targets::report_unpooled_gpu_textures(renderer, render);
 
         // The retained-static fast path is a whole composition strategy; it
         // owns its own eligibility rule and its own draw. What the draw order
@@ -284,7 +284,7 @@ impl RenderApp {
         // returns without composing anything, and advancing for a frame that
         // is never drawn would retire the picture a transition still needs.
         let composition = need_offscreen
-            .then(|| Self::advance_frame_composition(renderer, render, surface_size))
+            .then(|| composition_targets::advance_frame_composition(renderer, render, surface_size))
             .flatten();
         if let Some(composition) = composition.as_ref() {
             render_frame_window_contents(
@@ -424,109 +424,6 @@ impl RenderApp {
             frame,
             projection: pane_projection,
         })
-    }
-
-    /// Lease the intermediate composition texture for the full-frame post
-    /// shader at the window's physical size; returns its view.
-    ///
-    /// `None` means the budget refused the lease, and the caller composes
-    /// straight to the swapchain without the post shader: one unshaded frame
-    /// is a better answer than a dropped one.
-    fn ensure_frame_post_src(
-        renderer: &mut WgpuRenderer,
-        render: &mut GuiFrameRenderState,
-        size: SnapshotSize,
-    ) -> Option<wgpu::TextureView> {
-        if !render
-            .frame_post_src
-            .as_ref()
-            .is_some_and(|lease| lease.size() == size)
-        {
-            // Dropped before the acquire so the pool can re-cut the old-size
-            // slot rather than allocate beside it.
-            render.frame_post_src = None;
-            match renderer.acquire_snapshot(size) {
-                Ok(lease) => render.frame_post_src = Some(lease),
-                Err(exceeded) => {
-                    Self::note_refused_full_frame_texture(&exceeded, "frame post source");
-                    return None;
-                }
-            }
-        }
-        render
-            .frame_post_src
-            .as_ref()
-            .map(|lease| lease.view().clone())
-    }
-
-    /// Rotate the frame window's composition ring and hand back the slot this
-    /// frame composes into.
-    ///
-    /// `None` degrades the frame to composing straight on the surface, which
-    /// costs the transitions and pane motion for that frame and nothing else.
-    /// GPU pressure is a real state, not a masked bug, so it is counted.
-    fn advance_frame_composition(
-        renderer: &mut WgpuRenderer,
-        render: &mut GuiFrameRenderState,
-        surface_size: Option<SnapshotSize>,
-    ) -> Option<SnapshotLease> {
-        let size = surface_size?;
-        match render
-            .compositor
-            .transitions
-            .advance_compositions(renderer, size)
-        {
-            Ok(lease) => Some(lease),
-            Err(exceeded) => {
-                Self::note_refused_full_frame_texture(&exceeded, "frame composition");
-                None
-            }
-        }
-    }
-
-    fn note_refused_full_frame_texture(exceeded: &BudgetExceeded, what: &'static str) {
-        super::frame_stats::count(&super::frame_stats::FULL_FRAME_TEXTURE_REFUSALS);
-        tracing::debug!(
-            %exceeded,
-            what,
-            "GPU budget refused a full-frame texture; composing without it"
-        );
-    }
-
-    /// Re-report every full-frame GPU texture this window owns that the
-    /// snapshot pool does not hand out.
-    ///
-    /// Derived from live state once per frame rather than registered at
-    /// creation: a census that is re-stated every frame cannot drift, whereas
-    /// a charge/refund pair drifts the first time a release site is added
-    /// without a matching refund.
-    fn report_unpooled_gpu_textures(renderer: &mut WgpuRenderer, render: &GuiFrameRenderState) {
-        let owner = render.emacs_frame_id;
-        let retained_static_bytes = render
-            .compositor
-            .retained_static
-            .as_ref()
-            .and_then(|retained| SnapshotSize::new(retained.width, retained.height))
-            .map_or(0, |size| texture_bytes(size, renderer.surface_format()));
-        renderer.record_unpooled_texture(
-            owner,
-            UnpooledTexture::RetainedStaticScene,
-            retained_static_bytes,
-        );
-        let atlas_bytes = render
-            .compositor
-            .glyph_atlas
-            .as_ref()
-            .map_or(0, WgpuGlyphAtlas::resident_bytes);
-        renderer.record_unpooled_texture(owner, UnpooledTexture::GlyphAtlas, atlas_bytes);
-        let budget = renderer.gpu_budget();
-        tracing::trace!(
-            owner,
-            pooled_bytes = budget.pooled_bytes(),
-            unpooled_bytes = budget.unpooled_bytes(),
-            limit_bytes = budget.limit_bytes().get(),
-            "full-frame GPU texture accounting"
-        );
     }
 
     /// Render and present one top-level frame window, preserving the precise
