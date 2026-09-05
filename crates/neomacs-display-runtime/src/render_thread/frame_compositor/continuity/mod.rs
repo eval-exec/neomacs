@@ -45,6 +45,18 @@ pub(in crate::render_thread) struct TransitionInputs {
     pub(in crate::render_thread) region: BufferViewportRegion,
 }
 
+/// What one composition places, and the transform that matches those pixels.
+///
+/// The two travel together because they are derived from a single sample of a
+/// single motion; separating them is how a hit test and a render come to
+/// disagree.
+#[derive(Default)]
+pub(in crate::render_thread) struct PaneLayoutComposition {
+    pub(in crate::render_thread) blits: Vec<neomacs_renderer_wgpu::PaneBlit>,
+    pub(in crate::render_thread) projection:
+        Option<neomacs_display_protocol::InteractionProjection>,
+}
+
 impl GuiFrameRenderState {
     /// Start carrying the panes to where the incoming presentation puts them.
     ///
@@ -101,9 +113,9 @@ impl GuiFrameRenderState {
     pub(in crate::render_thread) fn sample_pane_layout(
         &mut self,
         frame: neomacs_display_protocol::frame_time::FrameSample,
-    ) -> Vec<neomacs_renderer_wgpu::PaneBlit> {
+    ) -> PaneLayoutComposition {
         let Some(morph) = self.compositor.pane_morph.as_ref() else {
-            return Vec::new();
+            return PaneLayoutComposition::default();
         };
         let Some(presentation) = self
             .compositor
@@ -112,7 +124,7 @@ impl GuiFrameRenderState {
             .map(|frame| frame.presentation_id)
         else {
             self.compositor.pane_morph = None;
-            return Vec::new();
+            return PaneLayoutComposition::default();
         };
         // Apply any layout committed since the last frame, starting the new
         // motion from where these panes are right now.
@@ -122,10 +134,12 @@ impl GuiFrameRenderState {
             // The retarget left nothing to animate: the panes are already where
             // the new layout wants them. The motion is over.
             self.compositor.pane_morph = None;
-            self.compositor.interaction = Some(
-                neomacs_display_protocol::InteractionProjection::settled(presentation),
-            );
-            return Vec::new();
+            return PaneLayoutComposition {
+                blits: Vec::new(),
+                projection: Some(neomacs_display_protocol::InteractionProjection::settled(
+                    presentation,
+                )),
+            };
         }
         let morph = self
             .compositor
@@ -133,7 +147,7 @@ impl GuiFrameRenderState {
             .as_ref()
             .expect("the morph was present at the top of this function");
         let sample = morph.sample(frame);
-        self.compositor.interaction = Some(sample.projection(presentation));
+        let projection = sample.projection(presentation);
         if sample.motion.finished {
             // Settled: drop the morph and fall back to the identity
             // projection, so the last frame of the motion and the first frame
@@ -141,18 +155,32 @@ impl GuiFrameRenderState {
             // are still returned — this frame is the one that draws the panes
             // at their destination.
             self.compositor.pane_morph = None;
-            self.compositor.interaction = Some(
-                neomacs_display_protocol::InteractionProjection::settled(presentation),
-            );
         }
-        sample
-            .panes
-            .iter()
-            .map(|placement| neomacs_renderer_wgpu::PaneBlit {
-                bounds: placement.bounds,
-                content_origin: placement.content_origin,
-            })
-            .collect()
+        PaneLayoutComposition {
+            blits: sample
+                .panes
+                .iter()
+                .map(|placement| neomacs_renderer_wgpu::PaneBlit {
+                    bounds: placement.bounds,
+                    content_origin: placement.content_origin,
+                })
+                .collect(),
+            projection: Some(projection),
+        }
+    }
+
+    /// Make the projection for a frame that has actually been presented.
+    ///
+    /// The single writer of `compositor.interaction`, and it runs on the
+    /// present path. Until a frame reaches the screen, what the panes look like
+    /// is an intention; hit testing must answer about pixels the user saw.
+    pub(in crate::render_thread) fn publish_presented_projection(
+        &mut self,
+        projection: Option<neomacs_display_protocol::InteractionProjection>,
+    ) {
+        if let Some(projection) = projection {
+            self.compositor.interaction = Some(projection);
+        }
     }
 
     /// Measure how far each window's viewport moved into the presentation being
