@@ -1107,6 +1107,13 @@ pub struct FrameGlyphBuffer {
     pub presentation_id: crate::frame_chrome::PresentationId,
     /// Canonical frame ancestry/placement for this presentation.
     pub frame_placement: crate::PresentedFramePlacement,
+    /// Why this presentation was produced.
+    ///
+    /// Carried here and not only on the `FrameDisplayState` it was
+    /// materialized from, because the compositor holds a `FrameGlyphBuffer`:
+    /// provenance that stops at materialization never reaches the only code
+    /// that reads it.
+    pub origin: crate::presentation_origin::PresentationOrigin,
     /// Frame dimensions
     pub width: f32,
     pub height: f32,
@@ -1474,6 +1481,7 @@ impl FrameGlyphBuffer {
         Self {
             presentation_id: crate::frame_chrome::PresentationId::default(),
             frame_placement: crate::PresentedFramePlacement::default(),
+            origin: crate::presentation_origin::PresentationOrigin::Ordinary,
             width: 0.0,
             height: 0.0,
             char_width: 8.0,

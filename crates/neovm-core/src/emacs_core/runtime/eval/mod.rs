@@ -2589,6 +2589,13 @@ pub struct Context {
     /// state and is deliberately reconstructed rather than serialized in a
     /// portable dump.
     pub(crate) cached_system_name: Value,
+    /// The window edge the pointer is holding, if any.
+    ///
+    /// Updated as `read_char` consumes each pointer press and release, so it is
+    /// ordered against the redisplays those events cause: every presentation
+    /// composed between a grab and its release is stamped as the drag's, and
+    /// none after it is.
+    pub(crate) window_edge_drag: crate::emacs_core::window_edge_drag::WindowEdgeDrag,
     /// The obarray — unified symbol table with value cells, function cells, plists.
     pub(crate) obarray: Obarray,
     /// Specpdl — special binding stack that writes directly to the obarray.

@@ -58,14 +58,11 @@ fn a_freshly_built_presentation_is_ordinary_and_animates() {
 
 #[test]
 fn a_sealed_presentation_carries_the_origin_it_was_built_with() {
-    use crate::presentation_origin::{InputSerial, InteractionSessionId, PresentationOrigin};
+    use crate::presentation_origin::{InteractionSessionId, PresentationOrigin};
 
     let session = InteractionSessionId::FIRST;
     let mut state = coherent_state(1);
-    state.origin = PresentationOrigin::InteractiveResize {
-        session,
-        through: InputSerial::new(4),
-    };
+    state.origin = PresentationOrigin::InteractiveResize { session };
     let sealed = SealedFramePresentation::seal(state).expect("coherent state seals");
     assert!(sealed.state().origin.suppresses_layout_motion());
     assert!(sealed.state().origin.belongs_to(session));
