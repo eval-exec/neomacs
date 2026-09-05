@@ -127,7 +127,8 @@ mod xterm_palette_test;
 #[cfg(test)]
 #[path = "tty_palette_test.rs"]
 mod tty_palette_test;
-
 #[cfg(test)]
 #[path = "witnessed_query_test.rs"]
 mod witnessed_query_test;
+mod pointer_input;
+pub use pointer_input::{PointerPosition, PointerTarget, ScrollDelta, PointerAction, PositionedPointerInput};

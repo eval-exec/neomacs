@@ -99,8 +99,23 @@ impl FrontendInputPort {
         &self,
         event: &FrontendEvent,
     ) -> Result<FrontendInputSubmission, FrontendInputDisconnected> {
+        self.submit_batch(EvaluatorInputBatch::from_frontend_event(event))
+    }
+
+    /// Submit one presentation-qualified pointer action atomically in input order.
+    pub fn submit_pointer(
+        &self,
+        event: neomacs_display_protocol::PositionedPointerInput,
+    ) -> Result<FrontendInputSubmission, FrontendInputDisconnected> {
+        self.submit_batch(EvaluatorInputBatch::from_positioned_pointer(event))
+    }
+
+    fn submit_batch(
+        &self,
+        batch: EvaluatorInputBatch<'_>,
+    ) -> Result<FrontendInputSubmission, FrontendInputDisconnected> {
         let mut queued = 0;
-        for event in EvaluatorInputBatch::from_frontend_event(event) {
+        for event in batch {
             if event.requests_default_quit() {
                 self.quit_requested.store(true, Ordering::Relaxed);
             }
