@@ -102,6 +102,7 @@ export function installBrowserInput({
   enqueueInput,
   targetFrame,
   sendViewport,
+  observePointer,
 }) {
   let composing = false;
   let closeRequested = false;
@@ -141,6 +142,27 @@ export function installBrowserInput({
   // browser text service afterward so printable keys and IME commits keep
   // flowing through the single text-committed path.
   root.addEventListener("pointerdown", focusTextInput, false);
+  const sendPointer = (event, pressed, movement = false) => {
+    const canvas = root.document?.querySelector("canvas");
+    if (!canvas || event.target !== canvas || !observePointer) return;
+    const bounds = canvas.getBoundingClientRect();
+    const button = movement ? 0 : [1, 2, 3, 4, 5][event.button];
+    if (button === undefined) return;
+    const modifiers = (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0)
+      | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
+    const payload = observePointer(event.clientX - bounds.left, event.clientY - bounds.top,
+      button, pressed, modifiers);
+    if (payload.length) enqueue({ type: "pointer", payload: Array.from(payload) });
+  };
+  root.addEventListener("pointerdown", (event) => {
+    sendPointer(event, true);
+    const canvas = root.document?.querySelector("canvas");
+    if (canvas && event.target === canvas) {
+      event.target.setPointerCapture?.(event.pointerId);
+    }
+  });
+  root.addEventListener("pointerup", (event) => sendPointer(event, false));
+  root.addEventListener("pointermove", (event) => sendPointer(event, false, true));
   root.addEventListener("pagehide", requestClose);
   root.addEventListener("beforeunload", requestClose);
 

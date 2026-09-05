@@ -69,7 +69,7 @@ function keyEvent(key, overrides = {}) {
   };
 }
 
-function harness() {
+function harness(options = {}) {
   const root = new FakeBrowserTarget();
   const textInput = new FakeEventTarget();
   const batches = [];
@@ -82,9 +82,27 @@ function harness() {
     sendViewport: () => {
       viewportCalls += 1;
     },
+    ...options,
   });
   return { root, textInput, batches, viewportCalls: () => viewportCalls };
 }
+
+test("pointer buttons use canvas-local CSS coordinates, independent of device scale", () => {
+  const observations = [];
+  const { root, batches } = harness({ observePointer: (...args) => {
+    observations.push(args);
+    return new Uint8Array([1, 2, 3]);
+  }});
+  const canvas = { getBoundingClientRect: () => ({ left: 10, top: 20 }) };
+  root.document = { querySelector: () => canvas };
+  const event = { target: canvas, clientX: 35, clientY: 45, button: 0, ctrlKey: true };
+  root.dispatch("pointerdown", event);
+  root.dispatch("pointerup", event);
+  assert.deepEqual(observations, [[25, 25, 1, true, 2], [25, 25, 1, false, 2]]);
+  assert.deepEqual(batches, [[{type: "pointer", payload: [1, 2, 3]}], [{type: "pointer", payload: [1, 2, 3]}]]);
+  root.dispatch("pointerdown", { ...event, target: {} });
+  assert.equal(observations.length, 2, "page chrome is not editor mouse input");
+});
 
 test("device-scale-only changes publish and re-arm viewport observation", () => {
   const { root, viewportCalls } = harness();
@@ -214,7 +232,7 @@ test("page lifecycle emits at most one typed close request", () => {
 test("pointer activation restores text focus after canvas target handlers", () => {
   const { root, textInput } = harness();
 
-  assert.deepEqual(root.listenerOptions.get("pointerdown"), [false]);
+  assert.deepEqual(root.listenerOptions.get("pointerdown"), [false, undefined]);
   root.dispatch("pointerdown");
 
   assert.equal(textInput.focusCalls, 2);
