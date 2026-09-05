@@ -6,12 +6,6 @@
 
 // FFI-heavy layout code; migrate to explicit `unsafe {}` blocks incrementally.
 #![allow(unsafe_op_in_unsafe_fn)]
-// The display/layout builders and FFI shims here routinely take many positional
-// parameters (glyph geometry, face state, window metrics). This crate already
-// annotates dozens of such fns individually; allow it crate-wide so the ~20
-// remaining sites don't each need a repeat annotation. Folding args into structs
-// is a separate refactor, out of scope for the lint gate.
-#![allow(clippy::too_many_arguments)]
 
 pub mod bidi;
 pub(crate) mod buffer_source;

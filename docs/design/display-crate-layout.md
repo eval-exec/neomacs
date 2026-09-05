@@ -130,6 +130,12 @@ Submodule charters — a new file needs one of these to belong:
    serde reflection over `VisualConfig` and carries only scalars plus
    `Duration`; a field that serializes to an object breaks
    `neomacs-effects-apply` for every effect, not just its own.
+6. **Lint suppressions are per item, never per crate.** A `#![allow(...)]` in a
+   `lib.rs` covers code nobody has read yet, so the count it hides drifts:
+   `neomacs-layout-engine`'s crate-wide `clippy::too_many_arguments` allow was
+   annotated "the ~20 remaining sites" and was covering 43 of them by the time
+   it was removed. Put the allow on the item, where a reviewer sees it next to
+   the signature and a new over-long function has to add its own.
 
 ## What this document does not govern
 

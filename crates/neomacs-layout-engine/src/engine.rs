@@ -538,6 +538,7 @@ fn live_window_frame_metadata(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_live_window_layout_inputs(
     evaluator: &mut neovm_core::emacs_core::Context,
     frame_id: neovm_core::window::FrameId,
@@ -1255,6 +1256,7 @@ impl LayoutEngine {
         Ok(state)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_window_output_decorations(
         &mut self,
         params: &WindowParams,
@@ -3429,6 +3431,7 @@ impl LayoutEngine {
         Some(replay)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn layout_window_rust(
         &mut self,
         evaluator: &mut neovm_core::emacs_core::Context,
@@ -4037,6 +4040,7 @@ impl LayoutEngine {
     ///
     /// Neomacs keeps immutable snapshots, so this method records typed
     /// frame-chrome content that every renderer can consume directly.
+    #[allow(clippy::too_many_arguments)]
     fn render_frame_tab_bar_rust(
         &mut self,
         evaluator: &mut neovm_core::emacs_core::Context,

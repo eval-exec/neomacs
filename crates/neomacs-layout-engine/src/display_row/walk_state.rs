@@ -771,6 +771,7 @@ impl WordWrapRenderState {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_candidate_at(
         &mut self,
         ch: char,

@@ -405,6 +405,7 @@ impl BufferDisplayPropertyTextReplacementOutcome {
             .cursor_info(active_face_state, position, preceding_charpos)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_to_progress_and_cursor(
         self,
         text: &[u8],

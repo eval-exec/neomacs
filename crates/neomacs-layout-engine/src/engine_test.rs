@@ -21925,6 +21925,7 @@ fn engine_face_resolver_for_frame(
 /// unified item renderer, and require FULL `Vec<Glyph>` equality with the
 /// buffer-pipeline row (including the appended newline space and its face).
 /// Returns the planned segments for scenario-specific assertions.
+#[allow(clippy::too_many_arguments)]
 fn assert_segmented_plain_shadow_row(
     eval: &Context,
     frame_id: neovm_core::window::FrameId,

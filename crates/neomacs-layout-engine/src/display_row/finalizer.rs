@@ -47,6 +47,7 @@ pub(crate) struct DisplayRowLineEndFinalizer {
 }
 
 impl DisplayRowLineEndFinalizer {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         row_break: DisplayRowBreak,
         row_break_face_id: FaceId,

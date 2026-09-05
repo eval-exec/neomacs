@@ -74,6 +74,7 @@ fn apply_produced_step_to_progress(
     (source_item, pending_faces, pending_non_text_area)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
     step: ProducedStep,
     progress: &mut DisplaySourceProgressState<'_>,
@@ -204,6 +205,7 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn consume_source_item_for_render(
         &mut self,
         progress: &mut DisplaySourceProgressState<'_>,

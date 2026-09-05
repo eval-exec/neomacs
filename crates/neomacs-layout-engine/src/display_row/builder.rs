@@ -1861,6 +1861,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         apply_box_run_topology_to_glyphs(glyphs, membership, source_edges, source_item_complete);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_text_item(
         &mut self,
         span: &SourceSpan,

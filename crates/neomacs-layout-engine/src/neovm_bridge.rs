@@ -1720,6 +1720,7 @@ fn effective_cursor_spec(
 /// `is_minibuffer` indicates whether this is the minibuffer window.
 ///
 /// Returns `None` for internal (non-leaf) windows.
+#[allow(clippy::too_many_arguments)]
 pub fn window_params_from_neovm(
     window: &Window,
     buffer: &Buffer,
@@ -1767,6 +1768,7 @@ pub struct WindowDisplayRole {
     pub is_minibuffer: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn window_params_from_neovm_with_font_sizing(
     window: &Window,
     buffer: &Buffer,

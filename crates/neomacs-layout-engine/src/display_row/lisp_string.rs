@@ -121,6 +121,7 @@ impl<'row> DisplayRowPrefixAppendContext<'row> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_source_to_text_row_and_emit<B: LayoutBufferView>(
         self,
         state: &mut TextRowSourceRenderState<'_>,
@@ -181,6 +182,7 @@ impl<'row> DisplayRowPrefixAppendContext<'row> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_lisp_string_source_append_to_text_row_and_emit(
     state: &mut TextRowSourceRenderState<'_>,
     source: &mut LispStringSourceCursor,
@@ -673,6 +675,7 @@ impl<'a> BufferLinePrefixRenderRequest<'a> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_requested_with_source_state_and_apply<B: LayoutBufferView>(
         self,
         request: &mut DisplayRowPrefixRequest,
@@ -775,6 +778,7 @@ pub(crate) fn apply_pending_display_source_faces(
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn append_lisp_string_to_text_row(
     state: &mut TextRowSourceRenderState<'_>,
     text_value: Value,

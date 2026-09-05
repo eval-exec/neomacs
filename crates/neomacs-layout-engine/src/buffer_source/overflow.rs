@@ -561,6 +561,7 @@ impl BufferSourceWordWrapAction {
         face_scan.invalidate();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_after_row_transition_and_prefix(
         self,
         row_transition: DisplayTextRowTransition,
