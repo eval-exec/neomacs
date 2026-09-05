@@ -11,7 +11,6 @@ use crate::display_cursor::{
     CapturedCursorInfo, CapturedCursorPlacement, CapturedCursorSlotWidth, CursorCaptureState,
     capture_cursor_approximation,
 };
-use crate::display_item::DisplayRowBreakReason;
 use crate::display_row::append_context::DisplayRowAppendSurface;
 use crate::display_row::builder::DisplayRowPosition;
 use crate::display_row::face_state::DisplayRowActiveFaceState;
@@ -1766,7 +1765,6 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 .map(DisplayReplacementStringLineBreak::metrics)
                 .unwrap_or_else(|| context.active_face_state.metrics());
             let line_end_ctx = LineEndContext {
-                reason: DisplayRowBreakReason::ExplicitNewline,
                 newline_face_id: context.active_face_state.face_id(),
                 measurement_mode: source_render.measurement_mode(),
                 pen_x: progress.row_progress().x(),
@@ -1956,7 +1954,6 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 },
             );
             let line_end_ctx = LineEndContext {
-                reason: DisplayRowBreakReason::ExplicitNewline,
                 newline_face_id,
                 measurement_mode: source_render.measurement_mode(),
                 pen_x: progress.row_progress().x(),

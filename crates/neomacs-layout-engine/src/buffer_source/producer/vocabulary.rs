@@ -21,9 +21,7 @@
 //! directly; the `#[ignore]`d harness cases name the rungs still outstanding.
 
 #[cfg(test)]
-use crate::display_item::{
-    DisplayItem, DisplayItemKind, DisplayRowBreakReason, DisplayStretchWidth, RenderFaceRef,
-};
+use crate::display_item::{DisplayItem, DisplayItemKind, DisplayStretchWidth, RenderFaceRef};
 use crate::display_item::{DisplaySourcePosition, SourceSpan};
 #[cfg(test)]
 use crate::display_source::{DisplaySourceStepItem, DisplaySourceTextPosition};
@@ -307,7 +305,6 @@ pub(crate) struct ProducedStretch {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProducedRowBreak {
     position: ProducerPosition,
-    reason: DisplayRowBreakReason,
 }
 
 #[cfg(test)]
@@ -382,10 +379,6 @@ impl ProducedRowBreak {
     pub(crate) const fn position(&self) -> ProducerPosition {
         self.position
     }
-
-    pub(crate) const fn reason(&self) -> DisplayRowBreakReason {
-        self.reason
-    }
 }
 
 #[cfg(test)]
@@ -430,9 +423,8 @@ impl ProducedElement {
                 face: item.face,
                 avoid_cursor: false,
             })),
-            DisplayItemKind::RowBreak(row_break) => Some(Self::RowBreak(ProducedRowBreak {
+            DisplayItemKind::RowBreak(_) => Some(Self::RowBreak(ProducedRowBreak {
                 position: buffer_position(),
-                reason: row_break.reason,
             })),
             DisplayItemKind::Glyphless(_) | DisplayItemKind::MediaReplacement(_) => None,
         }
