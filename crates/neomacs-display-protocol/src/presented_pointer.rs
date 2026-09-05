@@ -58,6 +58,43 @@ impl PresentedRegionKind {
             | Self::TabBar => None,
         }
     }
+
+    /// The window edge that pressing here and dragging moves, if any.
+    ///
+    /// GNU binds `down-mouse-1` on exactly these regions to a command that
+    /// resizes a window: `lisp/mouse.el` sends `header-line`, `tab-line` and
+    /// `mode-line` to `mouse-drag-{header,tab,mode}-line`, `vertical-line` and
+    /// `right-divider` to `mouse-drag-vertical-line`, and `bottom-divider` to
+    /// `mouse-drag-mode-line`. Holding a button down over one of them is the
+    /// user's hand placing window geometry, whatever command the keymap
+    /// happens to route the press to.
+    ///
+    /// Wider than [`Self::resize_axis`], and answering a different question:
+    /// that one describes the synthesized drag *handles* laid over a
+    /// presentation, and a mode line has no handle because GNU drags the line
+    /// itself. The exhaustive match makes a new presented region declare which
+    /// of the two it is.
+    #[must_use]
+    pub const fn dragged_window_edge(self) -> Option<PresentedResizeAxis> {
+        match self {
+            Self::RightDivider => Some(PresentedResizeAxis::Horizontal),
+            Self::TabLine | Self::HeaderLine | Self::ModeLine | Self::BottomDivider => {
+                Some(PresentedResizeAxis::Vertical)
+            }
+            Self::TextBody
+            | Self::LeftMargin
+            | Self::RightMargin
+            | Self::LeftFringe
+            | Self::RightFringe
+            | Self::LeftScrollBar
+            | Self::RightScrollBar
+            | Self::HorizontalScrollBar
+            | Self::MenuBar
+            | Self::ToolBar
+            | Self::CompactBar
+            | Self::TabBar => None,
+        }
+    }
 }
 
 /// Dimension changed by dragging a presented window resize handle.

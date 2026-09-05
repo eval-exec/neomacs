@@ -2912,6 +2912,11 @@ impl LayoutEngine {
             (next_layout_stats, retained, acked_buffer_ids)
         };
 
+        // Read at the moment of sealing, so the stamp describes the
+        // presentation actually being published: whether the user's hand is
+        // currently placing this geometry is what decides whether the
+        // compositor may animate toward it.
+        frame_display_state.origin = evaluator.presentation_origin();
         let resolved = match crate::frame_presentation::ResolvedFrame::new(frame_display_state) {
             Ok(resolved) => resolved,
             Err(error) => {

@@ -2557,6 +2557,7 @@ impl FrameDisplayState {
         let mut buf = FrameGlyphBuffer::with_size(self.frame_pixel_width, self.frame_pixel_height);
         buf.presentation_id = self.presentation_id;
         buf.frame_placement = self.frame_placement;
+        buf.origin = self.origin;
         buf.char_width = self.char_width;
         buf.char_height = self.char_height;
         buf.font_pixel_size = self.font_pixel_size;

@@ -1025,6 +1025,24 @@ fn state_with_text(text: &str) -> FrameDisplayState {
 }
 
 #[test]
+fn materializing_a_display_state_carries_the_origin_it_was_sealed_with() {
+    // The compositor holds a `FrameGlyphBuffer`, never the `FrameDisplayState`
+    // it came from. If this copy is missing, an interactive resize is stamped
+    // by the producer, sealed, shipped — and is invisible at the one place
+    // that reads it, with nothing anywhere failing to say so.
+    use crate::presentation_origin::{InteractionSessionId, PresentationOrigin};
+
+    let mut state = state_with_text("Hello");
+    assert_eq!(state.materialize().origin, PresentationOrigin::Ordinary);
+
+    let session = InteractionSessionId::FIRST;
+    state.origin = PresentationOrigin::InteractiveResize { session };
+    let materialized = state.materialize();
+    assert!(materialized.origin.suppresses_layout_motion());
+    assert!(materialized.origin.belongs_to(session));
+}
+
+#[test]
 fn materialize_produces_correct_glyph_count_from_grid() {
     let state = state_with_text("Hello");
     let buf = state.materialize();
