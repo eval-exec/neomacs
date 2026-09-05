@@ -1708,3 +1708,128 @@ struct PhantomBufferPosition;
 impl PhantomBufferPosition {
     const POSITION: i64 = 77;
 }
+
+// =======================================================================
+// Scroll-bar hover: which bar the pointer is over during a pane morph
+// =======================================================================
+
+/// The window whose scroll bar is drawn under the pointer.
+const SCROLL_BAR_POINTED_AT: i64 = 1;
+/// The window whose scroll bar sits at the pointer's *unprojected* position.
+const SCROLL_BAR_AT_RAW_COORDINATES: i64 = 2;
+
+/// A frame with one vertical scroll bar per window, far enough apart that no
+/// point is inside both.
+fn frame_with_two_scroll_bars(
+    presentation: neomacs_display_protocol::PresentationId,
+) -> FrameGlyphBuffer {
+    use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
+    use neomacs_display_protocol::types::DisplayWindowId;
+
+    let mut frame = make_frame(0x42, 0);
+    frame.presentation_id = presentation;
+    for (window, x, width) in [
+        (SCROLL_BAR_POINTED_AT, 40.0, 20.0),
+        (SCROLL_BAR_AT_RAW_COORDINATES, 240.0, 80.0),
+    ] {
+        frame.set_draw_context(DisplayWindowId::new(window), GlyphRowRole::Text, None);
+        frame.add_scroll_bar(
+            false,
+            x,
+            20.0,
+            width,
+            400.0,
+            0,
+            40,
+            400,
+            0.0,
+            40.0,
+            Color::BLACK,
+            Color::WHITE,
+        );
+    }
+    frame
+}
+
+/// A pane drawn 200px right of where its content belongs, as one is partway
+/// through a horizontal `split-window`.
+fn scroll_bar_pane_displaced_by_200px(
+    presentation: neomacs_display_protocol::PresentationId,
+) -> neomacs_display_protocol::InteractionProjection {
+    use neomacs_display_protocol::{
+        GeometryPoint, GeometryRect, InteractionProjection, LiveDisplayWindowId, LogicalPixels,
+        PaneProjection, PresentationFrameSpace, RootSurfaceSpace,
+    };
+
+    let pane = PaneProjection::new(
+        LiveDisplayWindowId::try_from(neomacs_display_protocol::types::DisplayWindowId::new(4))
+            .expect("a non-zero window id is live"),
+        GeometryRect::<RootSurfaceSpace, LogicalPixels>::new(200.0, 0.0, 400.0, 600.0)
+            .expect("a fixture's pane rect is valid geometry"),
+        GeometryPoint::<PresentationFrameSpace, LogicalPixels>::from_px(0.0, 0.0)
+            .expect("the frame origin is a valid content origin"),
+    )
+    .expect("a 200px translation is representable");
+    InteractionProjection::new(presentation, vec![pane])
+}
+
+fn render_at_pointer(x: f32, y: f32) -> GuiFrameRenderState {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.set_mouse_pos((x, y));
+    render
+}
+
+#[test]
+fn the_scroll_bar_a_pointer_highlights_is_the_one_drawn_under_it_while_its_pane_moves() {
+    // If `hovered_scroll_bar` stopped projecting the pointer, a hover
+    // mid-`split-window` would brighten the thumb of whichever bar sits at the
+    // pointer's raw coordinates instead of the one under the pointer — and
+    // every other hover test would still pass, because they run against
+    // settled frames where the projection is the identity.
+    let presentation = neomacs_display_protocol::PresentationId::new(11);
+    let frame = frame_with_two_scroll_bars(presentation);
+    let mut render = render_at_pointer(250.0, 40.0);
+    render.compositor.interaction = Some(scroll_bar_pane_displaced_by_200px(presentation));
+
+    assert_eq!(
+        render.hovered_scroll_bar(&frame),
+        Some(neomacs_display_protocol::ScrollBarIdentity::new(
+            neomacs_display_protocol::types::DisplayWindowId::new(SCROLL_BAR_POINTED_AT),
+            false,
+        )),
+        "surface x=250 is 50px into the destination, inside the first window's bar"
+    );
+}
+
+#[test]
+fn a_settled_frame_highlights_the_scroll_bar_at_the_pointers_own_coordinates() {
+    // The other half of the claim: projecting must displace nothing while
+    // nothing is moving, which is every frame outside a layout morph.
+    let presentation = neomacs_display_protocol::PresentationId::new(11);
+    let frame = frame_with_two_scroll_bars(presentation);
+    let render = render_at_pointer(250.0, 40.0);
+
+    assert_eq!(
+        render.hovered_scroll_bar(&frame),
+        Some(neomacs_display_protocol::ScrollBarIdentity::new(
+            neomacs_display_protocol::types::DisplayWindowId::new(SCROLL_BAR_AT_RAW_COORDINATES),
+            false,
+        )),
+        "with no pane in motion the pointer is over the bar its own coordinates name"
+    );
+}
+
+#[test]
+fn a_pointer_outside_every_scroll_bar_highlights_none_of_them() {
+    // Guards the `None` the draw site needs: without it every thumb in the
+    // frame would match a "no bar" answer and light up at once.
+    let presentation = neomacs_display_protocol::PresentationId::new(11);
+    let frame = frame_with_two_scroll_bars(presentation);
+    let render = render_at_pointer(150.0, 40.0);
+
+    assert_eq!(render.hovered_scroll_bar(&frame), None);
+}
