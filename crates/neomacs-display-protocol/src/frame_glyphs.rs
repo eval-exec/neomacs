@@ -1074,18 +1074,6 @@ pub enum WindowEffectHint {
         window_id: DisplayWindowId,
         bounds: Rect,
     },
-    /// Animate per-line spacing during scroll.
-    ScrollLineSpacing {
-        window_id: DisplayWindowId,
-        bounds: Rect,
-        direction: i32,
-    },
-    /// Show scroll momentum glow.
-    ScrollMomentum {
-        window_id: DisplayWindowId,
-        bounds: Rect,
-        direction: i32,
-    },
     /// Velocity-based fade intensity during scroll.
     ScrollVelocityFade {
         window_id: DisplayWindowId,
