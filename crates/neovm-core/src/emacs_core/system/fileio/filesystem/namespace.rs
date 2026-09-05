@@ -92,7 +92,7 @@ impl EditorFileSystemNamespace {
 impl EditorFileSystem for EditorFileSystemNamespace {
     fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
         if self.runtime_store_for(path).is_some() {
-            return super::FileAttributeSnapshot::read(self, path);
+            return super::FileAttributeSnapshot::read_single_user_virtual(self, path);
         }
         self.host.attributes(path)
     }
