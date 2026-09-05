@@ -82,7 +82,17 @@ Submodule charters — a new file needs one of these to belong:
 - `render_thread/frame_sched.rs` — when to draw next, and nothing else.
 - `render_thread/pointer_events.rs`, `window_events.rs` — platform input in,
   evaluator events out.
-- `render_thread/render_pass.rs` — the draw order for one frame.
+- `render_thread/render_pass/` — the draw order for one frame, and one
+  submodule per phase of it. `mod.rs` owns the sequence and nothing else:
+  acquire, sample the pane motion, pick a composition strategy, draw through
+  it, hand the result to `present`. Each phase owns how it draws — `surface`
+  (getting the swapchain texture and naming how that fails),
+  `composition_targets` (the offscreen textures a frame composes through),
+  `retained_static` and `full_render` (the three composition strategies),
+  `scene` (glyphs, child frames, content overlays), `chrome` (the window-level
+  overlays drawn over them), `present` (handing the result to the platform and
+  publishing the projection). When a body in `mod.rs` grows past "call the
+  phase, check the outcome", it belongs in a phase.
 - `render_thread/frame_ingest.rs` — presentations in from the evaluator.
 - `backend/tty/` — the terminal backend, which shares the protocol and nothing
   else.
