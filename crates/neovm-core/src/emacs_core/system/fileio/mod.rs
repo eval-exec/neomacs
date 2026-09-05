@@ -3548,16 +3548,20 @@ pub(crate) fn builtin_file_system_info(eval: &mut Context, args: Vec<Value>) -> 
     expect_args("file-system-info", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
     let filename = resolve_filename_lisp_for_eval(eval, &filename);
-    let space = eval
+    let space = match eval
         .editor_file_system()
         .file_system_space(&lisp_file_name_to_path_buf(&filename))
-        .map_err(|err| {
-            signal_file_action_error_value(
+    {
+        Ok(space) => space,
+        // GNU fileio.c returns nil for unavailable fsusage (ENOSYS), and
+        // explicitly for Android's virtual /assets and /content directories.
+        Err(err) if err.kind() == std::io::ErrorKind::Unsupported => return Ok(Value::NIL),
+        Err(err) => return Err(signal_file_action_error_value(
                 err,
                 "Getting file system info",
                 Value::heap_string(filename),
-            )
-        })?;
+            )),
+    };
     Ok(Value::list(vec![
         Value::fixnum(space.total_bytes),
         Value::fixnum(space.free_bytes),
