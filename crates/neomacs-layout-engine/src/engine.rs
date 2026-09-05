@@ -93,6 +93,7 @@ use neomacs_display_protocol::frame_chrome::{
 };
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::CursorStyle;
+use neomacs_display_protocol::frame_glyphs::LineNumberFieldWidth;
 use neomacs_display_protocol::frame_glyphs::PhysCursor;
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::types::Color;
@@ -3554,6 +3555,9 @@ impl LayoutEngine {
                     .render_window_info(WindowFrameInfoRenderRequest::new(
                         params,
                         live_window_frame_metadata(evaluator, buf_id),
+                        // No body walk ran, so no line-number glyphs were
+                        // produced and there is no field on screen to report.
+                        None,
                     ));
                 self.window_snapshots
                     .push(WindowPresentationSnapshot::LiveWindow(
@@ -3708,7 +3712,8 @@ impl LayoutEngine {
             }
         }
 
-        let (redisplay_positions, effective_default_face) = match render_outcome {
+        let (redisplay_positions, effective_default_face, line_number_field) = match render_outcome
+        {
             BufferSourceRenderAttemptOutcome::LogicalInputsChanged => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
@@ -3720,6 +3725,9 @@ impl LayoutEngine {
                     .render_window_info(WindowFrameInfoRenderRequest::new(
                         params,
                         live_window_frame_metadata(evaluator, buf_id),
+                        // No body walk ran, so no line-number glyphs were
+                        // produced and there is no field on screen to report.
+                        None,
                     ));
                 self.window_snapshots
                     .push(WindowPresentationSnapshot::LiveWindow(
@@ -3909,6 +3917,7 @@ impl LayoutEngine {
                 effective_default_face,
                 cursor_only,
                 reused_matrix_rows,
+                line_number_field_width,
             } => {
                 if let Some(snapshot) = self
                     .window_snapshots
@@ -3932,7 +3941,11 @@ impl LayoutEngine {
                             .insert(window_id, (reused, scroll_dvpos));
                     }
                 }
-                (redisplay_positions, effective_default_face)
+                (
+                    redisplay_positions,
+                    effective_default_face,
+                    LineNumberFieldWidth::measured(line_number_field_width),
+                )
             }
         };
 
@@ -3945,6 +3958,7 @@ impl LayoutEngine {
             .render_window_info(WindowFrameInfoRenderRequest::new(
                 params,
                 live_window_frame_metadata(evaluator, buf_id),
+                line_number_field,
             ));
 
         tracing::debug!(

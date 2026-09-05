@@ -1,7 +1,10 @@
 use super::super::effect_common::EffectCtx;
 use super::*;
 use crate::effect_config::EffectsConfig;
-use neomacs_display_protocol::frame_glyphs::{FrameGlyphBuffer, WindowInfo};
+use neomacs_display_protocol::frame_glyphs::{
+    FrameGlyphBuffer, LineNumberFieldWidth, PresentedCellOrigin, PresentedWindowGeometry,
+    PresentedWindowRegions, WindowInfo,
+};
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample, observe_platform_now};
 use neomacs_display_protocol::types::{AnimatedCursor, Rect};
 use std::time::Duration;
@@ -47,27 +50,60 @@ fn make_animated_cursor(x: f32, y: f32, w: f32, h: f32, window_id: i64) -> Anima
     }
 }
 
-/// Helper to create a selected WindowInfo for testing
-fn make_selected_window_info(x: f32, y: f32, w: f32, h: f32) -> WindowInfo {
+/// Gap between the test window's outer left edge and its text area: a left
+/// fringe plus a left display margin. The line-number field starts after it,
+/// so a band drawn at `bounds.x` is visibly wrong by this much.
+const TEST_LEFT_CHROME_PX: f32 = 30.0;
+
+/// Line-number field the test window reports. Deliberately not the 40px the
+/// renderer used to invent, so a test can tell a measurement from a constant.
+const TEST_LINE_NUMBER_FIELD_PX: f32 = 27.0;
+
+/// Helper to create a WindowInfo laid out like a real one: geometry installed,
+/// text area inset from the outer edge, line-number field measured.
+fn make_window_info(window_id: i64, selected: bool, x: f32, y: f32, w: f32, h: f32) -> WindowInfo {
+    let mode_line_height = 20.0;
+    let body = Rect::new(
+        x + TEST_LEFT_CHROME_PX,
+        y,
+        w - TEST_LEFT_CHROME_PX,
+        h - mode_line_height,
+    );
     WindowInfo {
-        window_id: neomacs_display_protocol::types::DisplayWindowId::new(1),
+        window_id: neomacs_display_protocol::types::DisplayWindowId::new(window_id),
         buffer_id: 1,
         window_start: 0,
         window_end: 100,
         buffer_size: 200,
         buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         bounds: Rect::new(x, y, w, h),
-        geometry: Default::default(),
-        mode_line_height: 20.0,
+        geometry: PresentedWindowGeometry::Complete {
+            cell_origin: PresentedCellOrigin::default(),
+            regions: PresentedWindowRegions {
+                outer: Rect::new(x, y, w, h),
+                text_body: body,
+                left_fringe: Some(Rect::new(x, body.y, 8.0, body.height)),
+                left_margin: Some(Rect::new(x + 8.0, body.y, 22.0, body.height)),
+                mode_line: Some(Rect::new(x, y + h - mode_line_height, w, mode_line_height)),
+                ..PresentedWindowRegions::default()
+            },
+        },
+        line_number_field: LineNumberFieldWidth::measured(TEST_LINE_NUMBER_FIELD_PX),
+        mode_line_height,
         header_line_height: 0.0,
         tab_line_height: 0.0,
-        selected: true,
+        selected,
         is_minibuffer: false,
         char_height: 16.0,
         buffer_name: String::new(),
         buffer_file_name: String::new(),
         modified: false,
     }
+}
+
+/// Helper to create a selected WindowInfo for testing
+fn make_selected_window_info(x: f32, y: f32, w: f32, h: f32) -> WindowInfo {
+    make_window_info(1, true, x, y, w, h)
 }
 
 /// Property test: all vertices have valid positions and colors
@@ -422,8 +458,12 @@ fn test_line_number_pulse_disabled() {
     assert_eq!(needs_redraw, false);
 }
 
+/// The band must cover the line-number field the window actually reserved.
+/// If this is false the pulse is back to the hardcoded 40px rect drawn at the
+/// window's outer edge: it sits on the fringe and the left display margin, the
+/// first gutter column stays unlit, and it spills past the last one.
 #[test]
-fn test_line_number_pulse_with_cursor_and_window() {
+fn the_line_number_pulse_spans_the_measured_field_starting_at_the_text_area_origin() {
     let mut config = EffectsConfig::default();
     config.line_number_pulse.enabled = true;
     config.line_number_pulse.intensity = 0.8;
@@ -440,11 +480,75 @@ fn test_line_number_pulse_with_cursor_and_window() {
     let (verts, needs_redraw) = emit_line_number_pulse(&ctx);
 
     assert_eq!(needs_redraw, true);
-    // Should produce at least one rect (6 vertices) for the gutter
-    if verts.len() > 0 {
-        validate_vertex_count(&verts);
-        validate_vertices(&verts);
-    }
+    assert_eq!(verts.len(), 6, "the pulse draws exactly one band");
+    validate_vertex_count(&verts);
+    validate_vertices(&verts);
+
+    let left = verts[0].position[0];
+    let right = verts[1].position[0];
+    assert_eq!(
+        left, TEST_LEFT_CHROME_PX,
+        "the band starts at the text area, not at the window's outer edge"
+    );
+    assert_eq!(
+        right - left,
+        TEST_LINE_NUMBER_FIELD_PX,
+        "the band is as wide as the field the window reserved"
+    );
+}
+
+/// `display-line-numbers` is nil in a default session, so the common case is a
+/// window with no field at all. If this is false, enabling the effect paints a
+/// solid block over buffer text.
+#[test]
+fn the_line_number_pulse_draws_nothing_for_a_window_that_reserved_no_field() {
+    let mut config = EffectsConfig::default();
+    config.line_number_pulse.enabled = true;
+    config.line_number_pulse.intensity = 0.8;
+
+    let mut fgb = FrameGlyphBuffer::default();
+    let mut info = make_selected_window_info(0.0, 0.0, 800.0, 600.0);
+    info.line_number_field = None;
+    fgb.window_infos.push(info);
+
+    let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
+
+    let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
+
+    let (verts, needs_redraw) = emit_line_number_pulse(&ctx);
+    assert_eq!(verts.len(), 0);
+    assert_eq!(
+        needs_redraw, false,
+        "a window with no band to light has no standing animation demand"
+    );
+}
+
+/// The band lights the number of the row the cursor is on, so it belongs to the
+/// cursor's window. If this is false, an active minibuffer makes the echo area
+/// the selected window and the band lands there instead.
+#[test]
+fn the_line_number_pulse_follows_the_cursors_window_rather_than_the_selected_one() {
+    let mut config = EffectsConfig::default();
+    config.line_number_pulse.enabled = true;
+    config.line_number_pulse.intensity = 0.8;
+
+    let mut fgb = FrameGlyphBuffer::default();
+    // The selected window sits elsewhere on the frame, as an active minibuffer does.
+    fgb.window_infos
+        .push(make_window_info(2, true, 400.0, 0.0, 400.0, 600.0));
+    fgb.window_infos
+        .push(make_window_info(1, false, 0.0, 0.0, 400.0, 600.0));
+
+    let anim_cursor = Some(make_animated_cursor(100.0, 100.0, 10.0, 20.0, 1));
+
+    let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
+
+    let (verts, _) = emit_line_number_pulse(&ctx);
+    assert_eq!(verts.len(), 6);
+    assert_eq!(
+        verts[0].position[0], TEST_LEFT_CHROME_PX,
+        "the band belongs to window 1, which the cursor names, not to selected window 2"
+    );
 }
 
 // ========================================================================

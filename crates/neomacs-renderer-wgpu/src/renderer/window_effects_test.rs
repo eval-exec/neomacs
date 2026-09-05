@@ -46,6 +46,7 @@ fn test_window_info(
         buffer_modiff: neomacs_display_protocol::presentation_origin::BufferModiff::default(),
         bounds,
         geometry: Default::default(),
+        line_number_field: None,
         mode_line_height,
         header_line_height: 0.0,
         tab_line_height: 0.0,

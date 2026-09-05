@@ -16,8 +16,8 @@ use neomacs_display_protocol::frame_chrome::{
 };
 use neomacs_display_protocol::frame_glyphs::{
     BufferTransitionTarget, BufferViewportRegion, ContentTransitionHint, GlyphRowRole,
-    PresentedCellOrigin as ProtocolCellOrigin, PresentedWindowGeometry as ProtocolWindowGeometry,
-    WindowInfo, derive_buffer_replacement_hint,
+    LineNumberFieldWidth, PresentedCellOrigin as ProtocolCellOrigin,
+    PresentedWindowGeometry as ProtocolWindowGeometry, WindowInfo, derive_buffer_replacement_hint,
 };
 use neomacs_display_protocol::glyph_matrix::{FrameDisplayState, ScrollBarItem};
 use neomacs_display_protocol::types::FaceId;
@@ -438,11 +438,23 @@ impl<'a> WindowFrameGeometryRequest<'a> {
 pub(crate) struct WindowFrameInfoRenderRequest<'a> {
     params: &'a WindowParams,
     metadata: WindowFrameMetadata,
+    line_number_field: Option<LineNumberFieldWidth>,
 }
 
 impl<'a> WindowFrameInfoRenderRequest<'a> {
-    pub(crate) fn new(params: &'a WindowParams, metadata: WindowFrameMetadata) -> Self {
-        Self { params, metadata }
+    /// `line_number_field` is a required input rather than a defaulted one so a
+    /// publish site that never laid a body has to say so, instead of silently
+    /// reporting a window with no line-number field.
+    pub(crate) fn new(
+        params: &'a WindowParams,
+        metadata: WindowFrameMetadata,
+        line_number_field: Option<LineNumberFieldWidth>,
+    ) -> Self {
+        Self {
+            params,
+            metadata,
+            line_number_field,
+        }
     }
 
     pub(crate) fn render_and_apply(self, mut state: FrameOutputTarget<'_>) {
@@ -466,6 +478,7 @@ impl<'a> WindowFrameInfoRenderRequest<'a> {
                 self.params.bounds.height,
             ),
             geometry: ProtocolWindowGeometry::default(),
+            line_number_field: self.line_number_field,
             mode_line_height: self.params.mode_line_height,
             header_line_height: self.params.header_line_height,
             tab_line_height: self.params.tab_line_height,

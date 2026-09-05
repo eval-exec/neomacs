@@ -882,6 +882,36 @@ pub struct PresentedWindowRegions {
     pub bottom_divider: Option<Rect>,
 }
 
+/// Pixel width of the line-number field one window reserved at the left of its
+/// text area — GNU's `it->lnum_pixel_width`.
+///
+/// GNU measures it by producing the number's glyphs with the window-resolved
+/// line-number face (`xdisp.c` `maybe_produce_line_number`), so it is not
+/// derivable from the frame's default cell width and cannot be recomputed by a
+/// consumer.
+///
+/// It is a width and not a rect because the origin is already published:
+/// the field starts at `PresentedWindowRegions::text_body.x`. A second copy of
+/// that origin could disagree with the first.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LineNumberFieldWidth(f32);
+
+impl LineNumberFieldWidth {
+    /// `None` when the window reserved no line-number field, so a consumer
+    /// cannot paint a zero-width band or read a NaN out of an unmeasured
+    /// window.
+    #[must_use]
+    pub fn measured(px: f32) -> Option<Self> {
+        (px.is_finite() && px > 0.0).then_some(Self(px))
+    }
+
+    #[must_use]
+    pub const fn px(self) -> f32 {
+        self.0
+    }
+}
+
 /// Canonical frame-space clip for paint owned by a buffer viewport.
 ///
 /// Construction stays private so transition producers cannot accidentally
@@ -1009,6 +1039,9 @@ pub struct WindowInfo {
     pub bounds: Rect,
     /// Atomically installed geometry from the same presentation.
     pub geometry: PresentedWindowGeometry,
+    /// Line-number field this window's accepted body walk reserved, `None` when
+    /// it reserved none. Its origin is `geometry`'s `regions.text_body.x`.
+    pub line_number_field: Option<LineNumberFieldWidth>,
     /// Height of the mode-line in pixels (0 if no mode-line)
     pub mode_line_height: f32,
     /// Height of the header-line in pixels (0 if no header-line)
@@ -2115,6 +2148,9 @@ impl FrameGlyphBuffer {
                 cell_origin: PresentedCellOrigin::default(),
                 outer: Rect::new(x, y, width, height),
             },
+            // This constructor assembles a window by hand and measures no rows,
+            // so it has no line-number field to report.
+            line_number_field: None,
             mode_line_height,
             header_line_height,
             tab_line_height,

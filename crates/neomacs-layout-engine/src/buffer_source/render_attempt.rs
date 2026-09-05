@@ -176,6 +176,11 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
         /// edit can reuse rows on both sides of its regenerated span, so a
         /// prefix count cannot faithfully carry this provenance.
         reused_matrix_rows: Option<ReusedMatrixRows>,
+        /// Pixel extent this accepted walk reserved for the line-number field
+        /// (`LineNumberFieldLayout::extent`), zero when it reserved none.  The
+        /// window metadata is published after the walk returns, so the accepted
+        /// outcome is the only carrier that has already seen the measurement.
+        line_number_field_width: f32,
     },
 }
 
