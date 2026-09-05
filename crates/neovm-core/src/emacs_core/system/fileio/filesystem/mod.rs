@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 mod access;
 mod browser_layout;
 mod memory;
+mod metadata;
 mod mounts;
 mod namespace;
 mod native;
@@ -17,6 +18,7 @@ mod virtual_path;
 pub use access::{AccessMode, AccessPermissions};
 pub use browser_layout::BrowserFileSystemLayout;
 pub use memory::MemoryFileSystem;
+pub use metadata::{FileAttributeType, FileAttributeSnapshot, FileIdentity, FilePrincipal};
 pub use mounts::MountTableFileSystem;
 pub(crate) use namespace::EditorFileSystemNamespace;
 pub use native::NativeFileSystem;
@@ -167,6 +169,11 @@ pub enum TemporaryEntry<'a> {
 /// an asynchronous host API, but a caller always observes one completed
 /// operation or one typed `io::Error`.
 pub trait EditorFileSystem {
+    /// Detailed attributes of the entry itself, never its symlink target.
+    /// Native adapters obtain stat fields from one non-following observation.
+    fn attributes(&self, path: &Path) -> io::Result<FileAttributeSnapshot> {
+        FileAttributeSnapshot::read(self, path)
+    }
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata>;
     fn access(&self, path: &Path, mode: AccessMode) -> bool;
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;

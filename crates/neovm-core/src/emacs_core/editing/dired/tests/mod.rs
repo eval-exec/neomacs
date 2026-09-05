@@ -1232,8 +1232,7 @@ fn test_format_mode_string() {
         let mut f = fs::File::create(&path).unwrap();
         f.write_all(b"test").unwrap();
     }
-    let meta = fs::symlink_metadata(&path).unwrap();
-    let mode_str = format_mode_string(0o100644, &meta);
+    let mode_str = format_attribute_mode(0o100644, &super::super::fileio::FileAttributeType::Other);
     assert_eq!(&mode_str[0..1], "-");
     assert_eq!(&mode_str[1..4], "rw-");
     assert_eq!(&mode_str[4..7], "r--");

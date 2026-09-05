@@ -1,7 +1,5 @@
 use super::{Ownership, Principal};
-use crate::emacs_core::runtime_identity::{
-    CredentialScope, process_group_id, process_user_id,
-};
+use crate::emacs_core::runtime_identity::{CredentialScope, process_group_id, process_user_id};
 use std::fs;
 use std::path::Path;
 

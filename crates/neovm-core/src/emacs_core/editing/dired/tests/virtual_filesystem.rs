@@ -32,6 +32,115 @@ fn names(value: Value) -> Vec<String> {
 }
 
 #[test]
+fn file_attributes_describe_virtual_files_without_host_metadata() {
+    let mut eval = virtual_editor();
+    assert_eq!(
+        eval.eval_str(
+            r##"(let ((a (file-attributes "/virtual-completion/alpha.el")))
+          (list (length a) (car a) (nth 7 a)
+                (car (file-attributes "/virtual-completion/alpha-dir"))
+                (file-attributes "/virtual-completion/missing")))"##
+        )
+        .unwrap(),
+        Value::list(vec![
+            Value::fixnum(12),
+            Value::NIL,
+            Value::fixnum(3),
+            Value::T,
+            Value::NIL
+        ])
+    );
+    assert_eq!(
+        eval.eval_str(
+            r##"(let ((a (file-attributes "/virtual-completion/alpha.el" 'string)))
+          (list (nth 1 a) (nth 2 a) (nth 3 a) (nth 4 a)
+                (consp (nth 5 a)) (nth 6 a) (nth 8 a) (nth 10 a) (nth 11 a)))"##
+        )
+        .unwrap(),
+        Value::list(vec![
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+            Value::string("-?????????"),
+            Value::NIL,
+            Value::NIL
+        ])
+    );
+    assert_eq!(
+        eval.eval_str(r##"(equal
+          (cdr (assoc "alpha.el" (directory-files-and-attributes "/virtual-completion" nil "^alpha")))
+          (file-attributes "/virtual-completion/alpha.el"))"##).unwrap(),
+        Value::T
+    );
+}
+
+#[test]
+fn file_attributes_include_mount_ancestors_and_mounted_entries() {
+    use crate::emacs_core::fileio::MountTableFileSystem;
+    let mut mounts = MountTableFileSystem::new();
+    mounts
+        .mount(
+            Path::new("/virtual-mount/home"),
+            Box::new(MemoryFileSystem::new()),
+        )
+        .unwrap();
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(mounts));
+    assert_eq!(
+        eval.eval_str(
+            r##"(list (car (file-attributes "/"))
+          (car (file-attributes "/virtual-mount"))
+          (car (file-attributes "/virtual-mount/home")))"##
+        )
+        .unwrap(),
+        Value::list(vec![Value::T, Value::T, Value::T])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn mounted_native_attributes_preserve_links_permissions_and_identity() {
+    use crate::emacs_core::fileio::{MountTableFileSystem, NativeFileSystem};
+    use std::os::unix::fs::PermissionsExt;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    let fixture = tempfile::Builder::new()
+        .prefix("native-attributes-")
+        .tempdir_in(root)
+        .unwrap();
+    let path = fixture.path().canonicalize().unwrap().join("file");
+    std::fs::write(&path, b"hello").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    std::fs::hard_link(&path, path.with_file_name("alias")).unwrap();
+    let mut mounts = MountTableFileSystem::new();
+    mounts
+        .mount(Path::new("/host"), Box::new(NativeFileSystem))
+        .unwrap();
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(mounts));
+    let filename = format!("/host{}", path.display());
+    assert_eq!(
+        eval.eval_str(&format!(
+            r##"(let ((a (file-attributes {filename:?})))
+      (list (nth 1 a) (nth 7 a) (nth 8 a) (integerp (nth 2 a))
+        (> (nth 10 a) 0) (integerp (nth 11 a))))"##
+        ))
+        .unwrap(),
+        Value::list(vec![
+            Value::fixnum(2),
+            Value::fixnum(5),
+            Value::string("-rw-r-----"),
+            Value::T,
+            Value::T,
+            Value::T
+        ])
+    );
+}
+
+#[test]
 fn filename_completion_uses_the_same_virtual_directory_as_directory_files() {
     let mut eval = virtual_editor();
     assert_eq!(

@@ -15,12 +15,8 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args_range;
 use crate::heap_types::LispString;
 use std::collections::VecDeque;
-#[cfg(unix)]
-use std::ffi::CStr;
 use std::fs;
 use std::io::ErrorKind;
-
-mod file_identity;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum FileIdFormat {
@@ -163,69 +159,6 @@ fn parse_wholenump_count(arg: Option<&Value>) -> Result<Option<usize>, Flow> {
     }
 }
 
-/// Get UNIX seconds + nanoseconds from SystemTime.
-#[cfg(not(unix))]
-fn system_time_to_secs_nanos(time: std::time::SystemTime) -> Option<(i64, i64)> {
-    let d = time.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some((d.as_secs() as i64, d.subsec_nanos() as i64))
-}
-
-#[cfg(unix)]
-fn uid_to_name(uid: u32) -> Option<String> {
-    unsafe {
-        let mut pwd: libc::passwd = std::mem::zeroed();
-        let mut result: *mut libc::passwd = std::ptr::null_mut();
-        let mut buf_len = 1024usize;
-
-        loop {
-            let mut buf = vec![0u8; buf_len];
-            let rc = libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr().cast(), buf_len, &mut result);
-
-            if rc == 0 {
-                if result.is_null() || pwd.pw_name.is_null() {
-                    return None;
-                }
-                return Some(CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned());
-            }
-
-            if rc == libc::ERANGE && buf_len < (1 << 20) {
-                buf_len *= 2;
-                continue;
-            }
-
-            return None;
-        }
-    }
-}
-
-#[cfg(unix)]
-fn gid_to_name(gid: u32) -> Option<String> {
-    unsafe {
-        let mut grp: libc::group = std::mem::zeroed();
-        let mut result: *mut libc::group = std::ptr::null_mut();
-        let mut buf_len = 1024usize;
-
-        loop {
-            let mut buf = vec![0u8; buf_len];
-            let rc = libc::getgrgid_r(gid, &mut grp, buf.as_mut_ptr().cast(), buf_len, &mut result);
-
-            if rc == 0 {
-                if result.is_null() || grp.gr_name.is_null() {
-                    return None;
-                }
-                return Some(CStr::from_ptr(grp.gr_name).to_string_lossy().into_owned());
-            }
-
-            if rc == libc::ERANGE && buf_len < (1 << 20) {
-                buf_len *= 2;
-                continue;
-            }
-
-            return None;
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // file-attributes core
 // ---------------------------------------------------------------------------
@@ -242,180 +175,74 @@ fn gid_to_name(gid: u32) -> Option<String> {
 ///
 /// Times use the representation selected by `time_output`.
 /// If ID-FORMAT is non-nil and not 'integer, UID/GID are returned as strings.
+/// Virtual stores can lack POSIX fields: unknown fields are nil, and unknown
+/// permission bits are `?`. A missing entry instead returns nil for the whole
+/// result. In particular, absent identity must not become a shared zero inode.
 fn build_file_attributes(
+    eval: &Context,
     filename: &LispString,
     id_format: FileIdFormat,
     time_output: LispTimeOutput,
 ) -> Option<Value> {
+    use super::fileio::{FileAttributeType, FilePrincipal, FileTimestamp};
     let path = super::fileio::lisp_file_name_to_path_buf(filename);
-
-    // Use symlink_metadata first to detect symlinks.
-    let sym_meta = fs::symlink_metadata(&path).ok()?;
-
-    // Determine file type.
-    let file_type = if sym_meta.file_type().is_symlink() {
-        // Read the symlink target, preserving raw file-name bytes.
-        match fs::read_link(&path) {
-            Ok(target) => Value::heap_string(super::fileio::path_to_lisp_file_name(&target)),
-            Err(_) => Value::string(""),
+    let attributes = eval.editor_file_system().attributes(&path).ok()?;
+    let file_type = match &attributes.kind {
+        FileAttributeType::Directory => Value::T,
+        FileAttributeType::SymbolicLink(target) => {
+            Value::heap_string(super::fileio::path_to_lisp_file_name(target))
         }
-    } else if sym_meta.is_dir() {
-        Value::T
-    } else {
-        Value::NIL
+        FileAttributeType::Other => Value::NIL,
     };
-
-    // GNU (src/dired.c `file_attributes`) performs exactly ONE
-    // `emacs_fstatat (..., AT_SYMLINK_NOFOLLOW)` — an lstat — and derives every
-    // field from that single result, including the size (`s.st_size`).  For a
-    // symlink that means the size is the byte length of the link target string,
-    // NOT the resolved target's size.  So never follow the link here: use the
-    // lstat metadata (`sym_meta`) for all fields.
-    let meta = sym_meta.clone();
-
-    // Number of hard links.
-    #[cfg(unix)]
-    let nlinks = {
-        use std::os::unix::fs::MetadataExt;
-        Value::fixnum(sym_meta.nlink() as i64)
+    let principal = |owner: Option<FilePrincipal>| match owner {
+        Some(owner) if id_format.ids_as_strings() => {
+            Value::string(owner.name.unwrap_or_else(|| owner.id.to_string()))
+        }
+        Some(owner) => Value::fixnum(owner.id),
+        None => Value::NIL,
     };
-    #[cfg(not(unix))]
-    let nlinks = Value::fixnum(1);
-
-    // UID / GID. GNU requests accurate Windows security-descriptor ownership
-    // specifically for file-attributes (src/dired.c:1070-1080); the platform
-    // boundary supplies that without exposing raw SID pointers here.
-    let ownership = file_identity::for_path(&path, &sym_meta);
-    let (uid_val, gid_val) = if id_format.ids_as_strings() {
-        (
-            Value::string(
-                ownership
-                    .user
-                    .name
-                    .unwrap_or_else(|| ownership.user.id.to_string()),
-            ),
-            Value::string(
-                ownership
-                    .group
-                    .name
-                    .unwrap_or_else(|| ownership.group.id.to_string()),
-            ),
-        )
-    } else {
-        (
-            Value::fixnum(ownership.user.id),
-            Value::fixnum(ownership.group.id),
-        )
+    let timestamp = |time: Option<FileTimestamp>| {
+        time.map(|time| make_lisp_time(time.seconds, i64::from(time.nanoseconds), time_output))
+            .unwrap_or(Value::NIL)
     };
-
-    // Access time.
-    #[cfg(unix)]
-    let atime = {
-        use std::os::unix::fs::MetadataExt;
-        make_lisp_time(sym_meta.atime(), sym_meta.atime_nsec(), time_output)
+    let integer = |number: Option<u64>| {
+        number.map(|number| Value::fixnum(number as i64)).unwrap_or(Value::NIL)
     };
-    #[cfg(not(unix))]
-    let atime = meta
-        .accessed()
-        .ok()
-        .and_then(system_time_to_secs_nanos)
-        .map(|(secs, nanos)| make_lisp_time(secs, nanos, time_output))
-        .unwrap_or(Value::NIL);
-
-    // Modification time.
-    #[cfg(unix)]
-    let mtime = {
-        use std::os::unix::fs::MetadataExt;
-        make_lisp_time(meta.mtime(), meta.mtime_nsec(), time_output)
+    let mode = match attributes.mode {
+        Some(mode) => format_attribute_mode(mode.bits(), &attributes.kind),
+        None => format!(
+            "{}?????????",
+            match attributes.kind {
+                FileAttributeType::Directory => 'd',
+                FileAttributeType::SymbolicLink(_) => 'l',
+                FileAttributeType::Other => '-',
+            }
+        ),
     };
-    #[cfg(not(unix))]
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(system_time_to_secs_nanos)
-        .map(|(secs, nanos)| make_lisp_time(secs, nanos, time_output))
-        .unwrap_or(Value::NIL);
-
-    // Status change time (ctime on Unix, creation time on other platforms).
-    #[cfg(unix)]
-    let ctime = {
-        use std::os::unix::fs::MetadataExt;
-        make_lisp_time(sym_meta.ctime(), sym_meta.ctime_nsec(), time_output)
-    };
-    #[cfg(not(unix))]
-    let ctime = meta
-        .created()
-        .ok()
-        .and_then(system_time_to_secs_nanos)
-        .map(|(secs, nanos)| make_lisp_time(secs, nanos, time_output))
-        .unwrap_or(Value::NIL);
-
-    // Size.
-    let size = Value::fixnum(meta.len() as i64);
-
-    // Mode string (like "drwxr-xr-x").
-    #[cfg(unix)]
-    let mode = {
-        use std::os::unix::fs::PermissionsExt;
-        let mode_bits = sym_meta.permissions().mode();
-        Value::string(format_mode_string(mode_bits, &sym_meta))
-    };
-    #[cfg(not(unix))]
-    let mode = Value::string(if meta.is_dir() {
-        "drwxr-xr-x"
-    } else {
-        "-rw-r--r--"
-    });
-
-    // GID-CHANGEP: Emacs commonly reports t on Unix filesystems.
-    #[cfg(unix)]
-    let gid_changep = Value::T;
-    #[cfg(not(unix))]
-    let gid_changep = Value::NIL;
-
-    // Inode.
-    #[cfg(unix)]
-    let inode = {
-        use std::os::unix::fs::MetadataExt;
-        Value::fixnum(sym_meta.ino() as i64)
-    };
-    #[cfg(not(unix))]
-    let inode = Value::fixnum(0);
-
-    // Device.
-    #[cfg(unix)]
-    let device = {
-        use std::os::unix::fs::MetadataExt;
-        Value::fixnum(sym_meta.dev() as i64)
-    };
-    #[cfg(not(unix))]
-    let device = Value::fixnum(0);
-
     Some(Value::list(vec![
         file_type,
-        nlinks,
-        uid_val,
-        gid_val,
-        atime,
-        mtime,
-        ctime,
-        size,
-        mode,
-        gid_changep,
-        inode,
-        device,
+        integer(attributes.links),
+        principal(attributes.user),
+        principal(attributes.group),
+        timestamp(attributes.accessed),
+        timestamp(attributes.modified),
+        timestamp(attributes.changed),
+        Value::fixnum(attributes.len as i64),
+        Value::string(mode),
+        Value::bool(attributes.legacy_group_change),
+        integer(attributes.identity.map(|id| id.inode)),
+        integer(attributes.identity.map(|id| id.device)),
     ]))
 }
 
 /// Format a Unix file mode string like "drwxr-xr-x" or "-rw-r--r--".
-#[cfg(unix)]
-fn format_mode_string(mode: u32, meta: &fs::Metadata) -> String {
+fn format_attribute_mode(mode: u32, kind: &super::fileio::FileAttributeType) -> String {
     let mut s = String::with_capacity(10);
 
     // File type character.
-    if meta.file_type().is_symlink() {
+    if matches!(kind, super::fileio::FileAttributeType::SymbolicLink(_)) {
         s.push('l');
-    } else if meta.is_dir() {
+    } else if matches!(kind, super::fileio::FileAttributeType::Directory) {
         s.push('d');
     } else {
         s.push('-');
@@ -564,7 +391,7 @@ fn directory_files_and_attributes_with_dir(
         .into_iter()
         .map(|(display_name, full_path)| {
             let attrs =
-                build_file_attributes(&full_path, id_format, time_output).unwrap_or(Value::NIL);
+                build_file_attributes(eval, &full_path, id_format, time_output).unwrap_or(Value::NIL);
             Value::cons(file_name_value(display_name), attrs)
         })
         .collect();
@@ -1242,7 +1069,7 @@ pub(crate) fn builtin_file_attributes(eval: &mut Context, args: Vec<Value>) -> E
     let id_format = FileIdFormat::from_id_format_arg(args.get(1));
     let time_output = LispTimeOutput::from_context(eval)?;
 
-    match build_file_attributes(&filename_lisp, id_format, time_output) {
+    match build_file_attributes(eval, &filename_lisp, id_format, time_output) {
         Some(attrs) => Ok(attrs),
         None => Ok(Value::NIL),
     }
