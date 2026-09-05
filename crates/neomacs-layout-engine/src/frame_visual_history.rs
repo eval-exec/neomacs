@@ -14,26 +14,17 @@ use rustc_hash::FxHashMap;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FrameVisualHistory {
     window_infos: FxHashMap<DisplayWindowId, WindowInfo>,
-    background: Option<Color>,
 }
 
 impl FrameVisualHistory {
     pub(crate) fn from_accepted_presentation(
         window_infos: FxHashMap<DisplayWindowId, WindowInfo>,
-        background: Color,
     ) -> Self {
-        Self {
-            window_infos,
-            background: Some(background),
-        }
+        Self { window_infos }
     }
 
     pub(crate) fn window_infos(&self) -> &FxHashMap<DisplayWindowId, WindowInfo> {
         &self.window_infos
-    }
-
-    pub(crate) const fn background(&self) -> Option<Color> {
-        self.background
     }
 }
 

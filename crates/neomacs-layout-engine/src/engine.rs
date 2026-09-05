@@ -41,10 +41,9 @@ use crate::display_cursor::{CursorSlotWidthRequest, VisualCursorGeometryContext}
 use crate::display_frame_output::{
     FrameContentTransitionHintRenderRequest, FrameLineAnimationHintsRenderRequest,
     FrameOutputIdentity, FrameOutputOwner, FrameOutputStateRenderRequest,
-    FrameThemeTransitionHintRenderRequest, NavigationIntentObservation,
-    WindowContentTransitionMode, WindowFrameDecorationsRenderRequest, WindowFrameGeometry,
-    WindowFrameGeometryRequest, WindowFrameInfoEffectsRenderRequest, WindowFrameInfoRenderRequest,
-    WindowFrameMetadata,
+    NavigationIntentObservation, WindowContentTransitionMode, WindowFrameDecorationsRenderRequest,
+    WindowFrameGeometry, WindowFrameGeometryRequest, WindowFrameInfoEffectsRenderRequest,
+    WindowFrameInfoRenderRequest, WindowFrameMetadata,
 };
 use crate::display_mock_frame::layout_mock_frame_content;
 use crate::display_origin::DisplayOrigin;
@@ -1304,12 +1303,6 @@ impl LayoutEngine {
             .render_line_animation_hints(FrameLineAnimationHintsRenderRequest::new(
                 prev_window_infos,
                 curr_window_infos,
-            ));
-        self.frame_output
-            .render_theme_transition_hint(FrameThemeTransitionHintRenderRequest::new(
-                previous.background(),
-                frame_params.width,
-                frame_params.height,
             ));
         self.frame_output.render_frame_content_transition_hint(
             FrameContentTransitionHintRenderRequest::new(
@@ -3032,10 +3025,7 @@ impl LayoutEngine {
 
         self.frame_visual_histories.commit(
             frame_id,
-            FrameVisualHistory::from_accepted_presentation(
-                curr_window_infos,
-                Color::from_pixel(frame_params.background),
-            ),
+            FrameVisualHistory::from_accepted_presentation(curr_window_infos),
         );
         {
             let frame_manager = evaluator.frame_manager_mut();
