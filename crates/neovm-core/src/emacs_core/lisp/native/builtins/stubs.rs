@@ -4,6 +4,7 @@ use crate::emacs_core::display;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::fontset;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
+use neomacs_display_protocol::SelectionOwner;
 
 // =========================================================================
 // fontset.c gap-fill stubs
@@ -287,6 +288,28 @@ pub(crate) fn builtin_neomacs_primary_selection_get(
         cached_primary_selection_text()
     };
     Ok(text.map(Value::string).unwrap_or(Value::NIL))
+}
+
+pub(crate) fn builtin_neomacs_primary_selection_owner(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("neomacs-primary-selection-owner", &args, 0)?;
+    let owner = if let Some(host) = ctx.display_host.as_mut() {
+        host.primary_selection_owner()
+            .map_err(|err| signal("error", vec![Value::string(err)]))?
+    } else if cached_primary_selection_text().is_some() {
+        SelectionOwner::ThisProcess
+    } else {
+        SelectionOwner::None
+    };
+    let symbol = match owner {
+        SelectionOwner::ThisProcess => "this-process",
+        SelectionOwner::OtherProcess => "other-process",
+        SelectionOwner::None => "none",
+        SelectionOwner::Unknown => "unknown",
+    };
+    Ok(Value::symbol(symbol))
 }
 
 pub(crate) fn builtin_neomacs_core_backend(args: Vec<Value>) -> EvalResult {

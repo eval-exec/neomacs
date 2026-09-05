@@ -632,3 +632,106 @@ fn write_font_oracle_diff(
     }
     std::fs::write(path, diff)
 }
+
+/// GNU `deactivate-mark` (emacs-31.0.90 lisp/simple.el:7056-7066) republishes
+/// the region to PRIMARY only when this process owns it or nobody does.  This
+/// test makes both supported ownership contracts exact: macOS/Windows use a
+/// process-local PRIMARY, while Linux reports ownership as unobservable and
+/// conservatively preserves a possibly foreign selection.
+#[test]
+fn real_gui_primary_selection_follows_deactivate_mark_after_prior_ownership() {
+    let Some(backend) = requested_backend() else {
+        eprintln!(
+            "skipping PRIMARY ownership regression; set \
+             NEOMACS_GUI_TEST_BACKEND=wayland, x11, macos or windows to run it"
+        );
+        return;
+    };
+
+    let workspace_root = workspace_root();
+    let binary = neomacs_binary(&workspace_root);
+    assert!(
+        binary.exists(),
+        "build {binary:?} before running the PRIMARY ownership regression"
+    );
+
+    let artifact_root = workspace_root.join("target/neomacs-gui-tests");
+    let session = DisplayHarness::for_backend(backend)
+        .start_session(&artifact_root)
+        .expect("display session should start");
+    let scenario = GuiScenario::new(
+        "primary-selection-ownership",
+        workspace_root.join("crates/neomacs-gui-tests/fixtures/primary-selection.el"),
+    );
+    let mut plan =
+        GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario).with_program(binary);
+    for (key, value) in session.env() {
+        plan = plan.with_env(key.clone(), value.clone());
+    }
+
+    let mut runner = ProcessGuiCommandRunner;
+    let result = plan
+        .run_with(
+            &mut runner,
+            GuiRunOptions::with_timeout(Duration::from_secs(30)),
+        )
+        .expect("PRIMARY ownership run should produce artifacts");
+
+    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+    let state = result
+        .gui_state
+        .as_ref()
+        .expect("PRIMARY fixture should publish GUI state");
+    assert_eq!(state["error"], serde_json::Value::Null, "{state:#}");
+    assert_eq!(state["window_system"], "neo");
+    assert_eq!(state["select_active_regions"], true);
+    let process_local_primary = matches!(backend, GuiBackend::Macos | GuiBackend::Windows);
+    let expected_owner = if process_local_primary {
+        "this-process"
+    } else {
+        "unknown"
+    };
+    let expected_after_deactivate = if process_local_primary { "new" } else { "old" };
+
+    assert_eq!(state["owner_before"], expected_owner, "{state:#}");
+    assert_eq!(state["owned_before"], process_local_primary, "{state:#}");
+    assert_eq!(
+        state["after_deactivate"], expected_after_deactivate,
+        "{state:#}"
+    );
+    assert_eq!(state["owner_after"], expected_owner, "{state:#}");
+    assert_eq!(state["owner_p"], process_local_primary, "{state:#}");
+    assert_eq!(state["exists_p"], true, "{state:#}");
+    assert_eq!(state["empty_owner"], expected_owner, "{state:#}");
+    assert_eq!(state["empty_exists_p"], true, "{state:#}");
+    assert_eq!(state["disown_tested"], process_local_primary, "{state:#}");
+    if process_local_primary {
+        assert_eq!(
+            state["after_disown_value"],
+            serde_json::Value::Null,
+            "{state:#}"
+        );
+        assert_eq!(state["after_disown_owner"], "none", "{state:#}");
+        assert_eq!(state["after_disown_owner_p"], false, "{state:#}");
+    } else {
+        assert_eq!(
+            state["after_disown_value"],
+            serde_json::Value::Null,
+            "{state:#}"
+        );
+        assert_eq!(
+            state["after_disown_owner"],
+            serde_json::Value::Null,
+            "{state:#}"
+        );
+        assert_eq!(state["after_disown_owner_p"], false, "{state:#}");
+    }
+
+    let stdout = std::fs::read_to_string(&result.artifacts.stdout).expect("stdout artifact");
+    let stderr = std::fs::read_to_string(&result.artifacts.stderr).expect("stderr artifact");
+    let output = format!("{stdout}\n{stderr}");
+    assert!(
+        !output.contains("PRIMARY selection is not supported"),
+        "PRIMARY must be accepted on every display backend:\n{output:.4000}"
+    );
+}

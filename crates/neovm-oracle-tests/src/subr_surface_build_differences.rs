@@ -19,8 +19,9 @@
 //! `xwidget.c` nor `comp.c`'s guarded body nor `term.c`'s Gpm block.  This port
 //! has xwidgets (the WPE/WebKit render path) and is not an X client, so the two
 //! builds legitimately declare different names -- ledger 183 ruled the xwidget
-//! pair not a divergence, and ledger 190 measured the whole set for functions:
-//! **63 names this build declares and GNU does not, 9 the other way.**  Ledger
+//! pair not a divergence, and ledger 190 measured the original set for functions:
+//! **63 names this build declared and GNU did not, 9 the other way.**  The
+//! typed PRIMARY ownership primitive added one port-owned name.  Ledger
 //! 192 made the second number **12**: it deleted the three `dbus` subrs 190 had
 //! left standing, because this build has no D-Bus transport and GNU's whole
 //! `src/dbusbind.c` is one `#ifdef HAVE_DBUS`.
@@ -44,7 +45,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 /// 23 xwidget subrs (`src/xwidget.c`, whole file behind `XWIDGETS_OBJ`,
 /// `configure.ac:4455-4507`), `x-load-color-file` (`src/xfaces.c:7583`, whose
 /// guard is `#ifndef HAVE_X_WINDOWS` -- GNU declares it in the NON-X branch,
-/// which is this build's branch), and 39 primitives of this port's own in this
+/// which is this build's branch), and 40 primitives of this port's own in this
 /// port's own namespace, as GNU carries `w32-`, `ns-` and `haiku-` ones.
 const DECLARED_HERE_ONLY: &str = "
   delete-xwidget-view get-buffer-xwidgets kill-xwidget
@@ -56,7 +57,8 @@ const DECLARED_HERE_ONLY: &str = "
   neomacs-effects-apply neomacs-frame-edges neomacs-frame-geometry
   neomacs-frame-shader neomacs-frame-shader-set-uniform neomacs-image-extent
   neomacs-mouse-absolute-pixel-position neomacs-open-tls-stream neomacs-primary-selection-get
-  neomacs-primary-selection-set neomacs-set-buffer-text-backend neomacs-set-default-buffer-text-backend
+  neomacs-primary-selection-owner neomacs-primary-selection-set neomacs-set-buffer-text-backend
+  neomacs-set-default-buffer-text-backend
   neomacs-set-mouse-absolute-pixel-position neomacs-surface-available-p neomacs-surface-create
   neomacs-surface-destroy neomacs-surface-set-uniform neomacs-terminal-create
   neomacs-terminal-destroy neomacs-terminal-get-text neomacs-terminal-resize
@@ -268,7 +270,7 @@ fn oracle_both_editors_declare_all_six_macros_c_subrs() {
     );
 }
 
-/// This build declares all 63 of its own names and none of GNU's 12.
+/// This build declares all 64 of its own names and none of GNU's 12.
 ///
 /// Runs the neomacs binary unconditionally (`run_neovm_eval`), so unlike a
 /// snapshot parity test it is a measurement of THIS build in every mode.  The
@@ -281,7 +283,7 @@ fn oracle_both_editors_declare_all_six_macros_c_subrs() {
 ///
 /// rather than pinned here, for the reason in the module header.
 #[test]
-fn oracle_this_build_declares_its_sixty_three_and_none_of_gnus_twelve() {
+fn oracle_this_build_declares_its_sixty_four_and_none_of_gnus_twelve() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let form = probe(DECLARED_HERE_ONLY, DECLARED_BY_GNU_ONLY);
@@ -289,7 +291,7 @@ fn oracle_this_build_declares_its_sixty_three_and_none_of_gnus_twelve() {
     assert_eq!(
         neovm, "OK (nil nil t)",
         "this build's subr surface moved: the first list is the name(s) of the \
-         sixty-three it no longer declares, the second is the name(s) of GNU's \
+         sixty-four it no longer declares, the second is the name(s) of GNU's \
          twelve it has started declaring, and a nil third element means the \
          probe never saw a booted obarray.  See DIVERGENCES.md 190 and 192."
     );

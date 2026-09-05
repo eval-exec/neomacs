@@ -12,7 +12,7 @@ use std::time::Instant;
 use neomacs_display_protocol::SealedFramePresentation;
 use neomacs_display_protocol::{
     ImageColorContext, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization, ImageRotation,
-    ImageSizeSpec, VideoId,
+    ImageSizeSpec, SelectionOwner, VideoId,
 };
 pub use neomacs_display_protocol::{
     ImageStateEvent, MenuBarItem, PopupMenuItem, TabBarItem, ToolBarImageSource, ToolBarItem,
@@ -21,7 +21,13 @@ pub use neomacs_display_protocol::{
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_core::window::GuiFrameGeometryHints;
 
-/// Native selection owned by the display server.
+/// Selection addressed by a clipboard request.
+///
+/// `Clipboard` is always the system clipboard.  `Primary` is the X11 or
+/// Wayland primary selection on Linux and a process-local store elsewhere,
+/// matching GNU w32's Lisp property.  GNU NS instead uses a named pasteboard
+/// and can observe foreign ownership; the clipboard runtime documents that
+/// explicit divergence beside its process-local state.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ClipboardSelection {
     Clipboard,
@@ -655,12 +661,19 @@ pub enum ClipboardCommand {
         expires_at: Instant,
         reply: Sender<Result<Option<String>, String>>,
     },
+    GetOwnership {
+        selection: ClipboardSelection,
+        expires_at: Instant,
+        reply: Sender<Result<SelectionOwner, String>>,
+    },
 }
 
 impl ClipboardCommand {
     pub(crate) fn is_expired(&self) -> bool {
         let expires_at = match self {
-            Self::SetText { expires_at, .. } | Self::GetText { expires_at, .. } => expires_at,
+            Self::SetText { expires_at, .. }
+            | Self::GetText { expires_at, .. }
+            | Self::GetOwnership { expires_at, .. } => expires_at,
         };
         Instant::now() >= *expires_at
     }

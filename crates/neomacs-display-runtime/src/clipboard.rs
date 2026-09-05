@@ -1,6 +1,7 @@
 use crate::thread_comm::{ClipboardCommand, ClipboardSelection};
 use arboard::Clipboard;
 use crossbeam_channel::{Receiver, Sender};
+use neomacs_display_protocol::SelectionOwner;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use winit::event_loop::OwnedDisplayHandle;
@@ -18,6 +19,8 @@ trait ClipboardBackend: Send {
     -> Result<(), String>;
 
     fn text(&mut self, selection: ClipboardSelection) -> Result<Option<String>, String>;
+
+    fn owner(&mut self, selection: ClipboardSelection) -> Result<SelectionOwner, String>;
 }
 
 enum ServiceCommand {
@@ -191,6 +194,17 @@ fn execute_command(backend: &mut dyn ClipboardBackend, command: ClipboardCommand
                 tracing::debug!("clipboard get reply receiver was dropped");
             }
         }
+        ClipboardCommand::GetOwnership {
+            selection, reply, ..
+        } => {
+            let result = backend.owner(selection);
+            if let Err(err) = &result {
+                tracing::warn!(?selection, "clipboard ownership query failed: {err}");
+            }
+            if reply.send(result).is_err() {
+                tracing::debug!("clipboard ownership reply receiver was dropped");
+            }
+        }
     }
 }
 
@@ -202,17 +216,76 @@ pub(crate) fn reject_command(command: ClipboardCommand, error: String) {
         ClipboardCommand::GetText { reply, .. } => {
             let _ = reply.send(Err(error));
         }
+        ClipboardCommand::GetOwnership { reply, .. } => {
+            let _ = reply.send(Err(error));
+        }
+    }
+}
+
+/// Process-local stand-in for a selection the platform clipboard does not
+/// expose.
+///
+/// GNU Emacs never rejects PRIMARY on a non-X platform.  Its w32 port keeps
+/// PRIMARY as a Lisp property (lisp/term/w32-win.el:364-367, :417-451), so
+/// another process cannot take it.  This typed state reproduces that contract
+/// for Neomacs on every platform whose native clipboard API lacks PRIMARY.
+///
+/// Ledgered macOS divergence: GNU NS maps PRIMARY to a named NSPasteboard
+/// (`src/nsselect.m:56,397-466,494-547`) and observes foreign takeover through
+/// pasteboard change counts.  Arboard exposes only the conventional system
+/// pasteboard, so Neomacs deliberately uses the process-local w32 model rather
+/// than aliasing PRIMARY to CLIPBOARD.  Consequently `OtherProcess` cannot
+/// arise for this state.  `ns-sent-selection-hooks` is also not run.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Default, PartialEq, Eq)]
+enum PrivateSelection {
+    /// Nobody owns the selection: `ns-get-selection` returns nil.
+    #[default]
+    Vacant,
+    /// This process owns the selection with the given text.
+    Owned(String),
+}
+
+#[cfg(not(target_os = "linux"))]
+impl PrivateSelection {
+    /// Own the selection with `text`, or disown it with `None`.
+    fn store(&mut self, text: Option<&str>) {
+        *self = match text {
+            Some(text) => Self::Owned(text.to_owned()),
+            None => Self::Vacant,
+        };
+    }
+
+    fn load(&self) -> Option<String> {
+        match self {
+            Self::Owned(text) => Some(text.clone()),
+            Self::Vacant => None,
+        }
+    }
+
+    fn owner(&self) -> SelectionOwner {
+        match self {
+            Self::Owned(_) => SelectionOwner::ThisProcess,
+            Self::Vacant => SelectionOwner::None,
+        }
     }
 }
 
 struct ArboardClipboard {
     clipboard: Clipboard,
+    /// PRIMARY on platforms whose clipboard API has no such selection.
+    #[cfg(not(target_os = "linux"))]
+    primary: PrivateSelection,
 }
 
 impl ArboardClipboard {
     fn new() -> Result<Self, String> {
         Clipboard::new()
-            .map(|clipboard| Self { clipboard })
+            .map(|clipboard| Self {
+                clipboard,
+                #[cfg(not(target_os = "linux"))]
+                primary: PrivateSelection::default(),
+            })
             .map_err(|err| format!("failed to initialize the system clipboard: {err}"))
     }
 
@@ -255,7 +328,8 @@ impl ClipboardBackend for ArboardClipboard {
                     }
                     .map_err(|err| err.to_string()),
                     ClipboardSelection::Primary => {
-                        Err("PRIMARY selection is not supported on this platform".to_owned())
+                        self.primary.store(text);
+                        Ok(())
                     }
                 }
             }
@@ -274,10 +348,23 @@ impl ClipboardBackend for ArboardClipboard {
             _ => {
                 match selection {
                     ClipboardSelection::Clipboard => Self::text_result(self.clipboard.get_text()),
-                    ClipboardSelection::Primary => {
-                        Err("PRIMARY selection is not supported on this platform".to_owned())
-                    }
+                    ClipboardSelection::Primary => Ok(self.primary.load()),
                 }
+            }
+        }
+    }
+
+    fn owner(&mut self, selection: ClipboardSelection) -> Result<SelectionOwner, String> {
+        std::cfg_select! {
+            target_os = "linux" => {
+                let _ = selection;
+                Ok(SelectionOwner::Unknown)
+            }
+            _ => {
+                Ok(match selection {
+                    ClipboardSelection::Clipboard => SelectionOwner::Unknown,
+                    ClipboardSelection::Primary => self.primary.owner(),
+                })
             }
         }
     }
@@ -330,11 +417,16 @@ impl ClipboardBackend for WaylandClipboard {
             Err(err) => Err(err.to_string()),
         }
     }
+
+    fn owner(&mut self, _selection: ClipboardSelection) -> Result<SelectionOwner, String> {
+        Ok(SelectionOwner::Unknown)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use neomacs_display_protocol::SelectionOwner;
     use std::collections::HashMap;
 
     #[derive(Default)]
@@ -375,6 +467,14 @@ mod tests {
         fn text(&mut self, selection: ClipboardSelection) -> Result<Option<String>, String> {
             Ok(self.selections.get(&selection).cloned())
         }
+
+        fn owner(&mut self, selection: ClipboardSelection) -> Result<SelectionOwner, String> {
+            Ok(if self.selections.contains_key(&selection) {
+                SelectionOwner::ThisProcess
+            } else {
+                SelectionOwner::None
+            })
+        }
     }
 
     impl ClipboardBackend for BlockingClipboard {
@@ -391,6 +491,10 @@ mod tests {
             self.release.recv().unwrap();
             Ok(Some("released".to_owned()))
         }
+
+        fn owner(&mut self, _selection: ClipboardSelection) -> Result<SelectionOwner, String> {
+            Ok(SelectionOwner::Unknown)
+        }
     }
 
     impl ClipboardBackend for BlockingDropClipboard {
@@ -404,6 +508,10 @@ mod tests {
 
         fn text(&mut self, _selection: ClipboardSelection) -> Result<Option<String>, String> {
             Ok(None)
+        }
+
+        fn owner(&mut self, _selection: ClipboardSelection) -> Result<SelectionOwner, String> {
+            Ok(SelectionOwner::Unknown)
         }
     }
 
@@ -428,6 +536,10 @@ mod tests {
             self.read_started.send(()).unwrap();
             self.release_read.recv().unwrap();
             Ok(None)
+        }
+
+        fn owner(&mut self, _selection: ClipboardSelection) -> Result<SelectionOwner, String> {
+            Ok(SelectionOwner::Unknown)
         }
     }
 
@@ -459,6 +571,19 @@ mod tests {
         result.recv().unwrap()
     }
 
+    fn owner(
+        service: &ClipboardService,
+        selection: ClipboardSelection,
+    ) -> Result<SelectionOwner, String> {
+        let (reply, result) = crossbeam_channel::bounded(1);
+        service.submit(ClipboardCommand::GetOwnership {
+            selection,
+            expires_at: std::time::Instant::now() + Duration::from_secs(5),
+            reply,
+        });
+        result.recv().unwrap()
+    }
+
     #[test]
     fn service_keeps_clipboard_and_primary_distinct_and_can_clear_them() {
         let service = ClipboardService::with_backend(MemoryClipboard::default());
@@ -479,6 +604,32 @@ mod tests {
         assert_eq!(
             text(&service, ClipboardSelection::Primary).unwrap(),
             Some("selected".to_owned())
+        );
+    }
+
+    #[test]
+    fn service_reports_empty_primary_as_owned_until_it_is_disowned() {
+        let service = ClipboardService::with_backend(MemoryClipboard::default());
+
+        assert_eq!(
+            owner(&service, ClipboardSelection::Primary).unwrap(),
+            SelectionOwner::None
+        );
+
+        set_text(&service, ClipboardSelection::Primary, Some("")).unwrap();
+        assert_eq!(
+            text(&service, ClipboardSelection::Primary).unwrap(),
+            Some(String::new())
+        );
+        assert_eq!(
+            owner(&service, ClipboardSelection::Primary).unwrap(),
+            SelectionOwner::ThisProcess
+        );
+
+        set_text(&service, ClipboardSelection::Primary, None).unwrap();
+        assert_eq!(
+            owner(&service, ClipboardSelection::Primary).unwrap(),
+            SelectionOwner::None
         );
     }
 
@@ -563,5 +714,44 @@ mod tests {
             recorded_writes.try_recv(),
             Err(crossbeam_channel::TryRecvError::Empty)
         );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn private_selection_round_trips_owned_and_vacant_states() {
+        let mut selection = PrivateSelection::default();
+        assert_eq!(selection.load(), None);
+
+        selection.store(Some("selected"));
+        assert_eq!(selection.load(), Some("selected".to_owned()));
+
+        selection.store(Some("reselected"));
+        assert_eq!(selection.load(), Some("reselected".to_owned()));
+
+        selection.store(None);
+        assert_eq!(selection.load(), None);
+    }
+
+    /// GNU's NS port keeps PRIMARY in a private pasteboard instead of
+    /// rejecting it (emacs-31.0.90 src/nsselect.m:56, :547), so every
+    /// region deactivation under `select-active-regions` must succeed here.
+    /// Only PRIMARY is touched: the system CLIPBOARD is left alone.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn arboard_backend_keeps_primary_in_process_local_state() {
+        let mut backend = ArboardClipboard::new().expect("system clipboard should open");
+
+        backend
+            .set_text(ClipboardSelection::Primary, Some("selected"))
+            .expect("PRIMARY store must not fail on this platform");
+        assert_eq!(
+            backend.text(ClipboardSelection::Primary),
+            Ok(Some("selected".to_owned()))
+        );
+
+        backend
+            .set_text(ClipboardSelection::Primary, None)
+            .expect("PRIMARY disown must not fail on this platform");
+        assert_eq!(backend.text(ClipboardSelection::Primary), Ok(None));
     }
 }

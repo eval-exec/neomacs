@@ -122,7 +122,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use neomacs_display_protocol::{VideoId, VisualConfig, WebViewId};
+use neomacs_display_protocol::{SelectionOwner, VideoId, VisualConfig, WebViewId};
 use neomacs_display_runtime::display_scale::observe_event_loop_display;
 #[cfg(not(feature = "neo-term"))]
 use neomacs_display_runtime::render_thread::run_render_loop_current_thread;
@@ -1571,6 +1571,19 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             },
             reply_rx,
             "failed to read PRIMARY selection",
+        )
+    }
+
+    fn primary_selection_owner(&mut self) -> Result<SelectionOwner, String> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        self.await_clipboard_reply(
+            ClipboardCommand::GetOwnership {
+                selection: ClipboardSelection::Primary,
+                expires_at: Instant::now() + CLIPBOARD_REPLY_TIMEOUT,
+                reply: reply_tx,
+            },
+            reply_rx,
+            "failed to query PRIMARY selection ownership",
         )
     }
 

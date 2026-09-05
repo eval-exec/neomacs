@@ -655,6 +655,22 @@ fn clipboard_command_before_display_initialization_returns_an_explicit_error() {
         reply_rx.recv().unwrap(),
         Err("clipboard is unavailable before display initialization".to_owned())
     );
+
+    let (owner_reply_tx, owner_reply_rx) = crossbeam_channel::bounded(1);
+    emacs
+        .cmd_tx
+        .send(RenderCommand::Clipboard(ClipboardCommand::GetOwnership {
+            selection: ClipboardSelection::Primary,
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(5),
+            reply: owner_reply_tx,
+        }))
+        .unwrap();
+
+    assert!(!app.process_commands());
+    assert_eq!(
+        owner_reply_rx.recv().unwrap(),
+        Err("clipboard is unavailable before display initialization".to_owned())
+    );
 }
 
 #[test]

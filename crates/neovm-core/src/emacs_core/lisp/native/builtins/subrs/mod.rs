@@ -5831,6 +5831,11 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(0, None),
     ));
     ctx.register_subr(SubrSpec::new(
+        "neomacs-primary-selection-owner",
+        NativeFn::ContextVec(builtin_neomacs_primary_selection_owner),
+        SubrArity::new(0, Some(0)),
+    ));
+    ctx.register_subr(SubrSpec::new(
         "neomacs-core-backend",
         NativeFn::ContextVec(|_ctx, args| builtin_neomacs_core_backend(args)),
         SubrArity::new(0, None),

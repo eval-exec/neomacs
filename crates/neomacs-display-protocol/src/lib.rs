@@ -6,6 +6,7 @@
 // `too_many_arguments` is allowed crate-wide rather than at each of the ~15 sites.
 #![allow(clippy::too_many_arguments)]
 
+pub mod clipboard;
 pub mod cursor;
 pub mod display_scale;
 pub mod effect_command;
@@ -37,6 +38,7 @@ pub mod xwidget_extent;
 pub use glyph_matrix::*;
 pub mod tty_capabilities;
 
+pub use clipboard::*;
 pub use display_scale::*;
 pub use effect_command::*;
 pub use effect_config::*;

@@ -36601,6 +36601,15 @@ the coordinator's list of three becomes a list of four.**
   entry 181 left it.  Nothing here changes its sizing.
 
 Status: FIXED.
+**NOTE ADDED 2026-09-05 -- typed PRIMARY ownership adds one intentional
+port-owned primitive.**
+
+`neomacs-primary-selection-owner` moves the current asymmetric subr surface
+from 63 to **64** names: 23 xwidget names + `x-load-color-file` + 40 names in
+this port's namespace.  The measured-before/after table above remains the
+historical ledger-190 result; the executable guards now carry and require all
+64 current names.
+
 **NOTE ADDED BY LEDGER 197, 2026-08-24 -- the handed-over `dbusbind` question is
 settled, and the "presence as a build test" class is now measured on the
 feature side too.**

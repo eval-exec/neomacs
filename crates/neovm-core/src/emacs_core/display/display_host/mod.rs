@@ -17,7 +17,7 @@ use crate::buffer::BufferId;
 use crate::face::{Face as RuntimeFace, FaceHeight};
 use crate::heap_types::LispString;
 use crate::window::FrameFullscreen;
-pub use neomacs_display_protocol::GraphicalFaceAttribute;
+pub use neomacs_display_protocol::{GraphicalFaceAttribute, SelectionOwner};
 use neomacs_display_protocol::{VideoId, WebViewId};
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 
@@ -277,6 +277,9 @@ pub trait DisplayHost {
     }
     fn primary_selection_text(&mut self) -> Result<Option<String>, String> {
         Err("PRIMARY selection is unsupported by this display host".to_owned())
+    }
+    fn primary_selection_owner(&mut self) -> Result<SelectionOwner, String> {
+        Err("PRIMARY selection ownership is unsupported by this display host".to_owned())
     }
     fn set_gui_frame_geometry_hints(
         &mut self,
