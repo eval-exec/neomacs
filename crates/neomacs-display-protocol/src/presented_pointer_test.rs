@@ -1,3 +1,22 @@
+/// A surface point in a presentation composed with nothing in motion.
+///
+/// The production path builds the same value by mapping through the projection
+/// the frame was drawn with; a settled projection maps by identity, so these
+/// tests state the point they mean while still going through the real witness
+/// rather than around it.
+fn settled_point(
+    presentation: crate::PresentationId,
+    x: f32,
+    y: f32,
+) -> crate::PresentationFramePoint {
+    crate::InteractionProjection::settled(presentation)
+        .map(
+            crate::GeometryPoint::<crate::RootSurfaceSpace, crate::LogicalPixels>::from_px(x, y)
+                .expect("a finite surface point"),
+        )
+        .expect("a settled projection maps every finite point")
+}
+
 use crate::{
     Color, FaceId, FrameRect, InteractionId, PointerAppearanceId, PointerAppearancePhase,
     PointerAppearanceSelection, PointerDrawMode, PointerImageRelief, PointerReliefCornerErase,
@@ -790,17 +809,21 @@ fn presented_hit_index_resolves_every_window_region_and_exact_text_position() {
 
     for (position, kind) in kinds.into_iter().enumerate() {
         let hit = index
-            .resolve(PresentedHitQuery::new(
+            .resolve(PresentedHitQuery::new(settled_point(
                 presentation,
                 position as f32 * 10.0 + 5.0,
                 5.0,
-            ))
+            )))
             .unwrap()
             .expect("semantic region hit");
         assert_eq!(hit.region().kind(), kind);
     }
     let text = index
-        .resolve(PresentedHitQuery::new(presentation, 3.0, 3.0))
+        .resolve(PresentedHitQuery::new(settled_point(
+            presentation,
+            3.0,
+            3.0,
+        )))
         .unwrap()
         .unwrap()
         .text_position()
@@ -809,7 +832,11 @@ fn presented_hit_index_resolves_every_window_region_and_exact_text_position() {
     assert_eq!((text.row(), text.column()), (4, 9));
     assert_eq!(
         index
-            .resolve(PresentedHitQuery::new(presentation, 5.0, 25.0))
+            .resolve(PresentedHitQuery::new(settled_point(
+                presentation,
+                5.0,
+                25.0
+            )))
             .unwrap()
             .unwrap()
             .region()
@@ -851,7 +878,11 @@ fn presented_hit_index_round_trips_exact_window_chrome_string_position() {
     let decoded: PresentedHitIndex = serde_json::from_str(&wire).unwrap();
 
     let hit = decoded
-        .resolve(PresentedHitQuery::new(presentation, 24.0, 8.0))
+        .resolve(PresentedHitQuery::new(settled_point(
+            presentation,
+            24.0,
+            8.0,
+        )))
         .unwrap()
         .unwrap();
     assert_eq!(hit.string_position(), Some(position));
@@ -915,7 +946,11 @@ fn presented_hit_index_uses_half_open_edges_z_order_and_rejects_stale_queries() 
 
     assert_eq!(
         index
-            .resolve(PresentedHitQuery::new(presentation, 10.0, 5.0))
+            .resolve(PresentedHitQuery::new(settled_point(
+                presentation,
+                10.0,
+                5.0
+            )))
             .unwrap()
             .unwrap()
             .region()
@@ -924,13 +959,21 @@ fn presented_hit_index_uses_half_open_edges_z_order_and_rejects_stale_queries() 
     );
     assert!(
         index
-            .resolve(PresentedHitQuery::new(presentation, 20.0, 5.0))
+            .resolve(PresentedHitQuery::new(settled_point(
+                presentation,
+                20.0,
+                5.0
+            )))
             .unwrap()
             .is_none(),
         "right edge is exclusive"
     );
     assert_eq!(
-        index.resolve(PresentedHitQuery::new(PresentationId::new(7), 5.0, 5.0)),
+        index.resolve(PresentedHitQuery::new(settled_point(
+            PresentationId::new(7),
+            5.0,
+            5.0
+        ))),
         Err(PresentedHitError::StalePresentation {
             expected: presentation,
             requested: PresentationId::new(7),
@@ -965,7 +1008,11 @@ fn presented_resize_handle_overrides_structural_window_region_without_changing_p
         .unwrap();
 
     let hit = index
-        .resolve(PresentedHitQuery::new(presentation, 95.0, 20.0))
+        .resolve(PresentedHitQuery::new(settled_point(
+            presentation,
+            95.0,
+            20.0,
+        )))
         .unwrap()
         .unwrap();
     assert_eq!(hit.region().kind(), PresentedRegionKind::RightDivider);
@@ -977,7 +1024,11 @@ fn presented_resize_handle_overrides_structural_window_region_without_changing_p
     assert_eq!(round_trip, index);
     assert_eq!(
         round_trip
-            .resolve(PresentedHitQuery::new(presentation, 95.0, 20.0))
+            .resolve(PresentedHitQuery::new(settled_point(
+                presentation,
+                95.0,
+                20.0
+            )))
             .unwrap()
             .unwrap()
             .region()
@@ -1033,7 +1084,11 @@ fn presented_resize_handle_preempts_overlapping_pointer_interaction_owner() {
         .unwrap();
 
     let hit = frame
-        .resolve_presented_hit(PresentedHitQuery::new(presentation, 95.0, 20.0))
+        .resolve_presented_hit(PresentedHitQuery::new(settled_point(
+            presentation,
+            95.0,
+            20.0,
+        )))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1175,7 +1230,11 @@ fn unified_query_uses_pointer_canonical_owner_in_semantic_overlap() {
         .unwrap();
 
     let hit = frame
-        .resolve_presented_hit(crate::PresentedHitQuery::new(presentation, 5.0, 5.0))
+        .resolve_presented_hit(crate::PresentedHitQuery::new(settled_point(
+            presentation,
+            5.0,
+            5.0,
+        )))
         .unwrap()
         .unwrap();
     assert_eq!(hit.semantic().unwrap().region().id(), owned);
@@ -1211,7 +1270,11 @@ fn semantic_hit_index_limits_large_frame_queries_to_the_selected_row_band() {
     .unwrap();
 
     let hit = index
-        .resolve(crate::PresentedHitQuery::new(presentation, 404.0, 808.0))
+        .resolve(crate::PresentedHitQuery::new(settled_point(
+            presentation,
+            404.0,
+            808.0,
+        )))
         .unwrap()
         .unwrap();
     assert_eq!(hit.text_position().unwrap().buffer_position(), 5_051);
@@ -1251,7 +1314,11 @@ fn semantic_hit_index_rebuilds_private_buckets_after_transport() {
     );
     let decoded: crate::PresentedHitIndex = serde_json::from_str(&wire).unwrap();
     let hit = decoded
-        .resolve(crate::PresentedHitQuery::new(presentation, 9.0, 8.0))
+        .resolve(crate::PresentedHitQuery::new(settled_point(
+            presentation,
+            9.0,
+            8.0,
+        )))
         .unwrap()
         .unwrap();
     assert_eq!(hit.text_position().unwrap().buffer_position(), 2);

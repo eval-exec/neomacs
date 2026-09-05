@@ -365,30 +365,40 @@ impl PresentedTextPosition {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PresentedHitQuery {
-    presentation: PresentationId,
-    x: f32,
-    y: f32,
+    point: crate::interaction_projection::PresentationFramePoint,
 }
 
 impl PresentedHitQuery {
+    /// A query about the point `point` names.
+    ///
+    /// There is deliberately no constructor taking raw coordinates. A
+    /// `PresentationFramePoint` can only come from mapping a surface point
+    /// through the transform the frame was drawn with, so a hit test cannot
+    /// silently ask about the wrong pixel while panes are in motion — the case
+    /// that would otherwise select the wrong window mid-`split-window`.
     #[must_use]
-    pub const fn new(presentation: PresentationId, x: f32, y: f32) -> Self {
-        Self { presentation, x, y }
+    pub const fn new(point: crate::interaction_projection::PresentationFramePoint) -> Self {
+        Self { point }
+    }
+
+    #[must_use]
+    pub const fn point(self) -> crate::interaction_projection::PresentationFramePoint {
+        self.point
     }
 
     #[must_use]
     pub const fn presentation(self) -> PresentationId {
-        self.presentation
+        self.point.presentation()
     }
 
     #[must_use]
-    pub const fn x(self) -> f32 {
-        self.x
+    pub fn x(self) -> f32 {
+        self.point.x()
     }
 
     #[must_use]
-    pub const fn y(self) -> f32 {
-        self.y
+    pub fn y(self) -> f32 {
+        self.point.y()
     }
 }
 
@@ -739,10 +749,10 @@ impl PresentedHitIndex {
         &self,
         query: PresentedHitQuery,
     ) -> Result<Option<PresentedUnifiedHit>, PresentedHitError> {
-        if query.presentation != self.presentation {
+        if query.presentation() != self.presentation {
             return Err(PresentedHitError::StalePresentation {
                 expected: self.presentation,
-                requested: query.presentation,
+                requested: query.presentation(),
             });
         }
         let resolved_semantic = self.resolve(query)?;
@@ -753,8 +763,8 @@ impl PresentedHitIndex {
                 find_presented_pointer_candidate(
                     &self.pointer_regions,
                     &self.pointer_buckets,
-                    query.x,
-                    query.y,
+                    query.x(),
+                    query.y(),
                 )
             })
             .flatten();
@@ -769,8 +779,8 @@ impl PresentedHitIndex {
                 .expect("published pointer owner remains in its immutable semantic index");
             Some(PresentedHit {
                 region,
-                text_position: self.resolve_text_position(region, query.x, query.y),
-                string_position: self.resolve_string_position(region, query.x, query.y),
+                text_position: self.resolve_text_position(region, query.x(), query.y()),
+                string_position: self.resolve_string_position(region, query.x(), query.y()),
             })
         } else {
             resolved_semantic
@@ -849,19 +859,19 @@ impl PresentedHitIndex {
         &self,
         query: PresentedHitQuery,
     ) -> Result<Option<PresentedHit>, PresentedHitError> {
-        if query.presentation != self.presentation {
+        if query.presentation() != self.presentation {
             return Err(PresentedHitError::StalePresentation {
                 expected: self.presentation,
-                requested: query.presentation,
+                requested: query.presentation(),
             });
         }
-        if !query.x.is_finite() || !query.y.is_finite() {
-            return Ok(None);
-        }
+        // No non-finite guard: the query's point is a `LogicalPixels` pair, and
+        // `LogicalPixels::new` rejects anything but a finite value, so an
+        // infinite or NaN coordinate cannot reach here to be checked for.
         let resize_handle = best_presented_hit_candidate(
             &self.resize_handle_buckets,
-            query.x,
-            query.y,
+            query.x(),
+            query.y(),
             |index| self.resize_handles[index].bounds,
             std::cmp::Reverse,
         );
@@ -874,8 +884,8 @@ impl PresentedHitIndex {
         }
         let best = best_presented_hit_candidate(
             &self.region_buckets,
-            query.x,
-            query.y,
+            query.x(),
+            query.y(),
             |index| self.regions[index].bounds,
             |index| (self.regions[index].z_order, std::cmp::Reverse(index)),
         );
@@ -883,11 +893,11 @@ impl PresentedHitIndex {
             return Ok(None);
         };
         let region = &self.regions[region_index];
-        let text_position = self.resolve_text_position(*region, query.x, query.y);
+        let text_position = self.resolve_text_position(*region, query.x(), query.y());
         Ok(Some(PresentedHit {
             region: *region,
             text_position,
-            string_position: self.resolve_string_position(*region, query.x, query.y),
+            string_position: self.resolve_string_position(*region, query.x(), query.y()),
         }))
     }
 

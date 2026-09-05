@@ -1,3 +1,24 @@
+/// A surface point in a presentation composed with nothing in motion.
+///
+/// The production path builds the same value by mapping through the projection
+/// the frame was drawn with; a settled projection maps by identity, so these
+/// tests state the point they mean while still going through the real witness.
+fn settled_point(
+    presentation: neomacs_display_protocol::PresentationId,
+    x: f32,
+    y: f32,
+) -> neomacs_display_protocol::PresentationFramePoint {
+    neomacs_display_protocol::InteractionProjection::settled(presentation)
+        .map(
+            neomacs_display_protocol::GeometryPoint::<
+                neomacs_display_protocol::RootSurfaceSpace,
+                neomacs_display_protocol::LogicalPixels,
+            >::from_px(x, y)
+            .expect("a finite surface point"),
+        )
+        .expect("a settled projection maps every finite point")
+}
+
 use super::*;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
@@ -2368,9 +2389,11 @@ fn accepted_presentation_publishes_identical_evaluator_and_renderer_window_regio
         let bounds = bounds.expect("configured semantic region");
         let hit = hit_index
             .resolve(neomacs_display_protocol::PresentedHitQuery::new(
-                protocol_presentation,
-                bounds.x + bounds.width / 2.0,
-                bounds.y + bounds.height / 2.0,
+                settled_point(
+                    protocol_presentation,
+                    bounds.x + bounds.width / 2.0,
+                    bounds.y + bounds.height / 2.0,
+                ),
             ))
             .expect("current presentation")
             .expect("region hit");
@@ -2392,9 +2415,11 @@ fn accepted_presentation_publishes_identical_evaluator_and_renderer_window_regio
         .expect("tab-line glyph retains its displayed string position");
     let tab_hit = hit_index
         .resolve(neomacs_display_protocol::PresentedHitQuery::new(
-            protocol_presentation,
-            tab_string_position.bounds().x() + tab_string_position.bounds().width() / 2.0,
-            tab_string_position.bounds().y() + tab_string_position.bounds().height() / 2.0,
+            settled_point(
+                protocol_presentation,
+                tab_string_position.bounds().x() + tab_string_position.bounds().width() / 2.0,
+                tab_string_position.bounds().y() + tab_string_position.bounds().height() / 2.0,
+            ),
         ))
         .unwrap()
         .unwrap();
@@ -2417,9 +2442,11 @@ fn accepted_presentation_publishes_identical_evaluator_and_renderer_window_regio
     let bounds = text_position.bounds();
     let exact_hit = hit_index
         .resolve(neomacs_display_protocol::PresentedHitQuery::new(
-            protocol_presentation,
-            bounds.x() + bounds.width() / 2.0,
-            bounds.y() + bounds.height() / 2.0,
+            settled_point(
+                protocol_presentation,
+                bounds.x() + bounds.width() / 2.0,
+                bounds.y() + bounds.height() / 2.0,
+            ),
         ))
         .unwrap()
         .unwrap();
@@ -2579,9 +2606,7 @@ fn accepted_presentation_publishes_identical_evaluator_and_renderer_window_regio
     ] {
         let hit = materialized
             .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-                protocol_presentation,
-                x,
-                bounds.y + bounds.height / 2.0,
+                settled_point(protocol_presentation, x, bounds.y + bounds.height / 2.0),
             ))
             .unwrap()
             .unwrap();
@@ -2666,9 +2691,11 @@ fn presentation_spatial_maps_blank_body_rows_to_their_buffer_position() {
     let hit = renderer
         .presented_hit_index
         .resolve(neomacs_display_protocol::PresentedHitQuery::new(
-            renderer.presentation_id,
-            regions.text_body.x + 1.0,
-            regions.text_body.y + body_y as f32 + blank_row.height as f32 / 2.0,
+            settled_point(
+                renderer.presentation_id,
+                regions.text_body.x + 1.0,
+                regions.text_body.y + body_y as f32 + blank_row.height as f32 / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("text-body hit");
@@ -15778,9 +15805,11 @@ fn layout_frame_rust_gui_zero_width_divider_uses_pixel_vertical_border() {
     let border_hit = state
         .materialize()
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            left_bounds.x + left_bounds.width - 1.0,
-            left_bounds.y + left_bounds.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                left_bounds.x + left_bounds.width - 1.0,
+                left_bounds.y + left_bounds.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("vertical border hit")
@@ -15796,9 +15825,11 @@ fn layout_frame_rust_gui_zero_width_divider_uses_pixel_vertical_border() {
         let hit = state
             .materialize()
             .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-                state.presentation_id,
-                x,
-                left_bounds.y + left_bounds.height / 2.0,
+                settled_point(
+                    state.presentation_id,
+                    x,
+                    left_bounds.y + left_bounds.height / 2.0,
+                ),
             ))
             .expect("current presentation")
             .expect("GNU-width resize grab band")
@@ -15813,9 +15844,11 @@ fn layout_frame_rust_gui_zero_width_divider_uses_pixel_vertical_border() {
     let outside_grab_band = state
         .materialize()
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            grab_band_left - 0.01,
-            left_bounds.y + left_bounds.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                grab_band_left - 0.01,
+                left_bounds.y + left_bounds.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("window hit outside resize grab band")
@@ -15903,9 +15936,11 @@ fn layout_frame_rust_zero_width_border_preserves_horizontal_scroll_bar_hit_area(
     let materialized = state.materialize();
     let hit = materialized
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            regions.outer.right() - 1.0,
-            horizontal_scroll_bar.y + horizontal_scroll_bar.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                regions.outer.right() - 1.0,
+                horizontal_scroll_bar.y + horizontal_scroll_bar.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("horizontal scroll bar hit")
@@ -15918,9 +15953,11 @@ fn layout_frame_rust_zero_width_border_preserves_horizontal_scroll_bar_hit_area(
     );
     let mode_line_hit = materialized
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            regions.outer.right() - 1.0,
-            mode_line.y + mode_line.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                regions.outer.right() - 1.0,
+                mode_line.y + mode_line.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("mode-line resize hit")
@@ -15990,9 +16027,11 @@ fn layout_frame_rust_vertical_scroll_bar_keeps_mode_line_border_draggable() {
     let materialized = state.materialize();
     let body_hit = materialized
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            right_scroll_bar.x + right_scroll_bar.width / 2.0,
-            right_scroll_bar.y + right_scroll_bar.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                right_scroll_bar.x + right_scroll_bar.width / 2.0,
+                right_scroll_bar.y + right_scroll_bar.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("vertical scroll bar hit")
@@ -16005,9 +16044,11 @@ fn layout_frame_rust_vertical_scroll_bar_keeps_mode_line_border_draggable() {
     );
     let mode_line_hit = materialized
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            regions.outer.right() - 1.0,
-            mode_line.y + mode_line.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                regions.outer.right() - 1.0,
+                mode_line.y + mode_line.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("mode-line resize hit")
@@ -16092,9 +16133,11 @@ fn layout_frame_rust_left_scroll_bar_uses_leading_edge_resize_handle() {
     let materialized = state.materialize();
     let body_hit = materialized
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            left_scroll_bar.x + left_scroll_bar.width / 2.0,
-            left_scroll_bar.y + left_scroll_bar.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                left_scroll_bar.x + left_scroll_bar.width / 2.0,
+                left_scroll_bar.y + left_scroll_bar.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("left scroll bar hit")
@@ -16106,9 +16149,11 @@ fn layout_frame_rust_left_scroll_bar_uses_leading_edge_resize_handle() {
     );
     let mode_line_hit = materialized
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            regions.outer.x,
-            mode_line.y + mode_line.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                regions.outer.x,
+                mode_line.y + mode_line.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("leading mode-line resize hit")
@@ -16194,9 +16239,11 @@ fn layout_frame_rust_mixed_window_scroll_bars_keep_shared_border_owned() {
     let hit = state
         .materialize()
         .resolve_presented_hit(neomacs_display_protocol::PresentedHitQuery::new(
-            state.presentation_id,
-            regions.outer.right() - 1.0,
-            mode_line.y + mode_line.height / 2.0,
+            settled_point(
+                state.presentation_id,
+                regions.outer.right() - 1.0,
+                mode_line.y + mode_line.height / 2.0,
+            ),
         ))
         .expect("current presentation")
         .expect("shared-border hit")

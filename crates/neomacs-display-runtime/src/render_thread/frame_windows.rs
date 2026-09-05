@@ -447,6 +447,48 @@ impl GuiFrameRenderState {
             .map(|_| self.compositor.pending.theme.is_some())
     }
 
+    /// Where a frame-local surface point lands in the presentation being shown.
+    ///
+    /// The only way to obtain the `PresentationFramePoint` a hit query needs.
+    /// While the frame is settled this is the identity and the answer equals
+    /// the input; while panes are morphing it undoes the transform the layout
+    /// pass drew with, so hit testing and rendering agree by construction
+    /// rather than by two call sites happening to compute the same thing.
+    ///
+    /// Returns `None` only when the point is outside representable geometry.
+    fn inverse_map(
+        &self,
+        frame: &FrameGlyphBuffer,
+        x: f32,
+        y: f32,
+    ) -> Option<neomacs_display_protocol::PresentationFramePoint> {
+        let point = neomacs_display_protocol::GeometryPoint::<
+            neomacs_display_protocol::RootSurfaceSpace,
+            neomacs_display_protocol::LogicalPixels,
+        >::from_px(x, y)
+        .ok()?;
+        self.interaction_projection(frame).map(point)
+    }
+
+    /// The projection for `frame`.
+    ///
+    /// Only the root frame's panes can be in motion: a child frame is composed
+    /// from its own presentation with nothing morphing inside it, so its
+    /// projection is settled.
+    fn interaction_projection(
+        &self,
+        frame: &FrameGlyphBuffer,
+    ) -> std::borrow::Cow<'_, neomacs_display_protocol::InteractionProjection> {
+        match &self.compositor.interaction {
+            Some(projection) if projection.presentation() == frame.presentation_id => {
+                std::borrow::Cow::Borrowed(projection)
+            }
+            _ => std::borrow::Cow::Owned(neomacs_display_protocol::InteractionProjection::settled(
+                frame.presentation_id,
+            )),
+        }
+    }
+
     /// Hit-tests pointer semantics from the immutable buffer currently shown
     /// for `target_frame_id`. Coordinates are local to that target frame.
     pub(super) fn presented_pointer_hit(
@@ -467,9 +509,10 @@ impl GuiFrameRenderState {
         let Some(frame) = frame else {
             return Ok(None);
         };
-        let Some(hit) =
-            frame.resolve_presented_hit(PresentedHitQuery::new(frame.presentation_id, x, y))?
-        else {
+        let Some(point) = self.inverse_map(frame, x, y) else {
+            return Ok(None);
+        };
+        let Some(hit) = frame.resolve_presented_hit(PresentedHitQuery::new(point))? else {
             return Ok(None);
         };
         Ok(Some(PresentedPointerHit::new(
@@ -500,8 +543,17 @@ impl GuiFrameRenderState {
         let Some(frame) = frame else {
             return Ok(None);
         };
+        let Some(point) = self.inverse_map(frame, x, y) else {
+            return Ok(None);
+        };
+        if point.presentation() != presentation {
+            return Err(PresentedHitError::StalePresentation {
+                expected: point.presentation(),
+                requested: presentation,
+            });
+        }
         frame
-            .resolve_presented_hit(PresentedHitQuery::new(presentation, x, y))
+            .resolve_presented_hit(PresentedHitQuery::new(point))
             .map(|hit| hit.and_then(|hit| hit.semantic()))
     }
 
@@ -878,6 +930,12 @@ impl GuiFrameRenderState {
         self.measure_reflow(frame.as_ref(), &reflow_imprints);
         self.compositor.reflow_imprints = reflow_imprints;
         self.compositor.scroll_anchors = scroll_anchors;
+        // The projection belongs to the presentation being installed, so it is
+        // replaced with it. Nothing is in motion yet, so it maps by identity;
+        // the layout pass rebuilds it per composition once panes can morph.
+        self.compositor.interaction = frame.as_ref().map(|frame| {
+            neomacs_display_protocol::InteractionProjection::settled(frame.presentation_id)
+        });
         let before = self.active_pointer_damage();
         let previous_presentation = self
             .compositor
