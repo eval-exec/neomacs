@@ -41,16 +41,59 @@ impl FrameRenderFailure {
 /// outcome into the failure the frame coordinator acts on.
 ///
 /// `emacs_frame_id` is only ever logged; nothing here consults frame state.
+/// Proof that this frame's surface was acquired.
+///
+/// Acquisition is where a frame stops being hypothetical. Everything above it
+/// can still return — a lost, outdated or occluded surface, or a validation
+/// error — and work done above those returns is either thrown away or, worse,
+/// leaves state describing a frame that nobody ever composed.
+///
+/// Three things in the draw order may therefore run only below acquisition:
+/// materializing the frame, sampling the pane layout, and draining the pending
+/// continuity observations. Each of those takes one of these, and this type has
+/// no public constructor and a private field, so [`acquire_current_texture`] is
+/// the only thing that can produce one. Moving such a call above acquisition is
+/// a compile error rather than a comment somebody has to notice.
+///
+/// That distinction is not hypothetical: both a projection published for a
+/// frame that was abandoned, and a settled projection discarded by the
+/// compositor-only path, were shipped bugs whose root cause was this ordering
+/// being enforced by prose.
+#[derive(Debug)]
+pub(in crate::render_thread) struct SurfaceAcquired(());
+
+impl SurfaceAcquired {
+    /// A stand-in for a test that is exercising one phase in isolation.
+    ///
+    /// `#[cfg(test)]`, so production still has exactly one way to obtain the
+    /// proof — acquiring a surface. A test asserting what a phase computes is
+    /// not asserting anything about the draw order, and should not have to
+    /// stand up a GPU surface to say so.
+    #[cfg(test)]
+    pub(in crate::render_thread) const fn for_test() -> Self {
+        Self(())
+    }
+}
+
+/// A frame's surface, and the proof that acquiring it succeeded.
+pub(in crate::render_thread) struct AcquiredSurface {
+    pub(in crate::render_thread) output: wgpu::SurfaceTexture,
+    pub(in crate::render_thread) acquired: SurfaceAcquired,
+}
+
 pub(super) fn acquire_current_texture(
     surface: &wgpu::Surface<'static>,
     device_lost: &mut DeviceLossDetector,
     emacs_frame_id: u64,
-) -> Result<wgpu::SurfaceTexture, FrameRenderFailure> {
+) -> Result<AcquiredSurface, FrameRenderFailure> {
     match surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(output)
         | wgpu::CurrentSurfaceTexture::Suboptimal(output) => {
             device_lost.record_surface_acquired();
-            Ok(output)
+            Ok(AcquiredSurface {
+                output,
+                acquired: SurfaceAcquired(()),
+            })
         }
         wgpu::CurrentSurfaceTexture::Lost => {
             // A one-off Lost is a swapchain hiccup; an unbroken

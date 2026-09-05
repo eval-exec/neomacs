@@ -20,7 +20,7 @@ mod input;
 mod lifecycle;
 mod media;
 mod pointer_events;
-mod render_pass;
+pub(in crate::render_thread) mod render_pass;
 mod render_quality;
 mod state;
 mod surface_readback;
