@@ -53,12 +53,31 @@ fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect::new(x, y, w, h)
 }
 
-/// The placement of `window` in `sample`.
+/// The placement of a window that is leaving, which reads the previous picture.
+fn departing(sample: &LayoutSample, id: i64) -> PanePlacement {
+    *sample
+        .panes
+        .iter()
+        .find(|placement| {
+            placement.window == live(id)
+                && placement.source == neomacs_renderer_wgpu::PaneSource::Previous
+        })
+        .expect("the window was placed as departing")
+}
+
+/// The destination-sourced placement of `window` in `sample`.
+///
+/// A resizing pane also contributes a fading ghost of its old wrapping; that
+/// one is a picture on its way out rather than "where the pane is", so it is
+/// `all_placed` that sees it.
 fn placed(sample: &LayoutSample, id: i64) -> PanePlacement {
     *sample
         .panes
         .iter()
-        .find(|placement| placement.window == live(id))
+        .find(|placement| {
+            placement.window == live(id)
+                && placement.source == neomacs_renderer_wgpu::PaneSource::Destination
+        })
         .expect("the window was placed")
 }
 
@@ -353,13 +372,15 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
 
     // Mid-motion: two placements, and a projection that is not the identity.
     let blits = render.sample_pane_layout(frame_at(origin, 50)).blits;
-    assert_eq!(blits.len(), 2);
+    // Three, not two: window 1 narrows from 800 to 400, so its old wrapping is
+    // crossfaded out alongside the two destination panes.
+    assert_eq!(blits.len(), 3);
     assert!(render.compositor.pane_morph.is_some(), "still travelling");
 
     // The last frame still draws the panes — at their destination — and only
     // then is the morph dropped, so nothing is left to re-arm on the next pass.
     let blits = render.sample_pane_layout(frame_at(origin, 100)).blits;
-    assert_eq!(blits.len(), 2);
+    assert_eq!(blits.len(), 3);
     assert!(render.compositor.pane_morph.is_none(), "settled");
 
     assert!(
@@ -620,7 +641,7 @@ fn a_leaving_pane_reads_the_previous_composition_because_the_new_one_has_none_of
     ];
     let after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    let leaving = placed(&morph.sample(frame_at(origin, 50)), 2);
+    let leaving = departing(&morph.sample(frame_at(origin, 50)), 2);
     assert_eq!(leaving.source, neomacs_renderer_wgpu::PaneSource::Previous);
     assert_eq!(
         leaving.bounds,
@@ -652,8 +673,8 @@ fn a_leaving_pane_fades_out_and_an_entering_one_fades_in() {
     let delete_after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let leaving = PaneLayoutMorph::try_new(&split_after, &delete_after, linear_100ms(), origin)
         .expect("a morph");
-    let early = placed(&leaving.sample(frame_at(origin, 10)), 2).opacity;
-    let late = placed(&leaving.sample(frame_at(origin, 90)), 2).opacity;
+    let early = departing(&leaving.sample(frame_at(origin, 10)), 2).opacity;
+    let late = departing(&leaving.sample(frame_at(origin, 90)), 2).opacity;
     assert!(
         early > late,
         "a leaving pane fades out: {early} then {late}"
@@ -673,4 +694,100 @@ fn a_persisted_pane_is_always_fully_opaque_and_reads_the_destination() {
         assert_eq!(pane.opacity, 1.0);
         assert_eq!(pane.source, neomacs_renderer_wgpu::PaneSource::Destination);
     }
+}
+
+// =======================================================================
+// Reflow: a pane whose width changed
+// =======================================================================
+
+/// Every placement for `id`, in draw order.
+fn all_placed(sample: &LayoutSample, id: i64) -> Vec<PanePlacement> {
+    sample
+        .panes
+        .iter()
+        .filter(|placement| placement.window == live(id))
+        .copied()
+        .collect()
+}
+
+#[test]
+fn a_pane_whose_width_changed_shows_its_old_wrapping_while_it_is_still_the_old_shape() {
+    // The destination picture holds the NEW line breaks. Drawing only that
+    // means the text rewraps on the very first frame while the geometry spends
+    // the whole motion catching up — the pane is 800px wide showing text
+    // wrapped for 400.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+
+    let placements = all_placed(&morph.sample(frame_at(origin, 50)), 1);
+    assert_eq!(placements.len(), 2, "the old wrapping and the new one");
+    assert_eq!(
+        placements[0].source,
+        neomacs_renderer_wgpu::PaneSource::Previous,
+        "the outgoing wrapping is drawn first, under the destination"
+    );
+    assert_eq!(
+        placements[1].source,
+        neomacs_renderer_wgpu::PaneSource::Destination
+    );
+    assert!(
+        placements[0].opacity < 1.0 && placements[0].opacity > 0.0,
+        "mid-crossfade"
+    );
+}
+
+#[test]
+fn a_pane_that_only_moved_does_not_crossfade_anything() {
+    // Its text did not rewrap, so the destination picture is correct for it at
+    // every instant. Crossfading would cost a texture and soften the glyphs for
+    // the duration, to show two pictures that are the same.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
+    let after = [window(1, rect(400.0, 0.0, 400.0, 600.0))];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let placements = all_placed(&morph.sample(frame_at(origin, 50)), 1);
+    assert_eq!(placements.len(), 1);
+    assert_eq!(
+        placements[0].source,
+        neomacs_renderer_wgpu::PaneSource::Destination
+    );
+    assert_eq!(placements[0].opacity, 1.0);
+}
+
+#[test]
+fn the_outgoing_wrapping_is_anchored_where_the_reader_last_saw_it() {
+    // Anchoring it at the destination origin instead would slide the old text
+    // sideways as it faded, so the reader would watch their lines move twice.
+    let origin = origin();
+    let before = [window(1, rect(100.0, 0.0, 700.0, 600.0))];
+    let after = [window(1, rect(400.0, 0.0, 400.0, 600.0))];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    for ms in [0, 50, 100] {
+        let ghost = all_placed(&morph.sample(frame_at(origin, ms)), 1)[0];
+        assert_eq!(
+            ghost.content_origin,
+            (100.0, 0.0),
+            "the old picture is sampled where it was, at every instant"
+        );
+    }
+}
+
+#[test]
+fn a_reflow_ghost_never_answers_a_hit_test() {
+    // It shows the PREVIOUS presentation's wrapping, so a point inside it does
+    // not name a position in the destination at all. Including it would let a
+    // click resolve against text on its way off screen.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let sample = morph.sample(frame_at(origin, 50));
+    let projection = sample.projection(neomacs_display_protocol::PresentationId::new(3));
+    assert_eq!(
+        projection.panes().len(),
+        1,
+        "one pane, one transform — the ghost is not a place you can click"
+    );
 }
