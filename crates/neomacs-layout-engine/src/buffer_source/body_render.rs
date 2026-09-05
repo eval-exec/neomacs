@@ -3,8 +3,8 @@
 use crate::buffer_source::face_resolution::*;
 use crate::buffer_source::loop_context::BufferSourceLoopRequestContext;
 use crate::buffer_source::loop_state::{
-    BufferSourceHitCaptureState, BufferSourceLoopMutableState, BufferSourceRowBuildState,
-    BufferSourceRowCarryoverState, BufferSourceSurfaceContext,
+    BufferSourceLoopMutableState, BufferSourceRowBuildState, BufferSourceRowCarryoverState,
+    BufferSourceSurfaceContext,
 };
 use crate::buffer_source::render_attempt::{
     BufferSourceOutputState, BufferSourceRedisplayPublishRequest,
@@ -32,7 +32,7 @@ use crate::display_row::metrics::DisplayRowFallbackMetrics;
 use crate::display_row::overlay_string::BufferOverlayStringTextRowRenderContext;
 use crate::display_row::source_render::TextRowSourceRenderState;
 use crate::display_row::walk_state::{
-    BoxFaceRowState, FaceScanCheckpoint, HitRowRangeTracker, HorizontalScrollSkipState,
+    BoxFaceRowState, DisplayRowSourceStart, FaceScanCheckpoint, HorizontalScrollSkipState,
     HorizontalScrollTruncationTarget, InvisibleTextScanCheckpoint, LineNumberRenderState,
     TrailingWhitespaceRenderState, WordWrapRenderState,
 };
@@ -43,7 +43,6 @@ use crate::display_text_window_row_lifecycle::{
 };
 use crate::font::metrics::FontMetricsService;
 use crate::frame_face_arena::FrameFaceAttempt;
-use crate::hit_test::HitRow;
 use crate::neovm_bridge::{FaceResolver, LayoutBufferView, RustBufferAccess};
 use crate::types::{LineWrapMode, WindowParams};
 use crate::window_output::{
@@ -102,8 +101,7 @@ pub(crate) struct BufferSourceWalkSetup {
     pub(crate) row_extend: DisplayRowExtendState,
     pub(crate) box_face: BoxFaceRowState,
     pub(crate) cursor_info: CursorCaptureState,
-    pub(crate) hit_rows: Vec<HitRow>,
-    pub(crate) hit_row_range: HitRowRangeTracker,
+    pub(crate) row_source_start: DisplayRowSourceStart,
     pub(crate) beyond_accessible_end_line_prefix:
         Option<crate::buffer_source::end_of_buffer_rows::BeyondAccessibleEndLinePrefix>,
 }
@@ -319,8 +317,7 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
             row_extend: DisplayRowExtendState::inactive(),
             box_face: BoxFaceRowState::inactive(),
             cursor_info: CursorCaptureState::new(),
-            hit_rows: Vec::new(),
-            hit_row_range: HitRowRangeTracker::new(self.window_start),
+            row_source_start: DisplayRowSourceStart::new(self.window_start),
             beyond_accessible_end_line_prefix: None,
         }
     }
@@ -363,7 +360,7 @@ impl BufferSourceWalkSetup {
                 &mut self.row_extend,
                 &mut self.box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut self.hit_rows, &mut self.hit_row_range),
+            &mut self.row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut self.prefix_request,
                 state.line_numbers,
@@ -411,8 +408,7 @@ impl BufferSourceWalkSetup {
             DisplaySourceRowProgressState::new(&mut self.x, &mut self.col),
             &mut self.row_geometry,
             &mut self.cursor_info,
-            &mut self.hit_rows,
-            &mut self.hit_row_range,
+            &mut self.row_source_start,
             &mut self.row_y_positions,
             face_ids,
             line_numbers,

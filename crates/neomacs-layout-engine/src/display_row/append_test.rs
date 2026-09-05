@@ -17,8 +17,8 @@ use crate::buffer_source::face_resolution::*;
 use crate::buffer_source::item_append::*;
 use crate::buffer_source::loop_context::*;
 use crate::buffer_source::loop_state::{
-    BufferSourceHitCaptureState, BufferSourceLoopMutableState, BufferSourceRowBuildState,
-    BufferSourceRowCarryoverState, BufferSourceSurfaceContext,
+    BufferSourceLoopMutableState, BufferSourceRowBuildState, BufferSourceRowCarryoverState,
+    BufferSourceSurfaceContext,
 };
 use crate::buffer_source::overflow::*;
 use crate::buffer_source::producer::frame::ReplacementCoveredSpan;
@@ -53,8 +53,8 @@ use crate::display_row::builder::{
 use crate::display_row::face_state::{DisplayRowExtendFace, DisplayRowMeasurementMode};
 use crate::display_row::geometry::{
     DisplayRowBoundaryTarget, DisplayRowFlagKind, DisplayRowFlags, DisplayRowGeometryDefaults,
-    DisplayRowGeometryState, DisplayRowHitRange, DisplayRowLimit, DisplayRowMaxX,
-    DisplayRowScopedValue, DisplayRowStartMarker, DisplayRowVisibilityLimit, DisplayRowYPositions,
+    DisplayRowGeometryState, DisplayRowLimit, DisplayRowMaxX, DisplayRowScopedValue,
+    DisplayRowStartMarker, DisplayRowVisibilityLimit, DisplayRowYPositions,
 };
 use crate::display_row::line_number_prefix::BufferLineNumberTextPrefixRenderRequest;
 use crate::display_row::lisp_string::{
@@ -74,7 +74,7 @@ use crate::display_row::source_render::{
 };
 use crate::display_row::transition::*;
 use crate::display_row::walk_state::{
-    BoxFaceRowState, DisplayRowTextOverflowDecision, FaceScanCheckpoint, HitRowRangeTracker,
+    BoxFaceRowState, DisplayRowSourceStart, DisplayRowTextOverflowDecision, FaceScanCheckpoint,
     HorizontalScrollDisplayItem, HorizontalScrollSkipState, HorizontalScrollTruncationTarget,
     HorizontalScrollVisibleRemainder, HscrollConsumedTextDisposition, InvisibleTextScanCheckpoint,
     LineNumberRenderState, TrailingWhitespaceRenderState, WordWrapBreakCandidate,
@@ -277,7 +277,6 @@ struct RowTransitionTestContext {
     defaults: DisplayRowGeometryDefaults,
     geometry: DisplayRowGeometryState,
     row_y_positions: DisplayRowYPositions,
-    hit_rows: Vec<crate::hit_test::HitRow>,
     row_flags: DisplayRowFlags,
     row_limit: DisplayRowLimit,
 }
@@ -322,7 +321,6 @@ impl RowTransitionTestContext {
             defaults,
             geometry,
             row_y_positions: DisplayRowYPositions::with_capacity_and_first_row(max_rows, 0.0),
-            hit_rows: Vec::new(),
             row_flags: DisplayRowFlags::new(max_rows),
             row_limit: DisplayRowLimit { max_rows },
         }
@@ -745,16 +743,15 @@ fn buffer_current_face_resolution_context_resolves_due_face() {
     assert_eq!(row_geometry.height(), 16.0);
 }
 
+/// If this claim is false a visual wrap leaves the walk on the row it just
+/// closed, and the continuation text is appended back onto the full row.
 #[test]
-fn display_row_boundary_transition_request_records_hit_and_emits_next_row() {
+fn a_boundary_transition_request_finishes_the_row_and_emits_the_next_one() {
     let mut ctx = RowTransitionTestContext::new("boundary-transition-request");
 
     let transition = DisplayRowBoundaryTransitionRequest::new(
         DisplayRowBoundaryTarget::visual_wrap(
-            DisplayRowHitRange {
-                charpos_start: 3,
-                charpos_end: 9,
-            },
+            LayoutCharPos0::new(9),
             ctx.defaults,
             0,
             6,
@@ -765,27 +762,22 @@ fn display_row_boundary_transition_request_records_hit_and_emits_next_row() {
     )
     .emit_with_output(
         &mut ctx.geometry,
-        &mut ctx.hit_rows,
         text_row_output_render_state(&mut ctx.builder, &mut ctx.output_emitter, &mut ctx.eval),
     );
 
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(ctx.geometry.row(), 1);
-    assert_eq!(ctx.hit_rows.len(), 1);
-    assert_eq!(ctx.hit_rows[0].charpos_start, 3);
-    assert_eq!(ctx.hit_rows[0].charpos_end, 9);
     assert_eq!(ctx.row_y_positions.recorded(), &[0.0, 16.0]);
 }
 
+/// If this claim is false `line-spacing` stops separating rows: the next row
+/// opens at the previous row's bottom edge instead of below the gap.
 #[test]
-fn display_row_line_break_transition_request_records_hit_spacing_and_emits_next_row() {
+fn a_line_break_transition_request_adds_line_spacing_and_emits_the_next_row() {
     let mut ctx = RowTransitionTestContext::new("line-break-transition-request");
 
     let transition = DisplayRowLineBreakTransitionRequest::new(
-        DisplayRowHitRange {
-            charpos_start: 3,
-            charpos_end: 9,
-        },
+        LayoutCharPos0::new(9),
         ctx.defaults,
         0,
         6,
@@ -796,15 +788,11 @@ fn display_row_line_break_transition_request_records_hit_spacing_and_emits_next_
     )
     .emit_with_output(
         &mut ctx.geometry,
-        &mut ctx.hit_rows,
         text_row_output_render_state(&mut ctx.builder, &mut ctx.output_emitter, &mut ctx.eval),
     );
 
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(ctx.geometry.row(), 1);
-    assert_eq!(ctx.hit_rows.len(), 1);
-    assert_eq!(ctx.hit_rows[0].charpos_start, 3);
-    assert_eq!(ctx.hit_rows[0].charpos_end, 9);
     assert_eq!(ctx.row_y_positions.recorded(), &[0.0, 20.0]);
 }
 
@@ -820,16 +808,12 @@ fn display_row_transition_request_context_builds_line_break_and_overflow_request
     )
     .line_break(
         DisplayRowLineBreakTransitionPlan::line_break(),
-        DisplayRowHitRange {
-            charpos_start: 3,
-            charpos_end: 9,
-        },
+        LayoutCharPos0::new(9),
         DisplayRowPosition::new(48.0, 6),
         4.0,
     )
     .emit_with_output(
         &mut line_ctx.geometry,
-        &mut line_ctx.hit_rows,
         text_row_output_render_state(
             &mut line_ctx.builder,
             &mut line_ctx.output_emitter,
@@ -839,9 +823,6 @@ fn display_row_transition_request_context_builds_line_break_and_overflow_request
 
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(line_ctx.geometry.row(), 1);
-    assert_eq!(line_ctx.hit_rows.len(), 1);
-    assert_eq!(line_ctx.hit_rows[0].charpos_start, 3);
-    assert_eq!(line_ctx.hit_rows[0].charpos_end, 9);
     assert_eq!(line_ctx.row_y_positions.recorded(), &[0.0, 20.0]);
 
     let mut wrap_ctx = RowTransitionTestContext::new("transition-context-overflow");
@@ -861,17 +842,13 @@ fn display_row_transition_request_context_builds_line_break_and_overflow_request
     )
     .overflow(
         transition,
-        DisplayRowHitRange {
-            charpos_start: 4,
-            charpos_end: 10,
-        },
+        LayoutCharPos0::new(10),
         DisplayRowPosition::new(56.0, 7),
     )
     .emit_with_output(
         &mut wrap_ctx.geometry,
         &mut wrap_ctx.row_flags,
         wrap_ctx.row_limit,
-        &mut wrap_ctx.hit_rows,
         text_row_output_render_state(
             &mut wrap_ctx.builder,
             &mut wrap_ctx.output_emitter,
@@ -881,9 +858,6 @@ fn display_row_transition_request_context_builds_line_break_and_overflow_request
 
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(wrap_ctx.geometry.row(), 1);
-    assert_eq!(wrap_ctx.hit_rows.len(), 1);
-    assert_eq!(wrap_ctx.hit_rows[0].charpos_start, 4);
-    assert_eq!(wrap_ctx.hit_rows[0].charpos_end, 10);
     assert!(wrap_ctx.row_flags.is_set(0, DisplayRowFlagKind::Continued));
     assert!(
         wrap_ctx
@@ -906,7 +880,6 @@ fn display_row_text_window_transition_context_emits_line_break_and_overflow() {
         &mut line_ctx.geometry,
         &mut line_ctx.row_flags,
         row_limit,
-        &mut line_ctx.hit_rows,
         text_row_output_render_state(
             &mut line_ctx.builder,
             &mut line_ctx.output_emitter,
@@ -915,19 +888,13 @@ fn display_row_text_window_transition_context_emits_line_break_and_overflow() {
     )
     .emit_line_break(
         DisplayRowLineBreakTransitionPlan::line_break(),
-        DisplayRowHitRange {
-            charpos_start: 1,
-            charpos_end: 5,
-        },
+        LayoutCharPos0::new(5),
         DisplayRowPosition::new(32.0, 4),
         2.0,
     );
 
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(line_ctx.geometry.row(), 1);
-    assert_eq!(line_ctx.hit_rows.len(), 1);
-    assert_eq!(line_ctx.hit_rows[0].charpos_start, 1);
-    assert_eq!(line_ctx.hit_rows[0].charpos_end, 5);
     assert_eq!(line_ctx.row_y_positions.recorded(), &[0.0, 18.0]);
 
     let mut overflow_ctx = RowTransitionTestContext::new("text-window-transition-overflow");
@@ -948,7 +915,6 @@ fn display_row_text_window_transition_context_emits_line_break_and_overflow() {
         &mut overflow_ctx.geometry,
         &mut overflow_ctx.row_flags,
         row_limit,
-        &mut overflow_ctx.hit_rows,
         text_row_output_render_state(
             &mut overflow_ctx.builder,
             &mut overflow_ctx.output_emitter,
@@ -957,18 +923,12 @@ fn display_row_text_window_transition_context_emits_line_break_and_overflow() {
     )
     .emit_overflow(
         transition,
-        DisplayRowHitRange {
-            charpos_start: 2,
-            charpos_end: 8,
-        },
+        LayoutCharPos0::new(8),
         DisplayRowPosition::new(64.0, 8),
     );
 
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(overflow_ctx.geometry.row(), 1);
-    assert_eq!(overflow_ctx.hit_rows.len(), 1);
-    assert_eq!(overflow_ctx.hit_rows[0].charpos_start, 2);
-    assert_eq!(overflow_ctx.hit_rows[0].charpos_end, 8);
     assert!(
         overflow_ctx
             .row_flags
@@ -1008,15 +968,11 @@ fn display_row_text_window_emit_context_applies_line_break_render_state_after_tr
         &mut ctx.geometry,
         &mut ctx.row_flags,
         row_limit,
-        &mut ctx.hit_rows,
         text_row_output_render_state(&mut ctx.builder, &mut ctx.output_emitter, &mut ctx.eval),
     )
     .emit_line_break_then_row_start(
         DisplayRowLineBreakTransitionPlan::hidden_line_break(),
-        DisplayRowHitRange {
-            charpos_start: 1,
-            charpos_end: 5,
-        },
+        LayoutCharPos0::new(5),
         DisplayRowPosition::new(32.0, col),
         2.0,
         DisplayRowTransitionRenderState::new(
@@ -1073,15 +1029,11 @@ fn display_row_text_window_emit_context_applies_overflow_render_state_after_tran
         &mut ctx.geometry,
         &mut ctx.row_flags,
         row_limit,
-        &mut ctx.hit_rows,
         text_row_output_render_state(&mut ctx.builder, &mut ctx.output_emitter, &mut ctx.eval),
     )
     .emit_overflow_then_row_start(
         transition,
-        DisplayRowHitRange {
-            charpos_start: 2,
-            charpos_end: 8,
-        },
+        LayoutCharPos0::new(8),
         DisplayRowPosition::new(64.0, col),
         DisplayRowTransitionRenderState::new(
             &mut prefix_request,
@@ -1294,7 +1246,7 @@ fn buffer_hscroll_skip_render_request_appends_left_truncation_marker() {
     let mut invisible_text_checkpoint = InvisibleTextScanCheckpoint::new(charpos);
     let mut box_face = BoxFaceRowState::inactive();
     let mut face_scan = FaceScanCheckpoint::initial();
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
@@ -1349,7 +1301,7 @@ fn buffer_hscroll_skip_render_request_appends_left_truncation_marker() {
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -1410,14 +1362,13 @@ fn buffer_hscroll_skip_action_applies_line_break_transition_state() {
     assert_eq!(x, 4.0);
     assert_eq!(row_extend.value_on(&geometry), None);
 
-    let mut hit_row_range = HitRowRangeTracker::new(7);
-    let hit_range = action
-        .line_break_hit_range(&mut hit_row_range)
-        .expect("line break hit range");
+    let mut row_source_start = DisplayRowSourceStart::new(7);
+    let next_row_start = action
+        .line_break_next_row_start(&mut row_source_start)
+        .expect("line break next row start");
 
-    assert_eq!(hit_range.charpos_start, 7);
-    assert_eq!(hit_range.charpos_end, 12);
-    assert_eq!(hit_row_range.start(), 12);
+    assert_eq!(next_row_start, LayoutCharPos0::new(12));
+    assert_eq!(row_source_start.start(), 12);
 }
 
 #[test]
@@ -1963,7 +1914,7 @@ fn buffer_invisible_text_render_request_appends_ellipsis_and_captures_cursor() {
     let mut x = 0.0;
     let mut col = 0;
     let mut cursor_info = CursorCaptureState::new();
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     let mut row_extend = DisplayRowScopedValue::inactive();
     let mut box_face = BoxFaceRowState::inactive();
@@ -2008,7 +1959,7 @@ fn buffer_invisible_text_render_request_appends_ellipsis_and_captures_cursor() {
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -2834,19 +2785,19 @@ fn buffer_text_line_break_source_action_applies_row_transition_state() {
 }
 
 #[test]
-fn sync_position_after_row_transition_advances_charpos_and_hit_range() {
+fn sync_position_after_row_transition_advances_charpos_and_row_source_start() {
     // Shared by the line-break, hidden-line-break, and truncation-skip actions.
     let mut position = DisplaySourceTextPosition::new(2, 9);
-    let mut hit_row_range = HitRowRangeTracker::new(3);
+    let mut row_source_start = DisplayRowSourceStart::new(3);
 
     crate::display_row::walk_state::sync_position_after_row_transition(
         14,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
     );
 
     assert_eq!(position, DisplaySourceTextPosition::new(2, 14));
-    assert_eq!(hit_row_range.start(), 14);
+    assert_eq!(row_source_start.start(), 14);
 }
 
 #[test]
@@ -2864,13 +2815,13 @@ fn buffer_text_line_break_source_action_applies_after_transition() {
     let mut box_face = BoxFaceRowState::inactive();
     box_face.activate(geometry.current_row_marker(), 8.0);
     let mut position = DisplaySourceTextPosition::new(2, 9);
-    let mut hit_row_range = HitRowRangeTracker::new(3);
+    let mut row_source_start = DisplayRowSourceStart::new(3);
 
     let continuation = action.apply_after_line_break_row_transition(
         DisplayTextRowTransition::BeganNextRow,
         14,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
         &geometry,
         &mut row_extend,
         &active_face,
@@ -2880,7 +2831,7 @@ fn buffer_text_line_break_source_action_applies_after_transition() {
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Continue);
     assert_eq!(position, DisplaySourceTextPosition::new(2, 14));
-    assert_eq!(hit_row_range.start(), 14);
+    assert_eq!(row_source_start.start(), 14);
     assert_eq!(
         row_extend.value_on(&geometry).copied(),
         active_face.row_extend_fill()
@@ -2903,13 +2854,13 @@ fn buffer_text_line_break_source_action_skips_after_state_when_transition_exhaus
     let mut row_extend = DisplayRowScopedValue::inactive();
     let mut box_face = BoxFaceRowState::inactive();
     let mut position = DisplaySourceTextPosition::new(2, 9);
-    let mut hit_row_range = HitRowRangeTracker::new(3);
+    let mut row_source_start = DisplayRowSourceStart::new(3);
 
     let continuation = action.apply_after_line_break_row_transition(
         DisplayTextRowTransition::ExhaustedRows,
         14,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
         &geometry,
         &mut row_extend,
         &active_face,
@@ -2919,7 +2870,7 @@ fn buffer_text_line_break_source_action_skips_after_state_when_transition_exhaus
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Exhausted);
     assert_eq!(position, DisplaySourceTextPosition::new(2, 9));
-    assert_eq!(hit_row_range.start(), 3);
+    assert_eq!(row_source_start.start(), 3);
     assert_eq!(row_extend.value_on(&geometry), None);
     assert_eq!(box_face.start_x(), None);
 }
@@ -2963,7 +2914,7 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
         HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph,
     );
     let mut word_wrap = WordWrapRenderState::new(false);
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut invisible_text_checkpoint = InvisibleTextScanCheckpoint::new(charpos);
     let mut face_scan = FaceScanCheckpoint::initial();
     let row_limit = context.row_limit;
@@ -3028,7 +2979,7 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -3049,7 +3000,7 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
     assert_eq!(charpos, 1);
     assert_eq!(x, 0.0);
     assert_eq!(col, 0);
-    assert_eq!(hit_row_range.start(), 1);
+    assert_eq!(row_source_start.start(), 1);
     assert_eq!(context.row_y_positions.recorded(), &[0.0, 16.0]);
     assert_eq!(
         trailing_whitespace.highlight_start_x(&context.geometry),
@@ -3065,36 +3016,36 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
 fn buffer_selective_display_line_tail_action_applies_after_hidden_line_break_transition() {
     let action = BufferSourceSelectiveDisplayLineTailAction::LineBreak { charpos: 12 };
     let mut position = DisplaySourceTextPosition::new(2, 9);
-    let mut hit_row_range = HitRowRangeTracker::new(3);
+    let mut row_source_start = DisplayRowSourceStart::new(3);
 
     let continuation = action.apply_after_hidden_line_break_transition(
         DisplayTextRowTransition::BeganNextRow,
         14,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
     );
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Continue);
     assert_eq!(position, DisplaySourceTextPosition::new(2, 14));
-    assert_eq!(hit_row_range.start(), 14);
+    assert_eq!(row_source_start.start(), 14);
 }
 
 #[test]
 fn buffer_selective_display_line_tail_action_skips_after_state_when_transition_exhausted() {
     let action = BufferSourceSelectiveDisplayLineTailAction::LineBreak { charpos: 12 };
     let mut position = DisplaySourceTextPosition::new(2, 9);
-    let mut hit_row_range = HitRowRangeTracker::new(3);
+    let mut row_source_start = DisplayRowSourceStart::new(3);
 
     let continuation = action.apply_after_hidden_line_break_transition(
         DisplayTextRowTransition::ExhaustedRows,
         14,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
     );
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Exhausted);
     assert_eq!(position, DisplaySourceTextPosition::new(2, 9));
-    assert_eq!(hit_row_range.start(), 3);
+    assert_eq!(row_source_start.start(), 3);
 }
 
 #[test]
@@ -3131,7 +3082,7 @@ fn buffer_selective_display_tail_render_request_appends_marker_and_transitions_r
     let mut box_face = BoxFaceRowState::inactive();
     let mut x = 0.0;
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
-    let mut hit_row_range = HitRowRangeTracker::new(1);
+    let mut row_source_start = DisplayRowSourceStart::new(1);
     let mut prefix_request = DisplayRowPrefixRequest::None;
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Wrap,
@@ -3194,7 +3145,7 @@ fn buffer_selective_display_tail_render_request_appends_marker_and_transitions_r
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -3216,13 +3167,10 @@ fn buffer_selective_display_tail_render_request_appends_marker_and_transitions_r
     );
     assert_eq!(byte_idx, 4);
     assert_eq!(charpos, 4);
-    assert_eq!(hit_row_range.start(), 4);
+    assert_eq!(row_source_start.start(), 4);
     assert_eq!(context.geometry.row(), 1);
     assert_eq!(x, 0.0);
     assert_eq!(col, 0);
-    assert_eq!(context.hit_rows.len(), 1);
-    assert_eq!(context.hit_rows[0].charpos_start, 1);
-    assert_eq!(context.hit_rows[0].charpos_end, 4);
 }
 
 #[test]
@@ -3332,18 +3280,18 @@ fn buffer_text_truncation_skip_action_syncs_after_visible_transition() {
         source_position: DisplaySourceTextPosition::new(0, 12),
     };
     let mut position = DisplaySourceTextPosition::new(2, 9);
-    let mut hit_row_range = HitRowRangeTracker::new(2);
+    let mut row_source_start = DisplayRowSourceStart::new(2);
 
     let continuation = action.sync_after_row_transition_if_visible(
         DisplayTextRowTransition::BeganNextRow,
         14,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
     );
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Continue);
     assert_eq!(position, DisplaySourceTextPosition::new(2, 14));
-    assert_eq!(hit_row_range.start(), 14);
+    assert_eq!(row_source_start.start(), 14);
 }
 
 #[test]
@@ -3354,18 +3302,18 @@ fn buffer_text_truncation_skip_action_skips_sync_when_transition_exhausted() {
         source_position: DisplaySourceTextPosition::new(0, 12),
     };
     let mut position = DisplaySourceTextPosition::new(2, 9);
-    let mut hit_row_range = HitRowRangeTracker::new(2);
+    let mut row_source_start = DisplayRowSourceStart::new(2);
 
     let continuation = action.sync_after_row_transition_if_visible(
         DisplayTextRowTransition::ExhaustedRows,
         14,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
     );
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Exhausted);
     assert_eq!(position, DisplaySourceTextPosition::new(2, 9));
-    assert_eq!(hit_row_range.start(), 2);
+    assert_eq!(row_source_start.start(), 2);
 }
 
 #[test]
@@ -3459,7 +3407,7 @@ fn buffer_text_word_wrap_source_action_applies_transition_state() {
     assert_eq!(x, 2.0);
     assert_eq!(row_extend.value_on(&geometry), None);
 
-    let mut hit_row_range = HitRowRangeTracker::new(4);
+    let mut row_source_start = DisplayRowSourceStart::new(4);
     let mut face_scan = FaceScanCheckpoint::initial();
     *face_scan.next_check_mut() = 99;
     let mut final_position = DisplaySourceTextPosition::new(20, 30);
@@ -3494,7 +3442,7 @@ fn buffer_text_word_wrap_source_action_applies_transition_state() {
         DisplayTextRowTransition::BeganNextRow,
         transition,
         &mut final_position,
-        &mut hit_row_range,
+        &mut row_source_start,
         &mut face_scan,
         &geometry,
         DisplayRowVisibilityLimit {
@@ -3513,7 +3461,7 @@ fn buffer_text_word_wrap_source_action_applies_transition_state() {
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Continue);
     assert_eq!(final_position, DisplaySourceTextPosition::new(7, 12));
-    assert_eq!(hit_row_range.start(), 12);
+    assert_eq!(row_source_start.start(), 12);
     assert!(face_scan.should_resolve_at(0));
     assert_eq!(prefix_request, DisplayRowPrefixRequest::Wrap);
     assert!(!wrap_state.has_candidate());
@@ -3634,12 +3582,11 @@ fn buffer_text_special_wrap_source_action_applies_transition_state() {
     assert_eq!(x, 3.0);
     assert_eq!(row_extend.value_on(&geometry), None);
 
-    let mut hit_row_range = HitRowRangeTracker::new(6);
-    let hit_range = action.hit_range_and_advance(&mut hit_row_range);
+    let mut row_source_start = DisplayRowSourceStart::new(6);
+    let next_row_start = action.next_row_start_and_advance(&mut row_source_start);
 
-    assert_eq!(hit_range.charpos_start, 6);
-    assert_eq!(hit_range.charpos_end, 21);
-    assert_eq!(hit_row_range.start(), 21);
+    assert_eq!(next_row_start, LayoutCharPos0::new(21));
+    assert_eq!(row_source_start.start(), 21);
     assert_eq!(
         action.transition_continuation(
             DisplayTextRowTransition::BeganNextRow,
@@ -3697,7 +3644,7 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
     );
     let mut x = 80.0;
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
-    let mut hit_row_range = HitRowRangeTracker::new(6);
+    let mut row_source_start = DisplayRowSourceStart::new(6);
     let mut prefix_request = DisplayRowPrefixRequest::None;
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Wrap,
@@ -3765,7 +3712,7 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -3789,7 +3736,7 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
     );
     assert_eq!(byte_idx, 0);
     assert_eq!(charpos, 21);
-    assert_eq!(hit_row_range.start(), 21);
+    assert_eq!(row_source_start.start(), 21);
     assert_eq!(x, 0.0);
     assert_eq!(col, 0);
     assert_eq!(row_extend.value_on(&context.geometry), None);
@@ -3840,14 +3787,14 @@ fn buffer_text_character_wrap_source_action_applies_transition_state() {
     assert_eq!(row_extend.value_on(&geometry), None);
 
     let mut position = DisplaySourceTextPosition::new(17, 22);
-    let mut hit_row_range = HitRowRangeTracker::new(6);
+    let mut row_source_start = DisplayRowSourceStart::new(6);
     let mut face_scan = FaceScanCheckpoint::initial();
     *face_scan.next_check_mut() = 99;
 
     let continuation = action.apply_after_visible_row_transition(
         DisplayTextRowTransition::BeganNextRow,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
         &mut face_scan,
         &geometry,
         DisplayRowVisibilityLimit {
@@ -3858,7 +3805,7 @@ fn buffer_text_character_wrap_source_action_applies_transition_state() {
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Continue);
     assert_eq!(position, DisplaySourceTextPosition::new(13, 21));
-    assert_eq!(hit_row_range.start(), 21);
+    assert_eq!(row_source_start.start(), 21);
     assert!(face_scan.should_resolve_at(0));
 }
 
@@ -3867,14 +3814,14 @@ fn buffer_text_character_wrap_source_action_skips_state_when_transition_exhauste
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let action = BufferSourceCharacterWrapAction::new(13, 21);
     let mut position = DisplaySourceTextPosition::new(17, 22);
-    let mut hit_row_range = HitRowRangeTracker::new(6);
+    let mut row_source_start = DisplayRowSourceStart::new(6);
     let mut face_scan = FaceScanCheckpoint::initial();
     *face_scan.next_check_mut() = 99;
 
     let continuation = action.apply_after_visible_row_transition(
         DisplayTextRowTransition::ExhaustedRows,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
         &mut face_scan,
         &geometry,
         DisplayRowVisibilityLimit {
@@ -3885,7 +3832,7 @@ fn buffer_text_character_wrap_source_action_skips_state_when_transition_exhauste
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Exhausted);
     assert_eq!(position, DisplaySourceTextPosition::new(17, 22));
-    assert_eq!(hit_row_range.start(), 6);
+    assert_eq!(row_source_start.start(), 6);
     assert!(!face_scan.should_resolve_at(0));
 }
 
@@ -3894,14 +3841,14 @@ fn buffer_text_character_wrap_source_action_reports_hidden_after_state_sync() {
     let geometry = DisplayRowGeometryState::new(0, 64.0, 0.0, 16.0, 12.0);
     let action = BufferSourceCharacterWrapAction::new(13, 21);
     let mut position = DisplaySourceTextPosition::new(17, 22);
-    let mut hit_row_range = HitRowRangeTracker::new(6);
+    let mut row_source_start = DisplayRowSourceStart::new(6);
     let mut face_scan = FaceScanCheckpoint::initial();
     *face_scan.next_check_mut() = 99;
 
     let continuation = action.apply_after_visible_row_transition(
         DisplayTextRowTransition::BeganNextRow,
         &mut position,
-        &mut hit_row_range,
+        &mut row_source_start,
         &mut face_scan,
         &geometry,
         DisplayRowVisibilityLimit {
@@ -3912,7 +3859,7 @@ fn buffer_text_character_wrap_source_action_reports_hidden_after_state_sync() {
 
     assert_eq!(continuation, DisplayRowTransitionContinuation::Hidden);
     assert_eq!(position, DisplaySourceTextPosition::new(13, 21));
-    assert_eq!(hit_row_range.start(), 21);
+    assert_eq!(row_source_start.start(), 21);
     assert!(face_scan.should_resolve_at(0));
 }
 
@@ -3948,7 +3895,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
     );
     let mut x = 80.0;
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
-    let mut hit_row_range = HitRowRangeTracker::new(6);
+    let mut row_source_start = DisplayRowSourceStart::new(6);
     let mut prefix_request = DisplayRowPrefixRequest::None;
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Wrap,
@@ -4021,7 +3968,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -4043,7 +3990,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
     );
     assert_eq!(byte_idx, 0);
     assert_eq!(charpos, 21);
-    assert_eq!(hit_row_range.start(), 21);
+    assert_eq!(row_source_start.start(), 21);
     assert_eq!(x, 0.0);
     assert!(face_scan.should_resolve_at(0));
     assert_eq!(row_extend.value_on(&context.geometry), None);
@@ -4107,10 +4054,7 @@ fn display_row_overflow_transition_request_marks_truncated_row_and_emits_boundar
     let mut ctx = RowTransitionTestContext::new("overflow-truncation-request");
 
     let transition = DisplayRowOverflowTransitionRequest::truncation(
-        DisplayRowHitRange {
-            charpos_start: 3,
-            charpos_end: 9,
-        },
+        LayoutCharPos0::new(9),
         ctx.defaults,
         0,
         6,
@@ -4122,15 +4066,11 @@ fn display_row_overflow_transition_request_marks_truncated_row_and_emits_boundar
         &mut ctx.geometry,
         &mut ctx.row_flags,
         ctx.row_limit,
-        &mut ctx.hit_rows,
         text_row_output_render_state(&mut ctx.builder, &mut ctx.output_emitter, &mut ctx.eval),
     );
 
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(ctx.geometry.row(), 1);
-    assert_eq!(ctx.hit_rows.len(), 1);
-    assert_eq!(ctx.hit_rows[0].charpos_start, 3);
-    assert_eq!(ctx.hit_rows[0].charpos_end, 9);
     assert!(ctx.row_flags.is_set(0, DisplayRowFlagKind::Truncated));
     assert!(!ctx.row_flags.is_set(0, DisplayRowFlagKind::Continued));
     assert!(!ctx.row_flags.is_set(1, DisplayRowFlagKind::Continuation));
@@ -4143,10 +4083,7 @@ fn display_row_overflow_transition_request_marks_visual_wrap_rows_and_emits_boun
 
     let transition = DisplayRowOverflowTransitionRequest::visual_wrap(
         VisualWrapBreak::MidElement,
-        DisplayRowHitRange {
-            charpos_start: 3,
-            charpos_end: 9,
-        },
+        LayoutCharPos0::new(9),
         ctx.defaults,
         0,
         6,
@@ -4158,15 +4095,11 @@ fn display_row_overflow_transition_request_marks_visual_wrap_rows_and_emits_boun
         &mut ctx.geometry,
         &mut ctx.row_flags,
         ctx.row_limit,
-        &mut ctx.hit_rows,
         text_row_output_render_state(&mut ctx.builder, &mut ctx.output_emitter, &mut ctx.eval),
     );
 
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(ctx.geometry.row(), 1);
-    assert_eq!(ctx.hit_rows.len(), 1);
-    assert_eq!(ctx.hit_rows[0].charpos_start, 3);
-    assert_eq!(ctx.hit_rows[0].charpos_end, 9);
     assert!(ctx.row_flags.is_set(0, DisplayRowFlagKind::Continued));
     assert!(
         ctx.row_flags
@@ -5245,7 +5178,7 @@ fn buffer_overlay_string_render_context_disabled_keeps_render_state() {
     let mut x = 24.0;
     let mut col = 3;
     let mut cursor_info = CursorCaptureState::new();
-    let mut hit_row_range = HitRowRangeTracker::new(2);
+    let mut row_source_start = DisplayRowSourceStart::new(2);
 
     {
         let source_render = text_row_source_render_state(
@@ -5261,8 +5194,7 @@ fn buffer_overlay_string_render_context_disabled_keeps_render_state() {
             &mut col,
             &mut ctx.geometry,
             &mut cursor_info,
-            &mut ctx.hit_rows,
-            &mut hit_row_range,
+            &mut row_source_start,
             &mut ctx.row_y_positions,
             &mut face_ids,
         );
@@ -5280,8 +5212,7 @@ fn buffer_overlay_string_render_context_disabled_keeps_render_state() {
     assert_eq!(col, 3);
     assert_eq!(ctx.geometry.row(), 0);
     assert!(cursor_info.captured().is_none());
-    assert!(ctx.hit_rows.is_empty());
-    assert_eq!(hit_row_range.start(), 2);
+    assert_eq!(row_source_start.start(), 2);
 }
 
 #[test]
@@ -5305,7 +5236,7 @@ fn overlay_string_row_break_context_finishes_current_row() {
     let mut x = 24.0;
     let mut col = 3;
     let mut cursor_info = CursorCaptureState::new();
-    let mut hit_row_range = HitRowRangeTracker::new(2);
+    let mut row_source_start = DisplayRowSourceStart::new(2);
 
     {
         let source_render = text_row_source_render_state(
@@ -5321,8 +5252,7 @@ fn overlay_string_row_break_context_finishes_current_row() {
             &mut col,
             &mut ctx.geometry,
             &mut cursor_info,
-            &mut ctx.hit_rows,
-            &mut hit_row_range,
+            &mut row_source_start,
             &mut ctx.row_y_positions,
             &mut face_ids,
         );
@@ -5336,10 +5266,7 @@ fn overlay_string_row_break_context_finishes_current_row() {
     assert_eq!(x, 0.0);
     assert_eq!(col, 0);
     assert_eq!(ctx.geometry.row(), 1);
-    assert_eq!(ctx.hit_rows.len(), 1);
-    assert_eq!(ctx.hit_rows[0].charpos_start, 2);
-    assert_eq!(ctx.hit_rows[0].charpos_end, 5);
-    assert_eq!(hit_row_range.start(), 5);
+    assert_eq!(row_source_start.start(), 5);
 }
 
 #[test]
@@ -6971,7 +6898,7 @@ fn buffer_text_source_render_request_appends_plain_text_run_with_cursor_inside()
     let mut box_face = BoxFaceRowState::inactive();
     let mut x = 0.0;
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut prefix_request = DisplayRowPrefixRequest::None;
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Wrap,
@@ -7036,7 +6963,7 @@ fn buffer_text_source_render_request_appends_plain_text_run_with_cursor_inside()
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -7120,7 +7047,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_trailing_enabled
     let mut box_face = BoxFaceRowState::inactive();
     let mut x = 0.0;
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut prefix_request = DisplayRowPrefixRequest::None;
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Truncate,
@@ -7186,7 +7113,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_trailing_enabled
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -7278,7 +7205,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_word_wrap_enable
     let mut box_face = BoxFaceRowState::inactive();
     let mut x = 0.0;
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut prefix_request = DisplayRowPrefixRequest::None;
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Wrap,
@@ -7343,7 +7270,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_word_wrap_enable
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -7437,7 +7364,7 @@ fn buffer_text_source_render_request_renders_fit_prefix_before_overflow() {
     let mut box_face = BoxFaceRowState::inactive();
     let mut x = 0.0;
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut prefix_request = DisplayRowPrefixRequest::None;
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Wrap,
@@ -7502,7 +7429,7 @@ fn buffer_text_source_render_request_renders_fit_prefix_before_overflow() {
                 &mut row_extend,
                 &mut box_face,
             ),
-            BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+            &mut row_source_start,
             BufferSourceRowCarryoverState::new(
                 &mut prefix_request,
                 &mut line_numbers,
@@ -7759,7 +7686,7 @@ fn buffer_end_of_buffer_tail_render_request_captures_cursor_and_renders_overlay(
     let mut x = 24.0;
     let mut col = 3;
     let mut cursor_info = CursorCaptureState::new();
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     let mut line_numbers = LineNumberRenderState::new(false, 1, 1);
     let mut face_scan = FaceScanCheckpoint::initial();
@@ -7779,8 +7706,7 @@ fn buffer_end_of_buffer_tail_render_request_captures_cursor_and_renders_overlay(
                 DisplaySourceRowProgressState::new(&mut x, &mut col),
                 &mut context.geometry,
                 &mut cursor_info,
-                &mut context.hit_rows,
-                &mut hit_row_range,
+                &mut row_source_start,
                 &mut context.row_y_positions,
                 &mut face_ids,
                 &mut line_numbers,
@@ -7846,7 +7772,7 @@ fn buffer_text_window_tail_finalize_request_publishes_cursor_and_finishes_row() 
         slot_state: crate::display_cursor::CursorSlotResolutionState::Unresolved,
         display_replacement_anchor_charpos: None,
     });
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
 
     let outcome = TextWindowTailFinalizeRequest::new(TextWindowTailFinalizeContext::new(
         &params,
@@ -7868,8 +7794,7 @@ fn buffer_text_window_tail_finalize_request_publishes_cursor_and_finishes_row() 
         &mut cursor_info,
         &context.geometry,
         &context.row_y_positions,
-        &mut hit_row_range,
-        &mut context.hit_rows,
+        &mut row_source_start,
         text_row_output_render_state(
             &mut context.builder,
             &mut context.output_emitter,
@@ -7886,7 +7811,6 @@ fn buffer_text_window_tail_finalize_request_publishes_cursor_and_finishes_row() 
     assert!(outcome.pending_row_finished());
     assert_eq!(outcome.visual_cursor_summary().requested, 1);
     assert_eq!(outcome.visual_cursor_summary().published, 1);
-    assert_eq!(context.hit_rows.len(), 1);
     let cursor = context.builder.phys_cursor().expect("physical cursor");
     assert_eq!(cursor.window_id.get(), 1);
     assert_eq!(cursor.row, 0);
@@ -7910,7 +7834,7 @@ fn buffer_text_window_tail_finalize_reports_missing_cursor_capture() {
     params.text_bounds = Rect::new(0.0, 0.0, 160.0, 48.0);
 
     let mut cursor_info = CursorCaptureState::new();
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
 
     let outcome = TextWindowTailFinalizeRequest::new(TextWindowTailFinalizeContext::new(
         &params,
@@ -7932,8 +7856,7 @@ fn buffer_text_window_tail_finalize_reports_missing_cursor_capture() {
         &mut cursor_info,
         &context.geometry,
         &context.row_y_positions,
-        &mut hit_row_range,
-        &mut context.hit_rows,
+        &mut row_source_start,
         text_row_output_render_state(
             &mut context.builder,
             &mut context.output_emitter,
@@ -8458,13 +8381,6 @@ fn buffer_text_window_finish_request_closes_window_and_returns_snapshot_artifact
     let output_emitter =
         crate::window_output::WindowOutputEmitter::new(frame_id, window_id, 0, 10.0, 5.0);
     output_emitter.begin_update(&mut eval);
-    let hit_rows = vec![crate::hit_test::HitRow {
-        y_start: 2.0,
-        y_end: 18.0,
-        charpos_start: 3,
-        charpos_end: 9,
-    }];
-
     let finished = TextWindowFinishRequest::new(
         neovm_core::window::geometry::CellOrigin::new(0, 0),
         neovm_core::window::PresentedWindowRegions {
@@ -8480,7 +8396,6 @@ fn buffer_text_window_finish_request_closes_window_and_returns_snapshot_artifact
         TextWindowOutputTarget::from_builder(&mut builder),
         output_emitter,
         &mut eval,
-        hit_rows,
     ));
     let snapshot = finished.into_snapshot();
     assert_eq!(snapshot.cell_origin.column().get(), 0);
@@ -12431,7 +12346,7 @@ fn display_property_live_render_outcome(
     let mut box_face = BoxFaceRowState::inactive();
     let mut x = 0.0;
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
-    let mut hit_row_range = HitRowRangeTracker::new(0);
+    let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut prefix_request = DisplayRowPrefixRequest::None;
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Wrap,
@@ -12510,7 +12425,7 @@ fn display_property_live_render_outcome(
                     &mut row_extend,
                     &mut box_face,
                 ),
-                BufferSourceHitCaptureState::new(&mut context.hit_rows, &mut hit_row_range),
+                &mut row_source_start,
                 BufferSourceRowCarryoverState::new(
                     &mut prefix_request,
                     &mut line_numbers,

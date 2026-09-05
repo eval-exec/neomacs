@@ -16,8 +16,8 @@ use crate::display_row::append_context::DisplayRowAppendSurface;
 use crate::display_row::builder::DisplayRowPosition;
 use crate::display_row::face_state::DisplayRowActiveFaceState;
 use crate::display_row::geometry::{
-    DisplayRowExtendState, DisplayRowGeometryDefaults, DisplayRowGeometryState, DisplayRowHitRange,
-    DisplayRowLimit, DisplayRowYPositions,
+    DisplayRowExtendState, DisplayRowGeometryDefaults, DisplayRowGeometryState, DisplayRowLimit,
+    DisplayRowYPositions,
 };
 use crate::display_row::line_end::{
     LineEndContext, LineEndExtend, LineEndFillGeometry, LineEndIndicator,
@@ -36,7 +36,7 @@ use crate::display_row::transition::{
     DisplayRowTransitionContinuation,
 };
 use crate::display_row::walk_state::{
-    BoxFaceRowState, FaceScanCheckpoint, HitRowRangeTracker, HorizontalScrollDisplayItem,
+    BoxFaceRowState, DisplayRowSourceStart, FaceScanCheckpoint, HorizontalScrollDisplayItem,
     HorizontalScrollSkipState, HorizontalScrollTruncationTarget, HorizontalScrollVisibleRemainder,
     HscrollConsumedTextDisposition, InvisibleTextScanCheckpoint, LineNumberRenderState,
     TrailingWhitespaceRenderState, sync_position_after_row_transition,
@@ -45,8 +45,8 @@ use crate::display_source::DisplaySourceStepChar;
 use crate::display_source::DisplaySourceTextPosition;
 use crate::display_source_progress::{DisplaySourceProgressState, DisplaySourceRowProgressState};
 use crate::frame_face_arena::FrameFaceAttempt;
-use crate::hit_test::HitRow;
 use crate::neovm_bridge::{LayoutBufferView, RustTextPropAccess};
+use crate::types::LayoutCharPos0;
 use crate::unicode::is_wide_char;
 use crate::window_output::{
     DisplayRowTerminator, DisplayRowTerminatorCell, DisplayTextRowTransition, WindowOutputEmitter,
@@ -155,16 +155,17 @@ impl BufferSourceHscrollSkipAction {
         }
     }
 
-    pub(crate) fn line_break_hit_range(
+    /// The charpos the continuation row starts at, taken before the tracker
+    /// is advanced onto it so the two can never disagree.
+    pub(crate) fn line_break_next_row_start(
         self,
-        hit_row_range: &mut HitRowRangeTracker,
-    ) -> Option<DisplayRowHitRange> {
+        row_source_start: &mut DisplayRowSourceStart,
+    ) -> Option<LayoutCharPos0> {
         if !self.is_line_break() {
             return None;
         }
-        let hit_range = hit_row_range.range_to(self.end_charpos());
-        hit_row_range.advance_to(self.end_charpos());
-        Some(hit_range)
+        row_source_start.advance_to(self.end_charpos());
+        Some(LayoutCharPos0::new(self.end_charpos()))
     }
 
     pub(crate) fn capture_line_break_cursor_if_point(
@@ -461,8 +462,7 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
         row_progress: DisplaySourceRowProgressState<'_>,
         row_geometry: &mut DisplayRowGeometryState,
         cursor_info: &mut CursorCaptureState,
-        hit_rows: &mut Vec<HitRow>,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
         row_y_positions: &mut DisplayRowYPositions,
         face_ids: &mut FrameFaceAttempt,
         line_numbers: &mut LineNumberRenderState,
@@ -514,8 +514,7 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
                 col,
                 row_geometry,
                 cursor_info,
-                hit_rows,
-                hit_row_range,
+                row_source_start,
                 row_y_positions,
                 face_ids,
                 line_numbers,
@@ -606,7 +605,7 @@ impl<'a> BufferSourceHscrollSkipRenderContext<'a> {
             mut row_carryover,
             row_build,
             source_render,
-            hit_capture,
+            row_source_start,
             cursor_info,
             row_y_positions,
             face_ids,
@@ -650,9 +649,9 @@ impl<'a> BufferSourceHscrollSkipRenderContext<'a> {
             );
             let row_position = progress.row_position();
             let line_break_transition = DisplayRowLineBreakTransitionPlan::hscroll_line_break();
-            let hit_range = hscroll_action
-                .line_break_hit_range(hit_capture.hit_row_range)
-                .expect("hscroll line break hit range");
+            let next_row_start = hscroll_action
+                .line_break_next_row_start(row_source_start)
+                .expect("hscroll line break next row start");
             let row_transition = DisplayRowTextWindowEmitContext::from_source_render(
                 context.row_geometry_defaults,
                 context.display_text_row_base,
@@ -661,12 +660,11 @@ impl<'a> BufferSourceHscrollSkipRenderContext<'a> {
                 row_build.row_geometry,
                 row_build.row_flags,
                 context.row_limit,
-                hit_capture.hit_rows,
                 &mut source_render,
             )
             .emit_line_break_then_row_start(
                 line_break_transition,
-                hit_range,
+                next_row_start,
                 row_position,
                 0.0,
                 row_carryover.render_state(context.has_prefix),
@@ -908,7 +906,7 @@ impl<'a> BufferSourceSelectiveDisplayTailRenderRequest<'a> {
             source_render,
             row_build,
             mut row_carryover,
-            hit_capture,
+            row_source_start,
             row_y_positions,
             face_ids,
             ..
@@ -955,12 +953,11 @@ impl<'a> BufferSourceSelectiveDisplayTailRenderRequest<'a> {
             row_build.row_geometry,
             row_build.row_flags,
             context.row_limit,
-            hit_capture.hit_rows,
             &mut source_render,
         )
         .emit_line_break_then_row_start(
             line_break_transition,
-            hit_capture.hit_row_range.range_to(progress.charpos()),
+            LayoutCharPos0::new(progress.charpos()),
             row_position,
             0.0,
             row_carryover.render_state(context.has_prefix),
@@ -976,7 +973,7 @@ impl<'a> BufferSourceSelectiveDisplayTailRenderRequest<'a> {
             row_transition,
             synced_charpos,
             &mut synced_source_position,
-            hit_capture.hit_row_range,
+            row_source_start,
         );
         source_walk
             .source_position_update(synced_source_position)
@@ -1402,12 +1399,12 @@ impl BufferSourceSelectiveDisplayLineTailAction {
         row_transition: DisplayTextRowTransition,
         synced_charpos: i64,
         position: &mut DisplaySourceTextPosition,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
     ) -> DisplayRowTransitionContinuation {
         if row_transition.is_exhausted() {
             return DisplayRowTransitionContinuation::Exhausted;
         }
-        sync_position_after_row_transition(synced_charpos, position, hit_row_range);
+        sync_position_after_row_transition(synced_charpos, position, row_source_start);
         DisplayRowTransitionContinuation::Continue
     }
 
@@ -1729,7 +1726,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
             row_build,
             mut row_carryover,
             source_render,
-            hit_capture,
+            row_source_start,
             row_y_positions,
             face_ids,
             ..
@@ -1841,12 +1838,11 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
             row_build.row_geometry,
             row_build.row_flags,
             context.row_limit,
-            hit_capture.hit_rows,
             &mut source_render,
         )
         .emit_line_break_then_row_start(
             line_break_transition,
-            hit_capture.hit_row_range.range_to(progress.charpos()),
+            LayoutCharPos0::new(progress.charpos()),
             progress.row_position(),
             line_break_action.line_spacing(),
             row_carryover.render_state(context.has_prefix),
@@ -1863,7 +1859,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
             row_transition,
             synced_charpos,
             &mut synced_source_position,
-            hit_capture.hit_row_range,
+            row_source_start,
             row_build.row_geometry,
             row_build.row_extend,
             context.active_face_state,
@@ -1910,7 +1906,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
             row_build,
             mut row_carryover,
             source_render,
-            hit_capture,
+            row_source_start,
             row_y_positions,
             face_ids,
             ..
@@ -2018,12 +2014,11 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
             row_build.row_geometry,
             row_build.row_flags,
             context.row_limit,
-            hit_capture.hit_rows,
             &mut source_render,
         )
         .emit_line_break_then_row_start(
             line_break_transition,
-            hit_capture.hit_row_range.range_to(progress.charpos()),
+            LayoutCharPos0::new(progress.charpos()),
             progress.row_position(),
             line_break_action.line_spacing(),
             row_carryover.render_state(context.has_prefix),
@@ -2040,7 +2035,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
             row_transition,
             synced_charpos,
             &mut synced_source_position,
-            hit_capture.hit_row_range,
+            row_source_start,
             row_build.row_geometry,
             row_build.row_extend,
             context.active_face_state,
@@ -2163,7 +2158,7 @@ impl BufferSourceLineBreakSourceAction {
         row_transition: DisplayTextRowTransition,
         synced_charpos: i64,
         position: &mut DisplaySourceTextPosition,
-        hit_row_range: &mut HitRowRangeTracker,
+        row_source_start: &mut DisplayRowSourceStart,
         row_geometry: &DisplayRowGeometryState,
         row_extend: &mut DisplayRowExtendState,
         active_face_state: &DisplayRowActiveFaceState,
@@ -2173,7 +2168,7 @@ impl BufferSourceLineBreakSourceAction {
         if row_transition.is_exhausted() {
             return DisplayRowTransitionContinuation::Exhausted;
         }
-        sync_position_after_row_transition(synced_charpos, position, hit_row_range);
+        sync_position_after_row_transition(synced_charpos, position, row_source_start);
         sync_row_extend_to_active_face(row_extend, row_geometry, active_face_state);
         self.apply_after_row_transition(row_geometry, box_face, content_x);
         DisplayRowTransitionContinuation::Continue

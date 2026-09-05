@@ -3,7 +3,7 @@ use crate::display_row::builder::{DisplayRowGlyphCheckpoint, DisplayRowPosition}
 use crate::display_row::face_state::DisplayRowExtendFace;
 #[cfg(test)]
 use crate::display_row::geometry::DisplayRowGeometryState;
-use crate::display_row::geometry::{DisplayRowHitRange, DisplayRowMarker, DisplayRowStartMarker};
+use crate::display_row::geometry::{DisplayRowMarker, DisplayRowStartMarker};
 use crate::display_source::DisplaySourceTextPosition;
 use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess};
 use crate::types::LineWrapMode;
@@ -417,8 +417,15 @@ pub(crate) struct TrailingWhitespaceRenderState {
     start_marker: DisplayRowStartMarker,
 }
 
+/// The source charpos at which the current display row's text starts.
+///
+/// GNU's `display_line` keeps the same fact in `it->current.pos` at row entry
+/// and consults it to tell an empty row from one that consumed source
+/// (xdisp.c `row->used[TEXT_AREA] == 0` guards). Both users here need that
+/// origin: deciding whether the pending row may be finished at all, and
+/// stamping the charpos the NEXT row starts at across a row break.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct HitRowRangeTracker {
+pub(crate) struct DisplayRowSourceStart {
     start_charpos: i64,
 }
 
@@ -1152,20 +1159,16 @@ impl TrailingWhitespaceRenderState {
     }
 }
 
-impl HitRowRangeTracker {
+impl DisplayRowSourceStart {
     pub(crate) fn new(start_charpos: i64) -> Self {
         Self { start_charpos }
     }
 
+    /// Only the walk-setup test reads the seed back; production consults the
+    /// origin through [`Self::should_finish_current_row`] instead.
+    #[cfg(test)]
     pub(crate) fn start(self) -> i64 {
         self.start_charpos
-    }
-
-    pub(crate) fn range_to(self, end_charpos: i64) -> DisplayRowHitRange {
-        DisplayRowHitRange {
-            charpos_start: self.start_charpos,
-            charpos_end: end_charpos,
-        }
     }
 
     pub(crate) fn advance_to(&mut self, start_charpos: i64) {
@@ -1181,17 +1184,17 @@ impl HitRowRangeTracker {
     }
 }
 
-/// Sync the source text position to `synced_charpos` and advance the hit-row
-/// range to follow it after a row transition. GNU's xdisp.c keeps this as one
-/// operation; the line-break, hidden-line-break, and truncation-skip actions
-/// all perform exactly this step.
+/// Sync the source text position to `synced_charpos` and advance the display
+/// row's source start to follow it after a row transition. GNU's xdisp.c keeps
+/// this as one operation; the line-break, hidden-line-break, and
+/// truncation-skip actions all perform exactly this step.
 pub(crate) fn sync_position_after_row_transition(
     synced_charpos: i64,
     position: &mut DisplaySourceTextPosition,
-    hit_row_range: &mut HitRowRangeTracker,
+    row_source_start: &mut DisplayRowSourceStart,
 ) {
     *position = position.with_charpos(synced_charpos);
-    hit_row_range.advance_to(position.charpos());
+    row_source_start.advance_to(position.charpos());
 }
 
 impl InvisibleTextScanCheckpoint {

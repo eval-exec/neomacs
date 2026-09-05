@@ -49,7 +49,7 @@ use crate::display_origin::DisplayOrigin;
 use crate::display_rendered_row_output_install::frame_chrome_display_row;
 use crate::display_row::face_state::DisplayRowFaceRealizer;
 #[cfg(test)]
-use crate::display_row::geometry::{DisplayRowHitRange, DisplayRowMarker, DisplayRowStartMarker};
+use crate::display_row::geometry::{DisplayRowMarker, DisplayRowStartMarker};
 #[cfg(test)]
 use crate::display_row::lisp_string::DisplayRowPrefixRequest;
 #[cfg(test)]
@@ -63,7 +63,7 @@ use crate::display_row::walk_state::FaceScanCheckpoint;
 use crate::display_row::walk_state::WordWrapBreakCandidate;
 #[cfg(test)]
 use crate::display_row::walk_state::{
-    BoxFaceRowState, HitRowRangeTracker, HorizontalScrollDisplayItem, HorizontalScrollSkipState,
+    BoxFaceRowState, DisplayRowSourceStart, HorizontalScrollDisplayItem, HorizontalScrollSkipState,
     HorizontalScrollTruncationTarget, HorizontalScrollVisibleRemainder,
     HscrollConsumedTextDisposition, InvisibleTextScanCheckpoint, LineNumberRenderState,
     TrailingWhitespaceRenderState, WordWrapRenderState,
