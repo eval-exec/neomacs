@@ -3,6 +3,9 @@
 // would not be reused, so the type-complexity lint is allowed module-wide.
 #![allow(clippy::type_complexity)]
 
+mod surface;
+
+use self::surface::FrameRenderFailure;
 use super::child_frames::ChildFrameManager;
 use super::cursor::CursorTarget;
 use super::frame_sched::PresentResult;
@@ -44,29 +47,6 @@ struct RenderedFrameSurface {
     output: wgpu::SurfaceTexture,
     frame: crate::core::frame_glyphs::FrameGlyphBuffer,
     projection: Option<neomacs_display_protocol::InteractionProjection>,
-}
-
-/// Failures before a frame reaches `present`, kept distinct until the frame
-/// coordinator consumes them.  In particular, missing editor content is not a
-/// GPU timeout and must not manufacture an expose-retry loop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FrameRenderFailure {
-    AwaitingContent,
-    WindowNotReady,
-    SurfaceLost,
-    SurfaceTimeout,
-    SurfaceOccluded,
-}
-
-impl FrameRenderFailure {
-    const fn present_result(self) -> PresentResult {
-        match self {
-            Self::AwaitingContent => PresentResult::AwaitingContent,
-            Self::WindowNotReady | Self::SurfaceTimeout => PresentResult::Timeout,
-            Self::SurfaceLost => PresentResult::SurfaceLost,
-            Self::SurfaceOccluded => PresentResult::Occluded,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -561,54 +541,13 @@ impl RenderApp {
         let feature_plan =
             render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
 
-        let output = if let Some(output) = output {
-            output
-        } else {
-            match native.surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(output)
-                | wgpu::CurrentSurfaceTexture::Suboptimal(output) => {
-                    device_lost.record_surface_acquired();
-                    output
-                }
-                wgpu::CurrentSurfaceTexture::Lost => {
-                    // A one-off Lost is a swapchain hiccup; an unbroken
-                    // streak means the device itself is gone (TDR) and only
-                    // a full GPU rebuild brings frames back.
-                    if device_lost.record_surface_lost() {
-                        tracing::error!(
-                            "Surface for frame 0x{:x} lost {} times in a row: treating the wgpu device as lost",
-                            render.emacs_frame_id,
-                            super::device_loss::CONSECUTIVE_SURFACE_LOST_THRESHOLD
-                        );
-                    } else {
-                        tracing::info!(
-                            "Skipping redraw for frame 0x{:x}: surface lost",
-                            render.emacs_frame_id
-                        );
-                    }
-                    return Err(FrameRenderFailure::SurfaceLost);
-                }
-                wgpu::CurrentSurfaceTexture::Outdated => {
-                    tracing::info!(
-                        "Skipping redraw for frame 0x{:x}: surface outdated",
-                        render.emacs_frame_id
-                    );
-                    return Err(FrameRenderFailure::SurfaceLost);
-                }
-                wgpu::CurrentSurfaceTexture::Timeout => {
-                    return Err(FrameRenderFailure::SurfaceTimeout);
-                }
-                wgpu::CurrentSurfaceTexture::Occluded => {
-                    return Err(FrameRenderFailure::SurfaceOccluded);
-                }
-                wgpu::CurrentSurfaceTexture::Validation => {
-                    tracing::warn!(
-                        "Surface validation error for frame 0x{:x}",
-                        render.emacs_frame_id
-                    );
-                    return Err(FrameRenderFailure::SurfaceTimeout);
-                }
-            }
+        let output = match output {
+            Some(output) => output,
+            None => surface::acquire_current_texture(
+                &native.surface,
+                device_lost,
+                render.emacs_frame_id,
+            )?,
         };
 
         // Placed here, after the surface is in hand: `sample_pane_layout`
