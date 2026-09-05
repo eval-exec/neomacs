@@ -570,9 +570,14 @@ impl WgpuRenderer {
 
     /// Draw inline shader surfaces (image pipeline, alpha blended). Also
     /// stamps each composited surface as recently drawn so its animation
-    /// demand and iTime clock stay live only while visible, and routes the
-    /// pointer's hover position into the `iMouse` uniform of the surface
-    /// under it.
+    /// demand and iTime clock stay live only while visible.
+    ///
+    /// `iMouse` is not touched here. Deciding which surface the pointer is over
+    /// means comparing a pointer position with glyph rects, and these rects are
+    /// in the destination presentation's coordinates while the pointer position
+    /// this pass carries is in the surface's — the same place for a settled
+    /// frame, a different pixel for every frame of a pane morph. The compositor
+    /// resolves it against the projection and calls `surface_mouse_hover`.
     pub(super) fn draw_inline_surfaces(&mut self, ctx: &mut FramePassCtx<'_, '_>) {
         let frame_glyphs = ctx.params.frame_glyphs;
         let mut quads = Vec::new();
@@ -656,19 +661,6 @@ impl WgpuRenderer {
                     self.caches.surface.mark_drawn(surface_id.get());
                     self.media_budget
                         .touch(crate::media_budget::MediaType::Surface, surface_id.get());
-                    // Hover-only iMouse: while the pointer is inside the
-                    // glyph rect (logical px), stream its normalized position
-                    // into the surface's uniforms (picked up by the next
-                    // offscreen pass). Outside the rect nothing is written,
-                    // so iMouse persists at the last hover position.
-                    let (mx, my) = ctx.params.mouse_pos;
-                    if mx >= *x && mx < *x + *width && my >= *y && my < *y + *height {
-                        self.caches.surface.set_mouse_uv(
-                            surface_id.get(),
-                            (mx - *x) / *width,
-                            (my - *y) / *height,
-                        );
-                    }
                     quads.push(MediaQuad {
                         id: surface_id.get(),
                         vertices: textured_quad_vertices_uv(
