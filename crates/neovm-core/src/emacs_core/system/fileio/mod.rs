@@ -4,6 +4,8 @@
 //! directory operations, and file attribute queries.
 
 mod binary_mode;
+mod directory;
+pub(crate) use directory::read_directory_names_lisp;
 pub(crate) mod file_error_class;
 mod filesystem;
 mod runtime_resources;
@@ -1437,34 +1439,6 @@ fn write_bytes_to_file_with_mode(
 // Directory operations
 // ===========================================================================
 
-/// Return a list of file names in DIR.
-/// If FULL is true, return absolute paths.
-/// If MATCH_REGEX is Some, only include entries whose names match the regex.
-/// If NOSORT is true, preserve filesystem enumeration order.
-/// COUNT limits the number of accepted entries during enumeration.
-fn read_directory_names_lisp(
-    dir: &crate::heap_types::LispString,
-    filesystem: &dyn EditorFileSystem,
-) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    let path = lisp_file_name_to_path_buf(dir);
-    let entries = filesystem
-        .read_directory(&path)
-        .map_err(|e| DirectoryFilesError::Io {
-            action: "Opening directory",
-            err: e,
-        })?;
-    let mut names = vec![
-        crate::heap_types::LispString::from_unibyte(b".".to_vec()),
-        crate::heap_types::LispString::from_unibyte(b"..".to_vec()),
-    ];
-    for entry in entries {
-        // Keep the host entry bytes intact here.  Public directory primitives
-        // apply GNU's DECODE_FILE step before matching or returning names.
-        names.push(path_to_lisp_file_name(Path::new(&entry)));
-    }
-    Ok(names)
-}
-
 #[derive(Debug)]
 enum DirectoryFilesError {
     Io {
@@ -1515,7 +1489,11 @@ fn directory_files_with_decoder(
         return Ok(Vec::new());
     }
 
-    let names = read_directory_names_lisp(dir, filesystem)?;
+    let names =
+        read_directory_names_lisp(dir, filesystem).map_err(|err| DirectoryFilesError::Io {
+            action: "Opening directory",
+            err,
+        })?;
 
     // Emacs builds this list via `cons` while scanning readdir output.
     // That makes NOSORT results reverse the traversal order and applies COUNT
