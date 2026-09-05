@@ -1,5 +1,6 @@
 import { fetchEditorWorkerAssets } from "./worker-assets.mjs";
 import { createHttpHostImports } from "./network/host.mjs";
+import { WorkerWait, HostWake } from "./worker-wait.mjs";
 import {
   OriginPrivateFileSystem,
   createOpfsHostImports,
@@ -22,7 +23,7 @@ let startup = null;
 let mailbox = null;
 let queuedInput = null;
 let queuedInputSequence = null;
-let pendingJspiWake = null;
+const workerWait = new WorkerWait(() => Boolean(currentInput()));
 let probing = true;
 
 function post(type, payload = {}, transfer = []) {
@@ -54,19 +55,9 @@ function currentInput() {
 
 function createJspiWait() {
   return new WebAssembly.Suspending(async (timeoutMilliseconds) => {
-    if (currentInput()) return INPUT_WAKE;
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        pendingJspiWake = null;
-        resolve(TIMEOUT_WAKE);
-      }, timeoutMilliseconds);
-      pendingJspiWake = () => {
-        clearTimeout(timeout);
-        pendingJspiWake = null;
-        resolve(INPUT_WAKE);
-      };
-      if (probing) post("probe-waiting");
-    });
+    const pending = workerWait.wait(timeoutMilliseconds);
+    if (probing) post("probe-waiting");
+    return pending;
   });
 }
 
@@ -158,7 +149,7 @@ function hostImports(waitForInput, filesystemImports) {
         message: decodeMemoryString(source, length),
       }),
       ...filesystemImports,
-      ...createHttpHostImports(() => memory, () => pendingJspiWake?.()),
+      ...createHttpHostImports(() => memory, () => workerWait.notify()),
     },
   };
 }
@@ -244,7 +235,8 @@ async function start(message) {
 self.onmessage = (event) => {
   const message = event.data;
   if (message?.type === "wake-probe") {
-    pendingJspiWake?.();
+    // The isolated startup probe intentionally simulates an input wake.
+    workerWait.notify(HostWake.Input);
     return;
   }
   if (message?.type === "input") {
@@ -252,7 +244,7 @@ self.onmessage = (event) => {
     queuedInputSequence = typeof message.batch?.sequence === "string"
       ? message.batch.sequence
       : null;
-    pendingJspiWake?.();
+    workerWait.notify();
     return;
   }
   if (message?.type === "start") {
