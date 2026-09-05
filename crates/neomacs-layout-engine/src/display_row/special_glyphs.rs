@@ -62,6 +62,7 @@ impl TextWindowRightEdgeMarkerColumn {
 }
 
 impl<'a> TextWindowRightEdgeMarkers<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_reserved_special_column(
         reserve_right_special_col: bool,
         reserve_right_border_col: bool,
@@ -188,6 +189,7 @@ fn render_right_edge_marker_source(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn install_right_edge_marker_from_source_request(
     row: &mut GlyphRow,
     target_col: usize,

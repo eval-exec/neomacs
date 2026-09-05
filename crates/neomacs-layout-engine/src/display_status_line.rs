@@ -2003,6 +2003,7 @@ impl TabBarPresentedPointerPlan {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn tab_bar_presented_pointer_plan(
     evaluator: &mut Context,
     presentation: u64,

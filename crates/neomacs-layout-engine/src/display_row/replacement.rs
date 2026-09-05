@@ -667,6 +667,7 @@ impl DisplayReplacementItemAppendTemplate {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn append_to_text_row(
         self,
         replacement_append_context: DisplayReplacementRowAppendContext<'_>,
@@ -717,6 +718,7 @@ struct DisplayPropertyReplacementAppendRequest {
 }
 
 impl DisplayPropertyReplacementAppendRequest {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         replacement_source: BufferDisplayReplacementSource,
         item: DisplayPropertyReplacementSourceItem,
@@ -1219,6 +1221,7 @@ impl DisplayPropertyReplacementAppendPlanItemRequest {
 }
 
 impl DisplayPropertyReplacementAtomicAppendPlanItem {
+    #[allow(clippy::too_many_arguments)]
     fn append_to_text_row(
         self,
         replacement_append_context: DisplayReplacementRowAppendContext<'_>,
@@ -1496,6 +1499,7 @@ impl<'a> DisplayReplacementAppendContext<'a> {
     }
 
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_replacement_string_source_to_text_row_and_emit(
         &self,
         state: &mut TextRowSourceRenderState<'_>,

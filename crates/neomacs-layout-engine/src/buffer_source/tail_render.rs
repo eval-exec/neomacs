@@ -90,6 +90,7 @@ impl BufferSourceBodyInstallContext {
         self.display_text_row_base
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn request<'a>(
         self,
         window_start: i64,

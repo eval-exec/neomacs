@@ -12145,6 +12145,7 @@ impl<S> DisplayRowSourceWalker<S> {
 }
 
 impl<S: crate::display_source::DisplayItemSource> DisplayRowSourceWalker<S> {
+    #[allow(clippy::too_many_arguments)]
     fn next_step(
         &mut self,
         face_resolver: &FaceResolver,

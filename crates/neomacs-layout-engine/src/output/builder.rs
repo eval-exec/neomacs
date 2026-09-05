@@ -361,6 +361,7 @@ impl DisplayOutputBuilder {
         self.frame_state.install_cursor(request);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn set_output_frame_identity(
         &mut self,
         frame_id: u64,

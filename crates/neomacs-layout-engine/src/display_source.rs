@@ -1187,6 +1187,7 @@ fn display_item_buffer_end_byte_idx(item: &DisplayItem, text_start_byte: usize) 
     end_byte_pos.get().checked_sub(text_start_byte)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn direct_text_run_char_item(
     buffer_id: BufferId,
     face: RenderFaceRef,

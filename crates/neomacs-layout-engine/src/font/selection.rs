@@ -29,6 +29,7 @@ pub(crate) struct CandidateSelectionScore {
     style: GnuStyleScore,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn candidate_selection_score(
     compatibility: u32,
     requested_size_26_6: u32,
