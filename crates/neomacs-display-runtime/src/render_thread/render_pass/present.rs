@@ -69,7 +69,7 @@ impl RenderApp {
             .transitions
             .apply_policy(self.transition_policy);
 
-        let rendered = Self::render_frame_window_contents_to_surface(
+        let rendered = super::render_frame_window_contents_to_surface(
             renderer,
             window_state,
             bg_gradient,
