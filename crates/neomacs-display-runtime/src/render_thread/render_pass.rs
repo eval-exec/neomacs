@@ -550,19 +550,6 @@ impl RenderApp {
         let feature_plan =
             render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
 
-        // Place the panes before anything reads their positions, so the
-        // transform hit testing uses and the geometry this pass draws come
-        // from one sample of one motion rather than from two evaluations that
-        // could land on different sides of a frame boundary.
-        let pane_blits = render.sample_pane_layout(renderer.frame_sample());
-        if !pane_blits.is_empty() {
-            render.mark_dirty();
-        }
-        // A morph draws the composed frame once and then places it a pane at a
-        // time, which needs the frame in a texture rather than straight on the
-        // surface.
-        let need_offscreen = feature_plan.use_transition_offscreen || !pane_blits.is_empty();
-
         let output = if let Some(output) = output {
             output
         } else {
@@ -612,6 +599,27 @@ impl RenderApp {
                 }
             }
         };
+
+        // Placed here, after the surface is in hand: `sample_pane_layout`
+        // advances the motion and republishes the projection, and every path
+        // above returns without drawing. Sampling before them would leave the
+        // projection describing a frame that was never composed, so a pointer
+        // event arriving before the next successful render would resolve
+        // against pixels nobody saw — the one thing the projection exists to
+        // prevent.
+        //
+        // It still runs before anything reads a pane's position, so the
+        // transform hit testing uses and the geometry this pass draws come
+        // from one sample of one motion rather than from two evaluations that
+        // could land on different sides of a frame boundary.
+        let pane_blits = render.sample_pane_layout(renderer.frame_sample());
+        if !pane_blits.is_empty() {
+            render.mark_dirty();
+        }
+        // A morph draws the composed frame once and then places it a pane at a
+        // time, which needs the frame in a texture rather than straight on the
+        // surface.
+        let need_offscreen = feature_plan.use_transition_offscreen || !pane_blits.is_empty();
 
         let present_mapping = render
             .present_mapping()
@@ -668,7 +676,14 @@ impl RenderApp {
         // captured at the last scene-commit full render stays correct. Gating
         // on `!need_offscreen` here would disable the fast path entirely under
         // the default transition policy.
+        // A morph disqualifies the fast path for the same reason an active
+        // transition does: the retained scene is a picture of the panes where
+        // the *presentation* puts them, and this frame needs them where the
+        // motion puts them. Reproducing it would snap every pane to its
+        // destination for that frame and back on the next — a blink landing
+        // mid-motion is enough to show it.
         if compositor_only_hint
+            && pane_blits.is_empty()
             && !render.compositor.transitions.has_active()
             && !Self::window_has_active_overlays(render)
             && Self::retained_static_pointer_appearance_allowed(&render.pointer_appearance)

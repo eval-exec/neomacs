@@ -122,17 +122,72 @@ impl Default for ScrollTransitionConfig {
 /// How panes travel when a layout change moves them.
 ///
 /// Splitting a window, deleting one, or resizing the frame rearranges every
-/// pane at once; installed as a single presentation that arrives as a jump.
-/// `movement` says whether — and how — the compositor carries them there
-/// instead.
+/// pane at once; committed as a single presentation, that arrives as a jump.
+/// This says whether — and how — the compositor carries them there instead.
 ///
-/// It defaults to [`MotionSpec::Instant`](crate::motion_spec::MotionSpec::Instant),
-/// which is not merely "fast": a caller that sees an instant spec builds no
-/// motion at all, so the whole morph path costs nothing until someone opts in.
-/// That is also what a reduced-motion preference resolves to.
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+/// The shape is three scalars rather than a [`MotionSpec`] field, and that is
+/// load-bearing: the effect registry reflects `VisualConfig` through serde and
+/// can only carry scalar property values (plus the one special case for
+/// `Duration`). A `MotionSpec` serializes to an externally tagged *object* for
+/// every variant but `Instant`, so storing one here would make
+/// `neomacs-effect-get 'pane-motion` fail the moment motion was switched on —
+/// and `neomacs-effects-apply`, which walks every effect, with it.
+/// [`Self::movement`] converts to the precise form the compositor samples.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PaneMotionConfig {
-    pub movement: crate::motion_spec::MotionSpec,
+    pub enabled: bool,
+    pub duration: Duration,
+    pub easing: TransitionEasing,
+}
+
+impl Default for PaneMotionConfig {
+    /// Off, and deliberately so.
+    ///
+    /// Not because the path is unfinished — it measures, samples, projects and
+    /// draws, and its parts are covered by tests — but because no run in a
+    /// headless environment can execute it. Pane motion is disabled on a
+    /// software adapter, which is the only adapter class available under Xvfb
+    /// (llvmpipe, and lavapipe under `WGPU_BACKEND=vulkan`), so nothing short
+    /// of a real GPU exercises the per-pane pass end to end.
+    ///
+    /// Turning it on would therefore ship an animation that has never once run
+    /// in a live editor, on every layout change and every echo-area resize. The
+    /// preparation for this default alone surfaced four defects found by
+    /// reading rather than by a failing test — one of them, a cleared render
+    /// target, would have made the echo area vanish during every
+    /// `split-window`, and would have been obvious in a single frame on screen.
+    ///
+    /// `tmp/impl/verify-pane-motion.sh` drives the check; flip this to `true`
+    /// once someone can watch it on hardware.
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            duration: Duration::from_millis(160),
+            easing: TransitionEasing::EaseOutCubic,
+        }
+    }
+}
+
+impl PaneMotionConfig {
+    /// How a pane travels under this configuration.
+    ///
+    /// [`MotionSpec::Instant`] whenever there is nothing to animate — disabled,
+    /// or a duration of zero. That is not merely the fast path: a caller that
+    /// sees an instant spec builds no motion, takes no offscreen and composes
+    /// exactly as it would with this feature absent.
+    #[must_use]
+    pub fn movement(&self) -> crate::motion_spec::MotionSpec {
+        use crate::motion_spec::{MotionDuration, MotionSpec, TweenSpec};
+        if !self.enabled {
+            return MotionSpec::Instant;
+        }
+        MotionDuration::new(self.duration).map_or(MotionSpec::Instant, |duration| {
+            MotionSpec::Tween(TweenSpec {
+                duration,
+                easing: self.easing,
+            })
+        })
+    }
 }
 
 /// Desired visual configuration owned by the evaluator and published as one
