@@ -127,6 +127,10 @@ impl EditorFileSystem for MountTableFileSystem {
         match self.route(path) {
             Ok((mount, relative)) => mount.filesystem.access(&relative, mode),
             Err(_) => {
+                if let AccessMode::Existing(permissions) = mode {
+                    return self.namespace_directory(path).unwrap_or(false)
+                        && permissions.is_satisfied_by(true, false, true);
+                }
                 self.namespace_directory(path).unwrap_or(false)
                     && matches!(
                         mode,

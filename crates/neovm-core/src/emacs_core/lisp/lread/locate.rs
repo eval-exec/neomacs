@@ -1,7 +1,9 @@
 //! GNU file lookup: search order, suffixes, predicates, and filename handlers.
 
 use super::expect_lisp_string;
-use crate::emacs_core::error::{EvalResult, Flow, LispCondition, expect_max_args, expect_min_args, signal};
+use crate::emacs_core::error::{
+    EvalResult, Flow, LispCondition, expect_max_args, expect_min_args, signal,
+};
 use crate::emacs_core::value::*;
 use crate::heap_types::LispString;
 
@@ -9,7 +11,10 @@ use crate::heap_types::LispString;
 ///
 /// Search PATH for FILENAME with each suffix in SUFFIXES.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_locate_file(eval: &mut crate::emacs_core::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_locate_file(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_min_args("locate-file", &args, 2)?;
     expect_max_args("locate-file", &args, 4)?;
     let filename = expect_lisp_string(&args[0])?;
@@ -223,8 +228,10 @@ fn candidate_matches_openp(
         return readable_non_directory_candidate(eval, candidate);
     }
 
-    if let Some(mask) = predicate.as_fixnum() {
-        return Ok(integer_access_predicate_matches(candidate, mask));
+    if let Some(mask) = predicate.as_fixnum()
+        && mask >= 0
+    {
+        return Ok(integer_access_predicate_matches(eval, candidate, mask));
     }
 
     let result = eval.funcall_general(*predicate, vec![Value::heap_string(candidate.clone())])?;
@@ -270,40 +277,19 @@ fn readable_non_directory_candidate(
             .is_ok_and(|metadata| metadata.kind != FileEntryKind::Directory))
 }
 
-fn integer_access_predicate_matches(candidate: &LispString, mask: i64) -> bool {
-    let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(candidate);
-    if std::fs::metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+fn integer_access_predicate_matches(
+    eval: &crate::emacs_core::eval::Context,
+    candidate: &LispString,
+    mask: i64,
+) -> bool {
+    use crate::emacs_core::fileio::{AccessMode, AccessPermissions, FileEntryKind};
+    let Some(permissions) = AccessPermissions::from_posix_mask(mask) else {
         return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-
-        let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
-            return false;
-        };
-        let mut mode = 0;
-        if (mask & 1) != 0 {
-            mode |= libc::X_OK;
-        }
-        if (mask & 2) != 0 {
-            mode |= libc::W_OK;
-        }
-        if (mask & 4) != 0 {
-            mode |= libc::R_OK;
-        }
-        unsafe { libc::access(c_path.as_ptr(), mode) == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        let meta = match std::fs::metadata(path) {
-            Ok(meta) => meta,
-            Err(_) => return false,
-        };
-        if (mask & 2) != 0 && meta.permissions().readonly() {
-            return false;
-        }
-        true
-    }
+    };
+    let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(candidate);
+    let filesystem = eval.editor_file_system();
+    filesystem
+        .metadata(&path, true)
+        .is_ok_and(|metadata| metadata.kind != FileEntryKind::Directory)
+        && filesystem.access(&path, AccessMode::Existing(permissions))
 }
-

@@ -135,6 +135,11 @@ impl EditorFileSystem for MemoryFileSystem {
             Some(node) => {
                 let metadata = node.metadata();
                 match mode {
+                    AccessMode::Existing(permissions) => permissions.is_satisfied_by(
+                        true,
+                        !metadata.readonly,
+                        metadata.kind == FileEntryKind::Directory,
+                    ),
                     AccessMode::Exists | AccessMode::Read => true,
                     AccessMode::WriteOrCreate => !metadata.readonly,
                     AccessMode::Execute | AccessMode::ReadAndSearch => {

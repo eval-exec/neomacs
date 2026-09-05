@@ -69,6 +69,32 @@ fn evaluator_with_files(files: impl IntoIterator<Item = (&'static str, &'static 
 }
 
 #[test]
+fn integer_lookup_preserves_runtime_mount_read_only_access() {
+    let mut evaluator = evaluator_with_files([("/neomacs/lisp/probe.el", b"nil".as_slice())]);
+    for (mask, expected) in [
+        (0, true),
+        (1, false),
+        (2, false),
+        (3, false),
+        (4, true),
+        (5, false),
+        (6, false),
+        (7, false),
+    ] {
+        let value = evaluator
+            .eval_str(&format!(
+                r#"(locate-file-internal "probe.el" '("/neomacs/lisp") nil {mask})"#
+            ))
+            .unwrap();
+        assert_eq!(
+            value.as_utf8_str(),
+            expected.then_some("/neomacs/lisp/probe.el"),
+            "mask {mask}"
+        );
+    }
+}
+
+#[test]
 fn load_resolves_and_reads_lisp_from_the_context_runtime_mount() {
     let mut evaluator = evaluator_with_files([(
         "/neomacs/lisp/browser-runtime-probe.el",
