@@ -18,7 +18,9 @@ use std::collections::HashMap;
 use neomacs_display_protocol::DeviceScale;
 use neomacs_display_protocol::PresentedPrimitiveKind;
 use neomacs_display_protocol::face::{BoxType, BoxVerticalEdges, Face};
-use neomacs_display_protocol::frame_glyphs::{FrameGlyph, FrameGlyphBuffer, GlyphRowRole};
+use neomacs_display_protocol::frame_glyphs::{
+    FrameGlyph, FrameGlyphBuffer, GlyphRowRole, ScrollBarIdentity,
+};
 use neomacs_display_protocol::types::{AnimatedCursor, Color, Rect};
 
 use super::super::vertex::RectVertex;
@@ -36,7 +38,13 @@ pub(super) struct FrameParams<'a> {
     /// `None` while its visual box is in flight, so text cannot be recolored
     /// at a destination the box has not reached.
     pub(super) cursor_inverse_video: Option<InverseVideoCell>,
-    pub(super) mouse_pos: (f32, f32),
+    /// Which scroll bar the pointer is over, resolved by the compositor.
+    ///
+    /// An identity rather than a position: the pointer's position is on the
+    /// root surface and every rect in this buffer is in the presentation being
+    /// drawn, and while a pane is in motion those name different pixels. A
+    /// draw phase has no way to tell them apart, so it is given the answer.
+    pub(super) hovered_scroll_bar: Option<ScrollBarIdentity>,
     // RGB-pair gradient endpoints; a dedicated type alias would add little here.
     #[allow(clippy::type_complexity)]
     pub(super) background_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
