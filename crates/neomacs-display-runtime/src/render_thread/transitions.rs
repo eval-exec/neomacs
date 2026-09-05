@@ -300,7 +300,7 @@ fn plan_scroll(
     policy: &TransitionPolicy,
     scroll: &crate::render_thread::frame_compositor::continuity::ScrollObservation,
 ) -> Option<PlannedTransition> {
-    let bounds = scroll.region.bounds();
+    let bounds = scroll.transition?.region.bounds();
     if bounds.height < policy.minimum_scroll_region_height() {
         return None;
     }
