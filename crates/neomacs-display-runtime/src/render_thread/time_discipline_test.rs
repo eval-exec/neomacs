@@ -41,8 +41,8 @@ fn allowlist() -> BTreeMap<&'static str, &'static str> {
              frame sample would make it read zero.",
         ),
         (
-            "src/render_thread/render_pass/chrome.rs",
-            "render_frame_fps_overlay closes the CPU render-work span begun by \
+            "src/render_thread/render_pass/chrome/transient_overlays.rs",
+            "draw_fps closes the CPU render-work span begun by \
              begin_fps_cpu_span; the frame sample is the same for both ends of \
              that span, so it cannot measure it.",
         ),
