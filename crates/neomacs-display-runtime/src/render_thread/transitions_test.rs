@@ -39,9 +39,7 @@ fn visual_config_is_the_transition_policy_source_of_truth() {
 #[test]
 fn default_transition_state_starts_without_active_transitions() {
     let ts = TransitionState::default();
-    assert!(ts.offscreen_a.is_none());
-    assert!(ts.offscreen_b.is_none());
-    assert!(ts.current_is_a);
+    assert!(ts.compositions.is_none());
     assert!(!ts.has_active());
 }
 

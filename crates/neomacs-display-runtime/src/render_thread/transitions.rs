@@ -5,7 +5,9 @@ use neomacs_display_protocol::{
     DirectionlessTransitionEffect, DisplayWindowId, Rect, ResolvedTransitionEffect,
     TransitionEasing, TransitionPlan, TransitionPolicy,
 };
-use neomacs_renderer_wgpu::WgpuRenderer;
+use neomacs_renderer_wgpu::{
+    BudgetExceeded, CompositionRing, SnapshotLease, SnapshotSize, WgpuRenderer,
+};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,26 +105,27 @@ pub(super) struct ActiveTransition {
     pub(super) started: neomacs_display_protocol::frame_time::EventTime,
     /// Regions share this transition's one clock and previous-frame snapshot.
     plan: SynchronizedTransitionPlan,
-    // Snapshot handles retained for the transition's lifetime; sampling goes
-    // through `old_bind_group`, so these are never read directly.
-    #[allow(dead_code)]
-    pub(super) old_texture: wgpu::Texture,
-    #[allow(dead_code)]
-    pub(super) old_view: wgpu::TextureView,
-    pub(super) old_bind_group: wgpu::BindGroup,
+    /// The composition this transition animates away from.
+    ///
+    /// Holding the lease is what keeps those pixels alive: the pool will not
+    /// re-lease a slot anyone still names, so the ring allocates beside it
+    /// instead of overwriting it. This used to be a full-frame
+    /// `copy_texture_to_texture` into a third texture on every transition
+    /// start, which existed only because the flip-flop would otherwise draw
+    /// over the picture being faded from.
+    old: SnapshotLease,
 }
 
 /// Window transition state.
 ///
-/// Groups configuration, double-buffer textures, and active transition maps.
+/// Groups configuration, the composition ring, and active transition maps.
 pub(crate) struct TransitionState {
     // Configuration
     pub(super) policy: TransitionPolicy,
 
-    // Double-buffer offscreen textures
-    pub(super) offscreen_a: Option<(wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
-    pub(super) offscreen_b: Option<(wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
-    pub(super) current_is_a: bool,
+    /// The pictures of the last two composed frames, leased from the pool.
+    /// `None` until the first offscreen frame, and again after a device loss.
+    pub(super) compositions: Option<CompositionRing>,
 
     // Active transitions
     active: HashMap<TransitionKey, ActiveTransition>,
@@ -132,9 +135,7 @@ impl Default for TransitionState {
     fn default() -> Self {
         Self {
             policy: TransitionPolicy::default(),
-            offscreen_a: None,
-            offscreen_b: None,
-            current_is_a: true,
+            compositions: None,
             active: HashMap::new(),
         }
     }
@@ -158,68 +159,37 @@ impl TransitionState {
     pub(super) fn active_count(&self) -> usize {
         self.active.len()
     }
-}
 
-fn current_offscreen_view_and_bg(
-    transitions: &TransitionState,
-) -> Option<(&wgpu::TextureView, &wgpu::BindGroup)> {
-    let (_, view, bg) = if transitions.current_is_a {
-        transitions.offscreen_a.as_ref()?
-    } else {
-        transitions.offscreen_b.as_ref()?
-    };
-    Some((view, bg))
-}
-
-fn previous_offscreen(
-    transitions: &TransitionState,
-) -> Option<(&wgpu::Texture, &wgpu::TextureView, &wgpu::BindGroup)> {
-    let (tex, view, bg) = if transitions.current_is_a {
-        transitions.offscreen_b.as_ref()?
-    } else {
-        transitions.offscreen_a.as_ref()?
-    };
-    Some((tex, view, bg))
-}
-
-fn snapshot_prev_texture(
-    renderer: &WgpuRenderer,
-    transitions: &TransitionState,
-    width: u32,
-    height: u32,
-) -> Option<(wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)> {
-    let (prev_tex, _, _) = previous_offscreen(transitions)?;
-
-    let (snap, snap_view) = renderer.create_offscreen_texture(width, height);
-
-    let mut encoder = renderer
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Snapshot Copy Encoder"),
-        });
-    encoder.copy_texture_to_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: prev_tex,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyTextureInfo {
-            texture: &snap,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    renderer.queue().submit(std::iter::once(encoder.finish()));
-
-    let snap_bg = renderer.create_texture_bind_group(&snap_view);
-    Some((snap, snap_view, snap_bg))
+    /// Rotate this frame window's composition ring and hand back the slot the
+    /// frame should compose into.
+    ///
+    /// A ring cut for a surface size that no longer exists is rebuilt rather
+    /// than advanced, and is dropped *before* the new lease is asked for so
+    /// the pool can re-cut those slots at the new size instead of allocating
+    /// beside them. That also retires the unwritten contract the old
+    /// `ensure_frame_offscreen_textures` depended on: it never checked the
+    /// size of an existing texture, so correctness rested entirely on an
+    /// external resize hook clearing it.
+    pub(super) fn advance_compositions(
+        &mut self,
+        renderer: &mut WgpuRenderer,
+        size: SnapshotSize,
+    ) -> Result<SnapshotLease, BudgetExceeded> {
+        match self.compositions.take() {
+            Some(mut ring) if ring.size() == size => {
+                let advanced = ring.advance(|| renderer.acquire_snapshot(size));
+                let current = ring.current().clone();
+                self.compositions = Some(ring);
+                advanced.map(|()| current)
+            }
+            _ => {
+                let ring = CompositionRing::new(renderer.acquire_snapshot(size)?);
+                let current = ring.current().clone();
+                self.compositions = Some(ring);
+                Ok(current)
+            }
+        }
+    }
 }
 
 fn plan_transition_hint(
@@ -321,13 +291,10 @@ const VELOCITY_FADE_SATURATION_FRACTION: f32 = 1.0;
 /// re-entry guard that lets a running theme transition finish rather than
 /// restarting it, and the configured duration and easing.
 fn start_theme_transition(
-    renderer: &WgpuRenderer,
     transitions: &mut TransitionState,
     effects: &neomacs_display_protocol::EffectsConfig,
     theme: crate::render_thread::frame_compositor::continuity::theme::ThemeChange,
     now: neomacs_display_protocol::frame_time::EventTime,
-    width: u32,
-    height: u32,
 ) {
     if !effects.theme_transition.enabled {
         return;
@@ -342,14 +309,11 @@ fn start_theme_transition(
         effect: ResolvedTransitionEffect::Directionless(DirectionlessTransitionEffect::Crossfade),
     };
     start_transition(
-        renderer,
         transitions,
         TransitionKey::Theme,
         TransitionSource::Theme,
         SynchronizedTransitionPlan::from_single(plan),
         now,
-        width,
-        height,
     );
 }
 
@@ -380,41 +344,33 @@ fn plan_scroll(
 }
 
 fn apply_transition_hint(
-    renderer: &WgpuRenderer,
     transitions: &mut TransitionState,
     hint: &ContentTransitionHint,
     now: neomacs_display_protocol::frame_time::EventTime,
-    width: u32,
-    height: u32,
 ) {
     let Some(planned) = plan_transition_hint(&transitions.policy, hint) else {
         return;
     };
     transitions.active.remove(&planned.key);
-    start_transition(
-        renderer,
-        transitions,
-        planned.key,
-        planned.source,
-        planned.plan,
-        now,
-        width,
-        height,
-    );
+    start_transition(transitions, planned.key, planned.source, planned.plan, now);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn start_transition(
-    renderer: &WgpuRenderer,
     transitions: &mut TransitionState,
     transition_key: TransitionKey,
     source: TransitionSource,
     plan: SynchronizedTransitionPlan,
     now: neomacs_display_protocol::frame_time::EventTime,
-    width: u32,
-    height: u32,
 ) {
-    let Some((tex, view, bg)) = snapshot_prev_texture(renderer, transitions, width, height) else {
+    // No previous composition means there is nothing to animate away from —
+    // the first offscreen frame of a window, or the first after a device
+    // loss. Starting anyway would crossfade from an empty texture.
+    let Some(old) = transitions
+        .compositions
+        .as_ref()
+        .and_then(CompositionRing::previous)
+        .cloned()
+    else {
         return;
     };
     tracing::debug!(
@@ -431,9 +387,7 @@ fn start_transition(
             source,
             started: now,
             plan,
-            old_texture: tex,
-            old_view: view,
-            old_bind_group: bg,
+            old,
         },
     );
 }
@@ -445,8 +399,6 @@ pub(super) fn detect_frame_transitions(
     frame: &mut FrameGlyphBuffer,
     pending: crate::render_thread::frame_compositor::PendingContinuity,
     frame_dirty: &mut bool,
-    width: u32,
-    height: u32,
 ) {
     let transition_hints = frame.take_transition_hints();
     // One sample for the whole frame: a transition detected and rendered in the
@@ -455,14 +407,14 @@ pub(super) fn detect_frame_transitions(
     let now = renderer.frame_sample().presentation_time();
 
     for hint in &transition_hints {
-        apply_transition_hint(renderer, transitions, hint, now, width, height);
+        apply_transition_hint(transitions, hint, now);
     }
     // Scroll transitions come from a measurement the compositor made when the
     // presentation was installed, not from anything the producer declared.
     if pending.accept_derived_effects
         && let Some(theme) = pending.theme
     {
-        start_theme_transition(renderer, transitions, effects, theme, now, width, height);
+        start_theme_transition(transitions, effects, theme, now);
     }
     if pending.accept_derived_effects
         && let Some(selection) = pending.selection
@@ -488,16 +440,7 @@ pub(super) fn detect_frame_transitions(
             continue;
         };
         transitions.active.remove(&planned.key);
-        start_transition(
-            renderer,
-            transitions,
-            planned.key,
-            planned.source,
-            planned.plan,
-            now,
-            width,
-            height,
-        );
+        start_transition(transitions, planned.key, planned.source, planned.plan, now);
     }
     if pending.accept_derived_effects && effects.line_animation.enabled {
         for reflow in &pending.reflows {
@@ -513,30 +456,8 @@ pub(super) fn detect_frame_transitions(
     }
 }
 
-pub(super) fn ensure_frame_offscreen_textures(
-    renderer: &WgpuRenderer,
-    transitions: &mut TransitionState,
-    width: u32,
-    height: u32,
-) {
-    if transitions.offscreen_a.is_some() && transitions.offscreen_b.is_some() {
-        return;
-    }
-    if transitions.offscreen_a.is_none() {
-        let (tex, view) = renderer.create_offscreen_texture(width, height);
-        let bg = renderer.create_texture_bind_group(&view);
-        transitions.offscreen_a = Some((tex, view, bg));
-    }
-    if transitions.offscreen_b.is_none() {
-        let (tex, view) = renderer.create_offscreen_texture(width, height);
-        let bg = renderer.create_texture_bind_group(&view);
-        transitions.offscreen_b = Some((tex, view, bg));
-    }
-}
-
 pub(super) fn clear_frame_transition_textures(transitions: &mut TransitionState) {
-    transitions.offscreen_a = None;
-    transitions.offscreen_b = None;
+    transitions.compositions = None;
     transitions.active.clear();
 }
 
@@ -548,10 +469,10 @@ pub(super) fn render_frame_transitions(
     height: u32,
 ) {
     let now = renderer.frame_sample().presentation_time();
-    let current_bg = match current_offscreen_view_and_bg(transitions) {
-        Some((_, bg)) => bg.clone(),
-        None => return,
+    let Some(compositions) = transitions.compositions.as_ref() else {
+        return;
     };
+    let current_bg = compositions.current().bind_group().clone();
 
     let mut completed = Vec::new();
     for (&transition_key, transition) in &transitions.active {
@@ -562,7 +483,7 @@ pub(super) fn render_frame_transitions(
         for region in transition.plan.regions() {
             renderer.render_transition_effect(
                 surface_view,
-                &transition.old_bind_group,
+                transition.old.bind_group(),
                 &current_bg,
                 raw_t,
                 elapsed_secs,
