@@ -8,6 +8,76 @@ fn test_eval_ctx() -> Context {
 }
 
 #[test]
+fn locate_theme_file_in_the_editor_filesystem() {
+    use crate::emacs_core::fileio::{EditorFileSystem, MemoryFileSystem, TemporaryEntry};
+    use std::path::Path;
+
+    let mut eval = test_eval_ctx();
+    let filesystem = MemoryFileSystem::new();
+    filesystem
+        .create_directory(Path::new("/virtual-themes"), true)
+        .unwrap();
+    filesystem
+        .create_temporary(
+            Path::new("/virtual-themes/modus-vivendi-theme.el"),
+            TemporaryEntry::File(b"(provide-theme 'modus-vivendi)"),
+        )
+        .unwrap();
+    eval.install_editor_file_system(Box::new(filesystem));
+    let found = eval.eval_str(
+        r#"(locate-file-internal "modus-vivendi-theme.el" '("/virtual-themes") '("" "c"))"#,
+    ).unwrap();
+    assert_eq!(
+        found.as_utf8_str(),
+        Some("/virtual-themes/modus-vivendi-theme.el")
+    );
+    for (predicate, expected) in [
+        ("nil", "/virtual-themes/modus-vivendi-theme.el"),
+        ("t", "/virtual-themes/modus-vivendi-theme.el"),
+        // A user predicate may deliberately accept a nonexistent candidate.
+        ("(lambda (_) t)", "/virtual-themes/modus-vivendi-theme.missing"),
+    ] {
+        let found = eval.eval_str(&format!(
+            r#"(locate-file-internal "modus-vivendi-theme" '("/virtual-themes") '(".missing" ".el") {predicate})"#
+        )).unwrap();
+        assert_eq!(found.as_utf8_str(), Some(expected));
+        assert!(
+            eval.eval_str(&format!(
+                "(locate-file-internal \"/virtual-themes\" nil nil {predicate})"
+            ))
+            .unwrap()
+            .is_nil(),
+            "ordinary truthy predicates must reject directories"
+        );
+    }
+    assert_eq!(
+        eval.eval_str("(locate-file-internal \"/virtual-themes\" nil nil (lambda (_) 'dir-ok))")
+            .unwrap()
+            .as_utf8_str(),
+        Some("/virtual-themes")
+    );
+}
+
+#[test]
+fn locate_file_delegates_to_magic_filename_readability() {
+    let mut eval = test_eval_ctx();
+    let found = eval
+        .eval_str(
+            r#"(progn
+          (fset 'theme-file-handler (lambda (operation &rest args)
+            (eq operation 'file-readable-p)))
+          (put 'theme-file-handler 'operations '(file-exists-p file-readable-p))
+          (let ((file-name-handler-alist '(("/magic-theme/" . theme-file-handler))))
+            (locate-file-internal "modus-vivendi-theme.el" '("/magic-theme/") nil)))"#,
+        )
+        .unwrap();
+    assert_eq!(
+        found.as_utf8_str(),
+        Some("/magic-theme/modus-vivendi-theme.el")
+    );
+}
+
+#[test]
 fn eval_buffer_evaluates_current_buffer_forms() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
