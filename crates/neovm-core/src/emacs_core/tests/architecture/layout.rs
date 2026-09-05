@@ -403,3 +403,28 @@ fn process_mod_stays_a_facade_after_the_domain_split() {
          process/ child module for its domain instead of growing the facade"
     );
 }
+
+/// `runtime/jit/compile.rs` was split from 15,948 lines: its 5,152-line inline
+/// test module went out-of-line, then the compiled-leaf data model, the
+/// lowering engine, the runtime shims, and the dispatch/control-flow shims each
+/// moved to a child module under `jit/compile/`. What remains is the compile
+/// driver, the profitability and gate policy, `analyze_cfg`, the
+/// op-materialization helpers, and the AOT const-reloc glue -- the
+/// orchestration core. Unlike the mod.rs facades, compile.rs is a file module
+/// heavily referenced by sibling modules, so its children widen to pub(crate)
+/// and it re-exports them; new codegen work goes in the child module for its
+/// role, or a new one.
+#[test]
+fn jit_compile_stays_an_orchestrator_after_the_domain_split() {
+    const CEILING: usize = 5_000;
+    let path = emacs_core_root().join("runtime/jit/compile.rs");
+    let lines = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+        .lines()
+        .count();
+    assert!(
+        lines <= CEILING,
+        "runtime/jit/compile.rs is {lines} lines (ceiling {CEILING}); put the new code in the \
+         jit/compile/ child module for its role instead of growing the orchestrator"
+    );
+}
