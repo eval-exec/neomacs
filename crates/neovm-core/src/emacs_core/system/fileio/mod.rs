@@ -10,9 +10,9 @@ mod runtime_resources;
 
 pub(crate) use binary_mode::builtin_set_binary_mode;
 pub use filesystem::{
-    AccessMode, BrowserFileSystemLayout, EditorFileSystem, FileEntryKind, FileMetadata, FileMode,
-    FileStability, FileSystemSpace, FileTimestamp, MemoryFileSystem, MountTableFileSystem,
-    TemporaryEntry, WriteMode, WriteRequest,
+    AccessMode, AccessPermissions, BrowserFileSystemLayout, EditorFileSystem, FileEntryKind,
+    FileMetadata, FileMode, FileStability, FileSystemSpace, FileTimestamp, MemoryFileSystem,
+    MountTableFileSystem, TemporaryEntry, WriteMode, WriteRequest,
 };
 pub(crate) use filesystem::{
     EditorFileSystemNamespace, NativeFileSystem, default_editor_file_system,
