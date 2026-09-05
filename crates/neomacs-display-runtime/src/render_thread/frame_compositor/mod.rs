@@ -26,6 +26,7 @@ mod child_frames;
 pub(in crate::render_thread) mod continuity;
 mod cursor;
 mod media;
+pub(in crate::render_thread) mod motion;
 mod overlays;
 
 /// Glyph composition and rendering state for a frame window.
@@ -85,6 +86,13 @@ pub(crate) struct FrameCompositor {
     /// while nothing is in motion it is the settled projection, which maps by
     /// identity — the ordinary case, not a fallback.
     pub(super) interaction: Option<neomacs_display_protocol::InteractionProjection>,
+    /// How panes should travel, from the current quality policy.
+    pub(super) pane_motion: neomacs_display_protocol::motion_spec::MotionSpec,
+    /// The layout change currently being carried, if any.
+    ///
+    /// `None` is the overwhelmingly common state: it holds a morph only from
+    /// the install that rearranged the panes until the motion settles.
+    pub(super) pane_morph: Option<continuity::pane_layout::PaneLayoutMorph>,
 }
 
 /// What the compositor measured when the current presentation was installed.
@@ -157,6 +165,8 @@ impl FrameCompositor {
             scroll_anchors: ScrollAnchorsByWindow::default(),
             reflow_imprints: ReflowImprintsByWindow::default(),
             interaction: None,
+            pane_motion: neomacs_display_protocol::motion_spec::MotionSpec::Instant,
+            pane_morph: None,
             pending: PendingContinuity::default(),
         }
     }

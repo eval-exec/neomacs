@@ -921,6 +921,10 @@ impl GuiFrameRenderState {
         scroll_anchors: super::frame_compositor::ScrollAnchorsByWindow,
         reflow_imprints: super::frame_compositor::ReflowImprintsByWindow,
     ) -> Option<ActivePresentationTransition> {
+        // One observation for the whole install: every measurement below is
+        // about the same moment, so they must not each mint a slightly later
+        // time and disagree about when the presentation arrived.
+        let installed_at = neomacs_display_protocol::frame_time::observe_platform_now();
         // Measure viewport motion against the presentation being replaced,
         // while both sets of anchors are still in hand.
         self.measure_scroll(frame.as_ref(), &scroll_anchors);
@@ -928,6 +932,7 @@ impl GuiFrameRenderState {
         self.observe_theme_change(frame.as_ref());
         self.observe_shown_text(frame.as_ref());
         self.measure_reflow(frame.as_ref(), &reflow_imprints);
+        self.measure_pane_layout(frame.as_ref(), installed_at);
         self.compositor.reflow_imprints = reflow_imprints;
         self.compositor.scroll_anchors = scroll_anchors;
         // The projection belongs to the presentation being installed, so it is
@@ -2108,6 +2113,21 @@ impl GuiFrameWindowManager {
                 .compositor
                 .transitions
                 .apply_policy(policy);
+        });
+    }
+
+    /// Publish how panes should travel under the current quality policy.
+    ///
+    /// Only affects morphs measured after this point: one already in flight
+    /// finishes on the spec it started with, because retargeting a motion
+    /// mid-flight is a separate question (step 11) and stopping it dead would
+    /// leave panes wherever the policy change happened to catch them.
+    pub(super) fn apply_top_level_pane_motion(
+        &mut self,
+        spec: neomacs_display_protocol::motion_spec::MotionSpec,
+    ) {
+        self.for_each_top_level_window_mut(|window_state| {
+            window_state.render.compositor.pane_motion = spec;
         });
     }
 
