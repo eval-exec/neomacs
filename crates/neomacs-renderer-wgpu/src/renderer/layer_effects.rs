@@ -1152,7 +1152,7 @@ impl WgpuRenderer {
                 ctx,
                 &mut self.fx.border_transition.transitions,
                 &mut self.fx.border_transition.prev_selected,
-                self.durations.border_transition,
+                std::time::Duration::from_millis(self.effects.border_transition.duration_ms as u64,),
             )
         );
     }
@@ -1237,7 +1237,7 @@ impl WgpuRenderer {
             super::cursor_effects::emit_cursor_trail_fade(
                 ctx,
                 &mut self.fx.cursor_trail.positions,
-                &self.durations.cursor_trail_fade,
+                &std::time::Duration::from_millis(self.effects.cursor_trail_fade.ms as u64),
             )
         );
 
@@ -1265,7 +1265,7 @@ impl WgpuRenderer {
             super::window_effects::emit_typing_ripple(
                 ctx,
                 &mut self.fx.typing_ripple.active,
-                self.durations.typing_ripple,
+                self.effects.typing_ripple.duration_ms as f32 / 1000.0,
             )
         );
     }
