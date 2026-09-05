@@ -120,6 +120,10 @@ cargo nextest run \
 # Compile the real editor worker for the browser target.
 cargo check --target wasm32-unknown-unknown -p neomacs-wasm-worker
 
+# Verify HTTP status/body handling, CORS, and filtered headers in Chrome.
+# Starts its own controlled endpoints; no editor build or preview is needed.
+python3 crates/neomacs-wasm/tests/browser_http_smoke.py --headless
+
 # Exercise HiDPI startup and a live viewport/scale change in default Chrome.
 python3 crates/neomacs-wasm/tests/browser_hidpi_smoke.py \
   --headless --url http://127.0.0.1:4174/
