@@ -36167,6 +36167,11 @@ URL can be a URL string, or a URL record of the type returned by
 (register-definition-prefixes "url-misc" '("url-"))
 
 
+;;; Generated autoloads from url/url-neomacs-http.el
+
+(register-definition-prefixes "url-neomacs-http" '("url-neomacs-http"))
+
+
 ;;; Generated autoloads from url/url-news.el
 
 (autoload 'url-news "url-news"
