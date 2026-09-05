@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 
 import { fetchHttp } from "./http.mjs";
+import { createHttpHostImports } from "./host.mjs";
 
 async function endpoint(t, handler) {
   const server = createServer(handler);
@@ -116,4 +117,24 @@ test("HTTP transport rejects non-HTTP URLs", async () => {
   await assert.rejects(fetchHttp({ url: "data:text/plain,not-http" }), {
     name: "TypeError",
   });
+});
+
+test("worker HTTP requests complete as owned metadata and binary bytes", async (t) => {
+  const url = await endpoint(t, (_request, response) => response.end(Buffer.from([0, 255])));
+  const memory = new WebAssembly.Memory({ initial: 2 });
+  let wake;
+  const completed = new Promise((resolve) => { wake = resolve; });
+  const host = createHttpHostImports(() => memory, wake);
+  const request = new TextEncoder().encode(JSON.stringify({url, method: "GET", headers: [], hasBody: false}));
+  new Uint8Array(memory.buffer).set(request);
+  const id = host.http_start(0, request.length, 0, 0);
+  assert.ok(id > 0);
+  assert.equal(host.http_poll(id), 0);
+  await completed;
+  assert.equal(host.http_poll(id), 1);
+  assert.equal(host.http_result_len(id, 1), 2);
+  assert.equal(host.http_copy_result(id, 1, 1024, 2), 2);
+  assert.deepEqual(new Uint8Array(memory.buffer, 1024, 2), new Uint8Array([0, 255]));
+  host.http_cancel(id);
+  assert.equal(host.http_poll(id), 3);
 });
