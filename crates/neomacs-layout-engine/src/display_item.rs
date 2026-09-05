@@ -171,7 +171,6 @@ impl SourceSpan {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RenderFaceRef {
-    #[allow(dead_code)]
     Inherit,
     FaceId(FaceId),
 }
@@ -1275,8 +1274,6 @@ fn is_non_ignorable_format_control(cp: u32) -> bool {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DisplayLength {
-    #[allow(dead_code)]
-    Columns(u16),
     Pixels(f32),
     Em(f32),
     /// A `(space :width/:height/:ascent …)` operand kept verbatim as Lisp.
@@ -1713,12 +1710,14 @@ impl DisplayRowBreak {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DisplayRowBreakReason {
     ExplicitNewline,
-    #[allow(dead_code)]
+    /// Reached only by the line-end plan's own tests: nothing in the pipeline
+    /// yet stamps a row break with the reason it wrapped or truncated, so
+    /// `line_end.rs` constructs these to pin the plan's contract for the row
+    /// shapes that carry no newline.
+    #[cfg(test)]
     Wrap,
-    #[allow(dead_code)]
+    #[cfg(test)]
     Truncate,
-    #[allow(dead_code)]
-    EndOfSource,
 }
 
 #[cfg(test)]

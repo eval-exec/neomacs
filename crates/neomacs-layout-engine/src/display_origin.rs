@@ -9,11 +9,21 @@ pub(crate) enum OverlayStringKind {
     After,
 }
 
+/// Which property carrier a `display` replacement string came from.
+///
+/// GNU distinguishes these — `handle_display_prop` reads the spec through
+/// `get_char_property_and_overlay` and keeps the overlay it came from
+/// (xdisp.c) — and this crate already threads the answer from
+/// `DisplayReplacementStringSourceItem::display_property_string` down onto the
+/// origin. What is missing is upstream: `DisplayPropertyClassification` does
+/// not yet tell a text-property `display` from an overlay one, so the single
+/// production caller states `TextProperty` unconditionally. The `Overlay`
+/// variant that stood here was never constructed by anything, tests included;
+/// it comes back as one line at that call site on the day the classification
+/// can answer the question.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DisplayPropertySource {
     TextProperty,
-    #[allow(dead_code)]
-    Overlay,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
