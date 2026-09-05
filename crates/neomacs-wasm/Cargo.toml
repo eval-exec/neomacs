@@ -23,6 +23,7 @@ neomacs-layout-engine.workspace = true
 neomacs-wgpu-runtime.workspace = true
 neovm-core.workspace = true
 wasm-bindgen.workspace = true
+js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 winit.workspace = true
 
