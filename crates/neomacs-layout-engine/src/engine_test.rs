@@ -9980,6 +9980,214 @@ fn distant_point_with_unrelated_overlay_does_not_exhaust_visibility_retries() {
     );
 }
 
+/// The dashboard scenario behind "SPC SPC hangs after a resize": a completion
+/// UI grows the minibuffer, the selected window shrinks under point, and the
+/// redisplay that follows runs while the *minibuffer* is the current buffer.
+/// The point-relative placement must be resolved in the window's buffer (GNU
+/// `redisplay_window` selects `w->contents` before `recenter:`,
+/// src/xdisp.c:20532-20535, emacs-31.0.90), and once the retry budget is
+/// spent the leaf must end at the start it has (xdisp.c:21384-21398 `done:`)
+/// rather than ask for the same placement forever.
+#[test]
+fn point_placement_with_a_foreign_current_buffer_terminates_and_shows_point() {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let text = (0..600)
+        .map(|index| format!("ordinary line {index:03}\n"))
+        .collect::<String>();
+    let hidden_start = text.find("ordinary line 100").expect("line 100");
+    let hidden_end = text.find("ordinary line 110").expect("line 110");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&text);
+        // A hidden span between the visible rows and point makes the producer
+        // measure display rows instead of counting source lines, which is the
+        // path that asks core display motion for the placement.
+        assert!(buf.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::T
+        ));
+        buf.set_buffer_local("scroll-conservatively", Value::fixnum(30));
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "placement-with-foreign-current-buffer",
+        640,
+        224,
+        buf_id,
+    );
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let point = text.find("ordinary line 500").expect("line 500") + 3;
+    eval.buffer_manager_mut()
+        .goto_buffer_emacs_byte_pos(buf_id, EmacsBytePos::new(point));
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        let neovm_core::window::Window::Leaf {
+            point: window_point,
+            ..
+        } = frame
+            .find_window_mut(selected_window)
+            .expect("selected window")
+        else {
+            panic!("selected window is not a leaf");
+        };
+        *window_point = LispCharPos1::new((point + 1) as i64);
+    }
+    // Redisplay is entered with the active minibuffer current: a buffer far
+    // smaller than any position the placement scans in the window's buffer.
+    eval.eval_str("(progn (set-buffer (get-buffer-create \" *tiny-minibuf*\")) (insert \"M-x \"))")
+        .expect("select a tiny current buffer");
+    let tiny = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    assert_ne!(
+        tiny, buf_id,
+        "the fixture must redisplay with a foreign current buffer"
+    );
+
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    assert!(
+        engine
+            .last_frame_display_state
+            .as_ref()
+            .and_then(|state| state.phys_cursor.as_ref())
+            .is_some(),
+        "point must be placed in the window by display-row motion over the \
+         window's buffer, not the current one"
+    );
+    assert_eq!(
+        eval.buffer_manager()
+            .current_buffer()
+            .map(|buffer| buffer.id()),
+        Some(tiny),
+        "redisplay restores the current buffer it was entered with"
+    );
+}
+
+/// The leaf loop must end once the visibility retry budget is spent even
+/// when the point-relative placement resolves to the start already laid out.
+///
+/// The first source line carries a `display` string of thirty rows. The row
+/// producer fills the window with those rows, so point on the second source
+/// line is beyond the visible span, and a hidden span before point forces a
+/// display-row measurement; core screen-line motion counts that first line
+/// as one screen line, so every placement relative to point clamps back to
+/// the window start. The old decision table turned the spent-budget
+/// measurement that followed into another placement request and re-entered
+/// the leaf with the same inputs forever; GNU ends the pass at `done:`
+/// (src/xdisp.c:21384-21398, emacs-31.0.90). The layout runs on a helper
+/// thread so a regression fails on the timeout instead of hanging the test
+/// binary.
+#[test]
+fn spent_visibility_budget_ends_the_leaf_at_its_start() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || {
+            let mut eval = Context::new();
+            let buf_id = eval
+                .buffer_manager()
+                .current_buffer()
+                .expect("current buffer")
+                .id();
+            let text = format!(
+                "ab\n{}",
+                (0..20)
+                    .map(|index| format!("ordinary line {index:03}\n"))
+                    .collect::<String>()
+            );
+            let replacement = (0..30)
+                .map(|index| format!("replacement row {index:02}\n"))
+                .collect::<String>();
+            let point = text.find("ordinary line 000").expect("line 000") + 3;
+            {
+                let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+                buf.insert(&text);
+                // The replacement sits on the second character so the walk
+                // makes progress past the window start before it fills the
+                // window; a walk with no progress is settled, not scrolled.
+                assert!(buf.put_text_property(
+                    1,
+                    2,
+                    Value::symbol("display"),
+                    Value::string(&replacement)
+                ));
+                // A hidden span between the visible rows and point makes the
+                // producer measure display rows instead of source lines.
+                assert!(buf.put_text_property(
+                    point - 2,
+                    point,
+                    Value::symbol("invisible"),
+                    Value::T
+                ));
+                buf.set_buffer_local("scroll-conservatively", Value::fixnum(30));
+                buf.goto_emacs_byte_pos(EmacsBytePos::new(point));
+            }
+            let frame_id = eval.frame_manager_mut().create_frame(
+                "spent-budget-placement-clamps-to-start",
+                640,
+                224,
+                buf_id,
+            );
+            let selected_window = eval
+                .frame_manager()
+                .get(frame_id)
+                .expect("frame")
+                .selected_window;
+            {
+                let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+                let neovm_core::window::Window::Leaf {
+                    point: window_point,
+                    ..
+                } = frame
+                    .find_window_mut(selected_window)
+                    .expect("selected window")
+                else {
+                    panic!("selected window is not a leaf");
+                };
+                *window_point = LispCharPos1::new((point + 1) as i64);
+            }
+            let mut engine = LayoutEngine::new();
+            engine.layout_frame_rust(&mut eval, frame_id);
+            let prepared = engine.last_frame_display_state.is_some();
+            let window_start = eval
+                .frame_manager()
+                .get(frame_id)
+                .and_then(|frame| frame.find_window(selected_window))
+                .and_then(neovm_core::window::Window::window_start)
+                .map(|start| start.as_i64());
+            tx.send((prepared, window_start))
+                .expect("report the layout outcome");
+        })
+        .expect("spawn the layout thread");
+
+    let (prepared, window_start) = rx
+        .recv_timeout(std::time::Duration::from_secs(120))
+        .expect("the leaf loop must end once its visibility retry budget is spent");
+    assert!(prepared, "a bounded leaf still publishes the frame");
+    assert_eq!(
+        window_start,
+        Some(1),
+        "with no retries left and no better placement, the leaf ends at the start it had"
+    );
+}
+
 #[test]
 fn layout_frame_rust_renders_invisible_ellipsis_through_row_builder() {
     let mut eval = Context::new();

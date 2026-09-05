@@ -424,28 +424,17 @@ impl BufferSourceRetryPlan {
         self.retry.retry_window_start()
     }
 
+    /// The viewport decision the frame coordinator still has to act on, if
+    /// any. `None` leaves the start to [`Self::should_retry`], which moves it
+    /// only while retries remain; see [`ViewportDecision::resolve_with_budget`]
+    /// for the GNU bound this enforces once the visibility retries are spent.
     pub(crate) fn viewport_resolution(
         &self,
         remaining_visibility_retries: usize,
     ) -> Option<ViewportDecision> {
-        match self.retry.viewport_decision() {
-            ViewportDecision::NeedMoreMeasurement(measurement)
-                if remaining_visibility_retries > 0 =>
-            {
-                Some(ViewportDecision::NeedMoreMeasurement(measurement))
-            }
-            ViewportDecision::NeedMoreMeasurement(measurement) => {
-                Some(measurement.fallback_placement())
-            }
-            decision @ ViewportDecision::PlaceRelativeToPoint { .. }
-                if remaining_visibility_retries > 0 =>
-            {
-                Some(decision)
-            }
-            ViewportDecision::Keep
-            | ViewportDecision::Commit { .. }
-            | ViewportDecision::PlaceRelativeToPoint { .. } => None,
-        }
+        self.retry
+            .viewport_decision()
+            .resolve_with_budget(remaining_visibility_retries, self.retry.start())
     }
 
     /// Target for GNU's force_start point move: the last fully-visible

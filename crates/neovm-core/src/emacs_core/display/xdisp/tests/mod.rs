@@ -6107,3 +6107,58 @@ fn window_line_height_refuses_every_line_form_without_a_current_matrix_like_gnu(
         );
     }
 }
+
+/// GNU runs the `recenter:` placement inside `redisplay_window`, after
+/// `set_buffer_internal_1 (XBUFFER (w->contents))` (src/xdisp.c:20532-20535,
+/// emacs-31.0.90), so the display iterator and every text-property probe it
+/// makes read the window's buffer. This port's redisplay runs with whatever
+/// buffer Lisp left current -- the active minibuffer while a completion UI
+/// is up -- so the placement scan must select the window's buffer itself
+/// and hand the caller's buffer back afterwards.
+#[test]
+fn redisplay_start_before_point_scans_the_window_buffer_not_the_current_one() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = interactive_context();
+    let window_buffer = eval.buffers.current_buffer_id().expect("current buffer");
+    let text: String = (0..600).map(|index| format!("line {index:03}\n")).collect();
+    eval.buffers
+        .get_mut(window_buffer)
+        .expect("window buffer")
+        .insert(&text);
+    let frame_id = eval
+        .frames
+        .create_frame("recenter-window-buffer", 80, 24, window_buffer);
+    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+
+    // A four-character buffer is current, as " *Minibuf-1*" is while `M-x`
+    // completes; every position the scan probes lies beyond its end.
+    let tiny = eval.buffers.create_buffer(" *tiny*");
+    eval.switch_current_buffer(tiny)
+        .expect("select the tiny buffer");
+    eval.buffers
+        .get_mut(tiny)
+        .expect("tiny buffer")
+        .insert("M-x ");
+
+    let line = |index: usize| {
+        text.find(&format!("line {index:03}\n"))
+            .expect("line present")
+    };
+    let point = CharPos0::new(line(500) + 3);
+
+    assert_eq!(
+        eval.redisplay_start_before_point_by_display_rows(window_buffer, window_id, point, 0),
+        Some(CharPos0::new(line(500))),
+        "zero rows above point is the start of point's own screen line"
+    );
+    assert_eq!(
+        eval.redisplay_start_before_point_by_display_rows(window_buffer, window_id, point, 2),
+        Some(CharPos0::new(line(498))),
+        "two rows above point on unwrapped lines is two source lines up"
+    );
+    assert_eq!(
+        eval.buffers.current_buffer_id(),
+        Some(tiny),
+        "the placement scan restores the buffer redisplay was entered with"
+    );
+}

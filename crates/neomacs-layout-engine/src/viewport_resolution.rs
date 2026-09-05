@@ -26,6 +26,82 @@ pub(crate) enum ViewportDecision {
     },
 }
 
+/// The start the rows behind a decision were laid out from.
+///
+/// The frame coordinator may publish a semantic start as the window's
+/// viewport, but a measurement probe is evidence only
+/// ([`ForwardViewportMeasurement::probe_window_start`]): rows produced from
+/// it can never become the accepted presentation, and the semantic start
+/// they stand in for is the probe's origin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewportAttemptStart {
+    /// `window-start`, or a placement the coordinator already committed.
+    Semantic(i64),
+    /// A transient forward probe rooted at `origin`, the last semantic start.
+    MeasurementProbe { origin: i64 },
+}
+
+impl ViewportAttemptStart {
+    /// The start that is Lisp-visible for this attempt.
+    pub(crate) const fn semantic_window_start(self) -> i64 {
+        match self {
+            Self::Semantic(start) | Self::MeasurementProbe { origin: start } => start,
+        }
+    }
+}
+
+impl ViewportDecision {
+    /// Resolve this decision against the leaf attempts the coordinator can
+    /// still grant.
+    ///
+    /// GNU bounds the same search in two places: `try_scrolling` gives up
+    /// once point is more than `scroll_max` lines away (src/xdisp.c:19445-
+    /// 19446, emacs-31.0.90) and, after `try_window` has run from the
+    /// `recenter:` start, `redisplay_window` re-recenters at most twice
+    /// before reaching `done:` with whatever start it has (xdisp.c:21360-
+    /// 21398). With retries left, the decision stands. With none left, a
+    /// semantic start is final: returning `None` lets the producer finish
+    /// its rows there, the port's `done:`. A probe start is never
+    /// publishable, so its decision is replaced by the policy's
+    /// point-relative placement, which the coordinator commits with no
+    /// retries left and the producer then accepts on the next attempt.
+    /// Every path therefore ends at most one leaf attempt after the budget
+    /// is spent; the caller must never re-derive a decision from a spent
+    /// budget on its own.
+    ///
+    /// Declared divergence: GNU answers `SCROLLING_FAILED` with `recenter:`
+    /// (xdisp.c:21097-21108) and so always ends with a start placed around
+    /// point. The coordinator spends its last retry on that placement; when
+    /// core display motion cannot produce one (it returned the start already
+    /// laid out), the leaf ends at that start and point may be outside the
+    /// window for this redisplay, where GNU would have recentered. Ending
+    /// there is what keeps the leaf loop bounded.
+    pub(crate) fn resolve_with_budget(
+        self,
+        remaining_visibility_retries: usize,
+        start: ViewportAttemptStart,
+    ) -> Option<Self> {
+        match self {
+            Self::Keep | Self::Commit { .. } => None,
+            Self::NeedMoreMeasurement(_) | Self::PlaceRelativeToPoint { .. }
+                if remaining_visibility_retries > 0 =>
+            {
+                Some(self)
+            }
+            Self::NeedMoreMeasurement(measurement) => match start {
+                ViewportAttemptStart::Semantic(_) => None,
+                ViewportAttemptStart::MeasurementProbe { .. } => {
+                    Some(measurement.fallback_placement())
+                }
+            },
+            Self::PlaceRelativeToPoint { .. } => match start {
+                ViewportAttemptStart::Semantic(_) => None,
+                ViewportAttemptStart::MeasurementProbe { .. } => Some(self),
+            },
+        }
+    }
+}
+
 /// A forward display-row probe rooted at the last semantic `window-start`.
 ///
 /// `probe_window_start` is deliberately not a candidate for publication.  The
@@ -362,5 +438,102 @@ mod tests {
             },
             "a transient probe must not become the presentation when its rows cannot supply a policy-approved start"
         );
+    }
+
+    fn probe_measurement() -> ForwardViewportMeasurement {
+        let initial = vec![row(0, 1, 10), row(1, 11, 20), row(2, 21, 30)];
+        let ViewportDecision::NeedMoreMeasurement(measurement) = ForwardViewportMeasurement::begin(
+            &initial,
+            ResolvedWindowStart::from_layout_charpos(1),
+            ScrollPolicy::Conservative { max_lines: 30 },
+            0,
+        ) else {
+            panic!("a bounded conservative policy measures forward first")
+        };
+        measurement
+    }
+
+    #[test]
+    fn budget_left_keeps_the_producer_decision() {
+        let measurement = probe_measurement();
+        assert_eq!(
+            ViewportDecision::NeedMoreMeasurement(measurement.clone())
+                .resolve_with_budget(1, ViewportAttemptStart::Semantic(1)),
+            Some(ViewportDecision::NeedMoreMeasurement(measurement))
+        );
+        let placement = ViewportDecision::PlaceRelativeToPoint {
+            lines_above_point: 0,
+            fallback_window_start: ResolvedWindowStart::from_layout_charpos(1),
+        };
+        assert_eq!(
+            placement
+                .clone()
+                .resolve_with_budget(1, ViewportAttemptStart::MeasurementProbe { origin: 1 }),
+            Some(placement)
+        );
+    }
+
+    #[test]
+    fn spent_budget_ends_the_leaf_at_a_semantic_start() {
+        // The hang behind "SPC SPC after a resize": with no retries left the
+        // producer kept asking for a placement that resolved to the start it
+        // already had. GNU reaches `done:` instead (xdisp.c:21384-21398).
+        let measurement = probe_measurement();
+        assert_eq!(
+            ViewportDecision::NeedMoreMeasurement(measurement)
+                .resolve_with_budget(0, ViewportAttemptStart::Semantic(1)),
+            None
+        );
+        assert_eq!(
+            ViewportDecision::PlaceRelativeToPoint {
+                lines_above_point: 0,
+                fallback_window_start: ResolvedWindowStart::from_layout_charpos(1),
+            }
+            .resolve_with_budget(0, ViewportAttemptStart::Semantic(1)),
+            None
+        );
+    }
+
+    #[test]
+    fn spent_budget_never_publishes_a_measurement_probe() {
+        let measurement = probe_measurement();
+        let fallback = measurement.fallback_placement();
+        assert!(matches!(
+            fallback,
+            ViewportDecision::PlaceRelativeToPoint { .. }
+        ));
+        assert_eq!(
+            ViewportDecision::NeedMoreMeasurement(measurement)
+                .resolve_with_budget(0, ViewportAttemptStart::MeasurementProbe { origin: 1 }),
+            Some(fallback.clone())
+        );
+        assert_eq!(
+            fallback
+                .clone()
+                .resolve_with_budget(0, ViewportAttemptStart::MeasurementProbe { origin: 1 }),
+            Some(fallback)
+        );
+    }
+
+    #[test]
+    fn settled_decisions_need_no_retry_at_any_budget() {
+        for budget in [0, 1] {
+            for start in [
+                ViewportAttemptStart::Semantic(1),
+                ViewportAttemptStart::MeasurementProbe { origin: 1 },
+            ] {
+                assert_eq!(
+                    ViewportDecision::Keep.resolve_with_budget(budget, start),
+                    None
+                );
+                assert_eq!(
+                    ViewportDecision::Commit {
+                        window_start: ResolvedWindowStart::from_layout_charpos(1)
+                    }
+                    .resolve_with_budget(budget, start),
+                    None
+                );
+            }
+        }
     }
 }
