@@ -20,7 +20,7 @@ use super::transitions::TransitionState;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
 #[cfg(feature = "video")]
 use neomacs_display_protocol::types::VideoId;
-use neomacs_renderer_wgpu::{RendererFrameEffects, WgpuGlyphAtlas};
+use neomacs_renderer_wgpu::{FullFrameTexture, RendererFrameEffects, WgpuGlyphAtlas};
 
 mod child_frames;
 pub(in crate::render_thread) mod continuity;
@@ -218,16 +218,18 @@ impl FrameCompositor {
 /// frames so an ambient cursor effect composites over it instead of
 /// re-running the glyph pipeline. Validity is generation- and size-keyed.
 pub(crate) struct RetainedStatic {
-    #[allow(dead_code)]
-    pub(super) texture: wgpu::Texture,
-    pub(super) view: wgpu::TextureView,
+    /// The scene texture, its GPU-budget category and its cost as one value.
+    ///
+    /// It used to be a raw `wgpu::Texture` nothing read, kept alive by an
+    /// `#[allow(dead_code)]`, beside a `width`/`height` pair the per-frame
+    /// census re-derived a byte count from. Three descriptions of one
+    /// allocation, any two of which could disagree; now there is one.
+    pub(super) texture: FullFrameTexture,
     /// Image-pipeline bind group for blitting the texture to the surface.
     pub(super) bind_group: wgpu::BindGroup,
     /// `current_scene_generation` this was built from; a new scene commit
     /// bumps that stamp and invalidates this.
     pub(super) generation: u64,
-    pub(super) width: u32,
-    pub(super) height: u32,
     /// Per-filled-box-cursor single-glyph mini-frames, built once per
     /// generation so the composite path re-renders each cursor cell (box plus
     /// inverse-video character) without cloning the frame's font tables every
@@ -244,22 +246,13 @@ pub(crate) struct RetainedCursorCell {
 }
 
 impl RetainedStatic {
-    pub(super) fn new(
-        texture: wgpu::Texture,
-        view: wgpu::TextureView,
-        bind_group: wgpu::BindGroup,
-        width: u32,
-        height: u32,
-    ) -> Self {
+    pub(super) fn new(texture: FullFrameTexture, bind_group: wgpu::BindGroup) -> Self {
         Self {
             texture,
-            view,
             bind_group,
             // Sentinel: no valid scene captured yet, forcing a build on the
             // first fast-path frame.
             generation: u64::MAX,
-            width,
-            height,
             cursor_cells: Vec::new(),
         }
     }

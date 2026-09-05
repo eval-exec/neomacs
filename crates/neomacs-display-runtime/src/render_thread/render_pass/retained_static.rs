@@ -22,7 +22,7 @@ use crate::render_thread::frame_windows::{
     GuiFrameNativeWindowState, GuiFrameRenderState, RetainedCursorCell, RetainedStatic,
 };
 use crate::render_thread::state::PointerAppearanceState;
-use neomacs_renderer_wgpu::WgpuRenderer;
+use neomacs_renderer_wgpu::{FullFrameTexture, SnapshotSize, UnpooledTexture, WgpuRenderer};
 
 /// Whether this frame may be composed from the retained static scene:
 /// the coordinator asked for a compositor-only cursor frame, and the scene is
@@ -80,21 +80,26 @@ pub(super) fn draw(
     cursor_visible: bool,
     hovered_scroll_bar: Option<neomacs_display_protocol::ScrollBarIdentity>,
 ) {
+    let Some(native_size) = SnapshotSize::new(native.width, native.height) else {
+        // wgpu rejects a zero extent, so there is no scene to retain and
+        // nothing to composite from. Reaching this would mean the window was
+        // asked to draw at a size `resize` already refuses to configure.
+        return;
+    };
     let generation = render.compositor.current_scene_generation;
     let retained_valid = matches!(
         &render.compositor.retained_static,
-        Some(rs) if rs.generation == generation
-            && rs.width == native.width
-            && rs.height == native.height
+        Some(rs) if rs.generation == generation && rs.texture.size() == native_size
     );
     if !retained_valid {
-        ensure_retained_static_texture(renderer, render, native.width, native.height);
+        ensure_retained_static_texture(renderer, render, native_size);
         let retained_view = render
             .compositor
             .retained_static
             .as_ref()
             .expect("retained texture just ensured")
-            .view
+            .texture
+            .view()
             .clone();
         // Render the full cursorless static scene into the retained
         // texture (this runs the glyph pipeline once per generation).
@@ -277,44 +282,38 @@ pub(super) fn pointer_appearance_allowed(pointer_appearance: &PointerAppearanceS
     pointer_appearance.active().is_none()
 }
 
-/// Ensure the window's retained-static texture exists at `width`x`height`
-/// in the surface format, recreating it on a size change. Leaves the
-/// generation stamp untouched (the caller sets it after rendering).
+/// Ensure the window's retained-static texture exists at `size` in the
+/// surface format, recreating it on a size change. Leaves the generation
+/// stamp untouched (the caller sets it after rendering).
 ///
-/// Not a pool lease: `RetainedStatic` owns a raw texture, and it is
-/// counted through the [`UnpooledTexture`] census instead.
+/// Not a pool lease: `RetainedStatic` outlives the frame that drew it, so it
+/// owns a [`FullFrameTexture`] and is counted through the
+/// [`UnpooledTexture::RetainedStaticScene`] census instead.
+///
+/// [`UnpooledTexture::RetainedStaticScene`]:
+///     neomacs_renderer_wgpu::UnpooledTexture::RetainedStaticScene
 fn ensure_retained_static_texture(
     renderer: &WgpuRenderer,
     render: &mut GuiFrameRenderState,
-    width: u32,
-    height: u32,
+    size: SnapshotSize,
 ) {
     let needs_new = match &render.compositor.retained_static {
-        Some(rs) => rs.width != width || rs.height != height,
+        Some(rs) => rs.texture.size() != size,
         None => true,
     };
     if !needs_new {
         return;
     }
-    let texture = renderer.device().create_texture(&wgpu::TextureDescriptor {
-        label: Some("retained-static-scene"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: renderer.surface_format(),
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let bind_group = renderer.create_texture_bind_group(&view);
-    render.compositor.retained_static = Some(RetainedStatic::new(
-        texture, view, bind_group, width, height,
-    ));
+    let texture = FullFrameTexture::allocate(
+        renderer.device(),
+        UnpooledTexture::RetainedStaticScene,
+        "retained-static-scene",
+        size,
+        renderer.surface_format(),
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let bind_group = renderer.create_texture_bind_group(texture.view());
+    render.compositor.retained_static = Some(RetainedStatic::new(texture, bind_group));
 }
 
 #[cfg(test)]

@@ -1293,7 +1293,7 @@ impl WgpuRenderer {
 
         let stencil_attachment = if use_stencil {
             Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.stencil.view,
+                view: self.stencil.texture.view(),
                 depth_ops: None,
                 stencil_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Load,

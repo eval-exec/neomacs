@@ -19,6 +19,9 @@ pub mod renderer;
 pub mod shader_surface;
 pub mod shader_surface_cache;
 mod svg;
+#[cfg(test)]
+#[path = "texture_discipline_test.rs"]
+mod texture_discipline_test;
 pub use svg::SvgResourceContext;
 pub mod vertex;
 pub mod xbm;
@@ -50,10 +53,10 @@ pub use glyph_atlas::{
 pub use image_cache::{CachedImage, ImageCache, ImageCacheEvent, ImageMetadata, ImageState};
 pub use overlay_state::{MenuPanel, PopupMenuState, TooltipState};
 pub use renderer::{
-    BudgetExceeded, CompositionRing, FrameRowDamage, GpuBudget, GpuBudgetOwner, PaneBlit,
-    PaneSource, RendererFrameEffects, RowDamageInfo, RowReuseStats, SnapshotId, SnapshotLease,
-    SnapshotPool, SnapshotResources, SnapshotSize, UnpooledTexture, WgpuRenderer, WindowRowDamage,
-    texture_bytes,
+    BudgetExceeded, CompositionRing, FrameRowDamage, FullFrameTexture, GpuBudget, GpuBudgetOwner,
+    PaneBlit, PaneSource, RendererFrameEffects, RowDamageInfo, RowReuseStats, SnapshotId,
+    SnapshotLease, SnapshotPool, SnapshotResources, SnapshotSize, UnpooledTexture, WgpuRenderer,
+    WindowRowDamage, texture_bytes,
 };
 pub use shader_surface::{
     SURFACE_USER_UNIFORM_SLOTS, ShaderValidationError, SurfaceContract, SurfaceUniformInit,
