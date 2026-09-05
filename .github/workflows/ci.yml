@@ -639,10 +639,10 @@ jobs:
       NEXTEST_FILTER: ${{ matrix.filter }}
       NEOMACS_BIN: ${{ github.workspace }}/target/release/neomacs
       NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
-      NEOMACS_MELPA_ORACLE_EMACS: /usr/bin/emacs
+      NEOMACS_MELPA_ORACLE_EMACS: emacs
       NEOMACS_GUI_TEST_BACKEND: x11
       NEOMACS_GUI_TEST_BINARY: ${{ github.workspace }}/target/release/neomacs
-      NEOMACS_GUI_TEST_GNU_EMACS: /usr/bin/emacs
+      NEOMACS_GUI_TEST_GNU_EMACS: emacs
     steps:
       - *checkout
       - *prepare_workspace_tmp
@@ -684,6 +684,11 @@ jobs:
 
       - name: Install Nix for exact MELPA test runtimes
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+
+      # After the MELPA Nix install so the action reuses that Nix instead of
+      # provisioning its own.
+      - name: Set up GNU Emacs oracle
+        uses: ./.github/actions/setup-gnu-emacs
 
       - name: Run deterministic package ecosystem compatibility tests
         env:
@@ -757,6 +762,8 @@ jobs:
       - *prepare_workspace_tmp
       - name: Install GNU Emacs oracle dependencies
         run: scripts/ci/setup-linux.sh oracle
+      - name: Set up GNU Emacs oracle
+        uses: ./.github/actions/setup-gnu-emacs
       - name: Set up test runner
         uses: ./.github/actions/setup-rust
         with:
@@ -798,12 +805,14 @@ jobs:
       TMPDIR: ${{ github.workspace }}/tmp
       NEOMACS_GUI_TEST_BACKEND: x11
       NEOMACS_GUI_TEST_BINARY: ${{ github.workspace }}/target/release/neomacs
-      NEOMACS_GUI_TEST_GNU_EMACS: /usr/bin/emacs
+      NEOMACS_GUI_TEST_GNU_EMACS: emacs
     steps:
       - *checkout
       - *prepare_workspace_tmp
       - name: Install Linux ecosystem dependencies
         run: scripts/ci/setup-linux.sh ecosystem
+      - name: Set up GNU Emacs oracle
+        uses: ./.github/actions/setup-gnu-emacs
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
@@ -850,12 +859,14 @@ jobs:
       TMPDIR: ${{ github.workspace }}/tmp
       NEOMACS_BIN: ${{ github.workspace }}/target/release/neomacs
       NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
-      NEOMACS_MELPA_ORACLE_EMACS: /usr/bin/emacs
+      NEOMACS_MELPA_ORACLE_EMACS: emacs
     steps:
       - *checkout
       - *prepare_workspace_tmp
       - name: Install Linux ecosystem dependencies
         run: scripts/ci/setup-linux.sh ecosystem
+      - name: Set up GNU Emacs oracle
+        uses: ./.github/actions/setup-gnu-emacs
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:

@@ -58,6 +58,12 @@ jobs:
       - name: Install suite dependencies
         run: scripts/ci/setup-linux.sh "$LINUX_PROFILE"
 
+      # Only the tui suite spawns GNU Emacs (pair comparisons); core and
+      # oracle shards run in snapshot mode with no live oracle process.
+      - name: Set up GNU Emacs oracle
+        if: inputs.suite == 'tui'
+        uses: ./.github/actions/setup-gnu-emacs
+
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:

@@ -20,7 +20,7 @@ jobs:
       RUST_BACKTRACE: 1
       TMPDIR: ${{ github.workspace }}/tmp
       NEOMACS_TUI_RECORD: on
-      NEOMACS_MELPA_ORACLE_EMACS: /usr/bin/emacs
+      NEOMACS_MELPA_ORACLE_EMACS: emacs
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,6 +30,13 @@ jobs:
 
       - name: Install system dependencies (apt)
         run: scripts/ci/setup-linux.sh ecosystem
+
+      # Before the tui tests, which spawn the GNU oracle. This provisions a
+      # Nix of its own; the later install-nix-action in this job must reuse
+      # it (this workflow is manual-dispatch only, so a conflict fails loudly
+      # in a low-traffic job rather than silently skipping the oracle).
+      - name: Set up GNU Emacs oracle
+        uses: ./.github/actions/setup-gnu-emacs
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust

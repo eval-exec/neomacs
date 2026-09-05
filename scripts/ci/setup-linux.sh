@@ -56,7 +56,6 @@ readonly -a video_backend_packages=(
 
 declare -a profile_packages=()
 declare -a required_commands=()
-requires_emacs=false
 requires_libfaketime=false
 requires_gstreamer=true
 case "$profile" in
@@ -65,14 +64,16 @@ case "$profile" in
     build-no-gstreamer)
         requires_gstreamer=false
         ;;
+    # GNU Emacs is NOT an apt package here: every GNU-vs-Neomacs comparison
+    # runs against the pinned build installed by
+    # .github/actions/setup-gnu-emacs (the apt emacs-nox 29.3 version-skewed
+    # against the Emacs 31 reference the lisp tree and local pin track).
     oracle)
-        profile_packages=(emacs-nox libfaketime)
-        requires_emacs=true
+        profile_packages=(libfaketime)
         requires_libfaketime=true
         ;;
     ecosystem)
         profile_packages=(
-            emacs-nox
             gnupg
             libfaketime
             xvfb
@@ -84,7 +85,6 @@ case "$profile" in
             fonts-noto-core
         )
         required_commands=(gpg Xvfb xauth xdpyinfo xdotool import weston)
-        requires_emacs=true
         requires_libfaketime=true
         ;;
     release)
@@ -122,9 +122,6 @@ if $requires_gstreamer; then
     pkg-config --modversion gstreamer-1.0
 fi
 
-if $requires_emacs; then
-    emacs --batch --quick --eval '(kill-emacs 0)'
-fi
 if $requires_libfaketime; then
     dpkg -L libfaketime | grep -q '/libfaketime\.so\.1$'
 fi
