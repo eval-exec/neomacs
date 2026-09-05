@@ -27,6 +27,7 @@ fn minibuffer_at(y: f32) -> neomacs_display_protocol::frame_glyphs::WindowInfo {
         buffer_modiff: BufferModiff::new(1),
         bounds: neomacs_display_protocol::types::Rect::new(0.0, y, 800.0, 20.0),
         geometry: neomacs_display_protocol::PresentedWindowGeometry::default(),
+        line_number_field: None,
         mode_line_height: 0.0,
         header_line_height: 0.0,
         tab_line_height: 0.0,
