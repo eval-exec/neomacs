@@ -115,7 +115,7 @@ impl EditorFileSystem for MountTableFileSystem {
         match self.route(path) {
             Ok((mount, relative)) => mount.filesystem.attributes(&relative),
             Err(error) if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? => {
-                super::FileAttributeSnapshot::read(self, path)
+                super::FileAttributeSnapshot::read_single_user_virtual(self, path)
             }
             Err(error) => Err(error),
         }
