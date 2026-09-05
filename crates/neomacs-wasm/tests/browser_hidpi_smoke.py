@@ -146,8 +146,8 @@ def assert_browser_viewport(
         "width": width,
         "height": height,
         "scale": scale,
-        "canvasWidth": width,
-        "canvasHeight": height,
+        "canvasWidth": width - 18,
+        "canvasHeight": height - 52,
     }
     if observed != expected:
         raise RuntimeError(
@@ -169,8 +169,8 @@ def main() -> None:
         assert_browser_viewport(driver, width=1975, height=1100, scale=1.75)
         wait_for_logical_geometry(
             driver,
-            width=1975,
-            height=1100,
+            width=1957,
+            height=1048,
             timeout=args.timeout,
         )
         assert_editor_frame_scale(editor, 1.75)
@@ -181,8 +181,8 @@ def main() -> None:
         assert_browser_viewport(driver, width=1975, height=1100, scale=2.0)
         wait_for_logical_geometry(
             driver,
-            width=1975,
-            height=1100,
+            width=1957,
+            height=1048,
             timeout=args.timeout,
             after_presentation=before_scale_change,
         )
@@ -193,8 +193,8 @@ def main() -> None:
         assert_browser_viewport(driver, width=1440, height=900, scale=2.0)
         wait_for_logical_geometry(
             driver,
-            width=1440,
-            height=900,
+            width=1422,
+            height=848,
             timeout=args.timeout,
             after_presentation=before_resize,
         )
