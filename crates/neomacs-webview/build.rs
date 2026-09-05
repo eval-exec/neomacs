@@ -10,6 +10,7 @@ use std::{
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(wpe_platform_available)");
+    println!("cargo::rustc-check-cfg=cfg(wpe_buffer_formats_api_v2)");
 
     #[cfg(feature = "webview")]
     if env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "linux" {
@@ -120,6 +121,18 @@ fn generate_wpe_platform_bindings(out_dir: &Path) {
     let wpe_platform = pkg_config::Config::new()
         .probe("wpe-platform-2.0")
         .expect("the webview feature on Linux requires wpe-platform-2.0");
+    // WPE 2.52 renamed the DMABuf-formats surface: WPEBufferDMABufFormats
+    // became WPEBufferFormats and the fence accessors moved onto the base
+    // WPEBuffer.  Gate the call sites so the same source builds against
+    // both the nix-pinned 2.50.4 and the distro 2.52.x.
+    let version_parts: Vec<u32> = wpe_platform
+        .version
+        .split('.')
+        .map(|part| part.parse().unwrap_or(0))
+        .collect();
+    if version_parts.len() >= 2 && (version_parts[0], version_parts[1]) >= (2, 52) {
+        println!("cargo::rustc-cfg=wpe_buffer_formats_api_v2");
+    }
     let wpe_headless = pkg_config::Config::new()
         .probe("wpe-platform-headless-2.0")
         .expect("the webview feature on Linux requires wpe-platform-headless-2.0");

@@ -1185,8 +1185,15 @@ unsafe fn capture_dmabuf(
         });
     }
 
-    let dma_buf = buffer.cast::<plat::WPEBufferDMABuf>();
-    let rendering_fence = plat::wpe_buffer_dma_buf_get_rendering_fence(dma_buf);
+    // WPE 2.52 moved the fence accessors from WPEBufferDMABuf onto the base
+    // WPEBuffer type.
+    #[cfg(not(wpe_buffer_formats_api_v2))]
+    let rendering_fence = {
+        let dma_buf = buffer.cast::<plat::WPEBufferDMABuf>();
+        plat::wpe_buffer_dma_buf_get_rendering_fence(dma_buf)
+    };
+    #[cfg(wpe_buffer_formats_api_v2)]
+    let rendering_fence = plat::wpe_buffer_get_rendering_fence(buffer);
     let rendering_fence = if rendering_fence < 0 {
         None
     } else {

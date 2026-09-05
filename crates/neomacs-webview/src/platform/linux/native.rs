@@ -235,7 +235,14 @@ mod display_imp {
             class.get_egl_display = Some(super::egl_display);
             class.get_keymap = Some(super::keymap);
             class.get_clipboard = Some(super::clipboard);
-            class.get_preferred_dma_buf_formats = Some(super::preferred_dma_buf_formats);
+            #[cfg(not(wpe_buffer_formats_api_v2))]
+            {
+                class.get_preferred_dma_buf_formats = Some(super::preferred_dma_buf_formats);
+            }
+            #[cfg(wpe_buffer_formats_api_v2)]
+            {
+                class.get_preferred_buffer_formats = Some(super::preferred_buffer_formats);
+            }
             class.get_n_screens = Some(super::screen_count);
             class.get_screen = Some(super::screen);
             class.get_drm_device = Some(super::drm_device);
@@ -337,6 +344,7 @@ unsafe extern "C" fn clipboard(display: *mut plat::WPEDisplay) -> *mut plat::WPE
     })
 }
 
+#[cfg(not(wpe_buffer_formats_api_v2))]
 unsafe extern "C" fn preferred_dma_buf_formats(
     display: *mut plat::WPEDisplay,
 ) -> *mut plat::WPEBufferDMABufFormats {
@@ -346,6 +354,21 @@ unsafe extern "C" fn preferred_dma_buf_formats(
         || unsafe {
             delegate(display).map_or(std::ptr::null_mut(), |delegate| {
                 plat::wpe_display_get_preferred_dma_buf_formats(delegate)
+            })
+        },
+    )
+}
+
+#[cfg(wpe_buffer_formats_api_v2)]
+unsafe extern "C" fn preferred_buffer_formats(
+    display: *mut plat::WPEDisplay,
+) -> *mut plat::WPEBufferFormats {
+    guard_native_vfunc(
+        "get-preferred-buffer-formats",
+        std::ptr::null_mut(),
+        || unsafe {
+            delegate(display).map_or(std::ptr::null_mut(), |delegate| {
+                plat::wpe_display_get_preferred_buffer_formats(delegate)
             })
         },
     )
