@@ -193,7 +193,7 @@ impl PaneLayoutMorph {
         LayoutSample {
             panes: self
                 .changes()
-                .map(|change| PanePlacement::at(change, motion))
+                .filter_map(|change| PanePlacement::at(change, motion))
                 .collect(),
             motion,
         }
@@ -220,8 +220,9 @@ fn lerp(from: f32, to: f32, t: f32) -> f32 {
 }
 
 impl PanePlacement {
-    fn at(change: PaneChange, motion: MotionSample) -> Self {
-        match change {
+    /// Where `change` puts its pane at `motion`, or `None` if it draws nothing.
+    fn at(change: PaneChange, motion: MotionSample) -> Option<Self> {
+        Some(match change {
             PaneChange::Persisted { window, from, to } => {
                 let t = motion.progress;
                 let bounds = Rect {
@@ -240,20 +241,26 @@ impl PanePlacement {
                     content_origin: (to.x, to.y),
                 }
             }
-            // An entering pane has nowhere to come from and a leaving one has
-            // nowhere to go, so both stay put for the duration. Step 8 gives
-            // them snapshots to fade.
+            // An entering pane has nowhere to come from, so it sits at its
+            // destination for the duration. Step 8 gives it a snapshot to fade.
             PaneChange::Entered { window, to } => Self {
                 window,
                 bounds: to,
                 content_origin: (to.x, to.y),
             },
-            PaneChange::Exited { window, from } => Self {
-                window,
-                bounds: from,
-                content_origin: (from.x, from.y),
-            },
-        }
+            // A leaving pane draws nothing. Its window is gone from the
+            // destination, so the composed picture holds no pixels for it, and
+            // placing it at its old rect sampling its old origin is an identity
+            // blit of the destination onto itself. That is not the harmless
+            // no-op it looks like: placements are ordered by window id, so an
+            // exiting pane with a higher id lands *after* the panes still in
+            // motion and repaints their region with the settled layout —
+            // `delete-window` on the highest-numbered window erases half the
+            // animation. Until step 8 gives it a snapshot of what it used to
+            // show, the honest thing to draw is nothing, and the base quad
+            // already has the destination covered.
+            PaneChange::Exited { .. } => return None,
+        })
     }
 }
 

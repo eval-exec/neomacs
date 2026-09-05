@@ -319,6 +319,9 @@ fn install(
     frame.window_infos = windows.to_vec();
     render.measure_pane_layout(Some(&frame), at);
     render.compositor.current_frame = Some(frame);
+    // Composed, so the next install measures against this one. See the note on
+    // `FrameCompositor::baseline`.
+    render.begin_presentable_render();
 }
 
 #[test]

@@ -8,6 +8,15 @@ fn frame(background: Color) -> FrameGlyphBuffer {
     frame
 }
 
+/// The last composed presentation, as the measurements see it.
+fn baseline(background: Color) -> crate::render_thread::frame_compositor::MeasurementBaseline {
+    crate::render_thread::frame_compositor::MeasurementBaseline {
+        presentation: neomacs_display_protocol::PresentationId::new(1),
+        window_infos: Vec::new(),
+        background,
+    }
+}
+
 fn minibuffer_at(y: f32) -> neomacs_display_protocol::frame_glyphs::WindowInfo {
     neomacs_display_protocol::frame_glyphs::WindowInfo {
         window_id: DisplayWindowId::new(9),
@@ -45,7 +54,7 @@ fn a_background_change_past_the_threshold_is_a_theme_change() {
         b: 0.9,
         a: 1.0,
     };
-    let change = theme_change(&frame(DARK), &frame(light)).expect("a theme change");
+    let change = theme_change(&baseline(DARK), &frame(light)).expect("a theme change");
     assert_eq!(
         change.bounds,
         neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
@@ -63,7 +72,7 @@ fn a_sub_threshold_drift_is_not_a_theme_change() {
         b: DARK.b,
         a: 1.0,
     };
-    assert_eq!(theme_change(&frame(DARK), &frame(nudged)), None);
+    assert_eq!(theme_change(&baseline(DARK), &frame(nudged)), None);
 }
 
 #[test]
@@ -71,12 +80,12 @@ fn an_alpha_only_change_is_not_a_theme_change() {
     // Frame opacity is a window-manager property a user may animate on its own.
     // Treating it as a theme change would crossfade every time the frame faded.
     let translucent = Color { a: 0.4, ..DARK };
-    assert_eq!(theme_change(&frame(DARK), &frame(translucent)), None);
+    assert_eq!(theme_change(&baseline(DARK), &frame(translucent)), None);
 }
 
 #[test]
 fn an_identical_background_is_not_a_theme_change() {
-    assert_eq!(theme_change(&frame(DARK), &frame(DARK)), None);
+    assert_eq!(theme_change(&baseline(DARK), &frame(DARK)), None);
 }
 
 #[test]
@@ -89,7 +98,7 @@ fn the_crossfade_stops_above_the_minibuffer() {
     };
     let mut next = frame(light);
     next.window_infos.push(minibuffer_at(580.0));
-    let change = theme_change(&frame(DARK), &next).expect("a theme change");
+    let change = theme_change(&baseline(DARK), &next).expect("a theme change");
     assert_eq!(
         change.bounds.height, 580.0,
         "the echo area draws from its own state and is not part of the fade"
@@ -104,7 +113,7 @@ fn each_channel_can_trigger_the_change_on_its_own() {
         Color { b: 0.5, ..DARK },
     ] {
         assert!(
-            theme_change(&frame(DARK), &frame(shifted)).is_some(),
+            theme_change(&baseline(DARK), &frame(shifted)).is_some(),
             "a single channel moving past the threshold is a theme change"
         );
     }

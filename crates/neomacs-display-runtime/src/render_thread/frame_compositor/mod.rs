@@ -68,6 +68,13 @@ pub(crate) struct FrameCompositor {
     /// (frame scheduling plan, Stage 4). Built lazily from the current frame
     /// and reused across cursor-only frames; invalidated on any full render.
     pub(super) retained_static: Option<RetainedStatic>,
+    /// Anchors and imprints of the presentation most recently *installed*,
+    /// waiting to become the baseline if and when it is composed. Separate from
+    /// the baseline pair below for the same reason `baseline` is separate from
+    /// `current_frame`: an install that no frame draws must not displace what
+    /// the next measurement compares against.
+    pub(super) incoming_scroll_anchors: ScrollAnchorsByWindow,
+    pub(super) incoming_reflow_imprints: ReflowImprintsByWindow,
     /// Scroll anchors of the presentation currently displayed.
     ///
     /// Retained instead of its glyph rows: a materialized frame carries no
@@ -79,6 +86,24 @@ pub(crate) struct FrameCompositor {
     pub(super) reflow_imprints: ReflowImprintsByWindow,
     /// Facts measured at the most recent install, consumed exactly once.
     pub(super) pending: PendingContinuity,
+    /// What the continuity measurements compare the next presentation against.
+    ///
+    /// Deliberately NOT `current_frame`. Presentations are installed one at a
+    /// time but composed in batches: `poll_frame` drains the whole channel, so
+    /// when two commits arrive between ticks the first is installed, measured,
+    /// and retired without a frame ever being drawn from it. Measuring against
+    /// `current_frame` would then compare the second commit against the first,
+    /// and the motion the user actually sees — from the last frame on screen to
+    /// the next one — would be measured against a presentation nobody saw. Worse,
+    /// the first commit's own observations are cleared by the second's
+    /// measurement pass, so a scroll, a text replacement or a reflow that
+    /// happened simply never animates.
+    ///
+    /// This advances only when a frame is composed, so it always names the
+    /// pixels that were last on screen. `observe_theme_change` was already
+    /// sticky for exactly this reason; this makes the other four correct too,
+    /// rather than each carrying its own workaround.
+    pub(super) baseline: Option<MeasurementBaseline>,
     /// How a surface point maps into the presentation currently displayed.
     ///
     /// Built alongside the composition it describes, so hit testing asks about
@@ -125,6 +150,19 @@ pub(in crate::render_thread) struct PendingContinuity {
     pub(in crate::render_thread) accept_derived_effects: bool,
 }
 
+/// The last *composed* presentation, reduced to what the measurements read.
+///
+/// A whole `FrameGlyphBuffer` would carry every glyph; these two fields are the
+/// entirety of what diffing two presentations needs.
+pub(in crate::render_thread) struct MeasurementBaseline {
+    /// Which presentation this describes, so a repeated composition of the same
+    /// one does not re-promote and lose the anchors it is supposed to hold.
+    pub(in crate::render_thread) presentation: neomacs_display_protocol::PresentationId,
+    pub(in crate::render_thread) window_infos:
+        Vec<neomacs_display_protocol::frame_glyphs::WindowInfo>,
+    pub(in crate::render_thread) background: neomacs_display_protocol::types::Color,
+}
+
 /// Row imprints keyed by the window that offered them.
 pub(in crate::render_thread) type ReflowImprintsByWindow = std::collections::HashMap<
     neomacs_display_protocol::types::DisplayWindowId,
@@ -162,8 +200,11 @@ impl FrameCompositor {
             renderer_effects: RendererFrameEffects::default(),
             transitions: TransitionState::default(),
             retained_static: None,
+            incoming_scroll_anchors: ScrollAnchorsByWindow::default(),
+            incoming_reflow_imprints: ReflowImprintsByWindow::default(),
             scroll_anchors: ScrollAnchorsByWindow::default(),
             reflow_imprints: ReflowImprintsByWindow::default(),
+            baseline: None,
             interaction: None,
             pane_motion: neomacs_display_protocol::motion_spec::MotionSpec::Instant,
             pane_morph: None,
