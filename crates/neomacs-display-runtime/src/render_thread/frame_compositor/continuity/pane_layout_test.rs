@@ -603,3 +603,74 @@ fn a_sampled_projection_is_not_visible_to_a_hit_test_until_it_has_been_presented
         "presenting the frame is what puts its projection in force"
     );
 }
+
+// =======================================================================
+// Entering and leaving
+// =======================================================================
+
+#[test]
+fn a_leaving_pane_reads_the_previous_composition_because_the_new_one_has_none_of_it() {
+    // Its window is absent from the destination presentation entirely. Reading
+    // the composed picture at its old rect would blit whatever replaced it,
+    // wearing the departing pane's geometry.
+    let origin = origin();
+    let before = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(400.0, 0.0, 400.0, 600.0)),
+    ];
+    let after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let leaving = placed(&morph.sample(frame_at(origin, 50)), 2);
+    assert_eq!(leaving.source, neomacs_renderer_wgpu::PaneSource::Previous);
+    assert_eq!(
+        leaving.bounds,
+        rect(400.0, 0.0, 400.0, 600.0),
+        "held at the rect it had, not carried anywhere"
+    );
+}
+
+#[test]
+fn a_leaving_pane_fades_out_and_an_entering_one_fades_in() {
+    // Both alternatives are worse than a fade. A window that vanishes outright
+    // is the jump the morph exists to remove; one that appears at full opacity
+    // is indistinguishable from the frame simply being redrawn.
+    let origin = origin();
+    let split_before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let split_after = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(400.0, 0.0, 400.0, 600.0)),
+    ];
+    let entering = PaneLayoutMorph::try_new(&split_before, &split_after, linear_100ms(), origin)
+        .expect("a morph");
+    let early = placed(&entering.sample(frame_at(origin, 10)), 2).opacity;
+    let late = placed(&entering.sample(frame_at(origin, 90)), 2).opacity;
+    assert!(
+        early < late,
+        "an entering pane fades in: {early} then {late}"
+    );
+
+    let delete_after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let leaving = PaneLayoutMorph::try_new(&split_after, &delete_after, linear_100ms(), origin)
+        .expect("a morph");
+    let early = placed(&leaving.sample(frame_at(origin, 10)), 2).opacity;
+    let late = placed(&leaving.sample(frame_at(origin, 90)), 2).opacity;
+    assert!(
+        early > late,
+        "a leaving pane fades out: {early} then {late}"
+    );
+}
+
+#[test]
+fn a_persisted_pane_is_always_fully_opaque_and_reads_the_destination() {
+    // Only the lifecycle changes are translucent. Fading a pane that merely
+    // moved would show the frame through the text it is carrying.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    for ms in [0, 50, 100] {
+        let pane = placed(&morph.sample(frame_at(origin, ms)), 1);
+        assert_eq!(pane.opacity, 1.0);
+        assert_eq!(pane.source, neomacs_renderer_wgpu::PaneSource::Destination);
+    }
+}

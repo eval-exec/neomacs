@@ -317,12 +317,16 @@ pub(in crate::render_thread) struct PanePlacement {
     pub(in crate::render_thread) window: LiveDisplayWindowId,
     /// The pane's rect on the surface right now.
     pub(in crate::render_thread) bounds: Rect,
-    /// Where the pane's top-left sits in the destination presentation.
+    /// Where the pane's top-left sits in the picture it samples.
     ///
     /// While a pane is still travelling, the pixels under it belong to a
-    /// different place in the destination than its surface position says. This
-    /// is that place, and it is what makes the interaction projection exact.
+    /// different place in that picture than its surface position says. This is
+    /// that place, and it is what makes the interaction projection exact.
     pub(in crate::render_thread) content_origin: (f32, f32),
+    /// Which picture holds this pane's pixels.
+    pub(in crate::render_thread) source: neomacs_renderer_wgpu::PaneSource,
+    /// How opaque to draw it, for a pane entering or leaving.
+    pub(in crate::render_thread) opacity: f32,
 }
 
 /// Linear interpolation at `t`, which may exceed `[0, 1]` for a spring.
@@ -350,27 +354,36 @@ impl PanePlacement {
                     // top-left. Interpolating the content origin instead would
                     // scroll the text inside the pane as it travelled.
                     content_origin: (to.x, to.y),
+                    source: neomacs_renderer_wgpu::PaneSource::Destination,
+                    opacity: 1.0,
                 }
             }
-            // An entering pane has nowhere to come from, so it sits at its
-            // destination for the duration. Step 8 gives it a snapshot to fade.
+            // An entering pane has nowhere to travel from, so it sits at its
+            // destination and fades in. Fading rather than appearing outright
+            // is what distinguishes it from the frame simply being redrawn: a
+            // new window arriving instantly at full opacity is exactly the jump
+            // the morph exists to remove.
             PaneChange::Entered { window, to } => Self {
                 window,
                 bounds: to,
                 content_origin: (to.x, to.y),
+                source: neomacs_renderer_wgpu::PaneSource::Destination,
+                opacity: motion.content_mix.get(),
             },
-            // A leaving pane draws nothing. Its window is gone from the
-            // destination, so the composed picture holds no pixels for it, and
-            // placing it at its old rect sampling its old origin is an identity
-            // blit of the destination onto itself. That is not the harmless
-            // no-op it looks like: placements are ordered by window id, so an
-            // exiting pane with a higher id lands *after* the panes still in
-            // motion and repaints their region with the settled layout —
-            // `delete-window` on the highest-numbered window erases half the
-            // animation. Until step 8 gives it a snapshot of what it used to
-            // show, the honest thing to draw is nothing, and the base quad
-            // already has the destination covered.
-            PaneChange::Exited { .. } => return None,
+            // A leaving pane holds still at the rect it had reached and fades
+            // out, reading from the *previous* composition. That source is the
+            // whole point: its window is absent from the destination, so the
+            // composed picture holds no pixels for it at all. Sampling the
+            // destination instead would blit whatever replaced it, wearing the
+            // departing pane's geometry — which is what made an earlier version
+            // of this repaint the settled layout over panes still in motion.
+            PaneChange::Exited { window, from } => Self {
+                window,
+                bounds: from,
+                content_origin: (from.x, from.y),
+                source: neomacs_renderer_wgpu::PaneSource::Previous,
+                opacity: 1.0 - motion.content_mix.get(),
+            },
         })
     }
 }
