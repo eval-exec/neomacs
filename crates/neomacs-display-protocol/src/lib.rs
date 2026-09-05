@@ -93,3 +93,5 @@ pub use xwidget_extent::*;
 mod tests;
 
 pub mod input_latency;
+mod pointer_input;
+pub use pointer_input::{PointerPosition, PointerTarget, ScrollDelta, PointerAction, PositionedPointerInput};

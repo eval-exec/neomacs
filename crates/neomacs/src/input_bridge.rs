@@ -186,26 +186,14 @@ pub(crate) fn convert_monitor_infos(monitors: &[DisplayMonitorInfo]) -> Vec<Neom
 /// observation immediately followed by its raw evaluator action.
 pub(crate) fn convert_display_event(event: &DisplayEvent) -> EvaluatorInputBatch<'_> {
     if let DisplayEvent::Tracked { receipt, event } = event {
-        let mut batch = convert_display_event(event);
-        if let EvaluatorInputBatchInner::Inline(events) = &mut batch.inner
-            && let Some(action) = events.iter_mut().rev().find(|event| event.is_some()) {
-            *action = Some(KbInputEvent::Tracked {
-                receipt: receipt.clone(),
-                event: Box::new(action.take().unwrap()),
-            });
-        }
-        return batch;
+        return convert_display_event(event).map_inline_action(|action| KbInputEvent::Tracked {
+            receipt: receipt.clone(), event: Box::new(action),
+        });
     }
     if let DisplayEvent::Observed { token, event } = event {
-        let mut batch = convert_display_event(event);
-        if let EvaluatorInputBatchInner::Inline(events) = &mut batch.inner
-            && let Some(action) = events.iter_mut().rev().find(|event| event.is_some()) {
-            *action = Some(KbInputEvent::Observed {
-                token: *token,
-                event: Box::new(action.take().unwrap()),
-            });
-        }
-        return batch;
+        return convert_display_event(event).map_inline_action(|action| KbInputEvent::Observed {
+            token: *token, event: Box::new(action),
+        });
     }
     if let DisplayEvent::Frontend(event) = event {
         return EvaluatorInputBatch::from_frontend_event(event);
@@ -217,82 +205,8 @@ pub(crate) fn convert_display_event(event: &DisplayEvent) -> EvaluatorInputBatch
 }
 
 fn convert_positioned_pointer_input(input: PositionedPointerInput) -> EvaluatorInputBatch<'static> {
-    let position = input.position;
-    let observation = match input.target {
-        PointerTarget::Presented { presentation, hit } => Some(KbInputEvent::PresentedRegion {
-            presentation,
-            hit,
-            x: position.x,
-            y: position.y,
-            target_frame_id: position.target_frame_id,
-        }),
-        PointerTarget::Unpresented => None,
-    };
-    let action = match input.action {
-        PointerAction::Button {
-            button,
-            pressed,
-            modifiers,
-            ..
-        } => {
-            let button = match button {
-                1 => MouseButton::Left,
-                2 => MouseButton::Middle,
-                3 => MouseButton::Right,
-                4 => MouseButton::Button4,
-                5 => MouseButton::Button5,
-                _ => return EvaluatorInputBatch::empty(),
-            };
-            if pressed {
-                KbInputEvent::MousePress {
-                    button,
-                    x: position.x,
-                    y: position.y,
-                    modifiers: keyboard::render_modifiers_to_modifiers(modifiers),
-                    target_frame_id: position.target_frame_id,
-                }
-            } else {
-                KbInputEvent::MouseRelease {
-                    button,
-                    x: position.x,
-                    y: position.y,
-                    target_frame_id: position.target_frame_id,
-                }
-            }
-        }
-        PointerAction::Move { modifiers } => KbInputEvent::MouseMove {
-            x: position.x,
-            y: position.y,
-            modifiers: keyboard::render_modifiers_to_modifiers(modifiers),
-            target_frame_id: position.target_frame_id,
-        },
-        PointerAction::Scroll {
-            delta, modifiers, ..
-        } => {
-            let modifiers = keyboard::render_modifiers_to_modifiers(modifiers);
-            match delta {
-                ScrollDelta::Lines { x, y } => KbInputEvent::MouseScroll {
-                    delta_x: x,
-                    delta_y: y,
-                    x: position.x,
-                    y: position.y,
-                    modifiers,
-                    target_frame_id: position.target_frame_id,
-                },
-                ScrollDelta::Pixels { x, y } => KbInputEvent::PixelScroll {
-                    delta_x: x,
-                    delta_y: y,
-                    x: position.x,
-                    y: position.y,
-                    modifiers,
-                    target_frame_id: position.target_frame_id,
-                },
-            }
-        }
-    };
-    EvaluatorInputBatch::ordered(observation, action)
+    EvaluatorInputBatch::from_positioned_pointer(input)
 }
-
 fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
     match event {
         DisplayEvent::Observed { .. }
