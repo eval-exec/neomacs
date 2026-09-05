@@ -60,12 +60,36 @@ impl EditorFileSystem for NativeFileSystem {
                 return false;
             };
             let native_mode = match mode {
+                AccessMode::Existing(permissions) => {
+                    let mut flags = libc::F_OK;
+                    if permissions.requires_read() {
+                        flags |= libc::R_OK;
+                    }
+                    if permissions.requires_write() {
+                        flags |= libc::W_OK;
+                    }
+                    if permissions.requires_execute() {
+                        flags |= libc::X_OK;
+                    }
+                    flags
+                }
                 AccessMode::Exists => libc::F_OK,
                 AccessMode::Read => libc::R_OK,
                 AccessMode::WriteOrCreate => libc::W_OK,
                 AccessMode::Execute => libc::X_OK,
                 AccessMode::ReadAndSearch => libc::R_OK | libc::X_OK,
             };
+            if matches!(mode, AccessMode::Existing(_)) {
+                // GNU openp uses effective IDs, not access(2)'s real IDs.
+                return unsafe {
+                    libc::faccessat(
+                        libc::AT_FDCWD,
+                        c_path.as_ptr(),
+                        native_mode,
+                        libc::AT_EACCESS,
+                    ) == 0
+                };
+            }
             if unsafe { libc::access(c_path.as_ptr(), native_mode) } == 0 {
                 return true;
             }
@@ -85,6 +109,11 @@ impl EditorFileSystem for NativeFileSystem {
         #[cfg(not(unix))]
         {
             match mode {
+                AccessMode::Existing(permissions) => {
+                    self.metadata(path, true).is_ok_and(|metadata| {
+                        permissions.is_satisfied_by(true, !metadata.readonly, true)
+                    })
+                }
                 AccessMode::Exists => path.exists(),
                 AccessMode::Read => self.metadata(path, true).is_ok(),
                 AccessMode::WriteOrCreate => {

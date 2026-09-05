@@ -3,6 +3,8 @@ use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use malachite::integer::Integer;
 
+mod locate;
+
 /// Test helper: create a fresh eval context for locate-file tests.
 fn test_eval_ctx() -> Context {
     Context::new()
