@@ -352,18 +352,21 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
     assert!(render.compositor.pane_morph.is_some());
 
     // Mid-motion: two placements, and a projection that is not the identity.
-    let blits = render.sample_pane_layout(frame_at(origin, 50));
+    let blits = render.sample_pane_layout(frame_at(origin, 50)).blits;
     assert_eq!(blits.len(), 2);
     assert!(render.compositor.pane_morph.is_some(), "still travelling");
 
     // The last frame still draws the panes — at their destination — and only
     // then is the morph dropped, so nothing is left to re-arm on the next pass.
-    let blits = render.sample_pane_layout(frame_at(origin, 100));
+    let blits = render.sample_pane_layout(frame_at(origin, 100)).blits;
     assert_eq!(blits.len(), 2);
     assert!(render.compositor.pane_morph.is_none(), "settled");
 
     assert!(
-        render.sample_pane_layout(frame_at(origin, 150)).is_empty(),
+        render
+            .sample_pane_layout(frame_at(origin, 150))
+            .blits
+            .is_empty(),
         "a settled frame composes the ordinary way, with no offscreen"
     );
 }
@@ -387,7 +390,12 @@ fn a_disabled_policy_installs_no_morph_at_all() {
         origin,
     );
     assert!(render.compositor.pane_morph.is_none());
-    assert!(render.sample_pane_layout(frame_at(origin, 0)).is_empty());
+    assert!(
+        render
+            .sample_pane_layout(frame_at(origin, 0))
+            .blits
+            .is_empty()
+    );
 }
 
 #[test]
@@ -415,7 +423,8 @@ fn the_settled_projection_replaces_the_morphs_on_the_last_frame() {
     >::from_px(500.0, 10.0)
     .expect("a finite point");
 
-    render.sample_pane_layout(frame_at(origin, 100));
+    let composition = render.sample_pane_layout(frame_at(origin, 100));
+    render.publish_presented_projection(composition.projection);
     let after_last_frame = render
         .compositor
         .interaction
@@ -553,5 +562,44 @@ fn a_window_the_new_layout_drops_keeps_the_position_it_had_reached() {
     assert!(
         matches!(exited, PaneChange::Exited { from, .. } if (from.x - travelled.x).abs() < 1e-3),
         "the leaving pane is recorded where it had travelled to, not where it started"
+    );
+}
+
+#[test]
+fn a_sampled_projection_is_not_visible_to_a_hit_test_until_it_has_been_presented() {
+    // Sampling places the panes for a frame that may never reach the screen:
+    // the render pass can still lose the surface, or abandon the frame for
+    // want of content, after this point. Publishing at sample time would leave
+    // hit testing answering about pixels nobody saw, which is the one thing
+    // the projection exists to prevent.
+    let mut render = empty_render();
+    render.compositor.pane_motion = linear_100ms();
+    let origin = origin();
+    install(
+        &mut render,
+        &[window(1, rect(0.0, 0.0, 800.0, 600.0))],
+        origin,
+    );
+    install(
+        &mut render,
+        &[window(1, rect(400.0, 0.0, 400.0, 600.0))],
+        origin,
+    );
+
+    let composition = render.sample_pane_layout(frame_at(origin, 50));
+    assert!(!composition.blits.is_empty(), "the panes are in motion");
+    assert!(
+        composition.projection.is_some(),
+        "the sample computed one, it just has not been published"
+    );
+    assert!(
+        render.compositor.interaction.is_none(),
+        "nothing was presented, so no projection is in force"
+    );
+
+    render.publish_presented_projection(composition.projection);
+    assert!(
+        render.compositor.interaction.is_some(),
+        "presenting the frame is what puts its projection in force"
     );
 }
