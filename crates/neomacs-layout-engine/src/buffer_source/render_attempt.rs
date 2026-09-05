@@ -256,7 +256,6 @@ impl<'emit> BufferSourceOutputState<'emit> {
 }
 
 impl<'a, 'face> BufferSourceRenderAttemptContext<'a, 'face> {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         output: TextWindowOutputTarget<'a>,
         evaluator: &'a mut Context,
@@ -274,7 +273,6 @@ impl<'a, 'face> BufferSourceRenderAttemptContext<'a, 'face> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_frame_output_owner(
         frame_output: &'a mut FrameOutputOwner,
         evaluator: &'a mut Context,

@@ -188,7 +188,6 @@ impl SyntheticTextAppendRequest {
     }
 
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn text_row_metrics_source(
         position: DisplayRowPosition,
         source: SyntheticTextSource,
@@ -207,7 +206,6 @@ impl SyntheticTextAppendRequest {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn text_row_metrics_marker(
         position: DisplayRowPosition,
         marker: SyntheticTextMarker,

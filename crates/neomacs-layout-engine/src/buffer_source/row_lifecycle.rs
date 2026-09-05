@@ -854,7 +854,6 @@ impl<'a> BufferSourceSelectiveDisplayTailRenderContext<'a> {
 }
 
 impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         text: &'a [u8],
         accessible_end: i64,
@@ -1009,7 +1008,6 @@ pub(crate) struct BufferSourceInvisibleTextSkip {
 }
 
 impl BufferSourceInvisibleTextSkip {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         start_byte_idx: usize,
         start_charpos: i64,

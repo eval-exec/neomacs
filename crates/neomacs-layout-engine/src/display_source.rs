@@ -2425,7 +2425,6 @@ impl DisplayPropertyReplacementSourceInputs {
 }
 
 impl DisplayPropertyReplacementSourceItem {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_display_property_parts(
         display_property: &DisplayPropertyClassification,
         anchor_charpos: CharPos0,

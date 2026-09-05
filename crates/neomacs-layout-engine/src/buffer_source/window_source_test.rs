@@ -83,7 +83,6 @@ fn window_params() -> WindowParams {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn request(
     requested_window_start: i64,
     point_charpos: i64,
