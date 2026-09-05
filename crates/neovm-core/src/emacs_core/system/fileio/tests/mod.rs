@@ -6909,3 +6909,10 @@ fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
         "the tail's coding cookie must be inside the probe"
     );
 }
+
+#[test]
+fn file_system_info_returns_nil_when_virtual_capacity_is_unsupported() {
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(super::MemoryFileSystem::new()));
+    assert_eq!(eval.eval_str(r##"(file-system-info "/")"##).unwrap(), Value::NIL);
+}
