@@ -131,7 +131,7 @@ pub(crate) struct GuiFrameRenderState {
     /// Intermediate composition target while a full-frame post shader is
     /// installed: the whole frame renders here, then the post pass shades it
     /// into the swapchain as the final step. Recreated on resize.
-    pub(super) frame_post_src: Option<(wgpu::Texture, wgpu::TextureView)>,
+    pub(super) frame_post_src: Option<neomacs_renderer_wgpu::SnapshotLease>,
     /// The current native input-method composition, if any.
     ///
     /// `Option` is the active-state invariant: a preedit cannot be "active"
@@ -1823,17 +1823,21 @@ impl GuiFrameWindowManager {
         }
     }
 
-    /// Process pending window destructions.
-    pub fn process_destroys(&mut self) {
+    /// Process pending window destructions, reporting the frames that went
+    /// away so their GPU accounting can be retired with them.
+    pub fn process_destroys(&mut self) -> Vec<u64> {
         let pending = std::mem::take(&mut self.pending_destroys);
+        let mut destroyed = Vec::new();
         for frame_id in pending {
             if let Some(state) = self.windows.remove(&FrameKey::Adopted(frame_id)) {
                 if let Some(native) = state.lifecycle.native() {
                     self.winit_to_emacs.remove(&native.window.id());
                 }
+                destroyed.push(frame_id);
                 tracing::info!("Destroyed window for frame {}", frame_id);
             }
         }
+        destroyed
     }
 
     /// Drop all windows and their wgpu surfaces (for clean shutdown).
@@ -2187,8 +2191,8 @@ impl GuiFrameWindowManager {
             render.compositor.glyph_atlas = None;
             // Retained cursorless scene: texture + view + bind group.
             render.compositor.retained_static = None;
-            // Transition snapshots: offscreen_a/offscreen_b plus each
-            // crossfade/scroll-slide's old_texture/old_view/old_bind_group.
+            // Composition ring plus every running transition's leased
+            // source picture.
             clear_frame_transition_textures(&mut render.compositor.transitions);
             // Full-frame post shader composition target.
             render.frame_post_src = None;
