@@ -93,6 +93,12 @@ Submodule charters — a new file needs one of these to belong:
   overlays drawn over them), `present` (handing the result to the platform and
   publishing the projection). When a body in `mod.rs` grows past "call the
   phase, check the outcome", it belongs in a phase.
+  `chrome/` repeats the pattern one level down: its `mod.rs` owns the order
+  alone, `frame_bands` draws the frame's furniture (titlebar, menu / tool /
+  compact bars, corner mask) and `transient_overlays` the things that appear
+  because something just happened (popup menu, tooltip, IME pre-edit, visual
+  bell, FPS, typing speed). The two interleave — the corner mask goes on after
+  the visual bell — so neither owns a run of the sequence.
 - `render_thread/frame_ingest.rs` — presentations in from the evaluator.
 - `backend/tty/` — the terminal backend, which shares the protocol and nothing
   else.
