@@ -40,6 +40,7 @@
 
 pub(in crate::render_thread) mod chrome;
 mod composition_targets;
+mod full_render;
 mod present;
 mod retained_static;
 mod scene;
@@ -51,7 +52,6 @@ use super::frame_windows::{
     FrameLifecycle, GuiFrameNativeWindowState, GuiFrameRenderState, GuiFrameWindowState,
 };
 use super::state::{ChildFrameStyle, ToolbarResources};
-use super::transitions::{detect_frame_transitions, render_frame_transitions};
 use crate::core::types::DisplayFrameId;
 use neomacs_renderer_wgpu::{SnapshotSize, WgpuRenderer};
 
@@ -300,113 +300,29 @@ fn render_frame_window_contents_to_surface(
     let composition = need_offscreen
         .then(|| composition_targets::advance_frame_composition(renderer, render, surface_size))
         .flatten();
-    if let Some(composition) = composition.as_ref() {
-        render_frame_window_contents(
+    match composition.as_ref() {
+        Some(composition) => full_render::through_composition_ring(
             renderer,
             native,
             render,
-            composition.view(),
-            &frame,
+            composition,
+            &composition_view,
+            &mut frame,
             &inputs,
             cursor_visible,
-            false,
-        );
-
-        // Drained here, not earlier: the surface-acquisition paths above can
-        // return, and observations dropped on one of those would lose the
-        // scroll measured at install with no later chance to plan it.
-        let pending_continuity =
-            render.take_pending_continuity(feature_plan.accept_derived_effects);
-        renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
-            detect_frame_transitions(
-                renderer,
-                &mut render.compositor.transitions,
-                &renderer.effects.clone(),
-                &mut frame,
-                pending_continuity,
-                &mut render.compositor.dirty,
-            );
-        });
-        if render.compositor.renderer_effects.needs_redraw() {
-            render.mark_dirty();
-        }
-
-        if pane_blits.is_empty() {
-            renderer.blit_texture_to_view(
-                composition.bind_group(),
-                &composition_view,
-                native.width,
-                native.height,
-            );
-        } else {
-            // Same picture, placed rather than copied whole: each pane
-            // reads the region of the composed frame it owns and draws
-            // it where the motion currently puts it.
-            let previous = render
-                .compositor
-                .transitions
-                .previous_composition()
-                .map(|lease| lease.bind_group().clone());
-            renderer.render_pane_layout(
-                composition.bind_group(),
-                previous.as_ref(),
-                &composition_view,
-                (
-                    native.width as f32 / native.scale_factor as f32,
-                    native.height as f32 / native.scale_factor as f32,
-                ),
-                &pane_blits,
-            );
-        }
-        render_frame_transitions(
-            renderer,
-            &mut render.compositor.transitions,
-            &composition_view,
-            native.width,
-            native.height,
-        );
-        if render.compositor.transitions.has_active() {
-            render.mark_dirty();
-        }
-        chrome::render_frame_window_overlays_with_toolbar_resources(
+            feature_plan.accept_derived_effects,
+            &pane_blits,
+        ),
+        None => full_render::onto_target(
             renderer,
             native,
             render,
             &composition_view,
-            &frame,
-            cursor_visible,
-            animated_cursor,
-            child_frame_style,
-            scroll_indicators_enabled,
-            toolbar,
-        );
-    } else {
-        render_frame_window_contents(
-            renderer,
-            native,
-            render,
-            &composition_view,
-            &frame,
+            &mut frame,
             &inputs,
             cursor_visible,
-            true,
-        );
-        // Drained here, not earlier: the surface-acquisition paths above can
-        // return, and observations dropped on one of those would lose the
-        // scroll measured at install with no later chance to plan it.
-        let pending_continuity =
-            render.take_pending_continuity(feature_plan.accept_derived_effects);
-        renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
-            detect_frame_transitions(
-                renderer,
-                &mut render.compositor.transitions,
-                &renderer.effects.clone(),
-                &mut frame,
-                pending_continuity,
-                &mut render.compositor.dirty,
-            );
-        });
-        render.mark_active_visuals_dirty();
+            feature_plan.accept_derived_effects,
+        ),
     }
 
     if frame_post_active {
