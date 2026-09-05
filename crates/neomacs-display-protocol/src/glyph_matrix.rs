@@ -14,7 +14,7 @@ use super::frame_chrome::{FrameChrome, FrameChromeContent, PresentationId};
 use super::frame_glyphs::{
     ContentTransitionHint, CursorStyle, DisplaySlotId, FrameGlyph, FrameGlyphBuffer,
     FringeBitmapData, FringeSide, GlyphRowRole, MaterializedFaceData, PhysCursor,
-    PresentedWindowGeometry, WindowCursor, WindowEffectHint, WindowInfo,
+    PresentedWindowGeometry, WindowCursor, WindowInfo,
 };
 use super::image::{ImageMargins, ImageOpaqueBackground, ImageSourceRect, RetainedImageSet};
 use super::presented_pointer::PresentedPrimitiveKind;
@@ -1845,8 +1845,6 @@ pub struct FrameDisplayState {
     pub scroll_bars: Vec<ScrollBarItem>,
     /// Authoritative active cursor for the frame.
     pub phys_cursor: Option<PhysCursor>,
-    /// Effect hints for the renderer.
-    pub effect_hints: Vec<WindowEffectHint>,
     /// Resolved fringe bitmaps for this frame, keyed by registry index. Each
     /// `GlyphRow::left_fringe_bitmap` references one of these by `bitmap_index`.
     pub fringe_bitmaps: HashMap<u16, FringeBitmapData>,
@@ -2362,7 +2360,6 @@ impl FrameDisplayState {
             cursor_effects_by_window: HashMap::new(),
             scroll_bars: Vec::new(),
             phys_cursor: None,
-            effect_hints: Vec::new(),
             fringe_bitmaps: HashMap::new(),
         }
     }
@@ -2453,7 +2450,6 @@ impl FrameDisplayState {
         state.cursor_effects_by_window = buf.cursor_effects_by_window.clone();
         state.fringe_bitmaps = buf.fringe_bitmaps.clone();
         state.transition_hints = buf.transition_hints.clone();
-        state.effect_hints = buf.effect_hints.clone();
         // Render buffers do not retain buffer-position semantics. Non-active
         // entries therefore round-trip as paint-only cursors; the active entry
         // is reconstructed into `phys_cursor` above.
@@ -2595,9 +2591,6 @@ impl FrameDisplayState {
         buf.fringe_bitmaps = self.fringe_bitmaps.clone();
 
         // --- Grid conversion ---
-
-        // Copy effect hints
-        buf.effect_hints = self.effect_hints.clone();
 
         // Copy transition hints
         buf.transition_hints = self.transition_hints.clone();

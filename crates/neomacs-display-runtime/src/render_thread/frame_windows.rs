@@ -867,6 +867,7 @@ impl GuiFrameRenderState {
         frame: Option<crate::core::frame_glyphs::FrameGlyphBuffer>,
         row_damage: Option<neomacs_renderer_wgpu::FrameRowDamage>,
         scroll_anchors: super::frame_compositor::ScrollAnchorsByWindow,
+        reflow_imprints: super::frame_compositor::ReflowImprintsByWindow,
     ) -> Option<ActivePresentationTransition> {
         // Measure viewport motion against the presentation being replaced,
         // while both sets of anchors are still in hand.
@@ -874,6 +875,8 @@ impl GuiFrameRenderState {
         self.observe_selection_change(frame.as_ref());
         self.observe_theme_change(frame.as_ref());
         self.observe_shown_text(frame.as_ref());
+        self.measure_reflow(frame.as_ref(), &reflow_imprints);
+        self.compositor.reflow_imprints = reflow_imprints;
         self.compositor.scroll_anchors = scroll_anchors;
         let before = self.active_pointer_damage();
         let previous_presentation = self
@@ -932,10 +935,9 @@ impl GuiFrameRenderState {
     }
 
     pub(super) fn take_frame_for_render(current_frame: &mut FrameGlyphBuffer) -> FrameGlyphBuffer {
-        let (transition_hints, effect_hints) = current_frame.take_runtime_hints();
+        let transition_hints = current_frame.take_transition_hints();
         let mut frame = current_frame.clone();
         frame.transition_hints = transition_hints;
-        frame.effect_hints = effect_hints;
         frame
     }
 }

@@ -37,9 +37,9 @@ use neomacs_display_protocol::frame_glyphs::CursorStyle;
 use neomacs_display_protocol::frame_glyphs::DisplaySlotId;
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
-use neomacs_display_protocol::frame_glyphs::{
-    ContentTransitionHint, PhysCursor, WindowEffectHint, WindowInfo,
-};
+#[cfg(test)]
+use neomacs_display_protocol::frame_glyphs::PhysCursor;
+use neomacs_display_protocol::frame_glyphs::{ContentTransitionHint, WindowInfo};
 use neomacs_display_protocol::glyph_matrix::*;
 use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::types::{Color, DisplayFrameId, DisplayWindowId, Rect};
@@ -460,10 +460,6 @@ impl DisplayOutputBuilder {
         self.install_output_frame_artifact(OutputFrameArtifactInstallRequest::TransitionHint(hint));
     }
 
-    pub(crate) fn add_output_effect_hint(&mut self, hint: WindowEffectHint) {
-        self.install_output_frame_artifact(OutputFrameArtifactInstallRequest::EffectHint(hint));
-    }
-
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn add_output_cursor(
@@ -573,28 +569,22 @@ impl DisplayOutputBuilder {
         self.frame_state.window_infos()
     }
 
-    pub(crate) fn transition_hints(&self) -> &[ContentTransitionHint] {
-        self.frame_state.transition_hints()
-    }
-
-    pub(crate) fn effect_hints(&self) -> &[WindowEffectHint] {
-        self.frame_state.effect_hints()
-    }
-
-    pub(crate) fn background_color(&self) -> &Color {
-        self.frame_state.background_color()
-    }
-
-    pub(crate) fn output_face(&self, face_id: FaceId) -> Option<Face> {
-        self.face_attempt.face(face_id)
-    }
-
+    #[cfg(test)]
     pub(crate) fn cursors(&self) -> &[CursorItem] {
         self.frame_state.cursors()
     }
 
+    #[cfg(test)]
     pub(crate) fn phys_cursor(&self) -> Option<&PhysCursor> {
         self.frame_state.phys_cursor()
+    }
+
+    pub(crate) fn transition_hints(&self) -> &[ContentTransitionHint] {
+        self.frame_state.transition_hints()
+    }
+
+    pub(crate) fn output_face(&self, face_id: FaceId) -> Option<Face> {
+        self.face_attempt.face(face_id)
     }
 
     pub(crate) fn finish(

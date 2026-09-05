@@ -13,9 +13,7 @@ use crate::types::{
     WebViewId, XwidgetId,
 };
 use crate::xwidget_extent::XwidgetPresentationGeometry;
-use crate::{
-    ContentTransitionIntent, FrameSpace, GeometryRect, LogicalPixels, TransitionDirection,
-};
+use crate::{ContentTransitionIntent, FrameSpace, GeometryRect, LogicalPixels};
 use std::collections::HashMap;
 
 pub use crate::cursor::{CursorBarWidth, CursorKind, CursorSpec, CursorStyle};
@@ -1066,18 +1064,6 @@ pub enum ContentTransitionHint {
     },
 }
 
-/// Explicit effect hint from layout producers to render thread.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum WindowEffectHint {
-    /// Animate line insertion/deletion below edit point.
-    LineAnimation {
-        window_id: DisplayWindowId,
-        bounds: Rect,
-        edit_y: f32,
-        offset: f32,
-    },
-}
-
 /// Buffer collecting glyphs for current frame.
 ///
 /// With matrix-based rendering, this buffer is cleared and rebuilt from scratch
@@ -1133,9 +1119,6 @@ pub struct FrameGlyphBuffer {
 
     /// Explicit transition requests emitted by layout producers.
     pub transition_hints: Vec<ContentTransitionHint>,
-
-    /// Explicit effect requests emitted by layout producers.
-    pub effect_hints: Vec<WindowEffectHint>,
 
     /// Unified per-window cursors emitted by layout. Exactly one entry per
     /// window; the selected window's entry has `active: true`.
@@ -1477,7 +1460,6 @@ impl FrameGlyphBuffer {
             presented_hit_index: crate::presented_pointer::PresentedHitIndex::default(),
             window_infos: Vec::with_capacity(16),
             transition_hints: Vec::with_capacity(16),
-            effect_hints: Vec::with_capacity(16),
             window_cursors: Vec::with_capacity(8),
             cursor_effects_by_window: HashMap::new(),
             current_face_id: FaceId::new(0),
@@ -1517,7 +1499,6 @@ impl FrameGlyphBuffer {
             crate::presented_pointer::PresentedHitIndex::empty(self.presentation_id);
         self.window_infos.clear();
         self.transition_hints.clear();
-        self.effect_hints.clear();
         self.window_cursors.clear();
         self.fringe_bitmaps.clear();
         self.faces.clear();
@@ -1539,12 +1520,9 @@ impl FrameGlyphBuffer {
         )
     }
 
-    /// Drain producer-emitted transition and effect hints exactly once.
-    pub fn take_runtime_hints(&mut self) -> (Vec<ContentTransitionHint>, Vec<WindowEffectHint>) {
-        (
-            std::mem::take(&mut self.transition_hints),
-            std::mem::take(&mut self.effect_hints),
-        )
+    /// Drain producer-emitted transition hints exactly once.
+    pub fn take_transition_hints(&mut self) -> Vec<ContentTransitionHint> {
+        std::mem::take(&mut self.transition_hints)
     }
 
     /// Set frame identity for child frame support.
@@ -2152,11 +2130,6 @@ impl FrameGlyphBuffer {
     /// Add an explicit transition hint.
     pub fn add_transition_hint(&mut self, hint: ContentTransitionHint) {
         self.transition_hints.push(hint);
-    }
-
-    /// Add an explicit effect hint.
-    pub fn add_effect_hint(&mut self, hint: WindowEffectHint) {
-        self.effect_hints.push(hint);
     }
 
     /// Set the authoritative physical cursor for the frame.

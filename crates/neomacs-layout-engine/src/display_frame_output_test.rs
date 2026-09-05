@@ -3,11 +3,10 @@ use crate::types::{DisplayLineNumbersMode, FrameParams, LineWrapMode, WindowKind
 use neomacs_display_protocol::cursor::CursorBarWidth;
 use neomacs_display_protocol::frame_chrome::FrameChromeKind;
 use neomacs_display_protocol::frame_glyphs::{
-    BufferTransitionTarget, ContentTransitionHint, CursorKind, CursorStyle, DisplaySlotId,
-    PresentedCellOrigin, PresentedWindowGeometry, PresentedWindowRegions, WindowEffectHint,
-    WindowInfo,
+    BufferTransitionTarget, ContentTransitionHint, CursorKind, PresentedCellOrigin,
+    PresentedWindowGeometry, PresentedWindowRegions, WindowInfo,
 };
-use neomacs_display_protocol::types::{Color, DisplayWindowId, Rect};
+use neomacs_display_protocol::types::{DisplayWindowId, Rect};
 use neomacs_display_protocol::{ContentTransitionIntent, TransitionDirection};
 
 fn install_skipped_geometry(
@@ -424,39 +423,6 @@ fn window_frame_info_request_emits_background_and_window_info() {
 }
 
 #[test]
-fn a_scroll_emits_only_the_hints_the_producer_still_owns() {
-    let params = window_params();
-    let mut prev = window_info(&params);
-    prev.window_start = 11;
-    prev.window_end = 81;
-    let curr = window_info(&params);
-    let mut prev_infos = std::collections::HashMap::default();
-    prev_infos.insert(prev.window_id, prev);
-    let mut curr_infos = std::collections::HashMap::default();
-    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
-    builder.add_output_window_info(curr.clone());
-    install_complete_geometry(&mut builder, &curr);
-
-    let observation = WindowFrameInfoEffectsRenderRequest::new(
-        &prev_infos,
-        WindowContentTransitionMode::PerWindow { navigation: None },
-    )
-    .render_latest_and_apply(
-        FrameOutputTarget::from_builder(&mut builder),
-        &mut curr_infos,
-    );
-    assert_eq!(observation, NavigationIntentObservation::None);
-
-    let state = builder.finish(80, 24, 8.0, 16.0);
-    assert_eq!(curr_infos.len(), 1);
-    // Was 4, then 2, now 0. The compositor measures viewport motion itself and
-    // derives every scroll effect from it, so a scroll makes the producer emit
-    // nothing at all. Kept as the regression guard until `WindowEffectHint`
-    // itself goes with the line-animation conversion.
-    assert!(state.effect_hints.is_empty());
-}
-
-#[test]
 fn window_navigation_intent_is_attached_to_the_content_replacement_hint() {
     let params = window_params();
     let mut prev = window_info(&params);
@@ -491,49 +457,6 @@ fn window_navigation_intent_is_attached_to_the_content_replacement_hint() {
             intent: ContentTransitionIntent::Navigate(TransitionDirection::Backward),
             ..
         }]
-    ));
-}
-
-#[test]
-fn frame_line_animation_request_uses_cursor_y_for_buffer_size_change() {
-    let params = window_params();
-    let mut prev = window_info(&params);
-    prev.buffer_size = 200;
-    let mut curr = window_info(&params);
-    curr.buffer_size = 210;
-    let mut prev_infos = std::collections::HashMap::default();
-    prev_infos.insert(prev.window_id, prev);
-    let mut curr_infos = std::collections::HashMap::default();
-    curr_infos.insert(curr.window_id, curr);
-    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
-    builder.add_output_cursor(
-        params.window_id,
-        DisplaySlotId {
-            window_id: DisplayWindowId::new(params.window_id),
-            row: 1,
-            col: 2,
-        },
-        24.0,
-        48.0,
-        8.0,
-        16.0,
-        CursorStyle::FilledBox,
-        Color::WHITE,
-    );
-
-    FrameLineAnimationHintsRenderRequest::new(&prev_infos, &curr_infos)
-        .render_and_apply(FrameOutputTarget::from_builder(&mut builder));
-
-    let state = builder.finish(80, 24, 8.0, 16.0);
-    assert_eq!(state.effect_hints.len(), 1);
-    assert!(matches!(
-        state.effect_hints[0],
-        WindowEffectHint::LineAnimation {
-            window_id,
-            edit_y,
-            offset: -16.0,
-            ..
-        } if window_id.get() == 41 && (edit_y - 64.0).abs() < f32::EPSILON
     ));
 }
 

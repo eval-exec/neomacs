@@ -2440,7 +2440,6 @@ fn materialize_new_fields_default_to_empty() {
     assert!(state.borders.is_empty());
     assert!(state.cursors.is_empty());
     assert!(state.scroll_bars.is_empty());
-    assert!(state.effect_hints.is_empty());
 }
 
 #[test]

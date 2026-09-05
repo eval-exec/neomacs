@@ -39,11 +39,10 @@ use crate::display_cursor::{CapturedCursorInfo, CapturedCursorPlacement, Capture
 #[cfg(test)]
 use crate::display_cursor::{CursorSlotWidthRequest, VisualCursorGeometryContext};
 use crate::display_frame_output::{
-    FrameContentTransitionHintRenderRequest, FrameLineAnimationHintsRenderRequest,
-    FrameOutputIdentity, FrameOutputOwner, FrameOutputStateRenderRequest,
-    NavigationIntentObservation, WindowContentTransitionMode, WindowFrameDecorationsRenderRequest,
-    WindowFrameGeometry, WindowFrameGeometryRequest, WindowFrameInfoEffectsRenderRequest,
-    WindowFrameInfoRenderRequest, WindowFrameMetadata,
+    FrameContentTransitionHintRenderRequest, FrameOutputIdentity, FrameOutputOwner,
+    FrameOutputStateRenderRequest, NavigationIntentObservation, WindowContentTransitionMode,
+    WindowFrameDecorationsRenderRequest, WindowFrameGeometry, WindowFrameGeometryRequest,
+    WindowFrameInfoEffectsRenderRequest, WindowFrameInfoRenderRequest, WindowFrameMetadata,
 };
 use crate::display_mock_frame::layout_mock_frame_content;
 use crate::display_origin::DisplayOrigin;
@@ -1295,15 +1294,9 @@ impl LayoutEngine {
         &mut self,
         previous: &FrameVisualHistory,
         curr_window_infos: &rustc_hash::FxHashMap<DisplayWindowId, WindowInfo>,
-        frame_params: &FrameParams,
         frame_navigation: Option<neomacs_display_protocol::TransitionDirection>,
     ) -> NavigationIntentObservation {
         let prev_window_infos = previous.window_infos();
-        self.frame_output
-            .render_line_animation_hints(FrameLineAnimationHintsRenderRequest::new(
-                prev_window_infos,
-                curr_window_infos,
-            ));
         self.frame_output.render_frame_content_transition_hint(
             FrameContentTransitionHintRenderRequest::new(
                 prev_window_infos,
@@ -2531,7 +2524,6 @@ impl LayoutEngine {
             let frame_navigation_observation = self.render_frame_output_hints(
                 &previous_visual_history,
                 &curr_window_infos,
-                &frame_params,
                 pending_frame_navigation.map(|intent| intent.direction()),
             );
             let observed_frame_navigation = frame_navigation_observation
