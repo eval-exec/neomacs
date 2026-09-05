@@ -160,7 +160,7 @@ fn materialize_op_sym_id(
             let sym_bits =
                 fb.ins()
                     .load(types::I64, MemFlagsData::trusted(), base, (idx * 8) as i32);
-            fb.ins().ushr_imm_u(sym_bits, TAG_BITS as i64)
+            lowering::ushr_imm_p(fb, sym_bits, TAG_BITS as i64)
         }
         None => fb.ins().iconst(types::I64, sym as i64),
     }
@@ -2528,10 +2528,10 @@ fn emit_backedge_jump(
     pending: &mut Vec<PendingDispatch>,
 ) {
     let c = fb.ins().stack_load(rt.ptr_ty, types::I64, counter_slot, 0);
-    let c1 = fb.ins().iadd_imm_u(c, 1);
-    let c1m = fb.ins().band_imm_u(c1, 0xFF);
+    let c1 = lowering::iadd_imm_p(fb, c, 1);
+    let c1m = lowering::band_imm_p(fb, c1, 0xFF);
     fb.ins().stack_store(rt.ptr_ty, c1m, counter_slot, 0);
-    let wrapped = fb.ins().icmp_imm_u(IntCC::Equal, c1m, 0);
+    let wrapped = lowering::icmp_imm_p(fb, IntCC::Equal, c1m, 0);
     let poll = fb.create_block();
     fb.ins().brif(wrapped, poll, &[], target_block, &[]);
 
@@ -2553,7 +2553,7 @@ fn emit_backedge_jump(
     let status = fb.inst_results(call)[0];
     emit_cond_residual_roots_post(fb, rt, saved);
     let se = signal_target_for_site(fb, signal_exit, handlers, pending, &vals);
-    let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+    let ok = lowering::icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
     fb.ins().brif(ok, target_block, &[], se, &[]);
 }
 
@@ -3193,6 +3193,7 @@ fn build_leaf_fn<M: Module>(
     // param instead of baking. 0 = plain function / AOT.
     dynamic_prefix: usize,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    lowering::imm_pool_reset();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     let frontend_config = module.target_config();
     let call_conv = frontend_config.default_call_conv;
@@ -3399,6 +3400,9 @@ fn build_leaf_fn<M: Module>(
             meta_depth_addr,
             meta_handlers_addr,
         );
+        // Pool the common immediates once per function (see
+        // `lowering::imm_pool_define`); `imm_pool_reset` ran at function start.
+        lowering::imm_pool_define(&mut fb, lowering::POOLED_IMMEDIATES);
         if let Some(rt) = rt.as_mut() {
             fb.def_var(rt.vmctx_var, vmctx_param);
             // Root-window base + capacity check once per activation instead
@@ -3687,20 +3691,22 @@ fn build_leaf_fn<M: Module>(
                         );
                         let fall = block_for[&(i + 1)];
                         // miss -> fall through
-                        let miss = fb.ins().icmp_imm_u(IntCC::Equal, addr, JIT_SWITCH_MISS);
+                        let miss =
+                            lowering::icmp_imm_p(&mut fb, IntCC::Equal, addr, JIT_SWITCH_MISS);
                         let chain = fb.create_block();
                         fb.ins().brif(miss, fall, &[], chain, &[]);
                         fb.switch_to_block(chain);
                         fb.seal_block(chain);
                         // stale (-2): the shim stashed the flow already.
-                        let stale = fb.ins().icmp_imm_u(IntCC::Equal, addr, JIT_SWITCH_STALE);
+                        let stale =
+                            lowering::icmp_imm_p(&mut fb, IntCC::Equal, addr, JIT_SWITCH_STALE);
                         let mut cur_blk = fb.create_block();
                         fb.ins().brif(stale, sig, &[], cur_blk, &[]);
                         for &(raw, target) in targets {
                             fb.switch_to_block(cur_blk);
                             fb.seal_block(cur_blk);
                             let next = fb.create_block();
-                            let hit = fb.ins().icmp_imm_u(IntCC::Equal, addr, raw);
+                            let hit = lowering::icmp_imm_p(&mut fb, IntCC::Equal, addr, raw);
                             if target <= i {
                                 // Backward jump-table edge: poll through a
                                 // trampoline, exactly like Goto back-edges.

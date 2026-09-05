@@ -188,7 +188,7 @@ pub(crate) fn guard_fixnum(
     if is_known_fixnum(fb, v) || known.contains(&v) {
         return;
     }
-    let tag = fb.ins().band_imm_u(v, FIXNUM_CHECK_MASK as i64);
+    let tag = band_imm_p(fb, v, FIXNUM_CHECK_MASK as i64);
     let is_fix = fb
         .ins()
         .icmp_imm_u(IntCC::Equal, tag, FIXNUM_CHECK_VALUE as i64);
@@ -197,8 +197,8 @@ pub(crate) fn guard_fixnum(
 
 /// Retag an untagged i64 `n` as a fixnum `Value`: `(n << 2) | 2`.
 pub(crate) fn retag_fixnum(fb: &mut FunctionBuilder, n: ClifValue) -> ClifValue {
-    let shifted = fb.ins().ishl_imm_u(n, FIXNUM_SHIFT as i64);
-    fb.ins().bor_imm_u(shifted, FIXNUM_CHECK_VALUE as i64)
+    let shifted = ishl_imm_p(fb, n, FIXNUM_SHIFT as i64);
+    bor_imm_p(fb, shifted, FIXNUM_CHECK_VALUE as i64)
 }
 
 /// Lower a fixnum-fast-path binary op (`Add`/`Sub`) with the exact parity the
@@ -217,8 +217,8 @@ pub(crate) fn lower_fixnum_binop(
     guard_fixnum(fb, deopt, b, known);
 
     // Untag (arithmetic shift right by 2 == GNU XFIXNUM), compute, range-check.
-    let av = fb.ins().sshr_imm_u(a, FIXNUM_SHIFT as i64);
-    let bv = fb.ins().sshr_imm_u(b, FIXNUM_SHIFT as i64);
+    let av = sshr_imm_p(fb, a, FIXNUM_SHIFT as i64);
+    let bv = sshr_imm_p(fb, b, FIXNUM_SHIFT as i64);
     // Operands are <= 61-bit, so the i64 result cannot overflow; a fixnum-range
     // check is sufficient and matches the interpreter exactly.
     let res = if is_sub {
@@ -228,12 +228,14 @@ pub(crate) fn lower_fixnum_binop(
     };
 
     // Guard: MOST_NEGATIVE_FIXNUM <= res <= MOST_POSITIVE_FIXNUM.
-    let ge_lo = fb.ins().icmp_imm_u(
+    let ge_lo = icmp_imm_p(
+        fb,
         IntCC::SignedGreaterThanOrEqual,
         res,
         Value::MOST_NEGATIVE_FIXNUM,
     );
-    let le_hi = fb.ins().icmp_imm_u(
+    let le_hi = icmp_imm_p(
+        fb,
         IntCC::SignedLessThanOrEqual,
         res,
         Value::MOST_POSITIVE_FIXNUM,
@@ -269,19 +271,19 @@ pub(crate) fn lower_fixnum_unop(
     known: &HashSet<ClifValue>,
 ) -> ClifValue {
     guard_fixnum(fb, deopt, a, known);
-    let n = fb.ins().sshr_imm_u(a, FIXNUM_SHIFT as i64);
+    let n = sshr_imm_p(fb, a, FIXNUM_SHIFT as i64);
 
     // The only input that leaves fixnum range is the op's boundary value.
     let bound = match kind {
         UnaryKind::Add1 => Value::MOST_POSITIVE_FIXNUM,
         UnaryKind::Sub1 | UnaryKind::Negate => Value::MOST_NEGATIVE_FIXNUM,
     };
-    let in_range = fb.ins().icmp_imm_u(IntCC::NotEqual, n, bound);
+    let in_range = icmp_imm_p(fb, IntCC::NotEqual, n, bound);
     emit_guard(fb, deopt, in_range);
 
     let res = match kind {
-        UnaryKind::Add1 => fb.ins().iadd_imm_u(n, 1),
-        UnaryKind::Sub1 => fb.ins().iadd_imm_u(n, -1),
+        UnaryKind::Add1 => iadd_imm_p(fb, n, 1),
+        UnaryKind::Sub1 => iadd_imm_p(fb, n, -1),
         UnaryKind::Negate => fb.ins().ineg(n),
     };
     retag_fixnum(fb, res)
@@ -303,8 +305,8 @@ pub(crate) fn lower_fixnum_mul(
 ) -> ClifValue {
     guard_fixnum(fb, deopt, a, known);
     guard_fixnum(fb, deopt, b, known);
-    let av = fb.ins().sshr_imm_u(a, FIXNUM_SHIFT as i64);
-    let bv = fb.ins().sshr_imm_u(b, FIXNUM_SHIFT as i64);
+    let av = sshr_imm_p(fb, a, FIXNUM_SHIFT as i64);
+    let bv = sshr_imm_p(fb, b, FIXNUM_SHIFT as i64);
 
     let a128 = fb.ins().sextend(types::I128, av);
     let b128 = fb.ins().sextend(types::I128, bv);
@@ -345,10 +347,10 @@ pub(crate) fn lower_fixnum_divrem(
 ) -> ClifValue {
     guard_fixnum(fb, deopt, a, known);
     guard_fixnum(fb, deopt, b, known);
-    let bv = fb.ins().sshr_imm_u(b, FIXNUM_SHIFT as i64);
-    let nonzero = fb.ins().icmp_imm_u(IntCC::NotEqual, bv, 0);
+    let bv = sshr_imm_p(fb, b, FIXNUM_SHIFT as i64);
+    let nonzero = icmp_imm_p(fb, IntCC::NotEqual, bv, 0);
     emit_guard(fb, deopt, nonzero);
-    let av = fb.ins().sshr_imm_u(a, FIXNUM_SHIFT as i64);
+    let av = sshr_imm_p(fb, a, FIXNUM_SHIFT as i64);
     let res = if is_rem {
         fb.ins().srem(av, bv)
     } else {
@@ -379,19 +381,19 @@ pub(crate) fn lower_predicate(fb: &mut FunctionBuilder, kind: PredKind, a: ClifV
             .ins()
             .icmp_imm_u(IntCC::Equal, a, Value::NIL.bits() as i64),
         PredKind::Consp => {
-            let tag = fb.ins().band_imm_u(a, TAG_MASK as i64);
-            fb.ins().icmp_imm_u(IntCC::Equal, tag, TAG_CONS as i64)
+            let tag = band_imm_p(fb, a, TAG_MASK as i64);
+            icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64)
         }
         PredKind::Stringp => {
-            let tag = fb.ins().band_imm_u(a, TAG_MASK as i64);
-            fb.ins().icmp_imm_u(IntCC::Equal, tag, TAG_STRING as i64)
+            let tag = band_imm_p(fb, a, TAG_MASK as i64);
+            icmp_imm_p(fb, IntCC::Equal, tag, TAG_STRING as i64)
         }
         PredKind::Listp => {
             let is_nil = fb
                 .ins()
                 .icmp_imm_u(IntCC::Equal, a, Value::NIL.bits() as i64);
-            let tag = fb.ins().band_imm_u(a, TAG_MASK as i64);
-            let is_cons = fb.ins().icmp_imm_u(IntCC::Equal, tag, TAG_CONS as i64);
+            let tag = band_imm_p(fb, a, TAG_MASK as i64);
+            let is_cons = icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64);
             fb.ins().bor(is_nil, is_cons)
         }
     };
@@ -413,8 +415,8 @@ pub(crate) fn lower_car_cdr(
     safe: bool,
     a: ClifValue,
 ) -> ClifValue {
-    let tag = fb.ins().band_imm_u(a, TAG_MASK as i64);
-    let is_cons = fb.ins().icmp_imm_u(IntCC::Equal, tag, TAG_CONS as i64);
+    let tag = band_imm_p(fb, a, TAG_MASK as i64);
+    let is_cons = icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64);
     if !safe {
         let is_nil = fb
             .ins()
@@ -436,7 +438,7 @@ pub(crate) fn lower_car_cdr(
     fb.ins().brif(is_cons, cons_blk, &[], nil_blk, &[]);
 
     fb.switch_to_block(cons_blk);
-    let ptr = fb.ins().band_imm_u(a, !(TAG_MASK as i64));
+    let ptr = band_imm_p(fb, a, !(TAG_MASK as i64));
     let offset = if is_cdr {
         core::mem::offset_of!(ConsCell, cdr_or_next)
     } else {
@@ -486,7 +488,7 @@ pub(crate) fn mir_as_raw(
         Ok(cv)
     } else {
         guard_fixnum(fb, deopt, cv, &HashSet::new());
-        Ok(fb.ins().sshr_imm_u(cv, FIXNUM_SHIFT as i64))
+        Ok(sshr_imm_p(fb, cv, FIXNUM_SHIFT as i64))
     }
 }
 
@@ -658,7 +660,7 @@ pub(crate) fn emit_root_window_stores(
             addr.unwrap_or((vmctx, vmctx))
         });
         let _ = (ptr, slot0);
-        let need = fb.ins().iadd_imm_u(h.base, to_root.len() as i64);
+        let need = iadd_imm_p(fb, h.base, to_root.len() as i64);
         fb.ins()
             .store(MemFlagsData::trusted(), need, vmctx, off_top);
         return h.base;
@@ -666,7 +668,7 @@ pub(crate) fn emit_root_window_stores(
     let base = fb
         .ins()
         .load(types::I64, MemFlagsData::trusted(), vmctx, off_top);
-    let need = fb.ins().iadd_imm_u(base, to_root.len() as i64);
+    let need = iadd_imm_p(fb, base, to_root.len() as i64);
     let cap = fb
         .ins()
         .load(types::I64, MemFlagsData::trusted(), vmctx, off_cap);
@@ -684,7 +686,7 @@ pub(crate) fn emit_root_window_stores(
     let ptr = fb
         .ins()
         .load(rt.ptr_ty, MemFlagsData::trusted(), vmctx, off_ptr);
-    let byte_off = fb.ins().ishl_imm_u(base, 3);
+    let byte_off = ishl_imm_p(fb, base, 3);
     let slot0 = fb.ins().iadd(ptr, byte_off);
     for (i, &v) in to_root.iter().enumerate() {
         fb.ins()
@@ -774,12 +776,14 @@ pub(crate) fn raw_fixnum_addsub(
     } else {
         fb.ins().iadd(av, bv)
     };
-    let ge_lo = fb.ins().icmp_imm_u(
+    let ge_lo = icmp_imm_p(
+        fb,
         IntCC::SignedGreaterThanOrEqual,
         res,
         Value::MOST_NEGATIVE_FIXNUM,
     );
-    let le_hi = fb.ins().icmp_imm_u(
+    let le_hi = icmp_imm_p(
+        fb,
         IntCC::SignedLessThanOrEqual,
         res,
         Value::MOST_POSITIVE_FIXNUM,
@@ -802,11 +806,11 @@ pub(crate) fn raw_fixnum_unop(
         UnaryKind::Add1 => Value::MOST_POSITIVE_FIXNUM,
         UnaryKind::Sub1 | UnaryKind::Negate => Value::MOST_NEGATIVE_FIXNUM,
     };
-    let in_range = fb.ins().icmp_imm_u(IntCC::NotEqual, av, bound);
+    let in_range = icmp_imm_p(fb, IntCC::NotEqual, av, bound);
     emit_guard(fb, deopt, in_range);
     match kind {
-        UnaryKind::Add1 => fb.ins().iadd_imm_u(av, 1),
-        UnaryKind::Sub1 => fb.ins().iadd_imm_u(av, -1),
+        UnaryKind::Add1 => iadd_imm_p(fb, av, 1),
+        UnaryKind::Sub1 => iadd_imm_p(fb, av, -1),
         UnaryKind::Negate => fb.ins().ineg(av),
     }
 }
@@ -847,18 +851,20 @@ pub(crate) fn raw_fixnum_divrem(
     av: ClifValue,
     bv: ClifValue,
 ) -> ClifValue {
-    let nonzero = fb.ins().icmp_imm_u(IntCC::NotEqual, bv, 0);
+    let nonzero = icmp_imm_p(fb, IntCC::NotEqual, bv, 0);
     emit_guard(fb, deopt, nonzero);
     if is_rem {
         fb.ins().srem(av, bv)
     } else {
         let res = fb.ins().sdiv(av, bv);
-        let ge = fb.ins().icmp_imm_u(
+        let ge = icmp_imm_p(
+            fb,
             IntCC::SignedGreaterThanOrEqual,
             res,
             Value::MOST_NEGATIVE_FIXNUM,
         );
-        let le = fb.ins().icmp_imm_u(
+        let le = icmp_imm_p(
+            fb,
             IntCC::SignedLessThanOrEqual,
             res,
             Value::MOST_POSITIVE_FIXNUM,
@@ -1302,6 +1308,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
     // CLIF body is otherwise identical — same RESULTS either way.
     aot: bool,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    imm_pool_reset();
     use mir::{BinKind, CmpKind, MirOp, MirTerm, PredKind as MP, UnaryKind as MU};
 
     // Phase-0 fix: this reset + the post-finalize set below used to exist only
@@ -1727,7 +1734,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                         // STATUS_OK -> continue; anything else is STATUS_SIGNAL.
                         let se = *signal_exit.get_or_insert_with(|| fb.create_block());
                         let cont = fb.create_block();
-                        let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+                        let ok = icmp_imm_p(&mut fb, IntCC::Equal, status, STATUS_OK);
                         fb.ins().brif(ok, cont, &[], se, &[]);
                         fb.switch_to_block(cont);
                         fb.seal_block(cont);
@@ -2004,6 +2011,93 @@ pub(crate) fn rootwin_counters() -> (u32, u32) {
     })
 }
 
+thread_local! {
+    /// Per-function pool of I64 immediates materialized once in the entry
+    /// block (see [`imm_pool_define`]); empty for functions that do not opt
+    /// in, so [`imm64`] falls back to a fresh `iconst`.
+    static IMM_POOL: std::cell::RefCell<std::collections::HashMap<i64, ClifValue>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The immediates a baseline leaf pools at entry: the org editing probe's
+/// CLIF census (2026-09-05) had 8,137 `iconst`s in 62 bodies, 842 distinct
+/// values, and these few small ones were two thirds of them (1, 0, 3, 2, 4,
+/// 7, 8, -8, ... — tag masks, slot strides, small counts).
+pub(crate) const POOLED_IMMEDIATES: &[i64] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 24, 32, -1, -8,
+];
+
+/// Forget the pool (a new function).
+pub(crate) fn imm_pool_reset() {
+    IMM_POOL.with(|p| p.borrow_mut().clear());
+}
+
+/// Materialize `values` in the CURRENT block — which must be the entry
+/// block, so every later use is dominated — and pool them.
+///
+/// Why this is safe for code quality: every pooled use below goes through an
+/// ALU op whose x64 lowering folds an `iconst` operand into the instruction
+/// (`cmp r, imm`, `and r, imm`, `add r, imm`, shifts by immediate), matched
+/// on the operand's DEFINITION regardless of how many uses it has; a pooled
+/// constant all of whose uses fold is never emitted and has no live range.
+/// Constants that feed stores, calls or selects are deliberately NOT pooled
+/// (Cranelift 0.134 does not rematerialize, so they would become long-lived
+/// registers). The saving is IR the frontend and lowering never walk: one
+/// definition per value per function instead of one per use.
+pub(crate) fn imm_pool_define(fb: &mut FunctionBuilder, values: &[i64]) {
+    IMM_POOL.with(|p| {
+        let mut p = p.borrow_mut();
+        for &k in values {
+            let v = fb.ins().iconst(types::I64, k);
+            p.insert(k, v);
+        }
+    });
+}
+
+/// An I64 immediate: the pooled entry-block value when `k` is pooled, else a
+/// fresh `iconst`.
+pub(crate) fn imm64(fb: &mut FunctionBuilder, k: i64) -> ClifValue {
+    if let Some(v) = IMM_POOL.with(|p| p.borrow().get(&k).copied()) {
+        return v;
+    }
+    fb.ins().iconst(types::I64, k)
+}
+
+fn is_i64(fb: &FunctionBuilder, x: ClifValue) -> bool {
+    fb.func.dfg.value_type(x) == types::I64
+}
+
+/// `icmp_imm` through the pool for I64 operands (Cranelift's `icmp_imm_u`
+/// materializes a fresh `iconst` per call).
+pub(crate) fn icmp_imm_p(fb: &mut FunctionBuilder, cc: IntCC, x: ClifValue, k: i64) -> ClifValue {
+    if is_i64(fb, x) {
+        let c = imm64(fb, k);
+        fb.ins().icmp(cc, x, c)
+    } else {
+        fb.ins().icmp_imm_u(cc, x, k)
+    }
+}
+
+macro_rules! pooled_binop {
+    ($name:ident, $op:ident, $imm:ident) => {
+        /// Immediate-form ALU op through the pool for I64 operands.
+        pub(crate) fn $name(fb: &mut FunctionBuilder, x: ClifValue, k: i64) -> ClifValue {
+            if is_i64(fb, x) {
+                let c = imm64(fb, k);
+                fb.ins().$op(x, c)
+            } else {
+                fb.ins().$imm(x, k)
+            }
+        }
+    };
+}
+pooled_binop!(iadd_imm_p, iadd, iadd_imm_u);
+pooled_binop!(band_imm_p, band, band_imm_u);
+pooled_binop!(bor_imm_p, bor, bor_imm_u);
+pooled_binop!(sshr_imm_p, sshr, sshr_imm_u);
+pooled_binop!(ushr_imm_p, ushr, ushr_imm_u);
+pooled_binop!(ishl_imm_p, ishl, ishl_imm_u);
+
 /// `NEOVM_JIT_DUMP_CLIF=<path>`: append every lowered function's CLIF (with
 /// an `;; ops=N` header) to `path` — the IR-composition census.
 pub(crate) fn dump_clif(func: &cranelift_codegen::ir::Function, header: &str) {
@@ -2036,7 +2130,7 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     let base = fb
         .ins()
         .load(types::I64, MemFlagsData::trusted(), vmctx, off_top);
-    let need_max = fb.ins().iadd_imm_u(base, max_slots as i64);
+    let need_max = iadd_imm_p(fb, base, max_slots as i64);
     let cap = fb
         .ins()
         .load(types::I64, MemFlagsData::trusted(), vmctx, off_cap);
@@ -2050,7 +2144,7 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     fb.ins().jump(cont_blk, &[]);
     fb.switch_to_block(cont_blk);
     fb.seal_block(cont_blk);
-    let byte_off = fb.ins().ishl_imm_u(base, 3);
+    let byte_off = ishl_imm_p(fb, base, 3);
     rt.rootwin = Some(HoistedRootWin { base, byte_off });
 }
 
@@ -2711,7 +2805,7 @@ pub(crate) fn emit_pending_dispatches(
             }
             let hit = fb.create_block();
             let next = fb.create_block();
-            let is_m = fb.ins().icmp_imm_u(IntCC::Equal, idx, m as i64);
+            let is_m = icmp_imm_p(fb, IntCC::Equal, idx, m as i64);
             fb.ins().brif(is_m, hit, &[], next, &[]);
             fb.switch_to_block(hit);
             fb.seal_block(hit);
@@ -2748,7 +2842,7 @@ pub(crate) fn stack_as_raw(
         stack[k]
     } else {
         guard_fixnum(fb, deopt, stack[k], known);
-        fb.ins().sshr_imm_u(stack[k], FIXNUM_SHIFT as i64)
+        sshr_imm_p(fb, stack[k], FIXNUM_SHIFT as i64)
     }
 }
 
@@ -3045,8 +3139,8 @@ pub(crate) fn lower_simple_op(
             let fast = fb.create_block();
             let slow = fb.create_block();
             let merge = fb.create_block();
-            let tag = fb.ins().band_imm_u(a, TAG_MASK as i64);
-            let is_sym = fb.ins().icmp_imm_u(IntCC::Equal, tag, TAG_SYMBOL as i64);
+            let tag = band_imm_p(fb, a, TAG_MASK as i64);
+            let is_sym = icmp_imm_p(fb, IntCC::Equal, tag, TAG_SYMBOL as i64);
             fb.ins().brif(is_sym, fast, &[], slow, &[]);
 
             fb.switch_to_block(fast);
@@ -3164,7 +3258,7 @@ pub(crate) fn lower_simple_op(
             let fast = fb.create_block();
             let slow = fb.create_block();
             let merge = fb.create_block();
-            let tagbits = fb.ins().band_imm_u(a, FIXNUM_CHECK_MASK as i64);
+            let tagbits = band_imm_p(fb, a, FIXNUM_CHECK_MASK as i64);
             let is_fix = fb
                 .ins()
                 .icmp_imm_u(IntCC::Equal, tagbits, FIXNUM_CHECK_VALUE as i64);
@@ -3207,7 +3301,7 @@ pub(crate) fn lower_simple_op(
             emit_cond_residual_roots_post(fb, rt, saved);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
             let cont = fb.create_block();
-            let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], se, &[]);
             fb.switch_to_block(cont);
             fb.seal_block(cont);
@@ -3234,7 +3328,7 @@ pub(crate) fn lower_simple_op(
             emit_cond_residual_roots_post(fb, rt, saved);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
             let cont = fb.create_block();
-            let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], se, &[]);
             fb.switch_to_block(cont);
             fb.seal_block(cont);
@@ -3314,14 +3408,14 @@ pub(crate) fn lower_simple_op(
                             // (the interpreter re-runs the real call, which
                             // signals arith-error). The result magnitude stays
                             // below |b|, so the retag never overflows.
-                            let av = fb.ins().sshr_imm_u(a, FIXNUM_SHIFT as i64);
-                            let bv = fb.ins().sshr_imm_u(b, FIXNUM_SHIFT as i64);
-                            let nonzero = fb.ins().icmp_imm_u(IntCC::NotEqual, bv, 0);
+                            let av = sshr_imm_p(fb, a, FIXNUM_SHIFT as i64);
+                            let bv = sshr_imm_p(fb, b, FIXNUM_SHIFT as i64);
+                            let nonzero = icmp_imm_p(fb, IntCC::NotEqual, bv, 0);
                             emit_guard(fb, dsite, nonzero);
                             let m = fb.ins().srem(av, bv);
                             let signs = fb.ins().bxor(m, bv);
-                            let differ = fb.ins().icmp_imm_u(IntCC::SignedLessThan, signs, 0);
-                            let m_nonzero = fb.ins().icmp_imm_u(IntCC::NotEqual, m, 0);
+                            let differ = icmp_imm_p(fb, IntCC::SignedLessThan, signs, 0);
+                            let m_nonzero = icmp_imm_p(fb, IntCC::NotEqual, m, 0);
                             let need_fix = fb.ins().band(differ, m_nonzero);
                             let fixed = fb.ins().iadd(m, bv);
                             let floored = fb.ins().select(need_fix, fixed, m);
@@ -3331,7 +3425,7 @@ pub(crate) fn lower_simple_op(
                             debug_assert_eq!(op, ARITH_KIND_LOGXOR as u8);
                             // XOR clears the tag bit (2^2=0); restore it.
                             let x = fb.ins().bxor(a, b);
-                            fb.ins().bor_imm_u(x, FIXNUM_CHECK_VALUE as i64)
+                            bor_imm_p(fb, x, FIXNUM_CHECK_VALUE as i64)
                         }
                     }
                 };
@@ -3471,7 +3565,7 @@ pub(crate) fn lower_simple_op(
             // STATUS_SIGNAL -> propagate via the handler-aware signal target.
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
             let cont = fb.create_block();
-            let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             if let Some(gen_block) = generic_fallback {
                 let check = fb.create_block();
                 fb.ins().brif(ok, cont, &[], check, &[]);
@@ -3506,7 +3600,7 @@ pub(crate) fn lower_simple_op(
                 let status_gen = fb.inst_results(call_gen)[0];
                 emit_cond_residual_roots_post(fb, rt, saved_gen);
                 let se_gen = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
-                let ok_gen = fb.ins().icmp_imm_u(IntCC::Equal, status_gen, STATUS_OK);
+                let ok_gen = icmp_imm_p(fb, IntCC::Equal, status_gen, STATUS_OK);
                 fb.ins().brif(ok_gen, cont, &[], se_gen, &[]);
             } else {
                 fb.ins().brif(ok, cont, &[], se, &[]);
@@ -3557,7 +3651,7 @@ pub(crate) fn lower_simple_op(
             let cont = fb.create_block();
             let signal =
                 signal_target_for_site(fb, signal_exit, handlers, pending, stack.as_slice());
-            let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], signal, &[]);
             fb.switch_to_block(cont);
             fb.seal_block(cont);
@@ -3581,7 +3675,7 @@ pub(crate) fn lower_simple_op(
             let cont = fb.create_block();
             let signal =
                 signal_target_for_site(fb, signal_exit, handlers, pending, stack.as_slice());
-            let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], signal, &[]);
             fb.switch_to_block(cont);
             fb.seal_block(cont);
@@ -3627,7 +3721,7 @@ pub(crate) fn lower_simple_op(
             emit_cond_residual_roots_post(fb, rt, saved);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
             let cont = fb.create_block();
-            let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], se, &[]);
             fb.switch_to_block(cont);
             fb.seal_block(cont);
@@ -3709,7 +3803,7 @@ pub(crate) fn lower_simple_op(
                     let sym_bits =
                         fb.ins()
                             .load(types::I64, MemFlagsData::trusted(), base, (idx * 8) as i32);
-                    fb.ins().ushr_imm_u(sym_bits, TAG_BITS as i64)
+                    ushr_imm_p(fb, sym_bits, TAG_BITS as i64)
                 }
                 None => fb.ins().iconst(types::I64, sym as i64),
             };
@@ -3748,7 +3842,7 @@ pub(crate) fn lower_simple_op(
             emit_cond_residual_roots_post(fb, rt, saved);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
             let cont = fb.create_block();
-            let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             if let Some(gen_block) = generic_fallback {
                 // STATUS_OK -> cont; STATUS_NEED_GENERIC -> the general CBSym
                 // lowering; anything else -> STATUS_SIGNAL via the signal target.
@@ -3780,7 +3874,7 @@ pub(crate) fn lower_simple_op(
                 let status_gen = fb.inst_results(call_gen)[0];
                 emit_cond_residual_roots_post(fb, rt, saved_gen);
                 let se_gen = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
-                let ok_gen = fb.ins().icmp_imm_u(IntCC::Equal, status_gen, STATUS_OK);
+                let ok_gen = icmp_imm_p(fb, IntCC::Equal, status_gen, STATUS_OK);
                 fb.ins().brif(ok_gen, cont, &[], se_gen, &[]);
             } else {
                 fb.ins().brif(ok, cont, &[], se, &[]);
@@ -3852,7 +3946,7 @@ pub(crate) fn lower_simple_op(
                 emit_cond_residual_roots_post(fb, rt, saved);
                 let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
                 let cont = fb.create_block();
-                let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+                let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
                 fb.ins().brif(ok, cont, &[], se, &[]);
                 fb.switch_to_block(cont);
                 fb.seal_block(cont);
@@ -3900,7 +3994,7 @@ pub(crate) fn lower_simple_op(
             emit_cond_residual_roots_post(fb, rt, saved);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
             let cont = fb.create_block();
-            let ok = fb.ins().icmp_imm_u(IntCC::Equal, status, STATUS_OK);
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], se, &[]);
             fb.switch_to_block(cont);
             fb.seal_block(cont);
