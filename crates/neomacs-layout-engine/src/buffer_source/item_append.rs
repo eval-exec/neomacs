@@ -290,7 +290,6 @@ impl<'source, 'surface, B: LayoutBufferView + ?Sized>
             .append_display_item_to_text_row_and_emit(state, display_item, position, fallback_kind)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn resolve_source_render_plan_to_text_row(
         &self,
         geometry: &DisplayRowGeometryState,

@@ -542,7 +542,6 @@ impl DisplayRowOverflowTransitionPlan {
         self.apply_prefix_state(state);
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn request<'a>(
         self,
         hit_range: DisplayRowHitRange,
@@ -581,7 +580,6 @@ impl DisplayRowOverflowTransitionPlan {
 }
 
 impl<'a> DisplayRowOverflowTransitionRequest<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn truncation(
         hit_range: DisplayRowHitRange,
         defaults: DisplayRowGeometryDefaults,

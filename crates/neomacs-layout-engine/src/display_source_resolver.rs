@@ -392,7 +392,6 @@ pub(crate) fn resolve_display_replacement(
 }
 
 impl DisplayReplacementMediaSourceItem {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn resolve_display_property(
         display_prop: Value,
         replacement: &DisplayMediaReplacementProperty,
