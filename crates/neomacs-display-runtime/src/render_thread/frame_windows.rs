@@ -472,9 +472,13 @@ impl GuiFrameRenderState {
 
     /// The projection for `frame`.
     ///
-    /// Only the root frame's panes can be in motion: a child frame is composed
-    /// from its own presentation with nothing morphing inside it, so its
-    /// projection is settled.
+    /// `sample_pane_layout` is the single writer of `compositor.interaction`,
+    /// and it writes only while a morph is in flight. Everything else — a
+    /// settled root frame, a child frame, a presentation installed but not yet
+    /// composed — takes the identity projection synthesised here. Writing a
+    /// settled projection at install as well would be redundant at best, and
+    /// wrong while a morph was running: it would claim the panes were at their
+    /// destination when the last frame drawn had them mid-flight.
     fn interaction_projection(
         &self,
         frame: &FrameGlyphBuffer,
@@ -835,6 +839,39 @@ impl GuiFrameRenderState {
     pub(super) fn begin_presentable_render(&mut self) {
         self.compositor.dirty = false;
         self.compositor.cursor_dirty = false;
+        // The measurement baseline advances here and nowhere else, because this
+        // is the first point at which the retained presentation is committed to
+        // reaching the screen. Advancing it at install instead would let a
+        // presentation that was superseded before any frame drew it become the
+        // thing the next commit is measured against — see the note on
+        // `FrameCompositor::baseline`.
+        let Some(frame) = self.compositor.current_frame.as_ref() else {
+            return;
+        };
+        let presentation = frame.presentation_id;
+        if self
+            .compositor
+            .baseline
+            .as_ref()
+            .is_some_and(|baseline| baseline.presentation == presentation)
+        {
+            // Already the baseline. Composing the same presentation again — a
+            // cursor blink, a pointer repaint — must not re-promote, or the
+            // staged anchors (now empty, or belonging to a later install) would
+            // replace the ones this presentation was measured with.
+            return;
+        }
+        let window_infos = frame.window_infos.clone();
+        let background = frame.background;
+        self.compositor.baseline = Some(super::frame_compositor::MeasurementBaseline {
+            presentation,
+            window_infos,
+            background,
+        });
+        self.compositor.scroll_anchors =
+            std::mem::take(&mut self.compositor.incoming_scroll_anchors);
+        self.compositor.reflow_imprints =
+            std::mem::take(&mut self.compositor.incoming_reflow_imprints);
     }
 
     pub(super) fn set_dirty(&mut self, dirty: bool) {
@@ -933,14 +970,10 @@ impl GuiFrameRenderState {
         self.observe_shown_text(frame.as_ref());
         self.measure_reflow(frame.as_ref(), &reflow_imprints);
         self.measure_pane_layout(frame.as_ref(), installed_at);
-        self.compositor.reflow_imprints = reflow_imprints;
-        self.compositor.scroll_anchors = scroll_anchors;
-        // The projection belongs to the presentation being installed, so it is
-        // replaced with it. Nothing is in motion yet, so it maps by identity;
-        // the layout pass rebuilds it per composition once panes can morph.
-        self.compositor.interaction = frame.as_ref().map(|frame| {
-            neomacs_display_protocol::InteractionProjection::settled(frame.presentation_id)
-        });
+        // Staged, not installed: these describe the incoming presentation, and
+        // they become the baseline only if a frame is actually drawn from it.
+        self.compositor.incoming_reflow_imprints = reflow_imprints;
+        self.compositor.incoming_scroll_anchors = scroll_anchors;
         let before = self.active_pointer_damage();
         let previous_presentation = self
             .compositor
