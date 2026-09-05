@@ -984,6 +984,7 @@ pub(crate) fn lower_mir_pure(m: &mir::MirFunction) -> Result<CompiledLeaf, Compi
 
     Ok(CompiledLeaf {
         tier: LeafTier::Mir,
+        regalloc: active_regalloc_choice(),
         arity: m.arity,
         required: m.arity,
         has_rest: false,
@@ -1034,6 +1035,17 @@ pub(crate) fn jit_isa()
         .map_err(|e| init_err(e.to_string()))?;
     flags
         .set(
+            "regalloc_algorithm",
+            active_regalloc_choice().cranelift_setting(),
+        )
+        .map_err(|e| init_err(e.to_string()))?;
+    if regalloc_checker_enabled() {
+        flags
+            .set("regalloc_checker", "true")
+            .map_err(|e| init_err(e.to_string()))?;
+    }
+    flags
+        .set(
             "enable_verifier",
             if cfg!(debug_assertions) {
                 "true"
@@ -1046,6 +1058,119 @@ pub(crate) fn jit_isa()
         .map_err(|e| init_err(e.to_string()))?
         .finish(settings::Flags::new(flags))
         .map_err(|e| init_err(e.to_string()))
+}
+
+/// Which regalloc2 allocator a Cranelift compile runs.
+///
+/// Measured on the same binary (2026-09-05, `tmp/rr/wf2/ab-regalloc.sh`):
+/// `Fast` halves compile time (mean 399 → 209 µs, max 1.46 → 0.43 ms per
+/// leaf — a keystroke-time stall) and cuts a compile-bound fixture by 11%,
+/// but its code runs ~10% more instructions on the call-heavy benchmark. So
+/// it is a per-compile choice (`choose_regalloc`), never a global one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RegallocChoice {
+    /// regalloc2's single-pass allocator (`fastalloc`): compiles fast.
+    Fast,
+    /// regalloc2's backtracking allocator (`ion`, Cranelift's default): the
+    /// better code.
+    Full,
+}
+
+impl RegallocChoice {
+    /// The value of Cranelift's `regalloc_algorithm` setting.
+    pub(crate) fn cranelift_setting(self) -> &'static str {
+        match self {
+            RegallocChoice::Fast => "single_pass",
+            RegallocChoice::Full => "backtracking",
+        }
+    }
+}
+
+/// Why a compile is happening, which decides its allocator (see
+/// [`choose_regalloc`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RegallocPolicy {
+    /// An entry tier-up: the body's shape decides.
+    Auto,
+    /// The full allocator regardless of shape: an OSR entry (a loop that is
+    /// already running), or a re-tier of a leaf that proved hot.
+    Full,
+}
+
+thread_local! {
+    /// The allocator of the compile in progress on this thread. `Full`
+    /// outside any [`RegallocScope`], so every path that does not opt in
+    /// compiles exactly as before.
+    static ACTIVE_REGALLOC: std::cell::Cell<RegallocChoice> =
+        const { std::cell::Cell::new(RegallocChoice::Full) };
+}
+
+/// The allocator of the compile in progress (see [`ACTIVE_REGALLOC`]).
+pub(crate) fn active_regalloc_choice() -> RegallocChoice {
+    ACTIVE_REGALLOC.with(|c| c.get())
+}
+
+/// RAII scope: every ISA built inside it uses `choice`; the previous choice
+/// is restored on drop (a nested compile restores its parent's).
+pub(crate) struct RegallocScope(RegallocChoice);
+
+impl RegallocScope {
+    pub(crate) fn enter(choice: RegallocChoice) -> Self {
+        Self(ACTIVE_REGALLOC.with(|c| c.replace(choice)))
+    }
+}
+
+impl Drop for RegallocScope {
+    fn drop(&mut self) {
+        ACTIVE_REGALLOC.with(|c| c.set(self.0));
+    }
+}
+
+/// `NEOVM_JIT_REGALLOC`: `single_pass` (`fast`) or `backtracking` (`full`)
+/// forces one allocator for every JIT compile — the A/B knob. Unset (or any
+/// other value) means the policy in [`choose_regalloc`].
+pub(crate) fn forced_regalloc() -> Option<RegallocChoice> {
+    use std::sync::OnceLock;
+    static FORCED: OnceLock<Option<RegallocChoice>> = OnceLock::new();
+    *FORCED
+        .get_or_init(|| parse_regalloc_choice(std::env::var("NEOVM_JIT_REGALLOC").ok().as_deref()))
+}
+
+/// The accepted spellings of `NEOVM_JIT_REGALLOC`; anything else = policy.
+pub(crate) fn parse_regalloc_choice(value: Option<&str>) -> Option<RegallocChoice> {
+    match value.map(str::trim) {
+        Some("single_pass" | "single-pass" | "fastalloc" | "fast") => Some(RegallocChoice::Fast),
+        Some("backtracking" | "ion" | "full") => Some(RegallocChoice::Full),
+        _ => None,
+    }
+}
+
+/// The allocator policy: a forced choice wins; otherwise the full allocator
+/// for a `Full` policy or a body with a back-edge (a loop can run unboundedly
+/// per entry, so its code quality is worth the compile), and the fast one for
+/// a straight-line or branchy body (bounded work per entry — and it re-tiers
+/// to `Full` if the interpreter keeps entering it; see `retier_heat`).
+pub(crate) fn choose_regalloc(
+    forced: Option<RegallocChoice>,
+    policy: RegallocPolicy,
+    has_back_edge: bool,
+) -> RegallocChoice {
+    if let Some(forced) = forced {
+        return forced;
+    }
+    if policy == RegallocPolicy::Full || has_back_edge {
+        RegallocChoice::Full
+    } else {
+        RegallocChoice::Fast
+    }
+}
+
+/// `NEOVM_JIT_REGALLOC_CHECKER=1`: run regalloc2's checker after every
+/// allocation (a verification harness for the allocator choice; slow).
+fn regalloc_checker_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NEOVM_JIT_REGALLOC_CHECKER").as_deref() == Ok("1"))
 }
 
 /// Whether a constant `Value` must be routed through the per-leaf reloc vector

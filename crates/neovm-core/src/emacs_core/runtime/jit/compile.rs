@@ -714,11 +714,44 @@ pub fn compile_bytecode_function_with(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
 ) -> Result<CompiledLeaf, CompileError> {
+    compile_bytecode_function_tiered(f, obarray, lowering::RegallocPolicy::Auto)
+}
+
+/// [`compile_bytecode_function_with`] with the register allocator chosen by
+/// `policy` and the body's shape (`lowering::choose_regalloc`).
+pub fn compile_bytecode_function_tiered(
+    f: &ByteCodeFunction,
+    obarray: Option<&Obarray>,
+    policy: lowering::RegallocPolicy,
+) -> Result<CompiledLeaf, CompileError> {
+    let _scope = lowering::RegallocScope::enter(regalloc_for(policy, f.executable_ops()));
     let result = compile_bytecode_function_inner(f, obarray);
     if jit_profile_path().is_some() {
         jit_profile_emit(f, obarray, result.is_ok());
     }
     result
+}
+
+/// Whether `ops` jump backwards anywhere: the body can loop, so its work per
+/// entry is unbounded (the same classification `jit_profile_emit` counts).
+pub(crate) fn has_back_edge(ops: &[Op]) -> bool {
+    ops.iter().enumerate().any(|(i, op)| match op {
+        Op::Goto(t)
+        | Op::GotoIfNil(t)
+        | Op::GotoIfNotNil(t)
+        | Op::GotoIfNilElsePop(t)
+        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
+        _ => false,
+    })
+}
+
+/// The register allocator for a compile of `ops` under `policy` (the forced
+/// `NEOVM_JIT_REGALLOC` choice first; see `lowering::choose_regalloc`).
+pub(crate) fn regalloc_for(
+    policy: lowering::RegallocPolicy,
+    ops: &[Op],
+) -> lowering::RegallocChoice {
+    lowering::choose_regalloc(lowering::forced_regalloc(), policy, has_back_edge(ops))
 }
 
 /// Max instruction budget (excluding `Arg`s) for an inlined callee body. Small
@@ -2734,6 +2767,7 @@ pub fn lower_leaf_full_osr(
     let entry = module.get_finalized_function(fid);
     Ok(CompiledLeaf {
         tier: LeafTier::Baseline,
+        regalloc: lowering::active_regalloc_choice(),
         arity,
         // Plain fixed-arity defaults; compile_bytecode_function overrides for
         // &optional/&rest lambda lists.
@@ -3633,7 +3667,7 @@ fn build_leaf_fn<M: Module>(
 mod leaf;
 pub use leaf::*;
 
-mod lowering;
+pub(crate) mod lowering;
 pub use lowering::*;
 
 mod shims;

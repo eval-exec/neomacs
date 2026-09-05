@@ -5147,3 +5147,115 @@ fn contained_panic_in_load_unwinds_load_bookkeeping() {
         .expect("normal load succeeds after repeated containment");
     assert!(ev.loads_in_progress.is_empty());
 }
+
+/// `NEOVM_JIT_REGALLOC` accepts the two allocators under a few spellings and
+/// leaves the policy alone for anything else.
+#[test]
+fn regalloc_knob_maps_spellings_to_allocators() {
+    use super::lowering::{RegallocChoice, parse_regalloc_choice};
+    assert_eq!(
+        parse_regalloc_choice(Some("single_pass")),
+        Some(RegallocChoice::Fast)
+    );
+    assert_eq!(
+        parse_regalloc_choice(Some(" fastalloc ")),
+        Some(RegallocChoice::Fast)
+    );
+    assert_eq!(
+        parse_regalloc_choice(Some("backtracking")),
+        Some(RegallocChoice::Full)
+    );
+    assert_eq!(
+        parse_regalloc_choice(Some("ion")),
+        Some(RegallocChoice::Full)
+    );
+    assert_eq!(parse_regalloc_choice(Some("linear-scan")), None);
+    assert_eq!(parse_regalloc_choice(None), None);
+}
+
+/// The allocator policy: forced wins; otherwise loops and `Full` requests get
+/// the full allocator, straight-line entry compiles the fast one.
+#[test]
+fn regalloc_policy_is_forced_then_shape_then_request() {
+    use super::lowering::{RegallocChoice, RegallocPolicy, choose_regalloc};
+    let (a, f) = (RegallocPolicy::Auto, RegallocPolicy::Full);
+    assert_eq!(choose_regalloc(None, a, false), RegallocChoice::Fast);
+    assert_eq!(choose_regalloc(None, a, true), RegallocChoice::Full);
+    assert_eq!(choose_regalloc(None, f, false), RegallocChoice::Full);
+    assert_eq!(
+        choose_regalloc(Some(RegallocChoice::Fast), f, true),
+        RegallocChoice::Fast
+    );
+    assert_eq!(
+        choose_regalloc(Some(RegallocChoice::Full), a, false),
+        RegallocChoice::Full
+    );
+    // Back-edge detection: any jump to its own index or earlier.
+    assert!(!has_back_edge(&[
+        Op::Constant(0),
+        Op::GotoIfNil(3),
+        Op::Nil,
+        Op::Return
+    ]));
+    assert!(has_back_edge(&[
+        Op::Constant(0),
+        Op::GotoIfNil(3),
+        Op::Goto(0),
+        Op::Return
+    ]));
+    assert!(has_back_edge(&[
+        Op::Nil,
+        Op::GotoIfNotNilElsePop(1),
+        Op::Return
+    ]));
+}
+
+/// Outside a compile scope the active choice is `Full` (unscoped paths compile
+/// as before); an entry compile of a straight-line body is `Fast`, a loop body
+/// is `Full`, and a `Full` request is honored.
+#[test]
+fn entry_compiles_pick_the_allocator_by_shape_and_request() {
+    use super::lowering::{
+        RegallocChoice, RegallocPolicy, active_regalloc_choice, forced_regalloc,
+    };
+    assert_eq!(active_regalloc_choice(), RegallocChoice::Full);
+    if forced_regalloc().is_some() {
+        return; // the A/B knob overrides the policy
+    }
+    let mut f = nullary();
+    f.ops = vec![Op::Constant(0), Op::Return];
+    f.constants = vec![Value::make_int(42)].into();
+    let leaf = compile_bytecode_function_with(&f, None).expect("straight-line body compiles");
+    assert_eq!(leaf.regalloc, RegallocChoice::Fast);
+    let leaf = compile_bytecode_function_tiered(&f, None, RegallocPolicy::Full)
+        .expect("compiles under the full allocator too");
+    assert_eq!(leaf.regalloc, RegallocChoice::Full);
+    assert_eq!(
+        active_regalloc_choice(),
+        RegallocChoice::Full,
+        "scope restored"
+    );
+    // (lambda (n) (while (> n 0) (setq n (1- n))) n): a back-edge → Full.
+    let mut lp = ByteCodeFunction::new(LambdaParams {
+        required: vec![crate::emacs_core::intern::SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    lp.ops = vec![
+        Op::StackRef(0),
+        Op::Constant(0),
+        Op::Gtr,
+        Op::GotoIfNil(8),
+        Op::StackRef(0),
+        Op::Sub1,
+        Op::StackSet(1),
+        Op::Goto(0),
+        Op::StackRef(0),
+        Op::Return,
+    ];
+    lp.constants = vec![Value::make_int(0)].into();
+    lp.max_stack = 16;
+    lp.lexical = true;
+    let leaf = compile_bytecode_function_with(&lp, None).expect("loop body compiles");
+    assert_eq!(leaf.regalloc, RegallocChoice::Full);
+}

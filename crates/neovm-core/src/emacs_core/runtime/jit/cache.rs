@@ -16,6 +16,8 @@
 //!   dead functions linger until thread exit (a bounded leak), never a
 //!   use-after-free.
 
+use super::compile::compile_bytecode_function_tiered;
+use super::compile::lowering::{RegallocChoice, RegallocPolicy, RegallocScope, forced_regalloc};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -280,6 +282,9 @@ fn compile_osr_leaf(
         }
         return None;
     }
+    // A loop that is already running gets the full allocator: its work per
+    // entry is unbounded, so the code quality is worth the compile.
+    let _regalloc = RegallocScope::enter(super::compile::regalloc_for(RegallocPolicy::Full, ops));
     let leaf = match super::compile::lower_leaf_full_osr(
         ops,
         &func.constants,
@@ -396,9 +401,14 @@ pub(crate) fn rejection_epoch() -> u64 {
 /// inline deps on success (so a later redefinition of an inlined callee evicts
 /// this leaf), and maps the outcome to a [`CacheEntry`]. Runs solely from the
 /// `or_insert_with` closures, never on the hot dispatch path.
-fn compile_cache_entry(id: u64, func: &ByteCodeFunction, obarray: Option<&Obarray>) -> CacheEntry {
+fn compile_cache_entry(
+    id: u64,
+    func: &ByteCodeFunction,
+    obarray: Option<&Obarray>,
+    policy: RegallocPolicy,
+) -> CacheEntry {
     let started = Instant::now();
-    let result = compile_bytecode_function_with(func, obarray);
+    let result = compile_bytecode_function_tiered(func, obarray, policy);
     stats::record_compile(started.elapsed(), func.executable_ops().len(), &result);
     match result {
         Ok(leaf) => {
@@ -457,6 +467,15 @@ pub(crate) fn evict_inline_dependents(sym: SymId) {
             cache.remove(id);
         }
     });
+}
+
+/// Test-only: the register allocator of the leaf cached for `id`, if any.
+#[cfg(test)]
+pub(crate) fn compiled_regalloc_for_test(id: u64) -> Option<RegallocChoice> {
+    COMPILED.with(|c| match c.borrow().get(id) {
+        Some(CacheEntry::Compiled(l)) => Some(l.regalloc),
+        _ => None,
+    })
 }
 
 /// Test-only: is a compiled leaf currently cached for `id` on this thread?
@@ -524,7 +543,7 @@ pub(crate) fn compile_and_cache_jit_leaf(
     obarray: Option<&Obarray>,
 ) -> Option<u64> {
     let id = func.jit_runtime().compiled_id_or_assign();
-    let entry = compile_cache_entry(id, func, obarray);
+    let entry = compile_cache_entry(id, func, obarray, RegallocPolicy::Auto);
     let compiled = matches!(entry, CacheEntry::Compiled(_));
     COMPILED.with(|c| {
         c.borrow_mut().insert(id, entry);
@@ -788,9 +807,30 @@ pub fn try_run_compiled(
                 if l.inline_epoch().is_some()
                     && l.inline_epoch() != obarray.map(|ob| ob.function_epoch())
         );
-        if stale {
+        // Re-tier: a leaf built with the fast register allocator that the
+        // interpreter keeps entering has proven hot — rebuild it with the
+        // full allocator (`retier_heat`). A leaf that already earned `Full`
+        // keeps it when a stale inline makes it recompile: the tier is
+        // earned, not re-decided. Never under a forced allocator, which
+        // would rebuild `Fast` forever.
+        let prev_regalloc = match cache.get(id) {
+            Some(CacheEntry::Compiled(l)) => Some(l.regalloc),
+            _ => None,
+        };
+        let retier = prev_regalloc == Some(RegallocChoice::Fast)
+            && forced_regalloc().is_none()
+            && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
+        if stale || retier {
             cache.remove(id);
         }
+        if retier {
+            stats::record_retier();
+        }
+        let policy = if retier || prev_regalloc == Some(RegallocChoice::Full) {
+            RegallocPolicy::Full
+        } else {
+            RegallocPolicy::Auto
+        };
         match cache.get_or_insert_with(id, || {
             // R1c-6: consult AOT FIRST (additive — a miss/error falls through to
             // the JIT below, leaving JIT behavior unchanged). An AOT hit is a
@@ -820,7 +860,7 @@ pub fn try_run_compiled(
                     return CacheEntry::Compiled(Rc::new(leaf));
                 }
             }
-            compile_cache_entry(id, func, obarray)
+            compile_cache_entry(id, func, obarray, policy)
         }) {
             // Only run native for a valid call (lambda-list range); a mismatch
             // is a wrong-arg-count call the interpreter must signal.
@@ -863,7 +903,7 @@ pub(crate) fn resolve_compiled_leaf_ptr(
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
             let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
-            compile_cache_entry(id, func, obarray)
+            compile_cache_entry(id, func, obarray, RegallocPolicy::Auto)
         }) {
             // INLINED leaves must NOT be fast-path-cached in a spec slot: their
             // validity depends on an inlined callee's epoch, which the caller's
@@ -1215,6 +1255,43 @@ mod tests {
         assert!(
             matches!(rt.dispatch_sized(len), Plan::Compiled),
             "the cache forgot its verdicts, so the dispatcher probes again"
+        );
+    }
+
+    /// A straight-line body compiles with the fast allocator, and re-tiers to
+    /// the full one — in place, still running — once its heat proves it hot.
+    #[test]
+    fn fast_leaf_retiers_to_full_once_hot() {
+        if forced_regalloc().is_some() {
+            return; // the A/B knob overrides the policy
+        }
+        let Some(retier_at) = crate::emacs_core::jit::retier_heat() else {
+            return; // NEOVM_JIT_RETIER_FACTOR=0
+        };
+        let c = Value::make_int(7);
+        let f = nullary_fn(vec![Op::Constant(0), Op::Return], vec![c]);
+        let run = || try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap();
+        assert_eq!(run(), Some(c.bits()));
+        let id = f.jit_runtime().compiled_id().expect("compiled once");
+        assert_eq!(compiled_regalloc_for_test(id), Some(RegallocChoice::Fast));
+        assert_eq!(run(), Some(c.bits()));
+        assert_eq!(
+            compiled_regalloc_for_test(id),
+            Some(RegallocChoice::Fast),
+            "cold: no re-tier"
+        );
+        f.jit_runtime().set_heat_for_test(retier_at);
+        assert_eq!(run(), Some(c.bits()));
+        assert_eq!(
+            compiled_regalloc_for_test(id),
+            Some(RegallocChoice::Full),
+            "hot: rebuilt full"
+        );
+        assert_eq!(run(), Some(c.bits()));
+        assert_eq!(
+            compiled_regalloc_for_test(id),
+            Some(RegallocChoice::Full),
+            "and stays full"
         );
     }
 

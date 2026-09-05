@@ -53,6 +53,9 @@ pub(crate) struct CompileStats {
     /// Cache misses served by a pre-compiled AOT leaf ([`super::aot`]) instead
     /// of a JIT compile — no compile ran, so NOT counted in `total_compiles`.
     pub aot_loads: u64,
+    /// Leaves rebuilt with the full register allocator after proving hot
+    /// (`RuntimeState::RETIER_FACTOR`); each one is a second compile.
+    pub retiers: u64,
     /// Stall distribution: `<100µs, <250µs, <500µs, <1ms, <2.5ms, <5ms, <10ms, >=10ms`.
     pub histogram_us: [u64; 8],
 }
@@ -140,7 +143,7 @@ pub(super) fn record_aot_load(ops_len: usize) {
 pub(crate) fn format_summary(s: &CompileStats) -> String {
     let mean_us = s.total_us.checked_div(s.total_compiles).unwrap_or(0);
     format!(
-        "compiles={} ok={} native_entries={} dispatch={}/{} not_profitable={} not_compilable={} aot_loads={} \
+        "compiles={} ok={} native_entries={} dispatch={}/{} not_profitable={} not_compilable={} aot_loads={} retiers={} \
          total_us={} mean_us={mean_us} max_us={} max_fn_len={} \
          hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?}",
         s.total_compiles,
@@ -151,6 +154,7 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         s.not_profitable,
         s.not_compilable,
         s.aot_loads,
+        s.retiers,
         s.total_us,
         s.max_us,
         s.max_fn_len,
@@ -170,6 +174,16 @@ pub(crate) fn record_dispatch(said_compiled: bool) {
             stats.dispatch_said_compiled += 1;
         }
         cell.set(stats);
+    });
+}
+
+/// Count a fast-allocator leaf rebuilt with the full allocator (see
+/// `cache::try_run_compiled`).
+pub(crate) fn record_retier() {
+    STATS.with(|s| {
+        let mut stats = s.get();
+        stats.retiers += 1;
+        s.set(stats);
     });
 }
 

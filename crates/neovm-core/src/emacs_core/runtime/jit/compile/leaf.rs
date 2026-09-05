@@ -249,6 +249,9 @@ impl LeafTier {
 pub struct CompiledLeaf {
     /// The tier that produced this leaf (see [`LeafTier`]).
     pub(crate) tier: LeafTier,
+    /// The register allocator that built it: a `Fast` leaf re-tiers to `Full`
+    /// once hot (`cache::try_run_compiled`); AOT leaves are always `Full`.
+    pub(crate) regalloc: super::lowering::RegallocChoice,
     /// Number of fixed slots the native code reads from the args pointer at
     /// entry: `nonrest` parameters (required + optional, nil-padded) plus one
     /// slot for the `&rest` list when present. [`call`](Self::call) normalizes
@@ -546,6 +549,7 @@ impl CompiledLeaf {
         });
         CompiledLeaf {
             tier: LeafTier::Aot,
+            regalloc: super::lowering::RegallocChoice::Full,
             arity: meta.arity,
             required: meta.required,
             has_rest: meta.has_rest,

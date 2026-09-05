@@ -47,6 +47,9 @@
 //! | `NEOVM_JIT_COMPILE_STATS` | `=1`: print a running compile-stall summary line every 64 compiles. |
 //! | `NEOVM_JIT_SIZE_UNIT` | Override [`RuntimeState::SIZE_UNIT`] (64): the ops-per-unit divisor scaling the tier-up threshold by body size. |
 //! | `NEOVM_JIT_MAX_OPS` | Override [`RuntimeState::MAX_TIER_OPS`] (256): largest body that tiers at all; `0` = uncapped (the mid-end campaign's acceptance configuration). |
+//! | `NEOVM_JIT_REGALLOC` | Force one Cranelift register allocator for every JIT compile: `backtracking` (regalloc2 ion) or `single_pass` (fastalloc). Unset = the policy in `lowering::choose_regalloc` (fast for straight-line bodies, full for loops/OSR, re-tier when hot). |
+//! | `NEOVM_JIT_RETIER_FACTOR` | Override [`RuntimeState::RETIER_FACTOR`] (16): a fast-allocator leaf is rebuilt with the full allocator at `factor × hot_threshold()` heat; `0` = never. |
+//! | `NEOVM_JIT_REGALLOC_CHECKER=1` | Run regalloc2's checker after every allocation (verification harness for the allocator choice). |
 //!
 //! ## Verification harnesses (force the cold path everywhere; run the suite with each ON)
 //! | Knob | Forces |
@@ -331,6 +334,20 @@ pub fn size_unit() -> u32 {
     })
 }
 
+/// Heat at which a fast-allocator leaf is rebuilt with the full allocator
+/// ([`RuntimeState::RETIER_FACTOR`] × [`hot_threshold`]); `None` = never
+/// (`NEOVM_JIT_RETIER_FACTOR=0`).
+pub fn retier_heat() -> Option<u32> {
+    static AT: OnceLock<Option<u32>> = OnceLock::new();
+    *AT.get_or_init(|| {
+        let factor = std::env::var("NEOVM_JIT_RETIER_FACTOR")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(RuntimeState::RETIER_FACTOR);
+        (factor != 0).then(|| hot_threshold().saturating_mul(factor))
+    })
+}
+
 /// Largest body (in ops) the JIT tiers up at all; bigger bodies stay on the
 /// interpreter. Defaults to [`RuntimeState::MAX_TIER_OPS`]; `NEOVM_JIT_MAX_OPS`
 /// overrides it (`0` = no cap).
@@ -584,6 +601,14 @@ impl RuntimeState {
     /// budget is the precedent for scaling tier-up by bytecode length.
     pub const SIZE_UNIT: u32 = 64;
 
+    /// Default [`retier_heat`] factor: a leaf compiled with the fast register
+    /// allocator (`lowering::RegallocChoice::Fast`) is rebuilt with the full
+    /// one once its heat reaches this many [`hot_threshold`]s. 16 = 16,000
+    /// calls at the default threshold: the call-heavy benchmark (3M calls)
+    /// spends 0.5% of them on the fast code; an editing session's leaves
+    /// (hundreds to a few thousand calls) never pay the second compile.
+    pub const RETIER_FACTOR: u32 = 16;
+
     /// Default [`max_tier_ops`].
     ///
     /// Originally (2026-08-28) the same 352-op font-lock matcher cost ~80 ms
@@ -774,6 +799,12 @@ impl RuntimeState {
     #[cfg(test)]
     pub(crate) fn set_hot_for_test(&self) {
         self.heat.store(Self::HOT_THRESHOLD, Ordering::Relaxed);
+    }
+
+    /// Test-only: set the heat outright (re-tier tests).
+    #[cfg(test)]
+    pub(crate) fn set_heat_for_test(&self, heat: u32) {
+        self.heat.store(heat, Ordering::Relaxed);
     }
 
     /// Test-only: pin this function to the Tier-0 interpreter forever (the
