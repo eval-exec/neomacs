@@ -11519,3 +11519,94 @@ fn vm_backtrace_and_recursion_builtins_use_shared_runtime_state() {
         "OK (t nil 2 1 nil t)"
     );
 }
+
+#[test]
+fn vm_inline_opcode_builtins_dispatch_directly_like_gnu() {
+    // GNU's inline opcodes (bytecode.c `Bpoint_min`, `Bchar_after`,
+    // `Bbuffer_substring`, ...) call the C primitive directly: no funcall, no
+    // backtrace frame, no arity check. The decoder lowers them to
+    // `Op::CallBuiltinSym`; the VM must take the same direct path.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness();
+    eval.eval_str("(insert \"abc\")").expect("buffer setup");
+    eval.eval_str("(goto-char 2)").expect("buffer setup");
+
+    let run = |eval: &mut Context, constants: Vec<Value>, ops: Vec<Op>| {
+        let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+        f.constants = constants.into();
+        f.ops = ops;
+        f.max_stack = 4;
+        reset_inline_builtin_direct_count();
+        let result = new_vm(eval).execute(&f, vec![]);
+        (result, inline_builtin_direct_count())
+    };
+
+    let (result, direct) = run(
+        &mut eval,
+        vec![],
+        vec![
+            Op::CallBuiltinSym(intern("point-min"), 0),
+            Op::Add1,
+            Op::Return,
+        ],
+    );
+    assert_eq!(result.expect("point-min"), Value::fixnum(2));
+    assert_eq!(direct, 1, "Bpoint_min dispatches its primitive directly");
+
+    let (result, direct) = run(
+        &mut eval,
+        vec![Value::fixnum(1)],
+        vec![
+            Op::Constant(0),
+            Op::CallBuiltinSym(intern("char-after"), 1),
+            Op::Return,
+        ],
+    );
+    assert_eq!(result.expect("char-after"), Value::fixnum(i64::from(b'a')));
+    assert_eq!(direct, 1, "Bchar_after dispatches its primitive directly");
+
+    let (result, direct) = run(
+        &mut eval,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+        vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::CallBuiltinSym(intern("buffer-substring"), 2),
+            Op::Length,
+            Op::Return,
+        ],
+    );
+    assert_eq!(result.expect("buffer-substring"), Value::fixnum(2));
+    assert_eq!(
+        direct, 1,
+        "Bbuffer_substring dispatches its primitive directly"
+    );
+
+    // A signalling primitive still reaches the condition machinery.
+    let (result, direct) = run(
+        &mut eval,
+        vec![Value::string("x")],
+        vec![
+            Op::Constant(0),
+            Op::CallBuiltinSym(intern("char-after"), 1),
+            Op::Return,
+        ],
+    );
+    match result {
+        Err(Flow::Signal(sig)) => assert_eq!(
+            crate::emacs_core::intern::resolve_sym(sig.symbol),
+            "wrong-type-argument"
+        ),
+        other => panic!("expected wrong-type-argument, got {other:?}"),
+    }
+    assert_eq!(direct, 1);
+
+    // VM-owned specials need the interpreter itself and keep the framed path.
+    let (result, direct) = run(
+        &mut eval,
+        vec![],
+        vec![Op::CallBuiltinSym(intern("garbage-collect"), 0), Op::Return],
+    );
+    result.expect("garbage-collect");
+    assert_eq!(direct, 0, "VM specials do not take the inline path");
+}

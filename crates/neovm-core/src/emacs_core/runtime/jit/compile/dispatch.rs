@@ -1014,34 +1014,31 @@ pub extern "C" fn neovm_jit_cbsym_spec(
         // (in-place-rewrite safe). Not a plain builtin now → bounce so the general
         // shim reproduces void/invalid-function exactly. FORCE_CBSYM_GENERIC forces
         // every classified site down this bounce (harness).
-        let armed = !force_cbsym_generic()
-            && lookup_global_subr_entry(sym_id)
-                .is_some_and(|e| e.dispatch_kind == SubrDispatchKind::Builtin);
-        if !armed {
+        // GNU's inline opcodes (bytecode.c `Bpoint`..`Bwiden`,
+        // `Bset_marker`..`Bdowncase`) call the C primitive directly: no
+        // funcall, no backtrace frame, no arity check. Dispatch the registered
+        // builtin straight off the argument slot the same way the interpreter's
+        // `Op::CallBuiltinSym` arm does; the VM-owned specials and anything not
+        // registered as a plain builtin bounce to the generic shim.
+        let function = if force_cbsym_generic() {
+            None
+        } else {
+            Vm::inline_builtin_function(sym_id)
+        };
+        let Some(function) = function else {
             #[cfg(debug_assertions)]
             CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
             return STATUS_NEED_GENERIC;
-        }
+        };
         #[cfg(debug_assertions)]
         CBSYM_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-        // The name-canonical SUBR value the arm's funcall_general dispatches on.
-        let subr_value = Value::subr_from_sym_id(sym_id);
         let saved = save_scratch_gc_roots();
-        // Root the args on the GC-traced bc_buf (like neovm_jit_call_subr_spec),
-        // then build the exact-length arg vector funcall_general copies into its
-        // backtrace frame.
         let args_start = ctx.bc_buf.len();
         for i in 0..nargs {
-            // SAFETY: the generated code stored exactly `nargs` argument words at
-            // `args_ptr` (its call-args slot) immediately before this call.
             let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
             ctx.bc_buf.push(v);
         }
-        let args: LispArgVec = ctx.bc_buf[args_start..args_start + nargs]
-            .iter()
-            .copied()
-            .collect();
-        let res = ctx.funcall_general(subr_value, args);
+        let res = Vm::call_inline_builtin_from_stack(ctx, function, sym_id, args_start, nargs);
         ctx.bc_buf.truncate(args_start);
         let status = match res {
             Ok(value) => {
