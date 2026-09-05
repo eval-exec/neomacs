@@ -49,6 +49,7 @@ fn initial_frame_metrics(startup: &BrowserEditorStartup) -> Result<InitialFrameM
 }
 
 pub(crate) fn run() -> Result<EditorSessionExit, String> {
+    crate::network::http::install().map_err(|error| error.to_string())?;
     neomacs_host_runtime::time::BrowserClocks::new(
         browser_host::monotonic_time_milliseconds,
         browser_host::wall_time_milliseconds,
@@ -122,6 +123,9 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     .with_arguments(["--quick", "--no-splash"]);
     configure_interactive_gui_startup(&mut evaluator, surface, &invocation)
         .map_err(|error| format!("failed to configure browser startup: {error:?}"))?;
+
+    evaluator.eval_str(r#"(progn (require 'url-neomacs-http) (url-neomacs-http-enable))"#)
+        .map_err(|error| format!("failed to initialize browser HTTP: {error:?}"))?;
 
     let (mut session, frontend) = EditorSession::attach(
         evaluator,
