@@ -9,6 +9,7 @@
 //! supply provenance only where pixels genuinely cannot say (that a buffer
 //! replacement was a navigation, for instance).
 
+pub(in crate::render_thread) mod pane_layout;
 pub(in crate::render_thread) mod reflow;
 pub(in crate::render_thread) mod scroll;
 pub(in crate::render_thread) mod selection;
@@ -45,6 +46,80 @@ pub(in crate::render_thread) struct TransitionInputs {
 }
 
 impl GuiFrameRenderState {
+    /// Start carrying the panes to where the incoming presentation puts them.
+    ///
+    /// Measured at install, the only moment both layouts exist. A morph
+    /// already in flight is replaced rather than blended: the destination has
+    /// changed, so where the old motion was heading no longer exists. Its
+    /// panes jump, which is the honest behaviour until step 11 gives
+    /// interrupted motion a continuous retarget.
+    pub(in crate::render_thread) fn measure_pane_layout(
+        &mut self,
+        next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
+        now: neomacs_display_protocol::frame_time::EventTime,
+    ) {
+        let spec = self.compositor.pane_motion;
+        let (Some(previous), Some(next)) = (self.compositor.current_frame.as_ref(), next) else {
+            self.compositor.pane_morph = None;
+            return;
+        };
+        self.compositor.pane_morph = pane_layout::PaneLayoutMorph::try_new(
+            &previous.window_infos,
+            &next.window_infos,
+            spec,
+            now,
+        );
+    }
+
+    /// Place the panes for the frame about to be drawn.
+    ///
+    /// Called once per composition, before anything reads the projection, so
+    /// the transform hit testing uses and the placement the pass draws come
+    /// from one sample of one motion — there is no second evaluation that
+    /// could land on the other side of a frame boundary.
+    ///
+    /// Returns the placements to draw, empty when nothing is moving. The
+    /// emptiness is the signal: an empty result means the pass composes the
+    /// frame the ordinary way, with no offscreen and no per-pane blit.
+    pub(in crate::render_thread) fn sample_pane_layout(
+        &mut self,
+        frame: neomacs_display_protocol::frame_time::FrameSample,
+    ) -> Vec<neomacs_renderer_wgpu::PaneBlit> {
+        let Some(morph) = self.compositor.pane_morph.as_ref() else {
+            return Vec::new();
+        };
+        let Some(presentation) = self
+            .compositor
+            .current_frame
+            .as_ref()
+            .map(|frame| frame.presentation_id)
+        else {
+            self.compositor.pane_morph = None;
+            return Vec::new();
+        };
+        let sample = morph.sample(frame);
+        self.compositor.interaction = Some(sample.projection(presentation));
+        if sample.motion.finished {
+            // Settled: drop the morph and fall back to the identity
+            // projection, so the last frame of the motion and the first frame
+            // after it resolve a click to the same place. The final placements
+            // are still returned — this frame is the one that draws the panes
+            // at their destination.
+            self.compositor.pane_morph = None;
+            self.compositor.interaction = Some(
+                neomacs_display_protocol::InteractionProjection::settled(presentation),
+            );
+        }
+        sample
+            .panes
+            .iter()
+            .map(|placement| neomacs_renderer_wgpu::PaneBlit {
+                bounds: placement.bounds,
+                content_origin: placement.content_origin,
+            })
+            .collect()
+    }
+
     /// Measure how far each window's viewport moved into the presentation being
     /// installed, comparing it with the one being replaced.
     ///

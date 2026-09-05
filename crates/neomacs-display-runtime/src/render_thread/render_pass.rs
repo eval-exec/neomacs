@@ -549,7 +549,19 @@ impl RenderApp {
 
         let feature_plan =
             render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
-        let need_offscreen = feature_plan.use_transition_offscreen;
+
+        // Place the panes before anything reads their positions, so the
+        // transform hit testing uses and the geometry this pass draws come
+        // from one sample of one motion rather than from two evaluations that
+        // could land on different sides of a frame boundary.
+        let pane_blits = render.sample_pane_layout(renderer.frame_sample());
+        if !pane_blits.is_empty() {
+            render.mark_dirty();
+        }
+        // A morph draws the composed frame once and then places it a pane at a
+        // time, which needs the frame in a texture rather than straight on the
+        // surface.
+        let need_offscreen = feature_plan.use_transition_offscreen || !pane_blits.is_empty();
 
         let output = if let Some(output) = output {
             output
@@ -840,12 +852,27 @@ impl RenderApp {
             }
 
             if let Some(current_bg) = current_bg {
-                renderer.blit_texture_to_view(
-                    &current_bg,
-                    &composition_view,
-                    native.width,
-                    native.height,
-                );
+                if pane_blits.is_empty() {
+                    renderer.blit_texture_to_view(
+                        &current_bg,
+                        &composition_view,
+                        native.width,
+                        native.height,
+                    );
+                } else {
+                    // Same picture, placed rather than copied whole: each pane
+                    // reads the region of the composed frame it owns and draws
+                    // it where the motion currently puts it.
+                    renderer.render_pane_layout(
+                        &current_bg,
+                        &composition_view,
+                        (
+                            native.width as f32 / native.scale_factor as f32,
+                            native.height as f32 / native.scale_factor as f32,
+                        ),
+                        &pane_blits,
+                    );
+                }
             }
             render_frame_transitions(
                 renderer,
