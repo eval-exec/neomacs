@@ -33971,3 +33971,68 @@ fn redisplay_fontifies_visible_text_after_a_large_invisible_span() {
          tail props/calls={tail_props}"
     );
 }
+
+/// Dashboard centers its banner with a `line-prefix` whose `display` value is
+/// a list of two `(when FORM . SPEC)` clauses, `(display-graphic-p)` first and
+/// its negation second.  GNU evaluates FORM (xdisp.c:6130-6160) and, for a
+/// string object, stops at the first replacing spec (xdisp.c:6034-6040); the
+/// engine used to take every non-nil FORM as true, so a graphic frame got
+/// the text-terminal alignment.  The clauses are listed text-terminal first
+/// here so that the first-replacing rule alone cannot pass the test: only
+/// evaluating the forms selects the graphic clause.  The bare test
+/// evaluator has no frame.el, so the graphic test is `framep` of the
+/// selected frame (`neo` on the realized GUI frame), which
+/// `display-graphic-p` reduces to.
+#[test]
+fn line_prefix_when_clauses_are_decided_by_evaluating_their_forms() {
+    let mut eval = Context::new();
+    let root = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("when-prefix", 640, 200, root);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        "(progn
+           (insert \"X\\n\")
+           (put-text-property 1 2 'line-prefix
+             (propertize \" \" 'display
+               '((when (not (eq (framep (selected-frame)) 'neo)) space :align-to 20)
+                 (when (eq (framep (selected-frame)) 'neo) space :align-to 10)))))",
+    )
+    .expect("buffer with a conditional line prefix");
+    assert!(
+        eval.eval_str("(eq (framep (selected-frame)) 'neo)")
+            .expect("framep")
+            .is_truthy(),
+        "the test frame must be graphic for the first clause to apply"
+    );
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| {
+            state
+                .window_infos
+                .iter()
+                .any(|info| !info.is_minibuffer && info.window_id == entry.window_id)
+        })
+        .expect("root window matrix");
+    let rows = enabled_window_row_texts_expanding_stretches(entry);
+    let first = rows.first().expect("first row");
+    assert_eq!(
+        first.trim_end(),
+        format!("{}X", " ".repeat(10)),
+        "the graphic clause aligns X to column 10 (the text clause would give 20): {rows:?}"
+    );
+}

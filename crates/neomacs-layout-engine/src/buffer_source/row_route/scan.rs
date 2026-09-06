@@ -801,7 +801,9 @@ pub(super) fn routed_row_replacement_scan<B: LayoutBufferView>(
     start_byte: usize,
     line_end_byte: usize,
 ) -> Result<RoutedRowDisplayScan, RouteRefusal> {
-    use crate::display_property::{DisplayReplacementProperty, classify_display_property};
+    use crate::display_property::{
+        DisplayPropertyObject, DisplayReplacementProperty, classify_display_property,
+    };
 
     let display_prop_at = |byte: usize| {
         buffer.layout_text_prop_at_emacs_byte_pos(EmacsBytePos::new(byte), Value::symbol("display"))
@@ -838,7 +840,11 @@ pub(super) fn routed_row_replacement_scan<B: LayoutBufferView>(
             // hazard at its position: non-string display shapes keep the
             // historical HazardProp refusal, unroutable string shapes the
             // Replacement refusal.
-            let classification = classify_display_property(value);
+            let classification = classify_display_property(
+                value,
+                &buffer.layout_display_when_conditions(),
+                DisplayPropertyObject::Buffer,
+            );
             let spec = classification.replacement_spec();
             // Parse the routable content shape, independent of anchoring:
             // rung 2 — a plain, property-less string whose chars are all

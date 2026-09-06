@@ -3562,6 +3562,16 @@ impl LayoutEngine {
             .as_ref()
             .map(|replay| replay.dvpos)
             .unwrap_or(0.0);
+        // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
+        // run while it holds the buffer: evaluate the forms of the span the
+        // walk can reach (the same one fontification just covered) now and
+        // let the snapshot carry the results.
+        let display_when = crate::display_when::evaluate_window_display_when_forms(
+            evaluator,
+            buf_id,
+            neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
+            neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+        );
         // `params` already names the semantic display source chosen before
         // fontification and incremental classification.
         let layout_buffer = match evaluator.buffer_manager().get(buf_id) {
@@ -3569,7 +3579,8 @@ impl LayoutEngine {
                 buffer,
                 evaluator.obarray(),
                 Some(visible_char_bound(params)),
-            ),
+            )
+            .with_display_when(display_when),
             None => {
                 tracing::debug!("layout_window_rust: buffer {} not found", params.buffer_id);
                 self.frame_output

@@ -9,7 +9,7 @@ use crate::display_item::{
 };
 use crate::display_origin::{DisplayOrigin, DisplayPropertySource, OverlayStringKind};
 use crate::display_property::{
-    DisplayMarginContent, DisplayMarginSide, DisplayPropertyClassification,
+    DisplayMarginContent, DisplayMarginSide, DisplayPropertyClassification, DisplayPropertyObject,
     DisplayReplacementProperty, classify_display_property,
     classify_display_property_modifiers_only,
 };
@@ -20,6 +20,7 @@ use crate::display_source_append_plan::{
     DisplaySourceAppendMeasurementKind, DisplaySourceAppendRenderPlan, DisplaySourceFallbackWidth,
 };
 use crate::display_spec::{DisplaySpaceKey, display_space_positive_number};
+use crate::display_when::DisplayWhenConditions;
 use crate::neovm_bridge::{LayoutBufferView, OrderedFaceSources, TtyGlyphlessCharDisplay};
 use crate::types::{NobreakDisplayMode, WindowParams};
 use crate::unicode::{EmacsTextStorage, decode_emacs_char, decode_utf8};
@@ -2659,6 +2660,13 @@ impl LispStringSourceCursor {
         self
     }
 
+    /// Give this string (and the strings it pushes) the walk's evaluated
+    /// `(when FORM . SPEC)` results.
+    pub(crate) fn with_display_when(mut self, display_when: DisplayWhenConditions) -> Self {
+        self.stack = self.stack.with_display_when(display_when);
+        self
+    }
+
     pub(crate) fn discard_until_row_break(&mut self) -> bool {
         let mut context = DisplaySourceContext::empty();
         while let Some(item) = self.next_item(&mut context) {
@@ -2734,6 +2742,9 @@ pub(crate) struct LispStringSourceStack {
     frames: Vec<LispStringSourceFrame>,
     next_source_id: u64,
     tty_glyphless_char_display: TtyGlyphlessCharDisplay,
+    /// The walk's evaluated `(when FORM . SPEC)` results, handed to every
+    /// frame pushed onto this stack.
+    display_when: DisplayWhenConditions,
 }
 
 impl LispStringSourceStack {
@@ -2742,7 +2753,17 @@ impl LispStringSourceStack {
             frames: Vec::new(),
             next_source_id,
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
+            display_when: DisplayWhenConditions::structural(),
         }
+    }
+
+    /// Give the frames of this stack the walk's evaluated `when` results.
+    pub(crate) fn with_display_when(mut self, display_when: DisplayWhenConditions) -> Self {
+        for frame in &mut self.frames {
+            frame.display_when = display_when.clone();
+        }
+        self.display_when = display_when;
+        self
     }
 
     fn with_root(
@@ -2756,6 +2777,7 @@ impl LispStringSourceStack {
             frames: vec![frame],
             next_source_id: source_id.saturating_add(1),
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
+            display_when: DisplayWhenConditions::structural(),
         })
     }
 
@@ -2779,6 +2801,7 @@ impl LispStringSourceStack {
             frames: vec![frame],
             next_source_id: source_id.saturating_add(1),
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
+            display_when: DisplayWhenConditions::structural(),
         })
     }
 
@@ -2815,7 +2838,8 @@ impl LispStringSourceStack {
             occurrence,
             box_boundaries,
         ) {
-            self.frames.push(frame);
+            self.frames
+                .push(frame.with_display_when(self.display_when.clone()));
         }
     }
 
@@ -2894,6 +2918,9 @@ struct LispStringSourceFrame {
     /// overlay strings can continue an underlying box run; standalone chrome
     /// strings have an object boundary and therefore use `None`.
     box_boundaries: DisplayStringBoxBoundaries,
+    /// The walk's evaluated `(when FORM . SPEC)` results for this string's
+    /// own `display` properties.
+    display_when: DisplayWhenConditions,
 }
 
 impl LispStringSourceFrame {
@@ -2969,7 +2996,13 @@ impl LispStringSourceFrame {
             nested_display_policy,
             pointer_occurrence,
             box_boundaries,
+            display_when: DisplayWhenConditions::structural(),
         })
+    }
+
+    fn with_display_when(mut self, display_when: DisplayWhenConditions) -> Self {
+        self.display_when = display_when;
+        self
     }
 
     fn next_action(
@@ -2999,9 +3032,14 @@ impl LispStringSourceFrame {
             // than of a check someone has to remember to keep.
             if self.nested_display_policy == NestedDisplayPolicy::ModifiersOnly {
                 self.char_index = property_end;
-                item_layout = classify_display_property_modifiers_only(display_prop);
+                item_layout =
+                    classify_display_property_modifiers_only(display_prop, &self.display_when);
             } else {
-                let display_property = DisplayPropertySourcePlan::new(display_prop);
+                let display_property = DisplayPropertySourcePlan::new(
+                    display_prop,
+                    &self.display_when,
+                    DisplayPropertyObject::LispString,
+                );
                 let display_end = if display_property.replacement().is_some() {
                     self.display_value_extent(display_prop, property_end)
                 } else {
@@ -3446,10 +3484,14 @@ impl DisplayPropertySourceFaces {
 }
 
 impl DisplayPropertySourcePlan {
-    pub(crate) fn new(value: Value) -> Self {
+    pub(crate) fn new(
+        value: Value,
+        conditions: &DisplayWhenConditions,
+        object: DisplayPropertyObject,
+    ) -> Self {
         Self {
             value,
-            classification: classify_display_property(value),
+            classification: classify_display_property(value, conditions, object),
         }
     }
 

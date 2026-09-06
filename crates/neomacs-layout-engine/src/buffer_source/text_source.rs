@@ -174,6 +174,8 @@ pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
     mouse_faces: MouseFaceRuns<'a, B>,
     face_property: LayoutCharPropertyLookup,
     display_property: LayoutCharPropertyLookup,
+    /// The walk's evaluated `(when FORM . SPEC)` results (from the view).
+    display_when: crate::display_when::DisplayWhenConditions,
     line_height_property: LayoutCharPropertyLookup,
     line_spacing_property: LayoutCharPropertyLookup,
 }
@@ -215,9 +217,12 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             char_granularity_end: None,
             overlay_strings_produced_at: None,
             base_face,
-            replacement_strings: LispStringSourceStack::empty(1).with_tty_glyphless_char_display(
-                crate::neovm_bridge::TtyGlyphlessCharDisplay::capture(buffer),
-            ),
+            replacement_strings: LispStringSourceStack::empty(1)
+                .with_tty_glyphless_char_display(
+                    crate::neovm_bridge::TtyGlyphlessCharDisplay::capture(buffer),
+                )
+                .with_display_when(buffer.layout_display_when_conditions()),
+            display_when: buffer.layout_display_when_conditions(),
             mouse_faces: MouseFaceRuns::new(
                 buffer,
                 EmacsByteRange::new(
@@ -977,7 +982,11 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
 
             if let Some(display_source) = self.display_prop_source_at(start) {
                 let display_prop = display_source.value;
-                let display_property = DisplayPropertySourcePlan::new(display_prop);
+                let display_property = DisplayPropertySourcePlan::new(
+                    display_prop,
+                    &self.display_when,
+                    crate::display_property::DisplayPropertyObject::Buffer,
+                );
                 if replacement_mode.consumes_typed_replacements()
                     && display_property.replacement().is_some()
                 {

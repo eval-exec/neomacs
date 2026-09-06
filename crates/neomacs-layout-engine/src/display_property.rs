@@ -6,6 +6,7 @@ use crate::display_spec::{
     DisplayFringeLayout, DisplayImageSliceSpec, DisplaySpaceKey, parse_display_fringe_layout,
     parse_display_image_slice, parse_display_surface_layout, parse_display_xwidget_layout,
 };
+use crate::display_when::DisplayWhenConditions;
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::display_spec::{
     DisplayMarginLocation, DisplayMediaSpecKind, DisplayPropertySpecs, DisplaySpecKind,
@@ -249,10 +250,28 @@ pub(crate) type DisplayTextPropertyModifiers = DisplayItemLayout;
 /// GNU keeps the LAST element whose `handle_single_display_spec` reported a
 /// replacement (`replacing = rv`) and merges non-replacement modifiers
 /// (`raise`/`height`) from every element; both are reproduced here.
-pub(crate) fn classify_display_property(value: Value) -> DisplayPropertyClassification {
+/// The object a `display` property was found on.  GNU stops at the first
+/// element that replaces text of a STRING -- `position` would no longer
+/// point into `object` -- and lets a later replacing element override an
+/// earlier one for buffer text (`if (!it || STRINGP (object)) break;`,
+/// src/xdisp.c:6034-6040 and 6055-6061).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DisplayPropertyObject {
+    Buffer,
+    LispString,
+}
+
+/// Classify with the walk's evaluated `when` conditions and the object the
+/// property came from; readers without an evaluation behind them pass
+/// `DisplayWhenConditions::structural()`.
+pub(crate) fn classify_display_property(
+    value: Value,
+    conditions: &DisplayWhenConditions,
+    object: DisplayPropertyObject,
+) -> DisplayPropertyClassification {
     let mut result = DisplayPropertyClassification::default();
     DisplayPropertySpecs::of(value).for_each(|spec| {
-        let element = classify_single_display_spec(spec);
+        let element = classify_single_display_spec(spec, conditions);
         if element.replacement.is_some() {
             result.replacement = element.replacement;
             result.replacement_spec = element.replacement_spec;
@@ -261,7 +280,11 @@ pub(crate) fn classify_display_property(value: Value) -> DisplayPropertyClassifi
         if element.image_slice.is_some() {
             result.image_slice = element.image_slice;
         }
-        ControlFlow::Continue(())
+        if result.replacement.is_some() && object == DisplayPropertyObject::LispString {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
     });
     // GNU suppresses inline modifiers once a replacement claims the text.
     if result.replacement.is_some() {
@@ -274,10 +297,14 @@ pub(crate) fn classify_display_property(value: Value) -> DisplayPropertyClassifi
 /// a display property, while still honoring non-replacing modifiers.
 pub(crate) fn classify_display_property_modifiers_only(
     value: Value,
+    conditions: &DisplayWhenConditions,
 ) -> DisplayTextPropertyModifiers {
     let mut modifiers = DisplayTextPropertyModifiers::default();
     DisplayPropertySpecs::of(value).for_each(|spec| {
-        merge_modifiers(&mut modifiers, classify_single_display_spec(spec).modifiers);
+        merge_modifiers(
+            &mut modifiers,
+            classify_single_display_spec(spec, conditions).modifiers,
+        );
         ControlFlow::Continue(())
     });
     modifiers
@@ -288,22 +315,28 @@ pub(crate) fn classify_display_property_modifiers_only(
 /// The head taxonomy is `neovm_core`'s [`display_spec_kind`], so the arms are
 /// exhaustive: a spec kind this crate forgets to render is a compile error rather
 /// than a display property that silently does nothing.
-fn classify_single_display_spec(value: Value) -> DisplayPropertyClassification {
+fn classify_single_display_spec(
+    value: Value,
+    conditions: &DisplayWhenConditions,
+) -> DisplayPropertyClassification {
     let kind = display_spec_kind(value);
 
-    // `(when FORM . SPEC)`: GNU continues its SINGLE-spec arms on SPEC (it does
-    // not re-enter `handle_display_spec`, so SPEC is never a list of specs), with
-    // FORM evaluated. Resolved structurally here — the text is being displayed, so
-    // the condition held — matching GNU's own `single_display_spec_string_p`.
+    // `(when FORM . SPEC)`: GNU evaluates FORM (src/xdisp.c:6130-6160) and
+    // continues its SINGLE-spec arms on SPEC (it does not re-enter
+    // `handle_display_spec`, so SPEC is never a list of specs).  The walk's
+    // evaluated results decide here; a spec whose FORM did not hold does
+    // nothing, like GNU's `if (NILP (form)) return 0`.
     if matches!(kind, DisplaySpecKind::When) {
         return match display_spec_when_parts(value) {
-            Some((form, spec)) if !form.is_nil() => classify_single_display_spec(spec),
+            Some((form, spec)) if conditions.holds(form) => {
+                classify_single_display_spec(spec, conditions)
+            }
             _ => DisplayPropertyClassification::default(),
         };
     }
 
     if matches!(kind, DisplaySpecKind::Margin) {
-        return classify_margin_display_spec(value);
+        return classify_margin_display_spec(value, conditions);
     }
 
     let replacement = match kind {
@@ -389,11 +422,14 @@ fn classify_single_display_spec(value: Value) -> DisplayPropertyClassification {
     }
 }
 
-fn classify_margin_display_spec(value: Value) -> DisplayPropertyClassification {
+fn classify_margin_display_spec(
+    value: Value,
+    conditions: &DisplayWhenConditions,
+) -> DisplayPropertyClassification {
     let Some(spec) = display_margin_spec(value) else {
         return DisplayPropertyClassification::default();
     };
-    let inner = classify_single_display_spec(spec.content());
+    let inner = classify_single_display_spec(spec.content(), conditions);
 
     // GNU's `((margin nil) CONTENT)` selects TEXT_AREA and is otherwise the
     // ordinary CONTENT replacement.  Preserve the inner classification rather
