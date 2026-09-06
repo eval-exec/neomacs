@@ -562,6 +562,11 @@ pub(crate) fn builtin_force_mode_line_update(
             .buffer_manager()
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        // GNU gates this on `buffer_window_count (current_buffer)', and its
+        // initial frame always exists: in `--batch' the current `*scratch*'
+        // is displayed in `#<window 1 on *scratch*>' (GNU 31.0.90). Neomacs
+        // synthesizes that frame lazily, so resolve it before counting.
+        crate::emacs_core::window_cmds::ensure_selected_frame_id(ctx);
         super::eval::ModeLineUpdateTarget::CurrentBuffer(current_buffer)
     };
     ctx.request_mode_line_update(target);
