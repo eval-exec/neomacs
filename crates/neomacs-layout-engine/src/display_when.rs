@@ -15,6 +15,7 @@ use std::rc::Rc;
 use neovm_core::buffer::{Buffer, BufferId, CharPos0, EmacsByteRange};
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::display_spec::{DisplayPropertySpecs, display_spec_when_parts};
+use neovm_core::emacs_core::display_when::DisplayWhenSite;
 use neovm_core::emacs_core::value::{Value, get_string_text_properties_table_for_value};
 use rustc_hash::FxHashMap;
 
@@ -78,17 +79,6 @@ impl DisplayWhenConditions {
     }
 }
 
-/// One FORM occurrence with the bindings GNU gives it (src/xdisp.c:6152-6154).
-struct WhenFormSite {
-    form: Value,
-    object: Value,
-    position: i64,
-    buffer_position: i64,
-    /// False inside `(disable-eval …)`: GNU then takes FORM as nil
-    /// (src/xdisp.c:6139-6140) and the spec never applies.
-    eval_enabled: bool,
-}
-
 /// Evaluate the `when` forms of every display spec the walk of
 /// `[from, to)` of `buf_id` can reach: `display`, `line-prefix` and
 /// `wrap-prefix` text properties and overlay properties, overlay
@@ -118,26 +108,20 @@ pub(crate) fn evaluate_window_display_when_forms(
         Some(buffer) => collect_when_form_sites(buffer, from, to, &default_prefixes),
         None => Vec::new(),
     };
-    let mut results = FxHashMap::default();
-    let evaluated = evaluator.with_display_buffer_current(buf_id, |evaluator| {
-        for site in sites {
-            if results.contains_key(&site.form) {
-                continue;
-            }
-            let holds = site.eval_enabled
-                && evaluator.display_when_form_holds(
-                    site.form,
-                    site.object,
-                    site.position,
-                    site.buffer_position,
-                );
-            results.insert(site.form, holds);
+    match evaluator.evaluate_display_when_sites(buf_id, &sites) {
+        Ok(results) => DisplayWhenConditions::evaluated(results.into_iter().collect()),
+        // A `throw` (or an exit) out of a display FORM unwinds redisplay in
+        // GNU; redisplay here has no such exit, so the forms of this span
+        // fall back to the structural rule for this attempt (declared).
+        Err(flow) => {
+            tracing::warn!(
+                ?flow,
+                "display `when' form left evaluation with a non-error flow; \
+                 using the structural rule for this layout"
+            );
+            DisplayWhenConditions::structural()
         }
-    });
-    if evaluated.is_err() {
-        return DisplayWhenConditions::structural();
     }
-    DisplayWhenConditions::evaluated(results)
 }
 
 fn collect_when_form_sites(
@@ -145,7 +129,7 @@ fn collect_when_form_sites(
     from: CharPos0,
     to: CharPos0,
     default_prefixes: &[Value],
-) -> Vec<WhenFormSite> {
+) -> Vec<DisplayWhenSite> {
     let mut sites = Vec::new();
     let buffer_object = Value::make_buffer(buffer.id());
     let to = to.min(buffer.layout_point_max_char_pos()).max(from);
@@ -230,7 +214,7 @@ fn collect_when_forms(
     object: Value,
     position: i64,
     buffer_position: i64,
-    sites: &mut Vec<WhenFormSite>,
+    sites: &mut Vec<DisplayWhenSite>,
 ) {
     let specs = DisplayPropertySpecs::of(value);
     specs.for_each(|spec| {
@@ -238,7 +222,7 @@ fn collect_when_forms(
             && !form.is_nil()
             && !form.is_symbol_named("t")
         {
-            sites.push(WhenFormSite {
+            sites.push(DisplayWhenSite {
                 form,
                 object,
                 position,
@@ -255,7 +239,7 @@ fn collect_when_forms(
 fn collect_prefix_string_when_forms(
     string: Value,
     buffer_position: i64,
-    sites: &mut Vec<WhenFormSite>,
+    sites: &mut Vec<DisplayWhenSite>,
 ) {
     let Some(lisp_string) = string.as_lisp_string() else {
         return;
