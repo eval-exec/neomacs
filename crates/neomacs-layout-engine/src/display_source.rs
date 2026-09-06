@@ -1904,7 +1904,7 @@ impl DisplaySpaceWidthPolicy {
                     // is measured from the text area's left edge (`align_to =
                     // 0`), the line-number field having been folded into the
                     // number already (`XFLOATINT (prop) * base_unit +
-                    // lnum_pixel_width`, xdisp.c:30248).  `pctx` here is in
+                    // lnum_pixel_width`, xdisp.c:30493).  `pctx` here is in
                     // window coordinates, like `current_x`.
                     let target_x = if align_to >= 0 {
                         align_to as f32 + pixels as f32
@@ -2081,12 +2081,16 @@ impl DisplaySpaceGeometry {
         };
 
         // `content_x` is the text area's left edge plus the line-number
-        // field (`BufferWindowGeometry::content_x`).  GNU resolves `left` and
-        // `center` past the field -- `window_box_left_offset + lnum_pixel_width
-        // (+ window_box_width / 2)` (src/xdisp.c:30431-30441) -- and the
-        // width that half applies to is the text after the field (vanilla
-        // 31.0.90: a 28px field in a 560px text area puts `center` at 294px,
-        // the field plus half of the remaining 532px).
+        // field (`BufferWindowGeometry::content_x`).  GNU 31.0.90 resolves
+        // `left` past the field and `center` at the field plus half of the
+        // whole text area: `window_box_left_offset + lnum_pixel_width (+
+        // window_box_width / 2)` (src/xdisp.c:30431-30441), the box width
+        // being the text area with no line-number term (src/xdisp.c:1279-
+        // 1300).  Declared: Emacs master moves `center` by half the field
+        // only (`(LNUM_ONCE + window_box_width) / 2`); a 32.0.50 build here
+        // puts it at 294px for a 28px field in a 560px area where 31.0.90
+        // gives 308px.  The context keeps the box width and carries the
+        // field separately, as the calculator's `text` arm expects.
         let line_number_pixel_width = (content_x - params.text_bounds.x).max(0.0);
         let pctx = PixelCalcContext {
             frame_column_width: params.char_width.max(1.0) as f64,
@@ -2097,7 +2101,7 @@ impl DisplaySpaceGeometry {
             face_font_width: face_char_w.round().max(1.0) as f64,
             text_area_left: params.text_bounds.x as f64,
             text_area_right: (params.text_bounds.x + params.text_bounds.width) as f64,
-            text_area_width: (params.text_bounds.width - line_number_pixel_width).max(0.0) as f64,
+            text_area_width: params.text_bounds.width as f64,
             left_margin_left: (params.text_bounds.x
                 - params.left_fringe_width
                 - params.left_margin_width) as f64,

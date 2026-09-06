@@ -1037,12 +1037,17 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         // authority the buffer text path uses. Region symbols (`text`,
         // `right`, …) now reach real window-region positions instead of the
         // 0.0 the retired `length_expr_pixels` evaluator returned.
+        // A text row's geometry width is the append width past the
+        // line-number field; GNU's `window_box_width` is the whole text area
+        // and the field travels separately (`lnum_pixel_width`), so hand the
+        // calculator both.
         let mut pixel_calc = PixelCalcContext::for_chrome_row(
-            geometry.width(),
+            geometry.width() + geometry.line_number_width,
             char_width,
             geometry.height(),
             symbol_values,
         );
+        pixel_calc.line_number_pixel_width = f64::from(geometry.line_number_width);
         if matches!(
             role,
             GlyphRowRole::ModeLine | GlyphRowRole::HeaderLine | GlyphRowRole::TabLine

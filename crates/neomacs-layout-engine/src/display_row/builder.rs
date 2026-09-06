@@ -2926,10 +2926,17 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
                     self.layout.role,
                     GlyphRowRole::ModeLine | GlyphRowRole::HeaderLine | GlyphRowRole::TabLine
                 );
-                let raw_align_base_x = if align_to < 0 && chrome_row {
+                // Buffer rows: the text area's left edge, where GNU measures
+                // both a raw number (with the line-number field folded into
+                // it, xdisp.c:30493) and a region coordinate made
+                // text-area-relative (xdisp.c:32853-32859); the row origin
+                // `content_x` lies past the field.  Chrome rows: their own
+                // left offset for raw numbers, window coordinates otherwise.
+                let text_area_x = content_x - self.layout.line_number_width_px;
+                let raw_align_base_x = if chrome_row {
                     self.layout.pixel_calc.text_area_left as f32
                 } else {
-                    content_x
+                    text_area_x
                 };
                 // A resolved region coordinate (`left`/`center`/`right`, …):
                 // GNU `produce_stretch_glyph` (xdisp.c:32853-32859) makes it
@@ -2952,7 +2959,7 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
                 // `stretch_adjust`/`first_visible_x` (xdisp.c:32841-32843,
                 // 32862-32874); this pen is the visible pen of this row.
                 let target_x = if align_to >= 0 {
-                    let base = if chrome_row { 0.0 } else { content_x };
+                    let base = if chrome_row { 0.0 } else { text_area_x };
                     base + align_to as f32 + pixels as f32
                 } else {
                     raw_align_base_x + pixels as f32

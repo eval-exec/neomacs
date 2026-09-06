@@ -34037,14 +34037,17 @@ fn line_prefix_when_clauses_are_decided_by_evaluating_their_forms() {
     );
 }
 
-/// Under `display-line-numbers`, GNU measures a buffer `:align-to` from the
-/// text after the line-number field: `(space :align-to 10)` ends ten columns
-/// past the field and `center` at the field plus half of the remaining text
-/// width (vanilla 31.0.90 oracle: field 28px, X at 98px, center at 294px in a
-/// 560px text area).  Relative to the same layout without line numbers, the
-/// field therefore shifts a numeric target by its full width and `center` by
-/// half of it.  The row's origin is the field's right edge, so the pen must
-/// not count the field's glyphs a second time.
+/// Under `display-line-numbers`, GNU 31.0.90 folds the line-number field
+/// into every buffer `:align-to` target: a raw number is the field plus the
+/// number (`XFLOATINT (prop) * base_unit + lnum_pixel_width`, xdisp.c:30493)
+/// and `center` is the field plus half of the whole text area
+/// (xdisp.c:30438-30441), both measured from the text-area edge
+/// (xdisp.c:32853-32859).  Relative to the same layout without line numbers
+/// both targets therefore move by the whole field.  (Emacs master moves
+/// `center` by half the field only, `LNUM_ONCE`; a 32.0.50 build here puts
+/// it at 294px for a 28px field in a 560px area.)  The row's origin is the
+/// field's right edge, so the pen must not count the field's glyphs a second
+/// time.
 #[test]
 fn buffer_align_to_under_line_numbers_measures_from_the_field_edge() {
     let mut eval = Context::new();
@@ -34127,8 +34130,8 @@ fn buffer_align_to_under_line_numbers_measures_from_the_field_edge() {
     );
     assert_eq!(
         numbered[1].find('Y'),
-        Some(y_plain + field / 2),
-        "`center` moves by half the field (field + (width - field) / 2): {numbered:?}"
+        Some(y_plain + field),
+        "`center` moves by the whole field (field + width / 2): {numbered:?}"
     );
     assert_eq!(
         numbered[3].find('P'),
@@ -34137,8 +34140,8 @@ fn buffer_align_to_under_line_numbers_measures_from_the_field_edge() {
     );
     assert_eq!(
         numbered[4].find('Q'),
-        Some(y_plain + field / 2),
-        "a prefix string's `center` moves by half the field: {numbered:?}"
+        Some(y_plain + field),
+        "a prefix string's `center` moves by the whole field: {numbered:?}"
     );
 }
 
