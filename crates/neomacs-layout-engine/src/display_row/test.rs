@@ -4144,3 +4144,93 @@ fn shaped_complex_script_advances_are_not_cell_clamped() {
         "joined complex-script advances must pass through unclamped"
     );
 }
+
+/// Render one buffer row whose text area starts `content_x` pixels into the
+/// row (the left fringe), with `display` VALUE on the first character.
+fn render_buffer_text_row_with_display_at_content_x(
+    text: &str,
+    value: Value,
+    content_x: f32,
+) -> GlyphRow {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buffer.insert(text);
+        let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(0));
+        let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(1));
+        buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(start, end),
+            Value::symbol("display"),
+            value,
+        );
+    }
+    let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
+    let snapshot = LayoutBufferSnapshot::from_buffer(buffer);
+    let mut font_metrics = None;
+    let mut renderer =
+        DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
+    let table = FaceTable::new();
+    let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
+    let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+        buf_id,
+        &snapshot,
+        CharPos0::new(0),
+        snapshot.layout_point_max_char_pos(),
+        RenderFaceRef::FaceId(FaceId::new(1)),
+    );
+    display_row_request_for_face(
+        DisplayRowGeometry {
+            y: 0.0,
+            width: 240.0,
+            height: 16.0,
+            char_width: 8.0,
+            ascent: 12.0,
+            tab_policy: crate::display_row::builder::DisplayTabPolicy::from_tab_width_and_stops(
+                content_x,
+                8,
+                &[],
+            ),
+        },
+        FaceId::new(1),
+        resolver.default_face(),
+        GlyphRowRole::Text,
+    )
+    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .expect("buffer text row")
+    .row()
+    .clone()
+}
+
+#[test]
+fn buffer_align_to_center_measures_from_the_text_area_not_the_window_edge() {
+    // GNU `produce_stretch_glyph` (xdisp.c:32853-32859, emacs-31.0.90) makes a
+    // resolved region coordinate text-area-relative for buffer text --
+    // `align_to - window_box_left_offset (it->w, TEXT_AREA)` -- before
+    // subtracting the pen, so `(space :align-to center)` at a row start is
+    // exactly half the text area wide however wide the left fringe is.  With
+    // an 8px fringe the stretch came out 8px short (dashboard's centered
+    // banner and title sat one fringe left of center).
+    let _eval = Context::new();
+    let spec = Value::list(vec![
+        Value::symbol("space"),
+        Value::keyword("align-to"),
+        Value::symbol("center"),
+    ]);
+    for content_x in [0.0_f32, 8.0] {
+        let row = render_buffer_text_row_with_display_at_content_x("XY", spec, content_x);
+        let stretch = row.glyphs[1]
+            .iter()
+            .find(|glyph| matches!(glyph.glyph_type, GlyphType::Stretch { .. }))
+            .unwrap_or_else(|| panic!("expected a stretch glyph, got {:?}", row.glyphs[1]));
+        assert_eq!(
+            stretch.pixel_width, 120.0,
+            "content_x={content_x}: `center` is half the 240px text area from the text-area left"
+        );
+    }
+}

@@ -2917,17 +2917,29 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
                     return Some((1, self.layout.char_width_px.max(1.0)));
                 };
                 let content_x = self.layout.tab_policy.origin_x_px;
-                let raw_align_base_x = if align_to < 0
-                    && matches!(
-                        self.layout.role,
-                        GlyphRowRole::ModeLine | GlyphRowRole::HeaderLine | GlyphRowRole::TabLine
-                    ) {
+                let chrome_row = matches!(
+                    self.layout.role,
+                    GlyphRowRole::ModeLine | GlyphRowRole::HeaderLine | GlyphRowRole::TabLine
+                );
+                let raw_align_base_x = if align_to < 0 && chrome_row {
                     self.layout.pixel_calc.text_area_left as f32
                 } else {
                     content_x
                 };
+                // A resolved region coordinate (`left`/`center`/`right`, …):
+                // GNU `produce_stretch_glyph` (xdisp.c:32853-32859) makes it
+                // text-area-relative for buffer text, `align_to -
+                // window_box_left_offset (it->w, TEXT_AREA)`, and keeps
+                // window coordinates for mode/header/tab lines, then subtracts
+                // the pen.  Buffer rows resolve the symbol in text-area
+                // coordinates already (`text_area_left == 0`) while `current`
+                // below is measured from the row origin `content_x` (the text
+                // area's left edge), so the target moves into that space;
+                // chrome rows have a zero origin and window-coordinate
+                // targets, so nothing is added.
                 let target_x = if align_to >= 0 {
-                    align_to as f32 + pixels as f32
+                    let base = if chrome_row { 0.0 } else { content_x };
+                    base + align_to as f32 + pixels as f32
                 } else {
                     raw_align_base_x + pixels as f32
                 };
