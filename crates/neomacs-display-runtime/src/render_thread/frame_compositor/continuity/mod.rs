@@ -45,18 +45,6 @@ pub(in crate::render_thread) struct TransitionInputs {
     pub(in crate::render_thread) region: BufferViewportRegion,
 }
 
-/// What one composition places, and the transform that matches those pixels.
-///
-/// The two travel together because they are derived from a single sample of a
-/// single motion; separating them is how a hit test and a render come to
-/// disagree.
-#[derive(Default)]
-pub(in crate::render_thread) struct PaneLayoutComposition {
-    pub(in crate::render_thread) blits: Vec<neomacs_renderer_wgpu::PaneBlit>,
-    pub(in crate::render_thread) projection:
-        Option<neomacs_display_protocol::InteractionProjection>,
-}
-
 impl GuiFrameRenderState {
     /// Start carrying the panes to where the incoming presentation puts them.
     ///
@@ -72,32 +60,17 @@ impl GuiFrameRenderState {
     ) {
         let spec = self.compositor.pane_motion;
         let (Some(previous), Some(next)) = (self.compositor.baseline.as_ref(), next) else {
-            self.compositor.pane_morph = None;
+            self.compositor.layout = super::layout_driver::LayoutDriver::Settled;
             return;
         };
-        // A morph already in flight is retargeted rather than replaced. Its
-        // panes are somewhere between their old and new rects, and only a
-        // frame knows where; the splice therefore happens at the next sample,
-        // which has one. Replacing it here would restart them from the
-        // committed layout — the destination the old motion was still
-        // travelling toward — so every pane would snap forward to a place it
-        // had not reached and then animate away from it.
-        if let Some(in_flight) = self.compositor.pane_morph.as_mut() {
-            in_flight.retarget(&next.window_infos, spec, now);
-            return;
-        }
-        // Only *start* a morph when this presentation actually rearranged the
-        // panes. `try_new` returns `None` for a commit that left the layout
-        // alone, and almost every commit does: a keystroke redrawing the
-        // buffer, the echo area clearing, a mode-line clock tick.
-        if let Some(measured) = pane_layout::PaneLayoutMorph::try_new(
-            &previous.window_infos,
-            &next.window_infos,
-            spec,
-            now,
-        ) {
-            self.compositor.pane_morph = Some(measured);
-        }
+        // The whole decision is the driver's, made once from one delta. Nothing
+        // here may reach past it and touch the motion.
+        let delta = super::layout_driver::LayoutDelta {
+            previous: &previous.window_infos,
+            next: &next.window_infos,
+        };
+        let driver = std::mem::take(&mut self.compositor.layout);
+        self.compositor.layout = driver.on_commit(delta, spec, now);
     }
 
     /// Place the panes for the frame about to be drawn.
@@ -114,62 +87,20 @@ impl GuiFrameRenderState {
         &mut self,
         _acquired: &crate::render_thread::render_pass::surface::SurfaceAcquired,
         frame: neomacs_display_protocol::frame_time::FrameSample,
-    ) -> PaneLayoutComposition {
-        let Some(morph) = self.compositor.pane_morph.as_ref() else {
-            return PaneLayoutComposition::default();
-        };
+    ) -> super::continuity::pane_layout::PaneLayoutComposition {
         let Some(presentation) = self
             .compositor
             .current_frame
             .as_ref()
             .map(|frame| frame.presentation_id)
         else {
-            self.compositor.pane_morph = None;
-            return PaneLayoutComposition::default();
+            self.compositor.layout = super::layout_driver::LayoutDriver::Settled;
+            return super::continuity::pane_layout::PaneLayoutComposition::default();
         };
-        // Apply any layout committed since the last frame, starting the new
-        // motion from where these panes are right now.
-        if let Some(spliced) = morph.spliced(frame) {
-            self.compositor.pane_morph = Some(spliced);
-        } else if morph.has_pending_retarget() {
-            // The retarget left nothing to animate: the panes are already where
-            // the new layout wants them. The motion is over.
-            self.compositor.pane_morph = None;
-            return PaneLayoutComposition {
-                blits: Vec::new(),
-                projection: Some(neomacs_display_protocol::InteractionProjection::settled(
-                    presentation,
-                )),
-            };
-        }
-        let morph = self
-            .compositor
-            .pane_morph
-            .as_ref()
-            .expect("the morph was present at the top of this function");
-        let sample = morph.sample(frame);
-        let projection = sample.projection(presentation);
-        if sample.motion.finished {
-            // Settled: drop the morph and fall back to the identity
-            // projection, so the last frame of the motion and the first frame
-            // after it resolve a click to the same place. The final placements
-            // are still returned — this frame is the one that draws the panes
-            // at their destination.
-            self.compositor.pane_morph = None;
-        }
-        PaneLayoutComposition {
-            blits: sample
-                .panes
-                .iter()
-                .map(|placement| neomacs_renderer_wgpu::PaneBlit {
-                    bounds: placement.bounds,
-                    content_origin: placement.content_origin,
-                    source: placement.source,
-                    opacity: placement.opacity,
-                })
-                .collect(),
-            projection: Some(projection),
-        }
+        let driver = std::mem::take(&mut self.compositor.layout);
+        let (driver, composition) = driver.on_frame(presentation, frame);
+        self.compositor.layout = driver;
+        composition
     }
 
     /// Make the projection for a frame that has actually been presented.

@@ -26,6 +26,7 @@ mod child_frames;
 pub(in crate::render_thread) mod continuity;
 mod cursor;
 pub(in crate::render_thread) mod layout_continuity;
+pub(in crate::render_thread) mod layout_driver;
 mod media;
 pub(in crate::render_thread) mod motion;
 mod overlays;
@@ -114,11 +115,11 @@ pub(crate) struct FrameCompositor {
     pub(super) interaction: Option<neomacs_display_protocol::InteractionProjection>,
     /// How panes should travel, from the current quality policy.
     pub(super) pane_motion: neomacs_display_protocol::motion_spec::MotionSpec,
-    /// The layout change currently being carried, if any.
-    ///
-    /// `None` is the overwhelmingly common state: it holds a morph only from
-    /// the install that rearranged the panes until the motion settles.
-    pub(super) pane_morph: Option<continuity::pane_layout::PaneLayoutMorph>,
+    /// What the compositor is doing about the layout: settled, or carrying the
+    /// panes between two of them. A state machine rather than an `Option`,
+    /// because every question about it is then a `match` the compiler requires
+    /// — see [`layout_driver`].
+    pub(super) layout: layout_driver::LayoutDriver,
 }
 
 /// What the compositor measured when the current presentation was installed.
@@ -208,7 +209,7 @@ impl FrameCompositor {
             baseline: None,
             interaction: None,
             pane_motion: neomacs_display_protocol::motion_spec::MotionSpec::Instant,
-            pane_morph: None,
+            layout: layout_driver::LayoutDriver::default(),
             pending: PendingContinuity::default(),
         }
     }

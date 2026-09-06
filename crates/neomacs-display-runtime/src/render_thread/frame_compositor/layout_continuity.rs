@@ -92,7 +92,7 @@ impl GuiFrameRenderState {
         self.compositor.pending.scrolls.clear();
         self.compositor.pending.shown_text_replaced.clear();
         self.compositor.pending.reflows.clear();
-        self.compositor.pane_morph = None;
+        self.compositor.layout = super::layout_driver::LayoutDriver::Settled;
     }
 }
 
