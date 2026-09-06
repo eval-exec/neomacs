@@ -20,6 +20,47 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
 
+/// Model the editor that these command-loop tests run inside of.
+///
+/// GNU enters its top-level loop from `main` through `Frecursive_edit`, which
+/// takes `command_loop_level` from -1 to 0; only a *nested* `(recursive-edit)`
+/// runs at level 1, where `exit-recursive-edit` throws `exit`. Verified on GNU
+/// 31.0.90 `--batch`: `(recursion-depth)` is 0 at top level and
+/// `(exit-recursive-edit)` there is `(user-error "No recursive edit is in
+/// progress")`; inside `(recursive-edit)` the depth is 1 and
+/// `exit-recursive-edit` returns nil. Neomacs keeps the same model (raw loop
+/// count 1 = GNU level 0), so a test that ends its loop with
+/// `(exit-recursive-edit)` must first declare the already-running top-level
+/// loop it is nested in — the loop `recursive_edit_inner` then enters is the
+/// level-1 edit.
+///
+/// The session is interactive: these tests drive real frames with key events,
+/// and several end by exhausting the input channel, which the loop turns into
+/// a `quit`. GNU's `cmd_error_internal` (keyboard.c) prints a quit and kills
+/// Emacs with status -1 when `noninteractive`, and only messages it and keeps
+/// the loop alive in an interactive session — verified: `emacs --batch --eval
+/// '(signal (quote quit) nil)'` exits 255. Neomacs mirrors that gate, so the
+/// harness must not run these loops as `--batch`.
+fn simulate_active_top_level_command_loop(eval: &mut Context) {
+    eval.command_loop.recursive_depth = 1;
+    eval.command_loop.running = true;
+    eval.set_variable("noninteractive", Value::NIL);
+    // The session-ending key for tests that inspect window/buffer state after
+    // the loop: exhausting the input channel is a display disconnect, which
+    // deletes the terminal and its frames (GNU's batch analogue is EOF ->
+    // `kill-emacs'), so such a test ends its loop with a command instead.
+    let _ = eval.eval_str("(global-set-key [insert] 'exit-recursive-edit)");
+}
+
+/// Queue the session-ending key bound by
+/// [`simulate_active_top_level_command_loop`]; must be the last queued event.
+fn queue_end_of_session_key(tx: &crossbeam_channel::Sender<crate::keyboard::InputEvent>) {
+    tx.send(crate::keyboard::InputEvent::key_press(
+        crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Insert),
+    ))
+    .expect("queue end-of-session key");
+}
+
 #[test]
 fn load_name_equal_matches_lisp_equal_without_tagged_heap_allocation() {
     crate::test_utils::init_test_tracing();
@@ -3626,7 +3667,7 @@ fn bootstrap_runtime_command_loop_executes_meta_x_command_on_ret() {
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -3907,7 +3948,7 @@ fn bootstrap_runtime_command_loop_meta_s_o_opens_clean_occur_prompt_from_input_r
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -3972,7 +4013,7 @@ fn bootstrap_runtime_command_loop_meta_x_ret_opens_clean_nested_grep_prompt_from
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -4077,7 +4118,7 @@ fn bootstrap_runtime_mx_eager_completion_services_printable_input_before_quit() 
     });
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
     let result = eval
         .recursive_edit_inner()
         .expect("test exit command should leave the outer command loop normally");
@@ -4171,7 +4212,7 @@ fn bootstrap_runtime_read_key_after_two_minibuffers_consumes_fresh_key() {
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -4250,7 +4291,7 @@ fn bootstrap_runtime_minibuffer_read_restores_outer_this_command_keys() {
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5078,7 +5119,7 @@ fn bootstrap_runtime_save_some_buffers_space_saves_modified_file() {
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5151,7 +5192,7 @@ fn bootstrap_runtime_command_loop_sets_last_nonmenu_event_for_keyboard_invocatio
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5218,10 +5259,11 @@ fn bootstrap_runtime_command_loop_disabled_command_consumes_space_reply_once() {
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue SPC reply");
+    queue_end_of_session_key(&tx);
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5285,10 +5327,11 @@ fn bootstrap_runtime_gui_disabled_command_n_cancels_with_new_help_window() {
         tx.send(crate::keyboard::InputEvent::key_press(event))
             .expect("queue disabled-command input");
     }
+    queue_end_of_session_key(&tx);
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5345,7 +5388,7 @@ fn bootstrap_runtime_disabled_narrow_to_region_uses_live_region_after_space_repl
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5394,7 +5437,7 @@ fn bootstrap_runtime_command_loop_universal_argument_prefix_reaches_following_co
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5450,7 +5493,7 @@ fn bootstrap_runtime_command_loop_raw_universal_argument_reaches_form_interactiv
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5511,7 +5554,7 @@ fn bootstrap_runtime_minibuffer_restores_raw_universal_argument_for_form_interac
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5582,7 +5625,7 @@ fn bootstrap_runtime_read_from_minibuffer_binds_requested_history_variable_and_p
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5649,7 +5692,7 @@ fn bootstrap_runtime_completing_read_persists_requested_history_variable() {
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5721,7 +5764,7 @@ fn bootstrap_runtime_read_extended_command_recall_uses_extended_command_history(
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5809,7 +5852,7 @@ fn bootstrap_runtime_command_loop_meta_p_recalls_mx_history_with_numeric_positio
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -5920,7 +5963,7 @@ fn bootstrap_runtime_command_loop_meta_p_recalls_calendar_after_quit() {
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -6033,10 +6076,11 @@ fn bootstrap_runtime_disabled_command_from_visited_file_restores_single_selected
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue SPC reply");
+    queue_end_of_session_key(&tx);
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -6197,7 +6241,7 @@ fn bootstrap_runtime_cx_s_space_saves_typed_edit_from_command_loop() {
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
@@ -7939,7 +7983,7 @@ fn bootstrap_runtime_command_loop_cx_b_uses_recent_file_buffer_as_second_default
     drop(tx);
 
     eval.input_rx = Some(rx);
-    eval.command_loop.running = true;
+    simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
         .recursive_edit_inner()
