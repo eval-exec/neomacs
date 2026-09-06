@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use linux_perf_data::{PerfFileReader, PerfFileRecord, linux_perf_event_reader::RecordType};
 use neomacs_melpa_test_support::{
-    CommandError, EmacsRuntime, MelpaSandbox, PreparedPackageSet, group_output_with_timeout,
-    locked_melpa_sources, output_with_timeout, prepare_cached_tree_sitter_grammar,
+    CommandError, MelpaSandbox, PreparedPackageSet, group_output_with_timeout, output_with_timeout,
+    prepare_cached_tree_sitter_grammar,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -40,11 +40,6 @@ use scenarios::org_journal_open::{ExternalJournalInput, journal_file_in_director
 pub(crate) const ARTIFACT_SCHEMA_VERSION: u32 = 5;
 const SCENARIO_RESULT_SCHEMA_VERSION: u32 = 1;
 const NATIVE_VIDEO_RESULT_SCHEMA_VERSION: u32 = 4;
-const MX_TAB_COMPLETION_CANDIDATE_COUNT: u64 = 1024;
-const RUST_LSP_TYPING_OVERLAY_COUNT: u64 = 4;
-const RUST_LSP_TYPING_DIAGNOSTIC_COUNT: u64 = 4;
-const RUST_GRAMMAR_REPOSITORY: &str = "https://github.com/tree-sitter/tree-sitter-rust";
-const RUST_GRAMMAR_REVISION: &str = "18b0515fca567f5a10aee9978c6d2640e878671a";
 static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -492,9 +487,15 @@ impl PerfHarness {
         run_directory: &Path,
     ) -> Result<PreparedScenario, String> {
         match request.scenario {
-            ScenarioId::RustLspTyping => self.prepare_rust_lsp_typing(request, run_directory),
-            ScenarioId::MxTabCompletion => self.prepare_mx_tab_completion(request, run_directory),
-            ScenarioId::BytecodeCallLoop => self.prepare_bytecode_call_loop(request, run_directory),
+            ScenarioId::RustLspTyping => {
+                scenarios::rust_lsp::prepare(&self.workspace_root, request, run_directory)
+            }
+            ScenarioId::MxTabCompletion => {
+                scenarios::mx_tab::prepare(&self.workspace_root, request, run_directory)
+            }
+            ScenarioId::BytecodeCallLoop => {
+                scenarios::bytecode::prepare(&self.workspace_root, request, run_directory)
+            }
             ScenarioId::EditingSimulation
             | ScenarioId::Startup
             | ScenarioId::SustainedEditing
@@ -659,233 +660,6 @@ impl PerfHarness {
                 display_environment,
                 presentation_target,
             },
-        })
-    }
-
-    fn prepare_rust_lsp_typing(
-        &self,
-        request: &RunRequest,
-        run_directory: &Path,
-    ) -> Result<PreparedScenario, String> {
-        let lsp_mode_source = locked_melpa_sources()?
-            .into_iter()
-            .find(|source| source.package().0 == "lsp-mode")
-            .ok_or_else(|| "the MELPA source lock does not contain lsp-mode".to_string())?;
-        let lsp_mode = lsp_mode_source.package();
-        let packages = PreparedPackageSet::from_locked_melpa(
-            &EmacsRuntime::gnu_emacs(),
-            lsp_mode,
-            "lsp-mode.el",
-        )?;
-        let cached_grammar = prepare_cached_tree_sitter_grammar(
-            &EmacsRuntime::gnu_emacs(),
-            "rust",
-            RUST_GRAMMAR_REPOSITORY,
-            RUST_GRAMMAR_REVISION,
-        )?;
-        let grammar_directory = run_directory.join("tree-sitter");
-        let grammar_libraries =
-            copy_grammar_libraries(&cached_grammar, &grammar_directory, "tree-sitter-rust")?;
-        let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
-        let editor = collect_editor_provenance(request.editor(), &sandbox)?;
-        let startup = packages.write_startup_file(run_directory)?;
-        let fixture_root = self.workspace_root.join("crates/neomacs-perf/fixtures");
-        let fixture_source = fixture_root.join("rust-lsp-typing.el");
-        let source_source = fixture_root.join("rust-lsp-typing.rs");
-        let replay_source = fixture_root.join("rust-lsp-diagnostics.json");
-        for required in [&fixture_source, &source_source, &replay_source] {
-            if !required.is_file() {
-                return Err(format!(
-                    "missing committed performance fixture {}",
-                    required.display()
-                ));
-            }
-        }
-        let fixture = run_directory.join("rust-lsp-typing.el");
-        let source = run_directory.join("rust-lsp-typing.rs");
-        let replay = run_directory.join("rust-lsp-diagnostics.json");
-        for (input, output) in [
-            (&fixture_source, &fixture),
-            (&source_source, &source),
-            (&replay_source, &replay),
-        ] {
-            fs::copy(input, output).map_err(|error| {
-                format!(
-                    "failed to copy performance fixture {} to {}: {error}",
-                    input.display(),
-                    output.display()
-                )
-            })?;
-        }
-        let provenance = run_directory.join("input-provenance.json");
-        let provenance_manifest = RustLspInputProvenanceManifest {
-            lsp_mode: PackageProvenance {
-                name: lsp_mode.0,
-                version: lsp_mode.1,
-                repository: lsp_mode_source.repository(),
-                revision: lsp_mode_source.revision(),
-                upstream_repository: lsp_mode_source.upstream_repository(),
-                upstream_revision: lsp_mode_source.upstream_revision(),
-            },
-            tree_sitter_grammar: GrammarProvenance {
-                language: "rust",
-                repository: RUST_GRAMMAR_REPOSITORY,
-                revision: RUST_GRAMMAR_REVISION,
-            },
-            editor,
-            host: collect_host_provenance(request.machine_policy()),
-            workload_source: "crates/neomacs-perf/fixtures/rust-lsp-typing.rs",
-            workload_source_sha256: sha256_file(&source_source)?,
-            environment_policy: "closed-v1",
-            passthrough_environment: benchmark_passthrough_environment()
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value.to_string_lossy().into_owned()))
-                .collect(),
-        };
-        let provenance_json = serde_json::to_vec_pretty(&provenance_manifest)
-            .map_err(|error| format!("failed to serialize input provenance: {error}"))?;
-        fs::write(&provenance, provenance_json).map_err(|error| {
-            format!(
-                "failed to write input provenance {}: {error}",
-                provenance.display()
-            )
-        })?;
-        let gui_runtime_directory = prepare_gui_runtime_directory(&self.workspace_root)?;
-        Ok(PreparedScenario {
-            fixture,
-            provenance,
-            result: run_directory.join("scenario-result.json"),
-            sentinel: run_directory.join("completed"),
-            terminal_bytes: run_directory.join("terminal.ansi"),
-            gui_app_log: run_directory.join("gui-app.log"),
-            gui_weston_log: run_directory.join("weston.log"),
-            gui_runtime_directory,
-            sandbox,
-            workload: PreparedWorkload::RustLspTyping {
-                startup,
-                source,
-                replay,
-                grammar_directory,
-                grammar_libraries,
-                packages: Box::new(packages),
-            },
-        })
-    }
-
-    fn prepare_mx_tab_completion(
-        &self,
-        request: &RunRequest,
-        run_directory: &Path,
-    ) -> Result<PreparedScenario, String> {
-        let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
-        let editor = collect_editor_provenance(request.editor(), &sandbox)?;
-        let fixture_source = self
-            .workspace_root
-            .join("crates/neomacs-perf/fixtures/mx-tab-completion.el");
-        if !fixture_source.is_file() {
-            return Err(format!(
-                "missing committed performance fixture {}",
-                fixture_source.display()
-            ));
-        }
-        let fixture = run_directory.join("mx-tab-completion.el");
-        fs::copy(&fixture_source, &fixture).map_err(|error| {
-            format!(
-                "failed to copy performance fixture {} to {}: {error}",
-                fixture_source.display(),
-                fixture.display()
-            )
-        })?;
-        let provenance = run_directory.join("input-provenance.json");
-        let provenance_manifest = MxTabInputProvenanceManifest {
-            editor,
-            host: collect_host_provenance(request.machine_policy()),
-            workload_source: "crates/neomacs-perf/fixtures/mx-tab-completion.el",
-            workload_source_sha256: sha256_file(&fixture_source)?,
-            environment_policy: "closed-v1",
-            passthrough_environment: benchmark_passthrough_environment()
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value.to_string_lossy().into_owned()))
-                .collect(),
-        };
-        let provenance_json = serde_json::to_vec_pretty(&provenance_manifest)
-            .map_err(|error| format!("failed to serialize input provenance: {error}"))?;
-        fs::write(&provenance, provenance_json).map_err(|error| {
-            format!(
-                "failed to write input provenance {}: {error}",
-                provenance.display()
-            )
-        })?;
-        Ok(PreparedScenario {
-            fixture,
-            provenance,
-            result: run_directory.join("scenario-result.json"),
-            sentinel: run_directory.join("completed"),
-            terminal_bytes: run_directory.join("terminal.ansi"),
-            gui_app_log: run_directory.join("gui-app.log"),
-            gui_weston_log: run_directory.join("weston.log"),
-            gui_runtime_directory: prepare_gui_runtime_directory(&self.workspace_root)?,
-            sandbox,
-            workload: PreparedWorkload::MxTabCompletion,
-        })
-    }
-
-    fn prepare_bytecode_call_loop(
-        &self,
-        request: &RunRequest,
-        run_directory: &Path,
-    ) -> Result<PreparedScenario, String> {
-        let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
-        let editor = collect_editor_provenance(request.editor(), &sandbox)?;
-        let fixture_source = self
-            .workspace_root
-            .join("crates/neomacs-perf/fixtures/bytecode-call-loop.el");
-        if !fixture_source.is_file() {
-            return Err(format!(
-                "missing committed performance fixture {}",
-                fixture_source.display()
-            ));
-        }
-        let fixture = run_directory.join("bytecode-call-loop.el");
-        fs::copy(&fixture_source, &fixture).map_err(|error| {
-            format!(
-                "failed to copy performance fixture {} to {}: {error}",
-                fixture_source.display(),
-                fixture.display()
-            )
-        })?;
-        let provenance = run_directory.join("input-provenance.json");
-        let provenance_manifest = BytecodeCallInputProvenanceManifest {
-            editor,
-            host: collect_host_provenance(request.machine_policy()),
-            workload_source: "crates/neomacs-perf/fixtures/bytecode-call-loop.el",
-            workload_source_sha256: sha256_file(&fixture_source)?,
-            execution_tier: "tier-0-interpreter",
-            environment_policy: "closed-v1",
-            passthrough_environment: benchmark_passthrough_environment()
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value.to_string_lossy().into_owned()))
-                .collect(),
-        };
-        let provenance_json = serde_json::to_vec_pretty(&provenance_manifest)
-            .map_err(|error| format!("failed to serialize input provenance: {error}"))?;
-        fs::write(&provenance, provenance_json).map_err(|error| {
-            format!(
-                "failed to write input provenance {}: {error}",
-                provenance.display()
-            )
-        })?;
-        Ok(PreparedScenario {
-            fixture,
-            provenance,
-            result: run_directory.join("scenario-result.json"),
-            sentinel: run_directory.join("completed"),
-            terminal_bytes: run_directory.join("terminal.ansi"),
-            gui_app_log: run_directory.join("gui-app.log"),
-            gui_weston_log: run_directory.join("weston.log"),
-            gui_runtime_directory: prepare_gui_runtime_directory(&self.workspace_root)?,
-            sandbox,
-            workload: PreparedWorkload::BytecodeCallLoop,
         })
     }
 }
@@ -1231,7 +1005,7 @@ struct ProfileCaptureError {
     files: Vec<ArtifactFile>,
 }
 
-struct PreparedScenario {
+pub(crate) struct PreparedScenario {
     fixture: PathBuf,
     provenance: PathBuf,
     result: PathBuf,
@@ -1794,56 +1568,6 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hex)
 }
 
-fn copy_grammar_libraries(
-    cached_directory: &Path,
-    run_directory: &Path,
-    library_stem: &str,
-) -> Result<Vec<PathBuf>, String> {
-    fs::create_dir_all(run_directory).map_err(|error| {
-        format!(
-            "failed to create run-local Tree-sitter directory {}: {error}",
-            run_directory.display()
-        )
-    })?;
-    let entries = fs::read_dir(cached_directory).map_err(|error| {
-        format!(
-            "failed to enumerate cached Tree-sitter directory {}: {error}",
-            cached_directory.display()
-        )
-    })?;
-    let mut copied = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            format!(
-                "failed to read cached Tree-sitter entry below {}: {error}",
-                cached_directory.display()
-            )
-        })?;
-        if !entry.file_type().is_ok_and(|file_type| file_type.is_file())
-            || !entry.file_name().to_string_lossy().contains(library_stem)
-        {
-            continue;
-        }
-        let destination = run_directory.join(entry.file_name());
-        fs::copy(entry.path(), &destination).map_err(|error| {
-            format!(
-                "failed to copy Tree-sitter grammar {} to {}: {error}",
-                entry.path().display(),
-                destination.display()
-            )
-        })?;
-        copied.push(destination);
-    }
-    if copied.is_empty() {
-        return Err(format!(
-            "cached Tree-sitter directory {} contains no `{library_stem}` library",
-            cached_directory.display()
-        ));
-    }
-    copied.sort();
-    Ok(copied)
-}
-
 fn command_error_details(error: CommandError, timeout: Duration) -> (String, Option<Output>) {
     match error {
         CommandError::Launch(error) => {
@@ -1912,27 +1636,10 @@ fn frontend_name(frontend: Frontend) -> &'static str {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(try_from = "RustLspTypingResultWire")]
-struct RustLspTypingResult {
-    schema_version: u32,
-    scenario: ScenarioId,
-    outcome: ScenarioOutcome,
-    iterations: u32,
-    elapsed_us: u64,
-    major_mode: String,
-    lsp_mode_loaded: bool,
-    treesit_parser_language: String,
-    text_unchanged: bool,
-    point_unchanged: bool,
-    overlay_count: u64,
-    lsp_diagnostic_count: u64,
-}
-
 enum ScenarioResult {
-    RustLspTyping(RustLspTypingResult),
-    MxTabCompletion(MxTabCompletionResult),
-    BytecodeCallLoop(BytecodeCallLoopResult),
+    RustLspTyping(scenarios::rust_lsp::RustLspTypingResult),
+    MxTabCompletion(scenarios::mx_tab::MxTabCompletionResult),
+    BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
     EditorWorkload(scenarios::editor_workload::EditorWorkloadResult),
     OrgJournalOpen(scenarios::org_journal_open::OrgJournalOpenResult),
     SustainedNativeVideo(SustainedNativeVideoResult),
@@ -2257,25 +1964,6 @@ impl SustainedNativeVideoResult {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RustLspTypingResultWire {
-    schema_version: u32,
-    scenario: ScenarioId,
-    status: ScenarioStatus,
-    iterations: u32,
-    elapsed_us: u64,
-    major_mode: String,
-    lsp_mode_loaded: bool,
-    treesit_parser_language: String,
-    text_unchanged: bool,
-    point_unchanged: bool,
-    overlay_count: u64,
-    lsp_diagnostic_count: u64,
-    #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
-    error: Option<String>,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum ScenarioStatus {
@@ -2298,28 +1986,6 @@ impl std::fmt::Display for ScenarioOutcome {
     }
 }
 
-impl TryFrom<RustLspTypingResultWire> for RustLspTypingResult {
-    type Error = String;
-
-    fn try_from(wire: RustLspTypingResultWire) -> Result<Self, Self::Error> {
-        let outcome = scenario_outcome(wire.status, wire.error)?;
-        Ok(Self {
-            schema_version: wire.schema_version,
-            scenario: wire.scenario,
-            outcome,
-            iterations: wire.iterations,
-            elapsed_us: wire.elapsed_us,
-            major_mode: wire.major_mode,
-            lsp_mode_loaded: wire.lsp_mode_loaded,
-            treesit_parser_language: wire.treesit_parser_language,
-            text_unchanged: wire.text_unchanged,
-            point_unchanged: wire.point_unchanged,
-            overlay_count: wire.overlay_count,
-            lsp_diagnostic_count: wire.lsp_diagnostic_count,
-        })
-    }
-}
-
 fn scenario_outcome(
     status: ScenarioStatus,
     error: Option<String>,
@@ -2337,155 +2003,6 @@ fn scenario_outcome(
             Err("status `error` requires a non-null error".to_string())
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(try_from = "MxTabCompletionResultWire")]
-struct MxTabCompletionResult {
-    schema_version: u32,
-    scenario: ScenarioId,
-    outcome: ScenarioOutcome,
-    iterations: u32,
-    elapsed_us: u64,
-    completion_help_calls: u32,
-    completion_visible: bool,
-    completion_mode_correct: bool,
-    known_commands_present: bool,
-    completion_candidate_count: u64,
-    candidate_count_stable: bool,
-    completion_hidden_after_exit: bool,
-    minibuffer_depth_restored: bool,
-    selected_buffer_restored: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MxTabCompletionResultWire {
-    schema_version: u32,
-    scenario: ScenarioId,
-    status: ScenarioStatus,
-    iterations: u32,
-    elapsed_us: u64,
-    completion_help_calls: u32,
-    completion_visible: bool,
-    completion_mode_correct: bool,
-    known_commands_present: bool,
-    completion_candidate_count: u64,
-    candidate_count_stable: bool,
-    completion_hidden_after_exit: bool,
-    minibuffer_depth_restored: bool,
-    selected_buffer_restored: bool,
-    #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
-    error: Option<String>,
-}
-
-impl TryFrom<MxTabCompletionResultWire> for MxTabCompletionResult {
-    type Error = String;
-
-    fn try_from(wire: MxTabCompletionResultWire) -> Result<Self, Self::Error> {
-        let outcome = scenario_outcome(wire.status, wire.error)?;
-        Ok(Self {
-            schema_version: wire.schema_version,
-            scenario: wire.scenario,
-            outcome,
-            iterations: wire.iterations,
-            elapsed_us: wire.elapsed_us,
-            completion_help_calls: wire.completion_help_calls,
-            completion_visible: wire.completion_visible,
-            completion_mode_correct: wire.completion_mode_correct,
-            known_commands_present: wire.known_commands_present,
-            completion_candidate_count: wire.completion_candidate_count,
-            candidate_count_stable: wire.candidate_count_stable,
-            completion_hidden_after_exit: wire.completion_hidden_after_exit,
-            minibuffer_depth_restored: wire.minibuffer_depth_restored,
-            selected_buffer_restored: wire.selected_buffer_restored,
-        })
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(try_from = "BytecodeCallLoopResultWire")]
-struct BytecodeCallLoopResult {
-    schema_version: u32,
-    scenario: ScenarioId,
-    outcome: ScenarioOutcome,
-    iterations: u32,
-    elapsed_us: u64,
-    bytecode_calls: u64,
-    result: i64,
-    expected_result: i64,
-    bytecode_functions_compiled: bool,
-    interpreter_requested: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BytecodeCallLoopResultWire {
-    schema_version: u32,
-    scenario: ScenarioId,
-    status: ScenarioStatus,
-    iterations: u32,
-    elapsed_us: u64,
-    bytecode_calls: u64,
-    result: i64,
-    expected_result: i64,
-    bytecode_functions_compiled: bool,
-    interpreter_requested: bool,
-    #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
-    error: Option<String>,
-}
-
-impl TryFrom<BytecodeCallLoopResultWire> for BytecodeCallLoopResult {
-    type Error = String;
-
-    fn try_from(wire: BytecodeCallLoopResultWire) -> Result<Self, Self::Error> {
-        let outcome = scenario_outcome(wire.status, wire.error)?;
-        Ok(Self {
-            schema_version: wire.schema_version,
-            scenario: wire.scenario,
-            outcome,
-            iterations: wire.iterations,
-            elapsed_us: wire.elapsed_us,
-            bytecode_calls: wire.bytecode_calls,
-            result: wire.result,
-            expected_result: wire.expected_result,
-            bytecode_functions_compiled: wire.bytecode_functions_compiled,
-            interpreter_requested: wire.interpreter_requested,
-        })
-    }
-}
-
-#[derive(Serialize)]
-struct RustLspInputProvenanceManifest<'a> {
-    lsp_mode: PackageProvenance<'a>,
-    tree_sitter_grammar: GrammarProvenance<'a>,
-    editor: EditorProvenance,
-    host: HostProvenance,
-    workload_source: &'a str,
-    workload_source_sha256: String,
-    environment_policy: &'a str,
-    passthrough_environment: BTreeMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct MxTabInputProvenanceManifest<'a> {
-    editor: EditorProvenance,
-    host: HostProvenance,
-    workload_source: &'a str,
-    workload_source_sha256: String,
-    environment_policy: &'a str,
-    passthrough_environment: BTreeMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct BytecodeCallInputProvenanceManifest<'a> {
-    editor: EditorProvenance,
-    host: HostProvenance,
-    workload_source: &'a str,
-    workload_source_sha256: String,
-    execution_tier: &'a str,
-    environment_policy: &'a str,
-    passthrough_environment: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -2629,223 +2146,6 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::<String>::deserialize(deserializer)
-}
-
-fn validate_rust_lsp_typing_result(
-    request: &RunRequest,
-    result: &RustLspTypingResult,
-) -> Vec<CorrectnessMismatch> {
-    let mut mismatches = Vec::new();
-    mismatch(
-        &mut mismatches,
-        "scenario-result-schema",
-        SCENARIO_RESULT_SCHEMA_VERSION,
-        result.schema_version,
-    );
-    mismatch(
-        &mut mismatches,
-        "scenario-id",
-        request.scenario,
-        result.scenario,
-    );
-    mismatch(
-        &mut mismatches,
-        "scenario-outcome",
-        &ScenarioOutcome::Ok,
-        &result.outcome,
-    );
-    mismatch(
-        &mut mismatches,
-        "iterations",
-        request.iterations.get(),
-        result.iterations,
-    );
-    mismatch(
-        &mut mismatches,
-        "major-mode",
-        "rust-ts-mode",
-        result.major_mode.as_str(),
-    );
-    mismatch(
-        &mut mismatches,
-        "lsp-mode-loaded",
-        true,
-        result.lsp_mode_loaded,
-    );
-    mismatch(
-        &mut mismatches,
-        "treesit-parser-language",
-        "rust",
-        result.treesit_parser_language.as_str(),
-    );
-    mismatch(
-        &mut mismatches,
-        "final-buffer-text",
-        true,
-        result.text_unchanged,
-    );
-    mismatch(&mut mismatches, "final-point", true, result.point_unchanged);
-    mismatch(
-        &mut mismatches,
-        "overlay-count",
-        RUST_LSP_TYPING_OVERLAY_COUNT,
-        result.overlay_count,
-    );
-    mismatch(
-        &mut mismatches,
-        "lsp-diagnostic-count",
-        RUST_LSP_TYPING_DIAGNOSTIC_COUNT,
-        result.lsp_diagnostic_count,
-    );
-    mismatches
-}
-
-fn validate_mx_tab_completion_result(
-    request: &RunRequest,
-    result: &MxTabCompletionResult,
-) -> Vec<CorrectnessMismatch> {
-    let mut mismatches = Vec::new();
-    mismatch(
-        &mut mismatches,
-        "scenario-result-schema",
-        SCENARIO_RESULT_SCHEMA_VERSION,
-        result.schema_version,
-    );
-    mismatch(
-        &mut mismatches,
-        "scenario-id",
-        request.scenario,
-        result.scenario,
-    );
-    mismatch(
-        &mut mismatches,
-        "scenario-outcome",
-        &ScenarioOutcome::Ok,
-        &result.outcome,
-    );
-    mismatch(
-        &mut mismatches,
-        "iterations",
-        request.iterations.get(),
-        result.iterations,
-    );
-    mismatch(
-        &mut mismatches,
-        "completion-help-calls",
-        request.iterations.get(),
-        result.completion_help_calls,
-    );
-    mismatch(
-        &mut mismatches,
-        "completion-window-visible",
-        true,
-        result.completion_visible,
-    );
-    mismatch(
-        &mut mismatches,
-        "completion-buffer-mode",
-        true,
-        result.completion_mode_correct,
-    );
-    mismatch(
-        &mut mismatches,
-        "known-command-candidates",
-        true,
-        result.known_commands_present,
-    );
-    mismatch(
-        &mut mismatches,
-        "completion-candidate-count-stable",
-        true,
-        result.candidate_count_stable,
-    );
-    mismatch(
-        &mut mismatches,
-        "completion-candidate-count",
-        MX_TAB_COMPLETION_CANDIDATE_COUNT,
-        result.completion_candidate_count,
-    );
-    mismatch(
-        &mut mismatches,
-        "completion-window-hidden-after-exit",
-        true,
-        result.completion_hidden_after_exit,
-    );
-    mismatch(
-        &mut mismatches,
-        "minibuffer-depth-restored",
-        true,
-        result.minibuffer_depth_restored,
-    );
-    mismatch(
-        &mut mismatches,
-        "selected-buffer-restored",
-        true,
-        result.selected_buffer_restored,
-    );
-    mismatches
-}
-
-fn validate_bytecode_call_loop_result(
-    request: &RunRequest,
-    result: &BytecodeCallLoopResult,
-) -> Vec<CorrectnessMismatch> {
-    let mut mismatches = Vec::new();
-    mismatch(
-        &mut mismatches,
-        "scenario-result-schema",
-        SCENARIO_RESULT_SCHEMA_VERSION,
-        result.schema_version,
-    );
-    mismatch(
-        &mut mismatches,
-        "scenario-id",
-        request.scenario,
-        result.scenario,
-    );
-    mismatch(
-        &mut mismatches,
-        "scenario-outcome",
-        &ScenarioOutcome::Ok,
-        &result.outcome,
-    );
-    mismatch(
-        &mut mismatches,
-        "iterations",
-        request.iterations.get(),
-        result.iterations,
-    );
-    mismatch(
-        &mut mismatches,
-        "bytecode-call-count",
-        u64::from(request.iterations.get()),
-        result.bytecode_calls,
-    );
-    mismatch(
-        &mut mismatches,
-        "bytecode-result",
-        result.expected_result,
-        result.result,
-    );
-    mismatch(
-        &mut mismatches,
-        "expected-bytecode-result",
-        1,
-        result.expected_result,
-    );
-    mismatch(
-        &mut mismatches,
-        "bytecode-functions-compiled",
-        true,
-        result.bytecode_functions_compiled,
-    );
-    mismatch(
-        &mut mismatches,
-        "tier-0-interpreter-requested",
-        true,
-        result.interpreter_requested,
-    );
-    mismatches
 }
 
 fn validate_sustained_native_video_result(
@@ -3092,12 +2392,14 @@ fn result_verdict(
     process_wall_us: u128,
 ) -> RunVerdict {
     let mismatches = match result {
-        ScenarioResult::RustLspTyping(result) => validate_rust_lsp_typing_result(request, result),
+        ScenarioResult::RustLspTyping(result) => {
+            scenarios::rust_lsp::validate_rust_lsp_typing_result(request, result)
+        }
         ScenarioResult::MxTabCompletion(result) => {
-            validate_mx_tab_completion_result(request, result)
+            scenarios::mx_tab::validate_mx_tab_completion_result(request, result)
         }
         ScenarioResult::BytecodeCallLoop(result) => {
-            validate_bytecode_call_loop_result(request, result)
+            scenarios::bytecode::validate_bytecode_call_loop_result(request, result)
         }
         ScenarioResult::EditorWorkload(result) => {
             scenarios::editor_workload::validate_editor_workload_result(request, result)
@@ -3134,13 +2436,13 @@ where
 fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Measurement> {
     match result {
         ScenarioResult::RustLspTyping(result) => {
-            valid_rust_lsp_typing_measurements(result, wall_elapsed_us)
+            scenarios::rust_lsp::valid_rust_lsp_typing_measurements(result, wall_elapsed_us)
         }
         ScenarioResult::MxTabCompletion(result) => {
-            valid_mx_tab_completion_measurements(result, wall_elapsed_us)
+            scenarios::mx_tab::valid_mx_tab_completion_measurements(result, wall_elapsed_us)
         }
         ScenarioResult::BytecodeCallLoop(result) => {
-            valid_bytecode_call_loop_measurements(result, wall_elapsed_us)
+            scenarios::bytecode::valid_bytecode_call_loop_measurements(result, wall_elapsed_us)
         }
         ScenarioResult::EditorWorkload(result) => {
             scenarios::editor_workload::valid_editor_workload_measurements(result, wall_elapsed_us)
@@ -3255,126 +2557,6 @@ fn valid_sustained_native_video_measurements(
         });
     }
     measurements
-}
-
-fn valid_rust_lsp_typing_measurements(
-    result: &RustLspTypingResult,
-    wall_elapsed_us: u128,
-) -> Vec<Measurement> {
-    let edits = u64::from(result.iterations) * 2;
-    vec![
-        Measurement {
-            name: MetricName::ProcessWallTime,
-            value: wall_elapsed_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::WorkloadCpuTime,
-            value: result.elapsed_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::PerEditCpuTime,
-            value: result.elapsed_us as f64 / edits.max(1) as f64,
-            unit: MetricUnit::MicrosecondsPerEdit,
-        },
-        Measurement {
-            name: MetricName::Edits,
-            value: edits as f64,
-            unit: MetricUnit::Count,
-        },
-        Measurement {
-            name: MetricName::Redisplays,
-            value: edits as f64,
-            unit: MetricUnit::Count,
-        },
-        Measurement {
-            name: MetricName::Iterations,
-            value: f64::from(result.iterations),
-            unit: MetricUnit::Count,
-        },
-        Measurement {
-            name: MetricName::OverlayCount,
-            value: result.overlay_count as f64,
-            unit: MetricUnit::Count,
-        },
-        Measurement {
-            name: MetricName::LspDiagnosticCount,
-            value: result.lsp_diagnostic_count as f64,
-            unit: MetricUnit::Count,
-        },
-    ]
-}
-
-fn valid_mx_tab_completion_measurements(
-    result: &MxTabCompletionResult,
-    wall_elapsed_us: u128,
-) -> Vec<Measurement> {
-    vec![
-        Measurement {
-            name: MetricName::ProcessWallTime,
-            value: wall_elapsed_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::WorkloadCpuTime,
-            value: result.elapsed_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::PerCompletionCpuTime,
-            value: result.elapsed_us as f64 / f64::from(result.completion_help_calls.max(1)),
-            unit: MetricUnit::MicrosecondsPerCompletion,
-        },
-        Measurement {
-            name: MetricName::CompletionHelpCalls,
-            value: f64::from(result.completion_help_calls),
-            unit: MetricUnit::Count,
-        },
-        Measurement {
-            name: MetricName::CompletionCandidateCount,
-            value: result.completion_candidate_count as f64,
-            unit: MetricUnit::Count,
-        },
-        Measurement {
-            name: MetricName::Iterations,
-            value: f64::from(result.iterations),
-            unit: MetricUnit::Count,
-        },
-    ]
-}
-
-fn valid_bytecode_call_loop_measurements(
-    result: &BytecodeCallLoopResult,
-    wall_elapsed_us: u128,
-) -> Vec<Measurement> {
-    vec![
-        Measurement {
-            name: MetricName::ProcessWallTime,
-            value: wall_elapsed_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::WorkloadCpuTime,
-            value: result.elapsed_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::PerBytecodeCallCpuTime,
-            value: result.elapsed_us as f64 / result.bytecode_calls.max(1) as f64,
-            unit: MetricUnit::MicrosecondsPerBytecodeCall,
-        },
-        Measurement {
-            name: MetricName::BytecodeCalls,
-            value: result.bytecode_calls as f64,
-            unit: MetricUnit::Count,
-        },
-        Measurement {
-            name: MetricName::Iterations,
-            value: f64::from(result.iterations),
-            unit: MetricUnit::Count,
-        },
-    ]
 }
 
 /// The per-keystroke latency budget behind
