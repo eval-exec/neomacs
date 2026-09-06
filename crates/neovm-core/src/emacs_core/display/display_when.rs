@@ -116,8 +116,11 @@ impl Context {
     /// flow (a `throw`, a thread block, an exit) returned to the caller as
     /// GNU lets it unwind.  Declared, not ported: GNU's
     /// `inhibit-eval-during-redisplay` short-circuit (no such variable
-    /// here) and `dsafe_eval_handler`'s "Error during redisplay" line in
-    /// `*Messages*` (src/xdisp.c:3098-3104); the error is logged instead.
+    /// here), `dsafe_eval_handler`'s "Error during redisplay" line in
+    /// `*Messages*` (src/xdisp.c:3098-3104; the error is logged instead),
+    /// the abort of a nested redisplay through `Ftop_level`
+    /// (src/xdisp.c:3127-3136; `inhibit-redisplay` is bound, so none can
+    /// start), and `backtrace-on-redisplay-error` (src/xdisp.c:3159-3160).
     pub fn display_when_form_holds(
         &mut self,
         form: Value,

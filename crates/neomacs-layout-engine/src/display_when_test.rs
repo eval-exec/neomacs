@@ -85,8 +85,13 @@ fn window_span_forms_are_evaluated_from_text_props_overlays_and_prefix_vars() {
         .eval_str("(set (make-local-variable 'wrap-prefix) (propertize \" \" 'display '(when (car 1) space :align-to 9)))")
         .expect("local");
 
-    let conditions =
-        evaluate_window_display_when_forms(&mut eval, buf_id, CharPos0::new(0), CharPos0::new(12));
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        None,
+        CharPos0::new(0),
+        CharPos0::new(12),
+    );
     let holds = |form: Value| match conditions.verdict(form) {
         DisplayWhenVerdict::Holds => Some(true),
         DisplayWhenVerdict::Fails => Some(false),
@@ -132,8 +137,13 @@ fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
             disabled,
         );
     }
-    let conditions =
-        evaluate_window_display_when_forms(&mut eval, buf_id, CharPos0::new(0), CharPos0::new(4));
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        None,
+        CharPos0::new(0),
+        CharPos0::new(4),
+    );
     let form = when_form(disabled, 0);
     assert_eq!(conditions.verdict(form), DisplayWhenVerdict::Fails);
     assert!(!conditions.holds(form));
@@ -161,8 +171,13 @@ fn forms_are_evaluated_with_the_window_buffer_current() {
             spec,
         );
     }
-    let conditions =
-        evaluate_window_display_when_forms(&mut eval, other, CharPos0::new(0), CharPos0::new(4));
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        other,
+        None,
+        CharPos0::new(0),
+        CharPos0::new(4),
+    );
     assert_eq!(
         conditions.verdict(when_form(spec, 0)),
         DisplayWhenVerdict::Holds
@@ -171,5 +186,97 @@ fn forms_are_evaluated_with_the_window_buffer_current() {
         eval.buffers.current_buffer_id(),
         Some(original),
         "caller's buffer restored"
+    );
+}
+
+#[test]
+fn an_after_string_binds_buffer_position_to_the_overlay_end() {
+    // GNU loads an after-string when the iterator reaches the overlay's end
+    // (xdisp.c:7172-7173) and binds `buffer-position` to that position
+    // (xdisp.c:5919-5923); a before-string is bound to the start.
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    eval.buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("abcdefgh\n");
+    let after = eval
+        .eval_str(
+            "(let ((o (make-overlay 2 6)))
+               (overlay-put o 'after-string
+                 (propertize \" \" 'display '(when (= buffer-position 6) space :align-to 20)))
+               (overlay-put o 'before-string
+                 (propertize \" \" 'display '(when (= buffer-position 2) space :align-to 3)))
+               (list (overlay-get o 'after-string) (overlay-get o 'before-string)))",
+        )
+        .expect("overlay");
+    let after_string = after.cons_car();
+    let before_string = after.cons_cdr().cons_car();
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        None,
+        CharPos0::new(0),
+        CharPos0::new(9),
+    );
+    assert_eq!(
+        conditions.verdict(prefix_when_form(after_string)),
+        DisplayWhenVerdict::Holds
+    );
+    assert_eq!(
+        conditions.verdict(prefix_when_form(before_string)),
+        DisplayWhenVerdict::Holds
+    );
+}
+
+#[test]
+fn an_overlay_scoped_to_another_window_is_not_scanned() {
+    // GNU: "Skip this overlay if it doesn't apply to IT->w" (xdisp.c:7153-7156).
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    eval.buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("abcdefgh\n");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("scoped-overlay", 640, 200, buf_id);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let display = eval
+        .eval_str(
+            "(let ((o (make-overlay 2 6)))
+               (overlay-put o 'window (selected-window))
+               (overlay-put o 'display '(when (= 1 1) . \"OTHER\"))
+               (overlay-get o 'display))",
+        )
+        .expect("overlay");
+    // Scanning for a window that is not the overlay's leaves its form unseen…
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        Some(u64::MAX),
+        CharPos0::new(0),
+        CharPos0::new(9),
+    );
+    assert_eq!(
+        conditions.verdict(when_form(display, 0)),
+        DisplayWhenVerdict::Unseen
+    );
+    // …while the overlay's own window sees it evaluated.
+    let selected = eval
+        .eval_str("(selected-window)")
+        .expect("selected window")
+        .as_window_id()
+        .expect("window id");
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        Some(selected),
+        CharPos0::new(0),
+        CharPos0::new(9),
+    );
+    assert_eq!(
+        conditions.verdict(when_form(display, 0)),
+        DisplayWhenVerdict::Holds
     );
 }

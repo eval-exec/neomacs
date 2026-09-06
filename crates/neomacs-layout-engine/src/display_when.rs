@@ -87,16 +87,20 @@ impl DisplayWhenConditions {
 /// all of those strings.
 ///
 /// The forms run with `buf_id` current, as GNU's iterator does
-/// (src/xdisp.c:20533-20535).  A FORM is evaluated once, with the bindings
-/// of its first occurrence; GNU evaluates it at every occurrence, so a FORM
-/// that reads `position` or `buffer-position` and expects a different answer
-/// per occurrence is not reproduced (declared).  Not scanned, so left to the
-/// structural rule (declared): the `display` properties of strings reached
-/// through a replacing `display` property (modifiers only there) and of
-/// margin strings; frame-local chrome strings never get evaluated results.
+/// (src/xdisp.c:20533-20535).  A FORM is evaluated once per `equal` form
+/// (the table is keyed by structural equality), with the bindings of its
+/// first occurrence; GNU evaluates every occurrence, so a FORM that reads
+/// `position` or `buffer-position` and expects a different answer per
+/// occurrence is not reproduced (declared).  A before-string of an overlay
+/// starting before `from` is bound to `from` rather than to the overlay's
+/// start (declared).  Not scanned, so left to the structural rule
+/// (declared): the `display` properties of strings reached through a
+/// replacing `display` property (modifiers only there) and of margin
+/// strings; frame-local chrome strings never get evaluated results.
 pub(crate) fn evaluate_window_display_when_forms(
     evaluator: &mut Context,
     buf_id: BufferId,
+    window_id: Option<u64>,
     from: CharPos0,
     to: CharPos0,
 ) -> DisplayWhenConditions {
@@ -105,19 +109,20 @@ pub(crate) fn evaluate_window_display_when_forms(
         .filter_map(|name| evaluator.buffer_default_value(name))
         .collect();
     let sites = match evaluator.buffer_manager().get(buf_id) {
-        Some(buffer) => collect_when_form_sites(buffer, from, to, &default_prefixes),
+        Some(buffer) => collect_when_form_sites(buffer, window_id, from, to, &default_prefixes),
         None => Vec::new(),
     };
     match evaluator.evaluate_display_when_sites(buf_id, &sites) {
         Ok(results) => DisplayWhenConditions::evaluated(results.into_iter().collect()),
         // A `throw` (or an exit) out of a display FORM unwinds redisplay in
         // GNU; redisplay here has no such exit, so the forms of this span
-        // fall back to the structural rule for this attempt (declared).
+        // fall back to the structural rule for this attempt (declared).  The
+        // same fallback covers a buffer that is not live any more.
         Err(flow) => {
             tracing::warn!(
                 ?flow,
-                "display `when' form left evaluation with a non-error flow; \
-                 using the structural rule for this layout"
+                "display `when' forms could not be evaluated for this layout; \
+                 using the structural rule"
             );
             DisplayWhenConditions::structural()
         }
@@ -126,6 +131,7 @@ pub(crate) fn evaluate_window_display_when_forms(
 
 fn collect_when_form_sites(
     buffer: &Buffer,
+    window_id: Option<u64>,
     from: CharPos0,
     to: CharPos0,
     default_prefixes: &[Value],
@@ -167,6 +173,11 @@ fn collect_when_form_sites(
         buffer.layout_char_pos_to_emacs_byte_pos(to),
     );
     for overlay in overlays.overlays_in_emacs_byte_range(range) {
+        // GNU skips an overlay scoped to another window before it records
+        // the overlay's strings (src/xdisp.c:7153-7156).
+        if !overlays.overlay_applies_to_window(overlay, window_id) {
+            continue;
+        }
         let start = overlays
             .overlay_start_emacs_byte_pos(overlay)
             .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos))
@@ -182,15 +193,25 @@ fn collect_when_form_sites(
             );
         }
         // Overlay strings and prefixes are displayed as strings: their own
-        // `display` properties are evaluated with `object` bound to the string.
-        for name in [
-            "before-string",
-            "after-string",
-            "line-prefix",
-            "wrap-prefix",
+        // `display` properties are evaluated with `object` bound to the
+        // string.  `buffer-position` is where the string is displayed: the
+        // overlay's start for a before-string and the prefixes, its end for
+        // an after-string, which GNU loads when the iterator reaches that end
+        // (src/xdisp.c:7172-7173) and binds as `it->current.pos`
+        // (src/xdisp.c:5919-5923).
+        let end = overlays
+            .overlay_end_emacs_byte_pos(overlay)
+            .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos))
+            .unwrap_or(start)
+            .max(from);
+        for (name, at) in [
+            ("before-string", start),
+            ("after-string", end),
+            ("line-prefix", start),
+            ("wrap-prefix", start),
         ] {
             if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol(name)) {
-                collect_prefix_string_when_forms(value, gnu_pos(start), &mut sites);
+                collect_prefix_string_when_forms(value, gnu_pos(at), &mut sites);
             }
         }
     }
