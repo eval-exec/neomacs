@@ -53,6 +53,14 @@ video-backend = "none"
 cargo-features = []
 video-backend = "none"
 
+# Configuration for cross-rs (`cross`), folded in from a root-level
+# Cross.toml; cargo itself ignores metadata.* tables.
+[workspace.metadata.cross.build.env]
+passthrough = ["CARGO_INCREMENTAL"]
+
+[workspace.metadata.cross.target.x86_64-pc-windows-gnu]
+image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:edge"
+
 [workspace.package]
 version = "0.0.17"
 edition = "2024"
