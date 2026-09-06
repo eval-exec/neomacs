@@ -198,11 +198,11 @@ Crypto donations are also welcome — scan a QR code or copy an address:
 <table>
   <tr>
     <th align="center" width="240">BTC (Bitcoin)</th>
-    <th align="center" width="240">USDC (ERC-20 · Ethereum)</th>
+    <th align="center" width="240">Ethereum — ETH · USDC · any ERC-20</th>
   </tr>
   <tr>
     <td align="center" width="240"><img src="assets/receive_btc_bc1p0y3fzffqrqw08k8nc2ge3dfj02hr22ku8nugnc04ek522gty9kjsyy8lgc.png" width="240" alt="Bitcoin (BTC) donation QR code"/></td>
-    <td align="center" width="240"><img src="assets/receive_usdc_erc20_0xF5e8493b611F8D4c07850C2cC77b38dD632620F2.png" width="240" alt="USDC (ERC-20) donation QR code"/></td>
+    <td align="center" width="240"><img src="assets/receive_usdc_erc20_0xF5e8493b611F8D4c07850C2cC77b38dD632620F2.png" width="240" alt="Ethereum donation QR code (ETH, USDC and other ERC-20 tokens)"/></td>
   </tr>
   <tr>
     <td align="center" width="240"><sub>bc1p0y3fzf<wbr>fqrqw08k8n<wbr>c2ge3dfj02<wbr>hr22ku8nug<wbr>nc04ek522g<wbr>ty9kjsyy8l<wbr>gc</sub></td>
