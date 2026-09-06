@@ -329,7 +329,7 @@ fn an_after_string_ending_at_the_window_start_is_scanned_and_one_beyond_the_span
         .insert("abcdefghij\n");
     let strings = eval
         .eval_str(
-            "(let ((a (make-overlay 1 5)) (b (make-overlay 6 9)))
+            "(let ((a (make-overlay 1 5)) (b (make-overlay 6 11)))
                (overlay-put a 'after-string
                  (propertize \" \" 'display '(when (= 1 2) space :align-to 20)))
                (overlay-put b 'after-string
@@ -340,7 +340,9 @@ fn an_after_string_ending_at_the_window_start_is_scanned_and_one_beyond_the_span
     let at_start = strings.cons_car();
     let beyond = strings.cons_cdr().cons_car();
     // Window starts at char 4 (GNU position 5, where overlay `a` ends) and
-    // spans four characters, ending before overlay `b`'s end.
+    // spans four characters, ending at char 8; overlay `b` ends at char 10,
+    // past the span (a boundary at the span end itself is reached, see the
+    // next test).
     let conditions = evaluate_window_display_when_forms(
         &mut eval,
         buf_id,
@@ -357,5 +359,48 @@ fn an_after_string_ending_at_the_window_start_is_scanned_and_one_beyond_the_span
         conditions.verdict(prefix_when_form(beyond)),
         DisplayWhenVerdict::Unseen,
         "an after-string displayed past the span is not reached"
+    );
+}
+
+#[test]
+fn overlay_strings_anchored_at_point_max_are_evaluated_when_the_span_reaches_it() {
+    // A completion popup's empty overlay at point-max carries its candidates
+    // in `before-string`; the walk displays them through its end-of-buffer
+    // anchor path (GNU `reseat` -> `handle_stop` at ZV, xdisp.c:8046-8052),
+    // so their forms must be evaluated too.
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    eval.buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("abc\n");
+    let strings = eval
+        .eval_str(
+            "(let ((empty (make-overlay 5 5)) (ending (make-overlay 2 5)))
+               (overlay-put empty 'before-string
+                 (propertize \" \" 'display '(when (= 1 2) space :align-to 20)))
+               (overlay-put ending 'after-string
+                 (propertize \" \" 'display '(when (= buffer-position 5) space :align-to 30)))
+               (list (overlay-get empty 'before-string) (overlay-get ending 'after-string)))",
+        )
+        .expect("overlays");
+    let empty_before = strings.cons_car();
+    let ending_after = strings.cons_cdr().cons_car();
+    let point_max = eval
+        .buffers
+        .get(buf_id)
+        .expect("buffer")
+        .layout_point_max_char_pos();
+    let conditions =
+        evaluate_window_display_when_forms(&mut eval, buf_id, None, CharPos0::new(0), point_max);
+    assert_eq!(
+        conditions.verdict(prefix_when_form(empty_before)),
+        DisplayWhenVerdict::Fails,
+        "the empty overlay's before-string at point-max is evaluated"
+    );
+    assert_eq!(
+        conditions.verdict(prefix_when_form(ending_after)),
+        DisplayWhenVerdict::Holds,
+        "the after-string of an overlay ending at point-max is bound there"
     );
 }
