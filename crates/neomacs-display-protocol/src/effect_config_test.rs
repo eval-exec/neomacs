@@ -2659,70 +2659,97 @@ fn every_effect_in_the_registry_can_report_its_values() {
 }
 
 #[test]
-fn pane_motion_reaches_the_registry_as_scalars_and_converts_to_a_spec() {
+fn every_window_animation_slot_reaches_the_registry_as_scalars() {
     use crate::motion_spec::MotionSpec;
 
     let config = VisualConfig::default();
-    // Sorted, not in declaration order: the registry walks a serde JSON map,
-    // which orders its keys. Which properties exist is the contract here; the
-    // order they arrive in is not.
-    let mut values: Vec<String> = config
-        .effect_values("pane-motion")
-        .expect("pane-motion is a registry effect")
+    for slot in [
+        "window-open",
+        "window-close",
+        "window-resize",
+        "window-movement",
+    ] {
+        // Sorted, not in declaration order: the registry walks a serde JSON
+        // map, which orders its keys. Which properties exist is the contract;
+        // the order they arrive in is not.
+        let mut values: Vec<String> = config
+            .effect_values(slot)
+            .unwrap_or_else(|_| panic!("{slot} is a registry effect"))
+            .into_iter()
+            .map(|(property, _)| property)
+            .collect();
+        values.sort();
+        assert_eq!(
+            values,
+            vec![
+                "damping-ratio",
+                "duration",
+                "easing",
+                "enabled",
+                "kind",
+                "stiffness"
+            ],
+            "{slot} carries every scalar whichever kind it is"
+        );
+    }
+
+    let mut globals: Vec<String> = config
+        .effect_values("window-animations")
+        .expect("window-animations is a registry effect")
         .into_iter()
         .map(|(property, _)| property)
         .collect();
-    values.sort();
-    assert_eq!(values, vec!["duration", "easing", "enabled"]);
+    globals.sort();
+    assert_eq!(globals, vec!["off", "slowdown"]);
 
-    // On by default, so the default config builds a real motion.
-    assert!(matches!(
-        config.pane_motion.movement(),
-        MotionSpec::Tween(_)
-    ));
-
-    // Turned off through the registry, it builds none at all — not a
-    // zero-length one. A caller that sees `Instant` takes no offscreen and
-    // composes exactly as it would with the feature absent, which is what
-    // makes disabling it give back the standing cost of composing every frame
-    // through the ring.
-    let disabled = config
+    // Every slot carries all six properties whichever `kind` it is, and that is
+    // the registry's requirement rather than a modelling choice: a property key
+    // is validated against the value already stored, so a shape holding only
+    // the active variant's fields would make switching kind unreachable.
+    let sprung = config
         .apply_effects(&[EffectOperation::set(
-            "pane-motion",
-            [("enabled", EffectValue::Bool(false))],
+            "window-open",
+            [
+                ("kind", EffectValue::Symbol("spring".into())),
+                ("stiffness", EffectValue::Number(1000.0)),
+            ],
         )])
-        .expect("pane-motion accepts its own properties");
-    assert_eq!(disabled.pane_motion.movement(), MotionSpec::Instant);
-
-    let enabled = disabled
-        .apply_effects(&[EffectOperation::set(
-            "pane-motion",
-            [("enabled", EffectValue::Bool(true))],
-        )])
-        .expect("pane-motion accepts its own properties");
+        .expect("an easing slot accepts spring properties");
     assert!(matches!(
-        enabled.pane_motion.movement(),
-        MotionSpec::Tween(_)
+        sprung.window_open.motion(sprung.window_animations),
+        MotionSpec::Spring(_)
     ));
-    // The registry still answers about it with motion on. This is the case
-    // that would break if the config stored a `MotionSpec` directly: every
-    // variant but `Instant` serializes to an object, which the registry cannot
-    // represent, so `neomacs-effect-get` would fail for `pane-motion` — and
+    // And the registry still answers about it. This is the case that would
+    // break if a slot stored a `MotionSpec` directly: every variant but
+    // `Instant` serializes to an object, which the registry cannot represent,
+    // so `neomacs-effect-get` would fail for the slot — and
     // `neomacs-effects-apply`, which walks every effect, with it.
-    assert!(enabled.effect_values("pane-motion").is_ok());
+    assert!(sprung.effect_values("window-open").is_ok());
 }
 
 #[test]
-fn a_zero_duration_pane_motion_is_instant_rather_than_a_zero_length_tween() {
+fn the_master_switch_and_a_zero_duration_both_resolve_to_instant() {
     use crate::motion_spec::MotionSpec;
-    let config = VisualConfig::default()
+
+    let off = VisualConfig::default()
         .apply_effects(&[EffectOperation::set(
-            "pane-motion",
-            [
-                ("enabled", EffectValue::Bool(true)),
-                ("duration", EffectValue::Number(0.0)),
-            ],
+            "window-animations",
+            [("off", EffectValue::Bool(true))],
         )])
-        .expect("pane-motion accepts a zero duration");
-    assert_eq!(config.pane_motion.movement(), MotionSpec::Instant);
+        .expect("window-animations accepts its own properties");
+    assert_eq!(
+        off.window_resize.motion(off.window_animations),
+        MotionSpec::Instant
+    );
+
+    let instant = VisualConfig::default()
+        .apply_effects(&[EffectOperation::set(
+            "window-open",
+            [("duration", EffectValue::Number(0.0))],
+        )])
+        .expect("window-open accepts a zero duration");
+    assert_eq!(
+        instant.window_open.motion(instant.window_animations),
+        MotionSpec::Instant
+    );
 }

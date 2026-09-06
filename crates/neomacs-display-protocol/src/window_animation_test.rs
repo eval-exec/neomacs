@@ -1,0 +1,118 @@
+use super::*;
+use crate::motion_spec::MotionSpec;
+
+fn globals() -> WindowAnimationsConfig {
+    WindowAnimationsConfig::default()
+}
+
+#[test]
+fn nirs_stiffness_translates_to_our_angular_frequency_by_a_square_root() {
+    // niri fixes mass at 1 and uses omega0 = sqrt(stiffness / mass); its
+    // damping_ratio is our damping verbatim. If this drifts, every spring in
+    // the config means something other than what niri's docs say it does.
+    let resize = default_window_resize();
+    assert!((resize.omega() - 800f32.sqrt()).abs() < 1e-4);
+    assert!((resize.omega() - 28.284_271).abs() < 1e-3);
+
+    let MotionSpec::Spring(spec) = resize.motion(globals()) else {
+        panic!("window-resize is a spring");
+    };
+    assert!((spec.omega.get() - 28.284_271).abs() < 1e-3);
+    assert!((spec.damping.get() - 1.0).abs() < 1e-6, "critically damped");
+}
+
+#[test]
+fn slowdown_divides_omega_and_multiplies_a_duration() {
+    // Both are exact rather than approximate. omega appears in the spring
+    // solution only ever multiplied by t, so dividing it is the same motion
+    // played slower -- which is the whole reason a spring can be watched at all.
+    let slow = WindowAnimationsConfig {
+        off: false,
+        slowdown: 10.0,
+    };
+
+    let MotionSpec::Spring(spec) = default_window_resize().motion(slow) else {
+        panic!("still a spring");
+    };
+    assert!((spec.omega.get() - 28.284_271 / 10.0).abs() < 1e-3);
+
+    let MotionSpec::Tween(tween) = default_window_open().motion(slow) else {
+        panic!("still a tween");
+    };
+    assert_eq!(tween.duration.get(), std::time::Duration::from_millis(1500));
+}
+
+#[test]
+fn a_disabled_slot_and_the_master_switch_both_resolve_to_instant() {
+    // Instant is what makes disabling free: a caller holding it builds no
+    // motion and takes no offscreen composition.
+    let off = WindowAnimationsConfig {
+        off: true,
+        slowdown: 1.0,
+    };
+    assert_eq!(default_window_resize().motion(off), MotionSpec::Instant);
+    assert_eq!(default_window_open().motion(off), MotionSpec::Instant);
+    assert_eq!(
+        default_window_close().motion(globals()),
+        MotionSpec::Instant,
+        "window-close ships disabled"
+    );
+}
+
+#[test]
+fn a_zero_duration_disables_a_slot_rather_than_erroring() {
+    // `:duration 0` has to mean "no motion". Storing a MotionDuration here
+    // instead would reject zero at deserialize time, with a message naming a
+    // Rust type.
+    let slot = WindowAnimation {
+        duration: std::time::Duration::ZERO,
+        ..default_window_open()
+    };
+    assert_eq!(slot.motion(globals()), MotionSpec::Instant);
+}
+
+#[test]
+fn out_of_range_taste_parameters_are_clamped_not_rejected() {
+    // `apply_effects` is all-or-nothing and `neomacs-effects` is a defcustom
+    // whose `:set` calls it, so rejecting one value silently reverts the user's
+    // whole profile. Clamping still produces a watchable animation.
+    let wild = WindowAnimation {
+        damping_ratio: 1e9,
+        stiffness: 0,
+        ..default_window_resize()
+    };
+    let MotionSpec::Spring(spec) = wild.motion(globals()) else {
+        panic!("clamped, not dropped");
+    };
+    assert!((spec.damping.get() - 10.0).abs() < 1e-6, "damping clamped");
+    assert!(spec.omega.get() > 0.0, "stiffness floored to 1");
+
+    let nan = WindowAnimation {
+        damping_ratio: f32::NAN,
+        ..default_window_resize()
+    };
+    let MotionSpec::Spring(spec) = nan.motion(globals()) else {
+        panic!("NaN falls back rather than propagating");
+    };
+    assert!((spec.damping.get() - 1.0).abs() < 1e-6);
+
+    let wild_globals = WindowAnimationsConfig {
+        off: false,
+        slowdown: f32::INFINITY,
+    };
+    assert!(matches!(
+        default_window_open().motion(wild_globals),
+        MotionSpec::Tween(_)
+    ));
+}
+
+#[test]
+fn ease_out_expo_reaches_exactly_one() {
+    // niri's own curve is `1 - 2^(-10t)`, which is 0.999 at t = 1; it gets away
+    // with that by forcing the endpoint from outside the curve. We do not, so
+    // the guarded form is the only correct one here -- an animation that stops
+    // 0.1% short leaves the layout permanently a fraction of a pixel off.
+    assert_eq!(TransitionEasing::EaseOutExpo.apply(1.0), 1.0);
+    assert_eq!(TransitionEasing::EaseOutExpo.apply(0.0), 0.0);
+    assert!(TransitionEasing::EaseOutExpo.apply(0.5) > 0.9, "fast start");
+}

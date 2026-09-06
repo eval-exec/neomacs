@@ -1,4 +1,6 @@
 use super::*;
+use crate::render_thread::render_quality::WindowAnimationSpecs;
+use neomacs_display_protocol::motion_spec::MotionSpec;
 use neomacs_display_protocol::motion_spec::{MotionDuration, TweenSpec};
 use neomacs_display_protocol::presentation_origin::BufferModiff;
 use neomacs_display_protocol::scroll_animation::TransitionEasing;
@@ -15,11 +17,22 @@ fn frame_at(origin: EventTime, millis: u64) -> FrameSample {
 
 /// A 100ms linear tween, so a sample's progress is the elapsed fraction and
 /// every placement below can be read off directly.
-fn linear_100ms() -> MotionSpec {
-    MotionSpec::Tween(TweenSpec {
+/// Every role on one 100ms linear curve.
+///
+/// The tests below are about the morph's mechanics, not about the four slots
+/// having different shapes, so giving each role the same curve keeps their
+/// arithmetic readable: a sample's progress is the elapsed fraction.
+fn linear_100ms() -> WindowAnimationSpecs {
+    let tween = MotionSpec::Tween(TweenSpec {
         duration: MotionDuration::new(Duration::from_millis(100)).expect("a positive duration"),
         easing: TransitionEasing::Linear,
-    })
+    });
+    WindowAnimationSpecs {
+        resize: tween,
+        movement: tween,
+        open: tween,
+        close: tween,
+    }
 }
 
 fn window(id: i64, bounds: Rect) -> WindowInfo {
@@ -106,7 +119,10 @@ fn an_instant_policy_produces_no_morph_to_allocate() {
     // A reduced-motion setting must be free, not merely fast.
     let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
-    assert!(PaneLayoutMorph::try_new(&before, &after, MotionSpec::Instant, origin()).is_none());
+    assert!(
+        PaneLayoutMorph::try_new(&before, &after, WindowAnimationSpecs::INSTANT, origin())
+            .is_none()
+    );
 }
 
 #[test]
@@ -228,7 +244,7 @@ fn a_persisted_pane_starts_at_its_old_rect_and_arrives_at_its_new_one() {
 
     let arrived = morph.sample(frame_at(origin, 100));
     assert!((placed(&arrived, 1).bounds.width - 400.0).abs() < 1e-3);
-    assert!(arrived.motion.finished);
+    assert!(arrived.motion.finished());
 }
 
 #[test]
@@ -299,11 +315,16 @@ fn an_overshooting_pane_never_gets_a_negative_extent_or_a_strip_it_is_not_owed()
     // is interrupted and resumed carries its entry rate in, and the tween bump
     // peaks around progress 1.3. Two things break past 1.0, and neither is
     // visible at rest, so both are asserted at an explicit sample.
-    let motion = MotionSample {
+    let overshot = MotionSample {
         progress: 1.3,
         content_mix: neomacs_display_protocol::motion_spec::UnitInterval::clamp(1.0),
         rate: 0.0,
         finished: false,
+    };
+    let motion = RoleSamples {
+        geometry: overshot,
+        open: overshot,
+        close: overshot,
     };
 
     // A pane that GROWS must never emit a vacated strip. The guard used to read
@@ -523,7 +544,7 @@ fn a_disabled_policy_installs_no_morph_at_all() {
     // per-pane blit, and the pass composes exactly as it did before the
     // feature existed.
     let mut render = empty_render();
-    render.compositor.pane_motion = neomacs_display_protocol::motion_spec::MotionSpec::Instant;
+    render.compositor.pane_motion = WindowAnimationSpecs::INSTANT;
     let origin = origin();
     install(
         &mut render,
@@ -640,7 +661,7 @@ fn a_spliced_motion_does_not_stall_at_the_splice() {
         PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
     let at_splice = morph.sample(frame_at(origin, 50));
     assert!(
-        at_splice.motion.rate > 0.0,
+        at_splice.motion.geometry.rate > 0.0,
         "the motion is moving before it is cut"
     );
 
@@ -654,7 +675,7 @@ fn a_spliced_motion_does_not_stall_at_the_splice() {
         .expect("a spliced morph");
     let just_after = spliced.sample(frame_at(origin, 51));
     assert!(
-        just_after.motion.rate > 0.0,
+        just_after.motion.geometry.rate > 0.0,
         "the spliced motion left the splice already moving, rather than from rest"
     );
 }
@@ -790,6 +811,137 @@ fn a_leaving_pane_reads_the_previous_composition_because_the_new_one_has_none_of
         leaving.content_origin,
         (600.0, 0.0),
         "and reads the old picture from the columns it still covers"
+    );
+}
+
+/// Four roles with distinguishable curves, so a placement reading the wrong one
+/// shows up as a wrong number rather than as a plausible animation.
+fn distinguishable_roles() -> WindowAnimationSpecs {
+    let tween = |millis| {
+        MotionSpec::Tween(TweenSpec {
+            duration: MotionDuration::new(Duration::from_millis(millis))
+                .expect("a positive duration"),
+            easing: TransitionEasing::Linear,
+        })
+    };
+    WindowAnimationSpecs {
+        resize: tween(100),
+        movement: tween(1000),
+        open: tween(200),
+        close: tween(400),
+    }
+}
+
+#[test]
+fn resize_wins_a_mixed_morph_because_the_panes_have_to_share_one_curve() {
+    // Geometry is one curve for the whole morph: `placed_bounds` reads a single
+    // progress and adjacent panes tile, so two panes on two clocks would
+    // disagree about where their shared edge is. In an edge-to-edge tiling the
+    // mixed morph is the common case -- moving one pane's edge resizes its
+    // neighbour -- and resize is the change the vacated strip and the reflow
+    // crossfade are built for.
+    let origin = origin();
+    let before = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(400.0, 0.0, 400.0, 600.0)),
+    ];
+    // Window 1 resizes; window 2 only moves.
+    let after = [
+        window(1, rect(0.0, 0.0, 300.0, 600.0)),
+        window(2, rect(300.0, 0.0, 400.0, 600.0)),
+    ];
+    let morph = PaneLayoutMorph::try_new(&before, &after, distinguishable_roles(), origin)
+        .expect("a morph");
+
+    // At 100ms the 100ms resize curve has arrived and the 1000ms movement curve
+    // would be a tenth of the way along.
+    let sample = morph.sample(frame_at(origin, 100));
+    assert!(
+        (sample.motion.geometry.progress - 1.0).abs() < 1e-3,
+        "the movement curve drove a morph containing a resize: progress {}",
+        sample.motion.geometry.progress
+    );
+
+    // A morph where nothing resizes takes the movement curve instead.
+    let moved_only = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(410.0, 0.0, 400.0, 600.0)),
+    ];
+    let morph = PaneLayoutMorph::try_new(&before, &moved_only, distinguishable_roles(), origin)
+        .expect("a morph");
+    let sample = morph.sample(frame_at(origin, 100));
+    assert!(
+        (sample.motion.geometry.progress - 0.1).abs() < 1e-2,
+        "a pure move should use the movement curve: progress {}",
+        sample.motion.geometry.progress
+    );
+}
+
+#[test]
+fn an_entering_pane_fades_on_its_own_curve_and_holds_the_morph_open() {
+    // Opacity may be per-role precisely because it cannot move a seam: an
+    // entering pane is placed at its destination unconditionally.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(400.0, 0.0, 400.0, 600.0)),
+    ];
+    let morph = PaneLayoutMorph::try_new(&before, &after, distinguishable_roles(), origin)
+        .expect("a morph");
+
+    // 100ms in: geometry (100ms resize) has arrived, the 200ms open curve is
+    // halfway. Reading the geometry curve here would report a fully opaque pane.
+    let sample = morph.sample(frame_at(origin, 100));
+    let entering = placed(&sample, 2);
+    assert!(
+        (entering.opacity - 0.5).abs() < 1e-2,
+        "an entering pane read the wrong curve: opacity {}",
+        entering.opacity
+    );
+
+    // And the morph is not over while that fade is still running, or it would
+    // be cut off partway.
+    assert!(
+        !sample.motion.finished(),
+        "the morph ended while the open fade was still running"
+    );
+    assert!(morph.sample(frame_at(origin, 200)).motion.finished());
+}
+
+#[test]
+fn deleting_a_window_leaves_the_old_picture_standing_where_the_survivor_has_not_reached() {
+    // `C-x 0`: the left window goes, the right one grows across its ground.
+    // Mid-motion the frame must be partitioned -- old picture on the left of
+    // the survivor's edge, destination on the right -- or there is no animation
+    // at all, just the settled layout for the whole duration.
+    let origin = origin();
+    let before = [
+        window(1, rect(0.0, 0.0, 656.0, 1200.0)),
+        window(2, rect(656.0, 0.0, 656.0, 1200.0)),
+    ];
+    let after = [window(2, rect(0.0, 0.0, 1312.0, 1200.0))];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+
+    let sample = morph.sample(frame_at(origin, 50));
+    // Halfway the survivor spans [328, 1312), so the deleted window still shows
+    // in [0, 328).
+    let leaving = departing(&sample, 1);
+    assert_eq!(leaving.source, neomacs_renderer_wgpu::PaneSource::Previous);
+    assert!(
+        (leaving.bounds.width - 328.0).abs() < 1.0,
+        "the deleted window was trimmed to {:?}",
+        leaving.bounds
+    );
+    assert_eq!(leaving.opacity, 1.0, "opaque, not faded");
+    assert_eq!(leaving.content_origin, (0.0, 0.0));
+
+    let survivor = placed(&sample, 2);
+    assert!(
+        (survivor.painted.x - 328.0).abs() < 1.0,
+        "the survivor should be revealed from {}, not {:?}",
+        328.0,
+        survivor.painted
     );
 }
 

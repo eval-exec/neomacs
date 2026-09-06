@@ -1,4 +1,6 @@
 use super::*;
+use crate::render_thread::render_quality::WindowAnimationSpecs;
+use neomacs_display_protocol::motion_spec::MotionSpec;
 use neomacs_display_protocol::motion_spec::{MotionDuration, TweenSpec};
 use neomacs_display_protocol::presentation_origin::BufferModiff;
 use neomacs_display_protocol::scroll_animation::TransitionEasing;
@@ -13,11 +15,22 @@ fn frame_at(origin: EventTime, millis: u64) -> FrameSample {
     FrameSample::new(origin.plus(Duration::from_millis(millis)), Duration::ZERO)
 }
 
-fn tween_100ms() -> MotionSpec {
-    MotionSpec::Tween(TweenSpec {
+/// Every role on one 100ms linear curve.
+///
+/// The tests below are about the morph's mechanics, not about the four slots
+/// having different shapes, so giving each role the same curve keeps their
+/// arithmetic readable: a sample's progress is the elapsed fraction.
+fn tween_100ms() -> WindowAnimationSpecs {
+    let tween = MotionSpec::Tween(TweenSpec {
         duration: MotionDuration::new(Duration::from_millis(100)).expect("a positive duration"),
         easing: TransitionEasing::Linear,
-    })
+    });
+    WindowAnimationSpecs {
+        resize: tween,
+        movement: tween,
+        open: tween,
+        close: tween,
+    }
 }
 
 fn window(id: i64, bounds: Rect) -> WindowInfo {
