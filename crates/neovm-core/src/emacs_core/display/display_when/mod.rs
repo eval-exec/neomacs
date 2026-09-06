@@ -96,34 +96,34 @@ impl Context {
         }
         let evaluated = self.with_display_buffer_current(buf_id, |ctx| {
             let mut results: FxHashMap<Value, bool> = FxHashMap::default();
-            ctx.with_unwind_scope(|ctx| {
-                // GNU redisplay_window temporarily installs w->pointm for a
-                // nonselected window (xdisp.c:20578-20600). Save it with a
-                // marker so edits and nonlocal exits restore a live position.
-                let window_point = window_id.and_then(|id| {
-                    if ctx
-                        .frames
-                        .selected_frame()
-                        .map(|frame| frame.selected_window)
-                        == Some(id)
-                    {
-                        return None;
-                    }
-                    let frame = ctx.frames.get(ctx.frames.find_window_frame_id(id)?)?;
-                    match frame.find_window(id)? {
-                        Window::Leaf {
-                            buffer_id, point, ..
-                        } if *buffer_id == buf_id => Some(*point),
-                        _ => None,
-                    }
-                });
-                if let Some(point) = window_point {
-                    ctx.record_save_excursion();
-                    if let Some(buffer) = ctx.buffers.get_mut(buf_id) {
-                        let target = buffer.char_pos_to_emacs_byte_pos_clamped(point.to_char_pos());
-                        buffer.goto_emacs_byte_pos(target);
-                    }
+            // GNU saves a numeric character position, not an edit-tracking
+            // marker (xdisp.c:21585-21611). Recompute its byte position after
+            // Lisp has run, including when Lisp exits through a nonlocal flow.
+            let window_point = window_id.and_then(|id| {
+                if ctx
+                    .frames
+                    .selected_frame()
+                    .map(|frame| frame.selected_window)
+                    == Some(id)
+                {
+                    return None;
                 }
+                let frame = ctx.frames.get(ctx.frames.find_window_frame_id(id)?)?;
+                match frame.find_window(id)? {
+                    Window::Leaf {
+                        buffer_id, point, ..
+                    } if *buffer_id == buf_id => Some(*point),
+                    _ => None,
+                }
+            });
+            let saved_point = window_point.and_then(|point| {
+                let buffer = ctx.buffers.get_mut(buf_id)?;
+                let saved = buffer.point_char_pos();
+                let target = buffer.char_pos_to_emacs_byte_pos_clamped(point.to_char_pos());
+                buffer.goto_emacs_byte_pos(target);
+                Some(saved)
+            });
+            let outcome = ctx.with_unwind_scope(|ctx| {
                 for (site, (eval_enabled, specs)) in sites.iter().zip(properties) {
                     for spec in specs {
                         let resolved = if let Some((form, inner)) = display_spec_when_parts(spec) {
@@ -171,7 +171,15 @@ impl Context {
                     }
                 }
                 Ok(Value::NIL)
-            })?;
+            });
+            if let Some(point) = saved_point {
+                ctx.restore_current_buffer_if_live(buf_id);
+                if let Some(buffer) = ctx.buffers.get_mut(buf_id) {
+                    let target = buffer.char_pos_to_emacs_byte_pos_clamped(point);
+                    buffer.goto_emacs_byte_pos(target);
+                }
+            }
+            outcome?;
             Ok(results)
         });
         self.restore_specpdl_roots(root_scope);

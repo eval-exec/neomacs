@@ -263,7 +263,7 @@ pub(crate) enum DisplayPropertyObject {
 /// String objects stop at their first replacing element, as GNU does. The
 /// buffer classifier currently keeps the last replacement and merges modifiers
 /// from every element. Declared difference: GNU continues buffer lists but
-/// guards ordinary replacements with `display_replaced == 0` (xdisp.c:6523).
+/// guards ordinary replacements with `display_replaced == 0` (xdisp.c:6517).
 pub(crate) fn classify_display_property(
     value: Value,
     conditions: &DisplayWhenConditions,
@@ -349,9 +349,9 @@ pub(crate) fn classify_single_display_spec(
         DisplaySpecKind::Space => {
             parse_display_space(value).map(DisplayReplacementProperty::Stretch)
         }
-        DisplaySpecKind::Image => Some(DisplayReplacementProperty::Media(
-            DisplayMediaReplacementProperty::Image,
-        )),
+        DisplaySpecKind::Image => neovm_core::emacs_core::image::is_image_spec(&value).then_some(
+            DisplayReplacementProperty::Media(DisplayMediaReplacementProperty::Image),
+        ),
         DisplaySpecKind::Media(DisplayMediaSpecKind::Video) => Some(
             DisplayReplacementProperty::Media(DisplayMediaReplacementProperty::Video),
         ),
