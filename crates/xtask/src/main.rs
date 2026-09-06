@@ -37,9 +37,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::Instant;
 
+use production_capabilities::ProductionCapabilities;
 #[cfg(test)]
 use production_capabilities::ProductionVideoBackend;
-use production_capabilities::{CargoCapability, ProductionCapabilities};
 
 type DynError = Box<dyn Error>;
 type Result<T> = std::result::Result<T, DynError>;
@@ -64,7 +64,6 @@ struct FreshBuildOptions {
     dry_run: bool,
     native_comp: bool,
     skip_build: bool,
-    product_variant: ProductVariant,
     no_byte_compile: bool,
     features: Vec<RequestedCargoFeature>,
     /// R2-B1: enable the in-neomacs dump-time AOT preload producer. xtask sets
@@ -76,17 +75,10 @@ struct FreshBuildOptions {
     aot_preload: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProductVariant {
-    Full,
-    Minimal,
-}
-
 /// One Cargo feature request as written at the command line.
 ///
-/// Cargo accepts both `feature` and `package/feature`. Keeping the leaf name
-/// parsed prevents a qualified request from bypassing the minimal-product
-/// capability policy while preserving the exact spelling passed to Cargo.
+/// Cargo accepts both `feature` and `package/feature`; the exact spelling is
+/// preserved and handed to Cargo unchanged.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RequestedCargoFeature(String);
 
@@ -94,10 +86,6 @@ impl RequestedCargoFeature {
     fn parse(raw: &str) -> Option<Self> {
         let raw = raw.trim();
         (!raw.is_empty()).then(|| Self(raw.to_owned()))
-    }
-
-    fn enables(&self, capability: CargoCapability) -> bool {
-        self.0.rsplit('/').next() == Some(capability.feature_name())
     }
 
     fn into_raw(self) -> String {
@@ -499,7 +487,6 @@ impl FreshBuildOptions {
         let mut native_comp =
             env::var("NEOMACS_NATIVE_COMP").is_ok_and(|value| value.eq_ignore_ascii_case("yes"));
         let mut skip_build = false;
-        let mut product_variant = ProductVariant::Full;
         let mut no_byte_compile = false;
         let mut features: Vec<RequestedCargoFeature> = Vec::new();
         let mut aot_preload = false;
@@ -548,7 +535,6 @@ impl FreshBuildOptions {
                 "--native-comp" => native_comp = true,
                 "--no-native-comp" => native_comp = false,
                 "--skip-build" => skip_build = true,
-                "--minimal" => product_variant = ProductVariant::Minimal,
                 "--no-byte-compile" => no_byte_compile = true,
                 "--aot-preload" => aot_preload = true,
                 "--features" => {
@@ -568,21 +554,6 @@ impl FreshBuildOptions {
                 other => {
                     return Err(format!("unknown option: {other}\n\n{}", usage_text()).into());
                 }
-            }
-        }
-
-        if product_variant == ProductVariant::Minimal {
-            if let Some(capability) = production_capabilities
-                .cargo_features()
-                .iter()
-                .copied()
-                .find(|capability| features.iter().any(|feature| feature.enables(*capability)))
-            {
-                return Err(format!(
-                    "the minimal product cannot re-enable production capability `{}`",
-                    capability.feature_name()
-                )
-                .into());
             }
         }
 
@@ -627,7 +598,6 @@ impl FreshBuildOptions {
             dry_run,
             native_comp,
             skip_build,
-            product_variant,
             no_byte_compile,
             features,
             aot_preload,
@@ -1343,14 +1313,11 @@ fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
         OsString::from("-p"),
         OsString::from("neomacs"),
     ];
-    let mut features = match options.product_variant {
-        ProductVariant::Full => options
-            .production_capabilities
-            .cargo_feature_names()
-            .map(str::to_owned)
-            .collect::<Vec<_>>(),
-        ProductVariant::Minimal => Vec::new(),
-    };
+    let mut features = options
+        .production_capabilities
+        .cargo_feature_names()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     features.extend(
         options
             .features
@@ -1372,31 +1339,23 @@ fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
     cargo_args
 }
 
+/// The Linux product declares `video`, so its executable must link GStreamer.
+/// Nothing else is shipped, so this is the whole contract.
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LinuxVideoLinkage {
-    LinkedGstreamer,
-    NoGstreamer,
-}
-
-#[cfg(target_os = "linux")]
-fn verify_built_product(options: &FreshBuildOptions, binary: &Path) -> Result<()> {
-    let expected = match options.product_variant {
-        ProductVariant::Full => LinuxVideoLinkage::LinkedGstreamer,
-        ProductVariant::Minimal => LinuxVideoLinkage::NoGstreamer,
-    };
+fn verify_built_product(_options: &FreshBuildOptions, binary: &Path) -> Result<()> {
+    let expected = "LinkedGstreamer";
     let output = Command::new("readelf")
         .args([OsStr::new("--dynamic"), binary.as_os_str()])
         .output()
         .map_err(|error| {
             format!(
-                "failed to inspect {} for the {expected:?} product contract: {error}",
+                "failed to inspect {} for the {expected} product contract: {error}",
                 binary.display()
             )
         })?;
     if !output.status.success() {
         return Err(format!(
-            "readelf could not inspect {} for the {expected:?} product contract: {}",
+            "readelf could not inspect {} for the {expected} product contract: {}",
             binary.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         )
@@ -1406,20 +1365,15 @@ fn verify_built_product(options: &FreshBuildOptions, binary: &Path) -> Result<()
     let has_gstreamer = dynamic
         .lines()
         .any(|line| line.contains("Shared library: [libgst"));
-    let valid = matches!(
-        (expected, has_gstreamer),
-        (LinuxVideoLinkage::LinkedGstreamer, true) | (LinuxVideoLinkage::NoGstreamer, false)
-    );
-    if !valid {
+    if !has_gstreamer {
         return Err(format!(
-            "{} does not satisfy the {expected:?} product contract (GStreamer linkage present: {has_gstreamer})",
+            "{} does not satisfy the {expected} product contract (GStreamer linkage present: {has_gstreamer})",
             binary.display()
         )
         .into());
     }
     println!(
-        "+ verified {:?} product linkage in {}",
-        expected,
+        "+ verified {expected} product linkage in {}",
         binary.display()
     );
     Ok(())
@@ -4567,7 +4521,7 @@ fn print_usage() {
 
 fn usage_text() -> &'static str {
     "\
-Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--minimal] [--no-byte-compile] [--aot-preload]
+Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload]
        cargo xtask check-dependency-coherence
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
@@ -4640,8 +4594,6 @@ Options:
   --native-comp       Include native-comp-only COMPILE_FIRST entries
   --no-native-comp    Exclude native-comp-only COMPILE_FIRST entries
   --skip-build        Skip the initial cargo build -p neomacs stage
-  --minimal           Omit production capabilities such as Linux video. This
-                      variant builds and starts without GStreamer installed.
   --no-byte-compile   Skip byte-compilation steps (5, 9, 11); keep existing .elc
   --aot-preload       Enable the in-neomacs dump-time AOT producer: sets
                       NEOVM_AOT_PRELOAD=1 on the --temacs=pdump step (10) so it

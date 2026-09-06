@@ -10,8 +10,8 @@ publish = false
 # Re-enable neomacs-perf native-video acceptance inside cargo xtask perf on a
 # host with GStreamer development files:
 #   cargo xtask --features perf-native-video perf run sustained-native-video ...
-# Off by default so plain cargo xtask fresh-build --minimal (and every other
-# xtask-driven build) works on hosts without GStreamer.
+# Off by default so xtask's own build does not require GStreamer development
+# files on a host that only runs, say, `cargo xtask perf list`.
 perf-native-video = ["neomacs-perf/native-video"]
 
 [dependencies]

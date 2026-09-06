@@ -142,18 +142,8 @@ jobs:
           }
 
           full_path="$(build_release_package neomacs)"
-          minimal_path=""
-          has_minimal="$(
-            nix eval --accept-flake-config --json \
-              ".#packages.${NIX_SYSTEM}" \
-              --apply 'packages: builtins.hasAttr "neomacs-minimal" packages'
-          )"
-          if [[ "$has_minimal" == true ]]; then
-            minimal_path="$(build_release_package neomacs-minimal)"
-          fi
 
           echo "full-path=$full_path" >> "$GITHUB_OUTPUT"
-          echo "minimal-path=$minimal_path" >> "$GITHUB_OUTPUT"
 
       # The Nix evaluator and all build processes above run without this
       # credential. Only these explicitly selected store roots can be pushed.
@@ -162,19 +152,10 @@ jobs:
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
           FULL_PATH: ${{ steps.nix-release.outputs.full-path }}
-          MINIMAL_PATH: ${{ steps.nix-release.outputs.minimal-path }}
         run: |
           set -euo pipefail
-          release_paths=("$FULL_PATH")
-          if [[ -n "$MINIMAL_PATH" ]]; then
-            release_paths+=("$MINIMAL_PATH")
-          fi
-          printf '%s\n' "${release_paths[@]}" | cachix push eval-exec
+          printf '%s\n' "$FULL_PATH" | cachix push eval-exec
 
           pin_system="${NIX_SYSTEM//_/-}"
           cachix pin eval-exec \
             "neomacs-${RELEASE_TAG}-${pin_system}" "$FULL_PATH"
-          if [[ -n "$MINIMAL_PATH" ]]; then
-            cachix pin eval-exec \
-              "neomacs-minimal-${RELEASE_TAG}-${pin_system}" "$MINIMAL_PATH"
-          fi

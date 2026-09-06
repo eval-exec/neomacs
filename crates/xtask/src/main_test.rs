@@ -1,4 +1,5 @@
 use super::*;
+use crate::production_capabilities::CargoCapability;
 use flate2::{Compression, write::GzEncoder};
 use serde::Deserialize;
 
@@ -63,7 +64,6 @@ fn nix_ci_automates_evaluation_and_runs_the_public_package_contracts() {
     assert!(workflow.contains("nix flake check --all-systems --no-build"));
     assert!(workflow.contains("allow-import-from-derivation false"));
     assert!(workflow.contains(".#checks.x86_64-linux.installed-package-contract"));
-    assert!(workflow.contains(".#checks.x86_64-linux.minimal-installed-package-contract"));
     assert!(workflow.contains(".#checks.x86_64-linux.home-manager-contract"));
     assert!(
         !workflow.contains("./result/bin/neomacs --batch --quick"),
@@ -188,13 +188,12 @@ fn linux_release_links_gstreamer_without_a_private_adapter() {
     assert!(!rpm.contains("^libgst.*[.]so[.].*$"));
     assert!(deb.contains("dpkg-shlibdeps -O \"${shlib_args[@]}\""));
     assert!(audit.contains("full executable does not link GStreamer"));
-    assert!(ci.contains("minimal executable unexpectedly links GStreamer"));
     assert!(video_manifest.contains("features = [\"v1_20\"]"));
     assert!(!video_manifest.contains("features = [\"v1_24\"]"));
 }
 
 #[test]
-fn linux_release_publishes_verified_full_and_minimal_products() {
+fn linux_release_publishes_one_verified_linux_product() {
     let release = include_str!(concat!(
         env!("CARGO_WORKSPACE_DIR"),
         "/scripts/package-release.sh"
@@ -212,13 +211,17 @@ fn linux_release_publishes_verified_full_and_minimal_products() {
         "/.github/workflows/release.yml"
     ));
 
-    assert!(release.contains("--minimal"));
-    assert!(release.contains("minimal executable unexpectedly links GStreamer"));
+    // One product ships, so every Linux artifact must carry the capability
+    // the platform declares. `--minimal` is gone: nothing may reintroduce a
+    // second, quietly different product.
     assert!(release.contains("full executable does not link GStreamer"));
-    assert!(appimage.contains("neomacs-minimal"));
-    assert!(audit.contains("minimal-tar"));
-    assert!(workflow.contains("fresh-build --release --minimal"));
-    assert!(workflow.contains("package-release.sh --minimal"));
+    assert!(appimage.contains("neomacs-${version}-${target_triple}"));
+    for source in [release, appimage, audit, workflow] {
+        assert!(
+            !source.contains("--minimal") && !source.contains("neomacs-minimal"),
+            "the minimal product is retired"
+        );
+    }
 }
 
 #[test]
@@ -451,15 +454,13 @@ fn release_workflow_publishes_only_tagged_nix_release_closures() {
     assert!(build_script.contains(".#packages.${NIX_SYSTEM}.${package}"));
     assert!(build_script.contains("--no-link --print-out-paths"));
     assert!(build_script.contains("build_release_package neomacs"));
-    assert!(build_script.contains("builtins.hasAttr \"neomacs-minimal\""));
-    assert!(build_script.contains("build_release_package neomacs-minimal"));
 
     let publish = &job.steps[publish_position];
     let publish_env = publish
         .env
         .as_ref()
         .expect("publish step must receive its bounded environment");
-    assert_eq!(publish_env.len(), 3);
+    assert_eq!(publish_env.len(), 2);
     assert_eq!(
         publish_env.get("CACHIX_AUTH_TOKEN").map(String::as_str),
         Some("${{ secrets.CACHIX_AUTH_TOKEN }}")
@@ -468,16 +469,12 @@ fn release_workflow_publishes_only_tagged_nix_release_closures() {
         publish_env.get("FULL_PATH").map(String::as_str),
         Some("${{ steps.nix-release.outputs.full-path }}")
     );
-    assert_eq!(
-        publish_env.get("MINIMAL_PATH").map(String::as_str),
-        Some("${{ steps.nix-release.outputs.minimal-path }}")
-    );
     let publish_script = publish
         .run
         .as_deref()
         .expect("release closure publish step needs a script");
     assert!(publish_script.contains("cachix push eval-exec"));
-    assert_eq!(publish_script.matches("cachix pin eval-exec").count(), 2);
+    assert_eq!(publish_script.matches("cachix pin eval-exec").count(), 1);
 
     let token_steps: Vec<_> = job
         .steps
@@ -686,18 +683,6 @@ fn linux_ci_setup_profiles_expose_capabilities_and_reject_unknown_profiles() {
             .any(|package| package == "libgstreamer1.0-dev")
     );
     assert!(!build.lines().any(|package| package == "emacs-nox"));
-
-    let no_gstreamer = packages("build-no-gstreamer");
-    assert!(
-        no_gstreamer
-            .lines()
-            .any(|package| package == "liblcms2-dev")
-    );
-    assert!(
-        !no_gstreamer
-            .lines()
-            .any(|package| package.contains("gstreamer"))
-    );
 
     let oracle = packages("oracle");
     for package in ["liblcms2-dev", "emacs-nox", "libfaketime"] {
@@ -1599,52 +1584,20 @@ fn parse_aot_preload_defaults_off_and_flag_enables() {
     assert!(!options.skip_build);
 }
 
+/// The minimal product is retired: one product ships, and it always carries
+/// the capabilities its platform declares. An unknown `--minimal` must be
+/// rejected rather than silently ignored, so a stale caller fails loudly
+/// instead of shipping a product nobody verified.
 #[test]
-fn product_variant_defaults_to_full_and_can_be_minimal() {
-    assert_eq!(
-        parse_options(&["--release"]).product_variant,
-        ProductVariant::Full
-    );
-    assert_eq!(
-        parse_options(&["--release", "--minimal"]).product_variant,
-        ProductVariant::Minimal
-    );
-}
-
-#[test]
-fn minimal_variant_rejects_qualified_or_unqualified_production_capabilities() {
-    for feature in [
-        "video",
-        "neomacs/video",
-        "neomacs-display-runtime/video",
-        "neomacs-renderer-wgpu/video",
-    ] {
-        let error = FreshBuildOptions::parse(
-            PathBuf::from("/repo"),
-            ["--release", "--minimal", "--features", feature]
-                .into_iter()
-                .map(OsString::from),
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("minimal"));
-        assert!(error.contains("video"));
-    }
-}
-
-#[test]
-fn minimal_variant_can_bootstrap_a_skipped_build_only_under_minimal_identity() {
-    let options = FreshBuildOptions::parse(
+fn the_minimal_product_flag_is_retired() {
+    let error = FreshBuildOptions::parse(
         PathBuf::from("/repo"),
-        ["--release", "--minimal", "--skip-build"]
-            .into_iter()
-            .map(OsString::from),
+        ["--release", "--minimal"].into_iter().map(OsString::from),
     )
-    .unwrap();
+    .unwrap_err()
+    .to_string();
 
-    assert_eq!(options.product_variant, ProductVariant::Minimal);
-    assert!(options.skip_build);
+    assert!(error.contains("unknown option: --minimal"), "{error}");
 }
 
 #[test]
@@ -1708,24 +1661,6 @@ fn initial_cargo_build_enables_video_by_default_on_linux() {
             OsString::from("neomacs"),
             OsString::from("--features"),
             OsString::from("video"),
-            OsString::from("--profile"),
-            OsString::from("release"),
-        ]
-    );
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn minimal_build_omits_production_video_at_compile_time() {
-    let options = parse_options(&["--release", "--minimal"]);
-
-    assert_eq!(
-        initial_cargo_build_args(&options),
-        vec![
-            OsString::from("build"),
-            OsString::from("--verbose"),
-            OsString::from("-p"),
-            OsString::from("neomacs"),
             OsString::from("--profile"),
             OsString::from("release"),
         ]
@@ -3123,7 +3058,6 @@ fn generated_unidata_source_files_match_gnu_gen_clean_shape() {
         dry_run: false,
         native_comp: false,
         skip_build: false,
-        product_variant: ProductVariant::Full,
         no_byte_compile: false,
         features: Vec::new(),
         aot_preload: false,
@@ -3794,7 +3728,6 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
         dry_run: false,
         native_comp: false,
         skip_build: false,
-        product_variant: ProductVariant::Full,
         no_byte_compile: true,
         features: Vec::new(),
         aot_preload: false,
@@ -3856,7 +3789,6 @@ fn a_recompiling_run_clears_primary_but_keeps_secondary_loaddefs_bytecode() {
         dry_run: false,
         native_comp: false,
         skip_build: false,
-        product_variant: ProductVariant::Full,
         no_byte_compile: false,
         features: Vec::new(),
         aot_preload: false,
@@ -3920,7 +3852,6 @@ fn full_loaddefs_regeneration_keeps_secondary_bootstrap_seeds_loadable() {
         dry_run: false,
         native_comp: false,
         skip_build: false,
-        product_variant: ProductVariant::Full,
         no_byte_compile: false,
         features: Vec::new(),
         aot_preload: false,

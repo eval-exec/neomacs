@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-release.sh [--target TRIPLE] [--minimal] [--skip-build] [--no-smoke]
+Usage: scripts/package-release.sh [--target TRIPLE] [--skip-build] [--no-smoke]
 
 Build and package a Neomacs binary release archive.
 
@@ -14,11 +14,10 @@ Options:
                   aarch64-pc-windows-msvc on Windows.
   --skip-build    Package existing target/release artifacts without running
                   cargo xtask fresh-build --release.
-  --minimal       Build/package the GStreamer-free minimal product.
   --no-smoke      Do not smoke-test the extracted archive.
 
 Output:
-  dist/neomacs[-minimal]-{version}-{target}.tar.gz
+  dist/neomacs-{version}-{target}.tar.gz
 
 Layout (GNU's, with the archive root as the install prefix):
   bin/{neomacs,neomacsclient}
@@ -65,7 +64,6 @@ install_binary_if_present() {
 
 target_triple="$(detect_target)"
 skip_build=0
-minimal=0
 smoke=1
 
 while (($#)); do
@@ -76,10 +74,6 @@ while (($#)); do
       ;;
     --skip-build)
       skip_build=1
-      shift
-      ;;
-    --minimal)
-      minimal=1
       shift
       ;;
     --no-smoke)
@@ -105,21 +99,13 @@ cd "$repo_root"
 source "$repo_root/scripts/lib/archlib.sh"
 
 if ((skip_build == 0)); then
-  build_args=(fresh-build --release)
-  if ((minimal)); then
-    build_args+=(--minimal)
-  fi
-  cargo xtask "${build_args[@]}"
+  cargo xtask fresh-build --release
 fi
 
 release_dir="$repo_root/target/release"
 dist_dir="$repo_root/dist"
 version="$(get_version)"
-product_name="neomacs"
-if ((minimal)); then
-  product_name="neomacs-minimal"
-fi
-package_name="${product_name}-${version}-${target_triple}"
+package_name="neomacs-${version}-${target_triple}"
 package_dir="$dist_dir/$package_name"
 archive="$dist_dir/$package_name.tar.gz"
 binary_ext="$(binary_ext_for_target "$target_triple")"
@@ -140,17 +126,11 @@ for required in "${required_artifacts[@]}"; do
   fi
 done
 
-# A skipped build is safe only when the artifact itself proves the requested
-# product boundary. Direct linkage makes this an authoritative ELF property:
-# full Linux binaries must link GStreamer and minimal binaries must not.
+# A skipped build is safe only when the artifact itself proves the product
+# boundary. Direct linkage makes this an authoritative ELF property: the Linux
+# product declares `video`, so its binary must link GStreamer.
 if [[ "$target_triple" == *-linux-* ]]; then
-  if ((minimal)); then
-    if readelf --dynamic "$release_dir/neomacs$binary_ext" 2>/dev/null \
-      | grep -Eq 'Shared library: \[libgst[^]]*[.]so'; then
-      echo "minimal executable unexpectedly links GStreamer" >&2
-      exit 1
-    fi
-  elif ! readelf --dynamic "$release_dir/neomacs$binary_ext" 2>/dev/null \
+  if ! readelf --dynamic "$release_dir/neomacs$binary_ext" 2>/dev/null \
     | grep -Eq 'Shared library: \[libgstreamer-1[.]0[.]so'; then
     echo "full executable does not link GStreamer" >&2
     exit 1

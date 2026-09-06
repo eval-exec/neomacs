@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly usage="usage: $0 [--list] {build|build-no-gstreamer|oracle|ecosystem|release}"
+readonly usage="usage: $0 [--list] {build|oracle|ecosystem|release}"
 
 list_only=false
 if [[ ${1:-} == "--list" ]]; then
@@ -57,12 +57,8 @@ readonly -a video_backend_packages=(
 declare -a profile_packages=()
 declare -a required_commands=()
 requires_libfaketime=false
-requires_gstreamer=true
 case "$profile" in
     build)
-        ;;
-    build-no-gstreamer)
-        requires_gstreamer=false
         ;;
     # GNU Emacs is NOT an apt package here: every GNU-vs-Neomacs comparison
     # runs against the pinned build installed by
@@ -98,10 +94,13 @@ case "$profile" in
         ;;
 esac
 
-declare -a packages=("${build_packages[@]}" "${profile_packages[@]}")
-if $requires_gstreamer; then
-    packages+=("${video_backend_packages[@]}")
-fi
+# Every product this repo ships declares `video`, so the GStreamer development
+# files are part of every profile's build environment.
+declare -a packages=(
+    "${build_packages[@]}"
+    "${video_backend_packages[@]}"
+    "${profile_packages[@]}"
+)
 if $list_only; then
     printf '%s\n' "${packages[@]}"
     exit 0
@@ -118,9 +117,7 @@ sudo apt-get install -y --no-install-recommends "${packages[@]}"
 # Fail at the environment seam instead of silently compiling out optional
 # primitives and discovering the mismatch much later in an oracle test.
 pkg-config --modversion lcms2
-if $requires_gstreamer; then
-    pkg-config --modversion gstreamer-1.0
-fi
+pkg-config --modversion gstreamer-1.0
 
 if $requires_libfaketime; then
     dpkg -L libfaketime | grep -q '/libfaketime\.so\.1$'

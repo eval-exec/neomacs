@@ -1,10 +1,9 @@
 { inputs, lib, ... }:
 let
   mkNeomacs =
-    final: inputs: minimal:
+    final: inputs:
     import ../package.nix {
       inherit (inputs) crane;
-      inherit minimal;
       pkgs = final;
       rustToolchain = final.rust-neomacs;
       source = ../..;
@@ -22,8 +21,7 @@ let
         ];
       };
 
-      neomacs = mkNeomacs final inputs false;
-      neomacs-minimal = mkNeomacs final inputs true;
+      neomacs = mkNeomacs final inputs;
     }
     // lib.optionalAttrs prev.stdenv.isLinux {
       # Keep nix-wpe-webkit's pinned nixpkgs so this resolves to its cache,

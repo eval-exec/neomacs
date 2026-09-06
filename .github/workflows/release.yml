@@ -39,8 +39,7 @@ jobs:
       # The full product's cargo features, shared by the compile step and the
       # bootstrap below so both describe one build. `video` is what this
       # platform declares in [workspace.metadata.neomacs-production-capabilities];
-      # a test pins this list to that table. The minimal product deliberately
-      # drops the capability, so its steps do not use this.
+      # a test pins this list to that table.
       RELEASE_FEATURES: video,neomacs-layout-engine/freetype-bundled
     steps:
       - name: Checkout
@@ -119,21 +118,10 @@ jobs:
             --target "${{ matrix.target }}" \
             --skip-build --no-smoke
 
-      - name: Build minimal product
-        run: >-
-          cargo xtask fresh-build --release --minimal
-          --features neomacs-layout-engine/freetype-bundled
-
-      - name: Package minimal tarball
-        run: >-
-          ./scripts/package-release.sh --minimal
-          --target "${{ matrix.target }}"
-          --skip-build --no-smoke
-
-      # A portable AppImage cannot rely on host codec plugin families. Publish
-      # the explicit minimal product here; full video builds are the tar/deb/rpm
-      # artifacts whose GStreamer closure is declared or audited separately.
-      - name: Package minimal AppImage
+      # The AppImage carries the same product as the tarball, so linuxdeploy
+      # bundles its GStreamer closure into the image; codec plugin families
+      # still come from the host, as they do for the tar/deb/rpm artifacts.
+      - name: Package AppImage
         run: |
           ./scripts/package-appimage.sh \
             --target "${{ matrix.target }}" \

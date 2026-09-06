@@ -468,13 +468,12 @@ caps with explicit DRM modifiers. The newer caps are parsed into Neomacs-owned
 Rust types, so supporting them does not introduce references to GStreamer
 1.24-only symbols or raise the executable's loader requirement.
 
-Runtime optionality is represented by a separate compile-time product. The
-default full build includes video and declares GStreamer in its loader/package
-closure. `cargo xtask fresh-build --release --minimal` and the Nix
-`neomacs-minimal` output omit the `video` feature, so the resulting executable
-starts without GStreamer installed. GitHub releases publish both Linux
-tarballs; the AppImage is deliberately the minimal product because a portable
-image must not silently depend on codec plugins from the host.
+One product ships. It includes video and declares GStreamer in its
+loader/package closure, and `verify_built_product` fails the build if the Linux
+executable does not link it. The `.deb` and `.rpm` declare the dependency and
+the AppImage bundles the closure, so every Linux artifact carries the same
+capability; codec plugin families still come from the host. The separate
+GStreamer-free `--minimal` product that once backed the AppImage is retired.
 
 DMA-BUF import keeps decoded pixels on the GPU where the decoder and compositor
 topology is compatible. The typed transfer policy distinguishes direct external

@@ -121,7 +121,7 @@ Prefer system packages? Download them from
 
 | Platform | Packages |
 |----------|----------|
-| **Linux** | full `.deb` · `.rpm` · tarball; minimal AppImage · tarball (x86_64, aarch64) |
+| **Linux** | `.deb` · `.rpm` · tarball · AppImage (x86_64, aarch64) |
 | **macOS** *(experimental)* | `.dmg` · `.zip` · `.tar.gz` (Apple Silicon) |
 | **Windows** *(experimental)* | installer `.exe` · portable `.zip` (x86_64, aarch64) |
 
@@ -131,9 +131,10 @@ is also published for amd64 and arm64 on
 [`ghcr.io/eval-exec/neomacs`](https://github.com/eval-exec/neomacs/pkgs/container/neomacs).
 See the [Docker guide](docs/docker.md).
 
-The full Linux product links the system GStreamer runtime and provides video.
-The `neomacs-minimal-*` artifacts omit video and all GStreamer loader
-dependencies; the portable AppImage intentionally uses this minimal product.
+The Linux product links the system GStreamer runtime and provides video. Every
+Linux artifact carries it: the `.deb` and `.rpm` declare the dependency, and the
+AppImage bundles that closure, though codec plugin families still come from the
+host.
 
 <details>
 <summary><b>Build from source</b></summary>

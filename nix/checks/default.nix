@@ -3,14 +3,12 @@
   pkgs,
   homeManagerLib,
   package,
-  minimalPackage,
   app,
   devShell,
 }:
 let
   system = pkgs.stdenv.hostPlatform.system;
   productionCapabilities = package.productionCapabilities;
-  minimalCapabilities = minimalPackage.productionCapabilities;
   startupContract = import ./startup-contract.nix;
   outputContract =
     assert lib.assertMsg (pkgs ? neomacs) "overlays.default must expose pkgs.neomacs";
@@ -23,9 +21,6 @@ let
     assert lib.assertMsg (
       package.type or null == "derivation"
     ) "packages.${system}.default must be a derivation";
-    assert lib.assertMsg (
-      minimalPackage.type or null == "derivation"
-    ) "packages.${system}.neomacs-minimal must be a derivation";
     assert lib.assertMsg (app.type or null == "app") "apps.${system}.default must be an app";
     assert lib.assertMsg (
       devShell.type or null == "derivation"
@@ -36,9 +31,6 @@ let
     assert lib.assertMsg (
       productionCapabilities ? videoBackend
     ) "packages.${system}.default must publish its video backend policy";
-    assert lib.assertMsg (
-      minimalCapabilities.cargoFeatures == [ ] && minimalCapabilities.videoBackend == "none"
-    ) "packages.${system}.neomacs-minimal must omit optional production capabilities";
     pkgs.runCommand "neomacs-${system}-flake-output-contract" { } ''
       touch "$out"
     '';
@@ -46,11 +38,8 @@ let
   canRunPackage = pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
 
   packageContract =
-    {
-      checkedPackage,
-      product,
-    }:
-    pkgs.runCommand "neomacs-${system}-${product}-installed-package-contract"
+    { checkedPackage }:
+    pkgs.runCommand "neomacs-${system}-installed-package-contract"
       {
         nativeBuildInputs = [
           pkgs.binutils
@@ -78,21 +67,8 @@ let
         test -f ${checkedPackage}/bin/neomacs.pdump
         test ! -e ${checkedPackage}/bin/libneomacs_video_gstreamer.so
 
-        ${
-          if product == "full" then
-            ''
-              readelf --dynamic ${checkedPackage}/bin/neomacs \
-                | grep -Eq 'Shared library: \[libgstreamer-1[.]0[.]so'
-            ''
-          else
-            ''
-              if readelf --dynamic ${checkedPackage}/bin/neomacs \
-                | grep -Eq 'Shared library: \[libgst[^]]*[.]so'; then
-                echo "minimal Nix product unexpectedly links GStreamer" >&2
-                exit 1
-              fi
-            ''
-        }
+        readelf --dynamic ${checkedPackage}/bin/neomacs \
+          | grep -Eq 'Shared library: \[libgstreamer-1[.]0[.]so'
 
         fingerprint="$(${checkedPackage}/bin/neomacs --fingerprint | tr -d '[:space:]')"
         if ! [[ "$fingerprint" =~ ^[[:xdigit:]]{64}$ ]]; then
@@ -101,7 +77,7 @@ let
         fi
         test -f "${checkedPackage}/bin/neomacs-$fingerprint.pdump"
 
-        ${lib.optionalString (pkgs.stdenv.isLinux && product == "full") ''
+        ${lib.optionalString pkgs.stdenv.isLinux ''
           export GST_REGISTRY="$PWD/gstreamer-registry.bin"
           export GST_PLUGIN_SYSTEM_PATH_1_0="${checkedPackage.gstreamerRuntime.pluginSystemPath}"
           export GST_PLUGIN_SCANNER_1_0="${checkedPackage.gstreamerRuntime.pluginScanner}"
@@ -112,7 +88,7 @@ let
 
         ${startupContract {
           executable = "${checkedPackage}/bin/neomacs";
-          marker = "nix ${product} installed-package contract ok";
+          marker = "nix installed-package contract ok";
         }}
 
         touch "$out"
@@ -122,14 +98,7 @@ in
   flake-output-contract = outputContract;
 }
 // lib.optionalAttrs canRunPackage {
-  installed-package-contract = packageContract {
-    checkedPackage = package;
-    product = "full";
-  };
-  minimal-installed-package-contract = packageContract {
-    checkedPackage = minimalPackage;
-    product = "minimal";
-  };
+  installed-package-contract = packageContract { checkedPackage = package; };
   home-manager-contract = import ./home-manager.nix {
     inherit homeManagerLib pkgs package;
   };

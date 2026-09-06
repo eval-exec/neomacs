@@ -322,62 +322,6 @@ jobs:
             -l test/lisp/filenotify-tests.el \
             -f ert-run-tests-batch-and-exit
 
-  linux-no-gstreamer-startup:
-    name: startup without GStreamer (linux x86_64)
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 150
-    env:
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: 1
-      TMPDIR: ${{ github.workspace }}/tmp
-    steps:
-      - *checkout
-      - name: Prepare workspace temp directory
-        run: mkdir -p "$TMPDIR"
-
-      - name: Install dependencies without GStreamer
-        run: scripts/ci/setup-linux.sh build-no-gstreamer
-
-      - name: Prove GStreamer development files are absent
-        run: '! pkg-config --exists gstreamer-1.0'
-
-      - name: Set up Rust tooling
-        uses: ./.github/actions/setup-rust
-        with:
-          cache: "false"
-          cache-key: ci-no-gstreamer-linux-x86_64
-
-      - name: Build the minimal product without video
-        run: cargo xtask fresh-build --release --minimal
-
-      - name: Audit startup closure
-        run: |
-          if readelf --dynamic target/release/neomacs | grep -Eq 'Shared library: \[libgst'; then
-            echo "minimal executable unexpectedly links GStreamer" >&2
-            exit 1
-          fi
-
-      - name: Smoke the pdump relocating fallback (NEOVM_PDUMP_NO_FIXED_MAP)
-        run: |
-          # The planned-base hit path skips relocation validation wholesale;
-          # this keeps the delta-apply fallback (and its bounds checks) green
-          # forever. A green lane on purpose — the standing-red display jobs
-          # would hide a fallback regression.
-          NEOVM_PDUMP_NO_FIXED_MAP=1 target/release/neomacs --batch -Q --eval '(kill-emacs 0)'
-
-      - name: Smoke batch and real TUI in a GStreamer-free container
-        run: |
-          docker run --rm --volume "$PWD:/workspace:ro" ubuntu:24.04 \
-            bash -euxo pipefail -c "
-              apt-get update
-              DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-                libncursesw6 libstdc++6 libfontconfig1 libfreetype6 zlib1g util-linux
-              ! ldconfig -p | grep -Eq 'libgst(video|base|app|allocators|reamer)'
-              /workspace/target/release/neomacs --batch --eval '(kill-emacs 0)'
-              TERM=xterm timeout 30s script -qec \"/workspace/target/release/neomacs -Q -nw --eval '(kill-emacs 0)'\" /dev/null
-            "
-
   neomacs-workspace-test-archive:
     name: workspace test archive (linux x86_64)
     runs-on: ubuntu-24.04
@@ -492,6 +436,14 @@ jobs:
 
       - name: Build fresh release runtime
         run: cargo xtask fresh-build --release
+
+      - name: Smoke the pdump relocating fallback (NEOVM_PDUMP_NO_FIXED_MAP)
+        run: |
+          # The planned-base hit path skips relocation validation wholesale;
+          # this keeps the delta-apply fallback (and its bounds checks) green
+          # forever. A green lane on purpose — the standing-red display jobs
+          # would hide a fallback regression.
+          NEOVM_PDUMP_NO_FIXED_MAP=1 target/release/neomacs --batch -Q --eval '(kill-emacs 0)'
 
       - name: Run upstream GNU SQLite ERT suite
         run: >-

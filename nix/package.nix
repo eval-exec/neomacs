@@ -5,24 +5,14 @@
   source,
   version,
   wpeWebkit,
-  minimal ? false,
 }:
 let
   inherit (pkgs) lib;
   craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
   cargoSrc = craneLib.cleanCargoSource source;
-  fullCapabilities = import ./production-capabilities.nix {
+  productionCapabilities = import ./production-capabilities.nix {
     inherit lib pkgs source;
   };
-  productionCapabilities =
-    if minimal then
-      fullCapabilities
-      // {
-        cargoFeatures = [ ];
-        videoBackend = "none";
-      }
-    else
-      fullCapabilities;
   dependencies = import ./dependencies.nix {
     inherit lib pkgs wpeWebkit;
   };
@@ -43,7 +33,7 @@ let
     pluginInputs = dependencies.videoPluginInputs;
   };
   commonArgs = {
-    pname = if minimal then "neomacs-minimal" else "neomacs";
+    pname = "neomacs";
     inherit version;
     src = cargoSrc;
     strictDeps = true;
@@ -118,7 +108,7 @@ craneLib.buildPackage (
     inherit cargoArtifacts;
 
     postBuild = ''
-      cargo xtask fresh-build --release ${lib.optionalString minimal "--minimal "}--skip-build
+      cargo xtask fresh-build --release --skip-build
     '';
 
     postInstall = ''

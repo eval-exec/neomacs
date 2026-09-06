@@ -69,8 +69,8 @@ Linux layout (previous version kept for rollback):
   ~/.local/share/neomacs/versions/0.0.16/libexec/neomacs/<ver>/<triple>/
   ~/.local/share/neomacs/versions/0.0.16/share/neomacs/{lisp,etc,...}
 
-Linux also ships full .deb/.rpm packages and a GStreamer-free minimal
-AppImage/tarball; macOS ships a .dmg. See all release assets at:
+Linux also ships .deb/.rpm packages and an AppImage; macOS ships a .dmg.
+See all release assets at:
 https://github.com/eval-exec/neomacs/releases/latest
 USAGE
 }
