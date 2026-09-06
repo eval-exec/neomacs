@@ -2183,9 +2183,16 @@ fn x_popup_menu_interactive_loop(
                         return Ok(Value::NIL);
                     };
                     *selected = index;
-                    show_popup_menu_selection(
-                        ctx, frame_id, placement, title, entries, *selected, &mut help,
-                    )?;
+                    // The host has already dismissed its popup with this
+                    // selection; only the selected item's help is still owed
+                    // (GNU shows a popup once). Re-showing it here made every
+                    // native dialog appear twice.
+                    help.select(
+                        entries
+                            .get(*selected)
+                            .and_then(|entry| entry.help.as_deref()),
+                    )
+                    .publish(ctx, *selected)?;
                     return Ok(event);
                 }
             }
