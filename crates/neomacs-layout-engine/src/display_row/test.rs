@@ -389,6 +389,7 @@ fn display_row_source_geometry_allocates_dynamic_base_face_id_through_allocator(
 
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 80.0,
             height: 16.0,
@@ -410,6 +411,7 @@ fn display_row_source_geometry_allocates_dynamic_base_face_id_through_allocator(
 fn display_row_source_geometry_builds_whole_row_request() {
     let face = base_face();
     let geometry = DisplayRowGeometry {
+        line_number_width: 0.0,
         y: 4.0,
         width: 96.0,
         height: 18.0,
@@ -442,6 +444,7 @@ fn display_row_source_geometry_allocates_base_face_id() {
     face.face_id = 0;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(24);
     let geometry = DisplayRowGeometry {
+        line_number_width: 0.0,
         y: 5.0,
         width: 120.0,
         height: 20.0,
@@ -495,6 +498,7 @@ fn display_row_source_request_policy_builds_chrome_request() {
     assert_eq!(
         request.geometry(),
         &DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 6.0,
             width: 144.0,
             height: 22.0,
@@ -517,6 +521,7 @@ fn display_row_source_request_policy_builds_chrome_request() {
 fn display_row_source_geometry_request_overrides_render_bounds() {
     let face = base_face();
     let geometry = DisplayRowGeometry {
+        line_number_width: 0.0,
         y: 0.0,
         width: 80.0,
         height: 16.0,
@@ -558,6 +563,7 @@ fn display_row_source_fragment_frame_builds_column_bounds_from_glyph_row() {
     assert_eq!(
         request.geometry(),
         &DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 6.0,
             width: 90.0,
             height: 18.0,
@@ -594,6 +600,7 @@ fn display_row_source_fragment_frame_builds_column_bounds_from_row_geometry() {
     assert_eq!(
         request.geometry(),
         &DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 11.0,
             width: 45.0,
             height: 20.0,
@@ -813,6 +820,7 @@ fn display_row_renderer_renders_lisp_string_without_layout_engine() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -866,6 +874,7 @@ fn tty_complex_run_then_tab_lands_on_buffer_tab_stop() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             // 160 cols * 8px so nothing clips.
             width: 1280.0,
@@ -986,6 +995,7 @@ fn display_row_renderer_clips_lisp_string_rows_to_geometry_width() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let spec = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 16.0,
             height: 16.0,
@@ -1027,6 +1037,7 @@ fn display_row_renderer_clips_from_render_bounds_start() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -1074,6 +1085,7 @@ fn display_row_renderer_uses_render_bounds_start_for_tab_advance() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -1148,6 +1160,7 @@ fn display_row_renderer_continues_source_mapped_text_after_clip() {
 
     let first = display_row_request_for_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 16.0,
             height: 16.0,
@@ -1163,6 +1176,7 @@ fn display_row_renderer_continues_source_mapped_text_after_clip() {
     .expect("first row");
     let second = display_row_request_for_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 16.0,
             width: 16.0,
             height: 16.0,
@@ -1237,6 +1251,7 @@ fn display_row_renderer_accepts_direct_text_run_measurement_policy() {
 
     let result = display_row_request_for_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -1299,6 +1314,7 @@ fn display_row_geometry_builds_row_layout() {
     let tab_policy =
         crate::display_row::builder::DisplayTabPolicy::from_tab_width_and_stops(8.0, 4, &[6]);
     let geometry = DisplayRowGeometry {
+        line_number_width: 0.0,
         y: 20.0,
         width: 120.0,
         height: 16.0,
@@ -1374,6 +1390,7 @@ fn render_lisp_display_row_output_with_symbols_and_chrome_text_area_left(
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -1445,6 +1462,7 @@ fn render_buffer_display_row_with_properties(
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -1500,6 +1518,7 @@ fn render_display_item_source_row_accepts_buffer_text_source() {
 
     let rendered = display_row_request_for_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -1596,6 +1615,7 @@ fn render_lisp_string_row_records_xwidget_media_fragments() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let spec = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 4.0,
             width: 240.0,
             height: 16.0,
@@ -1682,6 +1702,7 @@ fn render_tab_line_with_sized_media_metadata_host(
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let spec = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 4.0,
             width: 240.0,
             height: row_height,
@@ -2270,6 +2291,7 @@ fn render_display_item_source_row_uses_spec_tab_policy() {
 
     let rendered = display_row_request_for_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -2310,6 +2332,7 @@ fn render_lisp_string_row_uses_explicit_tab_policy() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let spec = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -2482,6 +2505,7 @@ fn display_row_gui_renderer_preserves_narrow_proportional_glyph_advance() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 17.0,
@@ -3480,6 +3504,7 @@ fn render_lisp_string_row_uses_face_specific_glyph_widths() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let spec = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 32.0,
@@ -3517,6 +3542,7 @@ fn display_row_lisp_string_source_request_uses_render_context() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -3553,6 +3579,7 @@ fn display_row_render_executor_renders_lisp_string_source_request() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -3686,6 +3713,7 @@ fn display_row_fragment_keeps_bidi_unfinalized_for_current_row_append() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -3743,6 +3771,7 @@ fn display_row_renderer_can_render_source_fragment_into_existing_row() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let request = display_row_request_from_base_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,
@@ -4186,6 +4215,7 @@ fn render_buffer_text_row_with_display_at_content_x(
     );
     display_row_request_for_face(
         DisplayRowGeometry {
+            line_number_width: 0.0,
             y: 0.0,
             width: 240.0,
             height: 16.0,

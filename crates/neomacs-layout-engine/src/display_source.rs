@@ -1880,7 +1880,6 @@ impl DisplaySpaceWidthPolicy {
         self,
         pctx: &crate::display_pixel_calc::PixelCalcContext,
         current_x: f32,
-        content_x: f32,
         display_char_width: f32,
         default_width: f32,
     ) -> f32 {
@@ -1900,10 +1899,17 @@ impl DisplaySpaceWidthPolicy {
                 if let Some(pixels) =
                     calc_pixel_width_or_height(pctx, &prop, true, Some(&mut align_to))
                 {
+                    // GNU `produce_stretch_glyph` (xdisp.c:32853-32859): a
+                    // resolved region coordinate stands as it is; a raw number
+                    // is measured from the text area's left edge (`align_to =
+                    // 0`), the line-number field having been folded into the
+                    // number already (`XFLOATINT (prop) * base_unit +
+                    // lnum_pixel_width`, xdisp.c:30248).  `pctx` here is in
+                    // window coordinates, like `current_x`.
                     let target_x = if align_to >= 0 {
                         align_to as f32 + pixels as f32
                     } else {
-                        content_x + pixels as f32
+                        pctx.text_area_left as f32 + pixels as f32
                     };
                     (target_x - current_x).max(0.0)
                 } else {
@@ -2074,6 +2080,14 @@ impl DisplaySpaceGeometry {
             };
         };
 
+        // `content_x` is the text area's left edge plus the line-number
+        // field (`BufferWindowGeometry::content_x`).  GNU resolves `left` and
+        // `center` past the field -- `window_box_left_offset + lnum_pixel_width
+        // (+ window_box_width / 2)` (src/xdisp.c:30431-30441) -- and the
+        // width that half applies to is the text after the field (vanilla
+        // 31.0.90: a 28px field in a 560px text area puts `center` at 294px,
+        // the field plus half of the remaining 532px).
+        let line_number_pixel_width = (content_x - params.text_bounds.x).max(0.0);
         let pctx = PixelCalcContext {
             frame_column_width: params.char_width.max(1.0) as f64,
             frame_line_height: params.char_height.max(1.0) as f64,
@@ -2083,7 +2097,7 @@ impl DisplaySpaceGeometry {
             face_font_width: face_char_w.round().max(1.0) as f64,
             text_area_left: params.text_bounds.x as f64,
             text_area_right: (params.text_bounds.x + params.text_bounds.width) as f64,
-            text_area_width: params.text_bounds.width as f64,
+            text_area_width: (params.text_bounds.width - line_number_pixel_width).max(0.0) as f64,
             left_margin_left: (params.text_bounds.x
                 - params.left_fringe_width
                 - params.left_margin_width) as f64,
@@ -2097,7 +2111,7 @@ impl DisplaySpaceGeometry {
             fringes_outside_margins: false,
             scroll_bar_width: 0.0,
             scroll_bar_on_left: false,
-            line_number_pixel_width: 0.0,
+            line_number_pixel_width: line_number_pixel_width as f64,
             symbol_values: std::collections::HashMap::new(),
             image_sizes: crate::display_pixel_calc::PixelCalcImageSizes::resolve_for_space_spec(
                 spec,
@@ -2106,13 +2120,7 @@ impl DisplaySpaceGeometry {
         };
 
         let width_policy = DisplaySpaceWidthPolicy::from_items(&items);
-        let mut width = width_policy.resolve(
-            &pctx,
-            current_x,
-            content_x,
-            display_char_width,
-            default_width,
-        );
+        let mut width = width_policy.resolve(&pctx, current_x, display_char_width, default_width);
         if width <= 0.0 && (width < 0.0 || !width_policy.zero_width_allowed()) {
             width = 1.0;
         }

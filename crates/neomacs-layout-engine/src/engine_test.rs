@@ -34036,3 +34036,156 @@ fn line_prefix_when_clauses_are_decided_by_evaluating_their_forms() {
         "the graphic clause aligns X to column 10 (the text clause would give 20): {rows:?}"
     );
 }
+
+/// Under `display-line-numbers`, GNU measures a buffer `:align-to` from the
+/// text after the line-number field: `(space :align-to 10)` ends ten columns
+/// past the field and `center` at the field plus half of the remaining text
+/// width (vanilla 31.0.90 oracle: field 28px, X at 98px, center at 294px in a
+/// 560px text area).  Relative to the same layout without line numbers, the
+/// field therefore shifts a numeric target by its full width and `center` by
+/// half of it.  The row's origin is the field's right edge, so the pen must
+/// not count the field's glyphs a second time.
+#[test]
+fn buffer_align_to_under_line_numbers_measures_from_the_field_edge() {
+    let mut eval = Context::new();
+    let root = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("lnum-align", 640, 200, root);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        "(progn
+           (insert \" X\\n\")
+           (put-text-property 1 2 'display '(space :align-to 10))
+           (insert \" Y\\n\")
+           (put-text-property 4 5 'display '(space :align-to center))
+           (insert \"Z\\n\")
+           (insert \"P\\n\")
+           (put-text-property 9 10 'line-prefix
+             (propertize \" \" 'display '(space :align-to 10)))
+           (insert \"Q\\n\")
+           (put-text-property 11 12 'line-prefix
+             (propertize \" \" 'display '(space :align-to center))))",
+    )
+    .expect("buffer");
+    let mut engine = LayoutEngine::new();
+    let rows_of = |engine: &mut LayoutEngine, eval: &mut Context| -> Vec<String> {
+        engine.layout_frame_rust(eval, frame_id);
+        let state = engine
+            .last_frame_display_state
+            .as_ref()
+            .expect("display state");
+        let entry = state
+            .window_matrices
+            .iter()
+            .find(|entry| {
+                state
+                    .window_infos
+                    .iter()
+                    .any(|info| !info.is_minibuffer && info.window_id == entry.window_id)
+            })
+            .expect("root window matrix");
+        enabled_window_row_texts_expanding_stretches(entry)
+    };
+
+    let plain = rows_of(&mut engine, &mut eval);
+    assert_eq!(plain[2].find('Z'), Some(0), "no field yet: {plain:?}");
+    let x_plain = plain[0].find('X').expect("X");
+    let y_plain = plain[1].find('Y').expect("Y");
+    assert_eq!(x_plain, 10, "{plain:?}");
+    assert_eq!(
+        plain[3].find('P'),
+        Some(10),
+        "prefix-string numeric: {plain:?}"
+    );
+    assert_eq!(
+        plain[4].find('Q'),
+        Some(y_plain),
+        "prefix-string center: {plain:?}"
+    );
+
+    eval.buffer_manager_mut()
+        .get_mut(root)
+        .expect("buffer")
+        .set_buffer_local("display-line-numbers", Value::T);
+    let numbered = rows_of(&mut engine, &mut eval);
+    let field = numbered[2]
+        .find('Z')
+        .expect("Z after the line-number field");
+    assert!(
+        field > 0,
+        "line numbers should occupy columns: {numbered:?}"
+    );
+    assert_eq!(
+        numbered[0].find('X'),
+        Some(x_plain + field),
+        "a numeric target moves by the whole field: {numbered:?}"
+    );
+    assert_eq!(
+        numbered[1].find('Y'),
+        Some(y_plain + field / 2),
+        "`center` moves by half the field (field + (width - field) / 2): {numbered:?}"
+    );
+    assert_eq!(
+        numbered[3].find('P'),
+        Some(10 + field),
+        "a prefix string's numeric target moves by the whole field: {numbered:?}"
+    );
+    assert_eq!(
+        numbered[4].find('Q'),
+        Some(y_plain + field / 2),
+        "a prefix string's `center` moves by half the field: {numbered:?}"
+    );
+}
+
+/// A single clause whose FORM evaluates to nil must do nothing: on the old
+/// structural rule it applied (the FORM is non-nil), so this is red without
+/// evaluation whatever the first/last rule does.
+#[test]
+fn a_when_clause_whose_form_is_nil_leaves_the_prefix_out() {
+    let mut eval = Context::new();
+    let root = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("when-nil", 640, 200, root);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        "(progn
+           (insert \"X\\n\")
+           (put-text-property 1 2 'line-prefix
+             (propertize \" \" 'display
+               '((when (not (eq (framep (selected-frame)) 'neo)) space :align-to 20)))))",
+    )
+    .expect("buffer with a false conditional line prefix");
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| {
+            state
+                .window_infos
+                .iter()
+                .any(|info| !info.is_minibuffer && info.window_id == entry.window_id)
+        })
+        .expect("root window matrix");
+    let rows = enabled_window_row_texts_expanding_stretches(entry);
+    assert_eq!(
+        rows.first().map(|row| row.trim_end()),
+        Some(" X"),
+        "the prefix string itself (one space) shows, its display spec does not: {rows:?}"
+    );
+}

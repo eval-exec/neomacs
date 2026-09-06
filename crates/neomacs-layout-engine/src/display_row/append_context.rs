@@ -828,7 +828,8 @@ impl DisplayRowAppendFrame {
                 metrics.char_width(),
                 metrics.ascent(),
                 tab_policy,
-            ),
+            )
+            .with_line_number_width(area.line_number_width()),
             default_row_height: metrics.fallback_metrics().row_height(),
             area,
             margin_areas,

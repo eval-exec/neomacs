@@ -74,6 +74,10 @@ pub(crate) struct DisplayRowGeometry {
     pub(crate) char_width: f32,
     pub(crate) ascent: f32,
     pub(crate) tab_policy: DisplayTabPolicy,
+    /// Width of the line-number field drawn before the row's content
+    /// (`display-line-numbers`); 0 when there is none.  The content origin
+    /// `tab_policy.origin_x_px` already lies past it.
+    pub(crate) line_number_width: f32,
 }
 
 impl DisplayRowGeometry {
@@ -92,7 +96,13 @@ impl DisplayRowGeometry {
             char_width,
             ascent,
             tab_policy,
+            line_number_width: 0.0,
         }
+    }
+
+    pub(crate) fn with_line_number_width(mut self, line_number_width: f32) -> Self {
+        self.line_number_width = line_number_width.max(0.0);
+        self
     }
 
     pub(crate) fn y(&self) -> f32 {
@@ -140,6 +150,7 @@ impl DisplayRowGeometry {
             ascent_px,
             char_width_px,
             tab_policy: self.tab_policy.clone(),
+            line_number_width_px: self.line_number_width,
             base_face,
             pixel_calc,
             space_image_params,

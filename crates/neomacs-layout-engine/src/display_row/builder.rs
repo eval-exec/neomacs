@@ -89,6 +89,11 @@ pub(crate) struct DisplayRowLayout {
     pub(crate) ascent_px: f32,
     pub(crate) char_width_px: f32,
     pub(crate) tab_policy: DisplayTabPolicy,
+    /// Width of the line-number field whose glyphs precede the content in
+    /// this row (0 without `display-line-numbers`).  GNU produces those
+    /// glyphs into the same row and takes them back out of the pen before
+    /// measuring a stretch (`x -= it->lnum_pixel_width`, xdisp.c:32846-32848).
+    pub(crate) line_number_width_px: f32,
     pub(crate) base_face: RenderFaceRef,
     /// Window/face/frame pixel state for the single GNU-faithful
     /// `(space :width/:align-to …)` evaluator. Mode-line, header-line and
@@ -2936,15 +2941,32 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
                 // below is measured from the row origin `content_x` (the text
                 // area's left edge), so the target moves into that space;
                 // chrome rows have a zero origin and window-coordinate
-                // targets, so nothing is added.
+                // targets, so nothing is added.  Under `display-line-numbers`
+                // the origin is the field's right edge and the pen excludes
+                // the field, which is where GNU's `x -= it->lnum_pixel_width`
+                // lands too (xdisp.c:32846-32852; oracle: `:align-to 10` ends
+                // ten columns past the field, `center` at the field plus half
+                // of the remaining width).  Declared, not ported: GNU adds
+                // `it->continuation_lines_width` to the pen on continuation
+                // rows and adjusts a horizontally scrolled row's pen by
+                // `stretch_adjust`/`first_visible_x` (xdisp.c:32841-32843,
+                // 32862-32874); this pen is the visible pen of this row.
                 let target_x = if align_to >= 0 {
                     let base = if chrome_row { 0.0 } else { content_x };
                     base + align_to as f32 + pixels as f32
                 } else {
                     raw_align_base_x + pixels as f32
                 };
-                let current =
-                    self.layout.tab_policy.origin_x_px + self.current_text_metrics().width_px();
+                // The row's glyphs so far include the line-number field, which
+                // the origin already lies past: take it out of the pen as GNU
+                // does (`x -= it->lnum_pixel_width`, xdisp.c:32846-32848).
+                let current = self.layout.tab_policy.origin_x_px
+                    + self.current_text_metrics().width_px()
+                    - if chrome_row {
+                        0.0
+                    } else {
+                        self.layout.line_number_width_px
+                    };
                 let width_px = (target_x - current).max(0.0);
                 if !width_px.is_finite() {
                     return None;

@@ -3546,6 +3546,17 @@ impl LayoutEngine {
             return LeafLayoutAttempt::LogicalInputsChanged;
         };
         let _ = Self::ensure_fontified_rust(evaluator, buf_id, window_start, fontify_end);
+        // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
+        // run while it holds the buffer: evaluate the forms of the span the
+        // walk can reach (the same one fontification just covered) here, so
+        // the freshness and topology checks below cover this Lisp too, and
+        // let the snapshot carry the results.
+        let display_when = crate::display_when::evaluate_window_display_when_forms(
+            evaluator,
+            buf_id,
+            neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
+            neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+        );
         if evaluator.frame_manager().window_topology_generation() != topology_generation {
             return LeafLayoutAttempt::LogicalInputsChanged;
         }
@@ -3562,16 +3573,6 @@ impl LayoutEngine {
             .as_ref()
             .map(|replay| replay.dvpos)
             .unwrap_or(0.0);
-        // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
-        // run while it holds the buffer: evaluate the forms of the span the
-        // walk can reach (the same one fontification just covered) now and
-        // let the snapshot carry the results.
-        let display_when = crate::display_when::evaluate_window_display_when_forms(
-            evaluator,
-            buf_id,
-            neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
-            neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
-        );
         // `params` already names the semantic display source chosen before
         // fontification and incremental classification.
         let layout_buffer = match evaluator.buffer_manager().get(buf_id) {
