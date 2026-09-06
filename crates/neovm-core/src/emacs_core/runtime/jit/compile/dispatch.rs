@@ -1020,10 +1020,12 @@ pub extern "C" fn neovm_jit_cbsym_spec(
         // builtin straight off the argument slot the same way the interpreter's
         // `Op::CallBuiltinSym` arm does; the VM-owned specials and anything not
         // registered as a plain builtin bounce to the generic shim.
+        let inline = crate::emacs_core::eval::inline_subr(sym_id);
+        let inline_kind = inline.kind;
         let function = if force_cbsym_generic() {
             None
         } else {
-            Vm::inline_builtin_function(sym_id)
+            inline.function
         };
         let Some(function) = function else {
             #[cfg(debug_assertions)]
@@ -1038,7 +1040,14 @@ pub extern "C" fn neovm_jit_cbsym_spec(
             let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
             ctx.bc_buf.push(v);
         }
-        let res = Vm::call_inline_builtin_from_stack(ctx, function, sym_id, args_start, nargs);
+        // The operand-stack copy above is what roots the arguments while the
+        // builtin runs; for a small fixed-arity subr the call itself skips the
+        // by-symbol dispatch layers (same shape as the interpreter's arm).
+        let res = if inline_kind == crate::emacs_core::eval::InlineSubrKind::Direct {
+            Vm::call_fixed_builtin_direct(ctx, Some(function), sym_id, args_start, nargs)
+        } else {
+            Vm::call_inline_builtin_from_stack(ctx, function, sym_id, args_start, nargs)
+        };
         ctx.bc_buf.truncate(args_start);
         let status = match res {
             Ok(value) => {
@@ -1173,14 +1182,14 @@ pub extern "C" fn neovm_jit_cbsym_read(
             CBSYM_A_POINT => crate::emacs_core::buffer::builtin_point_0(ctx),
             CBSYM_A_POINT_MIN => crate::emacs_core::buffer::builtin_point_min_0(ctx),
             CBSYM_A_POINT_MAX => crate::emacs_core::buffer::builtin_point_max_0(ctx),
-            CBSYM_A_BOLP => navigation::builtin_bolp(ctx, Vec::new()),
-            CBSYM_A_EOLP => navigation::builtin_eolp(ctx, Vec::new()),
-            CBSYM_A_BOBP => navigation::builtin_bobp(ctx, Vec::new()),
-            CBSYM_A_EOBP => navigation::builtin_eobp(ctx, Vec::new()),
+            CBSYM_A_BOLP => navigation::builtin_bolp_0(ctx),
+            CBSYM_A_EOLP => navigation::builtin_eolp_0(ctx),
+            CBSYM_A_BOBP => navigation::builtin_bobp_0(ctx),
+            CBSYM_A_EOBP => navigation::builtin_eobp_0(ctx),
             CBSYM_A_FOLLOWING_CHAR => editfns::builtin_following_char_0(ctx),
             CBSYM_A_PRECEDING_CHAR => editfns::builtin_preceding_char(ctx, Vec::new()),
             // Tier-A char-after is 0-arg (nargs gated above): reads at point.
-            CBSYM_A_CHAR_AFTER => crate::emacs_core::buffer::builtin_char_after(ctx, Vec::new()),
+            CBSYM_A_CHAR_AFTER => crate::emacs_core::buffer::builtin_char_after_1(ctx, Value::NIL),
             CBSYM_A_MATCH_BEGINNING => {
                 // SAFETY: the generated code stored exactly nargs==1 word at args_ptr.
                 let group = Value::from_bits(unsafe { *args_ptr } as usize);

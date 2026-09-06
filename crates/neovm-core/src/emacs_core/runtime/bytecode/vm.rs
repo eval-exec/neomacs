@@ -7725,7 +7725,7 @@ impl<'a> Vm<'a> {
     /// operands read straight off the stack (absent optionals are nil, as
     /// GNU `funcall_subr` fills them) — no by-symbol dispatch layers.
     #[inline(never)]
-    fn call_fixed_builtin_direct(
+    pub(crate) fn call_fixed_builtin_direct(
         ctx: &mut crate::emacs_core::eval::Context,
         function: Option<SubrFn>,
         sym: SymId,
