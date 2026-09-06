@@ -68,10 +68,19 @@ pub(super) fn through_composition_ring(
         // Same picture, placed rather than copied whole: each pane
         // reads the region of the composed frame it owns and draws
         // it where the motion currently puts it.
-        let previous = render
+        // The picture this motion fades from, pinned by the morph on its first
+        // frame. Read straight from the ring instead, it would be the previous
+        // frame *of the motion* — the destination fading into the destination,
+        // which renders as a completely static frame.
+        let candidate = render
             .compositor
             .transitions
             .previous_composition()
+            .cloned();
+        let previous = render
+            .compositor
+            .layout
+            .pin_outgoing(candidate)
             .map(|lease| lease.bind_group().clone());
         renderer.render_pane_layout(
             composition.bind_group(),

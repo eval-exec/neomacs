@@ -23,6 +23,7 @@ use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
 use neomacs_display_protocol::motion_spec::MotionSpec;
 use neomacs_display_protocol::{InteractionProjection, PresentationId};
+use neomacs_renderer_wgpu::SnapshotLease;
 
 /// What one commit wants, against what the last composed frame showed.
 ///
@@ -34,6 +35,27 @@ pub(in crate::render_thread) struct LayoutDelta<'a> {
     pub(in crate::render_thread) next: &'a [WindowInfo],
 }
 
+/// The picture a motion fades *from*.
+///
+/// Three states rather than an `Option<SnapshotLease>`, because "not asked yet"
+/// and "asked, and there was nothing" have to be told apart. Only the first
+/// frame of a motion may pin: at that instant the ring's previous slot holds
+/// the last frame composed under the *old* layout, and every frame after it
+/// holds a frame of the motion itself. An `Option` alone cannot express that,
+/// so a motion whose first frame found nothing would quietly pin a frame of
+/// itself one frame later — and fading the destination into the destination
+/// renders as a completely static frame, which is indistinguishable from the
+/// animation not running at all.
+pub(in crate::render_thread) enum OutgoingPicture {
+    /// No frame of this motion has been drawn yet.
+    Unpinned,
+    /// Decided, on the motion's first frame. `None` when there was no previous
+    /// composition to pin — the frame that started this motion was the first
+    /// ever composed offscreen, so there is no picture of the old layout
+    /// anywhere and the panes that would fade out of it are dropped instead.
+    Pinned(Option<SnapshotLease>),
+}
+
 /// What the compositor is doing about the layout.
 #[derive(Default)]
 pub(in crate::render_thread) enum LayoutDriver {
@@ -41,7 +63,26 @@ pub(in crate::render_thread) enum LayoutDriver {
     #[default]
     Settled,
     /// The panes are travelling between two layouts.
-    Animating(PaneLayoutMorph),
+    Animating {
+        morph: PaneLayoutMorph,
+        /// The composed picture as it was *before* this rearrangement.
+        ///
+        /// A morph fades the old frame out over the new one, so it needs the
+        /// old frame for its whole duration — but the composition ring holds
+        /// exactly one frame of history, and every frame of the motion pushes
+        /// another copy of the *new* layout into it. Read from the ring each
+        /// frame, the fade is correct once and then dissolves the destination
+        /// into itself, which looks like no animation at all.
+        ///
+        /// So the morph pins it. `SnapshotLease` is refcounted and the pool
+        /// declines to recycle a slot anyone still holds, which is the
+        /// mechanism the ring was built around; holding the lease here is what
+        /// says "for as long as this motion runs". Settling drops it, and
+        /// because the transitions consume `self` there is no path that
+        /// forgets to.
+        ///
+        outgoing: OutgoingPicture,
+    },
 }
 
 impl LayoutDriver {
@@ -53,7 +94,43 @@ impl LayoutDriver {
     /// to schedule. Asking the driver is what stops a future animating state
     /// from repeating that.
     pub(in crate::render_thread) const fn wants_frames(&self) -> bool {
-        matches!(self, Self::Animating(_))
+        matches!(self, Self::Animating { .. })
+    }
+
+    /// Pin the picture this motion fades *from*, if it has not been pinned.
+    ///
+    /// Called by the render pass on every frame of a motion, with the ring's
+    /// previous composition. Only the first call stores anything: on the first
+    /// frame of the motion that lease is the last frame composed under the old
+    /// layout, and every later one is a frame of the motion itself.
+    ///
+    /// Takes the candidate by value rather than a closure because the ring and
+    /// this driver are neighbouring fields of the compositor, and a closure
+    /// borrowing one while this borrows the other does not compile — a detail
+    /// worth naming, since the obvious lazy signature looks preferable.
+    pub(in crate::render_thread) fn pin_outgoing(
+        &mut self,
+        candidate: Option<SnapshotLease>,
+    ) -> Option<&SnapshotLease> {
+        let Self::Animating { outgoing, .. } = self else {
+            return None;
+        };
+        if let OutgoingPicture::Unpinned = outgoing {
+            // The only externally visible evidence of the one thing that
+            // decides whether a morph is visible at all. A motion that pins
+            // nothing still runs, still places panes, and still logs progress
+            // to 1.0 — it just renders as a static frame, so every symptom
+            // points at the motion and none of them at the cause.
+            tracing::debug!(
+                pinned = candidate.is_some(),
+                "pane morph pinned its outgoing picture"
+            );
+            *outgoing = OutgoingPicture::Pinned(candidate);
+        }
+        match outgoing {
+            OutgoingPicture::Pinned(lease) => lease.as_ref(),
+            OutgoingPicture::Unpinned => unreachable!("just pinned above"),
+        }
     }
 
     /// A commit arrived.
@@ -67,9 +144,17 @@ impl LayoutDriver {
             // Nothing in flight: a rearrangement starts one, anything else is
             // still nothing. `try_new` answers both by returning `None` when no
             // pane moved.
-            Self::Settled => PaneLayoutMorph::try_new(delta.previous, delta.next, spec, at)
-                .map_or(Self::Settled, Self::Animating),
-            Self::Animating(mut morph) => {
+            Self::Settled => PaneLayoutMorph::try_new(delta.previous, delta.next, spec, at).map_or(
+                Self::Settled,
+                |morph| Self::Animating {
+                    morph,
+                    outgoing: OutgoingPicture::Unpinned,
+                },
+            ),
+            Self::Animating {
+                mut morph,
+                outgoing,
+            } => {
                 // Retarget only when this commit wants the panes somewhere other
                 // than where they are already heading. A retarget restarts the
                 // motion from this instant, and commits arrive continuously
@@ -78,7 +163,11 @@ impl LayoutDriver {
                 if morph.destination_differs_from(delta.next) {
                     morph.retarget(delta.next, spec, at);
                 }
-                Self::Animating(morph)
+                // The pinned picture is kept across a retarget. It is what the
+                // user last saw settled, which a change of destination does not
+                // alter; re-pinning here would swap in a frame of the motion
+                // itself and fade the destination into the destination.
+                Self::Animating { morph, outgoing }
             }
         }
     }
@@ -95,7 +184,7 @@ impl LayoutDriver {
     ) -> (Self, PaneLayoutComposition) {
         match self {
             Self::Settled => (Self::Settled, PaneLayoutComposition::default()),
-            Self::Animating(morph) => {
+            Self::Animating { morph, outgoing } => {
                 // Apply any retarget recorded since the last frame, starting the
                 // new motion from where these panes actually are.
                 let morph = match morph.spliced(frame) {
@@ -139,7 +228,7 @@ impl LayoutDriver {
                     // destination; only then is the motion over.
                     (Self::Settled, composition)
                 } else {
-                    (Self::Animating(morph), composition)
+                    (Self::Animating { morph, outgoing }, composition)
                 }
             }
         }

@@ -92,7 +92,14 @@ impl FramePostDisposition {
 /// Immutable decisions needed to execute one committed frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct RenderFeaturePlan {
-    pub(super) use_transition_offscreen: bool,
+    /// Compose this frame into the ring rather than straight onto the surface.
+    ///
+    /// Not only for transitions. Any effect that shows the frame as it was
+    /// *before* a change needs the previous composition to exist already when
+    /// the change lands — and a picture that was never composed offscreen was
+    /// never kept. Deciding this from the arrival of the change is too late by
+    /// exactly one frame: that is the frame whose picture is wanted.
+    pub(super) compose_offscreen: bool,
     pub(super) accept_transition_hints: bool,
     pub(super) accept_derived_effects: bool,
     pub(super) accept_cursor_effects: bool,
@@ -217,8 +224,10 @@ impl RenderQualityPolicy {
     ) -> RenderFeaturePlan {
         let full = self.mode == QualityMode::Full;
         RenderFeaturePlan {
-            use_transition_offscreen: full
-                && (self.transition_policy().needs_offscreen() || frame_has_theme_transition),
+            compose_offscreen: full
+                && (self.transition_policy().needs_offscreen()
+                    || self.effective_visual_config.pane_motion.enabled
+                    || frame_has_theme_transition),
             accept_transition_hints: full,
             accept_derived_effects: full,
             accept_cursor_effects: full,
@@ -314,7 +323,7 @@ mod tests {
         assert_eq!(
             policy.plan_frame(true, true),
             RenderFeaturePlan {
-                use_transition_offscreen: false,
+                compose_offscreen: false,
                 accept_transition_hints: false,
                 accept_derived_effects: false,
                 accept_cursor_effects: false,
