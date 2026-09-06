@@ -404,3 +404,34 @@ fn overlay_strings_anchored_at_point_max_are_evaluated_when_the_span_reaches_it(
         "the after-string of an overlay ending at point-max is bound there"
     );
 }
+
+#[test]
+fn an_empty_overlay_supplies_no_display_property() {
+    // GNU `get_char_property_and_overlay` skips an overlay whose end is at
+    // or before the position (textprop.c:652-653): an empty overlay's
+    // `display` never applies, so its form is not evaluated.
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    eval.buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("abcdef\n");
+    let display = eval
+        .eval_str(
+            "(let ((o (make-overlay 3 3)))
+               (overlay-put o 'display '(when (= 1 1) . \"EMPTY\"))
+               (overlay-get o 'display))",
+        )
+        .expect("overlay");
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        None,
+        CharPos0::new(0),
+        CharPos0::new(7),
+    );
+    assert_eq!(
+        conditions.verdict(when_form(display, 0)),
+        DisplayWhenVerdict::Unseen
+    );
+}

@@ -160,5 +160,5 @@ impl Context {
 }
 
 #[cfg(test)]
-#[path = "display_when_test.rs"]
+#[path = "tests/mod.rs"]
 mod tests;
