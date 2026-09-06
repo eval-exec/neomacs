@@ -2,6 +2,7 @@ use super::*;
 use crate::display_item::{
     DisplayImageItem, DisplayLength, DisplayMediaReplacement, DisplayVideoItem, DisplayXwidgetItem,
 };
+use crate::display_property::DisplayPropertyObject;
 use neomacs_display_protocol::VideoId;
 use neovm_core::emacs_core::{Context, Value};
 
@@ -24,9 +25,13 @@ fn classify_display_property_separates_replacements_from_text_modifiers() {
     );
 
     assert_eq!(
-        classify_display_property(Value::string("replacement"))
-            .replacement()
-            .cloned(),
+        classify_display_property(
+            Value::string("replacement"),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
+        .replacement()
+        .cloned(),
         Some(DisplayReplacementProperty::String)
     );
     let align_expr = Value::list(vec![
@@ -35,11 +40,15 @@ fn classify_display_property_separates_replacements_from_text_modifiers() {
         Value::fixnum(2),
     ]);
     assert_eq!(
-        classify_display_property(Value::list(vec![
-            Value::symbol("space"),
-            Value::keyword(":align-to"),
-            align_expr,
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::symbol("space"),
+                Value::keyword(":align-to"),
+                align_expr,
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement()
         .cloned(),
         Some(DisplayReplacementProperty::Stretch(ParsedDisplaySpace {
@@ -49,35 +58,51 @@ fn classify_display_property_separates_replacements_from_text_modifiers() {
         }))
     );
     assert_eq!(
-        classify_display_property(Value::list(vec![Value::symbol("image")]))
-            .replacement()
-            .cloned(),
+        classify_display_property(
+            Value::list(vec![Value::symbol("image")]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
+        .replacement()
+        .cloned(),
         Some(DisplayReplacementProperty::Media(
             DisplayMediaReplacementProperty::Image
         ))
     );
     assert_eq!(
-        classify_display_property(Value::list(vec![Value::symbol("video")]))
-            .replacement()
-            .cloned(),
+        classify_display_property(
+            Value::list(vec![Value::symbol("video")]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
+        .replacement()
+        .cloned(),
         Some(DisplayReplacementProperty::Media(
             DisplayMediaReplacementProperty::Video
         ))
     );
     assert_eq!(
-        classify_display_property(Value::list(vec![Value::symbol("webkit")]))
-            .replacement()
-            .cloned(),
+        classify_display_property(
+            Value::list(vec![Value::symbol("webkit")]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
+        .replacement()
+        .cloned(),
         Some(DisplayReplacementProperty::Media(
             DisplayMediaReplacementProperty::Webkit
         ))
     );
     assert_eq!(
-        classify_display_property(Value::list(vec![
-            Value::symbol("xwidget"),
-            Value::keyword("xwidget"),
-            xwidget,
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::symbol("xwidget"),
+                Value::keyword("xwidget"),
+                xwidget,
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement()
         .cloned(),
         Some(DisplayReplacementProperty::Media(
@@ -93,10 +118,11 @@ fn classify_display_property_separates_replacements_from_text_modifiers() {
     );
 
     assert_eq!(
-        classify_display_property(Value::list(vec![
-            Value::symbol("raise"),
-            Value::make_float(0.25),
-        ]))
+        classify_display_property(
+            Value::list(vec![Value::symbol("raise"), Value::make_float(0.25),]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .modifiers(),
         DisplayTextPropertyModifiers {
             raise: Some(0.25),
@@ -106,12 +132,16 @@ fn classify_display_property_separates_replacements_from_text_modifiers() {
         }
     );
     assert_eq!(
-        classify_display_property(Value::list(vec![
-            Value::keyword(":raise"),
-            Value::make_float(0.2),
-            Value::keyword(":height"),
-            Value::make_float(1.4),
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::keyword(":raise"),
+                Value::make_float(0.2),
+                Value::keyword(":height"),
+                Value::make_float(1.4),
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .modifiers(),
         DisplayTextPropertyModifiers {
             raise: Some(0.2),
@@ -125,17 +155,30 @@ fn classify_display_property_separates_replacements_from_text_modifiers() {
 #[test]
 fn display_property_classification_names_replacement_accessors() {
     let _eval = Context::new();
-    let string = classify_display_property(Value::string("replacement"));
-    let stretch = classify_display_property(Value::list(vec![
-        Value::symbol("space"),
-        Value::keyword(":width"),
-        Value::fixnum(3),
-    ]));
-    let media = classify_display_property(Value::list(vec![Value::symbol("image")]));
-    let modifier = classify_display_property(Value::list(vec![
-        Value::symbol("raise"),
-        Value::make_float(0.25),
-    ]));
+    let string = classify_display_property(
+        Value::string("replacement"),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
+    let stretch = classify_display_property(
+        Value::list(vec![
+            Value::symbol("space"),
+            Value::keyword(":width"),
+            Value::fixnum(3),
+        ]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
+    let media = classify_display_property(
+        Value::list(vec![Value::symbol("image")]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
+    let modifier = classify_display_property(
+        Value::list(vec![Value::symbol("raise"), Value::make_float(0.25)]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
 
     assert_eq!(
         string.replacement(),
@@ -166,15 +209,19 @@ fn classify_display_property_parses_space_width_height_and_ascent() {
     let _eval = Context::new();
 
     assert_eq!(
-        classify_display_property(Value::list(vec![
-            Value::symbol("space"),
-            Value::keyword(":width"),
-            Value::fixnum(3),
-            Value::keyword(":height"),
-            Value::fixnum(2),
-            Value::keyword(":ascent"),
-            Value::fixnum(50),
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::symbol("space"),
+                Value::keyword(":width"),
+                Value::fixnum(3),
+                Value::keyword(":height"),
+                Value::fixnum(2),
+                Value::keyword(":ascent"),
+                Value::fixnum(50),
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement()
         .cloned(),
         Some(DisplayReplacementProperty::Stretch(ParsedDisplaySpace {
@@ -190,11 +237,15 @@ fn classify_display_property_preserves_relative_width_source_basis() {
     let _eval = Context::new();
 
     assert_eq!(
-        classify_display_property(Value::list(vec![
-            Value::symbol("space"),
-            Value::keyword(":relative-width"),
-            Value::make_float(0.5),
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::symbol("space"),
+                Value::keyword(":relative-width"),
+                Value::make_float(0.5),
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement()
         .cloned(),
         Some(DisplayReplacementProperty::Stretch(ParsedDisplaySpace {
@@ -208,10 +259,14 @@ fn classify_display_property_preserves_relative_width_source_basis() {
 #[test]
 fn classify_display_property_keeps_space_width_with_raise_modifier() {
     let _eval = Context::new();
-    let classified = classify_display_property(Value::list(vec![
-        Value::list(vec![Value::symbol("space-width"), Value::make_float(0.4)]),
-        Value::list(vec![Value::symbol("raise"), Value::make_float(0.15)]),
-    ]));
+    let classified = classify_display_property(
+        Value::list(vec![
+            Value::list(vec![Value::symbol("space-width"), Value::make_float(0.4)]),
+            Value::list(vec![Value::symbol("raise"), Value::make_float(0.15)]),
+        ]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
 
     assert!(classified.replacement().is_none());
     assert_eq!(classified.modifiers().space_width, Some(0.4));
@@ -223,11 +278,15 @@ fn classify_display_property_keeps_space_replacement_without_explicit_width() {
     let _eval = Context::new();
 
     assert_eq!(
-        classify_display_property(Value::list(vec![
-            Value::symbol("space"),
-            Value::keyword(":height"),
-            Value::fixnum(2),
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::symbol("space"),
+                Value::keyword(":height"),
+                Value::fixnum(2),
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement()
         .cloned(),
         Some(DisplayReplacementProperty::Stretch(ParsedDisplaySpace {
@@ -245,11 +304,15 @@ fn classify_display_property_recognizes_left_and_right_fringe_specs() {
     // `(left-fringe BITMAP FACE)` / `(right-fringe BITMAP FACE)` are replacement
     // specs that produce no inline output (magit's section-heading fold arrows).
     // The parsed layout carries the bitmap symbol, side, and optional face.
-    let left = classify_display_property(Value::list(vec![
-        Value::symbol("left-fringe"),
-        Value::symbol("magit-fringe-bitmapv"),
-        Value::symbol("fringe"),
-    ]));
+    let left = classify_display_property(
+        Value::list(vec![
+            Value::symbol("left-fringe"),
+            Value::symbol("magit-fringe-bitmapv"),
+            Value::symbol("fringe"),
+        ]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     match left.replacement() {
         Some(crate::display_property::DisplayReplacementProperty::Fringe(layout)) => {
             assert_eq!(layout.side, crate::display_spec::DisplayFringeSide::Left);
@@ -263,10 +326,14 @@ fn classify_display_property_recognizes_left_and_right_fringe_specs() {
         other => panic!("expected left fringe layout, got {other:?}"),
     }
 
-    let right = classify_display_property(Value::list(vec![
-        Value::symbol("right-fringe"),
-        Value::symbol("right-arrow"),
-    ]));
+    let right = classify_display_property(
+        Value::list(vec![
+            Value::symbol("right-fringe"),
+            Value::symbol("right-arrow"),
+        ]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     match right.replacement() {
         Some(crate::display_property::DisplayReplacementProperty::Fringe(layout)) => {
             assert_eq!(layout.side, crate::display_spec::DisplayFringeSide::Right);
@@ -293,7 +360,11 @@ fn classify_display_property_unwraps_list_wrapped_fringe_spec() {
         Value::symbol("diff-hl-bmp-middle"),
         Value::symbol("diff-hl-change"),
     ];
-    let wrapped = classify_display_property(Value::list(vec![Value::list(bare.clone())]));
+    let wrapped = classify_display_property(
+        Value::list(vec![Value::list(bare.clone())]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     match wrapped.replacement() {
         Some(crate::display_property::DisplayReplacementProperty::Fringe(layout)) => {
             assert_eq!(layout.side, crate::display_spec::DisplayFringeSide::Left);
@@ -310,16 +381,24 @@ fn classify_display_property_unwraps_list_wrapped_fringe_spec() {
     // The list-wrapped classification must match the bare spec exactly.
     assert_eq!(
         wrapped.replacement().cloned(),
-        classify_display_property(Value::list(bare))
-            .replacement()
-            .cloned(),
+        classify_display_property(
+            Value::list(bare),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
+        .replacement()
+        .cloned(),
     );
 
     // A right-fringe list-wrapped spec resolves to the right side.
-    let right = classify_display_property(Value::list(vec![Value::list(vec![
-        Value::symbol("right-fringe"),
-        Value::symbol("diff-hl-bmp-insert"),
-    ])]));
+    let right = classify_display_property(
+        Value::list(vec![Value::list(vec![
+            Value::symbol("right-fringe"),
+            Value::symbol("diff-hl-bmp-insert"),
+        ])]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     match right.replacement() {
         Some(crate::display_property::DisplayReplacementProperty::Fringe(layout)) => {
             assert_eq!(layout.side, crate::display_spec::DisplayFringeSide::Right);
@@ -337,11 +416,15 @@ fn classify_display_property_keeps_fringe_length_units_in_space_specs() {
     // `:align-to` pixel expression and must keep resolving as length symbols,
     // NOT be mistaken for the `(left-fringe …)` fringe-bitmap replacement spec.
     assert_eq!(
-        classify_display_property(Value::list(vec![
-            Value::symbol("space"),
-            Value::keyword(":align-to"),
-            Value::symbol("left-fringe"),
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::symbol("space"),
+                Value::keyword(":align-to"),
+                Value::symbol("left-fringe"),
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement()
         .cloned(),
         Some(DisplayReplacementProperty::Stretch(ParsedDisplaySpace {
@@ -377,7 +460,13 @@ fn align_to_keeps_fractional_image_width_operand() {
     ]);
 
     assert_eq!(
-        classify_display_property(spec).replacement().cloned(),
+        classify_display_property(
+            spec,
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
+        .replacement()
+        .cloned(),
         Some(DisplayReplacementProperty::Stretch(ParsedDisplaySpace {
             width: ParsedDisplaySpaceWidth::AlignTo(expr),
             height: None,
@@ -470,7 +559,11 @@ fn margin_display_spec_preserves_its_typed_side_and_content() {
             Value::list(vec![Value::symbol("margin"), Value::symbol(side)]),
             Value::string(" "),
         ]);
-        let classified = classify_display_property(spec);
+        let classified = classify_display_property(
+            spec,
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer,
+        );
         let Some(DisplayReplacementProperty::Margin(margin)) = classified.replacement else {
             panic!("({side} …) should be a Margin replacement");
         };
@@ -489,10 +582,14 @@ fn margin_display_spec_preserves_its_typed_side_and_content() {
     }
     // A non-margin cons-headed list is unaffected (still not a margin spec).
     assert!(!matches!(
-        classify_display_property(Value::list(vec![
-            Value::list(vec![Value::symbol("not-margin")]),
-            Value::string("x"),
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::list(vec![Value::symbol("not-margin")]),
+                Value::string("x"),
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement,
         Some(DisplayReplacementProperty::Margin(_))
     ));
@@ -501,10 +598,14 @@ fn margin_display_spec_preserves_its_typed_side_and_content() {
 #[test]
 fn margin_nil_routes_content_to_the_text_area_like_gnu() {
     let _eval = Context::new();
-    let classified = classify_display_property(Value::list(vec![
-        Value::list(vec![Value::symbol("margin"), Value::NIL]),
-        Value::string("TEXT"),
-    ]));
+    let classified = classify_display_property(
+        Value::list(vec![
+            Value::list(vec![Value::symbol("margin"), Value::NIL]),
+            Value::string("TEXT"),
+        ]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     assert_eq!(
         classified.replacement().cloned(),
         Some(DisplayReplacementProperty::String)
@@ -518,10 +619,14 @@ fn a_vector_display_value_classifies_its_elements_like_gnu() {
     // This classifier had no vector arm, so `'display ["VEC"]' rendered the
     // original text; GNU renders VEC.
     let _eval = Context::new();
-    let classified = classify_display_property(Value::vector(vec![
-        Value::list(vec![Value::symbol("raise"), Value::make_float(0.2)]),
-        Value::string("VEC"),
-    ]));
+    let classified = classify_display_property(
+        Value::vector(vec![
+            Value::list(vec![Value::symbol("raise"), Value::make_float(0.2)]),
+            Value::string("VEC"),
+        ]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     assert_eq!(
         classified.replacement().cloned(),
         Some(DisplayReplacementProperty::String)
@@ -535,7 +640,11 @@ fn a_vector_display_value_classifies_its_elements_like_gnu() {
 fn a_list_wrapped_string_spec_carries_the_string_not_the_list() {
     // `("LIST")' is a LIST OF SPECS whose single element replaces the text.
     let _eval = Context::new();
-    let classified = classify_display_property(Value::list(vec![Value::string("LIST")]));
+    let classified = classify_display_property(
+        Value::list(vec![Value::string("LIST")]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     assert_eq!(
         classified.replacement().cloned(),
         Some(DisplayReplacementProperty::String)
@@ -549,28 +658,40 @@ fn a_when_spec_replaces_with_its_inner_spec_like_gnu() {
     // against GNU 31: `(when t . "DOTTED")' replaces, `(when t "LISTED")' -- whose
     // SPEC is the LIST `("LISTED")' -- does not.
     let _eval = Context::new();
-    let dotted = classify_display_property(Value::cons(
-        Value::symbol("when"),
-        Value::cons(Value::symbol("t"), Value::string("DOTTED")),
-    ));
+    let dotted = classify_display_property(
+        Value::cons(
+            Value::symbol("when"),
+            Value::cons(Value::symbol("t"), Value::string("DOTTED")),
+        ),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     assert_eq!(
         dotted.replacement().cloned(),
         Some(DisplayReplacementProperty::String)
     );
     assert_eq!(dotted.replacement_spec().as_utf8_str(), Some("DOTTED"));
 
-    let listed = classify_display_property(Value::list(vec![
-        Value::symbol("when"),
-        Value::symbol("t"),
-        Value::string("LISTED"),
-    ]));
+    let listed = classify_display_property(
+        Value::list(vec![
+            Value::symbol("when"),
+            Value::symbol("t"),
+            Value::string("LISTED"),
+        ]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     assert!(listed.replacement().is_none());
 
     // A nil condition disables the spec.
-    let disabled = classify_display_property(Value::cons(
-        Value::symbol("when"),
-        Value::cons(Value::NIL, Value::string("HIDDEN")),
-    ));
+    let disabled = classify_display_property(
+        Value::cons(
+            Value::symbol("when"),
+            Value::cons(Value::NIL, Value::string("HIDDEN")),
+        ),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     assert!(disabled.replacement().is_none());
 }
 
@@ -582,18 +703,26 @@ fn a_margin_spec_gnu_cannot_display_leaves_the_text_alone() {
     // not displayable.
     let _eval = Context::new();
     assert!(
-        classify_display_property(Value::list(vec![
-            Value::list(vec![Value::symbol("margin"), Value::symbol("bogus-area")]),
-            Value::string("BADMARGIN"),
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::list(vec![Value::symbol("margin"), Value::symbol("bogus-area")]),
+                Value::string("BADMARGIN"),
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement()
         .is_none()
     );
     assert!(
-        classify_display_property(Value::list(vec![
-            Value::list(vec![Value::symbol("margin"), Value::NIL]),
-            Value::fixnum(42),
-        ]))
+        classify_display_property(
+            Value::list(vec![
+                Value::list(vec![Value::symbol("margin"), Value::NIL]),
+                Value::fixnum(42),
+            ]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer
+        )
         .replacement()
         .is_none()
     );
@@ -604,13 +733,66 @@ fn disable_eval_classifies_the_wrapped_spec() {
     // `(disable-eval SPEC)' from enriched.el: GNU strips the wrapper and handles
     // SPEC (refusing to evaluate inside it).
     let _eval = Context::new();
-    let classified = classify_display_property(Value::list(vec![
-        Value::symbol("disable-eval"),
-        Value::string("INNER"),
-    ]));
+    let classified = classify_display_property(
+        Value::list(vec![Value::symbol("disable-eval"), Value::string("INNER")]),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     assert_eq!(
         classified.replacement().cloned(),
         Some(DisplayReplacementProperty::String)
     );
     assert_eq!(classified.replacement_spec().as_utf8_str(), Some("INNER"));
+}
+
+#[test]
+fn an_evaluated_when_form_that_did_not_hold_disables_its_spec() {
+    // GNU evaluates FORM (xdisp.c:6130-6160) and skips the spec on nil.  With
+    // the walk's results in hand, `(display-graphic-p)`-style forms are no
+    // longer taken as true just for being non-nil.
+    let mut eval = Context::new();
+    let call = eval.eval_str("'(some-predicate)").expect("read");
+    let spec = Value::cons(
+        Value::symbol("when"),
+        Value::cons(call, Value::string("SHOWN")),
+    );
+    let mut results = rustc_hash::FxHashMap::default();
+    results.insert(call, false);
+    let held_false = crate::display_when::DisplayWhenConditions::evaluated(results);
+    assert!(
+        classify_display_property(spec, &held_false, DisplayPropertyObject::Buffer)
+            .replacement()
+            .is_none()
+    );
+    let mut results = rustc_hash::FxHashMap::default();
+    results.insert(call, true);
+    let held_true = crate::display_when::DisplayWhenConditions::evaluated(results);
+    assert_eq!(
+        classify_display_property(spec, &held_true, DisplayPropertyObject::Buffer)
+            .replacement()
+            .cloned(),
+        Some(DisplayReplacementProperty::String)
+    );
+}
+
+#[test]
+fn a_string_object_takes_the_first_replacing_spec_and_a_buffer_the_last() {
+    // GNU `handle_display_spec` breaks after the first element that replaced
+    // text of a STRING (`if (!it || STRINGP (object)) break;`,
+    // xdisp.c:6034-6040) and lets later elements override for buffer text.
+    let _eval = Context::new();
+    let specs = Value::list(vec![Value::string("FIRST"), Value::string("LAST")]);
+    let structural = crate::display_when::DisplayWhenConditions::structural();
+    assert_eq!(
+        classify_display_property(specs, &structural, DisplayPropertyObject::LispString)
+            .replacement_spec()
+            .as_utf8_str(),
+        Some("FIRST")
+    );
+    assert_eq!(
+        classify_display_property(specs, &structural, DisplayPropertyObject::Buffer)
+            .replacement_spec()
+            .as_utf8_str(),
+        Some("LAST")
+    );
 }

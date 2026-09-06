@@ -714,7 +714,11 @@ fn display_property_source_action_classifies_strings_typed_items_and_resolver_fa
     {
         let mut context = DisplaySourceContext::with_face_resolver(&mut resolver);
 
-        let display_string = DisplayPropertySourcePlan::new(Value::string("displayed"));
+        let display_string = DisplayPropertySourcePlan::new(
+            Value::string("displayed"),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            crate::display_property::DisplayPropertyObject::Buffer,
+        );
         match display_string.source_action(
             &mut context,
             DisplayPropertySourceFaces::Buffer {
@@ -737,7 +741,11 @@ fn display_property_source_action_classifies_strings_typed_items_and_resolver_fa
             Value::keyword(":width"),
             Value::fixnum(2),
         ]);
-        let space_plan = DisplayPropertySourcePlan::new(space_spec);
+        let space_plan = DisplayPropertySourcePlan::new(
+            space_spec,
+            &crate::display_when::DisplayWhenConditions::structural(),
+            crate::display_property::DisplayPropertyObject::Buffer,
+        );
         match space_plan.source_action(
             &mut context,
             DisplayPropertySourceFaces::Buffer {
@@ -757,7 +765,11 @@ fn display_property_source_action_classifies_strings_typed_items_and_resolver_fa
             action => panic!("expected typed space action, got {action:?}"),
         }
 
-        let image_plan = DisplayPropertySourcePlan::new(Value::list(vec![Value::symbol("image")]));
+        let image_plan = DisplayPropertySourcePlan::new(
+            Value::list(vec![Value::symbol("image")]),
+            &crate::display_when::DisplayWhenConditions::structural(),
+            crate::display_property::DisplayPropertyObject::Buffer,
+        );
         match image_plan.source_action(
             &mut context,
             DisplayPropertySourceFaces::Buffer {
@@ -786,7 +798,11 @@ fn display_property_string_base_face_is_explicit_for_buffer_and_string_sources()
     let _eval = Context::new();
     let effective = RenderFaceRef::FaceId(FaceId::new(7));
     let underlying = RenderFaceRef::FaceId(FaceId::new(3));
-    let plan = DisplayPropertySourcePlan::new(Value::string("displayed"));
+    let plan = DisplayPropertySourcePlan::new(
+        Value::string("displayed"),
+        &crate::display_when::DisplayWhenConditions::structural(),
+        crate::display_property::DisplayPropertyObject::Buffer,
+    );
     let mut context = DisplaySourceContext::empty();
 
     let buffer_action = plan.source_action(
