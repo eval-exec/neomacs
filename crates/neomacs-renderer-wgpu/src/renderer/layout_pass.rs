@@ -56,16 +56,6 @@ pub struct PaneBlit {
     pub bounds: Rect,
     /// Where in its source picture its content lives.
     pub content_origin: (f32, f32),
-    /// How much of the source the pane owns, at its destination size.
-    ///
-    /// A travelling pane is often larger than the content it will settle into.
-    /// Sampling `bounds` worth from `content_origin` would then read past its
-    /// own edge into whatever the destination puts beside it — and because the
-    /// composed picture is the destination, that read is pixel-identical to
-    /// what is already on the target, so the pane draws nothing visible and the
-    /// motion is invisible. Clamping to the extent it actually owns is what
-    /// makes the area it has not yet claimed show the frame underneath.
-    pub content_extent: (f32, f32),
     pub source: PaneSource,
     /// How opaque to draw it, for a pane entering or leaving.
     pub opacity: f32,
@@ -122,13 +112,16 @@ impl WgpuRenderer {
         // Quads are grouped by source, because a bind group cannot change
         // within one draw call.
         for pane in panes {
-            // The pane samples its own size from the picture, not its
-            // destination's: while it is still wider than it will end up, it
-            // shows more of the row, and the extra is clipped by its own quad
-            // rather than squeezed into it.
-            // Never past what this pane owns: see `content_extent`.
-            let drawn_w = pane.bounds.width.min(pane.content_extent.0);
-            let drawn_h = pane.bounds.height.min(pane.content_extent.1);
+            // The pane's rect *is* what it draws. There is no clamp here any
+            // more: the compositor clamps when it builds the placement, so the
+            // quad and the interaction projection are the same rectangle by
+            // construction. Clamping here as well made this the second place
+            // that decided a pane's geometry, and the projection -- built from
+            // the unclamped rect -- claimed the vacated strip beside a
+            // shrinking pane and translated a click there by the pane's whole
+            // travel, off the end of the frame.
+            let drawn_w = pane.bounds.width;
+            let drawn_h = pane.bounds.height;
             let u0 = pane.content_origin.0 / frame_width;
             let v0 = pane.content_origin.1 / frame_height;
             let u1 = (pane.content_origin.0 + drawn_w) / frame_width;
