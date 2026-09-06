@@ -1909,9 +1909,9 @@ impl DisplaySpaceWidthPolicy {
                     // not ported: the continuation-row and horizontal-scroll
                     // pen terms (`continuation_lines_width`,
                     // `stretch_adjust`/`first_visible_x`, xdisp.c:32841-32851,
-                    // 32862-32874), and GNU's one-pixel stretch when the pen is
-                    // already past the target (xdisp.c:32882-32883); this
-                    // yields zero width.
+                    // 32862-32874).  A pen already past the target gives a
+                    // zero-width stretch in GNU too (`zero_width_ok_p`,
+                    // xdisp.c:32860, 32876), as here.
                     let target_x = if align_to >= 0 {
                         align_to as f32 + pixels as f32
                     } else {

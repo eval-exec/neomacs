@@ -19,7 +19,7 @@ use neovm_core::emacs_core::display_when::DisplayWhenSite;
 use neovm_core::emacs_core::value::{Value, get_string_text_properties_table_for_value};
 use rustc_hash::FxHashMap;
 
-use crate::neovm_bridge::LayoutBufferView;
+use crate::neovm_bridge::{LayoutBufferView, RustTextPropAccess};
 
 /// The evaluated conditions a walk consults.
 ///
@@ -91,9 +91,9 @@ impl DisplayWhenConditions {
 /// (the table is keyed by structural equality), with the bindings of its
 /// first occurrence; GNU evaluates every occurrence, so a FORM that reads
 /// `position` or `buffer-position` and expects a different answer per
-/// occurrence is not reproduced (declared).  A before-string of an overlay
-/// starting before `from` is bound to `from` rather than to the overlay's
-/// start (declared).  Not scanned, so left to the structural rule
+/// occurrence is not reproduced (declared).  Overlay strings displayed at a
+/// boundary outside `[from, to)` are not reached by this walk and are not
+/// evaluated.  Not scanned, so left to the structural rule
 /// (declared): the `display` properties of strings reached through a
 /// replacing `display` property (modifiers only there) and of margin
 /// strings; frame-local chrome strings never get evaluated results.
@@ -167,52 +167,73 @@ fn collect_when_form_sites(
         }
     }
 
+    // Overlay `display`, `line-prefix` and `wrap-prefix` properties, for the
+    // overlays of this window (GNU skips one scoped to another window both
+    // for its strings, src/xdisp.c:7153-7156, and for its properties,
+    // `overlay_matches_window` in `get_char_property_and_overlay`).
+    // Declared: a prefix from an overlay is bound to the overlay's start; GNU
+    // reads the prefix at each row start (src/xdisp.c:25131-25132, 25180).
     let overlays = buffer.overlays();
     let range = EmacsByteRange::new(
         buffer.layout_char_pos_to_emacs_byte_pos(from),
         buffer.layout_char_pos_to_emacs_byte_pos(to),
     );
-    for overlay in overlays.overlays_in_emacs_byte_range(range) {
-        // GNU skips an overlay scoped to another window before it records
-        // the overlay's strings (src/xdisp.c:7153-7156).
+    let mut boundaries: Vec<CharPos0> = Vec::new();
+    for overlay in overlays.overlays_in_emacs_byte_range(EmacsByteRange::new(
+        buffer
+            .layout_char_pos_to_emacs_byte_pos(from)
+            .saturating_sub_len(neovm_core::buffer::EmacsByteLen::new(1)),
+        buffer
+            .layout_char_pos_to_emacs_byte_pos(to)
+            .add_len(neovm_core::buffer::EmacsByteLen::new(1)),
+    )) {
         if !overlays.overlay_applies_to_window(overlay, window_id) {
             continue;
         }
         let start = overlays
             .overlay_start_emacs_byte_pos(overlay)
-            .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos))
-            .unwrap_or(from)
-            .max(from);
-        if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol("display")) {
-            collect_when_forms(
-                value,
-                buffer_object,
-                gnu_pos(start),
-                gnu_pos(start),
-                &mut sites,
-            );
-        }
-        // Overlay strings and prefixes are displayed as strings: their own
-        // `display` properties are evaluated with `object` bound to the
-        // string.  `buffer-position` is where the string is displayed: the
-        // overlay's start for a before-string and the prefixes, its end for
-        // an after-string, which GNU loads when the iterator reaches that end
-        // (src/xdisp.c:7172-7173) and binds as `it->current.pos`
-        // (src/xdisp.c:5919-5923).
+            .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos));
         let end = overlays
             .overlay_end_emacs_byte_pos(overlay)
-            .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos))
-            .unwrap_or(start)
-            .max(from);
-        for (name, at) in [
-            ("before-string", start),
-            ("after-string", end),
-            ("line-prefix", start),
-            ("wrap-prefix", start),
-        ] {
-            if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol(name)) {
-                collect_prefix_string_when_forms(value, gnu_pos(at), &mut sites);
+            .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos));
+        // A string is displayed where the walk stops at the overlay's start or
+        // end; only those inside the span are reached by this walk.
+        for at in [start, end].into_iter().flatten() {
+            if at >= from && at < to {
+                boundaries.push(at);
             }
+        }
+        if overlays
+            .overlays_in_emacs_byte_range(range)
+            .contains(&overlay)
+        {
+            let at = start.unwrap_or(from).max(from);
+            if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol("display")) {
+                collect_when_forms(value, buffer_object, gnu_pos(at), gnu_pos(at), &mut sites);
+            }
+            for name in ["line-prefix", "wrap-prefix"] {
+                if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol(name)) {
+                    collect_prefix_string_when_forms(value, gnu_pos(at), &mut sites);
+                }
+            }
+        }
+    }
+    // Overlay before- and after-strings: ask the walk's own resolver which
+    // strings it displays at each boundary, so the `window` filter, the
+    // invisible-text rule (a hidden overlay shows both strings at whichever
+    // end the walk reaches, src/xdisp.c:7158-7175) and the one-position load
+    // window around the iterator (src/xdisp.c:7141-7150) have one owner.
+    // `buffer-position` is that position (`it->current.pos`,
+    // src/xdisp.c:5919-5923).
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let access = match window_id {
+        Some(window_id) => RustTextPropAccess::new_for_window(buffer, window_id),
+        None => RustTextPropAccess::new(buffer),
+    };
+    for at in boundaries {
+        for entry in access.overlay_strings_at(at.get() as i64) {
+            collect_prefix_string_when_forms(entry.string, gnu_pos(at), &mut sites);
         }
     }
 
