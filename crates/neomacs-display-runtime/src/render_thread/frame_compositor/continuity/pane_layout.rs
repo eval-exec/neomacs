@@ -522,8 +522,18 @@ fn placed_bounds(change: PaneChange, motion: MotionSample) -> Rect {
             Rect {
                 x: lerp(from.x, to.x, t),
                 y: lerp(from.y, to.y, t),
-                width: lerp(from.width, to.width, t),
-                height: lerp(from.height, to.height, t),
+                // Clamped because `t` is deliberately not. A spring overshoots
+                // past 1.0 and that is the point -- it is what makes the motion
+                // read as physical, and `MotionSample::progress` documents that
+                // clamping it would delete exactly that. But an extent is not a
+                // position: `x` extrapolating past its destination is a picture
+                // of something, a negative width is not. A pane collapsing to
+                // near nothing (an echo area, say) inverts within a few percent
+                // of overshoot, and `GeometryRect::new` then rejects it -- which
+                // drops the pane from the interaction projection and falls the
+                // hit test silently back to identity.
+                width: lerp(from.width, to.width, t).max(0.0),
+                height: lerp(from.height, to.height, t).max(0.0),
             }
         }
         PaneChange::Entered { to, .. } => to,
@@ -692,22 +702,32 @@ fn vacated_strips(from: Rect, to: Rect, bounds: Rect) -> impl Iterator<Item = Va
         bounds: rect,
         content_origin: old_picture_origin(from, bounds, rect),
     };
-    let horizontal = (bounds.width - to.width > REFLOW_WIDTH_EPSILON).then(|| {
-        strip(Rect::new(
-            bounds.x + to.width,
-            bounds.y,
-            bounds.width - to.width,
-            bounds.height,
-        ))
-    });
-    let vertical = (bounds.height - to.height > REFLOW_WIDTH_EPSILON).then(|| {
-        strip(Rect::new(
-            bounds.x,
-            bounds.y + to.height,
-            bounds.width,
-            bounds.height - to.height,
-        ))
-    });
+    // Gated on the *change* being a shrink, not on the instantaneous width.
+    // Reading only `bounds` meant a GROWING pane briefly measured wider than
+    // its destination while overshooting, and published an opaque slab of
+    // stale pre-change pixels -- drawn last, over the neighbour it had just
+    // uncovered. This is also what the doc above already claims: the strips of
+    // `bounds` beyond what the pane *will keep*.
+    let shrinks_horizontally = from.width - to.width > REFLOW_WIDTH_EPSILON;
+    let shrinks_vertically = from.height - to.height > REFLOW_WIDTH_EPSILON;
+    let horizontal =
+        (shrinks_horizontally && bounds.width - to.width > REFLOW_WIDTH_EPSILON).then(|| {
+            strip(Rect::new(
+                bounds.x + to.width,
+                bounds.y,
+                bounds.width - to.width,
+                bounds.height,
+            ))
+        });
+    let vertical =
+        (shrinks_vertically && bounds.height - to.height > REFLOW_WIDTH_EPSILON).then(|| {
+            strip(Rect::new(
+                bounds.x,
+                bounds.y + to.height,
+                bounds.width,
+                bounds.height - to.height,
+            ))
+        });
     horizontal.into_iter().chain(vertical)
 }
 
