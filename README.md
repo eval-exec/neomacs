@@ -205,8 +205,8 @@ Crypto donations are also welcome — scan a QR code or copy an address:
     <td align="center" width="240"><img src="assets/receive_usdc_erc20_0xF5e8493b611F8D4c07850C2cC77b38dD632620F2.png" width="240" alt="USDC (ERC-20) donation QR code"/></td>
   </tr>
   <tr>
-    <td align="center" width="240"><small>bc1p0y3fzf<wbr>fqrqw08k8n<wbr>c2ge3dfj02<wbr>hr22ku8nug<wbr>nc04ek522g<wbr>ty9kjsyy8l<wbr>gc</small></td>
-    <td align="center" width="240"><small>0xF5e8493b<wbr>611F8D4c07<wbr>850C2cC77b<wbr>38dD632620<wbr>F2</small></td>
+    <td align="center" width="240"><sub>bc1p0y3fzf<wbr>fqrqw08k8n<wbr>c2ge3dfj02<wbr>hr22ku8nug<wbr>nc04ek522g<wbr>ty9kjsyy8l<wbr>gc</sub></td>
+    <td align="center" width="240"><sub>0xF5e8493b<wbr>611F8D4c07<wbr>850C2cC77b<wbr>38dD632620<wbr>F2</sub></td>
   </tr>
 </table>
 
