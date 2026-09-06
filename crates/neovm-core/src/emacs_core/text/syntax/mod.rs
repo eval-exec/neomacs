@@ -2879,6 +2879,45 @@ fn flat_ascii_entries_for_table(table: &SyntaxTable) -> [ParseSyntaxEntry; 128] 
     entries
 }
 
+thread_local! {
+    /// Persistent flat ASCII classifier for the regex/`char-syntax` path,
+    /// storing the FULL [`SyntaxEntry`] (the parser's `SYNTAX_FLAT_ASCII_*`
+    /// keeps only class+flags and cannot serve `matching_char`). Keyed the same
+    /// way — `(chartable bits, char_table_write_tick)` — so any char-table
+    /// write invalidates it. This is what stops `re-search-forward`'s per-call
+    /// `SyntaxPropByteRun` from re-decoding every ASCII char through
+    /// `ct_lookup` on each of the thousands of calls font-lock makes.
+    static SYNTAX_FLAT_ASCII_ENTRY_CACHE: std::cell::Cell<Option<(usize, u64)>> =
+        const { std::cell::Cell::new(None) };
+    static SYNTAX_FLAT_ASCII_ENTRY_ENTRIES: std::cell::RefCell<[SyntaxEntry; 128]> =
+        const { std::cell::RefCell::new([SYNTAX_ENTRY_WHITESPACE; 128]) };
+}
+
+const SYNTAX_ENTRY_WHITESPACE: SyntaxEntry = SyntaxEntry {
+    class: SyntaxClass::Whitespace,
+    matching_char: None,
+    flags: SyntaxFlags::empty(),
+};
+
+/// The syntax entry for ASCII `cp` under `table`, served from a thread-local
+/// flat classifier that survives across match calls (the per-`SyntaxPropByteRun`
+/// memo does not). On a cache miss the whole 0..128 range is filled once via
+/// `syntax_entry_from_table`; subsequent lookups — this call and every later
+/// one until a char-table write bumps the tick — are a single array index.
+fn flat_ascii_syntax_entry(table: &SyntaxTable, cp: u8) -> SyntaxEntry {
+    debug_assert!(cp < 128);
+    let key = (
+        table.chartable.bits(),
+        crate::emacs_core::chartable::char_table_write_tick(),
+    );
+    if SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|c| c.get()) != Some(key) {
+        let entries: [SyntaxEntry; 128] =
+            std::array::from_fn(|i| syntax_entry_from_table(table, i as u8 as char));
+        SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|e| *e.borrow_mut() = entries);
+        SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|c| c.set(Some(key)));
+    }
+    SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|e| e.borrow()[cp as usize])
+}
 pub(crate) fn syntax_entry_at_char_code(table: &Value, code: u32) -> Option<SyntaxEntry> {
     let effective = if table.is_nil() {
         ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
@@ -3142,7 +3181,7 @@ impl<'a> SyntaxPropByteRun<'a> {
         if let Some(entry) = slot.get() {
             return Some(entry);
         }
-        let entry = syntax_entry_from_table(table, ch);
+        let entry = flat_ascii_syntax_entry(table, cp as u8);
         slot.set(Some(entry));
         Some(entry)
     }
@@ -3448,7 +3487,7 @@ impl<'a> SyntaxPropRange<'a> {
         if let Some(entry) = slot.get() {
             return Some(entry);
         }
-        let entry = syntax_entry_from_table(table, ch);
+        let entry = flat_ascii_syntax_entry(table, cp as u8);
         slot.set(Some(entry));
         Some(entry)
     }
@@ -7083,3 +7122,43 @@ fn expect_skip_syntax_args(caller: &str, args: &[Value]) -> Result<(String, Opti
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+mod flat_ascii_syntax_entry_cache_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_ascii_lookups_decode_the_table_once_per_write_tick() {
+        // The persistent flat ASCII cache must survive across `SyntaxPropByteRun`
+        // instances (one is built per `re-search-forward`), so font-lock's
+        // thousands of searches do not re-decode every ASCII char through
+        // `ct_lookup`. Before: N searches x distinct chars decodes; after: 128.
+        let table = SyntaxTable::new_standard();
+        // Warm the persistent cache once (fills 0..128).
+        let _ = flat_ascii_syntax_entry(&table, b'a');
+        reset_syntax_table_decodes_for_test();
+
+        // A fresh per-scan memo per "search", each looking up several chars.
+        for _ in 0..50 {
+            let run = SyntaxPropByteRun::new(SyntaxProperties::Ignore);
+            for &c in b"abc(); \t\ndefun-let" {
+                let _ = run.ascii_entry(&table, c as char);
+            }
+        }
+        assert_eq!(
+            syntax_table_decodes_for_test(),
+            0,
+            "a warm persistent cache serves ASCII entries without re-decoding"
+        );
+
+        // The entries returned still match a direct table decode.
+        for &c in b"a(); \tX9_-" {
+            assert_eq!(
+                flat_ascii_syntax_entry(&table, c),
+                syntax_entry_from_table(&table, c as char),
+                "flat ASCII cache must agree with a direct decode for {}",
+                c as char
+            );
+        }
+    }
+}
