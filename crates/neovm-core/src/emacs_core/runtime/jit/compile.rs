@@ -3901,5 +3901,5 @@ pub use shims::*;
 mod dispatch;
 pub use dispatch::*;
 #[cfg(test)]
-#[path = "compile_tests.rs"]
+#[path = "tests/compile.rs"]
 mod tests;

@@ -22,7 +22,7 @@ use std::thread::JoinHandle;
 const INOTIFY_KEY: usize = 1;
 
 #[cfg(test)]
-#[path = "worker_test.rs"]
+#[path = "tests/worker.rs"]
 mod worker_test;
 
 #[cfg(test)]

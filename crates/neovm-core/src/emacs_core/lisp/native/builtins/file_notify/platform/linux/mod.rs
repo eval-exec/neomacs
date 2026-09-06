@@ -23,6 +23,7 @@ mod worker;
 pub(crate) use lisp::{inotify_add_watch, inotify_rm_watch, inotify_valid_p};
 
 #[cfg(test)]
+#[path = "tests/linux.rs"]
 mod linux_test;
 
 use worker::{NativeEvent, Worker, WorkerControl};

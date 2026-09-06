@@ -583,5 +583,5 @@ pub trait DisplayHost {
 }
 
 #[cfg(test)]
-#[path = "display_host_test.rs"]
+#[path = "tests/display_host.rs"]
 mod tests;
