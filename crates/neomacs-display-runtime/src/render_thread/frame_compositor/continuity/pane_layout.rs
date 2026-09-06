@@ -138,7 +138,17 @@ struct PendingRetarget {
 pub(in crate::render_thread) struct RoleSamples {
     pub(in crate::render_thread) geometry: MotionSample,
     open: MotionSample,
-    close: MotionSample,
+    /// `None` when the close slot is disabled, which is not the same as a
+    /// close motion that has arrived.
+    ///
+    /// Every other role collapses a disabled slot to [`rest`], because
+    /// "arrived" is what a disabled slot should look like: a pane that is not
+    /// travelling is at its destination, one that is not fading in is opaque.
+    /// A departing pane inverts that. Its opacity runs `1 - mix`, so "arrived"
+    /// would mean *gone* -- a window that vanishes the instant it is deleted,
+    /// which is precisely the jump the morph exists to remove. Disabled has to
+    /// mean "never fades", and only an absent sample can say that.
+    close: Option<MotionSample>,
 }
 
 /// A role with no motion samples as *arrived*, never as absent.
@@ -154,8 +164,21 @@ impl RoleSamples {
     /// spring that has already settled, and dropping the morph at the first
     /// role to finish would cut that fade off mid-way. A role with no motion
     /// samples as arrived, so it never holds the morph open.
-    pub(in crate::render_thread) const fn finished(self) -> bool {
-        self.geometry.finished && self.open.finished && self.close.finished
+    pub(in crate::render_thread) fn finished(self) -> bool {
+        self.geometry.finished && self.open.finished && self.close.is_none_or(|c| c.finished)
+    }
+
+    /// How opaque a pane that is leaving should be drawn.
+    ///
+    /// Opaque when the close slot is disabled: the pane holds the ground it
+    /// has not yet given up and is *uncovered* by whatever grows across it,
+    /// rather than blended with it. That is the shipped default, because
+    /// fading a departing pane over a backdrop already showing the settled
+    /// layout is a double exposure -- the deleted window and the pane replacing
+    /// it both half-visible for the length of the motion.
+    fn departing_opacity(self) -> f32 {
+        self.close
+            .map_or(1.0, |close| 1.0 - close.content_mix.get())
     }
 }
 
@@ -389,11 +412,12 @@ impl PaneLayoutMorph {
     pub(in crate::render_thread) fn spliced(&self, frame: FrameSample) -> Option<Self> {
         let pending = self.pending.as_ref()?;
         let samples = self.sample_roles(frame);
+        let vacated = self.vacated_at(samples);
         // Where the panes actually are on screen right now. This, not the
         // committed layout, is what the next motion must start from.
         let placed: std::collections::HashMap<LiveDisplayWindowId, Rect> = self
             .changes()
-            .filter_map(|change| PanePlacement::at(change, samples))
+            .filter_map(|change| PanePlacement::at(change, samples, &vacated))
             .map(|placement| (placement.window, placement.bounds))
             .collect();
 
@@ -450,7 +474,7 @@ impl PaneLayoutMorph {
         let close = changes
             .iter()
             .any(|change| matches!(change, PaneChange::Exited { .. }))
-            .then(|| resume(pending.specs.close, samples.close.rate))
+            .then(|| resume(pending.specs.close, samples.close.map_or(0.0, |c| c.rate)))
             .flatten();
         // Only when *no* role is live is there nothing left to animate. A `?`
         // on one role's resume would abort the splice on another's behalf.
@@ -479,12 +503,30 @@ impl PaneLayoutMorph {
     }
 
     /// Where every pane sits at `frame`.
+    /// Where every shrinking pane is currently giving ground up.
+    ///
+    /// Needed wherever an entering pane is placed, because it arrives through
+    /// that gap: `spliced` reads it for the same reason `sample` does, so a
+    /// layout arriving mid-slide carries the pane on from where it actually is
+    /// rather than snapping it to its destination.
+    fn vacated_at(&self, motion: RoleSamples) -> Vec<VacatedStrip> {
+        self.changes()
+            .filter_map(|change| match change {
+                PaneChange::Persisted { from, to, .. } => {
+                    Some(vacated_strips(from, to, placed_bounds(change, motion)))
+                }
+                PaneChange::Entered { .. } | PaneChange::Exited { .. } => None,
+            })
+            .flatten()
+            .collect()
+    }
+
     /// One sample of every role at `frame`.
     fn sample_roles(&self, frame: FrameSample) -> RoleSamples {
         RoleSamples {
             geometry: self.geometry.map_or_else(rest, |m| m.sample(frame)),
             open: self.open.map_or_else(rest, |m| m.sample(frame)),
-            close: self.close.map_or_else(rest, |m| m.sample(frame)),
+            close: self.close.map(|m| m.sample(frame)),
         }
     }
 
@@ -504,9 +546,10 @@ impl PaneLayoutMorph {
                 PaneChange::Entered { .. } | PaneChange::Exited { .. } => None,
             })
             .collect();
+        let vacated = self.vacated_at(motion);
         let mut panes = Vec::new();
         for change in self.changes() {
-            place(change, motion, &claimed, &mut panes);
+            place(change, motion, &claimed, &vacated, &mut panes);
         }
         LayoutSample { panes, motion }
     }
@@ -565,7 +608,7 @@ impl PanePlacement {
     ///
     /// One placement each. A shrinking or growing pane contributes more, and
     /// [`place`] is what adds them.
-    fn at(change: PaneChange, motion: RoleSamples) -> Option<Self> {
+    fn at(change: PaneChange, motion: RoleSamples, vacated: &[VacatedStrip]) -> Option<Self> {
         Some(match change {
             PaneChange::Persisted { window, from, to } => {
                 let bounds = placed_bounds(change, motion);
@@ -621,14 +664,26 @@ impl PanePlacement {
             // is what distinguishes it from the frame simply being redrawn: a
             // new window arriving instantly at full opacity is exactly the jump
             // the morph exists to remove.
-            PaneChange::Entered { window, to } => Self {
-                window,
-                bounds: to,
-                painted: to,
-                content_origin: (to.x, to.y),
-                source: neomacs_renderer_wgpu::PaneSource::Destination,
-                opacity: motion.open.content_mix.get(),
-            },
+            PaneChange::Entered { window, to } => {
+                // Slid in from the divider, not revealed in place. Its size is
+                // constant, so its content can travel with it -- the case a
+                // resizing pane cannot use, because there the destination
+                // picture is laid out for a size the pane does not yet have.
+                let (dx, dy) = entry_offset(to, vacated);
+                let arriving = Rect {
+                    x: to.x + dx,
+                    y: to.y + dy,
+                    ..to
+                };
+                Self {
+                    window,
+                    bounds: arriving,
+                    painted: arriving,
+                    content_origin: (to.x, to.y),
+                    source: neomacs_renderer_wgpu::PaneSource::Destination,
+                    opacity: motion.open.content_mix.get(),
+                }
+            }
             // A leaving pane holds still at the rect it had reached, reading
             // from the *previous* composition. That source is the whole point:
             // its window is absent from the destination, so the composed
@@ -644,7 +699,7 @@ impl PanePlacement {
                 painted: from,
                 content_origin: (from.x, from.y),
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
-                opacity: 1.0,
+                opacity: motion.departing_opacity(),
             },
         })
     }
@@ -766,7 +821,13 @@ const REFLOW_WIDTH_EPSILON: f32 = 1.0;
 /// destination nothing in the frame is moving. Holding it opaque means the
 /// frame is partitioned at every instant: new pane, old picture, new pane —
 /// and the boundary between them is the divider, travelling.
-fn place(change: PaneChange, motion: RoleSamples, claimed: &[Rect], out: &mut Vec<PanePlacement>) {
+fn place(
+    change: PaneChange,
+    motion: RoleSamples,
+    claimed: &[Rect],
+    vacated: &[VacatedStrip],
+    out: &mut Vec<PanePlacement>,
+) {
     let bounds = placed_bounds(change, motion);
     if let PaneChange::Persisted { window, from, to } = change {
         // The pane's old wrapping, fading out as the destination underneath
@@ -824,7 +885,7 @@ fn place(change: PaneChange, motion: RoleSamples, claimed: &[Rect], out: &mut Ve
             });
         }
     }
-    let Some(mut placement) = PanePlacement::at(change, motion) else {
+    let Some(mut placement) = PanePlacement::at(change, motion, vacated) else {
         return;
     };
     if let PaneChange::Exited { from, .. } = change {
@@ -850,10 +911,51 @@ fn old_picture_origin(from: Rect, bounds: Rect, visible: Rect) -> (f32, f32) {
     )
 }
 
+/// How far an entering pane still is from where it will settle.
+///
+/// A window created by a split is carved out of its neighbour, so it arrives
+/// *through* the ground that neighbour is giving up: its leading edge rides the
+/// vacated strip's edge, which is the divider. That ties its position to the
+/// geometry motion rather than to its own curve -- deliberately, because two
+/// clocks either side of a moving seam is exactly what tears one. `window-open`
+/// shapes its opacity; the divider decides where it is.
+///
+/// Placing it at its destination instead is what made a split read as "the new
+/// buffer was already there": the pane was uncovered in place, so nothing about
+/// it ever moved and it never looked attached to the window it belongs to.
+///
+/// `(0, 0)` when no vacated strip touches it -- a window that appears without
+/// anything shrinking to make room has nowhere to travel from, and fades in
+/// where it belongs.
+fn entry_offset(to: Rect, vacated: &[VacatedStrip]) -> (f32, f32) {
+    vacated
+        .iter()
+        .find(|strip| {
+            intersection(strip.bounds, to).is_some_and(|shared| {
+                shared.width > REFLOW_WIDTH_EPSILON && shared.height > REFLOW_WIDTH_EPSILON
+            })
+        })
+        .map_or((0.0, 0.0), |strip| match strip.axis {
+            StripAxis::Horizontal => (strip.bounds.x + strip.bounds.width - to.x, 0.0),
+            StripAxis::Vertical => (0.0, strip.bounds.y + strip.bounds.height - to.y),
+        })
+}
+
 /// One rectangle of the old picture that a shrinking pane has not vacated.
 struct VacatedStrip {
     bounds: Rect,
     content_origin: (f32, f32),
+    axis: StripAxis,
+}
+
+/// Which way a pane gave ground up.
+///
+/// Kept because an entering pane arrives *through* the gap: the axis says
+/// whether it slides in horizontally or vertically.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StripAxis {
+    Horizontal,
+    Vertical,
 }
 
 /// The strips of `bounds` that lie beyond what the pane will keep.
@@ -863,9 +965,10 @@ struct VacatedStrip {
 /// travels, the old text travels with it rather than standing still while the
 /// pane slides out from under it.
 fn vacated_strips(from: Rect, to: Rect, bounds: Rect) -> impl Iterator<Item = VacatedStrip> {
-    let strip = move |rect: Rect| VacatedStrip {
+    let strip = move |rect: Rect, axis: StripAxis| VacatedStrip {
         bounds: rect,
         content_origin: old_picture_origin(from, bounds, rect),
+        axis,
     };
     // Gated on the *change* being a shrink, not on the instantaneous width.
     // Reading only `bounds` meant a GROWING pane briefly measured wider than
@@ -877,21 +980,27 @@ fn vacated_strips(from: Rect, to: Rect, bounds: Rect) -> impl Iterator<Item = Va
     let shrinks_vertically = from.height - to.height > REFLOW_WIDTH_EPSILON;
     let horizontal =
         (shrinks_horizontally && bounds.width - to.width > REFLOW_WIDTH_EPSILON).then(|| {
-            strip(Rect::new(
-                bounds.x + to.width,
-                bounds.y,
-                bounds.width - to.width,
-                bounds.height,
-            ))
+            strip(
+                Rect::new(
+                    bounds.x + to.width,
+                    bounds.y,
+                    bounds.width - to.width,
+                    bounds.height,
+                ),
+                StripAxis::Horizontal,
+            )
         });
     let vertical =
         (shrinks_vertically && bounds.height - to.height > REFLOW_WIDTH_EPSILON).then(|| {
-            strip(Rect::new(
-                bounds.x,
-                bounds.y + to.height,
-                bounds.width,
-                bounds.height - to.height,
-            ))
+            strip(
+                Rect::new(
+                    bounds.x,
+                    bounds.y + to.height,
+                    bounds.width,
+                    bounds.height - to.height,
+                ),
+                StripAxis::Vertical,
+            )
         });
     horizontal.into_iter().chain(vertical)
 }
