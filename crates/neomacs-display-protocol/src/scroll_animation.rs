@@ -279,6 +279,16 @@ pub enum TransitionEasing {
     /// Ease-in-out cubic (smooth S-curve).
     #[strum(to_string = "ease-in-out-cubic", serialize = "ease-in-out")]
     EaseInOutCubic,
+
+    /// Ease-out exponential: very fast start, long tail.
+    ///
+    /// niri's default for opening a window, which is what it is here for. The
+    /// implementation is [`crate::types::ease_out_expo`], which pins `t >= 1.0`
+    /// to exactly 1.0 -- the bare curve `1 - 2^(-10t)` reaches only 0.999 at
+    /// t = 1, and niri gets away with that because it forces the endpoint from
+    /// outside the curve.
+    #[strum(to_string = "ease-out-expo", serialize = "expo")]
+    EaseOutExpo,
 }
 
 impl TransitionEasing {
@@ -292,6 +302,7 @@ impl TransitionEasing {
             Self::EaseOutQuad => 1.0 - (1.0 - t).powi(2),
             Self::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
             Self::Linear => t,
+            Self::EaseOutExpo => crate::types::ease_out_expo(t),
             Self::EaseInOutCubic => {
                 if t < 0.5 {
                     4.0 * t * t * t

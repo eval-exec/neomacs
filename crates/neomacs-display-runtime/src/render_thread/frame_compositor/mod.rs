@@ -114,7 +114,7 @@ pub(crate) struct FrameCompositor {
     /// identity — the ordinary case, not a fallback.
     pub(super) interaction: Option<neomacs_display_protocol::InteractionProjection>,
     /// How panes should travel, from the current quality policy.
-    pub(super) pane_motion: neomacs_display_protocol::motion_spec::MotionSpec,
+    pub(super) pane_motion: crate::render_thread::render_quality::WindowAnimationSpecs,
     /// What the compositor is doing about the layout: settled, or carrying the
     /// panes between two of them. A state machine rather than an `Option`,
     /// because every question about it is then a `match` the compiler requires
@@ -208,7 +208,7 @@ impl FrameCompositor {
             reflow_imprints: ReflowImprintsByWindow::default(),
             baseline: None,
             interaction: None,
-            pane_motion: neomacs_display_protocol::motion_spec::MotionSpec::Instant,
+            pane_motion: crate::render_thread::render_quality::WindowAnimationSpecs::INSTANT,
             layout: layout_driver::LayoutDriver::default(),
             pending: PendingContinuity::default(),
         }

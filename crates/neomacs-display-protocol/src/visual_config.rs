@@ -5,6 +5,10 @@
 //! subsystems.  Keeping that distinction behind `VisualConfig` gives Elisp a
 //! single named, typed, atomic interface without flattening the runtime model.
 
+use crate::window_animation::{
+    WindowAnimation, WindowAnimationsConfig, default_window_close, default_window_movement,
+    default_window_open, default_window_resize,
+};
 use crate::{
     CursorAnimStyle, EffectsConfig, TransitionAxisPreference, TransitionDirection,
     TransitionEasing, TransitionEffect,
@@ -119,85 +123,9 @@ impl Default for ScrollTransitionConfig {
     }
 }
 
-/// How panes travel when a layout change moves them.
-///
-/// Splitting a window, deleting one, or resizing the frame rearranges every
-/// pane at once; committed as a single presentation, that arrives as a jump.
-/// This says whether — and how — the compositor carries them there instead.
-///
-/// The shape is three scalars rather than a [`MotionSpec`] field, and that is
-/// load-bearing: the effect registry reflects `VisualConfig` through serde and
-/// can only carry scalar property values (plus the one special case for
-/// `Duration`). A `MotionSpec` serializes to an externally tagged *object* for
-/// every variant but `Instant`, so storing one here would make
-/// `neomacs-effect-get 'pane-motion` fail the moment motion was switched on —
-/// and `neomacs-effects-apply`, which walks every effect, with it.
-/// [`Self::movement`] converts to the precise form the compositor samples.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct PaneMotionConfig {
-    pub enabled: bool,
-    pub duration: Duration,
-    pub easing: TransitionEasing,
-}
-
-impl Default for PaneMotionConfig {
-    /// On.
-    ///
-    /// It was off for as long as nothing could watch it: pane motion is
-    /// disabled on a software adapter, which is the only adapter class
-    /// available under Xvfb (llvmpipe, and lavapipe under
-    /// `WGPU_BACKEND=vulkan`), so no headless run could execute the per-pane
-    /// pass end to end. Shipping it on that evidence would have meant an
-    /// animation that had never once run in a live editor, on every layout
-    /// change and every echo-area resize.
-    ///
-    /// It has since been watched on hardware — the divider sweep across a
-    /// `C-x 3` verified frame by frame, `tmp/impl/capture-split.sh` — and that
-    /// watching is what found the last two defects, both of which rendered as a
-    /// completely static frame while every placement in the model interpolated
-    /// perfectly: a morph with no pinned picture to fade from, and a vacated
-    /// strip that crossfaded instead of holding.
-    ///
-    /// Enabling it has a standing cost, not just a per-motion one. A morph
-    /// needs the frame as it was *before* the change, and a picture that was
-    /// never composed offscreen was never kept — so with this on, every frame
-    /// composes through the ring: two resident full-frame textures and one
-    /// extra full-frame blit per frame, whether or not anything is moving. See
-    /// `RenderFeaturePlan::compose_offscreen`. Turning this off gets that back.
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            duration: Duration::from_millis(160),
-            easing: TransitionEasing::EaseOutCubic,
-        }
-    }
-}
-
-impl PaneMotionConfig {
-    /// How a pane travels under this configuration.
-    ///
-    /// [`MotionSpec::Instant`] whenever there is nothing to animate — disabled,
-    /// or a duration of zero. That is not merely the fast path: a caller that
-    /// sees an instant spec builds no motion, takes no offscreen and composes
-    /// exactly as it would with this feature absent.
-    #[must_use]
-    pub fn movement(&self) -> crate::motion_spec::MotionSpec {
-        use crate::motion_spec::{MotionDuration, MotionSpec, TweenSpec};
-        if !self.enabled {
-            return MotionSpec::Instant;
-        }
-        MotionDuration::new(self.duration).map_or(MotionSpec::Instant, |duration| {
-            MotionSpec::Tween(TweenSpec {
-                duration,
-                easing: self.easing,
-            })
-        })
-    }
-}
-
 /// Desired visual configuration owned by the evaluator and published as one
 /// snapshot to the render thread.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VisualConfig {
     /// The large shader-effect catalog remains a focused renderer type.  Serde
     /// flattening exposes it beside the behavioral configs in the registry.
@@ -208,6 +136,42 @@ pub struct VisualConfig {
     pub cursor_size_transition: CursorSizeTransitionConfig,
     pub buffer_transition: BufferTransitionConfig,
     pub scroll_transition: ScrollTransitionConfig,
+    /// Global controls over every window-animation slot below.
     #[serde(default)]
-    pub pane_motion: PaneMotionConfig,
+    pub window_animations: WindowAnimationsConfig,
+    /// A window appearing: `split-window` and anything else that adds one.
+    #[serde(default = "default_window_open")]
+    pub window_open: WindowAnimation,
+    /// A window going away: `delete-window`, `delete-other-windows`.
+    #[serde(default = "default_window_close")]
+    pub window_close: WindowAnimation,
+    /// A surviving window whose *size* changes. Drives geometry.
+    #[serde(default = "default_window_resize")]
+    pub window_resize: WindowAnimation,
+    /// A surviving window that only moves. Drives geometry.
+    #[serde(default = "default_window_movement")]
+    pub window_movement: WindowAnimation,
+}
+
+/// Written out rather than derived, because the four window-animation slots do
+/// not share a default: opening and closing are easings, resizing and moving
+/// are springs, and closing ships disabled. A `#[derive(Default)]` would give
+/// all four the same value and silently ignore the `#[serde(default = ...)]`
+/// attributes above, which only apply to deserialization.
+impl Default for VisualConfig {
+    fn default() -> Self {
+        Self {
+            effects: EffectsConfig::default(),
+            cursor_blink: CursorBlinkConfig::default(),
+            cursor_motion: CursorMotionConfig::default(),
+            cursor_size_transition: CursorSizeTransitionConfig::default(),
+            buffer_transition: BufferTransitionConfig::default(),
+            scroll_transition: ScrollTransitionConfig::default(),
+            window_animations: WindowAnimationsConfig::default(),
+            window_open: default_window_open(),
+            window_close: default_window_close(),
+            window_resize: default_window_resize(),
+            window_movement: default_window_movement(),
+        }
+    }
 }
