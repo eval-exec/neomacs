@@ -1587,10 +1587,9 @@ impl IntervalTree {
         }
 
         self.ensure_cover(range.end());
-        self.split_at(range.start());
+        let first = self.split_at(range.start());
         self.split_at(range.end());
-
-        self.ids_overlapping(range)
+        self.ids_from_split(first, range)
     }
 
     fn existing_intervals_overlapping_after_splits(
@@ -1600,11 +1599,41 @@ impl IntervalTree {
         if range.is_empty() || self.root.is_none() {
             return Vec::new();
         }
-
-        self.split_at(range.start());
+        let first = self.split_at(range.start());
         self.split_at(range.end());
+        self.ids_from_split(first, range)
+    }
 
-        self.ids_overlapping(range)
+    /// The intervals overlapping `range`, walked forward from `first` — the
+    /// interval `split_at(range.start())` returned, which begins exactly at
+    /// `range.start()`. `split_at(range.end())` cannot move it: a split keeps the
+    /// original node as the LEFT piece and pushes a new node for the right one,
+    /// and rotations preserve in-order with arena-stable ids. Walking from it
+    /// replaces a `find_id` descent that also evicted the position memo the
+    /// caller's next lookup wanted (GNU keeps its interval pointer across the
+    /// split for the same reason: `add_text_properties_1` never re-finds).
+    fn ids_from_split(
+        &self,
+        first: Option<IntervalId>,
+        range: CharRange,
+    ) -> Vec<(CharPos0, IntervalId)> {
+        let mut result = Vec::new();
+        let Some(mut id) = first else {
+            return result;
+        };
+        let mut node_start = range.start();
+        while node_start < range.end() {
+            let node_end = self.interval_end(node_start, id);
+            if node_end > range.start() {
+                result.push((node_start, id));
+            }
+            let Some(next_id) = self.next_id(id) else {
+                break;
+            };
+            node_start = node_end;
+            id = next_id;
+        }
+        result
     }
 
     fn set_node_plist(&mut self, id: IntervalId, plist: Value) {
@@ -1990,6 +2019,10 @@ impl IntervalTree {
         Some((start, &self.nodes[id.0]))
     }
 
+    /// Successor steps the position memo tries before falling back to a root
+    /// descent (see the walk in `find_id`).
+    const FIND_MEMO_WALK_BUDGET: usize = 8;
+
     fn find_id(&self, pos: CharPos0) -> Option<(CharPos0, IntervalId)> {
         // Positional last-descent memo (see the `version`/`cache_*` fields): a lookup
         // that lands inside the previously located interval, at the same tree
@@ -2016,10 +2049,21 @@ impl IntervalTree {
             // walker in `intervals_from` already relies on), so the successor
             // begins exactly where the cached interval ended. Zero-length nodes
             // contain no position and are stepped over.
-            if pos == end {
+            //
+            // A position a few intervals PAST the memo is the same shape one
+            // level up: font-lock's next keyword range starts a couple of
+            // intervals after the last one it wrote. Walk up to
+            // `FIND_MEMO_WALK_BUDGET` successors before giving up on the memo
+            // and descending — every step is O(1) and a descent is O(log n).
+            if pos >= end {
                 let mut id = IntervalId(self.cache_id.load(Ordering::Relaxed));
                 let mut start = end;
+                let mut steps = 0usize;
                 while let Some(next) = self.next_id(id) {
+                    steps += 1;
+                    if steps > Self::FIND_MEMO_WALK_BUDGET {
+                        break;
+                    }
                     let next_end = start.add_len(self.node_len(next));
                     if pos < next_end {
                         self.cache_start.store(start.get(), Ordering::Relaxed);
@@ -2106,25 +2150,6 @@ impl IntervalTree {
         }
         self.first_id_after(range.start())
             .filter(|(next_start, _)| *next_start < range.end())
-    }
-
-    fn ids_overlapping(&self, range: CharRange) -> Vec<(CharPos0, IntervalId)> {
-        let mut result = Vec::new();
-        let Some((mut node_start, mut id)) = self.first_id_overlapping(range) else {
-            return result;
-        };
-        while node_start < range.end() {
-            let node_end = self.interval_end(node_start, id);
-            if node_end > range.start() {
-                result.push((node_start, id));
-            }
-            let Some(next_id) = self.next_id(id) else {
-                break;
-            };
-            node_start = node_end;
-            id = next_id;
-        }
-        result
     }
 
     fn find_first_id_after(
