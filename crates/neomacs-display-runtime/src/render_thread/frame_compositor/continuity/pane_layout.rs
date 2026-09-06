@@ -346,17 +346,38 @@ impl PaneLayoutMorph {
     /// Where every pane sits at `frame`.
     pub(in crate::render_thread) fn sample(&self, frame: FrameSample) -> LayoutSample {
         let motion = self.motion.sample(frame);
-        LayoutSample {
-            panes: {
-                let mut panes = Vec::new();
-                for change in self.changes() {
-                    place(change, motion, &mut panes);
-                }
-                panes
-            },
-            motion,
+        // What the surviving panes have reached, computed before anything is
+        // placed because a departing pane has to be trimmed to what is left.
+        //
+        // Only panes that survive claim ground. An `Entered` pane sits at its
+        // destination from the first frame, so counting it would erase a
+        // departing pane immediately -- which is the jump the morph exists to
+        // remove.
+        let claimed: Vec<Rect> = self
+            .changes()
+            .filter_map(|change| match change {
+                PaneChange::Persisted { to, .. } => intersection(placed_bounds(change, motion), to),
+                PaneChange::Entered { .. } | PaneChange::Exited { .. } => None,
+            })
+            .collect();
+        let mut panes = Vec::new();
+        for change in self.changes() {
+            place(change, motion, &claimed, &mut panes);
         }
+        LayoutSample { panes, motion }
     }
+}
+
+/// What is left of `rect` once every claimed area is taken out of it.
+///
+/// `None` as soon as one step leaves something this cannot express, because a
+/// departing pane draws the old picture *over* the destination: a quad that is
+/// too large hides the pane taking its place, and dropping it merely means the
+/// old window vanishes a little early.
+fn unclaimed(rect: Rect, claimed: &[Rect]) -> Option<Rect> {
+    claimed
+        .iter()
+        .try_fold(rect, |left, taken| remainder(left, *taken))
 }
 
 /// Where one pane is drawn, and which of its content that shows.
@@ -387,30 +408,54 @@ fn lerp(from: f32, to: f32, t: f32) -> f32 {
 impl PanePlacement {
     /// Where `change` puts its pane at `motion`.
     ///
-    /// Usually one placement; two while a pane whose *width* changed is
-    /// crossfading its old wrapping into its new one. See [`Self::place`].
+    /// One placement each. A shrinking or growing pane contributes more, and
+    /// [`place`] is what adds them.
     fn at(change: PaneChange, motion: MotionSample) -> Option<Self> {
         Some(match change {
             PaneChange::Persisted { window, from, to } => {
-                let t = motion.progress;
-                let bounds = Rect {
-                    x: lerp(from.x, to.x, t),
-                    y: lerp(from.y, to.y, t),
-                    width: lerp(from.width, to.width, t),
-                    height: lerp(from.height, to.height, t),
-                };
+                let bounds = placed_bounds(change, motion);
+                if !grows(from, to) {
+                    return Some(Self {
+                        window,
+                        bounds,
+                        // The pane shows its destination content throughout, so
+                        // the content under its moving top-left is the
+                        // destination's top-left. Interpolating the content
+                        // origin instead would scroll the text inside the pane
+                        // as it travelled.
+                        content_origin: (to.x, to.y),
+                        // Its destination size, so while it is still larger
+                        // than that it draws only what it owns and the frame
+                        // underneath shows through the rest.
+                        content_extent: (to.width, to.height),
+                        source: neomacs_renderer_wgpu::PaneSource::Destination,
+                        opacity: 1.0,
+                    });
+                }
+                // A *growing* pane cannot carry its content. Carrying means
+                // "the pane's top-left shows the destination's top-left", and
+                // that only works while the pane is at least as large as the
+                // content it is showing. A pane smaller than its destination
+                // shows the destination's leading corner at its own leading
+                // corner -- the correct pixels in the wrong place, sliding into
+                // position over the length of the motion.
+                //
+                // That is what `delete-window` looked like: the survivor grows
+                // into the space the deleted window gave up, so the whole new
+                // layout slid in from the side while the remnant of the deleted
+                // window sat beside it. With both windows on one buffer it read
+                // as the text having been duplicated.
+                //
+                // So a growing pane is anchored where it belongs and revealed
+                // where it has reached. Destination coordinates are screen
+                // coordinates -- the destination picture *is* the settled frame
+                // -- which makes the reveal a plain clip.
+                let visible = intersection(bounds, to)?;
                 Self {
                     window,
-                    bounds,
-                    // The pane shows its destination content throughout, so the
-                    // content under its moving top-left is the destination's
-                    // top-left. Interpolating the content origin instead would
-                    // scroll the text inside the pane as it travelled.
-                    content_origin: (to.x, to.y),
-                    // Its destination size, so while it is still larger than
-                    // that it draws only what it owns and the frame underneath
-                    // shows through the rest.
-                    content_extent: (to.width, to.height),
+                    bounds: visible,
+                    content_origin: (visible.x, visible.y),
+                    content_extent: (visible.width, visible.height),
                     source: neomacs_renderer_wgpu::PaneSource::Destination,
                     opacity: 1.0,
                 }
@@ -428,23 +473,103 @@ impl PanePlacement {
                 source: neomacs_renderer_wgpu::PaneSource::Destination,
                 opacity: motion.content_mix.get(),
             },
-            // A leaving pane holds still at the rect it had reached and fades
-            // out, reading from the *previous* composition. That source is the
-            // whole point: its window is absent from the destination, so the
-            // composed picture holds no pixels for it at all. Sampling the
-            // destination instead would blit whatever replaced it, wearing the
-            // departing pane's geometry — which is what made an earlier version
-            // of this repaint the settled layout over panes still in motion.
+            // A leaving pane holds still at the rect it had reached, reading
+            // from the *previous* composition. That source is the whole point:
+            // its window is absent from the destination, so the composed
+            // picture holds no pixels for it at all.
+            //
+            // Opaque, and clipped by its replacement in [`place`]. Fading it
+            // would blend the old window with whatever grows over it for the
+            // length of the motion, which is the same double exposure a
+            // crossfaded vacated strip produces.
             PaneChange::Exited { window, from } => Self {
                 window,
                 bounds: from,
                 content_origin: (from.x, from.y),
                 content_extent: (from.width, from.height),
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
-                opacity: 1.0 - motion.content_mix.get(),
+                opacity: 1.0,
             },
         })
     }
+}
+
+/// Whether a pane ends up larger than it started, on either axis.
+///
+/// The one thing that decides whether a pane can carry its content: see
+/// [`PanePlacement::at`].
+fn grows(from: Rect, to: Rect) -> bool {
+    to.width - from.width > REFLOW_WIDTH_EPSILON || to.height - from.height > REFLOW_WIDTH_EPSILON
+}
+
+/// The whole rect a pane covers at `motion`, before any clipping.
+fn placed_bounds(change: PaneChange, motion: MotionSample) -> Rect {
+    match change {
+        PaneChange::Persisted { from, to, .. } => {
+            let t = motion.progress;
+            Rect {
+                x: lerp(from.x, to.x, t),
+                y: lerp(from.y, to.y, t),
+                width: lerp(from.width, to.width, t),
+                height: lerp(from.height, to.height, t),
+            }
+        }
+        PaneChange::Entered { to, .. } => to,
+        PaneChange::Exited { from, .. } => from,
+    }
+}
+
+/// The overlap of two rects, or `None` when they are disjoint.
+///
+/// Touching rects overlap in a zero-extent rect rather than in nothing, and
+/// that degenerate answer is load-bearing: a pane growing from zero width
+/// starts exactly on the edge it will grow away from, and a `None` there would
+/// leave it unplaced on the first frame. Its neighbour is placed, so the two
+/// would disagree about where their shared edge is at the one instant the edge
+/// is easiest to see. The zero-extent quad draws nothing.
+fn intersection(a: Rect, b: Rect) -> Option<Rect> {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    (right >= x && bottom >= y).then(|| Rect::new(x, y, right - x, bottom - y))
+}
+
+/// The part of `rect` that `covered` has not taken, when that remainder is a
+/// single rectangle.
+///
+/// `None` means "draw nothing": either `covered` swallows `rect` entirely, or
+/// what is left is an L-shape this cannot express. Dropping in that case is the
+/// safe direction -- an old-picture placement that is too large draws over the
+/// pane replacing it, which is worse than one that is missing.
+fn remainder(rect: Rect, covered: Rect) -> Option<Rect> {
+    let Some(overlap) = intersection(rect, covered) else {
+        return Some(rect);
+    };
+    let spans_rows = overlap.y <= rect.y && overlap.y + overlap.height >= rect.y + rect.height;
+    let spans_cols = overlap.x <= rect.x && overlap.x + overlap.width >= rect.x + rect.width;
+    if spans_rows && spans_cols {
+        return None;
+    }
+    if spans_rows {
+        if overlap.x <= rect.x {
+            let x = overlap.x + overlap.width;
+            return Some(Rect::new(x, rect.y, rect.x + rect.width - x, rect.height));
+        }
+        if overlap.x + overlap.width >= rect.x + rect.width {
+            return Some(Rect::new(rect.x, rect.y, overlap.x - rect.x, rect.height));
+        }
+    }
+    if spans_cols {
+        if overlap.y <= rect.y {
+            let y = overlap.y + overlap.height;
+            return Some(Rect::new(rect.x, y, rect.width, rect.y + rect.height - y));
+        }
+        if overlap.y + overlap.height >= rect.y + rect.height {
+            return Some(Rect::new(rect.x, rect.y, rect.width, overlap.y - rect.y));
+        }
+    }
+    None
 }
 
 /// How much a width must change for the text inside to be worth crossfading.
@@ -475,10 +600,8 @@ const REFLOW_WIDTH_EPSILON: f32 = 1.0;
 /// destination nothing in the frame is moving. Holding it opaque means the
 /// frame is partitioned at every instant: new pane, old picture, new pane —
 /// and the boundary between them is the divider, travelling.
-fn place(change: PaneChange, motion: MotionSample, out: &mut Vec<PanePlacement>) {
-    let Some(destination) = PanePlacement::at(change, motion) else {
-        return;
-    };
+fn place(change: PaneChange, motion: MotionSample, claimed: &[Rect], out: &mut Vec<PanePlacement>) {
+    let bounds = placed_bounds(change, motion);
     if let PaneChange::Persisted { window, from, to } = change {
         if (from.width - to.width).abs() > REFLOW_WIDTH_EPSILON {
             // The outgoing wrapping, over the area the pane keeps, fading out
@@ -488,8 +611,8 @@ fn place(change: PaneChange, motion: MotionSample, out: &mut Vec<PanePlacement>)
             out.push(PanePlacement {
                 window,
                 bounds: Rect {
-                    width: destination.bounds.width.min(to.width),
-                    ..destination.bounds
+                    width: bounds.width.min(to.width),
+                    ..bounds
                 },
                 content_origin: (from.x, from.y),
                 content_extent: (to.width, to.height),
@@ -499,9 +622,9 @@ fn place(change: PaneChange, motion: MotionSample, out: &mut Vec<PanePlacement>)
         }
         // The area the pane still covers but will not keep, on each axis it is
         // shrinking along. A pane shrinking on both contributes both, and they
-        // overlap in one corner — harmlessly, since both draw the same opaque
+        // overlap in one corner -- harmlessly, since both draw the same opaque
         // picture at the coordinates it already occupied.
-        for strip in vacated_strips(from, to, destination.bounds) {
+        for strip in vacated_strips(from, to, bounds) {
             out.push(PanePlacement {
                 window,
                 bounds: strip.bounds,
@@ -512,7 +635,30 @@ fn place(change: PaneChange, motion: MotionSample, out: &mut Vec<PanePlacement>)
             });
         }
     }
-    out.push(destination);
+    let Some(mut placement) = PanePlacement::at(change, motion) else {
+        return;
+    };
+    if let PaneChange::Exited { from, .. } = change {
+        let Some(left) = unclaimed(placement.bounds, claimed) else {
+            return;
+        };
+        placement.content_origin = old_picture_origin(from, bounds, left);
+        placement.content_extent = (left.width, left.height);
+        placement.bounds = left;
+    }
+    out.push(placement);
+}
+
+/// Where in the old picture the content drawn at `visible` came from.
+///
+/// The pane's own content is anchored to the pane, not to the screen: a pane
+/// that moves carries its old pixels with it, so a point's old position is its
+/// offset within the current rect, applied to where the rect used to be.
+fn old_picture_origin(from: Rect, bounds: Rect, visible: Rect) -> (f32, f32) {
+    (
+        from.x + (visible.x - bounds.x),
+        from.y + (visible.y - bounds.y),
+    )
 }
 
 /// One rectangle of the old picture that a shrinking pane has not vacated.
@@ -529,25 +675,26 @@ struct VacatedStrip {
 /// travels, the old text travels with it rather than standing still while the
 /// pane slides out from under it.
 fn vacated_strips(from: Rect, to: Rect, bounds: Rect) -> impl Iterator<Item = VacatedStrip> {
-    let horizontal = (bounds.width - to.width > REFLOW_WIDTH_EPSILON).then(|| VacatedStrip {
-        bounds: Rect {
-            x: bounds.x + to.width,
-            y: bounds.y,
-            width: bounds.width - to.width,
-            height: bounds.height,
-        },
-        content_origin: (from.x + to.width, from.y),
-        content_extent: (from.width - to.width, from.height),
+    let strip = move |rect: Rect| VacatedStrip {
+        bounds: rect,
+        content_origin: old_picture_origin(from, bounds, rect),
+        content_extent: (rect.width, rect.height),
+    };
+    let horizontal = (bounds.width - to.width > REFLOW_WIDTH_EPSILON).then(|| {
+        strip(Rect::new(
+            bounds.x + to.width,
+            bounds.y,
+            bounds.width - to.width,
+            bounds.height,
+        ))
     });
-    let vertical = (bounds.height - to.height > REFLOW_WIDTH_EPSILON).then(|| VacatedStrip {
-        bounds: Rect {
-            x: bounds.x,
-            y: bounds.y + to.height,
-            width: bounds.width,
-            height: bounds.height - to.height,
-        },
-        content_origin: (from.x, from.y + to.height),
-        content_extent: (from.width, from.height - to.height),
+    let vertical = (bounds.height - to.height > REFLOW_WIDTH_EPSILON).then(|| {
+        strip(Rect::new(
+            bounds.x,
+            bounds.y + to.height,
+            bounds.width,
+            bounds.height - to.height,
+        ))
     });
     horizontal.into_iter().chain(vertical)
 }

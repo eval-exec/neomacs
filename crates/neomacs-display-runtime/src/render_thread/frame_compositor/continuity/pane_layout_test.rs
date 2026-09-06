@@ -666,18 +666,27 @@ fn a_leaving_pane_reads_the_previous_composition_because_the_new_one_has_none_of
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
     let leaving = departing(&morph.sample(frame_at(origin, 50)), 2);
     assert_eq!(leaving.source, neomacs_renderer_wgpu::PaneSource::Previous);
+    // Trimmed to the ground window 1 has not reached. Halfway through, window 1
+    // spans [0, 600), so the only part of the frame still showing the deleted
+    // window is [600, 800).
+    //
+    // It is not "held at the rect it had": a departing pane draws the old
+    // picture opaquely, and `Previous` placements draw *over* the destination,
+    // so an untrimmed one covers the very pane taking its place -- the
+    // survivor's arrival stays invisible until the last frame and then pops.
+    assert_eq!(leaving.bounds, rect(600.0, 0.0, 200.0, 600.0));
     assert_eq!(
-        leaving.bounds,
-        rect(400.0, 0.0, 400.0, 600.0),
-        "held at the rect it had, not carried anywhere"
+        leaving.content_origin,
+        (600.0, 0.0),
+        "and reads the old picture from the columns it still covers"
     );
 }
 
 #[test]
-fn a_leaving_pane_fades_out_and_an_entering_one_fades_in() {
-    // Both alternatives are worse than a fade. A window that vanishes outright
-    // is the jump the morph exists to remove; one that appears at full opacity
-    // is indistinguishable from the frame simply being redrawn.
+fn an_entering_pane_fades_in_and_a_leaving_one_is_uncovered_rather_than_faded() {
+    // An entering pane fades: appearing at full opacity is indistinguishable
+    // from the frame simply being redrawn, which is the jump the morph exists
+    // to remove.
     let origin = origin();
     let split_before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let split_after = [
@@ -693,14 +702,26 @@ fn a_leaving_pane_fades_out_and_an_entering_one_fades_in() {
         "an entering pane fades in: {early} then {late}"
     );
 
+    // A leaving pane does not fade. It is the old picture, and the old picture
+    // is opaque until something takes the ground it stands on -- so it shrinks
+    // as its replacement grows and is gone when that replacement arrives.
+    //
+    // Fading it looks like the same double exposure a crossfaded vacated strip
+    // produces: the deleted window and the pane replacing it both half-visible
+    // for the length of the motion, over a destination backdrop that already
+    // shows the settled layout.
     let delete_after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let leaving = PaneLayoutMorph::try_new(&split_after, &delete_after, linear_100ms(), origin)
         .expect("a morph");
-    let early = departing(&leaving.sample(frame_at(origin, 10)), 2).opacity;
-    let late = departing(&leaving.sample(frame_at(origin, 90)), 2).opacity;
+    let early = departing(&leaving.sample(frame_at(origin, 10)), 2);
+    let late = departing(&leaving.sample(frame_at(origin, 90)), 2);
+    assert_eq!(early.opacity, 1.0, "opaque throughout");
+    assert_eq!(late.opacity, 1.0);
     assert!(
-        early > late,
-        "a leaving pane fades out: {early} then {late}"
+        late.bounds.width < early.bounds.width,
+        "and uncovered rather than faded: {} then {}",
+        early.bounds.width,
+        late.bounds.width
     );
 }
 
