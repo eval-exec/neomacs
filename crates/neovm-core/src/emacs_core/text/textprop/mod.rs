@@ -608,6 +608,16 @@ fn lookup_char_property_from_direct<F>(
 where
     F: FnMut(Value) -> Option<Value>,
 {
+    let direct = DirectCharProperties::from_getter(&mut direct_get, prop);
+    // GNU `lookup_char_property` (src/intervals.c) scans the interval plist
+    // FIRST and returns on a direct hit, reading `char-property-alias-alist`
+    // and `default-text-properties` only on a miss. A direct hit is the common
+    // case (font-lock gives every char a `face`), and those two reads are
+    // buffer-local variable lookups -- so short-circuit before them rather than
+    // computing both eagerly on every call.
+    if let Some(value) = direct.value {
+        return value;
+    }
     let mut aliases = current_textprop_variable_value(
         obarray,
         buffers,
@@ -634,8 +644,6 @@ where
             .and_then(|defaults| plist_get_value(defaults, prop))
         })
         .flatten();
-
-    let direct = DirectCharProperties::from_getter(&mut direct_get, prop);
     resolve_effective_char_property(
         direct,
         |category, property| {
