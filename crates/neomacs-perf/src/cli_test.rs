@@ -50,6 +50,7 @@ fn run_command_parses_into_a_typed_workload_request() {
             },
             counters: Some(CounterScope::WholeProcess),
             video_file: None,
+            journal_file: None,
         }
     );
 }
@@ -138,6 +139,7 @@ fn compare_command_requires_two_editors_and_parses_repetition_controls() {
             machine: MachinePolicy::default(),
             counters: None,
             video_file: None,
+            journal_file: None,
         }
     );
 }
@@ -206,6 +208,7 @@ fn profile_command_selects_native_sampling_without_becoming_a_comparison() {
             timeout: Duration::from_secs(180),
             machine: MachinePolicy::default(),
             video_file: None,
+            journal_file: None,
         }
     );
 

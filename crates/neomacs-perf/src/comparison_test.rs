@@ -190,6 +190,7 @@ fn input() -> ComparisonInput {
         machine: crate::MachinePolicy::default(),
         counters: None,
         video_file: None,
+        journal_file: None,
     }
 }
 

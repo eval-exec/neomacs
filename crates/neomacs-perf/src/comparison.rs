@@ -33,6 +33,7 @@ pub struct ComparisonInput {
     pub machine: crate::MachinePolicy,
     pub counters: Option<crate::CounterScope>,
     pub video_file: Option<PathBuf>,
+    pub journal_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -181,6 +182,7 @@ pub struct ComparisonRequest {
     machine: crate::MachinePolicy,
     counters: Option<crate::CounterScope>,
     video_file: Option<PathBuf>,
+    journal_file: Option<PathBuf>,
 }
 
 impl ComparisonRequest {
@@ -202,6 +204,7 @@ impl ComparisonRequest {
             machine: crate::MachinePolicy::default(),
             counters: None,
             video_file: None,
+            journal_file: None,
         }
     }
 
@@ -227,6 +230,11 @@ impl ComparisonRequest {
 
     pub fn with_video_file(mut self, video_file: Option<PathBuf>) -> Self {
         self.video_file = video_file;
+        self
+    }
+
+    pub fn with_journal_file(mut self, journal_file: Option<PathBuf>) -> Self {
+        self.journal_file = journal_file;
         self
     }
 
@@ -741,6 +749,7 @@ impl PerfHarness {
             machine: request.machine.clone(),
             counters: request.counters,
             video_file: request.video_file.clone(),
+            journal_file: request.journal_file.clone(),
         };
         let mut observations = Vec::with_capacity(request.samples_per_side.get() as usize * 2);
         for (role, sample_index) in comparison_schedule(request.samples_per_side) {
@@ -753,7 +762,8 @@ impl PerfHarness {
                 .with_timeout(request.timeout)
                 .with_machine_policy(request.machine.clone())
                 .with_counters(request.counters)
-                .with_video_file(request.video_file.clone());
+                .with_video_file(request.video_file.clone())
+                .with_journal_file(request.journal_file.clone());
             let report = self.run(&run_request)?;
             let child_provenance = read_child_provenance(&report.artifact_path);
             let child = report.artifact;
