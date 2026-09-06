@@ -386,8 +386,12 @@ fn default_face_font_change_resets_a_grown_mini_window_to_one_line() {
 
 #[test]
 fn default_face_font_change_with_the_same_line_height_keeps_the_mini_window() {
-    // Same line height, different font: no `resize_frame_windows` vertical
-    // pass, so a grown mini-window keeps its height and only the edges resync.
+    // Same line height, different font, frame height a whole number of lines:
+    // GNU requests the same native height, `adjust_frame_size` sees no inner
+    // height change and skips `resize_frame_windows` (frame.c:1076-1082), so
+    // a grown mini-window keeps its height and only the edges resync.  (A
+    // frame with a fractional last line would be resized to whole lines by
+    // the implied native resize, which is not ported.)
     let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 11);
     let frame = eval.frames.get(frame_id).expect("selected frame");
     assert_eq!(frame.char_height, 11.0);

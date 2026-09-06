@@ -4789,7 +4789,18 @@ impl Frame {
             return;
         };
         let current_h = mini.bounds().height;
-        let new_h = (current_h + delta_rows as f32 * unit).clamp(unit, max_h);
+        // GNU `grow_mini_window` moves the mini-window by the pixel difference
+        // between its content and its box text height (src/window.c:5896-
+        // 5930, called from `resize_mini_window` with `height - old_height`,
+        // src/xdisp.c:13400,13406), so the window ends at the content's
+        // height: whole rows of `unit` for row content.  Land there from the
+        // current row count rather than adding rows to the current pixel
+        // height, which compounds a stale base that is not a multiple of the
+        // unit (a mini-window carried over a font change or restored from a
+        // configuration saved under another font: 11px + 1 row of 17px would
+        // give 28px where GNU gives 17px).
+        let current_rows = mini_window_rows(current_h, unit) as f32;
+        let new_h = ((current_rows + delta_rows as f32) * unit).clamp(unit, max_h);
         if (new_h - current_h).abs() < 0.5 {
             return;
         }
@@ -4816,6 +4827,28 @@ impl Frame {
         bounds.height = unit;
         mini.set_bounds(bounds);
         self.sync_window_area_bounds();
+    }
+}
+
+/// Whole rows of `unit` pixels that a mini-window `height` pixels tall holds.
+///
+/// The redisplay-time grow check (layout engine) and `grow_mini_window`
+/// count the same allocation through this one rule so they cannot disagree.
+/// GNU works in integer pixels; here the unit is an `f32`, so a height that
+/// is a whole number of rows can divide to `k - 1e-7`.  A height within half
+/// a pixel of `k` rows -- the same tolerance `grow_mini_window` uses to
+/// decide that a resize changed nothing -- is `k` rows; anything else floors.
+/// Without that, a 3-row mini-window at an 11.9px unit counted as 2 rows, the
+/// grow it triggered landed on its own height, and the relayout loop retried
+/// until its budget was gone.
+pub fn mini_window_rows(height: f32, unit: f32) -> usize {
+    let unit = unit.max(1.0);
+    let rows = height / unit;
+    let nearest = rows.round();
+    if (nearest * unit - height).abs() < 0.5 {
+        nearest.max(0.0) as usize
+    } else {
+        rows.floor().max(0.0) as usize
     }
 }
 
