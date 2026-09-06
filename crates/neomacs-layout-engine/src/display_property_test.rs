@@ -7,6 +7,40 @@ use neomacs_display_protocol::VideoId;
 use neovm_core::emacs_core::{Context, Value};
 
 #[test]
+fn rejected_nested_when_has_no_text_modifiers() {
+    let mut eval = Context::new();
+    let spec = eval
+        .eval_str("'(when t when nil :raise 2 :height 3)")
+        .expect("spec");
+    let classified = classify_display_property(
+        spec,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::LispString,
+    );
+    assert!(classified.replacement().is_none());
+    assert_eq!(
+        classified.modifiers,
+        DisplayTextPropertyModifiers::default()
+    );
+}
+
+#[test]
+fn rejected_image_has_no_text_modifiers() {
+    let mut eval = Context::new();
+    let spec = eval.eval_str("'(image :raise 2 :height 3)").expect("spec");
+    let classified = classify_display_property(
+        spec,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::LispString,
+    );
+    assert!(classified.replacement().is_none());
+    assert_eq!(
+        classified.modifiers,
+        DisplayTextPropertyModifiers::default()
+    );
+}
+
+#[test]
 fn classify_display_property_separates_replacements_from_text_modifiers() {
     let eval = Context::new();
     let buffer_id = eval

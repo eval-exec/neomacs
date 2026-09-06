@@ -352,9 +352,14 @@ pub(crate) fn classify_resolved_display_spec(value: Value) -> DisplayPropertyCla
         DisplaySpecKind::Space => {
             parse_display_space(value).map(DisplayReplacementProperty::Stretch)
         }
-        DisplaySpecKind::Image => neovm_core::emacs_core::image::is_image_spec(&value).then_some(
-            DisplayReplacementProperty::Media(DisplayMediaReplacementProperty::Image),
-        ),
+        DisplaySpecKind::Image => {
+            if !neovm_core::emacs_core::image::is_image_spec(&value) {
+                return DisplayPropertyClassification::default();
+            }
+            Some(DisplayReplacementProperty::Media(
+                DisplayMediaReplacementProperty::Image,
+            ))
+        }
         DisplaySpecKind::Media(DisplayMediaSpecKind::Video) => Some(
             DisplayReplacementProperty::Media(DisplayMediaReplacementProperty::Video),
         ),
@@ -405,8 +410,8 @@ pub(crate) fn classify_resolved_display_spec(value: Value) -> DisplayPropertyCla
         | DisplaySpecKind::Raise
         | DisplaySpecKind::KeywordPlist
         | DisplaySpecKind::Other => None,
-        // A second WHEN is not a valid resolved spec.
-        DisplaySpecKind::When => None,
+        // A second WHEN has no effect, including no text modifiers.
+        DisplaySpecKind::When => return DisplayPropertyClassification::default(),
     };
 
     let modifiers = if replacement.is_some() {
