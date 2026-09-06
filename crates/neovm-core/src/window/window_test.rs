@@ -3557,3 +3557,104 @@ fn grow_mini_window_with_max_lines_one_caps_at_one_row_not_whole_frame() {
         "a 1-line cap must keep the mini-window at one row, not grow to the frame"
     );
 }
+
+#[test]
+fn grow_mini_window_lands_on_whole_rows_of_the_current_unit() {
+    // GNU `grow_mini_window` adds the pixel difference between content and
+    // box text height (window.c:5896-5930), so the mini-window ends at the
+    // content height: for row content, whole rows of the current line height.
+    // A mini-window left at 11px under a 17px font (font change, restored
+    // configuration) growing by one row must land on 17px, not 28px.
+    crate::test_utils::init_test_tracing();
+    let mut mgr = FrameManager::new();
+    let fid = mgr.create_frame("F1", 502, 430, BufferId(1));
+    {
+        let frame = mgr.get_mut(fid).unwrap();
+        frame.char_height = 17.0;
+        frame.char_width = 6.0;
+        let mini = frame.minibuffer_leaf.as_mut().unwrap();
+        let mut b = *mini.bounds();
+        b.height = 11.0;
+        mini.set_bounds(b);
+        frame.sync_window_area_bounds();
+    }
+
+    mgr.get_mut(fid)
+        .unwrap()
+        .grow_mini_window_with_max_lines(1, 8.0);
+    let frame = mgr.get(fid).unwrap();
+    let mini = frame.minibuffer_leaf.as_ref().unwrap().bounds();
+    assert_eq!(mini.height, 17.0, "one row of the current 17px unit");
+    assert_eq!(
+        mini.y + mini.height,
+        430.0,
+        "mini-window ends at the frame bottom"
+    );
+    assert_eq!(
+        frame.root_window.bounds().y + frame.root_window.bounds().height,
+        mini.y,
+        "root window ends where the mini-window starts"
+    );
+
+    // A stale 22px base (two 11px rows) under a 19px font growing by two rows
+    // lands on three rows of 19px, as GNU's pixel delta would.
+    {
+        let frame = mgr.get_mut(fid).unwrap();
+        frame.char_height = 19.0;
+        let mini = frame.minibuffer_leaf.as_mut().unwrap();
+        let mut b = *mini.bounds();
+        b.height = 22.0;
+        mini.set_bounds(b);
+        frame.sync_window_area_bounds();
+        frame.grow_mini_window_with_max_lines(2, 8.0);
+    }
+    assert_eq!(
+        mgr.get(fid)
+            .unwrap()
+            .minibuffer_leaf
+            .as_ref()
+            .unwrap()
+            .bounds()
+            .height,
+        57.0
+    );
+}
+
+#[test]
+fn mini_window_rows_tolerates_float_division_at_whole_rows() {
+    // 3 * 11.9 divides to 2.9999998 in f32; that is three rows, not two.
+    assert_eq!(mini_window_rows(3.0 * 11.9, 11.9), 3);
+    assert_eq!(mini_window_rows(11.0, 17.0), 0);
+    assert_eq!(mini_window_rows(22.0, 19.0), 1);
+    assert_eq!(mini_window_rows(0.0, 17.0), 0);
+}
+
+#[test]
+fn grow_mini_window_always_moves_from_a_whole_row_count_at_a_fractional_unit() {
+    // A three-row mini-window at an 11.9px unit asked to grow by one row must
+    // land on four rows, not on its own height (which would make the engine
+    // retry until its layout budget was gone).
+    crate::test_utils::init_test_tracing();
+    let mut mgr = FrameManager::new();
+    let fid = mgr.create_frame("F1", 502, 430, BufferId(1));
+    {
+        let frame = mgr.get_mut(fid).unwrap();
+        frame.char_height = 11.9;
+        frame.char_width = 6.0;
+        let mini = frame.minibuffer_leaf.as_mut().unwrap();
+        let mut b = *mini.bounds();
+        b.height = 3.0 * 11.9;
+        mini.set_bounds(b);
+        frame.sync_window_area_bounds();
+        frame.grow_mini_window_with_max_lines(1, 8.0);
+    }
+    let h = mgr
+        .get(fid)
+        .unwrap()
+        .minibuffer_leaf
+        .as_ref()
+        .unwrap()
+        .bounds()
+        .height;
+    assert!((h - 4.0 * 11.9).abs() < 0.01, "expected four rows, got {h}");
+}

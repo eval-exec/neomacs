@@ -651,6 +651,26 @@ fn max_mini_window_lines_for_window(
     max_mini_window_lines_from_value(raw, frame_rows)
 }
 
+/// Whole rows of `char_h` the mini-window's current pixel height holds.
+///
+/// GNU `resize_mini_window` compares the content's pixel height against the
+/// window's (`old_height = WINDOW_BOX_TEXT_HEIGHT (w)`, src/xdisp.c:13276,
+/// then `height > old_height` / `height != old_height`, 13395-13406), so a
+/// window shorter than one line grows.  Counting the allocation in rows must
+/// keep that property: a mini-window left shorter than one line of the
+/// current font -- a restored window configuration saved under a smaller
+/// font, or a leaf carried over a font change -- holds zero rows, not one.
+/// Clamping to one row here hid exactly that state and the echo area stayed
+/// clipped until something else resized the mini-window.  The row count is
+/// the same rule `grow_mini_window` lands on (`mini_window_rows`), so the
+/// grow this check requests always moves the window.  GNU's unit also adds
+/// `line-spacing` placed above the line (src/xdisp.c:13324-13325) and grows
+/// by exact pixels; rows of `char_h` are kept here, so image or line-spacing
+/// content lands on a row multiple that GNU would leave at its pixel height.
+fn allocated_mini_rows(bounds_height: f32, char_h: f32) -> usize {
+    neovm_core::window::mini_window_rows(bounds_height, char_h)
+}
+
 fn minibuffer_growth_target(
     used_rows: usize,
     allocated_rows: usize,
@@ -2435,7 +2455,7 @@ impl LayoutEngine {
             {
                 let char_h = frame_params.char_height.max(1.0);
                 let mini_rows_used = (mini_content_height_px / char_h).ceil().max(1.0) as usize;
-                let allocated_rows = (mini_params.bounds.height / char_h).floor().max(1.0) as usize;
+                let allocated_rows = allocated_mini_rows(mini_params.bounds.height, char_h);
                 let frame_rows = frame_params.height / char_h;
                 let max_mini_lines =
                     max_mini_window_lines_for_window(evaluator, mini_params, frame_rows);
