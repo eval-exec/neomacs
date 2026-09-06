@@ -2682,6 +2682,10 @@ fn every_window_animation_slot_reaches_the_registry_as_scalars() {
         assert_eq!(
             values,
             vec![
+                "bezier-x1",
+                "bezier-x2",
+                "bezier-y1",
+                "bezier-y2",
                 "damping-ratio",
                 "duration",
                 "easing",

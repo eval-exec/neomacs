@@ -116,3 +116,71 @@ fn ease_out_expo_reaches_exactly_one() {
     assert_eq!(TransitionEasing::EaseOutExpo.apply(0.0), 0.0);
     assert!(TransitionEasing::EaseOutExpo.apply(0.5) > 0.9, "fast start");
 }
+
+#[test]
+fn a_cubic_bezier_slot_carries_its_control_points_into_the_spec() {
+    use crate::motion_spec::MotionSpec;
+
+    // The four numbers a niri config writes as `cubic-bezier(x1, y1, x2, y2)`,
+    // transcribed directly. Storing them as scalars beside a fieldless easing
+    // symbol is what keeps the effect registry able to read the slot at all.
+    let slot = WindowAnimation {
+        easing: TransitionEasing::CubicBezier,
+        bezier_x1: 0.05,
+        bezier_y1: 0.7,
+        bezier_x2: 0.1,
+        bezier_y2: 1.0,
+        ..default_window_open()
+    };
+    let MotionSpec::Tween(tween) = slot.motion(globals()) else {
+        panic!("an easing slot builds a tween");
+    };
+    let bezier = tween
+        .bezier
+        .expect("the control points travel with the spec");
+    assert!((bezier.x1 - 0.05).abs() < 1e-6);
+    assert!((bezier.y2 - 1.0).abs() < 1e-6);
+
+    // A named curve carries none, so the sampler uses the named curve.
+    let named = default_window_open();
+    let MotionSpec::Tween(named) = named.motion(globals()) else {
+        panic!("a named easing still builds a tween");
+    };
+    assert!(
+        named.bezier.is_none(),
+        "a named easing must not smuggle in control points"
+    );
+}
+
+#[test]
+fn a_bezier_is_pinned_at_both_ends_and_is_monotonic_in_time() {
+    use crate::motion_spec::UnitBezier;
+
+    // libadwaita's algorithm, which niri also uses, so a curve transcribed from
+    // a niri config behaves identically. Endpoints are pinned exactly rather
+    // than approached, because an animation that stops a fraction short leaves
+    // the layout permanently off.
+    let ease = UnitBezier::new(0.25, 0.1, 0.25, 1.0);
+    assert_eq!(ease.apply(0.0), 0.0);
+    assert_eq!(ease.apply(1.0), 1.0);
+    let mut previous = 0.0;
+    for step in 1..=20 {
+        let value = ease.apply(step as f32 / 20.0);
+        assert!(value >= previous - 1e-4, "went backwards at {step}");
+        previous = value;
+    }
+
+    // The identity curve is a straight line, which is what a slot switched to
+    // `cubic-bezier` without being given points animates on.
+    let linear = UnitBezier::new(0.0, 0.0, 1.0, 1.0);
+    assert!((linear.apply(0.5) - 0.5).abs() < 1e-3);
+
+    // x is clamped to the unit interval so solving for t stays unique; y is
+    // not, because overshoot is the point of a curve like this one.
+    let overshoot = UnitBezier::new(0.34, 1.56, 0.64, 1.0);
+    assert!(
+        overshoot.apply(0.5) > 1.0,
+        "y must be free to exceed 1: {}",
+        overshoot.apply(0.5)
+    );
+}

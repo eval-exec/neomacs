@@ -24,6 +24,7 @@ fn tween_100ms() -> WindowAnimationSpecs {
     let tween = MotionSpec::Tween(TweenSpec {
         duration: MotionDuration::new(Duration::from_millis(100)).expect("a positive duration"),
         easing: TransitionEasing::Linear,
+        bezier: None,
     });
     WindowAnimationSpecs {
         resize: tween,

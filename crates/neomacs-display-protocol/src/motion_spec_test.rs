@@ -135,6 +135,7 @@ fn only_the_instant_variant_reports_is_instant() {
     let tween = MotionSpec::Tween(TweenSpec {
         duration: MotionDuration::from_secs_f32(0.2).expect("positive"),
         easing: TransitionEasing::EaseOutQuad,
+        bezier: None,
     });
     let spring = MotionSpec::Spring(SpringSpec {
         omega: AngularFrequency::new(20.0).expect("positive"),
@@ -188,6 +189,7 @@ fn motion_spec_round_trips_through_json() {
     let spec = MotionSpec::Tween(TweenSpec {
         duration: MotionDuration::from_secs_f32(0.3).expect("positive"),
         easing: TransitionEasing::Spring,
+        bezier: None,
     });
     let json = serde_json::to_string(&spec).expect("serialize");
     let back: MotionSpec = serde_json::from_str(&json).expect("deserialize");
