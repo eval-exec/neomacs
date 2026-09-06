@@ -322,26 +322,29 @@ pub(crate) fn classify_single_display_spec(
     conditions: &DisplayWhenConditions,
     eval_enabled: bool,
 ) -> DisplayPropertyClassification {
-    let kind = display_spec_kind(value);
-
-    // `(when FORM . SPEC)`: GNU evaluates FORM (src/xdisp.c:6130-6160) and
-    // continues its SINGLE-spec arms on SPEC (it does not re-enter
-    // `handle_display_spec`, so SPEC is never a list of specs).  The walk's
-    // evaluated results decide here; a spec whose FORM did not hold does
-    // nothing, like GNU's `if (NILP (form)) return 0`.
-    if matches!(kind, DisplaySpecKind::When) {
-        return match display_spec_when_parts(value) {
+    // GNU unwraps WHEN exactly once (xdisp.c:6130-6164), then proceeds
+    // to the ordinary spec arms. A nested WHEN is not another clause.
+    let value = if matches!(display_spec_kind(value), DisplaySpecKind::When) {
+        match display_spec_when_parts(value) {
             Some((form, spec))
                 if (eval_enabled || form.is_symbol_named("t")) && conditions.holds(form) =>
             {
-                classify_single_display_spec(spec, conditions, eval_enabled)
+                spec
             }
-            _ => DisplayPropertyClassification::default(),
-        };
-    }
+            _ => return DisplayPropertyClassification::default(),
+        }
+    } else {
+        value
+    };
+    classify_resolved_display_spec(value)
+}
 
+/// Classify a spec after its optional WHEN has already been consumed.
+/// The evaluator uses this entry point so it cannot unwrap a second WHEN.
+pub(crate) fn classify_resolved_display_spec(value: Value) -> DisplayPropertyClassification {
+    let kind = display_spec_kind(value);
     if matches!(kind, DisplaySpecKind::Margin) {
-        return classify_margin_display_spec(value, conditions, eval_enabled);
+        return classify_margin_display_spec(value);
     }
 
     let replacement = match kind {
@@ -402,7 +405,7 @@ pub(crate) fn classify_single_display_spec(
         | DisplaySpecKind::Raise
         | DisplaySpecKind::KeywordPlist
         | DisplaySpecKind::Other => None,
-        // Handled above, before the replacement match.
+        // A second WHEN is not a valid resolved spec.
         DisplaySpecKind::When => None,
     };
 
@@ -427,15 +430,23 @@ pub(crate) fn classify_single_display_spec(
     }
 }
 
-fn classify_margin_display_spec(
-    value: Value,
-    conditions: &DisplayWhenConditions,
-    eval_enabled: bool,
-) -> DisplayPropertyClassification {
+fn classify_margin_display_spec(value: Value) -> DisplayPropertyClassification {
     let Some(spec) = display_margin_spec(value) else {
         return DisplayPropertyClassification::default();
     };
-    let inner = classify_single_display_spec(spec.content(), conditions, eval_enabled);
+    // GNU strips one margin prefix, then only accepts ordinary replacement
+    // content (xdisp.c:6473-6515). It does not re-enter WHEN or margin parsing.
+    if !matches!(
+        display_spec_kind(spec.content()),
+        DisplaySpecKind::Text
+            | DisplaySpecKind::Space
+            | DisplaySpecKind::Image
+            | DisplaySpecKind::Media(_)
+            | DisplaySpecKind::Xwidget
+    ) {
+        return DisplayPropertyClassification::default();
+    }
+    let inner = classify_resolved_display_spec(spec.content());
 
     // GNU's `((margin nil) CONTENT)` selects TEXT_AREA and is otherwise the
     // ordinary CONTENT replacement.  Preserve the inner classification rather

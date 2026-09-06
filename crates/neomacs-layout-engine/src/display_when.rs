@@ -125,13 +125,9 @@ pub(crate) fn evaluate_window_display_when_forms(
         window_id.map(neovm_core::window::WindowId),
         &sites,
         |spec| {
-            crate::display_property::classify_single_display_spec(
-                spec,
-                &DisplayWhenConditions::structural(),
-                true,
-            )
-            .replacement()
-            .is_some()
+            crate::display_property::classify_resolved_display_spec(spec)
+                .replacement()
+                .is_some()
         },
     ) {
         Ok(results) => DisplayWhenConditions::evaluated(results.into_iter().collect()),
