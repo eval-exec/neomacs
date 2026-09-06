@@ -3546,6 +3546,27 @@ impl LayoutEngine {
             return LeafLayoutAttempt::LogicalInputsChanged;
         };
         let _ = Self::ensure_fontified_rust(evaluator, buf_id, window_start, fontify_end);
+        // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
+        // run while it holds the buffer: evaluate the forms of the span the
+        // walk can reach (the same one fontification just covered) here, so
+        // the freshness and topology checks below cover this Lisp too, and
+        // let the snapshot carry the results.
+        let display_when = crate::display_when::evaluate_window_display_when_forms(
+            evaluator,
+            buf_id,
+            Some(window_id.0),
+            neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
+            neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+        );
+        // The retained key tracks buffer/face changes, not arbitrary Lisp
+        // dependencies. A newly evaluated condition can change glyphs without
+        // moving any of those ticks. This applies to cursor, scroll, and edit
+        // replay alike; static windows keep their existing fast paths.
+        let (cursor_only_replay, scroll_replay, is_edit) = if display_when.allows_body_reuse() {
+            (cursor_only_replay, scroll_replay, is_edit)
+        } else {
+            (None, None, false)
+        };
         if evaluator.frame_manager().window_topology_generation() != topology_generation {
             return LeafLayoutAttempt::LogicalInputsChanged;
         }
@@ -3569,7 +3590,8 @@ impl LayoutEngine {
                 buffer,
                 evaluator.obarray(),
                 Some(visible_char_bound(params)),
-            ),
+            )
+            .with_display_when(display_when),
             None => {
                 tracing::debug!("layout_window_rust: buffer {} not found", params.buffer_id);
                 self.frame_output

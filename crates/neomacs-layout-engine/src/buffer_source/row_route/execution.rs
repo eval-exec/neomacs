@@ -465,7 +465,11 @@ impl<'rows, 'emit, 'surface>
                     let replacement_item =
                         crate::display_item::BufferDisplayPropertyReplacementItem::new(
                             replacement.value,
-                            crate::display_property::classify_display_property(replacement.value),
+                            crate::display_property::classify_display_property(
+                                replacement.value,
+                                &buffer.layout_display_when_conditions(),
+                                crate::display_property::DisplayPropertyObject::Buffer,
+                            ),
                             crate::display_item::BufferDisplayReplacementSource::spanning(
                                 loop_context.buffer_id(),
                                 segment.start,
@@ -709,7 +713,11 @@ impl<'rows, 'emit, 'surface>
                 let replacement_item =
                     crate::display_item::BufferDisplayPropertyReplacementItem::new(
                         replacement.value,
-                        crate::display_property::classify_display_property(replacement.value),
+                        crate::display_property::classify_display_property(
+                            replacement.value,
+                            &buffer.layout_display_when_conditions(),
+                            crate::display_property::DisplayPropertyObject::Buffer,
+                        ),
                         crate::display_item::BufferDisplayReplacementSource::spanning(
                             loop_context.buffer_id(),
                             segment.start,

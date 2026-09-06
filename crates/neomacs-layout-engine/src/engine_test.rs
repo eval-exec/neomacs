@@ -33971,3 +33971,537 @@ fn redisplay_fontifies_visible_text_after_a_large_invisible_span() {
          tail props/calls={tail_props}"
     );
 }
+
+/// Dashboard centers its banner with a `line-prefix` whose `display` value is
+/// a list of two `(when FORM . SPEC)` clauses, `(display-graphic-p)` first and
+/// its negation second.  GNU evaluates FORM (xdisp.c:6130-6160) and, for a
+/// string object, stops at the first replacing spec (xdisp.c:6034-6040); the
+/// engine used to take every non-nil FORM as true, so a graphic frame got
+/// the text-terminal alignment.  The clauses are listed text-terminal first
+/// here so that the first-replacing rule alone cannot pass the test: only
+/// evaluating the forms selects the graphic clause.  The bare test
+/// evaluator has no frame.el, so the graphic test is `framep` of the
+/// selected frame (`neo` on the realized GUI frame), which
+/// `display-graphic-p` reduces to.
+#[test]
+fn line_prefix_when_clauses_are_decided_by_evaluating_their_forms() {
+    let mut eval = Context::new();
+    let root = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("when-prefix", 640, 200, root);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        "(progn
+           (insert \"X\\n\")
+           (put-text-property 1 2 'line-prefix
+             (propertize \" \" 'display
+               '((when (not (eq (framep (selected-frame)) 'neo)) space :align-to 20)
+                 (when (eq (framep (selected-frame)) 'neo) space :align-to 10)))))",
+    )
+    .expect("buffer with a conditional line prefix");
+    assert!(
+        eval.eval_str("(eq (framep (selected-frame)) 'neo)")
+            .expect("framep")
+            .is_truthy(),
+        "the test frame must be graphic for the first clause to apply"
+    );
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| {
+            state
+                .window_infos
+                .iter()
+                .any(|info| !info.is_minibuffer && info.window_id == entry.window_id)
+        })
+        .expect("root window matrix");
+    let rows = enabled_window_row_texts_expanding_stretches(entry);
+    let first = rows.first().expect("first row");
+    assert_eq!(
+        first.trim_end(),
+        format!("{}X", " ".repeat(10)),
+        "the graphic clause aligns X to column 10 (the text clause would give 20): {rows:?}"
+    );
+}
+
+/// Under `display-line-numbers`, GNU 31.0.90 folds the line-number field
+/// into every buffer `:align-to` target: a raw number is the field plus the
+/// number (`XFLOATINT (prop) * base_unit + lnum_pixel_width`, xdisp.c:30493)
+/// and `center` is the field plus half of the whole text area
+/// (xdisp.c:30438-30441), both measured from the text-area edge
+/// (xdisp.c:32853-32859).  Relative to the same layout without line numbers
+/// both targets therefore move by the whole field.  (Emacs master moves
+/// `center` by half the field only, `LNUM_ONCE`; a 32.0.50 build here puts
+/// it at 294px for a 28px field in a 560px area.)  The row's origin is the
+/// field's right edge, so the pen must not count the field's glyphs a second
+/// time.
+#[test]
+fn buffer_align_to_under_line_numbers_measures_from_the_field_edge() {
+    let mut eval = Context::new();
+    let root = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("lnum-align", 640, 200, root);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        "(progn
+           (insert \" X\\n\")
+           (put-text-property 1 2 'display '(space :align-to 10))
+           (insert \" Y\\n\")
+           (put-text-property 4 5 'display '(space :align-to center))
+           (insert \"Z\\n\")
+           (insert \"P\\n\")
+           (put-text-property 9 10 'line-prefix
+             (propertize \" \" 'display '(space :align-to 10)))
+           (insert \"Q\\n\")
+           (put-text-property 11 12 'line-prefix
+             (propertize \" \" 'display '(space :align-to center))))",
+    )
+    .expect("buffer");
+    let mut engine = LayoutEngine::new();
+    let rows_of = |engine: &mut LayoutEngine, eval: &mut Context| -> Vec<String> {
+        engine.layout_frame_rust(eval, frame_id);
+        let state = engine
+            .last_frame_display_state
+            .as_ref()
+            .expect("display state");
+        let entry = state
+            .window_matrices
+            .iter()
+            .find(|entry| {
+                state
+                    .window_infos
+                    .iter()
+                    .any(|info| !info.is_minibuffer && info.window_id == entry.window_id)
+            })
+            .expect("root window matrix");
+        enabled_window_row_texts_expanding_stretches(entry)
+    };
+
+    let plain = rows_of(&mut engine, &mut eval);
+    assert_eq!(plain[2].find('Z'), Some(0), "no field yet: {plain:?}");
+    let x_plain = plain[0].find('X').expect("X");
+    let y_plain = plain[1].find('Y').expect("Y");
+    assert_eq!(x_plain, 10, "{plain:?}");
+    assert_eq!(
+        plain[3].find('P'),
+        Some(10),
+        "prefix-string numeric: {plain:?}"
+    );
+    assert_eq!(
+        plain[4].find('Q'),
+        Some(y_plain),
+        "prefix-string center: {plain:?}"
+    );
+
+    eval.buffer_manager_mut()
+        .get_mut(root)
+        .expect("buffer")
+        .set_buffer_local("display-line-numbers", Value::T);
+    let numbered = rows_of(&mut engine, &mut eval);
+    let field = numbered[2]
+        .find('Z')
+        .expect("Z after the line-number field");
+    assert!(
+        field > 0,
+        "line numbers should occupy columns: {numbered:?}"
+    );
+    assert_eq!(
+        numbered[0].find('X'),
+        Some(x_plain + field),
+        "a numeric target moves by the whole field: {numbered:?}"
+    );
+    assert_eq!(
+        numbered[1].find('Y'),
+        Some(y_plain + field),
+        "`center` moves by the whole field (field + width / 2): {numbered:?}"
+    );
+    assert_eq!(
+        numbered[3].find('P'),
+        Some(10 + field),
+        "a prefix string's numeric target moves by the whole field: {numbered:?}"
+    );
+    assert_eq!(
+        numbered[4].find('Q'),
+        Some(y_plain + field),
+        "a prefix string's `center` moves by the whole field: {numbered:?}"
+    );
+}
+
+/// A single clause whose FORM evaluates to nil must do nothing: on the old
+/// structural rule it applied (the FORM is non-nil), so this is red without
+/// evaluation whatever the first/last rule does.
+#[test]
+fn a_when_clause_whose_form_is_nil_leaves_the_prefix_out() {
+    let mut eval = Context::new();
+    let root = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("when-nil", 640, 200, root);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        "(progn
+           (insert \"X\\n\")
+           (put-text-property 1 2 'line-prefix
+             (propertize \" \" 'display
+               '((when (not (eq (framep (selected-frame)) 'neo)) space :align-to 20)))))",
+    )
+    .expect("buffer with a false conditional line prefix");
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| {
+            state
+                .window_infos
+                .iter()
+                .any(|info| !info.is_minibuffer && info.window_id == entry.window_id)
+        })
+        .expect("root window matrix");
+    let rows = enabled_window_row_texts_expanding_stretches(entry);
+    assert_eq!(
+        rows.first().map(|row| row.trim_end()),
+        Some(" X"),
+        "the prefix string itself (one space) shows, its display spec does not: {rows:?}"
+    );
+}
+
+// Regression coverage for the conditional display review of PR #354.
+#[test]
+fn display_when_string_continues_after_an_invalid_image() {
+    assert_display_when_replacement_reachability("(image)", true);
+}
+
+#[test]
+fn display_when_string_continues_after_an_unsupported_image() {
+    assert_display_when_replacement_reachability(
+        r#"(image :type unsupported :file "x.png")"#,
+        true,
+    );
+}
+
+#[test]
+fn display_when_string_stops_after_a_valid_image() {
+    assert_display_when_replacement_reachability(r#"(image :type png :file "x.png")"#, false);
+}
+
+#[test]
+fn display_when_string_continues_after_a_nested_when() {
+    assert_display_when_replacement_reachability(r#"(when t when t . "X")"#, true);
+}
+
+#[test]
+fn display_when_string_continues_after_a_when_inside_a_margin() {
+    assert_display_when_replacement_reachability(r#"((margin nil) (when t . "X"))"#, true);
+}
+
+#[test]
+fn display_when_string_continues_after_a_nested_margin() {
+    assert_display_when_replacement_reachability(r#"((margin nil) ((margin nil) "X"))"#, true);
+}
+
+fn assert_display_when_replacement_reachability(spec: &str, continues: bool) {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("a\n", 640, 200);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(&format!(
+        r#"(progn (setq spec-followed nil)
+              (put-text-property 1 2 'line-prefix
+                (propertize " " 'display
+                  '({spec} (when (progn (setq spec-followed t) t) . "Y")))))"#,
+    ))
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(
+        !eval.eval_str("spec-followed").expect("flag").is_nil(),
+        continues,
+        "only an accepted replacement can suppress a later condition: {spec}"
+    );
+    if continues {
+        let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+        assert_eq!(rows[0], "Ya");
+    }
+}
+
+#[test]
+fn display_when_restores_numeric_point_after_a_multibyte_edit() {
+    assert_display_when_point_after_edit("nil");
+}
+
+#[test]
+fn display_when_restores_numeric_point_after_an_edit_and_error() {
+    assert_display_when_point_after_edit("(car 1)");
+}
+
+#[test]
+fn display_when_restores_numeric_point_after_an_edit_and_throw() {
+    assert_display_when_point_after_edit("(throw 'abort-display t)");
+}
+
+fn assert_display_when_point_after_edit(outcome: &str) {
+    let (mut eval, frame_id, buf_id, selected_window) =
+        incr_editing_frame("αβγδεζηθικ\n", 800, 300);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str("(goto-char 5)").expect("selected point");
+    let right = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected_window,
+            neovm_core::window::SplitDirection::Horizontal,
+            buf_id,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split");
+    eval.set_window_point_for_redisplay(frame_id, right, LispCharPos1::new(8));
+    eval.eval_str(&format!(
+        r#"(progn (setq point-edited nil point-seen nil)
+          (put-text-property 1 2 'display
+            '(when (progn
+                     (setq point-seen (cons (point) point-seen))
+                     (if point-edited nil
+                       (if (= (point) 8)
+                           (progn (setq point-edited t) (goto-char 1) (insert "λ"))))
+                     {outcome}) . "HIDDEN")))"#,
+    ))
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert!(
+        !eval.eval_str("point-edited").expect("edit flag").is_nil(),
+        "observed points: {:?}",
+        neovm_core::emacs_core::value::list_to_vec(&eval.eval_str("point-seen").expect("points"))
+    );
+    assert_eq!(eval.eval_str("(point)").expect("point"), Value::fixnum(5));
+}
+
+#[test]
+fn display_when_change_invalidates_retained_body() {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("X\n", 640, 200);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str("(progn (setq pr354-flag t pr354-calls 0) (put-text-property 1 2 'display '(when (progn (setq pr354-calls (1+ pr354-calls)) pr354-flag) . \"REPLACED\")))").expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let before = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+    eval.eval_str("(setq pr354-flag nil)").expect("toggle");
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let incremental = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+    let mut fresh_engine = LayoutEngine::new();
+    fresh_engine.layout_frame_rust(&mut eval, frame_id);
+    let fresh = trace_text_rows(&selected_window_layout_trace(
+        &eval,
+        &fresh_engine,
+        frame_id,
+    ));
+    assert_eq!(before[0], "REPLACED");
+    assert_eq!(fresh[0], "X");
+    assert_eq!(
+        eval.eval_str("pr354-calls").expect("evaluation count"),
+        Value::fixnum(3)
+    );
+    assert_eq!(
+        incremental, fresh,
+        "a newly false condition must discard old replacement glyphs"
+    );
+}
+
+#[test]
+fn display_when_disabled_site_does_not_poison_enabled_site() {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("a\nb\n", 640, 200);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        r#"(progn
+      (put-text-property 1 2 'display '(disable-eval (when (= 1 1) . "X")))
+      (put-text-property 3 4 'display '(when (= 1 1) . "Y")))"#,
+    )
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+    assert_eq!(
+        rows[1], "Y",
+        "disabled occurrence must not suppress enabled occurrence: {rows:?}"
+    );
+}
+
+#[test]
+fn display_when_string_replacement_stops_evaluation() {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("a\n", 640, 200);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        r#"(progn (setq pr354-unreachable nil)
+      (put-text-property 1 2 'line-prefix
+        (propertize " " 'display '("X" (when (progn (setq pr354-unreachable t) nil) . "Y")))))"#,
+    )
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert!(
+        eval.eval_str("pr354-unreachable").expect("flag").is_nil(),
+        "must not evaluate a string clause after its first replacement"
+    );
+}
+
+#[test]
+fn display_when_observes_nonselected_window_point() {
+    let (mut eval, frame_id, buf_id, selected_window) = incr_editing_frame("abcdef\n", 800, 300);
+    realize_test_gui_frame(&mut eval, frame_id);
+    let right = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected_window,
+            neovm_core::window::SplitDirection::Horizontal,
+            buf_id,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split");
+    eval.set_window_point_for_redisplay(frame_id, right, LispCharPos1::new(5));
+    eval.eval_str(r#"(put-text-property 1 2 'display '(when (= (point) 5) . "YES"))"#)
+        .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine.last_frame_display_state.as_ref().expect("state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|e| e.window_id.get() == right.0 as i64)
+        .expect("right");
+    let rows = enabled_window_row_texts_expanding_stretches(entry);
+    assert_eq!(
+        eval.eval_str("(point)").expect("restored point"),
+        Value::fixnum(1)
+    );
+    assert!(
+        rows[0].starts_with("YES"),
+        "right window FORM must see its own point=5: {rows:?}"
+    );
+}
+
+#[test]
+fn display_when_enabled_site_does_not_enable_disabled_site() {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("a\nb\nc\n", 640, 200);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        r#"(progn
+      (put-text-property 1 2 'display '(when (= 1 1) . "X"))
+      (put-text-property 3 4 'display '(disable-eval (when (= 1 1) . "Y")))
+      (put-text-property 5 6 'display '(disable-eval (when t . "LITERAL"))))"#,
+    )
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+    assert_eq!(
+        rows[..3],
+        ["X", "b", "LITERAL"],
+        "only nonliteral disabled forms are suppressed"
+    );
+}
+
+#[test]
+fn display_when_string_stops_after_a_true_conditional_replacement() {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("a\n", 640, 200);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        r#"(progn (setq when-calls nil)
+      (put-text-property 1 2 'line-prefix
+        (propertize " " 'display
+          '[(when (progn (setq when-calls (cons 'first when-calls)) t) . "X")
+            (when (progn (setq when-calls (cons 'second when-calls)) t) . "Y")])))"#,
+    )
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(
+        eval.eval_str("(length when-calls)").expect("calls"),
+        Value::fixnum(1)
+    );
+    let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+    assert_eq!(rows[0], "Xa");
+}
+
+#[test]
+fn display_when_string_continues_after_a_false_conditional_replacement() {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("a\n", 640, 200);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        r#"(progn (setq when-calls nil)
+      (put-text-property 1 2 'line-prefix
+        (propertize " " 'display
+          '((when (progn (setq when-calls (cons 'first when-calls)) nil) . "X")
+            (when (progn (setq when-calls (cons 'second when-calls)) t) . "Y")))))"#,
+    )
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(
+        eval.eval_str("(length when-calls)").expect("calls"),
+        Value::fixnum(2)
+    );
+    let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+    assert_eq!(rows[0], "Ya");
+}
+
+#[test]
+fn display_when_restores_point_after_an_error_in_another_window() {
+    let (mut eval, frame_id, buf_id, selected_window) = incr_editing_frame("abcdef\n", 800, 300);
+    realize_test_gui_frame(&mut eval, frame_id);
+    let right = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected_window,
+            neovm_core::window::SplitDirection::Horizontal,
+            buf_id,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split");
+    eval.set_window_point_for_redisplay(frame_id, right, LispCharPos1::new(5));
+    eval.eval_str(
+        r#"(progn (setq when-points nil)
+      (put-text-property 1 2 'display
+        '(when (progn (setq when-points (cons (point) when-points)) (car 1)) . "HIDDEN")))"#,
+    )
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(
+        eval.eval_str("when-points").expect("observed points"),
+        Value::list(vec![Value::fixnum(5), Value::fixnum(1)])
+    );
+    assert_eq!(
+        eval.eval_str("(point)").expect("restored point"),
+        Value::fixnum(1)
+    );
+}

@@ -9,7 +9,7 @@ use crate::display_item::{
 };
 use crate::display_origin::{DisplayOrigin, DisplayPropertySource, OverlayStringKind};
 use crate::display_property::{
-    DisplayMarginContent, DisplayMarginSide, DisplayPropertyClassification,
+    DisplayMarginContent, DisplayMarginSide, DisplayPropertyClassification, DisplayPropertyObject,
     DisplayReplacementProperty, classify_display_property,
     classify_display_property_modifiers_only,
 };
@@ -20,6 +20,7 @@ use crate::display_source_append_plan::{
     DisplaySourceAppendMeasurementKind, DisplaySourceAppendRenderPlan, DisplaySourceFallbackWidth,
 };
 use crate::display_spec::{DisplaySpaceKey, display_space_positive_number};
+use crate::display_when::DisplayWhenConditions;
 use crate::neovm_bridge::{LayoutBufferView, OrderedFaceSources, TtyGlyphlessCharDisplay};
 use crate::types::{NobreakDisplayMode, WindowParams};
 use crate::unicode::{EmacsTextStorage, decode_emacs_char, decode_utf8};
@@ -1879,7 +1880,6 @@ impl DisplaySpaceWidthPolicy {
         self,
         pctx: &crate::display_pixel_calc::PixelCalcContext,
         current_x: f32,
-        content_x: f32,
         display_char_width: f32,
         default_width: f32,
     ) -> f32 {
@@ -1899,10 +1899,23 @@ impl DisplaySpaceWidthPolicy {
                 if let Some(pixels) =
                     calc_pixel_width_or_height(pctx, &prop, true, Some(&mut align_to))
                 {
+                    // GNU `produce_stretch_glyph` (xdisp.c:32853-32859): a
+                    // resolved region coordinate stands as it is; a raw number
+                    // is measured from the text area's left edge (`align_to =
+                    // 0`), the line-number field having been folded into the
+                    // number already (`XFLOATINT (prop) * base_unit +
+                    // lnum_pixel_width`, xdisp.c:30493).  `pctx` here is in
+                    // frame-absolute coordinates, like `current_x`.  Declared,
+                    // not ported: the continuation-row and horizontal-scroll
+                    // pen terms (`continuation_lines_width`,
+                    // `stretch_adjust`/`first_visible_x`, xdisp.c:32841-32851,
+                    // 32862-32874).  A pen already past the target gives a
+                    // zero-width stretch in GNU too (`zero_width_ok_p`,
+                    // xdisp.c:32860, 32876), as here.
                     let target_x = if align_to >= 0 {
                         align_to as f32 + pixels as f32
                     } else {
-                        content_x + pixels as f32
+                        pctx.text_area_left as f32 + pixels as f32
                     };
                     (target_x - current_x).max(0.0)
                 } else {
@@ -2073,6 +2086,18 @@ impl DisplaySpaceGeometry {
             };
         };
 
+        // `content_x` is the text area's left edge plus the line-number
+        // field (`BufferWindowGeometry::content_x`).  GNU 31.0.90 resolves
+        // `left` past the field and `center` at the field plus half of the
+        // whole text area: `window_box_left_offset + lnum_pixel_width (+
+        // window_box_width / 2)` (src/xdisp.c:30431-30441), the box width
+        // being the text area with no line-number term (src/xdisp.c:1279-
+        // 1300).  Declared: Emacs master moves `center` by half the field
+        // only (`(LNUM_ONCE + window_box_width) / 2`); a 32.0.50 build here
+        // puts it at 294px for a 28px field in a 560px area where 31.0.90
+        // gives 308px.  The context keeps the box width and carries the
+        // field separately, as the calculator's `text` arm expects.
+        let line_number_pixel_width = (content_x - params.text_bounds.x).max(0.0);
         let pctx = PixelCalcContext {
             frame_column_width: params.char_width.max(1.0) as f64,
             frame_line_height: params.char_height.max(1.0) as f64,
@@ -2096,7 +2121,7 @@ impl DisplaySpaceGeometry {
             fringes_outside_margins: false,
             scroll_bar_width: 0.0,
             scroll_bar_on_left: false,
-            line_number_pixel_width: 0.0,
+            line_number_pixel_width: line_number_pixel_width as f64,
             symbol_values: std::collections::HashMap::new(),
             image_sizes: crate::display_pixel_calc::PixelCalcImageSizes::resolve_for_space_spec(
                 spec,
@@ -2105,13 +2130,7 @@ impl DisplaySpaceGeometry {
         };
 
         let width_policy = DisplaySpaceWidthPolicy::from_items(&items);
-        let mut width = width_policy.resolve(
-            &pctx,
-            current_x,
-            content_x,
-            display_char_width,
-            default_width,
-        );
+        let mut width = width_policy.resolve(&pctx, current_x, display_char_width, default_width);
         if width <= 0.0 && (width < 0.0 || !width_policy.zero_width_allowed()) {
             width = 1.0;
         }
@@ -2659,6 +2678,13 @@ impl LispStringSourceCursor {
         self
     }
 
+    /// Give this string (and the strings it pushes) the walk's evaluated
+    /// `(when FORM . SPEC)` results.
+    pub(crate) fn with_display_when(mut self, display_when: DisplayWhenConditions) -> Self {
+        self.stack = self.stack.with_display_when(display_when);
+        self
+    }
+
     pub(crate) fn discard_until_row_break(&mut self) -> bool {
         let mut context = DisplaySourceContext::empty();
         while let Some(item) = self.next_item(&mut context) {
@@ -2734,6 +2760,9 @@ pub(crate) struct LispStringSourceStack {
     frames: Vec<LispStringSourceFrame>,
     next_source_id: u64,
     tty_glyphless_char_display: TtyGlyphlessCharDisplay,
+    /// The walk's evaluated `(when FORM . SPEC)` results, handed to every
+    /// frame pushed onto this stack.
+    display_when: DisplayWhenConditions,
 }
 
 impl LispStringSourceStack {
@@ -2742,7 +2771,17 @@ impl LispStringSourceStack {
             frames: Vec::new(),
             next_source_id,
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
+            display_when: DisplayWhenConditions::structural(),
         }
+    }
+
+    /// Give the frames of this stack the walk's evaluated `when` results.
+    pub(crate) fn with_display_when(mut self, display_when: DisplayWhenConditions) -> Self {
+        for frame in &mut self.frames {
+            frame.display_when = display_when.clone();
+        }
+        self.display_when = display_when;
+        self
     }
 
     fn with_root(
@@ -2756,6 +2795,7 @@ impl LispStringSourceStack {
             frames: vec![frame],
             next_source_id: source_id.saturating_add(1),
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
+            display_when: DisplayWhenConditions::structural(),
         })
     }
 
@@ -2779,6 +2819,7 @@ impl LispStringSourceStack {
             frames: vec![frame],
             next_source_id: source_id.saturating_add(1),
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
+            display_when: DisplayWhenConditions::structural(),
         })
     }
 
@@ -2815,7 +2856,8 @@ impl LispStringSourceStack {
             occurrence,
             box_boundaries,
         ) {
-            self.frames.push(frame);
+            self.frames
+                .push(frame.with_display_when(self.display_when.clone()));
         }
     }
 
@@ -2894,6 +2936,9 @@ struct LispStringSourceFrame {
     /// overlay strings can continue an underlying box run; standalone chrome
     /// strings have an object boundary and therefore use `None`.
     box_boundaries: DisplayStringBoxBoundaries,
+    /// The walk's evaluated `(when FORM . SPEC)` results for this string's
+    /// own `display` properties.
+    display_when: DisplayWhenConditions,
 }
 
 impl LispStringSourceFrame {
@@ -2969,7 +3014,13 @@ impl LispStringSourceFrame {
             nested_display_policy,
             pointer_occurrence,
             box_boundaries,
+            display_when: DisplayWhenConditions::structural(),
         })
+    }
+
+    fn with_display_when(mut self, display_when: DisplayWhenConditions) -> Self {
+        self.display_when = display_when;
+        self
     }
 
     fn next_action(
@@ -2999,9 +3050,14 @@ impl LispStringSourceFrame {
             // than of a check someone has to remember to keep.
             if self.nested_display_policy == NestedDisplayPolicy::ModifiersOnly {
                 self.char_index = property_end;
-                item_layout = classify_display_property_modifiers_only(display_prop);
+                item_layout =
+                    classify_display_property_modifiers_only(display_prop, &self.display_when);
             } else {
-                let display_property = DisplayPropertySourcePlan::new(display_prop);
+                let display_property = DisplayPropertySourcePlan::new(
+                    display_prop,
+                    &self.display_when,
+                    DisplayPropertyObject::LispString,
+                );
                 let display_end = if display_property.replacement().is_some() {
                     self.display_value_extent(display_prop, property_end)
                 } else {
@@ -3446,10 +3502,14 @@ impl DisplayPropertySourceFaces {
 }
 
 impl DisplayPropertySourcePlan {
-    pub(crate) fn new(value: Value) -> Self {
+    pub(crate) fn new(
+        value: Value,
+        conditions: &DisplayWhenConditions,
+        object: DisplayPropertyObject,
+    ) -> Self {
         Self {
             value,
-            classification: classify_display_property(value),
+            classification: classify_display_property(value, conditions, object),
         }
     }
 

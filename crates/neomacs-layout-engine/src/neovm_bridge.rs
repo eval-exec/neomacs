@@ -89,6 +89,11 @@ impl DisplayLineNumbersMode {
 }
 
 pub(crate) trait LayoutBufferView {
+    /// The evaluated `(when FORM . SPEC)` conditions of the walk this view
+    /// serves; `structural()` for a view nothing evaluated for.
+    fn layout_display_when_conditions(&self) -> crate::display_when::DisplayWhenConditions {
+        crate::display_when::DisplayWhenConditions::structural()
+    }
     fn layout_is_multibyte(&self) -> bool;
     fn layout_buffer_local_value(&self, var: LayoutVar) -> Option<Value>;
     fn layout_point_min_emacs_byte_pos(&self) -> EmacsBytePos;
@@ -183,6 +188,8 @@ impl BufferFaceRemapping {
 
 #[derive(Clone)]
 pub(crate) struct LayoutBufferSnapshot {
+    /// `(when FORM . SPEC)` results for the window walk this snapshot serves.
+    display_when: crate::display_when::DisplayWhenConditions,
     name: String,
     text_snapshot: BufferTextSnapshot,
     accessible_start_emacs_byte: EmacsBytePos,
@@ -212,6 +219,7 @@ impl LayoutBufferSnapshot {
         let local_var_alist = buffer.local_var_alist_value();
         let slots = buffer.slot_values_snapshot();
         Self {
+            display_when: crate::display_when::DisplayWhenConditions::structural(),
             name: buffer.name_runtime_string_owned(),
             text_snapshot: buffer.text_snapshot(),
             accessible_start_emacs_byte: buffer.point_min_emacs_byte_pos(),
@@ -249,6 +257,15 @@ impl LayoutBufferSnapshot {
             capture_automatic_composition_spans(buffer, obarray, &snapshot.vars, visible);
         SNAPSHOTS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         snapshot
+    }
+
+    /// Attach the `(when FORM . SPEC)` results evaluated for this walk.
+    pub fn with_display_when(
+        mut self,
+        display_when: crate::display_when::DisplayWhenConditions,
+    ) -> Self {
+        self.display_when = display_when;
+        self
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -583,6 +600,9 @@ impl LayoutBufferView for Buffer {
 }
 
 impl LayoutBufferView for LayoutBufferSnapshot {
+    fn layout_display_when_conditions(&self) -> crate::display_when::DisplayWhenConditions {
+        self.display_when.clone()
+    }
     fn layout_is_multibyte(&self) -> bool {
         self.text_snapshot.is_multibyte()
     }
@@ -3178,9 +3198,13 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
                     .layout_text_prop_at_emacs_byte_pos(bytepos, Value::symbol("display"))
             })
             .is_some_and(|value| {
-                crate::display_property::classify_display_property(value)
-                    .replacement()
-                    .is_some()
+                crate::display_property::classify_display_property(
+                    value,
+                    &self.buffer.layout_display_when_conditions(),
+                    crate::display_property::DisplayPropertyObject::Buffer,
+                )
+                .replacement()
+                .is_some()
             })
     }
 
