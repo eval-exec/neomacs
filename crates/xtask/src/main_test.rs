@@ -4218,54 +4218,97 @@ fn motion_parity_delta_scores_a_fixed_probe_as_fixed() {
     );
 }
 
-/// The release workflow compiles the product in one step and bootstraps it in
-/// another. `print-cargo-features` is what keeps the two describing the same
-/// product, so it must answer with exactly the features the build would use.
+/// The release jobs hard-code the cargo features their compile and bootstrap
+/// steps share. Nothing at runtime checks that list: `verify_built_product`
+/// only inspects Linux linkage, so when the macOS job omitted `webview` the
+/// release shipped without the WKWebView layer and every job still passed.
+/// Pin each job's list to the capability table it claims to implement, and
+/// require both steps to read the one value.
 #[test]
-fn printed_cargo_features_are_the_ones_the_build_uses() {
-    let options = parse_options(&[
-        "--release",
-        "--features",
-        "neomacs-layout-engine/freetype-bundled",
-    ]);
-    let printed = resolved_cargo_features(&options);
+fn release_jobs_share_the_features_their_platform_declares() {
+    const REQUESTED: &str = "neomacs-layout-engine/freetype-bundled";
 
-    let args = initial_cargo_build_args(&options);
-    let built = args
-        .windows(2)
-        .find(|pair| pair[0] == OsString::from("--features"))
-        .map(|pair| pair[1].to_string_lossy().into_owned());
-
-    assert_eq!(built, Some(printed.join(",")));
-    assert!(
-        printed.contains(&"neomacs-layout-engine/freetype-bundled".to_string()),
-        "requested features survive: {printed:?}"
-    );
-}
-
-/// A full product carries this host's declared production capabilities;
-/// `--minimal` carries none of them. The macOS release compiled without
-/// `webview` for exactly as long as the workflow restated this list by hand.
-#[test]
-fn full_products_carry_the_host_capabilities_and_minimal_ones_do_not() {
-    let capabilities: Vec<String> = ProductionCapabilities::for_host()
-        .expect("this host has declared production capabilities")
-        .cargo_feature_names()
-        .map(str::to_owned)
-        .collect();
-
-    let full = resolved_cargo_features(&parse_options(&["--release"]));
-    let minimal = resolved_cargo_features(&parse_options(&["--release", "--minimal"]));
-
-    for capability in &capabilities {
-        assert!(full.contains(capability), "full product drops {capability}");
-        assert!(
-            !minimal.contains(capability),
-            "minimal product carries {capability}"
-        );
+    #[derive(Debug, Deserialize)]
+    struct FeatureWorkflow {
+        jobs: BTreeMap<String, FeatureJob>,
     }
-    assert!(
-        minimal.is_empty(),
-        "unexpected minimal features: {minimal:?}"
-    );
+
+    #[derive(Debug, Deserialize)]
+    struct FeatureJob {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        env: BTreeMap<String, serde_yaml_ng::Value>,
+        #[serde(default)]
+        steps: Vec<FeatureStep>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct FeatureStep {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        run: String,
+    }
+
+    let workflow: FeatureWorkflow = serde_yaml_ng::from_str(include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/workflows/release.yml"
+    )))
+    .expect("release.yml parses");
+    let manifest: toml::Value = toml::from_str(include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/Cargo.toml"
+    )))
+    .expect("the workspace manifest parses");
+
+    for (job_name, platform) in [
+        ("build Linux", "linux"),
+        ("build macOS", "darwin"),
+        ("build Windows", "windows"),
+    ] {
+        let job = workflow
+            .jobs
+            .values()
+            .find(|job| job.name.starts_with(job_name))
+            .unwrap_or_else(|| panic!("release.yml must keep a `{job_name}` job"));
+
+        let declared = manifest
+            .get("workspace")
+            .and_then(|workspace| workspace.get("metadata"))
+            .and_then(|metadata| metadata.get("neomacs-production-capabilities"))
+            .and_then(|capabilities| capabilities.get(platform))
+            .and_then(|platform| platform.get("cargo-features"))
+            .and_then(|features| features.as_array())
+            .unwrap_or_else(|| panic!("{platform} must declare cargo-features"));
+        let expected = declared
+            .iter()
+            .map(|feature| feature.as_str().expect("a declared feature is a string"))
+            .chain(std::iter::once(REQUESTED))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let features = job
+            .env
+            .get("RELEASE_FEATURES")
+            .and_then(serde_yaml_ng::Value::as_str)
+            .unwrap_or_else(|| panic!("`{job_name}` must set RELEASE_FEATURES"));
+        assert_eq!(
+            features, expected,
+            "`{job_name}` must compile the features {platform} declares"
+        );
+
+        for step_name in ["Compile release binaries", "Bootstrap and dump"] {
+            let step = job
+                .steps
+                .iter()
+                .find(|step| step.name == step_name)
+                .unwrap_or_else(|| panic!("`{job_name}` must keep a `{step_name}` step"));
+            assert!(
+                step.run.contains("--features \"$RELEASE_FEATURES\""),
+                "`{job_name}` / `{step_name}` must build the shared feature list, found: {}",
+                step.run
+            );
+        }
+    }
 }

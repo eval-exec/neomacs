@@ -470,18 +470,6 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
         pin_reference::run(args).map_err(DynError::from)?;
         return Ok(());
     }
-    // Print the feature list `fresh-build` would compile with, so a caller that
-    // builds the product itself -- the release workflow's separate compile step
-    // -- can pass the same one instead of hand-copying the capability manifest.
-    if matches!(
-        args.peek().and_then(|arg| arg.to_str()),
-        Some("print-cargo-features")
-    ) {
-        args.next();
-        let options = FreshBuildOptions::parse(repo_root, args)?;
-        println!("{}", resolved_cargo_features(&options).join(","));
-        return Ok(());
-    }
     let options = FreshBuildOptions::parse(repo_root, args)?;
     run_fresh_build(&options)
 }
@@ -1348,16 +1336,13 @@ fn verify_aot_preload_artifacts(paths: &PipelinePaths) -> Result<()> {
     Ok(())
 }
 
-/// The exact cargo features this build uses: the host's declared production
-/// capabilities for a full product (none for `--minimal`), plus whatever
-/// `--features` asked for.
-///
-/// The release workflow compiles the product in one step and bootstraps it in
-/// another (`fresh-build --skip-build`), and the two must agree. Anything that
-/// needs to name that feature set asks here rather than restating
-/// `[workspace.metadata.neomacs-production-capabilities]`, which is how the
-/// macOS compile step came to omit `webview`.
-fn resolved_cargo_features(options: &FreshBuildOptions) -> Vec<String> {
+fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
+    let mut cargo_args = vec![
+        OsString::from("build"),
+        OsString::from("--verbose"),
+        OsString::from("-p"),
+        OsString::from("neomacs"),
+    ];
     let mut features = match options.product_variant {
         ProductVariant::Full => options
             .production_capabilities
@@ -1375,17 +1360,6 @@ fn resolved_cargo_features(options: &FreshBuildOptions) -> Vec<String> {
     );
     features.sort();
     features.dedup();
-    features
-}
-
-fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
-    let mut cargo_args = vec![
-        OsString::from("build"),
-        OsString::from("--verbose"),
-        OsString::from("-p"),
-        OsString::from("neomacs"),
-    ];
-    let features = resolved_cargo_features(options);
     if !features.is_empty() {
         cargo_args.push(OsString::from("--features"));
         cargo_args.push(OsString::from(features.join(",")));
@@ -4595,19 +4569,12 @@ fn usage_text() -> &'static str {
     "\
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--minimal] [--no-byte-compile] [--aot-preload]
        cargo xtask check-dependency-coherence
-       cargo xtask print-cargo-features [--release | --profile NAME] [--minimal] [--features LIST]
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
        cargo xtask perf compare SCENARIO --baseline-editor PATH --candidate-editor PATH [--samples N>=3]
        cargo xtask perf profile SCENARIO [--profiler perf] [--editor PATH] [--iterations N]
        cargo xtask gc-stress [--editor PATH] [--probe-dir DIR] [--filter SUBSTR]
                              [--address-limit-kb N] [--list]
-
-print-cargo-features prints the cargo features a fresh-build with the same flags
-would compile with: this host's declared production capabilities plus any
---features. A caller that compiles the product itself (the release workflow
-compiles once, then bootstraps with --skip-build) passes that list to `cargo
-build` so both steps describe the same product.
 
 gc-stress runs crates/xtask/gc-stress/*.el against the shipped release binary with
 NEOVM_GC_STRESS=1 (collect at every allocation-bearing safe point) and a

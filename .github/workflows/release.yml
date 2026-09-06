@@ -36,6 +36,12 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       TMPDIR: ${{ github.workspace }}/tmp
+      # The full product's cargo features, shared by the compile step and the
+      # bootstrap below so both describe one build. `video` is what this
+      # platform declares in [workspace.metadata.neomacs-production-capabilities];
+      # a test pins this list to that table. The minimal product deliberately
+      # drops the capability, so its steps do not use this.
+      RELEASE_FEATURES: video,neomacs-layout-engine/freetype-bundled
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,17 +79,11 @@ jobs:
       # xtask's own EXACTLY - same package, same features, same profile - or the
       # bootstrap below rebuilds it instead of reusing it, and where nothing
       # verifies the result it blesses a product missing a capability the
-      # manifest promises.  So xtask states the features and this step consumes
-      # them; restating them here is what left macOS without `webview`.
-      # crates/neomacs/build.rs declares rerun-if-env-changed on
-      # NEOMACS_BUILD_PROFILE, so the profile has to agree the same way.
-      # `-p neomacs` covers neomacs, neomacsclient and mock-display; they are
-      # bins of one package.
-      - name: Resolve release cargo features
-        run: >-
-          echo "RELEASE_FEATURES=$(cargo xtask print-cargo-features --release
-          --features neomacs-layout-engine/freetype-bundled)" >> "$GITHUB_ENV"
-
+      # manifest promises (macOS shipped without `webview` that way).  Hence one
+      # RELEASE_FEATURES for both steps.  crates/neomacs/build.rs declares
+      # rerun-if-env-changed on NEOMACS_BUILD_PROFILE, so the profile has to
+      # agree the same way.  `-p neomacs` covers neomacs, neomacsclient and
+      # mock-display; they are bins of one package.
       - name: Compile release binaries
         env:
           NEOMACS_BUILD_PROFILE: release
@@ -93,7 +93,7 @@ jobs:
           --profile release
 
       - name: Bootstrap and dump
-        run: cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled --skip-build
+        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
 
       - name: Set version env
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -175,6 +175,12 @@ jobs:
       # Reserve the space for every binary that goes into the bundle -- the
       # others only fit by accident of their existing padding.
       RUSTFLAGS: "-C link-arg=-Wl,-headerpad_max_install_names"
+      # Shared by the compile step and the bootstrap below so both describe one
+      # build. `webview` is what darwin declares in
+      # [workspace.metadata.neomacs-production-capabilities]; a test pins this
+      # list to that table. Omitting it here is what shipped macOS without the
+      # WKWebView layer, because verify_built_product only inspects Linux.
+      RELEASE_FEATURES: webview,neomacs-layout-engine/freetype-bundled
     outputs:
       distribution_mode: ${{ steps.macos-signing.outputs.distribution_mode }}
     steps:
@@ -199,18 +205,13 @@ jobs:
       # rerun-if-env-changed=NEOMACS_BUILD_PROFILE - or the second step would
       # refingerprint and rebuild instead of reusing this.  `-p neomacs` covers
       # neomacs, neomacsclient and mock-display; they are bins of one package.
-      - name: Resolve release cargo features
-        run: >-
-          echo "RELEASE_FEATURES=$(cargo xtask print-cargo-features --release
-          --features neomacs-layout-engine/freetype-bundled)" >> "$GITHUB_ENV"
-
       - name: Compile release binaries
         env:
           NEOMACS_BUILD_PROFILE: release
         run: cargo build -p neomacs --features "$RELEASE_FEATURES" --profile release
 
       - name: Bootstrap and dump
-        run: cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled --skip-build
+        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
 
       - name: Configure Developer ID signing and notarization
         id: macos-signing
@@ -266,6 +267,11 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       NEOMACS_RELEASE_TARGET: ${{ matrix.target }}
+      # Shared by the compile step and the bootstrap below so both describe one
+      # build. Windows declares no production capabilities in
+      # [workspace.metadata.neomacs-production-capabilities], so this is the
+      # requested features alone; a test pins that to the table.
+      RELEASE_FEATURES: neomacs-layout-engine/freetype-bundled
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -290,12 +296,6 @@ jobs:
       # NEOMACS_BUILD_PROFILE, which crates/neomacs/build.rs declares
       # rerun-if-env-changed on - otherwise the bootstrap step refingerprints
       # and rebuilds instead of reusing this.
-      - name: Resolve release cargo features
-        shell: bash
-        run: >-
-          echo "RELEASE_FEATURES=$(cargo xtask print-cargo-features --release
-          --features neomacs-layout-engine/freetype-bundled)" >> "$GITHUB_ENV"
-
       - name: Compile release binaries
         shell: bash
         timeout-minutes: 150
@@ -314,7 +314,7 @@ jobs:
           # it HOME explicitly (a real Windows session always has one; GNU's
           # w32.c init_environment likewise guarantees HOME is set).
           export HOME="${USERPROFILE:-$GITHUB_WORKSPACE}"
-          cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled --skip-build
+          cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
 
       - name: Set version env (bash)
         shell: bash
