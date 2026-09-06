@@ -17,6 +17,16 @@ fn frame_at(origin: EventTime, millis: u64) -> FrameSample {
 
 /// A 100ms linear tween, so a sample's progress is the elapsed fraction and
 /// every placement below can be read off directly.
+/// The shipped shape of the close slot: disabled, so a departing pane is
+/// uncovered rather than faded. Tests about the default must say so, because
+/// `linear_100ms` deliberately enables every role.
+fn close_disabled() -> WindowAnimationSpecs {
+    WindowAnimationSpecs {
+        close: MotionSpec::Instant,
+        ..linear_100ms()
+    }
+}
+
 /// Every role on one 100ms linear curve.
 ///
 /// The tests below are about the morph's mechanics, not about the four slots
@@ -266,8 +276,15 @@ fn a_moving_pane_keeps_showing_its_destination_content() {
 }
 
 #[test]
-fn an_entering_pane_stays_at_its_destination_for_the_whole_motion() {
-    // It has nowhere to come from. Step 8 gives it a snapshot to fade.
+fn an_entering_pane_arrives_on_the_divider_it_was_carved_from() {
+    // A window created by a split is carved out of its neighbour, so it has
+    // somewhere to come from after all: the ground that neighbour is giving up.
+    // Its leading edge rides the vacated strip's edge, which is the divider.
+    //
+    // Placed at its destination instead -- which is what "it has nowhere to
+    // come from" used to mean here -- the pane is merely uncovered in place.
+    // Nothing about it moves, so a split reads as "the new buffer was already
+    // there" rather than as a window arriving.
     let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let after = [
         window(1, rect(0.0, 0.0, 400.0, 600.0)),
@@ -275,12 +292,42 @@ fn an_entering_pane_stays_at_its_destination_for_the_whole_motion() {
     ];
     let origin = origin();
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    for ms in [0, 50, 100] {
-        assert_eq!(
-            placed(&morph.sample(frame_at(origin, ms)), 2).bounds,
-            rect(400.0, 0.0, 400.0, 600.0)
+
+    // Window 1 spans 800 - 400t, so the divider is at 800 at the start and 400
+    // at rest; the entering pane's left edge tracks it exactly.
+    for (ms, edge) in [(0, 800.0), (50, 600.0), (100, 400.0)] {
+        let sample = morph.sample(frame_at(origin, ms));
+        let entering = placed(&sample, 2);
+        assert!(
+            (entering.bounds.x - edge).abs() < 1.0,
+            "at {ms}ms the entering pane was at {} rather than on the divider at {edge}",
+            entering.bounds.x
         );
+        // Its size never changes -- only a constant-size pane may carry its
+        // content, and that is what lets it slide rather than be revealed.
+        assert!((entering.bounds.width - 400.0).abs() < 1e-3);
+        assert_eq!(entering.content_origin, (400.0, 0.0));
     }
+
+    // And it rides the GEOMETRY motion, not its own: two clocks either side of
+    // a moving seam is exactly what tears one. At 50ms the shrinking pane's
+    // right edge and the entering pane's left edge must be the same number.
+    let sample = morph.sample(frame_at(origin, 50));
+    let shrinking = placed(&sample, 1);
+    let entering = placed(&sample, 2);
+    let strip = sample
+        .panes
+        .iter()
+        .filter(|p| p.source == neomacs_renderer_wgpu::PaneSource::Previous)
+        .find(|p| p.bounds.x > 0.0)
+        .expect("the shrinking pane leaves a strip");
+    assert!(
+        (strip.bounds.x + strip.bounds.width - entering.bounds.x).abs() < 1e-3,
+        "the entering pane separated from the divider: strip ends at {}, pane starts at {}",
+        strip.bounds.x + strip.bounds.width,
+        entering.bounds.x
+    );
+    assert!((shrinking.painted.x + shrinking.painted.width - strip.bounds.x).abs() < 1e-3);
 }
 
 // =======================================================================
@@ -325,7 +372,7 @@ fn an_overshooting_pane_never_gets_a_negative_extent_or_a_strip_it_is_not_owed()
     let motion = RoleSamples {
         geometry: overshot,
         open: overshot,
-        close: overshot,
+        close: Some(overshot),
     };
 
     // A pane that GROWS must never emit a vacated strip. The guard used to read
@@ -340,6 +387,7 @@ fn an_overshooting_pane_never_gets_a_negative_extent_or_a_strip_it_is_not_owed()
             to: rect(0.0, 0.0, 800.0, 600.0),
         },
         motion,
+        &[],
         &[],
         &mut grew,
     );
@@ -370,6 +418,7 @@ fn an_overshooting_pane_never_gets_a_negative_extent_or_a_strip_it_is_not_owed()
             to: rect(0.0, 0.0, 20.0, 600.0),
         },
         motion,
+        &[],
         &[],
         &mut shrank,
     );
@@ -912,6 +961,36 @@ fn an_entering_pane_fades_on_its_own_curve_and_holds_the_morph_open() {
 }
 
 #[test]
+fn the_close_slot_decides_whether_a_departing_pane_fades_at_all() {
+    let origin = origin();
+    let before = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(400.0, 0.0, 400.0, 600.0)),
+    ];
+    let after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+
+    // Disabled -- the shipped default. The departing pane holds the ground it
+    // has not given up at full opacity and is uncovered by the pane growing
+    // across it. Sampling a disabled slot as "arrived" would instead read as
+    // opacity zero and delete the window instantly, which is the jump the
+    // morph exists to remove.
+    let mut specs = linear_100ms();
+    specs.close = MotionSpec::Instant;
+    let morph = PaneLayoutMorph::try_new(&before, &after, specs, origin).expect("a morph");
+    let leaving = departing(&morph.sample(frame_at(origin, 50)), 2);
+    assert_eq!(leaving.opacity, 1.0, "a disabled close must not fade");
+
+    // Enabled -- it fades on its own curve, independent of the geometry.
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let early = departing(&morph.sample(frame_at(origin, 10)), 2).opacity;
+    let late = departing(&morph.sample(frame_at(origin, 90)), 2).opacity;
+    assert!(
+        early > late && early < 1.0 && late > 0.0,
+        "an enabled close fades out: {early} then {late}"
+    );
+}
+
+#[test]
 fn deleting_a_window_leaves_the_old_picture_standing_where_the_survivor_has_not_reached() {
     // `C-x 0`: the left window goes, the right one grows across its ground.
     // Mid-motion the frame must be partitioned -- old picture on the left of
@@ -923,7 +1002,8 @@ fn deleting_a_window_leaves_the_old_picture_standing_where_the_survivor_has_not_
         window(2, rect(656.0, 0.0, 656.0, 1200.0)),
     ];
     let after = [window(2, rect(0.0, 0.0, 1312.0, 1200.0))];
-    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let morph =
+        PaneLayoutMorph::try_new(&before, &after, close_disabled(), origin).expect("a morph");
 
     let sample = morph.sample(frame_at(origin, 50));
     // Halfway the survivor spans [328, 1312), so the deleted window still shows
@@ -976,7 +1056,7 @@ fn an_entering_pane_fades_in_and_a_leaving_one_is_uncovered_rather_than_faded() 
     // for the length of the motion, over a destination backdrop that already
     // shows the settled layout.
     let delete_after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
-    let leaving = PaneLayoutMorph::try_new(&split_after, &delete_after, linear_100ms(), origin)
+    let leaving = PaneLayoutMorph::try_new(&split_after, &delete_after, close_disabled(), origin)
         .expect("a morph");
     let early = departing(&leaving.sample(frame_at(origin, 10)), 2);
     let late = departing(&leaving.sample(frame_at(origin, 90)), 2);
