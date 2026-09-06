@@ -2,3 +2,4 @@
 //! preparation, result schema, invariants, and measurements.
 
 pub(crate) mod editor_workload;
+pub(crate) mod org_journal_open;

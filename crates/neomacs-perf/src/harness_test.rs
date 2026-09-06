@@ -1224,7 +1224,7 @@ fn org_journal_open_relaxes_creation_invariants_for_an_external_journal() {
 
 #[test]
 fn synthetic_journal_generator_is_deterministic_and_heavier_than_the_real_workload() {
-    use super::harness::generate_synthetic_journal;
+    use super::harness::scenarios::org_journal_open::generate_synthetic_journal;
 
     // Cross-machine reproduction hinges on the constant seed: the same
     // elapsed-day count must always produce a byte-identical journal.
@@ -1257,7 +1257,7 @@ fn synthetic_journal_generator_is_deterministic_and_heavier_than_the_real_worklo
 
 #[test]
 fn civil_date_helpers_round_trip_across_the_scenario_year() {
-    use super::harness::{civil_from_days, days_from_civil};
+    use super::harness::scenarios::org_journal_open::{civil_from_days, days_from_civil};
 
     assert_eq!(civil_from_days(0), (1970, 1, 1));
     for days in [
