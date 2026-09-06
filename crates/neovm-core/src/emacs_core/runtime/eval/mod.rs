@@ -454,7 +454,7 @@ thread_local! {
     /// full entry copy plus a linear scan of the special-name list that used
     /// to run on every `CallBuiltinSym` (GNU's inline opcodes cost nothing
     /// comparable: `CASE (Bpoint)` is a direct case).
-    static INLINE_SUBR_TABLE: RefCell<Vec<Option<SubrFn>>> = const { RefCell::new(Vec::new()) };
+    static INLINE_SUBR_TABLE: RefCell<Vec<InlineSubr>> = const { RefCell::new(Vec::new()) };
 
     /// Test-only visibility into hot-path registry reads.  Primitive objects
     /// should carry the GNU `Lisp_Subr` metadata needed by `commandp` instead
@@ -498,15 +498,12 @@ pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
         }
         table[idx] = Some(entry);
     });
-    let inline = (entry.dispatch_kind == SubrDispatchKind::Builtin
-        && !VM_SPECIAL_BUILTIN_NAMES.contains(&resolve_sym(sym_id)))
-    .then_some(entry.function)
-    .flatten();
+    let inline = InlineSubr::for_entry(resolve_sym(sym_id), &entry);
     INLINE_SUBR_TABLE.with(|table| {
         let idx = sym_id.0 as usize;
         let mut table = table.borrow_mut();
         if table.len() <= idx {
-            table.resize_with(idx + 1, || None);
+            table.resize_with(idx + 1, InlineSubr::default);
         }
         table[idx] = inline;
     });
@@ -541,11 +538,75 @@ pub(crate) const VM_SPECIAL_BUILTIN_NAMES: [&str; 13] = [
     "%%unimplemented-elc-bytecode",
 ];
 
+/// How the bytecode interpreter runs a `CallBuiltinSym` for one symbol —
+/// the analogue of GNU `exec_byte_code`'s dedicated `CASE`s for the inline
+/// opcodes (`Bpoint`, `Bcurrent_buffer`, ...), decided once at registration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum InlineSubrKind {
+    /// Not a plain builtin (VM-special, Lisp-only, or unregistered).
+    #[default]
+    Generic,
+    /// A fixed-arity subr of at most three arguments: the VM calls its
+    /// function pointer straight from the operand stack.
+    Direct,
+    /// `aset`/`fillarray`: keep the string write-back path.
+    Writeback,
+    /// Pure reads of the current buffer, executed without any call.
+    Point,
+    PointMin,
+    PointMax,
+    CurrentBuffer,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct InlineSubr {
+    pub(crate) function: Option<SubrFn>,
+    pub(crate) kind: InlineSubrKind,
+}
+
+impl InlineSubr {
+    fn for_entry(name: &str, entry: &SubrEntry) -> Self {
+        if entry.dispatch_kind != SubrDispatchKind::Builtin
+            || VM_SPECIAL_BUILTIN_NAMES.contains(&name)
+        {
+            return Self::default();
+        }
+        let kind = match (name, entry.function) {
+            ("point", Some(SubrFn::A0(_))) => InlineSubrKind::Point,
+            ("point-min", Some(SubrFn::A0(_))) => InlineSubrKind::PointMin,
+            ("point-max", Some(SubrFn::A0(_))) => InlineSubrKind::PointMax,
+            ("current-buffer", Some(SubrFn::A0(_))) => InlineSubrKind::CurrentBuffer,
+            ("aset" | "fillarray", _) => InlineSubrKind::Writeback,
+            (_, Some(SubrFn::A0(_) | SubrFn::A1(_) | SubrFn::A2(_) | SubrFn::A3(_))) => {
+                InlineSubrKind::Direct
+            }
+            _ => InlineSubrKind::Generic,
+        };
+        Self {
+            function: entry.function,
+            kind,
+        }
+    }
+}
+
+/// The inline-dispatch record for `sym_id` (`kind == Generic` with no
+/// function when the symbol is not a registered plain builtin).
+#[inline]
+pub(crate) fn inline_subr(sym_id: SymId) -> InlineSubr {
+    INLINE_SUBR_TABLE.with(|table| {
+        table
+            .borrow()
+            .get(sym_id.0 as usize)
+            .copied()
+            .unwrap_or_default()
+    })
+}
+
 /// The function pointer to call straight off the stack for `sym_id`, or
 /// `None` when the symbol is not a registered plain builtin.
 #[inline]
 pub(crate) fn inline_subr_function(sym_id: SymId) -> Option<SubrFn> {
-    INLINE_SUBR_TABLE.with(|table| table.borrow().get(sym_id.0 as usize).copied().flatten())
+    inline_subr(sym_id).function
 }
 
 pub(crate) fn lookup_global_subr_entry(sym_id: SymId) -> Option<SubrEntry> {

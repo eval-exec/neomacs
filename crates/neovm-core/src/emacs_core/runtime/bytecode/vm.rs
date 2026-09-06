@@ -5143,8 +5143,29 @@ impl<'a> Vm<'a> {
                         vm_profile::bump_entry(*sym, vm_profile::ENTRY_CALLBUILTINSYM);
                         let n = *n as usize;
                         let args_start = stk!().len().saturating_sub(n);
-                        let result =
-                            vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n));
+                        // GNU runs the inline opcodes as dedicated cases; the
+                        // registration-time kind picks the matching shape here
+                        // (pure buffer reads without a call, fixed-arity subrs
+                        // straight off the stack) and leaves the rest to the
+                        // generic by-symbol dispatch.
+                        use crate::emacs_core::eval::InlineSubrKind;
+                        let inline = crate::emacs_core::eval::inline_subr(*sym);
+                        let result = match inline.kind {
+                            InlineSubrKind::Point => vm_try!(self.op_point()),
+                            InlineSubrKind::PointMin => vm_try!(self.op_point_min()),
+                            InlineSubrKind::PointMax => vm_try!(self.op_point_max()),
+                            InlineSubrKind::CurrentBuffer => vm_try!(self.op_current_buffer()),
+                            InlineSubrKind::Direct => vm_try!(Self::call_fixed_builtin_direct(
+                                self.ctx,
+                                inline.function,
+                                *sym,
+                                args_start,
+                                n,
+                            )),
+                            InlineSubrKind::Generic | InlineSubrKind::Writeback => {
+                                vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n))
+                            }
+                        };
                         stk!().truncate(args_start);
                         stk_push!(result);
                         poll_quit!();
@@ -7660,6 +7681,82 @@ impl<'a> Vm<'a> {
     /// arguments with no backtrace frame, no arity check and no eval-depth
     /// accounting, then route a signal through the condition handlers exactly
     /// as the framed path does.
+    /// GNU `Bpoint`: `make_fixnum (PT)` with no call at all.
+    #[inline(never)]
+    fn op_point(&mut self) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        match self.ctx.buffers.current_buffer() {
+            Some(buf) => Ok(Value::fixnum(buf.point_lisp_char_pos().as_i64())),
+            None => Err(signal("error", vec![Value::string("No current buffer")])),
+        }
+    }
+    /// GNU `Bpoint_min`.
+    #[inline(never)]
+    fn op_point_min(&mut self) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        match self.ctx.buffers.current_buffer() {
+            Some(buf) => Ok(Value::fixnum(buf.point_min_lisp_char_pos().as_i64())),
+            None => Err(signal("error", vec![Value::string("No current buffer")])),
+        }
+    }
+    /// GNU `Bpoint_max`.
+    #[inline(never)]
+    fn op_point_max(&mut self) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        match self.ctx.buffers.current_buffer() {
+            Some(buf) => Ok(Value::fixnum(buf.point_max_lisp_char_pos().as_i64())),
+            None => Err(signal("error", vec![Value::string("No current buffer")])),
+        }
+    }
+    /// GNU `Bcurrent_buffer`.
+    #[inline(never)]
+    fn op_current_buffer(&mut self) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        Ok(match self.ctx.buffers.current_buffer() {
+            Some(buf) => Value::make_buffer(buf.id),
+            None => Value::NIL,
+        })
+    }
+    /// A fixed-arity subr of at most three arguments, called with its
+    /// operands read straight off the stack (absent optionals are nil, as
+    /// GNU `funcall_subr` fills them) — no by-symbol dispatch layers.
+    #[inline(never)]
+    fn call_fixed_builtin_direct(
+        ctx: &mut crate::emacs_core::eval::Context,
+        function: Option<SubrFn>,
+        sym: SymId,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        let arg = |i: usize| {
+            if i < nargs {
+                ctx.bc_buf[args_start + i]
+            } else {
+                Value::NIL
+            }
+        };
+        let (a0, a1, a2) = (arg(0), arg(1), arg(2));
+        let result = match function {
+            Some(SubrFn::A0(f)) => f(ctx),
+            Some(SubrFn::A1(f)) => f(ctx, a0),
+            Some(SubrFn::A2(f)) => f(ctx, a0, a1),
+            Some(SubrFn::A3(f)) => f(ctx, a0, a1, a2),
+            _ => Err(signal(
+                LispCondition::VoidFunction,
+                vec![Value::from_sym_id(sym)],
+            )),
+        };
+        match result {
+            Ok(value) => Ok(value),
+            Err(flow) => ctx.dispatch_signal_result_if_needed(Err(flow)),
+        }
+    }
     pub(crate) fn call_inline_builtin_from_stack(
         ctx: &mut crate::emacs_core::eval::Context,
         function: SubrFn,
