@@ -92,7 +92,7 @@ impl DisplayWhenConditions {
 /// first occurrence; GNU evaluates every occurrence, so a FORM that reads
 /// `position` or `buffer-position` and expects a different answer per
 /// occurrence is not reproduced (declared).  Overlay strings displayed at a
-/// boundary outside `[from, to)` are not reached by this walk and are not
+/// boundary outside `[from, to]` are not reached by this walk and are not
 /// evaluated.  Not scanned, so left to the structural rule
 /// (declared): the `display` properties of strings reached through a
 /// replacing `display` property (modifiers only there) and of margin
@@ -174,10 +174,6 @@ fn collect_when_form_sites(
     // Declared: a prefix from an overlay is bound to the overlay's start; GNU
     // reads the prefix at each row start (src/xdisp.c:25131-25132, 25180).
     let overlays = buffer.overlays();
-    let range = EmacsByteRange::new(
-        buffer.layout_char_pos_to_emacs_byte_pos(from),
-        buffer.layout_char_pos_to_emacs_byte_pos(to),
-    );
     let mut boundaries: Vec<CharPos0> = Vec::new();
     for overlay in overlays.overlays_in_emacs_byte_range(EmacsByteRange::new(
         buffer
@@ -190,24 +186,32 @@ fn collect_when_form_sites(
         if !overlays.overlay_applies_to_window(overlay, window_id) {
             continue;
         }
-        let start = overlays
-            .overlay_start_emacs_byte_pos(overlay)
-            .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos));
-        let end = overlays
-            .overlay_end_emacs_byte_pos(overlay)
-            .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos));
+        let (Some(start), Some(end)) = (
+            overlays
+                .overlay_start_emacs_byte_pos(overlay)
+                .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos)),
+            overlays
+                .overlay_end_emacs_byte_pos(overlay)
+                .map(|bytepos| buffer.layout_emacs_byte_pos_to_char_pos(bytepos)),
+        ) else {
+            continue;
+        };
         // A string is displayed where the walk stops at the overlay's start or
-        // end; only those inside the span are reached by this walk.
-        for at in [start, end].into_iter().flatten() {
-            if at >= from && at < to {
+        // end.  The walk reaches every position of `[from, to]`: `to` itself
+        // when it is the end of the buffer (`reseat` -> `handle_stop` at ZV,
+        // src/xdisp.c:8046-8052; the walk's end-of-buffer anchor path), and
+        // otherwise as the first position of the next row.
+        for at in [start, end] {
+            if at >= from && at <= to {
                 boundaries.push(at);
             }
         }
-        if overlays
-            .overlays_in_emacs_byte_range(range)
-            .contains(&overlay)
-        {
-            let at = start.unwrap_or(from).max(from);
+        // Properties come from overlays covering a displayed position: GNU
+        // `get_char_property_and_overlay` skips an overlay whose end is at
+        // or before the position (`node->end < pos + 1`, src/textprop.c:
+        // 652-653), so an empty overlay contributes none.
+        if start < end && start < to && end > from {
+            let at = start.max(from);
             if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol("display")) {
                 collect_when_forms(value, buffer_object, gnu_pos(at), gnu_pos(at), &mut sites);
             }
@@ -227,10 +231,7 @@ fn collect_when_form_sites(
     // src/xdisp.c:5919-5923).
     boundaries.sort_unstable();
     boundaries.dedup();
-    let access = match window_id {
-        Some(window_id) => RustTextPropAccess::new_for_window(buffer, window_id),
-        None => RustTextPropAccess::new(buffer),
-    };
+    let access = RustTextPropAccess::new_for_optional_window(buffer, window_id);
     for at in boundaries {
         for entry in access.overlay_strings_at(at.get() as i64) {
             collect_prefix_string_when_forms(entry.string, gnu_pos(at), &mut sites);
