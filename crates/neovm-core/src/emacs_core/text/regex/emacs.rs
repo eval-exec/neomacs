@@ -25,7 +25,8 @@
 //! - GNU header: `src/regex-emacs.h`
 //! - GNU search: `src/search.c` (3514 lines)
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap;
+use std::collections::HashSet;
 
 use crate::emacs_core::{emacs_char, syntax::SyntaxClass, value::Value};
 use regex_automata::util::prefilter::Prefilter as RaPrefilter;
@@ -296,7 +297,7 @@ pub(crate) struct CompiledPattern {
     /// Multibyte (non-ASCII) character ranges for Charset/CharsetNot opcodes.
     /// Key = bytecode position of the Charset/CharsetNot opcode.
     /// Value = list of inclusive (start_char, end_char) character ranges.
-    pub multibyte_charsets: HashMap<usize, Vec<(char, char)>>,
+    pub multibyte_charsets: FxHashMap<usize, Vec<(char, char)>>,
 
     /// Per-charset POSIX character class flags.
     ///
@@ -305,7 +306,9 @@ pub(crate) struct CompiledPattern {
     /// while executing the charset.  The ASCII bitmap remains the fast path,
     /// but these bits preserve the runtime predicate for multibyte characters
     /// and for syntax-table-sensitive classes such as `word` and `space`.
-    pub charset_class_bits: HashMap<usize, u32>,
+    /// Fx-hashed: probed per charset op while matching (57K probes per
+    /// five org font-lock operations); SipHash on a `usize` key was 1.7M Ir/op.
+    pub charset_class_bits: FxHashMap<usize, u32>,
 
     /// True if the pattern used a non-greedy optional `??`.  Its
     /// `OnFailureKeepStringJump` does NOT restore the string position on
@@ -511,8 +514,8 @@ impl CompiledPattern {
             uses_syntax: false,
             used_syntax: false,
             translate: None,
-            multibyte_charsets: HashMap::new(),
-            charset_class_bits: HashMap::new(),
+            multibyte_charsets: FxHashMap::default(),
+            charset_class_bits: FxHashMap::default(),
             has_nongreedy_optional: false,
             pike_eligible: false,
             buffer_sealed: false,
@@ -571,7 +574,7 @@ impl CompiledPattern {
 /// Copy entries keyed in `[from..from_end)` to `pos - from + to`, keeping the
 /// originals.
 fn clone_charset_keys<V: Clone>(
-    map: &mut HashMap<usize, V>,
+    map: &mut FxHashMap<usize, V>,
     from: usize,
     from_end: usize,
     to: usize,
@@ -590,7 +593,7 @@ fn clone_charset_keys<V: Clone>(
 }
 
 /// Shift every key `>= at` in an opcode-position-keyed map by `delta` bytes.
-fn shift_charset_keys<V>(map: &mut HashMap<usize, V>, at: usize, delta: isize) {
+fn shift_charset_keys<V>(map: &mut FxHashMap<usize, V>, at: usize, delta: isize) {
     if map.is_empty() || delta == 0 {
         return;
     }
@@ -604,7 +607,12 @@ fn shift_charset_keys<V>(map: &mut HashMap<usize, V>, at: usize, delta: isize) {
 }
 
 /// Re-key opcode entries that lived in `[from..from_end)` so they start at `to`.
-fn relocate_charset_keys<V>(map: &mut HashMap<usize, V>, from: usize, from_end: usize, to: usize) {
+fn relocate_charset_keys<V>(
+    map: &mut FxHashMap<usize, V>,
+    from: usize,
+    from_end: usize,
+    to: usize,
+) {
     if map.is_empty() {
         return;
     }
