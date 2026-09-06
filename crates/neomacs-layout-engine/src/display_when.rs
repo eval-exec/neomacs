@@ -53,6 +53,13 @@ impl DisplayWhenConditions {
         Self::Evaluated(Rc::new(results))
     }
 
+    /// Retained rows have no dependency record for arbitrary Lisp FORM
+    /// results. Rewalk a window with evaluated forms (or a failed evaluation)
+    /// instead of replaying glyphs produced by a previous answer.
+    pub(crate) fn allows_body_reuse(&self) -> bool {
+        matches!(self, Self::Evaluated(results) if results.is_empty())
+    }
+
     /// The evaluated result for FORM: literal `nil`/`t` first (GNU takes both
     /// as they are, src/xdisp.c:6141), then the evaluated table.
     pub fn verdict(&self, form: Value) -> DisplayWhenVerdict {
@@ -86,10 +93,11 @@ impl DisplayWhenConditions {
 /// `line-prefix`/`wrap-prefix` values, and the `display` properties inside
 /// all of those strings.
 ///
-/// The forms run with `buf_id` current, as GNU's iterator does
-/// (src/xdisp.c:20533-20535).  A FORM is evaluated once per `equal` form
+/// The forms run with `buf_id` current and the nonselected window's point
+/// temporarily installed, as GNU's iterator does (src/xdisp.c:20533-20535,
+/// 20578-20600). A FORM is evaluated once per `equal` form
 /// (the table is keyed by structural equality), with the bindings of its
-/// first occurrence; GNU evaluates every occurrence, so a FORM that reads
+/// first reachable, enabled occurrence; GNU evaluates every occurrence, so a FORM that reads
 /// `position` or `buffer-position` and expects a different answer per
 /// occurrence is not reproduced (declared).  Overlay strings displayed at a
 /// boundary outside `[from, to]` are not reached by this walk and are not
@@ -112,7 +120,20 @@ pub(crate) fn evaluate_window_display_when_forms(
         Some(buffer) => collect_when_form_sites(buffer, window_id, from, to, &default_prefixes),
         None => Vec::new(),
     };
-    match evaluator.evaluate_display_when_sites(buf_id, &sites) {
+    match evaluator.evaluate_display_when_sites(
+        buf_id,
+        window_id.map(neovm_core::window::WindowId),
+        &sites,
+        |spec| {
+            crate::display_property::classify_single_display_spec(
+                spec,
+                &DisplayWhenConditions::structural(),
+                true,
+            )
+            .replacement()
+            .is_some()
+        },
+    ) {
         Ok(results) => DisplayWhenConditions::evaluated(results.into_iter().collect()),
         // A `throw` (or an exit) out of a display FORM unwinds redisplay in
         // GNU; redisplay here has no such exit, so the forms of this span
@@ -259,7 +280,8 @@ fn collect_when_form_sites(
     sites
 }
 
-/// The `when` forms of one display property value.
+/// Keep a whole property containing a nonliteral FORM. Evaluation must see
+/// preceding replacements, including unconditional ones, to decide reachability.
 fn collect_when_forms(
     value: Value,
     object: Value,
@@ -274,12 +296,12 @@ fn collect_when_forms(
             && !form.is_symbol_named("t")
         {
             sites.push(DisplayWhenSite {
-                form,
+                property: value,
                 object,
                 position,
                 buffer_position,
-                eval_enabled: specs.eval_enabled,
             });
+            return std::ops::ControlFlow::Break(());
         }
         std::ops::ControlFlow::Continue(())
     });

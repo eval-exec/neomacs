@@ -13,25 +13,26 @@
 
 use super::eval::Context;
 use crate::buffer::BufferId;
+use crate::emacs_core::display_spec::{DisplayPropertySpecs, display_spec_when_parts};
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::Value;
+use crate::window::{Window, WindowId};
 use rustc_hash::FxHashMap;
+use std::ops::ControlFlow;
 
-/// One `(when FORM . SPEC)` occurrence with the bindings GNU gives its FORM
-/// (src/xdisp.c:6152-6154).
+/// A display property containing `when` clauses, with GNU's occurrence
+/// bindings. Keep the entire property so a string's first replacement can
+/// stop evaluation of the remaining clauses (xdisp.c:6034-6040).
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayWhenSite {
-    pub form: Value,
+    pub property: Value,
     /// The buffer or string carrying the property.
     pub object: Value,
     /// The position in `object` (GNU `position`).
     pub position: i64,
     /// The buffer position being displayed (GNU `buffer-position`).
     pub buffer_position: i64,
-    /// False inside `(disable-eval …)`: GNU then takes FORM as nil
-    /// (src/xdisp.c:6139-6140) and the spec never applies.
-    pub eval_enabled: bool,
 }
 
 impl Context {
@@ -58,46 +59,119 @@ impl Context {
         Ok(result)
     }
 
-    /// Evaluate every distinct FORM of `sites` with `buf_id` current, each
-    /// with the bindings of its first occurrence, and return what each held.
+    /// Evaluate reachable, enabled FORMs with the bindings of their first
+    /// occurrence. The caller supplies its single-spec replacement classifier
+    /// so string evaluation and rendering stop on the same winning clause.
     ///
-    /// The site values are rooted for the span of the loop: a FORM may drop
-    /// the property that made a later site's FORM reachable, and the
-    /// collector is precise (no stack scan).  A FORM is evaluated once; GNU
-    /// evaluates it at every occurrence (declared).  `Err` carries a flow
-    /// that is not an error signal -- a `throw`, a thread block, an exit --
-    /// which GNU lets unwind through redisplay.
+    /// Snapshot and root every property's elements before running Lisp. A
+    /// FORM can mutate the list/vector or remove a later site's property and
+    /// collect; neither may invalidate our iteration or its saved elements.
+    /// Once-per-`equal`-FORM evaluation remains a declared difference from GNU.
+    /// `Err` carries non-signal flows, which GNU lets unwind through redisplay.
     pub fn evaluate_display_when_sites(
         &mut self,
         buf_id: BufferId,
+        window_id: Option<WindowId>,
         sites: &[DisplayWhenSite],
+        mut replaces_text: impl FnMut(Value) -> bool,
     ) -> Result<FxHashMap<Value, bool>, Flow> {
         let root_scope = self.save_specpdl_roots();
+        let mut properties = Vec::with_capacity(sites.len());
         for site in sites {
-            for value in [site.form, site.object] {
+            let property = DisplayPropertySpecs::of(site.property);
+            let mut specs = Vec::new();
+            property.for_each(|spec| {
+                specs.push(spec);
+                ControlFlow::Continue(())
+            });
+            for value in [site.property, site.object]
+                .into_iter()
+                .chain(specs.iter().copied())
+            {
                 if value.is_heap_object() {
                     self.push_specpdl_root(value);
                 }
             }
+            properties.push((property.eval_enabled, specs));
         }
         let evaluated = self.with_display_buffer_current(buf_id, |ctx| {
             let mut results: FxHashMap<Value, bool> = FxHashMap::default();
-            for site in sites {
-                if results.contains_key(&site.form) {
-                    continue;
+            ctx.with_unwind_scope(|ctx| {
+                // GNU redisplay_window temporarily installs w->pointm for a
+                // nonselected window (xdisp.c:20578-20600). Save it with a
+                // marker so edits and nonlocal exits restore a live position.
+                let window_point = window_id.and_then(|id| {
+                    if ctx
+                        .frames
+                        .selected_frame()
+                        .map(|frame| frame.selected_window)
+                        == Some(id)
+                    {
+                        return None;
+                    }
+                    let frame = ctx.frames.get(ctx.frames.find_window_frame_id(id)?)?;
+                    match frame.find_window(id)? {
+                        Window::Leaf {
+                            buffer_id, point, ..
+                        } if *buffer_id == buf_id => Some(*point),
+                        _ => None,
+                    }
+                });
+                if let Some(point) = window_point {
+                    ctx.record_save_excursion();
+                    if let Some(buffer) = ctx.buffers.get_mut(buf_id) {
+                        let target = buffer.char_pos_to_emacs_byte_pos_clamped(point.to_char_pos());
+                        buffer.goto_emacs_byte_pos(target);
+                    }
                 }
-                let holds = if site.eval_enabled {
-                    ctx.display_when_form_holds(
-                        site.form,
-                        site.object,
-                        site.position,
-                        site.buffer_position,
-                    )?
-                } else {
-                    false
-                };
-                results.insert(site.form, holds);
-            }
+                for (site, (eval_enabled, specs)) in sites.iter().zip(properties) {
+                    for spec in specs {
+                        let resolved = if let Some((form, inner)) = display_spec_when_parts(spec) {
+                            // Earlier clauses may have installed this pair
+                            // after the snapshot. Root the values we actually
+                            // decoded: FORM can detach its own cdr and collect,
+                            // and the cached key must survive later clauses.
+                            for value in [form, inner] {
+                                if value.is_heap_object() {
+                                    ctx.push_specpdl_root(value);
+                                }
+                            }
+                            if form.is_nil() {
+                                continue;
+                            }
+                            if !form.is_symbol_named("t") {
+                                // Disabled sites have no cached answer: the policy
+                                // belongs to this property, not every equal FORM.
+                                if !eval_enabled {
+                                    continue;
+                                }
+                                let holds = if let Some(holds) = results.get(&form) {
+                                    *holds
+                                } else {
+                                    let holds = ctx.display_when_form_holds(
+                                        form,
+                                        site.object,
+                                        site.position,
+                                        site.buffer_position,
+                                    )?;
+                                    results.insert(form, holds);
+                                    holds
+                                };
+                                if !holds {
+                                    continue;
+                                }
+                            }
+                            inner
+                        } else {
+                            spec
+                        };
+                        if site.object.is_string() && replaces_text(resolved) {
+                            break;
+                        }
+                    }
+                }
+                Ok(Value::NIL)
+            })?;
             Ok(results)
         });
         self.restore_specpdl_roots(root_scope);

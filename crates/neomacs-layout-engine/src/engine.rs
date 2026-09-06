@@ -3558,6 +3558,15 @@ impl LayoutEngine {
             neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
             neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
         );
+        // The retained key tracks buffer/face changes, not arbitrary Lisp
+        // dependencies. A newly evaluated condition can change glyphs without
+        // moving any of those ticks. This applies to cursor, scroll, and edit
+        // replay alike; static windows keep their existing fast paths.
+        let (cursor_only_replay, scroll_replay, is_edit) = if display_when.allows_body_reuse() {
+            (cursor_only_replay, scroll_replay, is_edit)
+        } else {
+            (None, None, false)
+        };
         if evaluator.frame_manager().window_topology_generation() != topology_generation {
             return LeafLayoutAttempt::LogicalInputsChanged;
         }
