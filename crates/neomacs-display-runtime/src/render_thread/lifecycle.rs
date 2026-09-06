@@ -490,6 +490,19 @@ impl RenderApp {
                     DemandReason::Transition,
                     dynamic_animation_rate,
                 ),
+                // A morph is the one animation whose state lives entirely in
+                // the compositor rather than in a renderer effect list, so it
+                // is invisible to every demand above. Without a standing demand
+                // of its own the panes advance only on frames some *other*
+                // activity happened to schedule — a cursor blink, an incoming
+                // commit — so a `split-window` on an idle frame simply arrives,
+                // with a burst of motion in the middle if the cursor happened
+                // to blink during it.
+                (
+                    dynamic_effects_allowed && window_state.render.compositor.pane_morph.is_some(),
+                    DemandReason::PaneMotion,
+                    dynamic_animation_rate,
+                ),
             ];
             let mut action = PacingAction::Sleep;
             for (active, reason, rate) in effect_demands {
