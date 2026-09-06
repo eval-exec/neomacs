@@ -48,6 +48,15 @@ impl super::eval::Context {
     /// can wrap, fold, or be replaced. `None` leaves the caller's semantic
     /// viewport unchanged; a failed motion must never turn into a jump to
     /// `point-min`.
+    ///
+    /// GNU reaches `recenter:` inside `redisplay_window`, after
+    /// `set_buffer_internal_1 (XBUFFER (w->contents))` (xdisp.c:20532-20535,
+    /// emacs-31.0.90), so the iterator and every text-property probe it makes
+    /// read the window's buffer. Redisplay here is entered with whatever
+    /// buffer Lisp left current -- the active minibuffer while a completion
+    /// UI is up -- so this helper selects `buffer_id` for the scan and hands
+    /// the caller's buffer back afterwards, as `with_frame_display_context`
+    /// does for mode-line Lisp.
     pub fn redisplay_start_before_point_by_display_rows(
         &mut self,
         buffer_id: BufferId,
@@ -62,13 +71,29 @@ impl super::eval::Context {
         else {
             return None;
         };
-        let start_byte = match super::indent::scan_screen_line_motion_target(
+        let saved_buffer_id = self.buffers.current_buffer_id();
+        if saved_buffer_id != Some(buffer_id)
+            && let Err(flow) = self.set_current_buffer_unrecorded(buffer_id)
+        {
+            tracing::debug!(
+                "display-row viewport placement cannot select the window buffer: {flow:?}"
+            );
+            if let Some(saved_buffer_id) = saved_buffer_id {
+                self.restore_current_buffer_if_live(saved_buffer_id);
+            }
+            return None;
+        }
+        let motion = super::indent::scan_screen_line_motion_target(
             self,
             buffer_id,
             point_byte,
             Some(Value::make_window(window_id.0)),
             -rows.max(0),
-        ) {
+        );
+        if let Some(saved_buffer_id) = saved_buffer_id {
+            self.restore_current_buffer_if_live(saved_buffer_id);
+        }
+        let start_byte = match motion {
             Ok(motion) => motion.target,
             Err(flow) => {
                 tracing::debug!("display-row viewport placement failed: {flow:?}");
