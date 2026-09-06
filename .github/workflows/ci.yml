@@ -39,7 +39,12 @@ jobs:
 
       - name: Lint release shell contracts
         run: |
-          shellcheck \
+          # -x so sourced helpers are followed. The packaging scripts are in
+          # this list because they were not: removing a variable's assignment
+          # while a later line still read it passed `bash -n`, passed every
+          # test, and only failed when a release job ran package-release.sh.
+          # SC2154 catches exactly that.
+          shellcheck -x \
             install.sh \
             scripts/dispatch-release-event.sh \
             scripts/generate-release-notes.sh \
@@ -50,7 +55,13 @@ jobs:
             scripts/check-native-font-boundaries.sh \
             scripts/lib/macos-macho.sh \
             scripts/vendor-macos-runtime.sh \
-            scripts/test-macos-dependency-closure.sh
+            scripts/test-macos-dependency-closure.sh \
+            scripts/package-release.sh \
+            scripts/package-appimage.sh \
+            scripts/package-deb.sh \
+            scripts/package-rpm.sh \
+            scripts/test-linux-release-artifacts.sh \
+            scripts/ci/setup-linux.sh
           sh -n install.sh
           bash -n \
             scripts/dispatch-release-event.sh \
