@@ -80,7 +80,7 @@ impl DisplayWhenConditions {
 }
 
 /// Evaluate the `when` forms of every display spec the walk of
-/// `[from, to)` of `buf_id` can reach: `display`, `line-prefix` and
+/// `[from, to]` of `buf_id` can reach: `display`, `line-prefix` and
 /// `wrap-prefix` text properties and overlay properties, overlay
 /// `before-string`/`after-string`s, the buffer-local and default
 /// `line-prefix`/`wrap-prefix` values, and the `display` properties inside
@@ -197,10 +197,14 @@ fn collect_when_form_sites(
             continue;
         };
         // A string is displayed where the walk stops at the overlay's start or
-        // end.  The walk reaches every position of `[from, to]`: `to` itself
-        // when it is the end of the buffer (`reseat` -> `handle_stop` at ZV,
-        // src/xdisp.c:8046-8052; the walk's end-of-buffer anchor path), and
-        // otherwise as the first position of the next row.
+        // end.  Boundaries in `[from, to]` are kept: `to` is the end of the
+        // buffer for every window whose text ends inside the span, and GNU
+        // loads the strings anchored at ZV when the iterator arrives there
+        // (`next_element_from_buffer`, src/xdisp.c:9846-9860; the walk's
+        // end-of-buffer anchor path).  A `to` short of the buffer end is the
+        // fontification budget rather than a row edge, so a boundary there
+        // and forms of rows past the last displayed one are evaluated
+        // although GNU would not reach them (declared).
         for at in [start, end] {
             if at >= from && at <= to {
                 boundaries.push(at);
@@ -209,7 +213,11 @@ fn collect_when_form_sites(
         // Properties come from overlays covering a displayed position: GNU
         // `get_char_property_and_overlay` skips an overlay whose end is at
         // or before the position (`node->end < pos + 1`, src/textprop.c:
-        // 652-653), so an empty overlay contributes none.
+        // 652-653), so an empty overlay contributes none.  Declared: GNU
+        // then keeps only the highest-priority overlay's value, or the text
+        // property when no overlay supplies one (src/textprop.c:656-675);
+        // every covering overlay's form and the text property's are
+        // evaluated here.
         if start < end && start < to && end > from {
             let at = start.max(from);
             if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol("display")) {
