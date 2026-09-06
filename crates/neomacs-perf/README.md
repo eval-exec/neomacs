@@ -300,6 +300,15 @@ phases. Narrower workflows emit their applicable subset.
 - `large-file-editing`, `indentation`, and `regex-search` isolate their named
   workloads over committed or deterministically generated source.
 
+## Harness layout
+
+`src/harness.rs` is the engine: editor launch, the sampling gate, capture,
+artifact publication, and a one-line dispatch. Every scenario family lives in
+its own child module below `src/harness/scenarios/` — preparation, result
+schema, invariants, measurements, and provenance manifest together — and
+`src/architecture_test.rs` pins the registry and module ceilings so the
+engine cannot silently reabsorb scenario work.
+
 ### Reproducing `org-journal-open` on another machine
 
 The scenario needs no file from the original report. On a fresh clone:

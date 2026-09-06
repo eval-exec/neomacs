@@ -61,6 +61,8 @@ pub use suite::{
 };
 
 #[cfg(test)]
+mod architecture_test;
+#[cfg(test)]
 mod artifact_test;
 #[cfg(test)]
 mod build_provenance_test;
