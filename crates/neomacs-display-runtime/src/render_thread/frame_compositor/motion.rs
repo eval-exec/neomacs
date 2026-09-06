@@ -175,7 +175,13 @@ impl Motion {
                 // would let an interruption silently change how long the
                 // motion takes, and there is no duration at all that gives
                 // ease-in-out a non-zero departure.
-                let eased = tween.easing.apply(u);
+                // The control points win when the spec carries them: a
+                // `cubic-bezier` that reached a config with nowhere to store
+                // them answers linearly, and that is the only case where the
+                // named curve is consulted for this variant.
+                let eased = tween
+                    .bezier
+                    .map_or_else(|| tween.easing.apply(u), |bezier| bezier.apply(u));
                 let Some(entry) = self.entry_rate else {
                     return eased;
                 };
