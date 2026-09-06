@@ -213,7 +213,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             gnu_guard: BuildOption("HAVE_INOTIFY"),
             here: if cfg!(target_os = "linux") {
                 Implemented {
-                    by: "crates/neovm-core/src/emacs_core/lisp/native/builtins/file_notify/platform/linux -- \
+                    by: "crates/neovm-core/src/emacs_core/lisp/native/builtins/file_notify/platform/linux/mod.rs -- \
                          direct typed inotify masks through the `inotify' crate; \
                          inotify-add-watch/-rm-watch/-valid-p",
                 }

@@ -323,6 +323,12 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
     let allowed_exact = [
         "tagged/header.rs",
         "tagged/gc.rs",
+        "tagged/gc/allocation.rs",
+        "tagged/gc/arena_pages.rs",
+        "tagged/gc/gc_thread.rs",
+        "tagged/gc/incremental.rs",
+        "tagged/gc/mark_sweep.rs",
+        "tagged/gc/bytecode_arena_tests.rs",
         "tagged/mutate.rs",
         "tagged/tests.rs",
         "emacs_core/runtime/value/mod.rs",
