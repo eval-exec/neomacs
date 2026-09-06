@@ -158,6 +158,29 @@ pub(in crate::render_thread) struct RoleSamples {
 /// resize off" would leave every pane at its old rect for the length of the
 /// open fade.
 impl RoleSamples {
+    /// How opaque the outgoing picture of a *resizing* pane should be.
+    ///
+    /// Held near one while the pane is far from its destination, falling only
+    /// as it arrives -- not `1 - progress`, which is what made a `C-x 3` show
+    /// the left window's scroll bar at its final position from the first frame.
+    ///
+    /// The reason it can be held is that the old picture is not merely a
+    /// stand-in. A pane whose lines are truncated renders, at width w, exactly
+    /// the leftmost w pixels of its old picture -- so clipping the old picture
+    /// to the travelling rect is the *correct* rendering of the pane at that
+    /// instant, not an approximation of it. Only wrapped lines differ, and only
+    /// at the wrap boundary, which is why the crossfade still has to happen at
+    /// all rather than snapping.
+    ///
+    /// niri and Hyprland avoid this question by scaling the window's pixels
+    /// onto the animating rect. That is fine for a photo or a toolbar and bad
+    /// for text: the source is already-rasterized, hinted glyphs, and a split
+    /// scales one axis only.
+    fn outgoing_opacity(self) -> f32 {
+        let arrived = self.geometry.content_mix.get();
+        1.0 - arrived * arrived * arrived
+    }
+
     /// Whether every role has arrived.
     ///
     /// All of them, not the geometry alone: an entering pane's fade outlasts a
@@ -853,7 +876,7 @@ fn place(
                 painted: from,
                 content_origin: (from.x, from.y),
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
-                opacity: 1.0 - motion.geometry.content_mix.get(),
+                opacity: motion.outgoing_opacity(),
             });
         } else if from.width - to.width > REFLOW_WIDTH_EPSILON {
             let ghost = Rect {
@@ -867,7 +890,7 @@ fn place(
                 painted: ghost,
                 content_origin: (from.x, from.y),
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
-                opacity: 1.0 - motion.geometry.content_mix.get(),
+                opacity: motion.outgoing_opacity(),
             });
         }
         // The area the pane still covers but will not keep, on each axis it is
