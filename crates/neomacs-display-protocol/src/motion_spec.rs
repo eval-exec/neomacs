@@ -257,11 +257,98 @@ impl<'de> serde::Deserialize<'de> for DevicePixels {
     }
 }
 
+/// A cubic Bézier easing, given by its two control points.
+///
+/// The endpoints are fixed at (0,0) and (1,1), so only the middle two points
+/// are free -- the same four numbers CSS and niri take.
+///
+/// This lives here rather than as a payload on [`TransitionEasing`] because
+/// that type is a *registry* field on four different configs, and the effect
+/// registry can only carry scalar property values. A data-carrying easing
+/// variant would serialize to an object and break `neomacs-effect-get` for
+/// whichever slot selected it -- and `neomacs-effects-apply`, which walks every
+/// effect, along with it. Keeping `TransitionEasing` fieldless makes that
+/// impossible by construction rather than by discipline.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UnitBezier {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+}
+
+impl UnitBezier {
+    /// Control points clamped to the unit interval on x, as CSS requires.
+    ///
+    /// x outside `[0, 1]` makes the curve non-monotonic in time, so solving for
+    /// `t` given `x` stops having a unique answer. y is deliberately *not*
+    /// clamped: overshoot on y is the whole point of a curve like
+    /// `cubic-bezier(0.34, 1.56, 0.64, 1.0)`.
+    #[must_use]
+    pub fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        Self {
+            x1: x1.clamp(0.0, 1.0),
+            y1,
+            x2: x2.clamp(0.0, 1.0),
+            y2,
+        }
+    }
+
+    fn x_for_t(self, t: f64) -> f64 {
+        let omt = 1.0 - t;
+        3.0 * omt * omt * t * f64::from(self.x1)
+            + 3.0 * omt * t * t * f64::from(self.x2)
+            + t * t * t
+    }
+
+    fn y_for_t(self, t: f64) -> f64 {
+        let omt = 1.0 - t;
+        3.0 * omt * omt * t * f64::from(self.y1)
+            + 3.0 * omt * t * t * f64::from(self.y2)
+            + t * t * t
+    }
+
+    /// The curve's value at `x`.
+    ///
+    /// Bisection rather than Newton's method, and 30 iterations rather than a
+    /// tolerance: this is libadwaita's algorithm, which niri also uses, so a
+    /// curve transcribed from a niri config behaves identically here. Bisection
+    /// cannot diverge on the near-vertical segments that a control point at the
+    /// edge of the unit interval produces.
+    #[must_use]
+    pub fn apply(self, x: f32) -> f32 {
+        if x <= f32::EPSILON {
+            return 0.0;
+        }
+        if 1.0 - f32::EPSILON <= x {
+            return 1.0;
+        }
+        let x = f64::from(x);
+        let (mut low, mut high) = (0.0_f64, 1.0_f64);
+        for _ in 0..=30 {
+            let guess = f64::midpoint(low, high);
+            if x < self.x_for_t(guess) {
+                high = guess;
+            } else {
+                low = guess;
+            }
+        }
+        self.y_for_t(f64::midpoint(low, high)) as f32
+    }
+}
+
 /// A time-limited motion with a fixed duration and an easing curve.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TweenSpec {
     pub duration: MotionDuration,
     pub easing: TransitionEasing,
+    /// The control points, when `easing` is [`TransitionEasing::CubicBezier`].
+    ///
+    /// `None` for every named curve, and also for a `cubic-bezier` that reached
+    /// a config which has nowhere to store control points -- which is why
+    /// `TransitionEasing::CubicBezier` has to mean something on its own.
+    #[serde(default)]
+    pub bezier: Option<UnitBezier>,
 }
 
 /// A second-order spring, sampled analytically rather than integrated.

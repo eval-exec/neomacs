@@ -280,6 +280,21 @@ pub enum TransitionEasing {
     #[strum(to_string = "ease-in-out-cubic", serialize = "ease-in-out")]
     EaseInOutCubic,
 
+    /// A cubic Bézier given by control points stored beside this symbol.
+    ///
+    /// Fieldless on purpose. This type is a registry field on four configs and
+    /// the registry can only carry scalars, so the control points live on the
+    /// config that selects this — see [`crate::motion_spec::UnitBezier`].
+    ///
+    /// [`Self::apply`] therefore cannot evaluate the curve and answers
+    /// linearly. That is not a fallback for a broken state: it is what
+    /// `cubic-bezier` means on a config with nowhere to put control points, and
+    /// a straight line is the only honest reading of "a Bézier I cannot see".
+    /// Where the points *are* available the sampler uses them and never calls
+    /// this.
+    #[strum(to_string = "cubic-bezier", serialize = "bezier")]
+    CubicBezier,
+
     /// Ease-out exponential: very fast start, long tail.
     ///
     /// niri's default for opening a window, which is what it is here for. The
@@ -303,6 +318,7 @@ impl TransitionEasing {
             Self::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
             Self::Linear => t,
             Self::EaseOutExpo => crate::types::ease_out_expo(t),
+            Self::CubicBezier => t,
             Self::EaseInOutCubic => {
                 if t < 0.5 {
                     4.0 * t * t * t

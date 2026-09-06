@@ -22,6 +22,7 @@ fn tween(millis: u64, easing: TransitionEasing) -> MotionSpec {
     MotionSpec::Tween(TweenSpec {
         duration: MotionDuration::new(Duration::from_millis(millis)).expect("a positive duration"),
         easing,
+        bezier: None,
     })
 }
 

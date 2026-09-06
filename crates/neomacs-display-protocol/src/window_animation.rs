@@ -33,7 +33,7 @@
 //! file would have to document forever.
 
 use crate::motion_spec::{
-    AngularFrequency, DampingRatio, MotionDuration, MotionSpec, SpringSpec, TweenSpec,
+    AngularFrequency, DampingRatio, MotionDuration, MotionSpec, SpringSpec, TweenSpec, UnitBezier,
 };
 use crate::scroll_animation::TransitionEasing;
 use std::time::Duration;
@@ -65,6 +65,16 @@ pub struct WindowAnimation {
     pub duration: Duration,
     /// Read when `kind` is `easing`.
     pub easing: TransitionEasing,
+    /// The Bézier control points, read when `easing` is `cubic-bezier`.
+    ///
+    /// Four scalars rather than one curve object, for the same reason every
+    /// other field here is a scalar: the registry cannot carry an object. They
+    /// are the same four numbers a niri config writes as
+    /// `cubic-bezier(x1, y1, x2, y2)`, so a curve can be transcribed directly.
+    pub bezier_x1: f32,
+    pub bezier_y1: f32,
+    pub bezier_x2: f32,
+    pub bezier_y2: f32,
     /// Read when `kind` is `spring`. Clamped to niri's own `0.1..=10.0`.
     pub damping_ratio: f32,
     /// Read when `kind` is `spring`. Clamped to at least 1, as niri requires.
@@ -78,6 +88,12 @@ impl WindowAnimation {
             kind: MotionKind::Easing,
             duration: Duration::from_millis(millis),
             easing,
+            // The identity curve, so a slot switched to `cubic-bezier` without
+            // being given points animates linearly rather than jumping.
+            bezier_x1: 0.0,
+            bezier_y1: 0.0,
+            bezier_x2: 1.0,
+            bezier_y2: 1.0,
             damping_ratio: 1.0,
             stiffness: 800,
         }
@@ -89,6 +105,10 @@ impl WindowAnimation {
             kind: MotionKind::Spring,
             duration: Duration::from_millis(150),
             easing: TransitionEasing::EaseOutQuad,
+            bezier_x1: 0.0,
+            bezier_y1: 0.0,
+            bezier_x2: 1.0,
+            bezier_y2: 1.0,
             damping_ratio,
             stiffness,
         }
@@ -125,6 +145,14 @@ impl WindowAnimation {
                     MotionSpec::Tween(TweenSpec {
                         duration,
                         easing: self.easing,
+                        bezier: matches!(self.easing, TransitionEasing::CubicBezier).then(|| {
+                            UnitBezier::new(
+                                self.bezier_x1,
+                                self.bezier_y1,
+                                self.bezier_x2,
+                                self.bezier_y2,
+                            )
+                        }),
                     })
                 },
             ),
