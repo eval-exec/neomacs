@@ -294,6 +294,45 @@ fn the_projection_maps_a_surface_point_back_to_the_content_under_it() {
 }
 
 #[test]
+fn a_click_on_the_area_a_pane_has_not_given_up_does_not_resolve_off_the_frame() {
+    // The pane draws only what it owns: `layout_pass` clamps its quad to
+    // its own rect, so a shrinking pane paints its destination content at
+    // its destination size and the vacated strip beside it shows the old
+    // picture. The projection was built from the *unclamped* rect, so it
+    // claimed the strip too -- and translated a click there by the pane's
+    // whole travel, off the end of the frame.
+    //
+    // 800x600 at x=0 becoming 400x600 at x=400: a pane that shrinks *and*
+    // moves, which is the only shape that separates the two rects. Halfway,
+    // the pane draws [200, 600) and the strip covers [600, 800).
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [window(1, rect(400.0, 0.0, 400.0, 600.0))];
+    let origin = origin();
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let sample = morph.sample(frame_at(origin, 50));
+    let projection = sample.projection(neomacs_display_protocol::PresentationId::new(3));
+
+    let surface = neomacs_display_protocol::GeometryPoint::<
+        neomacs_display_protocol::RootSurfaceSpace,
+        neomacs_display_protocol::LogicalPixels,
+    >::from_px(700.0, 10.0)
+    .expect("a finite point");
+    let mapped = projection.map(surface).expect("a mapped point");
+    assert!(
+        mapped.x() <= 800.0,
+        "a click at 700 on an 800px frame resolved to {}",
+        mapped.x()
+    );
+    // It is over the old picture, which names no position in the destination,
+    // so the destination's own layout answers: identity.
+    assert!(
+        (mapped.x() - 700.0).abs() < 1e-3,
+        "resolved to {}",
+        mapped.x()
+    );
+}
+
+#[test]
 fn at_rest_the_projection_is_the_identity_the_settled_frame_would_use() {
     // The last frame of a morph and the first settled frame after it must
     // answer a click identically, or a hit would shift by a pixel exactly as
@@ -786,7 +825,7 @@ fn a_pane_whose_width_changed_shows_its_old_wrapping_while_it_is_still_the_old_s
     );
     // The crossfade covers only what the pane keeps. Beyond that it is not
     // rewrapping, it is vacating, and that area is the strip below.
-    assert_eq!(placements[0].content_extent.0, 400.0);
+    assert_eq!(placements[0].bounds.width, 400.0);
 
     // The strip: the area the pane still covers but will not keep, held at
     // full opacity. Fading it would leave the old text and the pane that

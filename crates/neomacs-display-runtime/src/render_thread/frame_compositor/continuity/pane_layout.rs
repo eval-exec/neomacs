@@ -384,10 +384,21 @@ fn unclaimed(rect: Rect, claimed: &[Rect]) -> Option<Rect> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::render_thread) struct PanePlacement {
     pub(in crate::render_thread) window: LiveDisplayWindowId,
-    /// The pane's rect on the surface right now.
+    /// The pane's rect on the surface right now -- where the pane *is*.
+    ///
+    /// Adjacent panes' `bounds` tile without a gap at every instant, which is
+    /// what keeps a moving seam from tearing.
     pub(in crate::render_thread) bounds: Rect,
-    /// How much of that picture the pane owns, at its destination size.
-    pub(in crate::render_thread) content_extent: (f32, f32),
+    /// The part of `bounds` that actually shows this pane's content.
+    ///
+    /// Smaller than `bounds` for a shrinking pane: it is larger than the
+    /// content it owns, and the rest of it is the vacated strip showing the old
+    /// picture. This is the rect the pass paints *and* the rect the interaction
+    /// projection clips to, and it is one field because they were once two
+    /// computations -- the renderer clamped, the projection did not, so the
+    /// projection claimed the strip and translated a click there by the pane's
+    /// whole travel. On an 800px frame a click at 700 resolved to 900.
+    pub(in crate::render_thread) painted: Rect,
     /// Where the pane's top-left sits in the picture it samples.
     ///
     /// While a pane is still travelling, the pixels under it belong to a
@@ -418,16 +429,17 @@ impl PanePlacement {
                     return Some(Self {
                         window,
                         bounds,
+                        painted: Rect {
+                            width: bounds.width.min(to.width),
+                            height: bounds.height.min(to.height),
+                            ..bounds
+                        },
                         // The pane shows its destination content throughout, so
                         // the content under its moving top-left is the
                         // destination's top-left. Interpolating the content
                         // origin instead would scroll the text inside the pane
                         // as it travelled.
                         content_origin: (to.x, to.y),
-                        // Its destination size, so while it is still larger
-                        // than that it draws only what it owns and the frame
-                        // underneath shows through the rest.
-                        content_extent: (to.width, to.height),
                         source: neomacs_renderer_wgpu::PaneSource::Destination,
                         opacity: 1.0,
                     });
@@ -453,9 +465,9 @@ impl PanePlacement {
                 let visible = intersection(bounds, to)?;
                 Self {
                     window,
-                    bounds: visible,
+                    bounds,
+                    painted: visible,
                     content_origin: (visible.x, visible.y),
-                    content_extent: (visible.width, visible.height),
                     source: neomacs_renderer_wgpu::PaneSource::Destination,
                     opacity: 1.0,
                 }
@@ -468,8 +480,8 @@ impl PanePlacement {
             PaneChange::Entered { window, to } => Self {
                 window,
                 bounds: to,
+                painted: to,
                 content_origin: (to.x, to.y),
-                content_extent: (to.width, to.height),
                 source: neomacs_renderer_wgpu::PaneSource::Destination,
                 opacity: motion.content_mix.get(),
             },
@@ -485,8 +497,8 @@ impl PanePlacement {
             PaneChange::Exited { window, from } => Self {
                 window,
                 bounds: from,
+                painted: from,
                 content_origin: (from.x, from.y),
-                content_extent: (from.width, from.height),
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
                 opacity: 1.0,
             },
@@ -608,14 +620,16 @@ fn place(change: PaneChange, motion: MotionSample, claimed: &[Rect], out: &mut V
             // as the destination underneath fades in. Clipped to that area:
             // beyond it the pane is not rewrapping, it is vacating, and the
             // strip below says what belongs there.
+            let ghost = Rect {
+                width: bounds.width.min(to.width),
+                height: bounds.height.min(to.height),
+                ..bounds
+            };
             out.push(PanePlacement {
                 window,
-                bounds: Rect {
-                    width: bounds.width.min(to.width),
-                    ..bounds
-                },
+                bounds: ghost,
+                painted: ghost,
                 content_origin: (from.x, from.y),
-                content_extent: (to.width, to.height),
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
                 opacity: 1.0 - motion.content_mix.get(),
             });
@@ -628,8 +642,8 @@ fn place(change: PaneChange, motion: MotionSample, claimed: &[Rect], out: &mut V
             out.push(PanePlacement {
                 window,
                 bounds: strip.bounds,
+                painted: strip.bounds,
                 content_origin: strip.content_origin,
-                content_extent: strip.content_extent,
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
                 opacity: 1.0,
             });
@@ -643,8 +657,8 @@ fn place(change: PaneChange, motion: MotionSample, claimed: &[Rect], out: &mut V
             return;
         };
         placement.content_origin = old_picture_origin(from, bounds, left);
-        placement.content_extent = (left.width, left.height);
         placement.bounds = left;
+        placement.painted = left;
     }
     out.push(placement);
 }
@@ -665,7 +679,6 @@ fn old_picture_origin(from: Rect, bounds: Rect, visible: Rect) -> (f32, f32) {
 struct VacatedStrip {
     bounds: Rect,
     content_origin: (f32, f32),
-    content_extent: (f32, f32),
 }
 
 /// The strips of `bounds` that lie beyond what the pane will keep.
@@ -678,7 +691,6 @@ fn vacated_strips(from: Rect, to: Rect, bounds: Rect) -> impl Iterator<Item = Va
     let strip = move |rect: Rect| VacatedStrip {
         bounds: rect,
         content_origin: old_picture_origin(from, bounds, rect),
-        content_extent: (rect.width, rect.height),
     };
     let horizontal = (bounds.width - to.width > REFLOW_WIDTH_EPSILON).then(|| {
         strip(Rect::new(
@@ -723,9 +735,8 @@ impl LayoutSample {
         self.panes
             .iter()
             .map(|placement| neomacs_renderer_wgpu::PaneBlit {
-                bounds: placement.bounds,
+                bounds: placement.painted,
                 content_origin: placement.content_origin,
-                content_extent: placement.content_extent,
                 source: placement.source,
                 opacity: placement.opacity,
             })
@@ -755,10 +766,10 @@ impl LayoutSample {
                     neomacs_display_protocol::RootSurfaceSpace,
                     neomacs_display_protocol::LogicalPixels,
                 >::new(
-                    placement.bounds.x,
-                    placement.bounds.y,
-                    placement.bounds.width,
-                    placement.bounds.height,
+                    placement.painted.x,
+                    placement.painted.y,
+                    placement.painted.width,
+                    placement.painted.height,
                 )
                 .ok()?;
                 let origin = neomacs_display_protocol::GeometryPoint::<
