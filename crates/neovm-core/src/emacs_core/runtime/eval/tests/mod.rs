@@ -2403,6 +2403,10 @@ fn recursive_edit_runs_top_level_before_outer_command_loop_reads_input() {
 
     ev.input_rx = Some(rx);
     ev.command_loop.running = true;
+    // A window-close request from the display ends the loop through a quit that
+    // only an interactive session survives (GNU `cmd_error_internal` kills a
+    // noninteractive Emacs on any quit); this models a GUI session.
+    ev.set_variable("noninteractive", Value::NIL);
 
     let result = ev
         .recursive_edit_inner()
@@ -2730,8 +2734,7 @@ fn eval_list_form_throws_on_pending_host_input() {
     ))
     .expect("queue keypress");
     ev.input_rx = Some(rx);
-    ev.obarray
-        .set_symbol_value("throw-on-input", Value::symbol("tag"));
+    ev.set_variable("throw-on-input", Value::symbol("tag"));
 
     let result = ev.eval_str("(list 1 2)");
     assert!(matches!(
@@ -2740,7 +2743,7 @@ fn eval_list_form_throws_on_pending_host_input() {
             if tag == Value::symbol("tag") && value == Value::T
     ));
 
-    ev.obarray.set_symbol_value("throw-on-input", Value::NIL);
+    ev.set_variable("throw-on-input", Value::NIL);
     let event = ev.read_char().expect("keypress should remain queued");
     assert_eq!(event, Value::fixnum('a' as i64));
 }
@@ -2753,8 +2756,7 @@ fn presentation_retirement_does_not_interrupt_while_no_input() {
     tx.send(crate::keyboard::InputEvent::PresentationRetired { presentation: 7 })
         .expect("queue presentation retirement");
     ev.input_rx = Some(rx);
-    ev.obarray
-        .set_symbol_value("throw-on-input", Value::symbol("tag"));
+    ev.set_variable("throw-on-input", Value::symbol("tag"));
 
     let result = ev
         .eval_str("(list 1 2)")
@@ -13770,13 +13772,19 @@ fn with_selected_window_restores_after_while_no_input_keyboard_interrupt() {
                  (list body-value
                        (eq (selected-window) w1)
                        (eq (current-buffer) (window-buffer w1))
-                       (read-event nil nil 0))
+                       (input-pending-p))
                (ignore-errors (delete-window w2))))"#,
     );
 
     assert_eq!(
         crate::emacs_core::error::format_eval_result(&result),
-        "OK (t t t nil)"
+        // GNU 31.0.90 (`-nw` under tmux, C-n typed while the body ran): the
+        // interrupting key stays pending — `input-pending-p' is t afterwards for a
+        // `sleep-for' body and for a pure CPU loop. `(read-event nil nil 0)'
+        // returned nil there only because a tty gobbles input lazily; after a
+        // `sit-for' body, which reads and unreads the key, it returned 14, as it
+        // does here.
+        "OK (t t t t)"
     );
 }
 
@@ -13819,13 +13827,19 @@ fn while_no_input_unwinds_inner_with_selected_window_on_keyboard_input() {
                  (list body-value
                        (eq (selected-window) w1)
                        (eq (current-buffer) (window-buffer w1))
-                       (read-event nil nil 0))
+                       (input-pending-p))
                (ignore-errors (delete-window w2))))"#,
     );
 
     assert_eq!(
         crate::emacs_core::error::format_eval_result(&result),
-        "OK (t t t nil)"
+        // GNU 31.0.90 (`-nw` under tmux, C-n typed while the body ran): the
+        // interrupting key stays pending — `input-pending-p' is t afterwards for a
+        // `sleep-for' body and for a pure CPU loop. `(read-event nil nil 0)'
+        // returned nil there only because a tty gobbles input lazily; after a
+        // `sit-for' body, which reads and unreads the key, it returned 14, as it
+        // does here.
+        "OK (t t t t)"
     );
 }
 
@@ -13929,13 +13943,19 @@ fn safe_run_hook_preserves_selected_window_after_while_no_input_interrupt() {
                (list neo-safe-hook-result
                      (eq (selected-window) (next-window neo-safe-hook-window))
                      (eq (current-buffer) (window-buffer (selected-window)))
-                     (read-event nil nil 0))
+                     (input-pending-p))
              (ignore-errors (delete-window (selected-window))))"#,
     );
 
     assert_eq!(
         crate::emacs_core::error::format_eval_result(&result),
-        "OK (t t t nil)"
+        // GNU 31.0.90 (`-nw` under tmux, C-n typed while the body ran): the
+        // interrupting key stays pending — `input-pending-p' is t afterwards for a
+        // `sleep-for' body and for a pure CPU loop. `(read-event nil nil 0)'
+        // returned nil there only because a tty gobbles input lazily; after a
+        // `sit-for' body, which reads and unreads the key, it returned 14, as it
+        // does here.
+        "OK (t t t t)"
     );
 }
 

@@ -1104,6 +1104,17 @@ fn internal_get_lisp_face_attribute_invalid_attr_errors() {
 fn internal_set_lisp_face_attribute_font_object_derives_font_related_attrs() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
+    // GNU derives font-related attributes from `:font' only on a window-system
+    // frame (`Finternal_set_lisp_face_attribute': `FRAME_WINDOW_P (f1)' before
+    // `set_lface_from_font'). On the initial tty frame GNU 31.0.90 --batch
+    // leaves the face untouched: family "default", height 1, :font
+    // unspecified. On a GUI frame the same call derives family/weight/height
+    // (verified against a running GNU frame), which is what this test models.
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .window_system = Some(Value::symbol("neo"));
     let mut font_face = RuntimeFace::new("default");
     font_face.family = Some(Value::string("Hack"));
     font_face.weight = Some(FontWeight::NORMAL);
@@ -1154,6 +1165,17 @@ fn internal_set_lisp_face_attribute_font_object_derives_font_related_attrs() {
 fn internal_set_lisp_face_attribute_default_font_spec_float_size_derives_absolute_height() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
+    // GNU derives font-related attributes from `:font' only on a window-system
+    // frame (`Finternal_set_lisp_face_attribute': `FRAME_WINDOW_P (f1)' before
+    // `set_lface_from_font'). On the initial tty frame GNU 31.0.90 --batch
+    // leaves the face untouched: family "default", height 1, :font
+    // unspecified. On a GUI frame the same call derives family/weight/height
+    // (verified against a running GNU frame), which is what this test models.
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .window_system = Some(Value::symbol("neo"));
     let font_spec = font_spec(vec![
         Value::keyword("family"),
         Value::string("Monospace"),

@@ -215,6 +215,12 @@ fn gnu_simple_command_execute_eval() -> Context {
         (defalias 'autoloadp #'(lambda (object) (eq 'autoload (car-safe object))))
         (fset 'prefix-command-update (lambda () nil))
         (fset 'add-to-history (lambda (&rest _args) nil))
+        ;; GNU defines `read-file-name' in minibuffer.el (not loaded here);
+        ;; `read-file-name-default' ends in this `completing-read' call, so
+        ;; in --batch the file codes signal the same end-of-file as the
+        ;; other minibuffer readers.
+        (defun read-file-name (prompt &optional dir default-filename mustmatch initial predicate)
+          (completing-read prompt nil predicate mustmatch initial 'file-name-history default-filename))
         (fset 'macroexp--obsolete-warning (lambda (&rest _args) ""))
         (fset 'help--key-description-fontified (lambda (&rest _args) ""))
         (fset 'where-is-internal (lambda (&rest _args) nil))
