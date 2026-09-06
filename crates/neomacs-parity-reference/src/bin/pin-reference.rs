@@ -1,6 +1,10 @@
 //! `cargo run -p xtask -- pin-reference` --- deliberate re-baselining of the
 //! GNU Emacs every parity number is measured against.
 //!
+//! It lives beside the manifest it rewrites rather than inside xtask, which
+//! launches it. xtask is a command launcher; linking this in dragged the
+//! parity library into every `cargo xtask fresh-build`.
+//!
 //! # Why re-pinning is a command and not an edit (ledger 214)
 //!
 //! A pin that cannot be updated is a pin people delete, so this must be
@@ -119,7 +123,7 @@ fn usage() -> String {
         .to_string()
 }
 
-pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
+fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let options = Options::parse(args)?;
     let path = manifest_path();
     let text = std::fs::read_to_string(&path)
@@ -546,5 +550,15 @@ mod tests {
             "2026-06-10T02:39:56+00:00"
         );
         assert_eq!(insert_offset_colon("no offset"), "no offset");
+    }
+}
+
+fn main() -> std::process::ExitCode {
+    match run(std::env::args_os().skip(1)) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::ExitCode::FAILURE
+        }
     }
 }

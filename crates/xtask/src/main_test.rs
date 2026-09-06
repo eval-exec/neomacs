@@ -23,13 +23,34 @@ fn github_workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
     tail
 }
 
+/// `perf` and `pin-reference` are launched, not linked, and the launch must
+/// not go through fresh-build's option parser (which would demand a profile).
+/// Assert the command rather than run it: executing would build another crate
+/// from inside a unit test.
 #[test]
-fn top_level_dispatch_routes_perf_without_parsing_fresh_build_options() {
-    run_xtask(
-        PathBuf::from("/repo"),
-        [OsString::from("perf"), OsString::from("list")],
-    )
-    .expect("perf list should not require a fresh-build profile");
+fn top_level_dispatch_launches_perf_without_parsing_fresh_build_options() {
+    let command = workspace_cli_command(
+        "neomacs-perf",
+        &["--no-default-features"],
+        [OsString::from("list")],
+    );
+    let args: Vec<_> = command.get_args().map(OsStr::to_os_string).collect();
+
+    assert_eq!(
+        args,
+        [
+            "run",
+            "--quiet",
+            "-p",
+            "neomacs-perf",
+            // The harness's own default features pull GStreamer; the linked
+            // build never had them, so the launched one must not either.
+            "--no-default-features",
+            "--",
+            "list",
+        ]
+        .map(OsString::from)
+    );
 }
 
 #[test]

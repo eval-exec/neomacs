@@ -9065,8 +9065,6 @@ name = "xtask"
 version = "0.0.17"
 dependencies = [
  "flate2",
- "neomacs-parity-reference",
- "neomacs-perf",
  "rayon",
  "serde",
  "serde_json",

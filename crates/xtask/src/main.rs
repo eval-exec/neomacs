@@ -1,6 +1,5 @@
 mod dependency_coherence;
 mod gc_stress;
-mod pin_reference;
 mod production_capabilities;
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
@@ -435,8 +434,11 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     }
     if matches!(args.peek().and_then(|arg| arg.to_str()), Some("perf")) {
         args.next();
-        neomacs_perf::run_cli(&repo_root, args)?;
-        return Ok(());
+        // `--no-default-features` keeps the harness buildable on a host without
+        // GStreamer development files, which is what the workspace dependency's
+        // `default-features = false` used to provide. Add `--features
+        // native-video` to get the GStreamer-backed fixture discovery back.
+        return run_workspace_cli("neomacs-perf", &["--no-default-features"], args);
     }
     // The standing detector for the missing-GC-root class (DIVERGENCES.md
     // 161/162): run the SHIPPED binary under NEOVM_GC_STRESS=1, which collects
@@ -455,8 +457,7 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
         Some("pin-reference")
     ) {
         args.next();
-        pin_reference::run(args).map_err(DynError::from)?;
-        return Ok(());
+        return run_workspace_cli("neomacs-parity-reference", &[], args);
     }
     let options = FreshBuildOptions::parse(repo_root, args)?;
     run_fresh_build(&options)
@@ -603,6 +604,45 @@ impl FreshBuildOptions {
             aot_preload,
         })
     }
+}
+
+/// The cargo invocation that runs one of the workspace's own CLI crates.
+///
+/// xtask is a command launcher, so the commands it does not implement are
+/// spawned rather than linked. Linking them put their dependency trees --
+/// twenty-three crates, and `neomacs-perf`'s default features pull GStreamer --
+/// into every `cargo xtask fresh-build`, including the five release jobs, for
+/// commands a release never runs.
+fn workspace_cli_command(
+    package: &str,
+    cargo_flags: &[&str],
+    args: impl IntoIterator<Item = OsString>,
+) -> Command {
+    let mut command = Command::new(cargo_program());
+    command.arg("run").arg("--quiet").arg("-p").arg(package);
+    command.args(cargo_flags);
+    command.arg("--");
+    command.args(args);
+    command
+}
+
+/// Run [`workspace_cli_command`] and adopt its outcome as this command's own.
+///
+/// A failing child has already said why on this terminal, so its exit code is
+/// forwarded rather than wrapped: an extra `error: … failed: exit status: 1`
+/// above the real message only buries it.
+fn run_workspace_cli(
+    package: &str,
+    cargo_flags: &[&str],
+    args: impl IntoIterator<Item = OsString>,
+) -> Result<()> {
+    let status = workspace_cli_command(package, cargo_flags, args)
+        .status()
+        .map_err(|error| format!("failed to launch {package}: {error}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 fn repository_root() -> PathBuf {
