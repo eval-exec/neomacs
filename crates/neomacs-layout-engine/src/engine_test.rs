@@ -34196,35 +34196,53 @@ fn a_when_clause_whose_form_is_nil_leaves_the_prefix_out() {
 // Regression coverage for the conditional display review of PR #354.
 #[test]
 fn display_when_string_continues_after_an_invalid_image() {
-    assert_display_when_image_reachability("(image)", true);
+    assert_display_when_replacement_reachability("(image)", true);
 }
 
 #[test]
 fn display_when_string_continues_after_an_unsupported_image() {
-    assert_display_when_image_reachability(r#"(image :type unsupported :file "x.png")"#, true);
+    assert_display_when_replacement_reachability(
+        r#"(image :type unsupported :file "x.png")"#,
+        true,
+    );
 }
 
 #[test]
 fn display_when_string_stops_after_a_valid_image() {
-    assert_display_when_image_reachability(r#"(image :type png :file "x.png")"#, false);
+    assert_display_when_replacement_reachability(r#"(image :type png :file "x.png")"#, false);
 }
 
-fn assert_display_when_image_reachability(image_spec: &str, continues: bool) {
+#[test]
+fn display_when_string_continues_after_a_nested_when() {
+    assert_display_when_replacement_reachability(r#"(when t when t . "X")"#, true);
+}
+
+#[test]
+fn display_when_string_continues_after_a_when_inside_a_margin() {
+    assert_display_when_replacement_reachability(r#"((margin nil) (when t . "X"))"#, true);
+}
+
+#[test]
+fn display_when_string_continues_after_a_nested_margin() {
+    assert_display_when_replacement_reachability(r#"((margin nil) ((margin nil) "X"))"#, true);
+}
+
+fn assert_display_when_replacement_reachability(spec: &str, continues: bool) {
     let (mut eval, frame_id, _, _) = incr_editing_frame("a\n", 640, 200);
     realize_test_gui_frame(&mut eval, frame_id);
     eval.eval_str(&format!(
-        r#"(progn (setq image-followed nil)
+        r#"(progn (setq spec-followed nil)
               (put-text-property 1 2 'line-prefix
                 (propertize " " 'display
-                  '({image_spec} (when (progn (setq image-followed t) t) . "Y")))))"#,
+                  '({spec} (when (progn (setq spec-followed t) t) . "Y")))))"#,
     ))
     .expect("setup");
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
     assert_eq!(
-        !eval.eval_str("image-followed").expect("flag").is_nil(),
+        !eval.eval_str("spec-followed").expect("flag").is_nil(),
         continues,
-        "only a valid image can suppress a later condition: {image_spec}"
+        "only an accepted replacement can suppress a later condition: {spec}"
     );
     if continues {
         let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
