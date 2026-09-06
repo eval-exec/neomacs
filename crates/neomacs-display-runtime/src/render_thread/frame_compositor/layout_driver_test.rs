@@ -134,21 +134,29 @@ fn a_commit_that_moves_nothing_does_not_restart_a_motion_in_flight() {
     }
 
     // Halfway through a 100ms tween the pane must be halfway, not back at the
-    // start. 800 -> 400 means 600 at the midpoint.
+    // start. 800 -> 400 means it still covers 600 at the midpoint.
     let (_, composition) = driver.on_frame(presentation(), frame_at(origin, 50));
-    // The pane itself, not the placements a shrink adds around it: the old
-    // wrapping is clipped to the width the pane will keep, and the strip
-    // covers only what it has not vacated, so neither one's width is the
-    // pane's.
-    let pane = composition
+
+    // Measured from the vacated strip, not from the pane's own quad. A blit
+    // carries the rect it *paints*, and a shrinking pane paints its
+    // destination size (400) from the first frame onward — the travel shows up
+    // as the strip beside it, which is exactly the area it has not yet given
+    // up. So the strip's width is what says how far along the motion is, and a
+    // restart would collapse it toward zero.
+    // A shrinking pane contributes two `Previous` placements: the reflow ghost,
+    // which starts at the pane's own origin, and the strip, which starts where
+    // the pane will end. Only the second one travels.
+    let strip = composition
         .blits
         .iter()
-        .find(|blit| blit.source == neomacs_renderer_wgpu::PaneSource::Destination)
-        .expect("the panes are still being placed");
+        .filter(|blit| blit.source == neomacs_renderer_wgpu::PaneSource::Previous)
+        .find(|blit| blit.bounds.x > 0.0)
+        .expect("a shrinking pane leaves a strip while it travels");
+    let travelling_edge = strip.bounds.x + strip.bounds.width;
     assert!(
-        (pane.bounds.width - 600.0).abs() < 5.0,
-        "the motion was restarted by commits that moved nothing: width {} at the midpoint",
-        pane.bounds.width
+        (travelling_edge - 600.0).abs() < 5.0,
+        "the motion was restarted by commits that moved nothing: the pane still \
+         reaches {travelling_edge} at the midpoint, expected 600"
     );
 }
 

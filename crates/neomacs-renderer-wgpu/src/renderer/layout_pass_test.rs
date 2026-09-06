@@ -12,8 +12,8 @@ fn quad(pane: PaneBlit, frame: (f32, f32)) -> Vec<([f32; 2], [f32; 2])> {
     let (fw, fh) = frame;
     let u0 = pane.content_origin.0 / fw;
     let v0 = pane.content_origin.1 / fh;
-    let dw = pane.bounds.width.min(pane.content_extent.0);
-    let dh = pane.bounds.height.min(pane.content_extent.1);
+    let dw = pane.bounds.width;
+    let dh = pane.bounds.height;
     let u1 = (pane.content_origin.0 + dw) / fw;
     let v1 = (pane.content_origin.1 + dh) / fh;
     let x0 = pane.bounds.x;
@@ -37,7 +37,6 @@ fn a_settled_pane_samples_exactly_the_region_it_covers() {
     let pane = PaneBlit {
         bounds: Rect::new(400.0, 0.0, 400.0, 600.0),
         content_origin: (400.0, 0.0),
-        content_extent: (f32::INFINITY, f32::INFINITY),
         source: PaneSource::Destination,
         opacity: 1.0,
     };
@@ -54,7 +53,6 @@ fn a_pane_drawn_away_from_its_content_still_samples_its_content() {
     let pane = PaneBlit {
         bounds: Rect::new(200.0, 0.0, 400.0, 600.0),
         content_origin: (400.0, 0.0),
-        content_extent: (f32::INFINITY, f32::INFINITY),
         source: PaneSource::Destination,
         opacity: 1.0,
     };
@@ -75,7 +73,6 @@ fn an_oversized_pane_shows_more_of_the_row_rather_than_a_stretched_copy() {
     let pane = PaneBlit {
         bounds: Rect::new(0.0, 0.0, 600.0, 600.0),
         content_origin: (0.0, 0.0),
-        content_extent: (f32::INFINITY, f32::INFINITY),
         source: PaneSource::Destination,
         opacity: 1.0,
     };
@@ -92,14 +89,12 @@ fn every_pane_maps_its_own_region_independently() {
     let left = PaneBlit {
         bounds: Rect::new(0.0, 0.0, 400.0, 600.0),
         content_origin: (0.0, 0.0),
-        content_extent: (f32::INFINITY, f32::INFINITY),
         source: PaneSource::Destination,
         opacity: 1.0,
     };
     let right = PaneBlit {
         bounds: Rect::new(400.0, 0.0, 400.0, 600.0),
         content_origin: (400.0, 0.0),
-        content_extent: (f32::INFINITY, f32::INFINITY),
         source: PaneSource::Destination,
         opacity: 1.0,
     };
@@ -118,8 +113,8 @@ fn the_helper_matches_what_the_pass_emits() {
     for expression in [
         "let u0 = pane.content_origin.0 / frame_width;",
         "let v0 = pane.content_origin.1 / frame_height;",
-        "let drawn_w = pane.bounds.width.min(pane.content_extent.0);",
-        "let drawn_h = pane.bounds.height.min(pane.content_extent.1);",
+        "let drawn_w = pane.bounds.width;",
+        "let drawn_h = pane.bounds.height;",
         "let u1 = (pane.content_origin.0 + drawn_w) / frame_width;",
         "let v1 = (pane.content_origin.1 + drawn_h) / frame_height;",
         "let x1 = pane.bounds.x + drawn_w;",
@@ -139,7 +134,6 @@ fn nothing_is_submitted_for_a_frame_with_no_size() {
     let pane = PaneBlit {
         bounds: Rect::new(0.0, 0.0, 10.0, 10.0),
         content_origin: (0.0, 0.0),
-        content_extent: (f32::INFINITY, f32::INFINITY),
         source: PaneSource::Destination,
         opacity: 1.0,
     };
