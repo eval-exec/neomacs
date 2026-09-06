@@ -294,6 +294,78 @@ fn the_projection_maps_a_surface_point_back_to_the_content_under_it() {
 }
 
 #[test]
+fn an_overshooting_pane_never_gets_a_negative_extent_or_a_strip_it_is_not_owed() {
+    // Overshoot is not hypothetical and does not need a spring: a motion that
+    // is interrupted and resumed carries its entry rate in, and the tween bump
+    // peaks around progress 1.3. Two things break past 1.0, and neither is
+    // visible at rest, so both are asserted at an explicit sample.
+    let motion = MotionSample {
+        progress: 1.3,
+        content_mix: neomacs_display_protocol::motion_spec::UnitInterval::clamp(1.0),
+        rate: 0.0,
+        finished: false,
+    };
+
+    // A pane that GROWS must never emit a vacated strip. The guard used to read
+    // the instantaneous width, so past 1.0 a growing pane briefly measured
+    // wider than its destination and published an opaque slab of stale
+    // pre-change pixels -- drawn last, over the neighbour it had just uncovered.
+    let mut grew = Vec::new();
+    place(
+        PaneChange::Persisted {
+            window: live(1),
+            from: rect(0.0, 0.0, 400.0, 600.0),
+            to: rect(0.0, 0.0, 800.0, 600.0),
+        },
+        motion,
+        &[],
+        &mut grew,
+    );
+    // Its reflow ghost is legitimate -- the pane's width IS changing, so its
+    // old wrapping crossfades over the area it keeps. What must not exist is
+    // old picture drawn PAST the destination, which is what a vacated strip is
+    // and what a growing pane never earns.
+    for placement in &grew {
+        if placement.source != neomacs_renderer_wgpu::PaneSource::Previous {
+            continue;
+        }
+        assert!(
+            placement.bounds.x + placement.bounds.width <= 800.0 + 1e-3,
+            "a growing pane was handed a vacated strip: {:?}",
+            placement.bounds
+        );
+    }
+
+    // A pane collapsing to near nothing must not invert. A negative extent is
+    // rejected by `GeometryRect::new`, which drops the pane from the projection
+    // and silently falls the hit test back to identity -- the exact
+    // render/hit-test divergence the projection exists to prevent.
+    let mut shrank = Vec::new();
+    place(
+        PaneChange::Persisted {
+            window: live(1),
+            from: rect(0.0, 0.0, 600.0, 600.0),
+            to: rect(0.0, 0.0, 20.0, 600.0),
+        },
+        motion,
+        &[],
+        &mut shrank,
+    );
+    for placement in &shrank {
+        assert!(
+            placement.bounds.width >= 0.0 && placement.bounds.height >= 0.0,
+            "inverted rect {:?}",
+            placement.bounds
+        );
+        assert!(
+            placement.painted.width >= 0.0 && placement.painted.height >= 0.0,
+            "inverted painted rect {:?}",
+            placement.painted
+        );
+    }
+}
+
+#[test]
 fn a_click_on_the_area_a_pane_has_not_given_up_does_not_resolve_off_the_frame() {
     // The pane draws only what it owns: `layout_pass` clamps its quad to
     // its own rect, so a shrinking pane paints its destination content at
