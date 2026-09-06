@@ -2675,13 +2675,26 @@ fn pane_motion_reaches_the_registry_as_scalars_and_converts_to_a_spec() {
     values.sort();
     assert_eq!(values, vec!["duration", "easing", "enabled"]);
 
-    assert_eq!(
+    // On by default, so the default config builds a real motion.
+    assert!(matches!(
         config.pane_motion.movement(),
-        MotionSpec::Instant,
-        "disabled means no motion is built at all, not a zero-length one"
-    );
+        MotionSpec::Tween(_)
+    ));
 
-    let enabled = config
+    // Turned off through the registry, it builds none at all — not a
+    // zero-length one. A caller that sees `Instant` takes no offscreen and
+    // composes exactly as it would with the feature absent, which is what
+    // makes disabling it give back the standing cost of composing every frame
+    // through the ring.
+    let disabled = config
+        .apply_effects(&[EffectOperation::set(
+            "pane-motion",
+            [("enabled", EffectValue::Bool(false))],
+        )])
+        .expect("pane-motion accepts its own properties");
+    assert_eq!(disabled.pane_motion.movement(), MotionSpec::Instant);
+
+    let enabled = disabled
         .apply_effects(&[EffectOperation::set(
             "pane-motion",
             [("enabled", EffectValue::Bool(true))],
