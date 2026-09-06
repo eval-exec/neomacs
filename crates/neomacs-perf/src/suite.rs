@@ -69,6 +69,7 @@ const STANDARD_SCENARIOS: &[SuiteScenario] = &[
     suite_scenario(ScenarioId::GuiInputLatency, 15.0),
     suite_scenario(ScenarioId::OrgEditing, 8.0),
     suite_scenario(ScenarioId::MagitStatus, 10.0),
+    suite_scenario(ScenarioId::OrgJournalOpen, 10.0),
     suite_scenario(ScenarioId::LargeFileEditing, 8.0),
     suite_scenario(ScenarioId::Indentation, 8.0),
     suite_scenario(ScenarioId::RegexSearch, 8.0),

@@ -1046,3 +1046,223 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         ["NEOVM_JIT_PROFILE", "NEOVM_JIT_THRESHOLD", "PATH"]
     );
 }
+
+#[test]
+fn org_journal_open_result_is_valid_when_every_journal_invariant_holds() {
+    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
+    let workspace = tempfile::Builder::new()
+        .prefix("neomacs-perf-org-journal-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let harness = PerfHarness::new(workspace.path());
+    let request = RunRequest::new(
+        ScenarioId::OrgJournalOpen,
+        workspace.path().join("fake-neomacs"),
+        NonZeroU32::new(3).expect("non-zero iterations"),
+    )
+    .with_frontend(Frontend::Batch);
+
+    let report = harness
+        .record_fixture_result(
+            &request,
+            r##"{
+              "schema_version": 1,
+              "scenario": "org-journal-open",
+              "status": "ok",
+              "iterations": 3,
+              "elapsed_us": 9000000,
+              "elapsed_wall_us": 9100000,
+              "operation_count": 3,
+              "open_phase_us": 4000000,
+              "fontify_phase_us": 3000000,
+              "settle_phase_us": 2000000,
+              "expected_major_mode": "org-journal-mode",
+              "actual_major_mode": "org-journal-mode",
+              "org_superstar_active": true,
+              "git_gutter_active": true,
+              "overlay_count_min": 2697,
+              "overlay_count_final": 2697,
+              "stable_checksum": true,
+              "entry_created": true,
+              "journal_line_count": 4340,
+              "error": null
+            }"##,
+        )
+        .expect("record fixture result");
+
+    let RunVerdict::Valid { measurements } = &report.artifact.verdict else {
+        panic!("a complete journal-open result must be valid");
+    };
+    assert!(measurements
+        .iter()
+        .any(|measurement| measurement.name == MetricName::PerOperationWallTime));
+    assert!(measurements
+        .iter()
+        .any(|measurement| measurement.name == MetricName::OverlayCount
+            && measurement.value > 0.0));
+}
+
+#[test]
+fn org_journal_open_rejects_a_journal_that_never_created_overlays_or_an_entry() {
+    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
+    let workspace = tempfile::Builder::new()
+        .prefix("neomacs-perf-org-journal-reject-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let harness = PerfHarness::new(workspace.path());
+    let request = RunRequest::new(
+        ScenarioId::OrgJournalOpen,
+        workspace.path().join("fake-neomacs"),
+        NonZeroU32::new(3).expect("non-zero iterations"),
+    )
+    .with_frontend(Frontend::Batch);
+
+    let report = harness
+        .record_fixture_result(
+            &request,
+            r##"{
+              "schema_version": 1,
+              "scenario": "org-journal-open",
+              "status": "ok",
+              "iterations": 3,
+              "elapsed_us": 9000000,
+              "elapsed_wall_us": 9100000,
+              "operation_count": 3,
+              "open_phase_us": 4000000,
+              "fontify_phase_us": 3000000,
+              "settle_phase_us": 2000000,
+              "expected_major_mode": "org-journal-mode",
+              "actual_major_mode": "org-mode",
+              "org_superstar_active": true,
+              "git_gutter_active": true,
+              "overlay_count_min": 0,
+              "overlay_count_final": 0,
+              "stable_checksum": false,
+              "entry_created": false,
+              "journal_line_count": 4340,
+              "error": null
+            }"##,
+        )
+        .expect("record fixture result");
+
+    let RunVerdict::CorrectnessMismatch { mismatches } = &report.artifact.verdict else {
+        panic!("a degenerate journal-open result must not be valid");
+    };
+    let invariants: Vec<&str> = mismatches
+        .iter()
+        .map(|mismatch| mismatch.invariant.as_str())
+        .collect();
+    for expected in [
+        "major-mode",
+        "stable-checksum",
+        "entry-created",
+        "overlay-count",
+    ] {
+        assert!(
+            invariants.contains(&expected),
+            "expected invariant {expected} to be rejected, got {invariants:?}"
+        );
+    }
+}
+
+#[test]
+fn org_journal_open_relaxes_creation_invariants_for_an_external_journal() {
+    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
+    let workspace = tempfile::Builder::new()
+        .prefix("neomacs-perf-org-journal-external-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let harness = PerfHarness::new(workspace.path());
+    let request = RunRequest::new(
+        ScenarioId::OrgJournalOpen,
+        workspace.path().join("fake-neomacs"),
+        NonZeroU32::new(2).expect("non-zero iterations"),
+    )
+    .with_frontend(Frontend::Batch)
+    .with_journal_file(Some(workspace.path().join("2026-bug.org")));
+
+    let report = harness
+        .record_fixture_result(
+            &request,
+            r##"{
+              "schema_version": 1,
+              "scenario": "org-journal-open",
+              "status": "ok",
+              "iterations": 2,
+              "elapsed_us": 6000000,
+              "elapsed_wall_us": 6100000,
+              "operation_count": 2,
+              "open_phase_us": 2500000,
+              "fontify_phase_us": 2000000,
+              "settle_phase_us": 1500000,
+              "expected_major_mode": "org-journal-mode",
+              "actual_major_mode": "org-journal-mode",
+              "org_superstar_active": true,
+              "git_gutter_active": true,
+              "overlay_count_min": 0,
+              "overlay_count_final": 0,
+              "stable_checksum": true,
+              "entry_created": false,
+              "journal_line_count": 4340,
+              "error": null
+            }"##,
+        )
+        .expect("record fixture result");
+
+    assert!(
+        report.artifact.verdict.is_valid(),
+        "an external journal that already has today's entry is not a correctness failure"
+    );
+}
+
+#[test]
+fn synthetic_journal_generator_is_deterministic_and_heavier_than_the_real_workload() {
+    use super::harness::{civil_from_days, days_from_civil, generate_synthetic_journal};
+
+    // Cross-machine reproduction hinges on the constant seed: the same
+    // elapsed-day count must always produce a byte-identical journal.
+    let (first, entries_first) = generate_synthetic_journal(2026, 249);
+    let (second, entries_second) = generate_synthetic_journal(2026, 249);
+    assert_eq!(first, second);
+    assert_eq!(entries_first, entries_second);
+
+    // Heavier than the ~330 KB / ~4,330-line real workload this scenario
+    // guards, so the font-lock, overlay, and marker costs are unmistakable
+    // on any machine.
+    let lines = first.lines().count() as u64;
+    assert!(
+        (5_000..8_000).contains(&lines),
+        "journal should stay around ~5.5k-7k lines at 249 days, got {lines}"
+    );
+    assert!(
+        (450_000..700_000).contains(&first.len()),
+        "journal should stay around ~0.5-0.7 MB at 249 days, got {}",
+        first.len()
+    );
+    assert!(
+        (500..800).contains(&entries_first),
+        "journal should carry ~600 timed entries at 249 days, got {entries_first}"
+    );
+    assert!(first.starts_with("* 2026-01-01, Thursday\n"));
+    // org-journal's timed entry shape must be present for font-lock.
+    assert!(first.contains("\n** "));
+}
+
+#[test]
+fn civil_date_helpers_round_trip_across_the_scenario_year() {
+    use super::harness::{civil_from_days, days_from_civil};
+
+    assert_eq!(civil_from_days(0), (1970, 1, 1));
+    for days in [
+        days_from_civil(2026, 1, 1),
+        days_from_civil(2026, 9, 6),
+        days_from_civil(2024, 2, 29),
+        days_from_civil(2025, 12, 31),
+    ] {
+        let (year, month, mday) = civil_from_days(days);
+        assert_eq!(days_from_civil(year, month, mday), days);
+    }
+}

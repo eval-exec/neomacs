@@ -7,7 +7,7 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 13);
+    assert_eq!(scenarios.len(), 14);
 
     let rust_lsp = scenario(ScenarioId::RustLspTyping);
     assert_eq!(rust_lsp.id, ScenarioId::RustLspTyping);
@@ -138,6 +138,24 @@ fn catalog_exposes_mx_tab_as_a_real_completion_window_workload() {
         &[CrossEditorParityMetric::CompletionCandidateCount]
     );
     assert!(mx_tab.description.contains("M-x TAB"));
+}
+
+#[test]
+fn catalog_exposes_the_org_journal_open_workload() {
+    let org_journal = scenario(ScenarioId::OrgJournalOpen);
+    assert_eq!(org_journal.id.to_string(), "org-journal-open");
+    assert_eq!(
+        ScenarioId::from_str("org-journal-open"),
+        Ok(ScenarioId::OrgJournalOpen)
+    );
+    assert_eq!(org_journal.default_frontend, Frontend::Batch);
+    assert_eq!(
+        org_journal.default_iterations,
+        NonZeroU32::new(5).expect("non-zero default")
+    );
+    assert_eq!(org_journal.primary_metric, MetricName::PerOperationWallTime);
+    assert!(org_journal.description.contains("org-journal"));
+    assert!(org_journal.description.contains("git-gutter"));
 }
 
 #[test]

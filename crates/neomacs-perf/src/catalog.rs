@@ -40,6 +40,7 @@ pub enum ScenarioId {
     GuiInputLatency,
     OrgEditing,
     MagitStatus,
+    OrgJournalOpen,
     LargeFileEditing,
     Indentation,
     RegexSearch,
@@ -58,6 +59,7 @@ impl ScenarioId {
             Self::GuiInputLatency => "gui-input-latency",
             Self::OrgEditing => "org-editing",
             Self::MagitStatus => "magit-status",
+            Self::OrgJournalOpen => "org-journal-open",
             Self::LargeFileEditing => "large-file-editing",
             Self::Indentation => "indentation",
             Self::RegexSearch => "regex-search",
@@ -97,6 +99,7 @@ impl FromStr for ScenarioId {
             "gui-input-latency" => Ok(Self::GuiInputLatency),
             "org-editing" => Ok(Self::OrgEditing),
             "magit-status" => Ok(Self::MagitStatus),
+            "org-journal-open" => Ok(Self::OrgJournalOpen),
             "large-file-editing" => Ok(Self::LargeFileEditing),
             "indentation" => Ok(Self::Indentation),
             "regex-search" => Ok(Self::RegexSearch),
@@ -218,6 +221,19 @@ const SCENARIOS: &[ScenarioSpec] = &[
         cross_editor_parity_metrics: &[],
     },
     ScenarioSpec {
+        id: ScenarioId::OrgJournalOpen,
+        description: "Revision-pinned org-journal yearly file open with org-superstar and git-gutter overlays",
+        default_frontend: Frontend::Batch,
+        // One operation is a full journal-open cycle (kill the buffer, let
+        // org-journal find-file, fontify, and lay out the yearly file). At the
+        // real workload's scale that is seconds, not milliseconds, so five
+        // iterations keep the run bounded while still giving the median
+        // something to work with.
+        default_iterations: NonZeroU32::new(5).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
         id: ScenarioId::LargeFileEditing,
         description: "Editing, fontification, and navigation in a deterministic large file",
         default_frontend: Frontend::Batch,
@@ -276,9 +292,10 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::GuiInputLatency => &SCENARIOS[6],
         ScenarioId::OrgEditing => &SCENARIOS[7],
         ScenarioId::MagitStatus => &SCENARIOS[8],
-        ScenarioId::LargeFileEditing => &SCENARIOS[9],
-        ScenarioId::Indentation => &SCENARIOS[10],
-        ScenarioId::RegexSearch => &SCENARIOS[11],
-        ScenarioId::SustainedNativeVideo => &SCENARIOS[12],
+        ScenarioId::OrgJournalOpen => &SCENARIOS[9],
+        ScenarioId::LargeFileEditing => &SCENARIOS[10],
+        ScenarioId::Indentation => &SCENARIOS[11],
+        ScenarioId::RegexSearch => &SCENARIOS[12],
+        ScenarioId::SustainedNativeVideo => &SCENARIOS[13],
     }
 }
