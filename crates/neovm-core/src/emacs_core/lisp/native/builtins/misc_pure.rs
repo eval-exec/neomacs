@@ -181,15 +181,13 @@ fn message_dolog(
     // complete message.  Echo-area printer output deliberately leaves a
     // fragment open, so the next ordinary message first terminates it.
     if termination != MessageLogTermination::Fragment {
-        let needs_newline = ctx.buffers.get(buf_id).is_some_and(|buffer| {
-            let full = buffer.full_emacs_byte_range();
-            full.start() < full.end()
-                && buffer.buffer_substring_bytes_range(crate::buffer::EmacsByteRange::new(
-                    full.end()
-                        .saturating_sub_len(crate::buffer::EmacsByteLen::new(1)),
-                    full.end(),
-                )) != b"\n"
-        });
+        // GNU `message_log_maybe_newline`: only a preceding *fragment* (echo-area
+        // printer output logged without a newline) owes a terminator. GNU keeps
+        // that as the `message_log_need_newline` flag rather than inspecting the
+        // buffer, so text placed in `*Messages*' by other means never gets one
+        // (verified on GNU 31.0.90: "keep" + `(message "hello")' logs
+        // "keephello\n").
+        let needs_newline = ctx.message_log_need_newline;
         if needs_newline {
             let _ = ctx.buffers.goto_buffer_emacs_byte_pos(buf_id, old_full_end);
             let _ = ctx.buffers.insert_into_buffer(buf_id, "\n");
@@ -268,6 +266,7 @@ fn message_dolog(
     if let Some(old) = old_buf {
         ctx.restore_current_buffer_if_live(old);
     }
+    ctx.message_log_need_newline = termination == MessageLogTermination::Fragment;
 }
 
 impl super::eval::Context {

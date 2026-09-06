@@ -2731,6 +2731,10 @@ pub struct Context {
     /// Emacs's `combine_after_change_buffer` (insdel.c). When the change
     /// buffer differs, the pending list is flushed before recording the new
     /// change.
+    /// GNU `message_log_need_newline`: the last `*Messages*' log was a
+    /// fragment (echo-area printer output), so the next complete message
+    /// first terminates that line.
+    pub(crate) message_log_need_newline: bool,
     pub(crate) combine_after_change_buffer: Option<crate::buffer::BufferId>,
     /// Process manager — owns all tracked processes.
     pub(crate) processes: ProcessManager,

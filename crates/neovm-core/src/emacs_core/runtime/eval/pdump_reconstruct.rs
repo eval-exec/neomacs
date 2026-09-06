@@ -99,6 +99,7 @@ impl Context {
             match_data: None,
             combine_after_change_list: Vec::new(),
             combine_after_change_buffer: None,
+            message_log_need_newline: false,
             processes: ProcessManager::new(),
             watchers,
             active_variable_watchers: HashSet::new(),
