@@ -141,27 +141,32 @@ pub struct PaneMotionConfig {
 }
 
 impl Default for PaneMotionConfig {
-    /// Off, and deliberately so.
+    /// On.
     ///
-    /// Not because the path is unfinished — it measures, samples, projects and
-    /// draws, and its parts are covered by tests — but because no run in a
-    /// headless environment can execute it. Pane motion is disabled on a
-    /// software adapter, which is the only adapter class available under Xvfb
-    /// (llvmpipe, and lavapipe under `WGPU_BACKEND=vulkan`), so nothing short
-    /// of a real GPU exercises the per-pane pass end to end.
+    /// It was off for as long as nothing could watch it: pane motion is
+    /// disabled on a software adapter, which is the only adapter class
+    /// available under Xvfb (llvmpipe, and lavapipe under
+    /// `WGPU_BACKEND=vulkan`), so no headless run could execute the per-pane
+    /// pass end to end. Shipping it on that evidence would have meant an
+    /// animation that had never once run in a live editor, on every layout
+    /// change and every echo-area resize.
     ///
-    /// Turning it on would therefore ship an animation that has never once run
-    /// in a live editor, on every layout change and every echo-area resize. The
-    /// preparation for this default alone surfaced four defects found by
-    /// reading rather than by a failing test — one of them, a cleared render
-    /// target, would have made the echo area vanish during every
-    /// `split-window`, and would have been obvious in a single frame on screen.
+    /// It has since been watched on hardware — the divider sweep across a
+    /// `C-x 3` verified frame by frame, `tmp/impl/capture-split.sh` — and that
+    /// watching is what found the last two defects, both of which rendered as a
+    /// completely static frame while every placement in the model interpolated
+    /// perfectly: a morph with no pinned picture to fade from, and a vacated
+    /// strip that crossfaded instead of holding.
     ///
-    /// `tmp/impl/verify-pane-motion.sh` drives the check; flip this to `true`
-    /// once someone can watch it on hardware.
+    /// Enabling it has a standing cost, not just a per-motion one. A morph
+    /// needs the frame as it was *before* the change, and a picture that was
+    /// never composed offscreen was never kept — so with this on, every frame
+    /// composes through the ring: two resident full-frame textures and one
+    /// extra full-frame blit per frame, whether or not anything is moving. See
+    /// `RenderFeaturePlan::compose_offscreen`. Turning this off gets that back.
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             duration: Duration::from_millis(160),
             easing: TransitionEasing::EaseOutCubic,
         }
