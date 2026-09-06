@@ -3554,6 +3554,7 @@ impl LayoutEngine {
         let display_when = crate::display_when::evaluate_window_display_when_forms(
             evaluator,
             buf_id,
+            Some(window_id.0),
             neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
             neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
         );

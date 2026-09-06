@@ -1905,7 +1905,13 @@ impl DisplaySpaceWidthPolicy {
                     // 0`), the line-number field having been folded into the
                     // number already (`XFLOATINT (prop) * base_unit +
                     // lnum_pixel_width`, xdisp.c:30493).  `pctx` here is in
-                    // window coordinates, like `current_x`.
+                    // frame-absolute coordinates, like `current_x`.  Declared,
+                    // not ported: the continuation-row and horizontal-scroll
+                    // pen terms (`continuation_lines_width`,
+                    // `stretch_adjust`/`first_visible_x`, xdisp.c:32841-32851,
+                    // 32862-32874), and GNU's one-pixel stretch when the pen is
+                    // already past the target (xdisp.c:32882-32883); this
+                    // yields zero width.
                     let target_x = if align_to >= 0 {
                         align_to as f32 + pixels as f32
                     } else {
