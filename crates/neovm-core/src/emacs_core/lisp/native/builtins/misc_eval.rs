@@ -18,7 +18,21 @@ pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_pos_property_impl(&eval.obarray, &[], Some(&eval.frames), &eval.buffers, args)
+    crate::emacs_core::error::expect_args_range("get-pos-property", &args, 2, 3)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_get_pos_property_3(eval, arg(0), arg(1), arg(2))
+}
+/// `get-pos-property` as registered: fixed arity 3, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_get_pos_property_3(
+    eval: &mut super::eval::Context,
+    position: Value,
+    prop: Value,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 3] = [position, prop, object];
+    builtin_get_pos_property_impl(&eval.obarray, &[], Some(&eval.frames), &eval.buffers, &args)
 }
 
 pub(crate) fn builtin_get_pos_property_impl(
@@ -26,7 +40,7 @@ pub(crate) fn builtin_get_pos_property_impl(
     _dynamic: &[OrderedRuntimeBindingMap],
     frames: Option<&crate::window::FrameManager>,
     buffers: &crate::buffer::BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("get-pos-property", &args, 2)?;
     expect_max_args("get-pos-property", &args, 3)?;
@@ -93,6 +107,15 @@ pub(crate) fn builtin_next_char_property_change_in_buffers(
 }
 
 pub(crate) fn builtin_pos_bol(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("pos-bol", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_pos_bol_1(eval, arg(0))
+}
+/// `pos-bol` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_pos_bol_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+    let args: [Value; 1] = [n];
     expect_max_args("pos-bol", &args, 1)?;
     // GNU `Fpos_bol` (editfns.c:684) returns the unconstrained line-beginning
     // position; only `Fline_beginning_position` adds field constraints.
@@ -102,6 +125,15 @@ pub(crate) fn builtin_pos_bol(eval: &mut super::eval::Context, args: Vec<Value>)
 }
 
 pub(crate) fn builtin_pos_eol(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("pos-eol", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_pos_eol_1(eval, arg(0))
+}
+/// `pos-eol` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_pos_eol_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+    let args: [Value; 1] = [n];
     expect_max_args("pos-eol", &args, 1)?;
     // GNU `Fpos_eol` (editfns.c:740) returns the unconstrained line-end
     // position; only `Fline_end_position` adds field constraints.
@@ -288,11 +320,26 @@ pub(crate) fn builtin_next_single_char_property_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("next-single-char-property-change", &args, 2, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_next_single_char_property_change_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `next-single-char-property-change` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_next_single_char_property_change_4(
+    eval: &mut super::eval::Context,
+    position: Value,
+    prop: Value,
+    object: Value,
+    limit: Value,
+) -> EvalResult {
+    let args: [Value; 4] = [position, prop, object, limit];
     builtin_next_single_char_property_change_in_buffers(
         &eval.obarray,
         Some(&eval.frames),
         &eval.buffers,
-        args,
+        &args,
     )
 }
 
@@ -364,7 +411,7 @@ pub(crate) fn builtin_next_single_char_property_change_in_buffers(
     obarray: &crate::emacs_core::symbol::Obarray,
     frames: Option<&crate::window::FrameManager>,
     buffers: &crate::buffer::BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("next-single-char-property-change", &args, 2)?;
     expect_max_args("next-single-char-property-change", &args, 4)?;
@@ -373,7 +420,7 @@ pub(crate) fn builtin_next_single_char_property_change_in_buffers(
         let result = super::textprop::builtin_next_single_property_change_in_state(
             obarray,
             buffers,
-            args.clone(),
+            &args.clone(),
         )?;
         if !result.is_nil() {
             return Ok(result);
@@ -465,7 +512,7 @@ pub(crate) fn builtin_previous_single_char_property_change_in_buffers(
         let result = super::textprop::builtin_previous_single_property_change_in_state(
             obarray,
             buffers,
-            args.clone(),
+            &args.clone(),
         )?;
         if !result.is_nil() {
             return Ok(result);
@@ -1365,7 +1412,7 @@ fn insert_print_lisp_string_to_marker_target(
             })?;
         let _ = super::marker::builtin_set_marker_in_buffers(
             &mut ctx.buffers,
-            vec![
+            &[
                 target,
                 Value::fixnum(new_marker_pos),
                 Value::make_buffer(buffer_id),

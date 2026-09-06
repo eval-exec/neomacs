@@ -325,7 +325,7 @@ fn test_builtin_point_to_register_stores_marker() {
         Value::make_buffer(current_buffer_id)
     );
     assert_eq!(
-        crate::emacs_core::marker::builtin_marker_position_in_buffers(&eval.buffers, vec![stored],)
+        crate::emacs_core::marker::builtin_marker_position_in_buffers(&eval.buffers, &[stored])
             .expect("marker-position"),
         Value::fixnum(1)
     );
@@ -349,7 +349,7 @@ fn test_builtin_point_to_register_stores_lisp_char_position() {
     let stored = builtin_get_register(&mut eval, vec![Value::char('p')]).expect("get-register");
     assert!(stored.is_marker());
     assert_eq!(
-        crate::emacs_core::marker::builtin_marker_position_in_buffers(&eval.buffers, vec![stored],)
+        crate::emacs_core::marker::builtin_marker_position_in_buffers(&eval.buffers, &[stored])
             .expect("marker-position"),
         Value::fixnum(2)
     );

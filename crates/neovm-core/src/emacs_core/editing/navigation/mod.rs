@@ -514,6 +514,14 @@ pub(crate) fn adjust_for_intangible(
 
 /// (bobp) -- at beginning of buffer?
 pub(crate) fn builtin_bobp(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("bobp", &args, 0)?;
+    builtin_bobp_0(ctx)
+}
+/// `bobp` as registered: fixed arity 0, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_bobp_0(ctx: &mut super::eval::Context) -> EvalResult {
+    let args: [Value; 0] = [];
     expect_args("bobp", &args, 0)?;
     let buf = current_buffer_in_manager(&ctx.buffers)?;
     Ok(Value::bool_val(
@@ -523,6 +531,14 @@ pub(crate) fn builtin_bobp(ctx: &mut super::eval::Context, args: Vec<Value>) -> 
 
 /// (eobp) -- at end of buffer?
 pub(crate) fn builtin_eobp(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("eobp", &args, 0)?;
+    builtin_eobp_0(ctx)
+}
+/// `eobp` as registered: fixed arity 0, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_eobp_0(ctx: &mut super::eval::Context) -> EvalResult {
+    let args: [Value; 0] = [];
     expect_args("eobp", &args, 0)?;
     let buf = current_buffer_in_manager(&ctx.buffers)?;
     Ok(Value::bool_val(
@@ -532,6 +548,14 @@ pub(crate) fn builtin_eobp(ctx: &mut super::eval::Context, args: Vec<Value>) -> 
 
 /// (bolp) -- at beginning of line?
 pub(crate) fn builtin_bolp(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("bolp", &args, 0)?;
+    builtin_bolp_0(ctx)
+}
+/// `bolp` as registered: fixed arity 0, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_bolp_0(ctx: &mut super::eval::Context) -> EvalResult {
+    let args: [Value; 0] = [];
     expect_args("bolp", &args, 0)?;
     let buf = current_buffer_in_manager(&ctx.buffers)?;
     let point = buf.point_emacs_byte_pos();
@@ -546,6 +570,14 @@ pub(crate) fn builtin_bolp(ctx: &mut super::eval::Context, args: Vec<Value>) -> 
 
 /// (eolp) -- at end of line?
 pub(crate) fn builtin_eolp(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("eolp", &args, 0)?;
+    builtin_eolp_0(ctx)
+}
+/// `eolp` as registered: fixed arity 0, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_eolp_0(ctx: &mut super::eval::Context) -> EvalResult {
+    let args: [Value; 0] = [];
     expect_args("eolp", &args, 0)?;
     let buf = current_buffer_in_manager(&ctx.buffers)?;
     let point = buf.point_emacs_byte_pos();
@@ -635,6 +667,18 @@ pub(crate) fn builtin_line_beginning_position(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("line-beginning-position", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_line_beginning_position_1(ctx, arg(0))
+}
+/// `line-beginning-position` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_line_beginning_position_1(
+    ctx: &mut super::eval::Context,
+    n: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [n];
     expect_max_args("line-beginning-position", &args, 1)?;
     let scan_count = line_beginning_scan_count_arg(&args)?;
     let (bol_charpos, orig_charpos, count) = pos_bol_compute(ctx, scan_count)?;
@@ -658,6 +702,15 @@ pub(crate) fn builtin_line_end_position(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("line-end-position", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_line_end_position_1(ctx, arg(0))
+}
+/// `line-end-position` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_line_end_position_1(ctx: &mut super::eval::Context, n: Value) -> EvalResult {
+    let args: [Value; 1] = [n];
     expect_max_args("line-end-position", &args, 1)?;
     let scan_count = line_end_scan_count_arg(&args)?;
     let (eol_charpos, orig_charpos) = pos_eol_compute(ctx, scan_count)?;
@@ -844,6 +897,15 @@ pub(crate) fn builtin_beginning_of_line(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("beginning-of-line", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_beginning_of_line_1(eval, arg(0))
+}
+/// `beginning-of-line` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_beginning_of_line_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+    let args: [Value; 1] = [n];
     let n = if args.is_empty() || args[0].is_nil() {
         1
     } else {
@@ -877,6 +939,15 @@ pub(crate) fn builtin_beginning_of_line(
 
 /// (end-of-line &optional N)
 pub(crate) fn builtin_end_of_line(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("end-of-line", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_end_of_line_1(eval, arg(0))
+}
+/// `end-of-line` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_end_of_line_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+    let args: [Value; 1] = [n];
     let n = if args.is_empty() || args[0].is_nil() {
         1
     } else {
@@ -1196,6 +1267,19 @@ pub(crate) fn builtin_skip_chars_forward(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("skip-chars-forward", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_skip_chars_forward_2(ctx, arg(0), arg(1))
+}
+/// `skip-chars-forward` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_skip_chars_forward_2(
+    ctx: &mut super::eval::Context,
+    string: Value,
+    lim: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [string, lim];
     expect_min_args("skip-chars-forward", &args, 1)?;
     let set_codes = match ctx.lisp_string(args[0]) {
         Some(string) => super::builtins::lisp_string_char_codes(string),
@@ -1246,6 +1330,19 @@ pub(crate) fn builtin_skip_chars_backward(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("skip-chars-backward", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_skip_chars_backward_2(ctx, arg(0), arg(1))
+}
+/// `skip-chars-backward` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_skip_chars_backward_2(
+    ctx: &mut super::eval::Context,
+    string: Value,
+    lim: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [string, lim];
     expect_min_args("skip-chars-backward", &args, 1)?;
     let set_codes = match ctx.lisp_string(args[0]) {
         Some(string) => super::builtins::lisp_string_char_codes(string),

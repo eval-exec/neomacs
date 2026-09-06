@@ -3920,12 +3920,20 @@ pub(crate) fn builtin_syntax_table(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_syntax_table_in_buffers(&mut eval.buffers, args)
+    crate::emacs_core::error::expect_args("syntax-table", &args, 0)?;
+    builtin_syntax_table_0(eval)
+}
+/// `syntax-table` as registered: fixed arity 0, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_syntax_table_0(eval: &mut super::eval::Context) -> EvalResult {
+    let args: [Value; 0] = [];
+    builtin_syntax_table_in_buffers(&mut eval.buffers, &args)
 }
 
 pub(crate) fn builtin_syntax_table_in_buffers(
     buffers: &mut BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     if !args.is_empty() {
         return Err(signal(
@@ -3944,12 +3952,24 @@ pub(crate) fn builtin_set_syntax_table(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_set_syntax_table_in_buffers(&mut eval.buffers, args)
+    crate::emacs_core::error::expect_args("set-syntax-table", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_set_syntax_table_1(eval, arg(0))
+}
+/// `set-syntax-table` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_set_syntax_table_1(
+    eval: &mut super::eval::Context,
+    table: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [table];
+    builtin_set_syntax_table_in_buffers(&mut eval.buffers, &args)
 }
 
 pub(crate) fn builtin_set_syntax_table_in_buffers(
     buffers: &mut BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     if args.len() != 1 {
         return Err(signal(
@@ -4043,12 +4063,24 @@ pub(crate) fn modify_syntax_entry_in_buffers(
 
 /// `(char-syntax CHAR)` — return the syntax class designator char.
 pub(crate) fn builtin_char_syntax(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_char_syntax_in_buffers(&eval.buffers, args)
+    crate::emacs_core::error::expect_args("char-syntax", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_char_syntax_1(eval, arg(0))
+}
+/// `char-syntax` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_char_syntax_1(
+    eval: &mut super::eval::Context,
+    character: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [character];
+    builtin_char_syntax_in_buffers(&eval.buffers, &args)
 }
 
 pub(crate) fn builtin_char_syntax_in_buffers(
     buffers: &BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     if args.len() != 1 {
         return Err(signal(
@@ -5504,6 +5536,20 @@ pub(crate) fn builtin_backward_sexp(
 ///
 /// This uses the same core scanner as `forward-sexp`/`backward-sexp`.
 pub(crate) fn builtin_scan_lists(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("scan-lists", &args, 3)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_scan_lists_3(ctx, arg(0), arg(1), arg(2))
+}
+/// `scan-lists` as registered: fixed arity 3, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_scan_lists_3(
+    ctx: &mut super::eval::Context,
+    from: Value,
+    count: Value,
+    depth: Value,
+) -> EvalResult {
+    let args: [Value; 3] = [from, count, depth];
     if args.len() != 3 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -5585,6 +5631,19 @@ pub(crate) fn builtin_scan_lists(ctx: &mut super::eval::Context, args: Vec<Value
 
 /// `(scan-sexps FROM COUNT)` — scan over COUNT sexps from FROM.
 pub(crate) fn builtin_scan_sexps(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("scan-sexps", &args, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_scan_sexps_2(ctx, arg(0), arg(1))
+}
+/// `scan-sexps` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_scan_sexps_2(
+    ctx: &mut super::eval::Context,
+    from: Value,
+    count: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [from, count];
     if args.len() != 2 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -6817,6 +6876,23 @@ pub(crate) fn builtin_parse_partial_sexp(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("parse-partial-sexp", &args, 2, 6)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_parse_partial_sexp_6(eval, arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
+}
+/// `parse-partial-sexp` as registered: fixed arity 6, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a6` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_parse_partial_sexp_6(
+    eval: &mut super::eval::Context,
+    from: Value,
+    to: Value,
+    targetdepth: Value,
+    stopbefore: Value,
+    oldstate: Value,
+    commentstop: Value,
+) -> EvalResult {
+    let args: [Value; 6] = [from, to, targetdepth, stopbefore, oldstate, commentstop];
     if args.len() < 2 || args.len() > 6 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -6930,6 +7006,19 @@ pub(crate) fn builtin_skip_syntax_forward(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("skip-syntax-forward", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_skip_syntax_forward_2(eval, arg(0), arg(1))
+}
+/// `skip-syntax-forward` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_skip_syntax_forward_2(
+    eval: &mut super::eval::Context,
+    syntax: Value,
+    lim: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [syntax, lim];
     let (syntax_chars, limit) = expect_skip_syntax_args("skip-syntax-forward", &args)?;
     let honor = parse_sexp_lookup_properties_enabled(eval);
 
@@ -7044,6 +7133,19 @@ pub(crate) fn builtin_skip_syntax_backward(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("skip-syntax-backward", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_skip_syntax_backward_2(eval, arg(0), arg(1))
+}
+/// `skip-syntax-backward` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_skip_syntax_backward_2(
+    eval: &mut super::eval::Context,
+    syntax: Value,
+    lim: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [syntax, lim];
     let (syntax_chars, limit) = expect_skip_syntax_args("skip-syntax-backward", &args)?;
     let honor = parse_sexp_lookup_properties_enabled(eval);
     if honor {

@@ -152,6 +152,15 @@ pub(crate) fn builtin_subr_name(args: Vec<Value>) -> EvalResult {
 ///
 /// Reads arity from the canonical static subr registry (single source of truth).
 pub(crate) fn builtin_subr_arity(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("subr-arity", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_subr_arity_1(ctx, arg(0))
+}
+/// `subr-arity` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_subr_arity_1(ctx: &mut super::eval::Context, subr: Value) -> EvalResult {
+    let args: [Value; 1] = [subr];
     expect_args("subr-arity", &args, 1)?;
     match args[0].kind() {
         ValueKind::Subr(id) => Ok(subr_arity_from_registry(ctx, id)),

@@ -2023,7 +2023,7 @@ fn display_run_at(
         let run_end_char1 = super::textprop::builtin_next_single_property_change_in_state(
             &ctx.obarray,
             &ctx.buffers,
-            vec![Value::fixnum(charpos1), Value::symbol("display")],
+            &[Value::fixnum(charpos1), Value::symbol("display")],
         )
         .ok()
         .and_then(|v| match v.kind() {

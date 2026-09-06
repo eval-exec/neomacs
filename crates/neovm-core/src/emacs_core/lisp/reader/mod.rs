@@ -1522,7 +1522,7 @@ pub fn builtin_read_impl(
 
             super::marker::builtin_set_marker_in_buffers(
                 &mut ctx.buffers,
-                vec![
+                &[
                     stream,
                     Value::fixnum(new_position.as_i64()),
                     Value::make_buffer(buf_id),

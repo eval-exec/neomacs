@@ -1303,18 +1303,31 @@ pub(crate) fn builtin_indirect_function(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    indirect_function_impl_checked(eval.obarray(), args, eval.symbols_with_pos_enabled)
+    crate::emacs_core::error::expect_args_range("indirect-function", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_indirect_function_2(eval, arg(0), arg(1))
+}
+/// `indirect-function` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_indirect_function_2(
+    eval: &mut super::eval::Context,
+    object: Value,
+    noerror: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [object, noerror];
+    indirect_function_impl_checked(eval.obarray(), &args, eval.symbols_with_pos_enabled)
 }
 
 /// Obarray-only implementation shared by `builtin_indirect_function` and doc.rs.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn indirect_function_impl(obarray: &Obarray, args: Vec<Value>) -> EvalResult {
-    indirect_function_impl_checked(obarray, args, false)
+    indirect_function_impl_checked(obarray, &args, false)
 }
 
 pub(crate) fn indirect_function_impl_checked(
     obarray: &Obarray,
-    args: Vec<Value>,
+    args: &[Value],
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
     expect_min_args("indirect-function", &args, 1)?;
@@ -1699,10 +1712,23 @@ pub(crate) fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value
 }
 
 pub(crate) fn builtin_intern_soft(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    intern_soft_impl(eval, args)
+    crate::emacs_core::error::expect_args_range("intern-soft", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_intern_soft_2(eval, arg(0), arg(1))
+}
+/// `intern-soft` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_intern_soft_2(
+    eval: &mut super::eval::Context,
+    name: Value,
+    obarray: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [name, obarray];
+    intern_soft_impl(eval, &args)
 }
 
-pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> EvalResult {
     expect_min_args("intern-soft", &args, 1)?;
     expect_max_args("intern-soft", &args, 2)?;
 

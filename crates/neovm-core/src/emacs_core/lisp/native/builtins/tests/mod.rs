@@ -4244,43 +4244,43 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
     }
 
     assert_eq!(
-        builtin_cl_type_of(vec![Value::NIL]).unwrap(),
+        builtin_cl_type_of(&[Value::NIL]).unwrap(),
         Value::symbol("null")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::T]).unwrap(),
+        builtin_cl_type_of(&[Value::T]).unwrap(),
         Value::symbol("boolean")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::fixnum(1)]).unwrap(),
+        builtin_cl_type_of(&[Value::fixnum(1)]).unwrap(),
         Value::symbol("fixnum")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::make_float(1.0)]).unwrap(),
+        builtin_cl_type_of(&[Value::make_float(1.0)]).unwrap(),
         Value::symbol("float")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::string("x")]).unwrap(),
+        builtin_cl_type_of(&[Value::string("x")]).unwrap(),
         Value::symbol("string")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::symbol("foo")]).unwrap(),
+        builtin_cl_type_of(&[Value::symbol("foo")]).unwrap(),
         Value::symbol("symbol")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::cons(Value::fixnum(1), Value::fixnum(2))]).unwrap(),
+        builtin_cl_type_of(&[Value::cons(Value::fixnum(1), Value::fixnum(2))]).unwrap(),
         Value::symbol("cons")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::vector(vec![Value::fixnum(1)])]).unwrap(),
+        builtin_cl_type_of(&[Value::vector(vec![Value::fixnum(1)])]).unwrap(),
         Value::symbol("vector")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::hash_table(HashTableTest::Equal)]).unwrap(),
+        builtin_cl_type_of(&[Value::hash_table(HashTableTest::Equal)]).unwrap(),
         Value::symbol("hash-table")
     );
     assert_eq!(
-        builtin_cl_type_of(vec![Value::subr(intern("car"))]).unwrap(),
+        builtin_cl_type_of(&[Value::subr(intern("car"))]).unwrap(),
         Value::symbol("primitive-function")
     );
     let lambda = Value::make_lambda(LambdaData {
@@ -4292,7 +4292,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         interactive: None,
     });
     assert_eq!(
-        builtin_cl_type_of(vec![lambda]).unwrap(),
+        builtin_cl_type_of(&[lambda]).unwrap(),
         Value::symbol("interpreted-function")
     );
 

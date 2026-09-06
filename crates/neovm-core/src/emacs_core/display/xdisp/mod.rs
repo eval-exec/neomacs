@@ -925,7 +925,7 @@ fn display_space_run(
         let run_end_char1 = super::textprop::builtin_next_single_property_change_in_state(
             &eval.obarray,
             &eval.buffers,
-            vec![Value::fixnum(charpos1), *display_sym],
+            &[Value::fixnum(charpos1), *display_sym],
         )
         .ok()
         .and_then(|v| match v.kind() {
@@ -1182,7 +1182,7 @@ fn string_display_space_run(
     let run_end_char = super::textprop::builtin_next_single_property_change_in_state(
         &eval.obarray,
         &eval.buffers,
-        vec![Value::fixnum(char_index as i64), *display_sym, string],
+        &[Value::fixnum(char_index as i64), *display_sym, string],
     )
     .ok()
     .and_then(|v| match v.kind() {

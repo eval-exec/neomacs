@@ -764,12 +764,24 @@ pub(crate) fn builtin_upcase_in_state(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args("upcase", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_upcase_in_state_1(eval, arg(0))
+}
+/// `upcase` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_upcase_in_state_1(
+    eval: &mut crate::emacs_core::eval::Context,
+    obj: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [obj];
     let casetab = super::super::casetab::CaseTableOverride::for_current_buffer(eval)?;
-    upcase_with_override(args, casetab)
+    upcase_with_override(&args, casetab)
 }
 
 fn upcase_with_override(
-    args: Vec<Value>,
+    args: &[Value],
     casetab: super::super::casetab::CaseTableOverride,
 ) -> EvalResult {
     expect_args("upcase", &args, 1)?;
@@ -1061,7 +1073,7 @@ pub(crate) fn casing_word_predicate(
 }
 
 fn downcase_with_word_pred(
-    args: Vec<Value>,
+    args: &[Value],
     is_word: impl Fn(u32) -> bool,
     casetab: super::super::casetab::CaseTableOverride,
 ) -> EvalResult {
@@ -1108,7 +1120,7 @@ fn downcase_with_word_pred(
 /// the Greek final-sigma word context does not apply); ignores final sigma.
 pub(crate) fn builtin_downcase(args: Vec<Value>) -> EvalResult {
     downcase_with_word_pred(
-        args,
+        &args,
         |_| false,
         super::super::casetab::CaseTableOverride::none(),
     )
@@ -1120,9 +1132,21 @@ pub(crate) fn builtin_downcase_in_state(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args("downcase", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_downcase_in_state_1(eval, arg(0))
+}
+/// `downcase` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_downcase_in_state_1(
+    eval: &mut crate::emacs_core::eval::Context,
+    obj: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [obj];
     let is_word = casing_word_predicate(eval);
     let casetab = super::super::casetab::CaseTableOverride::for_current_buffer(eval)?;
-    downcase_with_word_pred(args, is_word, casetab)
+    downcase_with_word_pred(&args, is_word, casetab)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

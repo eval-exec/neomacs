@@ -2466,19 +2466,19 @@ pub(super) fn update_process_mark(buffers: &mut BufferManager, proc: &mut Proces
     let Some(buffer_id) = proc.buffer.as_buffer_id() else {
         return super::super::marker::builtin_set_marker_in_buffers(
             buffers,
-            vec![proc.mark, Value::NIL],
+            &[proc.mark, Value::NIL],
         );
     };
     let Some(buffer) = buffers.get(buffer_id) else {
         return super::super::marker::builtin_set_marker_in_buffers(
             buffers,
-            vec![proc.mark, Value::NIL],
+            &[proc.mark, Value::NIL],
         );
     };
     let position = Value::fixnum(buffer.z_lisp_char_pos().as_i64());
     super::super::marker::builtin_set_marker_in_buffers(
         buffers,
-        vec![proc.mark, position, proc.buffer],
+        &[proc.mark, position, proc.buffer],
     )
 }
 

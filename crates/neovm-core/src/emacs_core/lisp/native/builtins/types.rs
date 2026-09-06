@@ -231,7 +231,7 @@ pub(crate) fn builtin_hash_table_p(args: Vec<Value>) -> EvalResult {
     Ok(Value::bool_val(args[0].is_hash_table()))
 }
 
-pub(crate) fn builtin_type_of(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_type_of(args: &[Value]) -> EvalResult {
     expect_args("type-of", &args, 1)?;
     // GNU Emacs `type-of` handles symbol, integer, subr directly,
     // then delegates to `cl-type-of` for everything else.
@@ -243,7 +243,7 @@ pub(crate) fn builtin_type_of(args: Vec<Value>) -> EvalResult {
             Ok(Value::symbol("integer"))
         }
         ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr) => Ok(Value::symbol("subr")),
-        _ => builtin_cl_type_of(args),
+        _ => builtin_cl_type_of(&args),
     }
 }
 
@@ -252,14 +252,26 @@ pub(crate) fn builtin_type_of_with_ctx(
     ctx: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args("type-of", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_type_of_with_ctx_1(ctx, arg(0))
+}
+/// `type-of` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_type_of_with_ctx_1(
+    ctx: &mut super::super::eval::Context,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [object];
     // Stale tagged pointer detection is not applicable with tagged pointers —
     // the old generation-based check relied on tagged pointer indirection which
     // no longer exists.  Just delegate directly.
     let _ = ctx; // suppress unused warning
-    builtin_type_of(args)
+    builtin_type_of(&args)
 }
 
-pub(crate) fn builtin_cl_type_of(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_cl_type_of(args: &[Value]) -> EvalResult {
     expect_args("cl-type-of", &args, 1)?;
     // Stale tagged pointer detection is not applicable with tagged pointers.
     // Records: return the type tag (slot 0).
@@ -437,6 +449,19 @@ fn builtin_symbol_with_pos_pos_1_value(arg: Value) -> EvalResult {
 }
 
 pub(crate) fn builtin_char_equal(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("char-equal", &args, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_char_equal_2(eval, arg(0), arg(1))
+}
+/// `char-equal` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_char_equal_2(
+    eval: &mut super::eval::Context,
+    c1: Value,
+    c2: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [c1, c2];
     expect_args("char-equal", &args, 2)?;
     let left = expect_char_equal_code(&args[0])?;
     let right = expect_char_equal_code(&args[1])?;

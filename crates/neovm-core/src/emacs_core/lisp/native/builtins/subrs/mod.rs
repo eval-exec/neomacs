@@ -282,10 +282,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(builtin_symbol_plist_fn),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "indirect-function",
-        NativeFn::ContextVec(builtin_indirect_function),
-        SubrArity::new(1, Some(2)),
+        builtin_indirect_function_2,
+        FixedMin2::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "signal",
@@ -307,10 +307,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(builtin_intern_fn),
         SubrArity::new(1, Some(2)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "intern-soft",
-        NativeFn::ContextVec(builtin_intern_soft),
-        SubrArity::new(1, Some(2)),
+        builtin_intern_soft_2,
+        FixedMin2::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "run-hook-with-args",
@@ -420,10 +420,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
             crate::emacs_core::interactive::BuiltinInteractiveSpec::String("bKill buffer: "),
         ),
     );
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "set-buffer",
-        NativeFn::ContextVec(builtin_set_buffer),
-        SubrArity::new(1, Some(1)),
+        builtin_set_buffer_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::fixed0("current-buffer", builtin_current_buffer_0));
     ctx.register_subr(SubrSpec::new(
@@ -630,10 +630,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed2(
             "delete-region",
-            NativeFn::ContextVec(crate::emacs_core::editfns::builtin_delete_region),
-            SubrArity::new(2, Some(2)),
+            crate::emacs_core::editfns::builtin_delete_region_2,
+            FixedMin2::Two,
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("r")),
     );
@@ -680,10 +680,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed2(
             "narrow-to-region",
-            NativeFn::ContextVec(builtin_narrow_to_region),
-            SubrArity::new(2, Some(2)),
+            builtin_narrow_to_region_2,
+            FixedMin2::Two,
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("r")),
     );
@@ -707,10 +707,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         )
         .placeholder(NoEvalPlaceholder::Nil),
     );
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "buffer-modified-p",
-        NativeFn::ContextVec(builtin_buffer_modified_p),
-        SubrArity::new(0, Some(1)),
+        builtin_buffer_modified_p_1,
+        FixedMin1::Zero,
     ));
     ctx.register_subr(SubrSpec::new(
         "set-buffer-modified-p",
@@ -742,15 +742,15 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(builtin_generate_new_buffer_name),
         SubrArity::new(1, Some(2)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "char-after",
-        NativeFn::ContextVec(builtin_char_after),
-        SubrArity::new(0, Some(1)),
+        builtin_char_after_1,
+        FixedMin1::Zero,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "char-before",
-        NativeFn::ContextVec(builtin_char_before),
-        SubrArity::new(0, Some(1)),
+        builtin_char_before_1,
+        FixedMin1::Zero,
     ));
     ctx.register_subr(SubrSpec::new(
         "byte-to-position",
@@ -767,10 +767,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(builtin_get_byte),
         SubrArity::new(0, Some(2)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "buffer-local-value",
-        NativeFn::ContextVec(builtin_buffer_local_value),
-        SubrArity::new(2, Some(2)),
+        builtin_buffer_local_value_2,
+        FixedMin2::Two,
     ));
     ctx.register_subr(SubrSpec::new(
         "local-variable-if-set-p",
@@ -862,10 +862,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         builtin_match_end_1,
         FixedMin1::One,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed3(
         "match-data",
-        NativeFn::ContextVec(builtin_match_data),
-        SubrArity::new(0, Some(3)),
+        builtin_match_data_3,
+        FixedMin3::Zero,
     ));
     ctx.register_subr(
         SubrSpec::new(
@@ -875,10 +875,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         )
         .requires_eval_state(),
     );
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "set-match-data",
-        NativeFn::ContextVec(builtin_set_match_data),
-        SubrArity::new(1, Some(2)),
+        builtin_set_match_data_2,
+        FixedMin2::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "replace-match",
@@ -1430,20 +1430,19 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
             ),
         ),
     );
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed0(
         "syntax-table",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_syntax_table),
-        SubrArity::new(0, Some(0)),
+        crate::emacs_core::syntax::builtin_syntax_table_0,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "set-syntax-table",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_set_syntax_table),
-        SubrArity::new(1, Some(1)),
+        crate::emacs_core::syntax::builtin_set_syntax_table_1,
+        FixedMin1::One,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "char-syntax",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_char_syntax),
-        SubrArity::new(1, Some(1)),
+        crate::emacs_core::syntax::builtin_char_syntax_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "matching-paren",
@@ -1468,30 +1467,30 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
     );
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed3(
         "scan-lists",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_scan_lists),
-        SubrArity::new(3, Some(3)),
+        crate::emacs_core::syntax::builtin_scan_lists_3,
+        FixedMin3::Three,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "scan-sexps",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_scan_sexps),
-        SubrArity::new(2, Some(2)),
+        crate::emacs_core::syntax::builtin_scan_sexps_2,
+        FixedMin2::Two,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed6(
         "parse-partial-sexp",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_parse_partial_sexp),
-        SubrArity::new(2, Some(6)),
+        crate::emacs_core::syntax::builtin_parse_partial_sexp_6,
+        FixedMin6::Two,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "skip-syntax-forward",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_skip_syntax_forward),
-        SubrArity::new(1, Some(2)),
+        crate::emacs_core::syntax::builtin_skip_syntax_forward_2,
+        FixedMin2::One,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "skip-syntax-backward",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_skip_syntax_backward),
-        SubrArity::new(1, Some(2)),
+        crate::emacs_core::syntax::builtin_skip_syntax_backward_2,
+        FixedMin2::One,
     ));
     ctx.register_subr(
         SubrSpec::new(
@@ -1542,20 +1541,20 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         crate::emacs_core::textprop::builtin_get_char_property_3,
         FixedMin3::Two,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed3(
         "get-pos-property",
-        NativeFn::ContextVec(builtin_get_pos_property),
-        SubrArity::new(2, Some(3)),
+        builtin_get_pos_property_3,
+        FixedMin3::Two,
     ));
     ctx.register_subr(SubrSpec::new(
         "add-face-text-property",
         NativeFn::ContextVec(crate::emacs_core::textprop::builtin_add_face_text_property),
         SubrArity::new(3, Some(5)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed4(
         "add-text-properties",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_add_text_properties),
-        SubrArity::new(3, Some(4)),
+        crate::emacs_core::textprop::builtin_add_text_properties_4,
+        FixedMin4::Three,
     ));
     ctx.register_subr(SubrSpec::new(
         "set-text-properties",
@@ -1567,20 +1566,20 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::textprop::builtin_remove_text_properties),
         SubrArity::new(3, Some(4)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "text-properties-at",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_text_properties_at),
-        SubrArity::new(1, Some(2)),
+        crate::emacs_core::textprop::builtin_text_properties_at_2,
+        FixedMin2::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "get-display-property",
         NativeFn::ContextVec(crate::emacs_core::textprop::builtin_get_display_property),
         SubrArity::new(2, Some(4)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed4(
         "next-single-char-property-change",
-        NativeFn::ContextVec(builtin_next_single_char_property_change),
-        SubrArity::new(2, Some(4)),
+        builtin_next_single_char_property_change_4,
+        FixedMin4::Two,
     ));
     ctx.register_subr(SubrSpec::new(
         "previous-single-char-property-change",
@@ -1612,10 +1611,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::textprop::builtin_text_property_any),
         SubrArity::new(4, Some(5)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed5(
         "text-property-not-all",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_text_property_not_all),
-        SubrArity::new(4, Some(5)),
+        crate::emacs_core::textprop::builtin_text_property_not_all_5,
+        FixedMin5::Four,
     ));
     ctx.register_subr(SubrSpec::new(
         "next-overlay-change",
@@ -1687,40 +1686,36 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlayp),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed0(
         "bobp",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_bobp),
-        SubrArity::new(0, Some(0)),
+        crate::emacs_core::navigation::builtin_bobp_0,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed0(
         "eobp",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_eobp),
-        SubrArity::new(0, Some(0)),
+        crate::emacs_core::navigation::builtin_eobp_0,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed0(
         "bolp",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_bolp),
-        SubrArity::new(0, Some(0)),
+        crate::emacs_core::navigation::builtin_bolp_0,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed0(
         "eolp",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_eolp),
-        SubrArity::new(0, Some(0)),
+        crate::emacs_core::navigation::builtin_eolp_0,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "pos-bol",
-        NativeFn::ContextVec(builtin_pos_bol),
-        SubrArity::new(0, Some(1)),
+        builtin_pos_bol_1,
+        FixedMin1::Zero,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "line-end-position",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_line_end_position),
-        SubrArity::new(0, Some(1)),
+        crate::emacs_core::navigation::builtin_line_end_position_1,
+        FixedMin1::Zero,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "pos-eol",
-        NativeFn::ContextVec(builtin_pos_eol),
-        SubrArity::new(0, Some(1)),
+        builtin_pos_eol_1,
+        FixedMin1::Zero,
     ));
     ctx.register_subr(SubrSpec::new(
         "line-number-at-pos",
@@ -1736,18 +1731,18 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
     );
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed1(
             "beginning-of-line",
-            NativeFn::ContextVec(crate::emacs_core::navigation::builtin_beginning_of_line),
-            SubrArity::new(0, Some(1)),
+            crate::emacs_core::navigation::builtin_beginning_of_line_1,
+            FixedMin1::Zero,
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
     );
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed1(
             "end-of-line",
-            NativeFn::ContextVec(crate::emacs_core::navigation::builtin_end_of_line),
-            SubrArity::new(0, Some(1)),
+            crate::emacs_core::navigation::builtin_end_of_line_1,
+            FixedMin1::Zero,
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
     );
@@ -1767,15 +1762,15 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
     );
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "skip-chars-forward",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_skip_chars_forward),
-        SubrArity::new(1, Some(2)),
+        crate::emacs_core::navigation::builtin_skip_chars_forward_2,
+        FixedMin2::One,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "skip-chars-backward",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_skip_chars_backward),
-        SubrArity::new(1, Some(2)),
+        crate::emacs_core::navigation::builtin_skip_chars_backward_2,
+        FixedMin2::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "mark-marker",
@@ -3071,18 +3066,18 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::hashtab::builtin_unintern),
         SubrArity::new(2, Some(2)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed3(
         "set-marker",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_set_marker),
-        SubrArity::new(2, Some(3)),
+        crate::emacs_core::marker::builtin_set_marker_3,
+        FixedMin3::Two,
     ));
     // No `move-marker' here: GNU has no DEFUN of that name.  It is
     // `(defalias 'move-marker #'set-marker)' at lisp/subr.el:2280, so the
     // function cell holds the SYMBOL `set-marker' (DIVERGENCES.md 148).
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "marker-position",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_marker_position),
-        SubrArity::new(1, Some(1)),
+        crate::emacs_core::marker::builtin_marker_position_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "marker-buffer",
@@ -3402,10 +3397,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::errors::builtin_error_message_string),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "char-equal",
-        NativeFn::ContextVec(builtin_char_equal),
-        SubrArity::new(2, Some(2)),
+        builtin_char_equal_2,
+        FixedMin2::Two,
     ));
     // No `macrop' here: GNU has no DEFUN of that name.  It is a `defun' at
     // lisp/subr.el:4793 over `indirect-function', which IS in C
@@ -6122,30 +6117,30 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_datagram_address),
         SubrArity::new(2, Some(2)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed4(
         "remove-list-of-text-properties",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_remove_list_of_text_properties),
-        SubrArity::new(3, Some(4)),
+        crate::emacs_core::textprop::builtin_remove_list_of_text_properties_4,
+        FixedMin4::Three,
     ));
     ctx.register_subr(SubrSpec::new(
         "get-char-property-and-overlay",
         NativeFn::ContextVec(crate::emacs_core::textprop::builtin_get_char_property_and_overlay),
         SubrArity::new(2, Some(3)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed4(
         "next-single-property-change",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_next_single_property_change),
-        SubrArity::new(2, Some(4)),
+        crate::emacs_core::textprop::builtin_next_single_property_change_4,
+        FixedMin4::Two,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed4(
         "previous-single-property-change",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_previous_single_property_change),
-        SubrArity::new(2, Some(4)),
+        crate::emacs_core::textprop::builtin_previous_single_property_change_4,
+        FixedMin4::Two,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "line-beginning-position",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_line_beginning_position),
-        SubrArity::new(0, Some(1)),
+        crate::emacs_core::navigation::builtin_line_beginning_position_1,
+        FixedMin1::Zero,
     ));
     ctx.register_subr(
         SubrSpec::new(
@@ -6736,10 +6731,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| builtin_bufferp(args)),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "type-of",
-        NativeFn::ContextVec(crate::emacs_core::builtins::types::builtin_type_of_with_ctx),
-        SubrArity::new(1, Some(1)),
+        crate::emacs_core::builtins::types::builtin_type_of_with_ctx_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "sequencep",
@@ -6757,7 +6752,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // Bconstant nil and never reads the cell (DIVERGENCES.md 152).
     ctx.register_subr(SubrSpec::new(
         "cl-type-of",
-        NativeFn::ContextVec(|_ctx, args| builtin_cl_type_of(args)),
+        NativeFn::ContextVec(|_ctx, args| builtin_cl_type_of(&args)),
         SubrArity::new(1, Some(1)),
     ));
 
@@ -6893,15 +6888,15 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|ctx, args| builtin_number_to_string(ctx, args)),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "upcase",
-        NativeFn::ContextVec(builtin_upcase_in_state),
-        SubrArity::new(1, Some(1)),
+        builtin_upcase_in_state_1,
+        FixedMin1::One,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "downcase",
-        NativeFn::ContextVec(builtin_downcase_in_state),
-        SubrArity::new(1, Some(1)),
+        builtin_downcase_in_state_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "char-to-string",
@@ -7172,10 +7167,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::subr_info::builtin_subr_name(args)),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "subr-arity",
-        NativeFn::ContextVec(crate::emacs_core::subr_info::builtin_subr_arity),
-        SubrArity::new(1, Some(1)),
+        crate::emacs_core::subr_info::builtin_subr_arity_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "native-comp-function-p",

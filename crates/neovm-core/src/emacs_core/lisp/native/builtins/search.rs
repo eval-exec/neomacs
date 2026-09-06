@@ -2431,6 +2431,20 @@ fn expect_match_data_position_in_manager(
 }
 
 pub(crate) fn builtin_match_data(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("match-data", &args, 0, 3)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_match_data_3(eval, arg(0), arg(1), arg(2))
+}
+/// `match-data` as registered: fixed arity 3, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_match_data_3(
+    eval: &mut super::eval::Context,
+    integers: Value,
+    reuse: Value,
+    reseat: Value,
+) -> EvalResult {
+    let args: [Value; 3] = [integers, reuse, reseat];
     builtin_match_data_with_state(&mut eval.buffers, &eval.match_data, &args)
 }
 
@@ -2595,6 +2609,19 @@ pub(crate) fn builtin_set_match_data(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("set-match-data", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_set_match_data_2(eval, arg(0), arg(1))
+}
+/// `set-match-data` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_set_match_data_2(
+    eval: &mut super::eval::Context,
+    list: Value,
+    reseat: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [list, reseat];
     builtin_set_match_data_with_state(&mut eval.buffers, &mut eval.match_data, &args)
 }
 

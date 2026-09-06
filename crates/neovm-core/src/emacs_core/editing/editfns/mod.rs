@@ -1438,6 +1438,19 @@ pub(crate) fn builtin_delete_region(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args("delete-region", &args, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_delete_region_2(ctx, arg(0), arg(1))
+}
+/// `delete-region` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_delete_region_2(
+    ctx: &mut crate::emacs_core::eval::Context,
+    start: Value,
+    end: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [start, end];
     expect_args("delete-region", &args, 2)?;
     let Some(byte_range) =
         current_buffer_accessible_char_region_in_buffers(&ctx.buffers, &args[0], &args[1])?

@@ -1678,7 +1678,7 @@ fn internal_default_process_sentinel_inserts_status_at_process_mark() {
             .expect("process-mark before sentinel");
     super::super::marker::builtin_set_marker_in_buffers(
         &mut ev.buffers,
-        vec![mark, Value::fixnum(7), Value::make_buffer(buffer_id)],
+        &[mark, Value::fixnum(7), Value::make_buffer(buffer_id)],
     )
     .expect("move process mark");
     ev.processes.get_mut(pid).expect("process").status = process_status_exit_value(0);

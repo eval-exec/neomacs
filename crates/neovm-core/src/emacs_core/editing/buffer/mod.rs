@@ -715,6 +715,18 @@ pub(crate) fn builtin_kill_buffer(eval: &mut super::eval::Context, args: Vec<Val
 }
 
 pub(crate) fn builtin_set_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args("set-buffer", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_set_buffer_1(eval, arg(0))
+}
+/// `set-buffer` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_set_buffer_1(
+    eval: &mut super::eval::Context,
+    buffer_or_name: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [buffer_or_name];
     expect_args("set-buffer", &args, 1)?;
     let id = match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => {
@@ -2571,7 +2583,7 @@ pub(crate) fn builtin_constrain_to_field(
             &[],
             None,
             &eval.buffers,
-            vec![Value::fixnum(old_pos), *capture_prop],
+            &[Value::fixnum(old_pos), *capture_prop],
         )?;
         constrain = old_capture.is_nil()
             && (old_pos <= point_min
@@ -2728,7 +2740,7 @@ fn field_property_at_position_in_state(
         dynamic,
         None,
         buffers,
-        vec![Value::fixnum(pos), Value::symbol("field")],
+        &[Value::fixnum(pos), Value::symbol("field")],
     )
 }
 
@@ -2763,8 +2775,7 @@ fn next_field_change_in_buffers(
     }
     expect_int(
         &crate::emacs_core::builtins::misc_eval::builtin_next_single_char_property_change_in_buffers(
-            obarray, None, buffers, args,
-        )?,
+            obarray, None, buffers, &args)?,
     )
 }
 
@@ -4251,6 +4262,19 @@ pub(crate) fn builtin_narrow_to_region(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args("narrow-to-region", &args, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_narrow_to_region_2(eval, arg(0), arg(1))
+}
+/// `narrow-to-region` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_narrow_to_region_2(
+    eval: &mut super::eval::Context,
+    start: Value,
+    end: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [start, end];
     expect_args("narrow-to-region", &args, 2)?;
     let start = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
     let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
@@ -4333,6 +4357,18 @@ pub(crate) fn builtin_buffer_modified_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("buffer-modified-p", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_buffer_modified_p_1(eval, arg(0))
+}
+/// `buffer-modified-p` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_buffer_modified_p_1(
+    eval: &mut super::eval::Context,
+    buffer: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [buffer];
     expect_max_args("buffer-modified-p", &args, 1)?;
     if args.is_empty() || args[0].is_nil() {
         let buf = eval
@@ -4733,6 +4769,15 @@ pub(crate) fn builtin_bufferp(args: Vec<Value>) -> EvalResult {
 }
 
 pub(crate) fn builtin_char_after(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("char-after", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_char_after_1(eval, arg(0))
+}
+/// `char-after` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) -> EvalResult {
+    let args: [Value; 1] = [pos];
     expect_max_args("char-after", &args, 1)?;
     let buf = eval
         .buffers
@@ -4761,6 +4806,15 @@ pub(crate) fn builtin_char_after(eval: &mut super::eval::Context, args: Vec<Valu
 }
 
 pub(crate) fn builtin_char_before(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("char-before", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_char_before_1(eval, arg(0))
+}
+/// `char-before` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_char_before_1(eval: &mut super::eval::Context, pos: Value) -> EvalResult {
+    let args: [Value; 1] = [pos];
     expect_max_args("char-before", &args, 1)?;
     let buf = eval
         .buffers
@@ -4959,6 +5013,19 @@ pub(crate) fn builtin_buffer_local_value(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args("buffer-local-value", &args, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_buffer_local_value_2(eval, arg(0), arg(1))
+}
+/// `buffer-local-value` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_buffer_local_value_2(
+    eval: &mut super::eval::Context,
+    variable: Value,
+    buffer: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [variable, buffer];
     use crate::emacs_core::intern::{intern, resolve_sym};
     use crate::emacs_core::symbol::SymbolRedirect;
 

@@ -238,7 +238,7 @@ pub(super) fn insert_default_process_buffer_payload(
             .unwrap_or(Value::NIL);
         super::super::marker::builtin_set_marker_in_buffers(
             &mut eval.buffers,
-            vec![process.mark, new_mark_pos, process.buffer],
+            &[process.mark, new_mark_pos, process.buffer],
         )?;
     }
 

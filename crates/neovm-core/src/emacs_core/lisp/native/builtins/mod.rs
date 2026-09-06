@@ -580,7 +580,7 @@ pub(crate) fn dispatch_builtin_by_id(
 }
 
 use super::subr::{
-    FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5, NativeFn, NoEvalPlaceholder,
+    FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5, FixedMin6, NativeFn, NoEvalPlaceholder,
     NoEvalPolicy, SubrArity, SubrSpec,
 };
 

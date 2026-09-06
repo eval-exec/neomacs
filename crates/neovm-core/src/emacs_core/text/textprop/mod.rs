@@ -2336,6 +2336,21 @@ pub(crate) fn builtin_add_text_properties(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("add-text-properties", &args, 3, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_add_text_properties_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `add-text-properties` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_add_text_properties_4(
+    eval: &mut super::eval::Context,
+    start: Value,
+    end: Value,
+    properties: Value,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 4] = [start, end, properties, object];
     expect_min_args("add-text-properties", &args, 3)?;
     expect_max_args("add-text-properties", &args, 4)?;
     // Same GNU `add_text_properties_1` order as `put-text-property`: the
@@ -2355,17 +2370,17 @@ pub(crate) fn builtin_add_text_properties(
         // Read-only text is verified once, inside `begin_buffer_text_property_change`
         // (GNU `prepare_to_modify_buffer_1`).
         let (saved_current, change) = begin_buffer_text_property_change(eval, buf_id, byte_range)?;
-        let result = builtin_add_text_properties_in_buffers(&mut eval.buffers, args)?;
+        let result = builtin_add_text_properties_in_buffers(&mut eval.buffers, &args)?;
         finish_buffer_text_property_change(eval, saved_current, change)?;
         Ok(result)
     } else {
-        builtin_add_text_properties_in_buffers(&mut eval.buffers, args)
+        builtin_add_text_properties_in_buffers(&mut eval.buffers, &args)
     }
 }
 
 pub(crate) fn builtin_add_text_properties_in_buffers(
     buffers: &mut BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("add-text-properties", &args, 3)?;
     expect_max_args("add-text-properties", &args, 4)?;
@@ -2793,6 +2808,21 @@ pub(crate) fn builtin_remove_list_of_text_properties(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("remove-list-of-text-properties", &args, 3, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_remove_list_of_text_properties_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `remove-list-of-text-properties` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_remove_list_of_text_properties_4(
+    eval: &mut super::eval::Context,
+    start: Value,
+    end: Value,
+    list_of_properties: Value,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 4] = [start, end, list_of_properties, object];
     expect_min_args("remove-list-of-text-properties", &args, 3)?;
     expect_max_args("remove-list-of-text-properties", &args, 4)?;
     verify_property_change_read_only(eval, &args, 3)?;
@@ -2812,7 +2842,7 @@ pub(crate) fn builtin_remove_list_of_text_properties(
         None
     };
     let result =
-        builtin_remove_list_of_text_properties_in_buffers(&mut eval.buffers, args.clone())?;
+        builtin_remove_list_of_text_properties_in_buffers(&mut eval.buffers, &args.clone())?;
     if let Some((saved_current, change)) = before {
         finish_buffer_text_property_change(eval, saved_current, change)?;
     }
@@ -2821,7 +2851,7 @@ pub(crate) fn builtin_remove_list_of_text_properties(
 
 pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
     buffers: &mut BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("remove-list-of-text-properties", &args, 3)?;
     expect_max_args("remove-list-of-text-properties", &args, 4)?;
@@ -2883,12 +2913,25 @@ pub(crate) fn builtin_text_properties_at(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_text_properties_at_in_buffers(&eval.buffers, args)
+    crate::emacs_core::error::expect_args_range("text-properties-at", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_text_properties_at_2(eval, arg(0), arg(1))
+}
+/// `text-properties-at` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_text_properties_at_2(
+    eval: &mut super::eval::Context,
+    position: Value,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [position, object];
+    builtin_text_properties_at_in_buffers(&eval.buffers, &args)
 }
 
 pub(crate) fn builtin_text_properties_at_in_buffers(
     buffers: &BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("text-properties-at", &args, 1)?;
     expect_max_args("text-properties-at", &args, 2)?;
@@ -2925,13 +2968,28 @@ pub(crate) fn builtin_next_single_property_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_next_single_property_change_in_state(&eval.obarray, &eval.buffers, args)
+    crate::emacs_core::error::expect_args_range("next-single-property-change", &args, 2, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_next_single_property_change_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `next-single-property-change` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_next_single_property_change_4(
+    eval: &mut super::eval::Context,
+    position: Value,
+    prop: Value,
+    object: Value,
+    limit: Value,
+) -> EvalResult {
+    let args: [Value; 4] = [position, prop, object, limit];
+    builtin_next_single_property_change_in_state(&eval.obarray, &eval.buffers, &args)
 }
 
 pub(crate) fn builtin_next_single_property_change_in_state(
     obarray: &Obarray,
     buffers: &BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("next-single-property-change", &args, 2)?;
     expect_max_args("next-single-property-change", &args, 4)?;
@@ -3087,13 +3145,28 @@ pub(crate) fn builtin_previous_single_property_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_previous_single_property_change_in_state(&eval.obarray, &eval.buffers, args)
+    crate::emacs_core::error::expect_args_range("previous-single-property-change", &args, 2, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_previous_single_property_change_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `previous-single-property-change` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_previous_single_property_change_4(
+    eval: &mut super::eval::Context,
+    position: Value,
+    prop: Value,
+    object: Value,
+    limit: Value,
+) -> EvalResult {
+    let args: [Value; 4] = [position, prop, object, limit];
+    builtin_previous_single_property_change_in_state(&eval.obarray, &eval.buffers, &args)
 }
 
 pub(crate) fn builtin_previous_single_property_change_in_state(
     obarray: &Obarray,
     buffers: &BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("previous-single-property-change", &args, 2)?;
     expect_max_args("previous-single-property-change", &args, 4)?;
@@ -3432,13 +3505,29 @@ pub(crate) fn builtin_text_property_not_all(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_text_property_not_all_in_state(&eval.obarray, &eval.buffers, args)
+    crate::emacs_core::error::expect_args_range("text-property-not-all", &args, 4, 5)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_text_property_not_all_5(eval, arg(0), arg(1), arg(2), arg(3), arg(4))
+}
+/// `text-property-not-all` as registered: fixed arity 5, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a5` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_text_property_not_all_5(
+    eval: &mut super::eval::Context,
+    start: Value,
+    end: Value,
+    property: Value,
+    value: Value,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 5] = [start, end, property, value, object];
+    builtin_text_property_not_all_in_state(&eval.obarray, &eval.buffers, &args)
 }
 
 pub(crate) fn builtin_text_property_not_all_in_state(
     obarray: &Obarray,
     buffers: &BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("text-property-not-all", &args, 4)?;
     expect_max_args("text-property-not-all", &args, 5)?;
