@@ -1279,12 +1279,7 @@ pub(crate) fn verify_text_read_only_emacs_byte_range_in_state(
     let iro = inhibit_read_only_sym();
     let inhibit = buf
         .get_buffer_local_by_sym_id_gated(iro, obarray.is_localized(iro))
-        .unwrap_or_else(|| {
-            obarray
-                .symbol_value("inhibit-read-only")
-                .copied()
-                .unwrap_or(Value::NIL)
-        });
+        .unwrap_or_else(|| obarray.symbol_value_id(iro).copied().unwrap_or(Value::NIL));
     // INTERVAL_GENERALLY_WRITABLE_P: when inhibit-read-only is non-nil
     // and not a list, every interval is writable regardless of its
     // read-only property.  GNU intervals.h:210.
@@ -1415,12 +1410,7 @@ pub(crate) fn verify_text_read_only_for_insert_in_state(
     let iro = inhibit_read_only_sym();
     let inhibit = buf
         .get_buffer_local_by_sym_id_gated(iro, obarray.is_localized(iro))
-        .unwrap_or_else(|| {
-            obarray
-                .symbol_value("inhibit-read-only")
-                .copied()
-                .unwrap_or(Value::NIL)
-        });
+        .unwrap_or_else(|| obarray.symbol_value_id(iro).copied().unwrap_or(Value::NIL));
     // inhibit-read-only non-nil and not a list: every modification is allowed.
     if !inhibit.is_nil() && !inhibit.is_cons() {
         return Ok(());
@@ -1766,9 +1756,21 @@ pub(crate) fn builtin_put_text_property(
         if unchanged {
             return Ok(Value::NIL);
         }
-        verify_property_change_read_only(eval, &args, 4)?;
+        // GNU `add_text_properties_1` verifies read-only text once, inside
+        // `modify_text_properties` -> `prepare_to_modify_buffer_1`; here that is
+        // `begin_buffer_text_property_change` -> `signal_before_change_with_kind`.
+        // The range was validated above, so the interval work takes it directly
+        // instead of re-parsing and re-validating the argument list.
+        let prop = expect_property_key(&args[2])?;
+        let val = args[3];
         let (saved_current, change) = begin_buffer_text_property_change(eval, buf_id, byte_range)?;
-        let result = builtin_put_text_property_in_buffers(&mut eval.buffers, args.clone())?;
+        let result = put_text_property_in_buffer_byte_range(
+            &mut eval.buffers,
+            buf_id,
+            byte_range,
+            prop,
+            val,
+        );
         finish_buffer_text_property_change(eval, saved_current, change)?;
         Ok(result)
     } else {
@@ -1810,13 +1812,27 @@ pub(crate) fn builtin_put_text_property_in_buffers(
     let Some(byte_range) = validate_buffer_property_range(buf, beg, end, args[0], args[1])? else {
         return Ok(Value::NIL);
     };
+    Ok(put_text_property_in_buffer_byte_range(
+        buffers, buf_id, byte_range, prop, val,
+    ))
+}
+
+/// The buffer half of `put-text-property` on an already validated byte range:
+/// apply the property and record the modification.
+fn put_text_property_in_buffer_byte_range(
+    buffers: &mut BufferManager,
+    buf_id: BufferId,
+    byte_range: EmacsByteRange,
+    prop: Value,
+    val: Value,
+) -> Value {
     if buffers
         .put_buffer_text_property_in_emacs_byte_range(buf_id, byte_range, prop, val)
         .unwrap_or(false)
     {
         let _ = buffers.record_buffer_text_property_modification(buf_id, byte_range);
     }
-    Ok(Value::NIL)
+    Value::NIL
 }
 
 /// (get-text-property POS PROP &optional OBJECT)
@@ -2292,9 +2308,10 @@ pub(crate) fn builtin_add_text_properties(
         if unchanged {
             return Ok(Value::NIL);
         }
-        verify_property_change_read_only(eval, &args, 3)?;
+        // Read-only text is verified once, inside `begin_buffer_text_property_change`
+        // (GNU `prepare_to_modify_buffer_1`).
         let (saved_current, change) = begin_buffer_text_property_change(eval, buf_id, byte_range)?;
-        let result = builtin_add_text_properties_in_buffers(&mut eval.buffers, args.clone())?;
+        let result = builtin_add_text_properties_in_buffers(&mut eval.buffers, args)?;
         finish_buffer_text_property_change(eval, saved_current, change)?;
         Ok(result)
     } else {
@@ -2436,9 +2453,10 @@ pub(crate) fn builtin_add_face_text_property(
         if unchanged {
             return Ok(Value::NIL);
         }
-        verify_property_change_read_only(eval, &args, 4)?;
+        // Read-only text is verified once, inside `begin_buffer_text_property_change`
+        // (GNU `prepare_to_modify_buffer_1`).
         let (saved_current, change) = begin_buffer_text_property_change(eval, buf_id, byte_range)?;
-        let result = builtin_add_face_text_property_in_buffers(&mut eval.buffers, args.clone())?;
+        let result = builtin_add_face_text_property_in_buffers(&mut eval.buffers, args)?;
         finish_buffer_text_property_change(eval, saved_current, change)?;
         Ok(result)
     } else {

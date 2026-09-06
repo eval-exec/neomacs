@@ -644,6 +644,10 @@ struct IntervalTree {
     cache_start: AtomicUsize,
     cache_end: AtomicUsize,
     cache_id: AtomicUsize,
+    /// In-order-last node memo for `prune_trailing_empty_intervals`, keyed by
+    /// `version` exactly like the find memo (see `rightmost_id_memo`).
+    rightmost_gen: MemoGeneration,
+    rightmost_id_cache: AtomicUsize,
 }
 
 /// Generation tag pairing a memo with the tree version it was computed for.
@@ -696,6 +700,8 @@ impl Clone for IntervalTree {
             cache_start: AtomicUsize::new(0),
             cache_end: AtomicUsize::new(0),
             cache_id: AtomicUsize::new(0),
+            rightmost_gen: MemoGeneration::default(),
+            rightmost_id_cache: AtomicUsize::new(0),
         }
     }
 }
@@ -1912,14 +1918,34 @@ impl IntervalTree {
             if let Some(left) = left {
                 self.nodes[left.0].parent = None;
             }
+            // The other branch bumps `version` through `add_length_to_ancestors`;
+            // removing the root itself is just as structural.
+            self.invalidate_find_cache();
         }
 
         Some(removed_len)
     }
 
+    /// The in-order-last interval, memoized against the structural `version`.
+    /// Rotations preserve in-order and node ids are arena-stable, so only an
+    /// insertion or deletion — each of which bumps `version` — can change which
+    /// node is rightmost. The per-put trailing prune (an insert can leave a
+    /// default tail that a later put must drop) thus costs one node read in the
+    /// steady state instead of a right-spine walk from the root on every put.
+    fn rightmost_id_memo(&self, root: IntervalId) -> IntervalId {
+        let version = self.version.load(Ordering::Relaxed);
+        if self.rightmost_gen.get() == version {
+            return IntervalId(self.rightmost_id_cache.load(Ordering::Relaxed));
+        }
+        let id = self.rightmost_id(root);
+        self.rightmost_id_cache.store(id.0, Ordering::Relaxed);
+        self.rightmost_gen.set(version);
+        id
+    }
+
     fn prune_trailing_empty_intervals(&mut self) {
         while let Some(root) = self.root {
-            let rightmost = self.rightmost_id(root);
+            let rightmost = self.rightmost_id_memo(root);
             if !self.nodes[rightmost.0].is_empty_plist() {
                 break;
             }
@@ -2693,7 +2719,6 @@ impl TextPropertyTable {
                 changed = true;
             }
         }
-
         self.intervals.prune_trailing_empty_intervals();
         changed
     }

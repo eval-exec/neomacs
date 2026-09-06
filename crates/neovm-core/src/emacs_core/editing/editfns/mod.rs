@@ -476,7 +476,45 @@ fn deactivate_mark_after_preparing_change(ctx: &mut crate::emacs_core::eval::Con
     // `Fset (Qdeactivate_mark, Qt)` after signaling before-change. Because
     // `deactivate-mark` is buffer-local-when-set, this creates a buffer-local
     // binding on the modified buffer (so it appears in buffer-local-variables).
-    let _ = ctx.try_set_runtime_binding_by_id(deactivate_mark_symbol(), Value::T);
+    //
+    // Every modification after the first in a command finds that binding
+    // already `t`, and `Fset` of the same value onto it changes nothing unless a
+    // variable watcher is trapped on the symbol. Skip exactly that no-op: the
+    // general store walks the forwarding / localization / specpdl machinery and
+    // was the single most expensive step of a text-property put.
+    let sym = deactivate_mark_symbol();
+    if deactivate_mark_set_is_noop(ctx, sym) {
+        return;
+    }
+    let _ = ctx.try_set_runtime_binding_by_id(sym, Value::T);
+}
+
+/// True when `(set 'deactivate-mark t)` would change no binding and notify no
+/// watcher: the symbol is untrapped and the binding the store would hit — the
+/// current buffer's local one for a localized symbol, the value cell otherwise —
+/// already holds `t`.
+fn deactivate_mark_set_is_noop(
+    ctx: &crate::emacs_core::eval::Context,
+    sym: crate::emacs_core::intern::SymId,
+) -> bool {
+    use crate::emacs_core::symbol::{SymbolRedirect, SymbolTrappedWrite};
+    let Some(symbol) = ctx.obarray.get_by_id(sym) else {
+        return false;
+    };
+    if symbol.flags.trapped_write() != SymbolTrappedWrite::Untrapped {
+        return false;
+    }
+    match symbol.redirect() {
+        SymbolRedirect::Plainval => ctx.obarray.symbol_value_id(sym).copied() == Some(Value::T),
+        SymbolRedirect::Localized => {
+            ctx.buffers
+                .current_buffer()
+                .and_then(|buf| buf.get_buffer_local_binding_by_sym_id_gated(sym, true))
+                .and_then(|binding| binding.as_value())
+                == Some(Value::T)
+        }
+        _ => false,
+    }
 }
 
 /// GNU `signal_after_change(beg, end, old_len)` — run `after-change-functions`
