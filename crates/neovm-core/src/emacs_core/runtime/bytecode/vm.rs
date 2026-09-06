@@ -11,7 +11,7 @@ use crate::emacs_core::builtins;
 use crate::emacs_core::error::*;
 use crate::emacs_core::eval::{
     BytecodeBacktraceFrame, BytecodeStackCallDispatch, ConditionFrame, LispArgVec, ResumeTarget,
-    SubrEntry, lookup_global_subr_entry, subr_entry_from_value,
+    SubrEntry, lookup_global_subr_entry, subr_call_entry_from_value, subr_entry_from_value,
 };
 use crate::emacs_core::intern::{SymId, intern, lookup_interned, resolve_sym};
 // storage_char_len and storage_substring no longer needed here — using emacs_char + LispString
@@ -1394,7 +1394,7 @@ impl ResolvedBuiltinCallee {
             debug_assert_eq!(entry.dispatch_kind, SubrDispatchKind::Builtin);
             (sym_id, entry)
         } else {
-            let (sym_id, entry) = subr_entry_from_value(self.0)
+            let (sym_id, entry) = subr_call_entry_from_value(self.0)
                 .expect("resolved builtin object must remain a valid subr");
             debug_assert_eq!(entry.dispatch_kind, SubrDispatchKind::Builtin);
             (sym_id, entry)
@@ -6387,7 +6387,7 @@ impl<'a> Vm<'a> {
         }
         self.with_bytecode_call_depth(|vm| {
             let func_val = frame_func;
-            let entry = subr_entry_from_value(subr_value)
+            let entry = subr_call_entry_from_value(subr_value)
                 .map(|(_, entry)| entry)
                 .filter(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin);
             let Some(entry) = entry else {
@@ -6421,7 +6421,7 @@ impl<'a> Vm<'a> {
             };
             let result = vm.ctx.dispatch_signal_result_if_needed(result);
             vm.ctx
-                .pop_bytecode_backtrace_token_with_result(backtrace, result)
+                .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result)
         })
     }
 
@@ -6868,9 +6868,14 @@ impl<'a> Vm<'a> {
                 vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
             ))
         } else {
-            if let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
-                ctx, sym_id, args_start, nargs,
-            ) {
+            // The fixnum fast paths exist only for `+`/`logand`/`logior`/`logxor`,
+            // all registered as slice builtins; skip the four symbol compares for
+            // every fixed-arity call.
+            if matches!(entry.function, Some(SubrFn::ManySlice(_)))
+                && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
+                    ctx, sym_id, args_start, nargs,
+                )
+            {
                 return match ctx.pop_fast_bytecode_backtrace_frame(backtrace) {
                     crate::emacs_core::eval::FastBytecodePop::Popped => Ok(value),
                     // GNU's exit debugger replaces the value it is shown
@@ -6897,7 +6902,7 @@ impl<'a> Vm<'a> {
             }
         };
         let result = ctx.dispatch_signal_result_if_needed(result);
-        ctx.pop_bytecode_backtrace_token_with_result(backtrace, result)
+        ctx.pop_bytecode_backtrace_token_fast_or_slow(backtrace, result)
     }
 
     #[inline]

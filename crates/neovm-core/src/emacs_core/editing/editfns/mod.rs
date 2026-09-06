@@ -213,10 +213,23 @@ fn hook_symbol_value_truthy(
 
 /// Check whether `inhibit-modification-hooks` is non-nil.
 pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context) -> bool {
-    let sym = crate::emacs_core::hook_runtime::hook_symbol_by_id(
-        ctx,
-        inhibit_modification_hooks_symbol(),
-    );
+    use crate::emacs_core::symbol::SymbolRedirect;
+    let sym = inhibit_modification_hooks_symbol();
+    // `inhibit-modification-hooks` is a plain global (GNU `DEFVAR_BOOL`). Unless
+    // something has made it an alias, buffer-local or forwarded, its value cell
+    // IS the visible binding (`let` shadows in place), so read it directly; the
+    // alias-resolving hook reader below runs twice per text-property write.
+    if ctx
+        .obarray
+        .get_by_id(sym)
+        .is_some_and(|s| s.redirect() == SymbolRedirect::Plainval)
+    {
+        return ctx
+            .obarray
+            .symbol_value_id(sym)
+            .is_some_and(|v| !v.is_unbound() && v.is_truthy());
+    }
+    let sym = crate::emacs_core::hook_runtime::hook_symbol_by_id(ctx, sym);
     crate::emacs_core::hook_runtime::hook_value_by_id(ctx, sym).is_some_and(|v| v.is_truthy())
 }
 

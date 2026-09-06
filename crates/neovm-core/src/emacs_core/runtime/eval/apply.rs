@@ -1220,6 +1220,26 @@ impl Context {
         self.pop_bytecode_backtrace_frame_with_result(frame.base(), result)
     }
 
+    /// Pop a bytecode backtrace frame after its callee returned. When the frame
+    /// is still the specpdl top and owes no debugger exit — every balanced
+    /// builtin return — this is the same `set_len` pop the fast arithmetic path
+    /// uses; otherwise (a callee that left bindings, or a signal a handler has
+    /// already unwound past the frame) the general unwind-to-base path runs.
+    #[inline]
+    pub(crate) fn pop_bytecode_backtrace_token_fast_or_slow(
+        &mut self,
+        frame: BytecodeBacktraceFrame,
+        result: EvalResult,
+    ) -> EvalResult {
+        if self.specpdl.len() == frame.base() + 1
+            && !self.backtrace_frame_wants_debug_on_exit(frame.base())
+        {
+            self.pop_fast_bytecode_backtrace_frame_unchecked(frame);
+            return result;
+        }
+        self.pop_bytecode_backtrace_frame_with_result(frame.base(), result)
+    }
+
     /// GNU `Breturn`: `if (backtrace_debug_on_exit (pdl)) val = call_debugger
     /// (list2 (Qexit, val));` and only then `specpdl_ptr--`
     /// (`src/bytecode.c:825-828`).

@@ -554,6 +554,38 @@ pub(crate) fn subr_entry_from_value(function: Value) -> Option<(SymId, SubrEntry
 }
 
 /// Access a subr entry by reference (avoids cloning).
+/// [`subr_entry_from_value`] for the CALL path: identical except that
+/// `interactive_spec` is left `None` instead of re-reading the global subr
+/// table for it. Nothing on the call path reads it — `commandp` and
+/// `call-interactively` consult the registered entry directly — and that second
+/// table read was a thread-local borrow plus a whole-entry copy on every
+/// builtin call.
+#[inline(always)]
+pub(crate) fn subr_call_entry_from_value(function: Value) -> Option<(SymId, SubrEntry)> {
+    let ptr = function.as_veclike_ptr()?;
+    let header = unsafe { &*ptr };
+    if header.type_tag != VecLikeType::Subr {
+        return None;
+    }
+    let subr = unsafe { &*(ptr as *const SubrObj) };
+    if subr.function.is_none() && subr.dispatch_kind == SubrDispatchKind::Builtin {
+        return None;
+    }
+    #[cfg(feature = "vm-profile")]
+    crate::emacs_core::bytecode::vm::vm_profile::bump_subr(subr.sym_id);
+    Some((
+        subr.sym_id,
+        SubrEntry {
+            function: subr.function,
+            min_args: subr.min_args,
+            max_args: subr.max_args,
+            dispatch_kind: subr.dispatch_kind,
+            name_id: subr.name,
+            interactive_spec: None,
+        },
+    ))
+}
+
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn with_global_subr_entry<R>(
     sym_id: SymId,
