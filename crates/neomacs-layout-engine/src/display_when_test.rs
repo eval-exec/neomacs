@@ -280,3 +280,82 @@ fn an_overlay_scoped_to_another_window_is_not_scanned() {
         DisplayWhenVerdict::Holds
     );
 }
+
+#[test]
+fn a_hidden_overlay_shows_its_after_string_at_the_start_the_walk_reaches() {
+    // GNU: "If the text ``under'' the overlay is invisible, both before- and
+    // after-strings from this overlay are visible; start and end position are
+    // indistinguishable" (xdisp.c:7158-7175): the after-string loads at the
+    // start, so `buffer-position` is the start there.
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    eval.buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("abcdefgh\n");
+    let after = eval
+        .eval_str(
+            "(let ((o (make-overlay 2 6)))
+               (overlay-put o 'invisible t)
+               (overlay-put o 'after-string
+                 (propertize \" \" 'display '(when (= buffer-position 2) space :align-to 20)))
+               (overlay-get o 'after-string))",
+        )
+        .expect("overlay");
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        None,
+        CharPos0::new(0),
+        CharPos0::new(9),
+    );
+    assert_eq!(
+        conditions.verdict(prefix_when_form(after)),
+        DisplayWhenVerdict::Holds
+    );
+}
+
+#[test]
+fn an_after_string_ending_at_the_window_start_is_scanned_and_one_beyond_the_span_is_not() {
+    // GNU loads the strings of overlays that start or end at the iterator
+    // position (xdisp.c:7141-7150), so an overlay ending exactly at the window
+    // start still shows its after-string on the first row; one ending past the
+    // span is never reached by this walk.
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    eval.buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("abcdefghij\n");
+    let strings = eval
+        .eval_str(
+            "(let ((a (make-overlay 1 5)) (b (make-overlay 6 9)))
+               (overlay-put a 'after-string
+                 (propertize \" \" 'display '(when (= 1 2) space :align-to 20)))
+               (overlay-put b 'after-string
+                 (propertize \" \" 'display '(when (= 1 1) space :align-to 20)))
+               (list (overlay-get a 'after-string) (overlay-get b 'after-string)))",
+        )
+        .expect("overlays");
+    let at_start = strings.cons_car();
+    let beyond = strings.cons_cdr().cons_car();
+    // Window starts at char 4 (GNU position 5, where overlay `a` ends) and
+    // spans four characters, ending before overlay `b`'s end.
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        None,
+        CharPos0::new(4),
+        CharPos0::new(8),
+    );
+    assert_eq!(
+        conditions.verdict(prefix_when_form(at_start)),
+        DisplayWhenVerdict::Fails,
+        "the after-string at the window start is evaluated (its form is nil)"
+    );
+    assert_eq!(
+        conditions.verdict(prefix_when_form(beyond)),
+        DisplayWhenVerdict::Unseen,
+        "an after-string displayed past the span is not reached"
+    );
+}
