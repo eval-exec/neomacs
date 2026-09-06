@@ -447,6 +447,15 @@ thread_local! {
     // be indexed by that dense id rather than hashed again at dispatch time.
     static GLOBAL_SUBR_TABLE: RefCell<Vec<Option<SubrEntry>>> = const { RefCell::new(Vec::new()) };
 
+    /// `SymId`-indexed projection of the registry: the function pointer of
+    /// every subr the bytecode interpreter and the JIT may call straight off
+    /// the stack (`SubrDispatchKind::Builtin`, not VM-special). One bounds
+    /// check and a 16-byte copy per inline-opcode dispatch, in place of the
+    /// full entry copy plus a linear scan of the special-name list that used
+    /// to run on every `CallBuiltinSym` (GNU's inline opcodes cost nothing
+    /// comparable: `CASE (Bpoint)` is a direct case).
+    static INLINE_SUBR_TABLE: RefCell<Vec<Option<SubrFn>>> = const { RefCell::new(Vec::new()) };
+
     /// Test-only visibility into hot-path registry reads.  Primitive objects
     /// should carry the GNU `Lisp_Subr` metadata needed by `commandp` instead
     /// of re-entering this table for every M-x candidate.
@@ -489,6 +498,18 @@ pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
         }
         table[idx] = Some(entry);
     });
+    let inline = (entry.dispatch_kind == SubrDispatchKind::Builtin
+        && !VM_SPECIAL_BUILTIN_NAMES.contains(&resolve_sym(sym_id)))
+    .then_some(entry.function)
+    .flatten();
+    INLINE_SUBR_TABLE.with(|table| {
+        let idx = sym_id.0 as usize;
+        let mut table = table.borrow_mut();
+        if table.len() <= idx {
+            table.resize_with(idx + 1, || None);
+        }
+        table[idx] = inline;
+    });
     crate::tagged::value::update_static_subr_object_entry(
         sym_id,
         entry.function,
@@ -500,6 +521,33 @@ pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
 }
 
 /// Look up a subr entry by SymId.
+/// The builtins `Vm::dispatch_vm_builtin_unrooted` implements at VM level
+/// (they need `&mut Vm`); every other registered `Builtin` subr may be
+/// called straight off the bytecode stack. Single source for both the
+/// registration-time projection and the VM's by-id check.
+pub(crate) const VM_SPECIAL_BUILTIN_NAMES: [&str; 13] = [
+    "call-interactively",
+    "start-kbd-macro",
+    "end-kbd-macro",
+    "call-last-kbd-macro",
+    "execute-kbd-macro",
+    "garbage-collect",
+    "mapatoms",
+    "maphash",
+    "store-kbd-macro-event",
+    "cancel-kbd-macro-events",
+    "%%defvar",
+    "%%defconst",
+    "%%unimplemented-elc-bytecode",
+];
+
+/// The function pointer to call straight off the stack for `sym_id`, or
+/// `None` when the symbol is not a registered plain builtin.
+#[inline]
+pub(crate) fn inline_subr_function(sym_id: SymId) -> Option<SubrFn> {
+    INLINE_SUBR_TABLE.with(|table| table.borrow().get(sym_id.0 as usize).copied().flatten())
+}
+
 pub(crate) fn lookup_global_subr_entry(sym_id: SymId) -> Option<SubrEntry> {
     #[cfg(test)]
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));
@@ -603,6 +651,7 @@ pub(crate) fn with_global_subr_entry<R>(
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn clear_global_subr_table() {
     GLOBAL_SUBR_TABLE.with(|table| table.borrow_mut().clear());
+    INLINE_SUBR_TABLE.with(|table| table.borrow_mut().clear());
 }
 
 /// Cached SymId for `internal--compiler-function-overrides`.

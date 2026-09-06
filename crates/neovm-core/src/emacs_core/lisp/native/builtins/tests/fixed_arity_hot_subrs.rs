@@ -172,3 +172,30 @@ const FA2_FORM: &str = r#"(save-current-buffer
     (progn (delete-region 1 2) (buffer-substring-no-properties 1 5))
     (condition-case e (char-after 1 2) (error e)) (condition-case e (scan-sexps 1) (error e)) (condition-case e (parse-partial-sexp 1) (error e)) (condition-case e (intern-soft) (error e)) (condition-case e (set-marker (make-marker)) (error e))))"#;
 const FA2_EXPECTED: &str = r#"((2 6 7 nil nil nil 0 nil nil (1 6) nil) t 18 18 1 1 2 -1 22 22 22 1 1 1 22 22 1 car car nil #<subr car> #<subr car> nil integer string (1 . 1) (40 40 102 40 nil nil t nil t nil) ((#<marker at 1 in  *fa2*> #<marker at 4 in  *fa2*>) (#<marker at 1 in  *fa2*> #<marker at 4 in  *fa2*>) (1 5 #<buffer  *fa2*>) (1 5) (1 3) (1 3)) 2 2 (face bold) (face bold) (y 2) 2 2 2 5 5 2 2 (y 2) nil nil nil (nil 3 4) t t fundamental-mode 40 119 t "AB" "ab" 65 t nil (2 5) "foo " (wrong-number-of-arguments char-after 2) (wrong-number-of-arguments scan-sexps 1) (wrong-number-of-arguments parse-partial-sexp 1) (wrong-number-of-arguments intern-soft 0) (wrong-number-of-arguments set-marker 1))"#;
+
+/// The registry projects every plain builtin into the inline table at
+/// registration; VM-special subrs and Lisp-only symbols stay out of it.
+#[test]
+fn inline_subr_table_mirrors_the_registry() {
+    crate::test_utils::init_test_tracing();
+    let _eval = Context::new();
+    for name in [
+        "car",
+        "point",
+        "widen",
+        "get-char-property",
+        "re-search-forward",
+    ] {
+        assert!(
+            crate::emacs_core::eval::inline_subr_function(intern(name)).is_some(),
+            "{name} is a plain builtin and must be inline-dispatchable"
+        );
+    }
+    for name in crate::emacs_core::eval::VM_SPECIAL_BUILTIN_NAMES {
+        assert!(
+            crate::emacs_core::eval::inline_subr_function(intern(name)).is_none(),
+            "{name} needs the VM-level implementation"
+        );
+    }
+    assert!(crate::emacs_core::eval::inline_subr_function(intern("no-such-subr-xyz")).is_none());
+}

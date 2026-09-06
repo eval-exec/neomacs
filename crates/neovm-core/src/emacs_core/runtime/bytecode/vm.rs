@@ -7539,23 +7539,7 @@ impl<'a> Vm<'a> {
     /// the symbol to a string.
     fn vm_special_builtin_ids() -> &'static [SymId; 13] {
         static IDS: std::sync::OnceLock<[SymId; 13]> = std::sync::OnceLock::new();
-        IDS.get_or_init(|| {
-            [
-                intern("call-interactively"),
-                intern("start-kbd-macro"),
-                intern("end-kbd-macro"),
-                intern("call-last-kbd-macro"),
-                intern("execute-kbd-macro"),
-                intern("garbage-collect"),
-                intern("mapatoms"),
-                intern("maphash"),
-                intern("store-kbd-macro-event"),
-                intern("cancel-kbd-macro-events"),
-                intern("%%defvar"),
-                intern("%%defconst"),
-                intern("%%unimplemented-elc-bytecode"),
-            ]
-        })
+        IDS.get_or_init(|| crate::emacs_core::eval::VM_SPECIAL_BUILTIN_NAMES.map(intern))
     }
 
     /// `CallBuiltin`/`CallBuiltinSym` dispatch by symbol id: the op's constant IS
@@ -7669,13 +7653,7 @@ impl<'a> Vm<'a> {
     /// path of [`Self::dispatch_vm_builtin_by_id_from_stack`].
     #[inline]
     pub(crate) fn inline_builtin_function(sym: SymId) -> Option<SubrFn> {
-        let entry = lookup_global_subr_entry(sym)?;
-        if entry.dispatch_kind != SubrDispatchKind::Builtin
-            || Self::vm_special_builtin_ids().contains(&sym)
-        {
-            return None;
-        }
-        entry.function
+        crate::emacs_core::eval::inline_subr_function(sym)
     }
 
     /// GNU inline-opcode semantics: call the primitive on the operand-stack
