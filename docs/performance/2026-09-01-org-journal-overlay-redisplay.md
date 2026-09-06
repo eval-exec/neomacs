@@ -111,6 +111,19 @@ A filesystem search found no replacement copy. Reconstructing a different Org
 file or configuration would not be a faithful before/after validation, so no
 real-workload latency claim is made here.
 
+Since that search, the `org-journal-open` performance scenario
+(`crates/neomacs-perf`, see its README) has committed a deterministic
+replacement for those private inputs: it replicates the relevant user
+configuration (revision-pinned `org-journal`, `org-superstar`, and
+`git-gutter`), generates a synthetic yearly journal at the original's scale
+inside a Git repository whose base predates today's entry (so the first
+open produces the same working-tree diff and git-gutter overlay population),
+and gates every run on the invariants above. A preserved copy of the original
+journal data can be profiled through it with
+`cargo xtask perf profile org-journal-open --journal-file <copy>` — the
+scenario works on a copy and re-verifies the source hash after the run, so
+the original file is never written.
+
 To finish end-to-end validation when the inputs are available, use the same
 profiling build, open the original journal with its original configuration,
 confirm approximately 4,268 `git-gutter` overlays and zero `mouse-face`

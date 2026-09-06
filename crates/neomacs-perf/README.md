@@ -289,8 +289,41 @@ phases. Narrower workflows emit their applicable subset.
   deterministic Org document.
 - `magit-status` prepares a deterministic Git repository and loads the
   revision-pinned Magit package graph before refreshing status.
+- `org-journal-open` reproduces the real-user yearly org-journal stall: it
+  loads the revision-pinned `org-journal`, `org-superstar`, and `git-gutter`
+  package graph, opens a synthetic journal at the original's scale (~4,300
+  lines) inside a Git repository whose base commit predates today's entry,
+  and measures the find-file, fontify, and settle phases of each open. Pass
+  `--journal-file PATH` to run against a copy of a real yearly journal (for
+  example the preserved `2026-bug.org` repro file); the source is only ever
+  read, and the harness re-verifies its hash after the run.
 - `large-file-editing`, `indentation`, and `regex-search` isolate their named
   workloads over committed or deterministically generated source.
+
+### Reproducing `org-journal-open` on another machine
+
+The scenario needs no file from the original report. On a fresh clone:
+
+- the three packages are cloned from GitHub at the revisions pinned in
+  `crates/neomacs-melpa-test-support/melpa-package-lock.tsv` on first run and
+  cached under `tmp/melpa/`;
+- the yearly journal is generated deterministically by the harness (constant
+  seed, sized above the original report's file) into each run directory —
+  `tmp/` is git-ignored, so generated journals are never tracked — and is
+  retained there as the `source-fixture` artifact.
+
+```sh
+cargo xtask fresh-build --release
+cargo xtask perf run org-journal-open --editor target/release/neomacs
+cargo xtask fresh-build --profile profiling
+cargo xtask perf profile org-journal-open --profiler perf \
+    --editor target/profiling/neomacs --scope edit-loop --iterations 3
+```
+
+Package preparation byte-compiles with a GNU Emacs oracle. If the pinned
+oracle checkout is absent or broken on that machine, point the oracle at any
+working GNU Emacs and drop the parity pin for the session:
+`NEOMACS_PARITY_REFERENCE=none NEOMACS_MELPA_ORACLE_EMACS=<emacs> cargo xtask perf …`.
 
 ## Thresholded suites and history
 
@@ -302,9 +335,9 @@ maximum regression percentage. The
 suite passes only when every child comparison is valid and no candidate median
 exceeds its budget. `tmp/perf-suites/<suite-id>/suite.json` records every
 threshold, observed percentage change, and immutable child comparison path.
-The standard budgets are 5% for `bytecode-call-loop`, 10% for `magit-status`,
-12% for `startup`, 15% for `gui-input-latency`, and 8% for every other
-scenario. Pass `--previous-suite PATH` to retain lineage to an earlier suite
+The standard budgets are 5% for `bytecode-call-loop`, 10% for `magit-status`
+and `org-journal-open`, 12% for `startup`, 15% for `gui-input-latency`, and 8%
+for every other scenario. Pass `--previous-suite PATH` to retain lineage to an earlier suite
 artifact. The new suite copies that predecessor beside `suite.json` and records
 its SHA-256, suite ID, and source path; missing, malformed, or unknown-schema
 history is rejected.
