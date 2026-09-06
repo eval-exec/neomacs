@@ -203,6 +203,51 @@ impl PaneLayoutMorph {
         })
     }
 
+    /// Where these panes are currently heading, ordered by window id.
+    ///
+    /// The pending retarget's destination when one is queued, because that is
+    /// what the next sample will splice to; otherwise the destination of the
+    /// changes in flight.
+    fn destination(&self) -> Vec<(LiveDisplayWindowId, Rect)> {
+        if let Some(pending) = self.pending.as_ref() {
+            return pending.destination.clone();
+        }
+        let mut destination: Vec<(LiveDisplayWindowId, Rect)> =
+            self.changes()
+                .filter_map(|change| match change {
+                    PaneChange::Persisted { window, to, .. }
+                    | PaneChange::Entered { window, to } => Some((window, to)),
+                    // A pane that is leaving has no destination to head for.
+                    PaneChange::Exited { .. } => None,
+                })
+                .collect();
+        destination.sort_by_key(|(window, _)| window.get());
+        destination
+    }
+
+    /// Whether `next` wants the panes somewhere other than where they are
+    /// already heading.
+    ///
+    /// The guard on retargeting at all. Commits arrive continuously while a
+    /// morph runs — a keystroke, a blink, a mode-line clock tick — and almost
+    /// none of them move a pane. Retargeting on one restarts the motion from
+    /// the current instant, so retargeting on *every* commit pins progress near
+    /// zero and the panes crawl instead of travelling: the animation appears
+    /// not to happen, and then the layout arrives.
+    pub(in crate::render_thread) fn destination_differs_from(&self, next: &[WindowInfo]) -> bool {
+        let mut wanted: Vec<(LiveDisplayWindowId, Rect)> =
+            panes_by_window(next).into_iter().collect();
+        wanted.sort_by_key(|(window, _)| window.get());
+        let heading = self.destination();
+        if wanted.len() != heading.len() {
+            return true;
+        }
+        wanted
+            .iter()
+            .zip(heading.iter())
+            .any(|((a_id, a), (b_id, b))| a_id != b_id || rect_changed(*a, *b))
+    }
+
     /// Record that `next` arrived while these panes were still moving.
     ///
     /// Replacing the morph outright is what the code did before, and it made
@@ -439,7 +484,31 @@ pub(in crate::render_thread) struct LayoutSample {
     pub(in crate::render_thread) motion: MotionSample,
 }
 
+/// What one composition places, and the transform matching those pixels.
+///
+/// The two travel together because they come from a single sample of a single
+/// motion; separating them is how a hit test and a render come to disagree.
+#[derive(Default)]
+pub(in crate::render_thread) struct PaneLayoutComposition {
+    pub(in crate::render_thread) blits: Vec<neomacs_renderer_wgpu::PaneBlit>,
+    pub(in crate::render_thread) projection:
+        Option<neomacs_display_protocol::InteractionProjection>,
+}
+
 impl LayoutSample {
+    /// The placements, as the renderer's per-pane blits.
+    pub(in crate::render_thread) fn pane_blits(&self) -> Vec<neomacs_renderer_wgpu::PaneBlit> {
+        self.panes
+            .iter()
+            .map(|placement| neomacs_renderer_wgpu::PaneBlit {
+                bounds: placement.bounds,
+                content_origin: placement.content_origin,
+                source: placement.source,
+                opacity: placement.opacity,
+            })
+            .collect()
+    }
+
     /// The interaction projection matching exactly what this sample draws.
     ///
     /// Built here, from the same placements the layout pass renders, so the two
