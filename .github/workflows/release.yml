@@ -69,18 +69,27 @@ jobs:
           cache_key: continuous-${{ matrix.arch }}
 
       # Split so a compile failure is distinguishable from a bootstrap failure,
-      # and so the expensive half is a step of its own.  The args must match
-      # xtask's initial_cargo_build_args EXACTLY - it builds `-p neomacs` with
-      # these features under this profile, and crates/neomacs/build.rs declares
-      # rerun-if-env-changed=NEOMACS_BUILD_PROFILE - or the second step would
-      # refingerprint and rebuild instead of reusing this.  `-p neomacs` covers
-      # neomacs, neomacsclient and mock-display; they are bins of one package.
+      # and so the expensive half is a step of its own.  This build must match
+      # xtask's own EXACTLY - same package, same features, same profile - or the
+      # bootstrap below rebuilds it instead of reusing it, and where nothing
+      # verifies the result it blesses a product missing a capability the
+      # manifest promises.  So xtask states the features and this step consumes
+      # them; restating them here is what left macOS without `webview`.
+      # crates/neomacs/build.rs declares rerun-if-env-changed on
+      # NEOMACS_BUILD_PROFILE, so the profile has to agree the same way.
+      # `-p neomacs` covers neomacs, neomacsclient and mock-display; they are
+      # bins of one package.
+      - name: Resolve release cargo features
+        run: >-
+          echo "RELEASE_FEATURES=$(cargo xtask print-cargo-features --release
+          --features neomacs-layout-engine/freetype-bundled)" >> "$GITHUB_ENV"
+
       - name: Compile release binaries
         env:
           NEOMACS_BUILD_PROFILE: release
         run: >-
           cargo build -p neomacs
-          --features video,neomacs-layout-engine/freetype-bundled
+          --features "$RELEASE_FEATURES"
           --profile release
 
       - name: Bootstrap and dump
@@ -190,10 +199,15 @@ jobs:
       # rerun-if-env-changed=NEOMACS_BUILD_PROFILE - or the second step would
       # refingerprint and rebuild instead of reusing this.  `-p neomacs` covers
       # neomacs, neomacsclient and mock-display; they are bins of one package.
+      - name: Resolve release cargo features
+        run: >-
+          echo "RELEASE_FEATURES=$(cargo xtask print-cargo-features --release
+          --features neomacs-layout-engine/freetype-bundled)" >> "$GITHUB_ENV"
+
       - name: Compile release binaries
         env:
           NEOMACS_BUILD_PROFILE: release
-        run: cargo build -p neomacs --features neomacs-layout-engine/freetype-bundled --profile release
+        run: cargo build -p neomacs --features "$RELEASE_FEATURES" --profile release
 
       - name: Bootstrap and dump
         run: cargo xtask fresh-build --release --features neomacs-layout-engine/freetype-bundled --skip-build
@@ -276,13 +290,19 @@ jobs:
       # NEOMACS_BUILD_PROFILE, which crates/neomacs/build.rs declares
       # rerun-if-env-changed on - otherwise the bootstrap step refingerprints
       # and rebuilds instead of reusing this.
+      - name: Resolve release cargo features
+        shell: bash
+        run: >-
+          echo "RELEASE_FEATURES=$(cargo xtask print-cargo-features --release
+          --features neomacs-layout-engine/freetype-bundled)" >> "$GITHUB_ENV"
+
       - name: Compile release binaries
         shell: bash
         timeout-minutes: 150
         env:
           NEOMACS_BUILD_PROFILE: release
         run: |
-          cargo build -p neomacs --features neomacs-layout-engine/freetype-bundled --profile release
+          cargo build -p neomacs --features "$RELEASE_FEATURES" --profile release
 
       - name: Bootstrap and dump
         shell: bash

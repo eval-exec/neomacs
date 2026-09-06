@@ -4217,3 +4217,55 @@ fn motion_parity_delta_scores_a_fixed_probe_as_fixed() {
         "the delta must report the fix, the zero, and the frame:\n{combined}"
     );
 }
+
+/// The release workflow compiles the product in one step and bootstraps it in
+/// another. `print-cargo-features` is what keeps the two describing the same
+/// product, so it must answer with exactly the features the build would use.
+#[test]
+fn printed_cargo_features_are_the_ones_the_build_uses() {
+    let options = parse_options(&[
+        "--release",
+        "--features",
+        "neomacs-layout-engine/freetype-bundled",
+    ]);
+    let printed = resolved_cargo_features(&options);
+
+    let args = initial_cargo_build_args(&options);
+    let built = args
+        .windows(2)
+        .find(|pair| pair[0] == OsString::from("--features"))
+        .map(|pair| pair[1].to_string_lossy().into_owned());
+
+    assert_eq!(built, Some(printed.join(",")));
+    assert!(
+        printed.contains(&"neomacs-layout-engine/freetype-bundled".to_string()),
+        "requested features survive: {printed:?}"
+    );
+}
+
+/// A full product carries this host's declared production capabilities;
+/// `--minimal` carries none of them. The macOS release compiled without
+/// `webview` for exactly as long as the workflow restated this list by hand.
+#[test]
+fn full_products_carry_the_host_capabilities_and_minimal_ones_do_not() {
+    let capabilities: Vec<String> = ProductionCapabilities::for_host()
+        .expect("this host has declared production capabilities")
+        .cargo_feature_names()
+        .map(str::to_owned)
+        .collect();
+
+    let full = resolved_cargo_features(&parse_options(&["--release"]));
+    let minimal = resolved_cargo_features(&parse_options(&["--release", "--minimal"]));
+
+    for capability in &capabilities {
+        assert!(full.contains(capability), "full product drops {capability}");
+        assert!(
+            !minimal.contains(capability),
+            "minimal product carries {capability}"
+        );
+    }
+    assert!(
+        minimal.is_empty(),
+        "unexpected minimal features: {minimal:?}"
+    );
+}
