@@ -3723,7 +3723,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3754,7 +3754,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-allocator"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "mimalloc",
  "tikv-jemallocator",
@@ -3762,7 +3762,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-diagnostics"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "axum",
  "http-body-util",
@@ -3778,7 +3778,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-display-protocol"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "bitflags 2.13.1",
  "num_enum",
@@ -3792,7 +3792,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-display-runtime"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "arboard",
  "ash",
@@ -3839,7 +3839,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-font-materializer"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "allsorts",
  "cosmic-text",
@@ -3855,7 +3855,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-gui-tests"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "getrandom 0.4.3",
  "image",
@@ -3864,7 +3864,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-layout-engine"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "cosmic-text",
  "dwrote",
@@ -3894,7 +3894,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-melpa-test-support"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "command-group",
  "fs4",
@@ -3907,7 +3907,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-melpa-tests"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "base64 0.22.1",
  "expect-test",
@@ -3925,7 +3925,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-parity-reference"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "sha2",
  "tempfile",
@@ -3933,7 +3933,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-perf"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "clap",
  "gstreamer",
@@ -3950,7 +3950,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-renderer-wgpu"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "ash",
  "bytemuck",
@@ -3980,7 +3980,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-test-fonts"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "flate2",
  "fs4",
@@ -3992,11 +3992,11 @@ dependencies = [
 
 [[package]]
 name = "neomacs-test-oracle"
-version = "0.0.16"
+version = "0.0.17"
 
 [[package]]
 name = "neomacs-tui-tests"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "libc",
  "neomacs-display-protocol",
@@ -4008,7 +4008,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-video"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "ash",
  "bytemuck",
@@ -4039,7 +4039,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-video-model"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "neomacs-display-protocol",
  "thiserror 2.0.20",
@@ -4047,7 +4047,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-webview"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "bindgen",
  "bitflags 2.13.1",
@@ -4076,7 +4076,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-core"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -4159,11 +4159,11 @@ dependencies = [
 
 [[package]]
 name = "neovm-host-abi"
-version = "0.0.16"
+version = "0.0.17"
 
 [[package]]
 name = "neovm-oracle-tests"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "colored",
  "expect-test",
@@ -4177,7 +4177,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-worker"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "neovm-core",
  "neovm-host-abi",
@@ -9062,7 +9062,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "flate2",
  "neomacs-parity-reference",

@@ -54,7 +54,7 @@ cargo-features = []
 video-backend = "none"
 
 [workspace.package]
-version = "0.0.16"
+version = "0.0.17"
 edition = "2024"
 authors = ["Eval Exec <execvy@gmail.com>"]
 license = "GPL-3.0-or-later"
