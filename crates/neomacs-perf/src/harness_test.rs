@@ -1094,13 +1094,17 @@ fn org_journal_open_result_is_valid_when_every_journal_invariant_holds() {
     let RunVerdict::Valid { measurements } = &report.artifact.verdict else {
         panic!("a complete journal-open result must be valid");
     };
-    assert!(measurements
-        .iter()
-        .any(|measurement| measurement.name == MetricName::PerOperationWallTime));
-    assert!(measurements
-        .iter()
-        .any(|measurement| measurement.name == MetricName::OverlayCount
-            && measurement.value > 0.0));
+    assert!(
+        measurements
+            .iter()
+            .any(|measurement| measurement.name == MetricName::PerOperationWallTime)
+    );
+    assert!(
+        measurements
+            .iter()
+            .any(|measurement| measurement.name == MetricName::OverlayCount
+                && measurement.value > 0.0)
+    );
 }
 
 #[test]
@@ -1220,7 +1224,7 @@ fn org_journal_open_relaxes_creation_invariants_for_an_external_journal() {
 
 #[test]
 fn synthetic_journal_generator_is_deterministic_and_heavier_than_the_real_workload() {
-    use super::harness::{civil_from_days, days_from_civil, generate_synthetic_journal};
+    use super::harness::generate_synthetic_journal;
 
     // Cross-machine reproduction hinges on the constant seed: the same
     // elapsed-day count must always produce a byte-identical journal.

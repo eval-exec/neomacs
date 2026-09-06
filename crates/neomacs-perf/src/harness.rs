@@ -35,6 +35,8 @@ use crate::{
     scenario,
 };
 
+mod scenarios;
+
 pub(crate) const ARTIFACT_SCHEMA_VERSION: u32 = 5;
 const SCENARIO_RESULT_SCHEMA_VERSION: u32 = 1;
 const NATIVE_VIDEO_RESULT_SCHEMA_VERSION: u32 = 4;
@@ -501,134 +503,14 @@ impl PerfHarness {
             | ScenarioId::MagitStatus
             | ScenarioId::LargeFileEditing
             | ScenarioId::Indentation
-            | ScenarioId::RegexSearch => self.prepare_editor_workload(request, run_directory),
+            | ScenarioId::RegexSearch => {
+                scenarios::editor_workload::prepare(&self.workspace_root, request, run_directory)
+            }
             ScenarioId::OrgJournalOpen => self.prepare_org_journal_open(request, run_directory),
             ScenarioId::SustainedNativeVideo => {
                 self.prepare_sustained_native_video(request, run_directory)
             }
         }
-    }
-
-    fn prepare_editor_workload(
-        &self,
-        request: &RunRequest,
-        run_directory: &Path,
-    ) -> Result<PreparedScenario, String> {
-        let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
-        let editor = collect_editor_provenance(request.editor(), &sandbox)?;
-        let fixture_source = self
-            .workspace_root
-            .join("crates/neomacs-perf/fixtures/editor-workloads.el");
-        let source_fixture = self.workspace_root.join("lisp/emacs-lisp/bytecomp.el");
-        for required in [&fixture_source, &source_fixture] {
-            if !required.is_file() {
-                return Err(format!(
-                    "missing committed performance fixture {}",
-                    required.display()
-                ));
-            }
-        }
-        let fixture = run_directory.join("editor-workloads.el");
-        fs::copy(&fixture_source, &fixture).map_err(|error| {
-            format!(
-                "failed to copy performance fixture {} to {}: {error}",
-                fixture_source.display(),
-                fixture.display()
-            )
-        })?;
-        let source = run_directory.join("workload-source.el");
-        if request.scenario == ScenarioId::LargeFileEditing {
-            let seed = fs::read_to_string(&source_fixture)
-                .map_err(|error| format!("failed to read {}: {error}", source_fixture.display()))?;
-            let mut large = String::with_capacity(seed.len() * 8);
-            for _ in 0..8 {
-                large.push_str(&seed);
-            }
-            fs::write(&source, large).map_err(|error| {
-                format!(
-                    "failed to write large-file fixture {}: {error}",
-                    source.display()
-                )
-            })?;
-        } else {
-            fs::copy(&source_fixture, &source).map_err(|error| {
-                format!(
-                    "failed to copy source fixture {} to {}: {error}",
-                    source_fixture.display(),
-                    source.display()
-                )
-            })?;
-        }
-
-        let mut package_provenance = None;
-        let mut startup = None;
-        let mut packages = None;
-        let repository = if request.scenario == ScenarioId::MagitStatus {
-            let magit_source = locked_melpa_sources()?
-                .into_iter()
-                .find(|source| source.package().0 == "magit")
-                .ok_or_else(|| "the MELPA source lock does not contain magit".to_string())?;
-            let package = magit_source.package();
-            let prepared = PreparedPackageSet::from_locked_melpa(
-                &EmacsRuntime::gnu_emacs(),
-                package,
-                "magit.el",
-            )?;
-            startup = Some(prepared.write_startup_file(run_directory)?);
-            package_provenance = Some(PackageProvenance {
-                name: package.0,
-                version: package.1,
-                repository: magit_source.repository(),
-                revision: magit_source.revision(),
-                upstream_repository: magit_source.upstream_repository(),
-                upstream_revision: magit_source.upstream_revision(),
-            });
-            packages = Some(Box::new(prepared));
-            Some(prepare_magit_repository(run_directory)?)
-        } else {
-            None
-        };
-
-        let provenance = run_directory.join("input-provenance.json");
-        let provenance_manifest = EditorWorkloadInputProvenanceManifest {
-            editor,
-            host: collect_host_provenance(request.machine_policy()),
-            scenario: request.scenario,
-            workload_fixture_sha256: sha256_file(&fixture_source)?,
-            source_fixture_sha256: sha256_file(&source)?,
-            package: package_provenance,
-            environment_policy: "closed-v1",
-            passthrough_environment: benchmark_passthrough_environment()
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value.to_string_lossy().into_owned()))
-                .collect(),
-        };
-        let provenance_json = serde_json::to_vec_pretty(&provenance_manifest)
-            .map_err(|error| format!("failed to serialize input provenance: {error}"))?;
-        fs::write(&provenance, provenance_json).map_err(|error| {
-            format!(
-                "failed to write input provenance {}: {error}",
-                provenance.display()
-            )
-        })?;
-
-        Ok(PreparedScenario {
-            fixture,
-            provenance,
-            result: run_directory.join("scenario-result.json"),
-            sentinel: run_directory.join("completed"),
-            terminal_bytes: run_directory.join("terminal.ansi"),
-            gui_app_log: run_directory.join("gui-app.log"),
-            gui_weston_log: run_directory.join("weston.log"),
-            gui_runtime_directory: prepare_gui_runtime_directory(&self.workspace_root)?,
-            sandbox,
-            workload: PreparedWorkload::EditorWorkload {
-                source,
-                repository,
-                startup,
-                packages,
-            },
-        })
     }
 
     fn prepare_org_journal_open(
@@ -674,8 +556,7 @@ impl PerfHarness {
             "org-journal.el",
         )?;
         for dependency in [org_superstar, git_gutter] {
-            let directory =
-                prepare_cached_locked_melpa_package(&gnu_emacs, dependency.package())?;
+            let directory = prepare_cached_locked_melpa_package(&gnu_emacs, dependency.package())?;
             packages = packages.with_prepared_dependency(dependency.package(), directory)?;
         }
         let startup = packages.write_startup_file(run_directory)?;
@@ -2064,47 +1945,6 @@ fn copy_grammar_libraries(
     Ok(copied)
 }
 
-fn prepare_magit_repository(run_directory: &Path) -> Result<PathBuf, String> {
-    let repository = run_directory.join("magit-repository");
-    fs::create_dir_all(&repository).map_err(|error| {
-        format!(
-            "failed to create Magit fixture repository {}: {error}",
-            repository.display()
-        )
-    })?;
-    fs::write(repository.join("README.md"), "# neomacs-perf\n")
-        .map_err(|error| format!("failed to write Magit fixture: {error}"))?;
-    for arguments in [
-        vec!["init", "--quiet"],
-        vec!["add", "README.md"],
-        vec![
-            "-c",
-            "user.name=neomacs-perf",
-            "-c",
-            "user.email=perf@example.invalid",
-            "commit",
-            "--quiet",
-            "-m",
-            "fixture",
-        ],
-    ] {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(&repository)
-            .output()
-            .map_err(|error| format!("failed to launch git for Magit fixture: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "failed to prepare Magit fixture repository: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-    }
-    fs::write(repository.join("README.md"), "# neomacs-perf\nmodified\n")
-        .map_err(|error| format!("failed to modify Magit fixture: {error}"))?;
-    Ok(repository)
-}
-
 /// An external journal source the scenario works from by copying, never by
 /// opening in place: the path plus the identity re-verified after the run.
 #[derive(Clone)]
@@ -2141,7 +1981,14 @@ struct JournalInputProvenance {
 fn prepare_org_journal_repository(
     run_directory: &Path,
     journal_file: Option<&Path>,
-) -> Result<(PathBuf, JournalInputProvenance, Option<ExternalJournalInput>), String> {
+) -> Result<
+    (
+        PathBuf,
+        JournalInputProvenance,
+        Option<ExternalJournalInput>,
+    ),
+    String,
+> {
     let journal_directory = run_directory.join("journal");
     fs::create_dir_all(&journal_directory).map_err(|error| {
         format!(
@@ -2188,7 +2035,8 @@ fn prepare_org_journal_repository(
         None => {
             // Days elapsed before today: the generated base must not
             // already contain today's entry.
-            let (content, entries) = generate_synthetic_journal(year, day_of_year.saturating_sub(1));
+            let (content, entries) =
+                generate_synthetic_journal(year, day_of_year.saturating_sub(1));
             fs::write(&journal_path, &content).map_err(|error| {
                 format!(
                     "failed to write synthetic journal {}: {error}",
@@ -2354,7 +2202,11 @@ pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 /// Civil date for days since 1970-01-01 (Howard Hinnant's algorithm).
 pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
-    let era = if shifted >= 0 { shifted } else { shifted - 146_096 } / 146_097;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
     let day_of_era = shifted - era * 146_097;
     let year_of_era =
         (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
@@ -2473,7 +2325,7 @@ enum ScenarioResult {
     RustLspTyping(RustLspTypingResult),
     MxTabCompletion(MxTabCompletionResult),
     BytecodeCallLoop(BytecodeCallLoopResult),
-    EditorWorkload(EditorWorkloadResult),
+    EditorWorkload(scenarios::editor_workload::EditorWorkloadResult),
     OrgJournalOpen(OrgJournalOpenResult),
     SustainedNativeVideo(SustainedNativeVideoResult),
 }
@@ -2520,9 +2372,7 @@ fn parse_scenario_result(
         | ScenarioId::LargeFileEditing
         | ScenarioId::Indentation
         | ScenarioId::RegexSearch => serde_json::from_str(raw).map(ScenarioResult::EditorWorkload),
-        ScenarioId::OrgJournalOpen => {
-            serde_json::from_str(raw).map(ScenarioResult::OrgJournalOpen)
-        }
+        ScenarioId::OrgJournalOpen => serde_json::from_str(raw).map(ScenarioResult::OrgJournalOpen),
         ScenarioId::SustainedNativeVideo => {
             serde_json::from_str(raw).map(ScenarioResult::SustainedNativeVideo)
         }
@@ -2998,105 +2848,6 @@ impl TryFrom<BytecodeCallLoopResultWire> for BytecodeCallLoopResult {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(try_from = "EditorWorkloadResultWire")]
-struct EditorWorkloadResult {
-    schema_version: u32,
-    scenario: ScenarioId,
-    outcome: ScenarioOutcome,
-    iterations: u32,
-    elapsed_us: u64,
-    elapsed_wall_us: u64,
-    operation_count: u64,
-    initial_checksum: String,
-    final_checksum: String,
-    point_restored: bool,
-    expected_major_mode: String,
-    actual_major_mode: String,
-    type_phase_us: u64,
-    comment_phase_us: u64,
-    kill_yank_phase_us: u64,
-    indent_phase_us: u64,
-    regex_phase_us: u64,
-    latency_samples_us: Vec<u64>,
-    mode_phase_us: u64,
-    fontify_phase_us: u64,
-    replace_phase_us: u64,
-    undo_redo_phase_us: u64,
-    isearch_phase_us: u64,
-    buffer_switch_phase_us: u64,
-    how_many_phase_us: u64,
-    motion_phase_us: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EditorWorkloadResultWire {
-    schema_version: u32,
-    scenario: ScenarioId,
-    status: ScenarioStatus,
-    iterations: u32,
-    elapsed_us: u64,
-    elapsed_wall_us: u64,
-    operation_count: u64,
-    initial_checksum: String,
-    final_checksum: String,
-    point_restored: bool,
-    expected_major_mode: String,
-    actual_major_mode: String,
-    type_phase_us: u64,
-    comment_phase_us: u64,
-    kill_yank_phase_us: u64,
-    indent_phase_us: u64,
-    regex_phase_us: u64,
-    latency_samples_us: Vec<u64>,
-    mode_phase_us: u64,
-    fontify_phase_us: u64,
-    replace_phase_us: u64,
-    undo_redo_phase_us: u64,
-    isearch_phase_us: u64,
-    buffer_switch_phase_us: u64,
-    how_many_phase_us: u64,
-    motion_phase_us: u64,
-    #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
-    error: Option<String>,
-}
-
-impl TryFrom<EditorWorkloadResultWire> for EditorWorkloadResult {
-    type Error = String;
-
-    fn try_from(wire: EditorWorkloadResultWire) -> Result<Self, Self::Error> {
-        Ok(Self {
-            schema_version: wire.schema_version,
-            scenario: wire.scenario,
-            outcome: scenario_outcome(wire.status, wire.error)?,
-            iterations: wire.iterations,
-            elapsed_us: wire.elapsed_us,
-            elapsed_wall_us: wire.elapsed_wall_us,
-            operation_count: wire.operation_count,
-            initial_checksum: wire.initial_checksum,
-            final_checksum: wire.final_checksum,
-            point_restored: wire.point_restored,
-            expected_major_mode: wire.expected_major_mode,
-            actual_major_mode: wire.actual_major_mode,
-            type_phase_us: wire.type_phase_us,
-            comment_phase_us: wire.comment_phase_us,
-            kill_yank_phase_us: wire.kill_yank_phase_us,
-            indent_phase_us: wire.indent_phase_us,
-            regex_phase_us: wire.regex_phase_us,
-            latency_samples_us: wire.latency_samples_us,
-            mode_phase_us: wire.mode_phase_us,
-            fontify_phase_us: wire.fontify_phase_us,
-            replace_phase_us: wire.replace_phase_us,
-            undo_redo_phase_us: wire.undo_redo_phase_us,
-            isearch_phase_us: wire.isearch_phase_us,
-            buffer_switch_phase_us: wire.buffer_switch_phase_us,
-            how_many_phase_us: wire.how_many_phase_us,
-            motion_phase_us: wire.motion_phase_us,
-        })
-    }
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(try_from = "OrgJournalOpenResultWire")]
 struct OrgJournalOpenResult {
     schema_version: u32,
@@ -3203,18 +2954,6 @@ struct BytecodeCallInputProvenanceManifest<'a> {
     workload_source: &'a str,
     workload_source_sha256: String,
     execution_tier: &'a str,
-    environment_policy: &'a str,
-    passthrough_environment: BTreeMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct EditorWorkloadInputProvenanceManifest<'a> {
-    editor: EditorProvenance,
-    host: HostProvenance,
-    scenario: ScenarioId,
-    workload_fixture_sha256: String,
-    source_fixture_sha256: String,
-    package: Option<PackageProvenance<'a>>,
     environment_policy: &'a str,
     passthrough_environment: BTreeMap<String, String>,
 }
@@ -3591,148 +3330,6 @@ fn validate_bytecode_call_loop_result(
     mismatches
 }
 
-fn validate_editor_workload_result(
-    request: &RunRequest,
-    result: &EditorWorkloadResult,
-) -> Vec<CorrectnessMismatch> {
-    let mut mismatches = Vec::new();
-    mismatch(
-        &mut mismatches,
-        "scenario-result-schema",
-        SCENARIO_RESULT_SCHEMA_VERSION,
-        result.schema_version,
-    );
-    mismatch(
-        &mut mismatches,
-        "scenario-id",
-        request.scenario,
-        result.scenario,
-    );
-    mismatch(
-        &mut mismatches,
-        "scenario-outcome",
-        &ScenarioOutcome::Ok,
-        &result.outcome,
-    );
-    mismatch(
-        &mut mismatches,
-        "iterations",
-        request.iterations.get(),
-        result.iterations,
-    );
-    mismatch(
-        &mut mismatches,
-        "operation-count",
-        u64::from(request.iterations.get()),
-        result.operation_count,
-    );
-    mismatch(
-        &mut mismatches,
-        "final-buffer-checksum",
-        result.initial_checksum.as_str(),
-        result.final_checksum.as_str(),
-    );
-    mismatch(&mut mismatches, "final-point", true, result.point_restored);
-    mismatch(
-        &mut mismatches,
-        "major-mode",
-        result.expected_major_mode.as_str(),
-        result.actual_major_mode.as_str(),
-    );
-    if result.initial_checksum.is_empty() {
-        mismatches.push(CorrectnessMismatch {
-            invariant: "initial-buffer-checksum".to_string(),
-            expected: "non-empty".to_string(),
-            actual: "empty".to_string(),
-        });
-    }
-    if result.expected_major_mode.is_empty() {
-        mismatches.push(CorrectnessMismatch {
-            invariant: "expected-major-mode".to_string(),
-            expected: "non-empty".to_string(),
-            actual: "empty".to_string(),
-        });
-    }
-    if result.elapsed_us == 0 {
-        mismatches.push(CorrectnessMismatch {
-            invariant: "elapsed-time".to_string(),
-            expected: "positive".to_string(),
-            actual: "0".to_string(),
-        });
-    }
-    if result.elapsed_wall_us == 0 {
-        mismatches.push(CorrectnessMismatch {
-            invariant: "elapsed-wall-time".to_string(),
-            expected: "positive".to_string(),
-            actual: "0".to_string(),
-        });
-    }
-    match request.scenario {
-        ScenarioId::EditingSimulation => {
-            for (name, value) in [
-                ("mode-phase-time", result.mode_phase_us),
-                ("fontify-phase-time", result.fontify_phase_us),
-                ("regex-phase-time", result.regex_phase_us),
-                ("type-phase-time", result.type_phase_us),
-                ("replace-phase-time", result.replace_phase_us),
-                ("indent-phase-time", result.indent_phase_us),
-                ("kill-yank-phase-time", result.kill_yank_phase_us),
-                ("undo-redo-phase-time", result.undo_redo_phase_us),
-                ("isearch-phase-time", result.isearch_phase_us),
-                ("buffer-switch-phase-time", result.buffer_switch_phase_us),
-                ("comment-phase-time", result.comment_phase_us),
-                ("how-many-phase-time", result.how_many_phase_us),
-                ("motion-phase-time", result.motion_phase_us),
-            ] {
-                require_positive_phase(&mut mismatches, name, value);
-            }
-        }
-        ScenarioId::SustainedEditing | ScenarioId::OrgEditing => {
-            require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
-        }
-        ScenarioId::MagitStatus | ScenarioId::RegexSearch => {
-            require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
-        }
-        ScenarioId::LargeFileEditing => {
-            require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
-            require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
-            require_positive_phase(&mut mismatches, "motion-phase-time", result.motion_phase_us);
-        }
-        ScenarioId::Indentation => {
-            require_positive_phase(&mut mismatches, "indent-phase-time", result.indent_phase_us);
-        }
-        ScenarioId::Startup | ScenarioId::GuiInputLatency => {}
-        ScenarioId::OrgJournalOpen => {
-            unreachable!("org-journal-open has a dedicated result validator")
-        }
-        ScenarioId::SustainedNativeVideo => {
-            unreachable!("native video has a dedicated result validator")
-        }
-        ScenarioId::RustLspTyping | ScenarioId::MxTabCompletion | ScenarioId::BytecodeCallLoop => {
-            unreachable!("dedicated scenario results do not use the editor workload validator")
-        }
-    }
-    let expected_latency_samples = if request.scenario == ScenarioId::GuiInputLatency {
-        request.iterations.get() as usize
-    } else {
-        0
-    };
-    mismatch(
-        &mut mismatches,
-        "latency-sample-count",
-        expected_latency_samples,
-        result.latency_samples_us.len(),
-    );
-    if result.latency_samples_us.contains(&0) {
-        mismatches.push(CorrectnessMismatch {
-            invariant: "latency-samples".to_string(),
-            expected: "all positive".to_string(),
-            actual: "contains zero".to_string(),
-        });
-    }
-    mismatches
-}
-
 fn validate_sustained_native_video_result(
     request: &RunRequest,
     result: &SustainedNativeVideoResult,
@@ -4039,7 +3636,12 @@ fn validate_org_journal_open_result(
         true,
         result.git_gutter_active,
     );
-    mismatch(&mut mismatches, "stable-checksum", true, result.stable_checksum);
+    mismatch(
+        &mut mismatches,
+        "stable-checksum",
+        true,
+        result.stable_checksum,
+    );
     if synthetic {
         mismatch(&mut mismatches, "entry-created", true, result.entry_created);
         if result.overlay_count_min == 0 {
@@ -4082,7 +3684,9 @@ fn result_verdict(
         ScenarioResult::BytecodeCallLoop(result) => {
             validate_bytecode_call_loop_result(request, result)
         }
-        ScenarioResult::EditorWorkload(result) => validate_editor_workload_result(request, result),
+        ScenarioResult::EditorWorkload(result) => {
+            scenarios::editor_workload::validate_editor_workload_result(request, result)
+        }
         ScenarioResult::OrgJournalOpen(result) => validate_org_journal_open_result(request, result),
         ScenarioResult::SustainedNativeVideo(result) => {
             validate_sustained_native_video_result(request, result)
@@ -4122,7 +3726,7 @@ fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Mea
             valid_bytecode_call_loop_measurements(result, wall_elapsed_us)
         }
         ScenarioResult::EditorWorkload(result) => {
-            valid_editor_workload_measurements(result, wall_elapsed_us)
+            scenarios::editor_workload::valid_editor_workload_measurements(result, wall_elapsed_us)
         }
         ScenarioResult::OrgJournalOpen(result) => {
             valid_org_journal_open_measurements(result, wall_elapsed_us)
@@ -4399,131 +4003,6 @@ fn valid_org_journal_open_measurements(
             unit: MetricUnit::Count,
         },
     ]
-}
-
-fn valid_editor_workload_measurements(
-    result: &EditorWorkloadResult,
-    wall_elapsed_us: u128,
-) -> Vec<Measurement> {
-    let mut measurements = vec![
-        Measurement {
-            name: MetricName::ProcessWallTime,
-            value: wall_elapsed_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::WorkloadCpuTime,
-            value: result.elapsed_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::WorkloadWallTime,
-            value: result.elapsed_wall_us as f64,
-            unit: MetricUnit::Microseconds,
-        },
-        Measurement {
-            name: MetricName::PerOperationCpuTime,
-            value: result.elapsed_us as f64 / result.operation_count.max(1) as f64,
-            unit: MetricUnit::MicrosecondsPerOperation,
-        },
-        Measurement {
-            name: MetricName::PerOperationWallTime,
-            value: result.elapsed_wall_us as f64 / result.operation_count.max(1) as f64,
-            unit: MetricUnit::MicrosecondsPerOperation,
-        },
-        Measurement {
-            name: MetricName::OperationCount,
-            value: result.operation_count as f64,
-            unit: MetricUnit::Count,
-        },
-        Measurement {
-            name: MetricName::Iterations,
-            value: f64::from(result.iterations),
-            unit: MetricUnit::Count,
-        },
-    ];
-    if result.scenario == ScenarioId::SustainedEditing {
-        let edits = result.operation_count.saturating_mul(2);
-        measurements.push(Measurement {
-            name: MetricName::PerEditCpuTime,
-            value: result.elapsed_us as f64 / edits.max(1) as f64,
-            unit: MetricUnit::MicrosecondsPerEdit,
-        });
-        measurements.push(Measurement {
-            name: MetricName::PerEditWallTime,
-            value: result.elapsed_wall_us as f64 / edits.max(1) as f64,
-            unit: MetricUnit::MicrosecondsPerEdit,
-        });
-    }
-    if matches!(
-        result.scenario,
-        ScenarioId::SustainedEditing | ScenarioId::GuiInputLatency
-    ) {
-        let edits = result.operation_count.saturating_mul(2);
-        measurements.extend([
-            Measurement {
-                name: MetricName::Edits,
-                value: edits as f64,
-                unit: MetricUnit::Count,
-            },
-            Measurement {
-                name: MetricName::Redisplays,
-                value: edits as f64,
-                unit: MetricUnit::Count,
-            },
-        ]);
-    }
-    for (name, value) in [
-        (MetricName::TypePhaseCpuTime, result.type_phase_us),
-        (MetricName::CommentPhaseCpuTime, result.comment_phase_us),
-        (MetricName::KillYankPhaseCpuTime, result.kill_yank_phase_us),
-        (MetricName::IndentPhaseCpuTime, result.indent_phase_us),
-        (MetricName::RegexPhaseCpuTime, result.regex_phase_us),
-        (MetricName::ModePhaseCpuTime, result.mode_phase_us),
-        (MetricName::FontifyPhaseCpuTime, result.fontify_phase_us),
-        (MetricName::ReplacePhaseCpuTime, result.replace_phase_us),
-        (MetricName::UndoRedoPhaseCpuTime, result.undo_redo_phase_us),
-        (MetricName::IsearchPhaseCpuTime, result.isearch_phase_us),
-        (
-            MetricName::BufferSwitchPhaseCpuTime,
-            result.buffer_switch_phase_us,
-        ),
-        (MetricName::HowManyPhaseCpuTime, result.how_many_phase_us),
-        (MetricName::MotionPhaseCpuTime, result.motion_phase_us),
-    ] {
-        if value > 0 {
-            measurements.push(Measurement {
-                name,
-                value: value as f64,
-                unit: MetricUnit::Microseconds,
-            });
-        }
-    }
-    if !result.latency_samples_us.is_empty() {
-        let mut samples = result.latency_samples_us.clone();
-        samples.sort_unstable();
-        for (name, percentile) in [
-            (MetricName::P50InputToRedisplayLatency, 0.50),
-            (MetricName::P95InputToRedisplayLatency, 0.95),
-            (MetricName::P99InputToRedisplayLatency, 0.99),
-        ] {
-            measurements.push(Measurement {
-                name,
-                value: nearest_rank(&samples, percentile) as f64,
-                unit: MetricUnit::Microseconds,
-            });
-        }
-        let over_budget = samples
-            .iter()
-            .filter(|&&sample| sample > INPUT_LATENCY_BUDGET_US)
-            .count();
-        measurements.push(Measurement {
-            name: MetricName::InputLatencyOverBudgetCount,
-            value: over_budget as f64,
-            unit: MetricUnit::Count,
-        });
-    }
-    measurements
 }
 
 /// The per-keystroke latency budget behind
