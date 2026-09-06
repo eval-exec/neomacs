@@ -101,7 +101,7 @@ fn an_ordinary_presentation_that_rearranges_the_panes_builds_a_morph() {
     showing_a_window(&mut render);
     install(&mut render, resized(PresentationOrigin::Ordinary));
     assert!(
-        render.compositor.pane_morph.is_some(),
+        render.compositor.layout.wants_frames(),
         "an ordinary layout change is something to travel to"
     );
 }
@@ -113,7 +113,7 @@ fn a_presentation_composed_during_a_drag_builds_no_pane_morph() {
     let mut render = render_state();
     showing_a_window(&mut render);
     install(&mut render, resized(during_a_drag()));
-    assert!(render.compositor.pane_morph.is_none());
+    assert!(!render.compositor.layout.wants_frames());
 }
 
 #[test]
@@ -137,11 +137,11 @@ fn a_drag_discards_layout_motion_an_earlier_install_had_already_armed() {
     let mut render = render_state();
     showing_a_window(&mut render);
     install(&mut render, resized(PresentationOrigin::Ordinary));
-    assert!(render.compositor.pane_morph.is_some());
+    assert!(render.compositor.layout.wants_frames());
     assert!(!render.compositor.pending.shown_text_replaced.is_empty());
 
     install(&mut render, resized(during_a_drag()));
-    assert!(render.compositor.pane_morph.is_none());
+    assert!(!render.compositor.layout.wants_frames());
     assert!(render.compositor.pending.shown_text_replaced.is_empty());
 }
 
@@ -165,7 +165,7 @@ fn an_ordinary_presentation_arriving_after_a_drag_animates_again() {
     let mut render = render_state();
     showing_a_window(&mut render);
     install(&mut render, resized(during_a_drag()));
-    assert!(render.compositor.pane_morph.is_none());
+    assert!(!render.compositor.layout.wants_frames());
 
     let mut after = frame_of(
         3,
@@ -175,7 +175,7 @@ fn an_ordinary_presentation_arriving_after_a_drag_animates_again() {
     after.window_infos[0].window_start = 700;
     install(&mut render, after);
     assert!(
-        render.compositor.pane_morph.is_some(),
+        render.compositor.layout.wants_frames(),
         "the drag ended, so the next layout change travels"
     );
 }

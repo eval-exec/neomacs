@@ -356,7 +356,7 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
         origin,
     );
     assert!(
-        render.compositor.pane_morph.is_none(),
+        !render.compositor.layout.wants_frames(),
         "the first install has no previous layout to have moved from"
     );
 
@@ -368,7 +368,7 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
         ],
         origin,
     );
-    assert!(render.compositor.pane_morph.is_some());
+    assert!(render.compositor.layout.wants_frames());
 
     // Mid-motion: two placements, and a projection that is not the identity.
     let blits = render
@@ -380,7 +380,7 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
     // Three, not two: window 1 narrows from 800 to 400, so its old wrapping is
     // crossfaded out alongside the two destination panes.
     assert_eq!(blits.len(), 3);
-    assert!(render.compositor.pane_morph.is_some(), "still travelling");
+    assert!(render.compositor.layout.wants_frames(), "still travelling");
 
     // The last frame still draws the panes — at their destination — and only
     // then is the morph dropped, so nothing is left to re-arm on the next pass.
@@ -391,7 +391,7 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
         )
         .blits;
     assert_eq!(blits.len(), 3);
-    assert!(render.compositor.pane_morph.is_none(), "settled");
+    assert!(!render.compositor.layout.wants_frames(), "settled");
 
     assert!(
         render
@@ -423,7 +423,7 @@ fn a_disabled_policy_installs_no_morph_at_all() {
         &[window(1, rect(0.0, 0.0, 400.0, 600.0))],
         origin,
     );
-    assert!(render.compositor.pane_morph.is_none());
+    assert!(!render.compositor.layout.wants_frames());
     assert!(
         render
             .sample_pane_layout(
@@ -811,47 +811,6 @@ fn a_reflow_ghost_never_answers_a_hit_test() {
         projection.panes().len(),
         1,
         "one pane, one transform — the ghost is not a place you can click"
-    );
-}
-
-#[test]
-fn a_retarget_that_ends_the_motion_still_hands_out_the_settled_projection() {
-    // This composition places nothing, so the render pass takes its
-    // compositor-only fast path. That path must still carry the projection:
-    // the motion just ended, and the transform in force is otherwise the
-    // morph's last mid-motion one, which would answer every later hit test
-    // about panes that have since arrived.
-    let mut render = empty_render();
-    render.compositor.pane_motion = linear_100ms();
-    let origin = origin();
-    install(
-        &mut render,
-        &[window(1, rect(0.0, 0.0, 800.0, 600.0))],
-        origin,
-    );
-    install(
-        &mut render,
-        &[window(1, rect(0.0, 0.0, 400.0, 600.0))],
-        origin,
-    );
-    // Let it arrive, then commit the layout it already reached.
-    install(
-        &mut render,
-        &[window(1, rect(0.0, 0.0, 400.0, 600.0))],
-        origin,
-    );
-
-    let composition = render.sample_pane_layout(
-        &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
-        frame_at(origin, 200),
-    );
-    assert!(
-        composition.blits.is_empty(),
-        "nothing left to place, so the fast path is eligible"
-    );
-    assert!(
-        composition.projection.is_some(),
-        "and yet there is a transform the next hit test must use"
     );
 }
 

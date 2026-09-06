@@ -499,7 +499,7 @@ impl RenderApp {
                 // with a burst of motion in the middle if the cursor happened
                 // to blink during it.
                 (
-                    dynamic_effects_allowed && window_state.render.compositor.pane_morph.is_some(),
+                    dynamic_effects_allowed && window_state.render.compositor.layout.wants_frames(),
                     DemandReason::PaneMotion,
                     dynamic_animation_rate,
                 ),
