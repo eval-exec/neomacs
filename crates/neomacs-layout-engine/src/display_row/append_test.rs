@@ -5632,6 +5632,7 @@ fn display_row_append_surface_builds_positioned_source_requests() {
     assert_eq!(
         *request.geometry(),
         DisplayRowGeometry::new(20.0, 120.0, 16.0, 9.0, 11.0, tab_policy)
+            .with_line_number_width(10.0)
     );
     assert_eq!(output.row(), 3);
     assert_eq!(output.row_y(), 20.0);
@@ -6058,6 +6059,7 @@ fn display_row_append_surface_builds_frames_with_shared_area() {
     assert_eq!(
         *frame.geometry(),
         DisplayRowGeometry::new(20.0, 120.0, 16.0, 9.0, 11.0, tab_policy)
+            .with_line_number_width(10.0)
     );
     assert_eq!(frame.content_x(), 8.0);
     assert_eq!(frame.text_width(), 150.0);
@@ -6169,6 +6171,7 @@ fn display_row_append_frame_preserves_geometry_and_area() {
     assert_eq!(
         *frame.geometry(),
         DisplayRowGeometry::new(20.0, 120.0, 16.0, 9.0, 11.0, tab_policy)
+            .with_line_number_width(10.0)
     );
     assert_eq!(frame.default_row_height(), 14.0);
     assert_eq!(frame.content_x(), 8.0);

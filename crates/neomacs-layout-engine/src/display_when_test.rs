@@ -87,8 +87,11 @@ fn window_span_forms_are_evaluated_from_text_props_overlays_and_prefix_vars() {
 
     let conditions =
         evaluate_window_display_when_forms(&mut eval, buf_id, CharPos0::new(0), CharPos0::new(12));
-    let results = conditions.evaluated.as_ref().expect("evaluated");
-    let holds = |form: Value| results.get(&form).copied();
+    let holds = |form: Value| match conditions.verdict(form) {
+        DisplayWhenVerdict::Holds => Some(true),
+        DisplayWhenVerdict::Fails => Some(false),
+        DisplayWhenVerdict::Unseen => None,
+    };
     assert_eq!(holds(when_form(text_display, 0)), Some(true));
     assert_eq!(holds(when_form(text_display, 1)), Some(false));
     assert_eq!(
@@ -108,4 +111,65 @@ fn window_span_forms_are_evaluated_from_text_props_overlays_and_prefix_vars() {
     );
     assert!(conditions.holds(when_form(text_display, 0)));
     assert!(!conditions.holds(when_form(text_display, 1)));
+}
+
+#[test]
+fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
+    // GNU: `if (!NILP (form) && !EQ (form, Qt) && !enable_eval_p) form = Qnil;`
+    // (src/xdisp.c:6139-6140), so a true FORM under `(disable-eval …)` still
+    // disables the spec.
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let disabled = read(&mut eval, "(disable-eval (when (= 1 1) . \"HIDDEN\"))");
+    {
+        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        buffer.insert("abc\n");
+        let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(0));
+        let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(2));
+        buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(start, end),
+            Value::symbol("display"),
+            disabled,
+        );
+    }
+    let conditions =
+        evaluate_window_display_when_forms(&mut eval, buf_id, CharPos0::new(0), CharPos0::new(4));
+    let form = when_form(disabled, 0);
+    assert_eq!(conditions.verdict(form), DisplayWhenVerdict::Fails);
+    assert!(!conditions.holds(form));
+}
+
+#[test]
+fn forms_are_evaluated_with_the_window_buffer_current() {
+    // GNU selects the window's buffer before the iterator runs
+    // (src/xdisp.c:20533-20535); a FORM reading a buffer-local sees it.
+    let mut eval = Context::new();
+    let original = eval.buffers.current_buffer_id().expect("buffer");
+    let other = eval.buffers.create_buffer("other");
+    let spec = read(
+        &mut eval,
+        "((when (string-equal (buffer-name) \"other\") space :align-to 3))",
+    );
+    {
+        let buffer = eval.buffers.get_mut(other).expect("buffer");
+        buffer.insert("xyz\n");
+        let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(0));
+        let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(1));
+        buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(start, end),
+            Value::symbol("display"),
+            spec,
+        );
+    }
+    let conditions =
+        evaluate_window_display_when_forms(&mut eval, other, CharPos0::new(0), CharPos0::new(4));
+    assert_eq!(
+        conditions.verdict(when_form(spec, 0)),
+        DisplayWhenVerdict::Holds
+    );
+    assert_eq!(
+        eval.buffers.current_buffer_id(),
+        Some(original),
+        "caller's buffer restored"
+    );
 }

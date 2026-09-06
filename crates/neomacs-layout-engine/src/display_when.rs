@@ -22,89 +22,130 @@ use crate::neovm_bridge::LayoutBufferView;
 
 /// The evaluated conditions a walk consults.
 ///
-/// `structural()` is the state of a reader with no evaluation behind it (a
-/// synchronous query, a test, a chrome string): every non-nil FORM holds,
-/// which is the pre-evaluation behaviour and GNU's `enable_eval_p` fallback
-/// inverted -- declared, not GNU.  Once evaluated, a FORM the scan did not
-/// see (an object the scan does not cover) also falls back to that.
+/// `Structural` is the state of a reader with no evaluation behind it (a
+/// synchronous query, a test, a frame-local chrome string): every non-nil
+/// FORM holds -- the pre-evaluation behaviour, declared, not GNU.  Once
+/// `Evaluated`, a FORM the scan did not see (an object the scan does not
+/// cover) falls back to the same rule.
 #[derive(Clone, Debug, Default)]
-pub struct DisplayWhenConditions {
-    evaluated: Option<Rc<FxHashMap<Value, bool>>>,
+pub enum DisplayWhenConditions {
+    #[default]
+    Structural,
+    Evaluated(Rc<FxHashMap<Value, bool>>),
+}
+
+/// What the conditions know about one FORM.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayWhenVerdict {
+    Holds,
+    Fails,
+    /// Not evaluated: a structural reader, or a FORM outside the scan.
+    Unseen,
 }
 
 impl DisplayWhenConditions {
     pub fn structural() -> Self {
-        Self::default()
+        Self::Structural
     }
 
     pub fn evaluated(results: FxHashMap<Value, bool>) -> Self {
-        Self {
-            evaluated: Some(Rc::new(results)),
+        Self::Evaluated(Rc::new(results))
+    }
+
+    /// The evaluated result for FORM: literal `nil`/`t` first (GNU takes both
+    /// as they are, src/xdisp.c:6141), then the evaluated table.
+    pub fn verdict(&self, form: Value) -> DisplayWhenVerdict {
+        if form.is_nil() {
+            return DisplayWhenVerdict::Fails;
+        }
+        if form.is_symbol_named("t") {
+            return DisplayWhenVerdict::Holds;
+        }
+        match self {
+            Self::Structural => DisplayWhenVerdict::Unseen,
+            Self::Evaluated(results) => match results.get(&form) {
+                Some(true) => DisplayWhenVerdict::Holds,
+                Some(false) => DisplayWhenVerdict::Fails,
+                None => DisplayWhenVerdict::Unseen,
+            },
         }
     }
 
-    /// Whether a `(when FORM . SPEC)` spec applies: `nil` never, `t` always
-    /// (GNU takes both literally, src/xdisp.c:6141), anything else by its
-    /// evaluated result.
+    /// Whether a `(when FORM . SPEC)` spec applies; an unseen FORM holds
+    /// (the structural rule).
     pub fn holds(&self, form: Value) -> bool {
-        if form.is_nil() {
-            return false;
-        }
-        if form.is_symbol_named("t") {
-            return true;
-        }
-        match &self.evaluated {
-            Some(results) => results.get(&form).copied().unwrap_or(true),
-            None => true,
-        }
+        !matches!(self.verdict(form), DisplayWhenVerdict::Fails)
     }
 }
 
-/// One FORM occurrence with the bindings GNU gives it (src/xdisp.c:6147-6149).
+/// One FORM occurrence with the bindings GNU gives it (src/xdisp.c:6152-6154).
 struct WhenFormSite {
     form: Value,
     object: Value,
     position: i64,
     buffer_position: i64,
+    /// False inside `(disable-eval …)`: GNU then takes FORM as nil
+    /// (src/xdisp.c:6139-6140) and the spec never applies.
+    eval_enabled: bool,
 }
 
 /// Evaluate the `when` forms of every display spec the walk of
 /// `[from, to)` of `buf_id` can reach: `display`, `line-prefix` and
-/// `wrap-prefix` text properties and overlay properties, the buffer-local
+/// `wrap-prefix` text properties and overlay properties, overlay
+/// `before-string`/`after-string`s, the buffer-local and default
 /// `line-prefix`/`wrap-prefix` values, and the `display` properties inside
-/// those prefix strings.
+/// all of those strings.
 ///
-/// A FORM is evaluated once, with the bindings of its first occurrence;
-/// GNU evaluates it at every occurrence, so a FORM that reads `position`
-/// or `buffer-position` and expects a different answer per occurrence is
-/// not reproduced (declared).
+/// The forms run with `buf_id` current, as GNU's iterator does
+/// (src/xdisp.c:20533-20535).  A FORM is evaluated once, with the bindings
+/// of its first occurrence; GNU evaluates it at every occurrence, so a FORM
+/// that reads `position` or `buffer-position` and expects a different answer
+/// per occurrence is not reproduced (declared).  Not scanned, so left to the
+/// structural rule (declared): the `display` properties of strings reached
+/// through a replacing `display` property (modifiers only there) and of
+/// margin strings; frame-local chrome strings never get evaluated results.
 pub(crate) fn evaluate_window_display_when_forms(
     evaluator: &mut Context,
     buf_id: BufferId,
     from: CharPos0,
     to: CharPos0,
 ) -> DisplayWhenConditions {
+    let default_prefixes: Vec<Value> = ["line-prefix", "wrap-prefix"]
+        .iter()
+        .filter_map(|name| evaluator.buffer_default_value(name))
+        .collect();
     let sites = match evaluator.buffer_manager().get(buf_id) {
-        Some(buffer) => collect_when_form_sites(buffer, from, to),
+        Some(buffer) => collect_when_form_sites(buffer, from, to, &default_prefixes),
         None => Vec::new(),
     };
     let mut results = FxHashMap::default();
-    for site in sites {
-        if results.contains_key(&site.form) {
-            continue;
+    let evaluated = evaluator.with_display_buffer_current(buf_id, |evaluator| {
+        for site in sites {
+            if results.contains_key(&site.form) {
+                continue;
+            }
+            let holds = site.eval_enabled
+                && evaluator.display_when_form_holds(
+                    site.form,
+                    site.object,
+                    site.position,
+                    site.buffer_position,
+                );
+            results.insert(site.form, holds);
         }
-        let holds = evaluator.display_when_form_holds(
-            site.form,
-            site.object,
-            site.position,
-            site.buffer_position,
-        );
-        results.insert(site.form, holds);
+    });
+    if evaluated.is_err() {
+        return DisplayWhenConditions::structural();
     }
     DisplayWhenConditions::evaluated(results)
 }
 
-fn collect_when_form_sites(buffer: &Buffer, from: CharPos0, to: CharPos0) -> Vec<WhenFormSite> {
+fn collect_when_form_sites(
+    buffer: &Buffer,
+    from: CharPos0,
+    to: CharPos0,
+    default_prefixes: &[Value],
+) -> Vec<WhenFormSite> {
     let mut sites = Vec::new();
     let buffer_object = Value::make_buffer(buffer.id());
     let to = to.min(buffer.layout_point_max_char_pos()).max(from);
@@ -156,17 +197,29 @@ fn collect_when_form_sites(buffer: &Buffer, from: CharPos0, to: CharPos0) -> Vec
                 &mut sites,
             );
         }
-        for name in ["line-prefix", "wrap-prefix"] {
+        // Overlay strings and prefixes are displayed as strings: their own
+        // `display` properties are evaluated with `object` bound to the string.
+        for name in [
+            "before-string",
+            "after-string",
+            "line-prefix",
+            "wrap-prefix",
+        ] {
             if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol(name)) {
                 collect_prefix_string_when_forms(value, gnu_pos(start), &mut sites);
             }
         }
     }
 
+    // The buffer-local and the default `line-prefix`/`wrap-prefix` values
+    // (GNU reads `Vline_prefix`/`Vwrap_prefix`, whichever binding applies).
     for name in ["line-prefix", "wrap-prefix"] {
         if let Some(value) = buffer.buffer_local_value(name) {
             collect_prefix_string_when_forms(value, gnu_pos(from), &mut sites);
         }
+    }
+    for value in default_prefixes {
+        collect_prefix_string_when_forms(*value, gnu_pos(from), &mut sites);
     }
     sites
 }
@@ -185,12 +238,12 @@ fn collect_when_forms(
             && !form.is_nil()
             && !form.is_symbol_named("t")
         {
-            // `(disable-eval SPEC)`: GNU takes FORM as nil (src/xdisp.c:6143-6144).
             sites.push(WhenFormSite {
-                form: if specs.eval_enabled { form } else { Value::NIL },
+                form,
                 object,
                 position,
                 buffer_position,
+                eval_enabled: specs.eval_enabled,
             });
         }
         std::ops::ControlFlow::Continue(())

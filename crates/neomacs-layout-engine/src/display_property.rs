@@ -238,18 +238,6 @@ impl DisplayMediaReplacementProperty {
 
 pub(crate) type DisplayTextPropertyModifiers = DisplayItemLayout;
 
-/// Classify a `display` property value into a typed replacement + text-property
-/// modifiers.
-///
-/// The SHAPE of the value (single spec / list of specs / vector of specs, minus a
-/// `(disable-eval …)` wrapper) is decoded by `neovm_core`'s
-/// [`DisplayPropertySpecs`] — GNU `handle_display_spec` — so this crate and the
-/// interpreter cannot disagree about it. They did: this classifier had no VECTOR
-/// arm, so `(put-text-property … 'display ["REPLACEMENT"])` rendered nothing.
-///
-/// GNU keeps the LAST element whose `handle_single_display_spec` reported a
-/// replacement (`replacing = rv`) and merges non-replacement modifiers
-/// (`raise`/`height`) from every element; both are reproduced here.
 /// The object a `display` property was found on.  GNU stops at the first
 /// element that replaces text of a STRING -- `position` would no longer
 /// point into `object` -- and lets a later replacing element override an
@@ -261,9 +249,21 @@ pub(crate) enum DisplayPropertyObject {
     LispString,
 }
 
-/// Classify with the walk's evaluated `when` conditions and the object the
+/// Classify a `display` property value into a typed replacement + text-property
+/// modifiers, with the walk's evaluated `when` conditions and the object the
 /// property came from; readers without an evaluation behind them pass
 /// `DisplayWhenConditions::structural()`.
+///
+/// The SHAPE of the value (single spec / list of specs / vector of specs, minus a
+/// `(disable-eval …)` wrapper) is decoded by `neovm_core`'s
+/// [`DisplayPropertySpecs`] — GNU `handle_display_spec` — so this crate and the
+/// interpreter cannot disagree about it. They did: this classifier had no VECTOR
+/// arm, so `(put-text-property … 'display ["REPLACEMENT"])` rendered nothing.
+///
+/// GNU keeps the LAST element whose `handle_single_display_spec` reported a
+/// replacement (`replacing = rv`) for buffer text, stops at the FIRST for a
+/// string, and merges non-replacement modifiers (`raise`/`height`) from
+/// every element; all three are reproduced here.
 pub(crate) fn classify_display_property(
     value: Value,
     conditions: &DisplayWhenConditions,
