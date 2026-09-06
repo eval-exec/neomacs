@@ -580,7 +580,8 @@ pub(crate) fn dispatch_builtin_by_id(
 }
 
 use super::subr::{
-    FixedMin1, FixedMin2, FixedMin3, NativeFn, NoEvalPlaceholder, NoEvalPolicy, SubrArity, SubrSpec,
+    FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5, NativeFn, NoEvalPlaceholder,
+    NoEvalPolicy, SubrArity, SubrSpec,
 };
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -636,6 +637,9 @@ pub(crate) fn dispatch_builtin_without_eval_state(
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+#[path = "tests/fixed_arity_hot_subrs.rs"]
+mod fixed_arity_hot_subrs;
 #[cfg(test)]
 #[path = "tests/replace_region_contents.rs"]
 mod replace_region_contents_test;

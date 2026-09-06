@@ -425,11 +425,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(builtin_set_buffer),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
-        "current-buffer",
-        NativeFn::ContextVec(builtin_current_buffer),
-        SubrArity::new(0, Some(0)),
-    ));
+    ctx.register_subr(SubrSpec::fixed0("current-buffer", builtin_current_buffer_0));
     ctx.register_subr(SubrSpec::new(
         "buffer-name",
         NativeFn::ContextVec(builtin_buffer_name),
@@ -516,10 +512,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::fns::builtin_buffer_hash),
         SubrArity::new(0, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "buffer-substring",
-        NativeFn::ContextVec(builtin_buffer_substring),
-        SubrArity::new(2, Some(2)),
+        builtin_buffer_substring_2,
+        FixedMin2::Two,
     ));
     ctx.register_subr(SubrSpec::new(
         "compare-buffer-substrings",
@@ -692,12 +688,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("r")),
     );
     ctx.register_subr(
-        SubrSpec::new(
-            "widen",
-            NativeFn::ContextVec(builtin_widen),
-            SubrArity::new(0, Some(0)),
-        )
-        .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
+        SubrSpec::fixed0("widen", builtin_widen_0)
+            .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
     );
     ctx.register_subr(
         SubrSpec::new(
@@ -801,12 +793,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(
-        SubrSpec::new(
-            "search-forward",
-            NativeFn::ContextVec(builtin_search_forward),
-            SubrArity::new(1, Some(4)),
-        )
-        .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("MSearch: ")),
+        SubrSpec::fixed4("search-forward", builtin_search_forward_4, FixedMin4::One).interactive(
+            crate::emacs_core::interactive::BuiltinInteractiveSpec::String("MSearch: "),
+        ),
     );
     ctx.register_subr(
         SubrSpec::new(
@@ -819,10 +808,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         ),
     );
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed4(
             "re-search-forward",
-            NativeFn::ContextVec(builtin_re_search_forward),
-            SubrArity::new(1, Some(4)),
+            builtin_re_search_forward_4,
+            FixedMin4::One,
         )
         .interactive(
             crate::emacs_core::interactive::BuiltinInteractiveSpec::String("sRE search: "),
@@ -838,10 +827,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
             crate::emacs_core::interactive::BuiltinInteractiveSpec::String("sRE search backward: "),
         ),
     );
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2(
         "looking-at",
-        NativeFn::ContextVec(builtin_looking_at),
-        SubrArity::new(1, Some(2)),
+        builtin_looking_at_2,
+        FixedMin2::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "posix-looking-at",
@@ -863,15 +852,15 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(builtin_posix_string_match),
         SubrArity::new(2, Some(4)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "match-beginning",
-        NativeFn::ContextVec(builtin_match_beginning),
-        SubrArity::new(1, Some(1)),
+        builtin_match_beginning_1,
+        FixedMin1::One,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "match-end",
-        NativeFn::ContextVec(builtin_match_end),
-        SubrArity::new(1, Some(1)),
+        builtin_match_end_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "match-data",
@@ -1538,20 +1527,20 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::kmacro::builtin_store_kbd_macro_event),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed5(
         "put-text-property",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_put_text_property),
-        SubrArity::new(4, Some(5)),
+        crate::emacs_core::textprop::builtin_put_text_property_5,
+        FixedMin5::Four,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed3(
         "get-text-property",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_get_text_property),
-        SubrArity::new(2, Some(3)),
+        crate::emacs_core::textprop::builtin_get_text_property_3,
+        FixedMin3::Two,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed3(
         "get-char-property",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_get_char_property),
-        SubrArity::new(2, Some(3)),
+        crate::emacs_core::textprop::builtin_get_char_property_3,
+        FixedMin3::Two,
     ));
     ctx.register_subr(SubrSpec::new(
         "get-pos-property",
@@ -1739,10 +1728,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(0, Some(2)),
     ));
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed1(
             "forward-line",
-            NativeFn::ContextVec(crate::emacs_core::navigation::builtin_forward_line),
-            SubrArity::new(0, Some(1)),
+            crate::emacs_core::navigation::builtin_forward_line_1,
+            FixedMin1::Zero,
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
     );
@@ -1763,10 +1752,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
     );
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed1(
             "forward-char",
-            NativeFn::ContextVec(crate::emacs_core::navigation::builtin_forward_char),
-            SubrArity::new(0, Some(1)),
+            crate::emacs_core::navigation::builtin_forward_char_1,
+            FixedMin1::Zero,
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
     );

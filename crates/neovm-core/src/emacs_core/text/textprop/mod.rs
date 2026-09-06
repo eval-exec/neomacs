@@ -1740,6 +1740,22 @@ pub(crate) fn builtin_put_text_property(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("put-text-property", &args, 4, 5)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_put_text_property_5(eval, arg(0), arg(1), arg(2), arg(3), arg(4))
+}
+/// `put-text-property` as registered: fixed arity 5, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a5` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_put_text_property_5(
+    eval: &mut super::eval::Context,
+    start: Value,
+    end: Value,
+    property: Value,
+    value: Value,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 5] = [start, end, property, value, object];
     expect_min_args("put-text-property", &args, 4)?;
     expect_max_args("put-text-property", &args, 5)?;
     // GNU `add_text_properties_1` order: argument validation first
@@ -1776,13 +1792,13 @@ pub(crate) fn builtin_put_text_property(
     } else {
         // Strings (and degenerate arg shapes): no buffer hooks, no buffer
         // read-only semantics — GNU's modify_text_properties is buffer-only.
-        builtin_put_text_property_in_buffers(&mut eval.buffers, args)
+        builtin_put_text_property_in_buffers(&mut eval.buffers, &args)
     }
 }
 
 pub(crate) fn builtin_put_text_property_in_buffers(
     buffers: &mut BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("put-text-property", &args, 4)?;
     expect_max_args("put-text-property", &args, 5)?;
@@ -1840,13 +1856,27 @@ pub(crate) fn builtin_get_text_property(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_text_property_in_state(&eval.obarray, &eval.buffers, args)
+    crate::emacs_core::error::expect_args_range("get-text-property", &args, 2, 3)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_get_text_property_3(eval, arg(0), arg(1), arg(2))
+}
+/// `get-text-property` as registered: fixed arity 3, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_get_text_property_3(
+    eval: &mut super::eval::Context,
+    position: Value,
+    prop: Value,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 3] = [position, prop, object];
+    builtin_get_text_property_in_state(&eval.obarray, &eval.buffers, &args)
 }
 
 pub(crate) fn builtin_get_text_property_in_state(
     obarray: &Obarray,
     buffers: &BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("get-text-property", &args, 2)?;
     expect_max_args("get-text-property", &args, 3)?;
@@ -2195,7 +2225,21 @@ pub(crate) fn builtin_get_char_property(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_char_property_with_frames(&eval.obarray, &eval.buffers, Some(&eval.frames), args)
+    crate::emacs_core::error::expect_args_range("get-char-property", &args, 2, 3)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_get_char_property_3(eval, arg(0), arg(1), arg(2))
+}
+/// `get-char-property` as registered: fixed arity 3, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_get_char_property_3(
+    eval: &mut super::eval::Context,
+    position: Value,
+    prop: Value,
+    object: Value,
+) -> EvalResult {
+    let args: [Value; 3] = [position, prop, object];
+    builtin_get_char_property_with_frames(&eval.obarray, &eval.buffers, Some(&eval.frames), &args)
 }
 
 pub(crate) fn builtin_get_char_property_in_state(
@@ -2203,7 +2247,7 @@ pub(crate) fn builtin_get_char_property_in_state(
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_char_property_with_frames(obarray, buffers, None, args)
+    builtin_get_char_property_with_frames(obarray, buffers, None, &args)
 }
 
 /// Read a character property at a position already proven to be in the
@@ -2240,7 +2284,7 @@ pub(crate) fn builtin_get_char_property_with_frames(
     obarray: &Obarray,
     buffers: &BufferManager,
     frames: Option<&FrameManager>,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("get-char-property", &args, 2)?;
     expect_max_args("get-char-property", &args, 3)?;
@@ -2248,7 +2292,7 @@ pub(crate) fn builtin_get_char_property_with_frames(
     let prop = expect_property_key(&args[1])?;
 
     if is_string_object(args.get(2)).is_some() {
-        return builtin_get_text_property_in_state(obarray, buffers, args);
+        return builtin_get_text_property_in_state(obarray, buffers, &args);
     }
 
     let (buf_id, window_id) = resolve_char_property_target_in_state(frames, buffers, args.get(2))?;
@@ -3515,7 +3559,7 @@ fn builtin_get_char_property_and_overlay_with_frames(
 
     // For strings, no overlays — just return (text-prop-value . nil)
     if is_string_object(args.get(2)).is_some() {
-        let value = builtin_get_text_property_in_state(obarray, buffers, args)?;
+        let value = builtin_get_text_property_in_state(obarray, buffers, &args)?;
         return Ok(Value::cons(value, Value::NIL));
     }
 

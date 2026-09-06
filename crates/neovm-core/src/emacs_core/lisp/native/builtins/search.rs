@@ -303,6 +303,21 @@ pub(crate) fn builtin_search_forward(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    expect_args_range("search-forward", &args, 1, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_search_forward_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `search-forward` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_search_forward_4(
+    eval: &mut super::eval::Context,
+    string: Value,
+    bound: Value,
+    noerror: Value,
+    count: Value,
+) -> EvalResult {
+    let args: [Value; 4] = [string, bound, noerror, count];
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
@@ -1113,6 +1128,21 @@ pub(crate) fn builtin_re_search_forward(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("re-search-forward", &args, 1, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_re_search_forward_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `re-search-forward` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_re_search_forward_4(
+    eval: &mut super::eval::Context,
+    regexp: Value,
+    bound: Value,
+    noerror: Value,
+    count: Value,
+) -> EvalResult {
+    let args: [Value; 4] = [regexp, bound, noerror, count];
+    expect_args_range("re-search-forward", &args, 1, 4)?;
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
@@ -1435,6 +1465,19 @@ pub(crate) fn builtin_posix_search_backward(
 }
 
 pub(crate) fn builtin_looking_at(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args_range("looking-at", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_looking_at_2(eval, arg(0), arg(1))
+}
+/// `looking-at` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_looking_at_2(
+    eval: &mut super::eval::Context,
+    regexp: Value,
+    inhibit_modify: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [regexp, inhibit_modify];
     expect_args_range("looking-at", &args, 1, 2)?;
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
@@ -2128,6 +2171,18 @@ pub(crate) fn builtin_match_beginning(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    expect_args("match-beginning", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_match_beginning_1(eval, arg(0))
+}
+/// `match-beginning` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_match_beginning_1(
+    eval: &mut super::eval::Context,
+    subexp: Value,
+) -> EvalResult {
+    let args: [Value; 1] = [subexp];
     builtin_match_beginning_with_state(&eval.match_data, &args)
 }
 
@@ -2164,6 +2219,15 @@ pub(crate) fn builtin_match_end_with_state(
 }
 
 pub(crate) fn builtin_match_end(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args("match-end", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_match_end_1(eval, arg(0))
+}
+/// `match-end` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_match_end_1(eval: &mut super::eval::Context, subexp: Value) -> EvalResult {
+    let args: [Value; 1] = [subexp];
     builtin_match_end_with_state(&eval.match_data, &args)
 }
 

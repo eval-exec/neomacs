@@ -38,7 +38,7 @@ pub(crate) fn builtin_get_pos_property_impl(
             return super::textprop::builtin_get_text_property_in_state(
                 obarray,
                 buffers,
-                vec![Value::fixnum(pos), prop, *str_val],
+                &[Value::fixnum(pos), prop, *str_val],
             );
         }
         return Ok(Value::NIL);
@@ -403,8 +403,9 @@ pub(crate) fn builtin_next_single_char_property_change_in_buffers(
     if let Some(object) = object {
         get_args.push(*object);
     }
-    let initial_value =
-        super::textprop::builtin_get_char_property_with_frames(obarray, buffers, frames, get_args)?;
+    let initial_value = super::textprop::builtin_get_char_property_with_frames(
+        obarray, buffers, frames, &get_args,
+    )?;
     let limit = match args.get(3) {
         Some(v) if !v.is_nil() => {
             crate::emacs_core::buffer::expect_integer_or_marker_in_buffers(buffers, v)?
@@ -428,7 +429,10 @@ pub(crate) fn builtin_next_single_char_property_change_in_buffers(
             value_args.push(*object);
         }
         let value = super::textprop::builtin_get_char_property_with_frames(
-            obarray, buffers, frames, value_args,
+            obarray,
+            buffers,
+            frames,
+            &value_args,
         )?;
         if !eq_value(&value, &initial_value) || cursor >= point_max {
             return Ok(Value::fixnum(cursor));
@@ -500,8 +504,9 @@ pub(crate) fn builtin_previous_single_char_property_change_in_buffers(
     if let Some(object) = object {
         get_args.push(*object);
     }
-    let initial_value =
-        super::textprop::builtin_get_char_property_with_frames(obarray, buffers, frames, get_args)?;
+    let initial_value = super::textprop::builtin_get_char_property_with_frames(
+        obarray, buffers, frames, &get_args,
+    )?;
 
     let mut cursor = position;
     loop {
@@ -518,7 +523,10 @@ pub(crate) fn builtin_previous_single_char_property_change_in_buffers(
             value_args.push(*object);
         }
         let value = super::textprop::builtin_get_char_property_with_frames(
-            obarray, buffers, frames, value_args,
+            obarray,
+            buffers,
+            frames,
+            &value_args,
         )?;
         if !eq_value(&value, &initial_value) {
             return Ok(Value::fixnum(cursor));

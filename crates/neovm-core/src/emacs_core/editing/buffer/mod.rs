@@ -748,6 +748,14 @@ pub(crate) fn builtin_current_buffer(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    expect_args("current-buffer", &args, 0)?;
+    builtin_current_buffer_0(eval)
+}
+/// `current-buffer` as registered: fixed arity 0, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_current_buffer_0(eval: &mut super::eval::Context) -> EvalResult {
+    let args: [Value; 0] = [];
     let buffers = &eval.buffers;
     expect_args("current-buffer", &args, 0)?;
     match buffers.current_buffer() {
@@ -897,6 +905,19 @@ pub(crate) fn builtin_buffer_substring(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    expect_args("buffer-substring", &args, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_buffer_substring_2(eval, arg(0), arg(1))
+}
+/// `buffer-substring` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_buffer_substring_2(
+    eval: &mut super::eval::Context,
+    start: Value,
+    end: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [start, end];
     expect_args("buffer-substring", &args, 2)?;
     let start = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
     let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
@@ -4283,6 +4304,14 @@ fn accessible_bounds(
 }
 
 pub(crate) fn builtin_widen(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args("widen", &args, 0)?;
+    builtin_widen_0(eval)
+}
+/// `widen` as registered: fixed arity 0, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_widen_0(eval: &mut super::eval::Context) -> EvalResult {
+    let args: [Value; 0] = [];
     expect_args("widen", &args, 0)?;
     let current_id = eval
         .buffers

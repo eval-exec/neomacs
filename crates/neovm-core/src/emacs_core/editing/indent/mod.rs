@@ -1972,7 +1972,7 @@ fn display_run_at(
         let v = super::textprop::builtin_get_text_property_in_state(
             &ctx.obarray,
             &ctx.buffers,
-            vec![Value::fixnum(charpos1), Value::symbol("display")],
+            &[Value::fixnum(charpos1), Value::symbol("display")],
         )
         .ok()?;
         if v.is_nil() { None } else { Some((v, None)) }

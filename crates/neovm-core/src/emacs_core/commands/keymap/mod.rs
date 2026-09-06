@@ -2599,7 +2599,7 @@ fn displayed_string_map_overrides(
         let found = super::textprop::builtin_get_text_property_in_state(
             obarray,
             buffers,
-            vec![
+            &[
                 Value::fixnum(displayed.char_pos),
                 Value::from_sym_id(property.symbol_id()),
                 displayed.object,

@@ -5911,7 +5911,7 @@ impl crate::emacs_core::eval::Context {
         let inhibit = crate::emacs_core::textprop::builtin_get_text_property_in_state(
             &self.obarray,
             &self.buffers,
-            vec![
+            &[
                 Value::fixnum(1),
                 Value::symbol("help-echo-inhibit-substitution"),
                 help,

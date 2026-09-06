@@ -787,6 +787,15 @@ pub(crate) fn builtin_forward_line(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("forward-line", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_forward_line_1(eval, arg(0))
+}
+/// `forward-line` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_forward_line_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+    let args: [Value; 1] = [n];
     let line_arg = optional_line_count_arg(&args, 1)?;
     let n = line_arg.count;
     let current_id = eval.buffers.current_buffer_id().ok_or_else(no_buffer)?;
@@ -913,6 +922,15 @@ pub(crate) fn builtin_forward_char(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    crate::emacs_core::error::expect_args_range("forward-char", &args, 0, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_forward_char_1(eval, arg(0))
+}
+/// `forward-char` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+pub(crate) fn builtin_forward_char_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+    let args: [Value; 1] = [n];
     let n = if args.is_empty() || args[0].is_nil() {
         1
     } else {

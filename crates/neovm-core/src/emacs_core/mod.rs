@@ -199,7 +199,9 @@ pub(crate) mod subr;
 /// ```
 #[doc(hidden)]
 pub mod subr_compile_contract {
-    pub use super::subr::{FixedMin1, FixedMin2, FixedMin3, SubrBatch, SubrSpec};
+    pub use super::subr::{
+        FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5, SubrBatch, SubrSpec,
+    };
 }
 #[path = "lisp/native/subr/info.rs"]
 pub mod subr_info;

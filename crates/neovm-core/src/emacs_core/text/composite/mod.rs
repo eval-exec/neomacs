@@ -442,7 +442,7 @@ pub(crate) fn composition_width_at(
     let prop = super::textprop::builtin_get_text_property_in_state(
         &ctx.obarray,
         &ctx.buffers,
-        vec![Value::fixnum(charpos1), Value::symbol("composition")],
+        &[Value::fixnum(charpos1), Value::symbol("composition")],
     )
     .ok()?;
     let (length, components, mod_func, registered) = composition_parts_any(prop)?;

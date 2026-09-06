@@ -9,8 +9,8 @@
 use super::interactive::BuiltinInteractiveSpec;
 use super::intern::{SymId, intern};
 use crate::tagged::header::{
-    SubrDispatchKind, SubrFn, SubrFn0, SubrFn1, SubrFn2, SubrFn3, SubrFnMany, SubrFnManyNoContext,
-    SubrFnManySlice,
+    SubrDispatchKind, SubrFn, SubrFn0, SubrFn1, SubrFn2, SubrFn3, SubrFn4, SubrFn5, SubrFnMany,
+    SubrFnManyNoContext, SubrFnManySlice,
 };
 use std::sync::{Mutex, OnceLock};
 
@@ -99,6 +99,21 @@ fixed_minimum!(FixedMin3 {
     One = 1,
     Two = 2,
     Three = 3,
+});
+fixed_minimum!(FixedMin4 {
+    Zero = 0,
+    One = 1,
+    Two = 2,
+    Three = 3,
+    Four = 4,
+});
+fixed_minimum!(FixedMin5 {
+    Zero = 0,
+    One = 1,
+    Two = 2,
+    Three = 3,
+    Four = 4,
+    Five = 5,
 });
 
 /// Behavior used only by tests that exercise primitives without an evaluator.
@@ -199,6 +214,20 @@ impl SubrSpec {
             name,
             SubrFn::A3(function),
             SubrArity::new(minimum.get(), Some(3)),
+        )
+    }
+    pub const fn fixed4(name: &'static str, function: SubrFn4, minimum: FixedMin4) -> Self {
+        Self::native(
+            name,
+            SubrFn::A4(function),
+            SubrArity::new(minimum.get(), Some(4)),
+        )
+    }
+    pub const fn fixed5(name: &'static str, function: SubrFn5, minimum: FixedMin5) -> Self {
+        Self::native(
+            name,
+            SubrFn::A5(function),
+            SubrArity::new(minimum.get(), Some(5)),
         )
     }
 

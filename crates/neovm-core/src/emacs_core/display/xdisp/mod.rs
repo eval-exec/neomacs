@@ -902,7 +902,7 @@ fn display_space_run(
         let v = super::textprop::builtin_get_text_property_in_state(
             &eval.obarray,
             &eval.buffers,
-            vec![Value::fixnum(charpos1), *display_sym],
+            &[Value::fixnum(charpos1), *display_sym],
         )
         .ok()?;
         if v.is_nil() { None } else { Some((v, None)) }
@@ -1168,7 +1168,7 @@ fn string_display_space_run(
     let display = super::textprop::builtin_get_text_property_in_state(
         &eval.obarray,
         &eval.buffers,
-        vec![Value::fixnum(char_index as i64), *display_sym, string],
+        &[Value::fixnum(char_index as i64), *display_sym, string],
     )
     .ok()?;
 
