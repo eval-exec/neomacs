@@ -136,14 +136,19 @@ fn a_commit_that_moves_nothing_does_not_restart_a_motion_in_flight() {
     // Halfway through a 100ms tween the pane must be halfway, not back at the
     // start. 800 -> 400 means 600 at the midpoint.
     let (_, composition) = driver.on_frame(presentation(), frame_at(origin, 50));
-    let first = composition
+    // The pane itself, not the placements a shrink adds around it: the old
+    // wrapping is clipped to the width the pane will keep, and the strip
+    // covers only what it has not vacated, so neither one's width is the
+    // pane's.
+    let pane = composition
         .blits
-        .first()
+        .iter()
+        .find(|blit| blit.source == neomacs_renderer_wgpu::PaneSource::Destination)
         .expect("the panes are still being placed");
     assert!(
-        (first.bounds.width - 600.0).abs() < 5.0,
+        (pane.bounds.width - 600.0).abs() < 5.0,
         "the motion was restarted by commits that moved nothing: width {} at the midpoint",
-        first.bounds.width
+        pane.bounds.width
     );
 }
 

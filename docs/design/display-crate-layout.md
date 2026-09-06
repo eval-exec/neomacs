@@ -2,9 +2,11 @@
 
 `docs/design/neovm-core-layout.md` governs placement inside `neovm-core`. This
 is the equivalent authority for the four display crates. It exists because its
-absence has a measurable cost: `render_thread/` grew to 22k lines in one flat
-directory with no stated seam, and a shared type's home had to be re-derived
-from the dependency graph every time one was added.
+absence had a measurable cost: `render_thread/` had grown to 22k lines in one
+flat directory with no stated seam, and a shared type's home had to be
+re-derived from the dependency graph every time one was added. The directories
+below are the seam that replaced it; this file is what keeps them meaningful,
+since nothing in the compiler objects to a file being put in the wrong one.
 
 ## The dependency direction, which is the whole rule
 

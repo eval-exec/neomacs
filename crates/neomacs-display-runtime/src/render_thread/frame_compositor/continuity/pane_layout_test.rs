@@ -377,9 +377,10 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
             frame_at(origin, 50),
         )
         .blits;
-    // Three, not two: window 1 narrows from 800 to 400, so its old wrapping is
-    // crossfaded out alongside the two destination panes.
-    assert_eq!(blits.len(), 3);
+    // Four, not two: window 1 narrows from 800 to 400, so alongside the two
+    // destination panes it contributes its old wrapping (crossfading) and the
+    // area it has not yet vacated (held opaque).
+    assert_eq!(blits.len(), 4);
     assert!(render.compositor.layout.wants_frames(), "still travelling");
 
     // The last frame still draws the panes — at their destination — and only
@@ -744,19 +745,44 @@ fn a_pane_whose_width_changed_shows_its_old_wrapping_while_it_is_still_the_old_s
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
 
     let placements = all_placed(&morph.sample(frame_at(origin, 50)), 1);
-    assert_eq!(placements.len(), 2, "the old wrapping and the new one");
+    assert_eq!(
+        placements.len(),
+        3,
+        "the old wrapping, the area not yet vacated, and the new one"
+    );
     assert_eq!(
         placements[0].source,
         neomacs_renderer_wgpu::PaneSource::Previous,
         "the outgoing wrapping is drawn first, under the destination"
     );
     assert_eq!(
-        placements[1].source,
+        placements[2].source,
         neomacs_renderer_wgpu::PaneSource::Destination
     );
     assert!(
         placements[0].opacity < 1.0 && placements[0].opacity > 0.0,
         "mid-crossfade"
+    );
+    // The crossfade covers only what the pane keeps. Beyond that it is not
+    // rewrapping, it is vacating, and that area is the strip below.
+    assert_eq!(placements[0].content_extent.0, 400.0);
+
+    // The strip: the area the pane still covers but will not keep, held at
+    // full opacity. Fading it would leave the old text and the pane that
+    // replaces it both half-visible for the length of the motion, which reads
+    // as a dissolve rather than as a divider sweeping across.
+    let strip = placements[1];
+    assert_eq!(strip.source, neomacs_renderer_wgpu::PaneSource::Previous);
+    assert_eq!(strip.opacity, 1.0, "held, not faded");
+    assert_eq!(strip.bounds.x, 400.0, "starts where the pane will end");
+    assert_eq!(
+        strip.bounds.width,
+        placements[2].bounds.width - 400.0,
+        "and runs to the pane's travelling edge"
+    );
+    assert_eq!(
+        strip.content_origin.0, 400.0,
+        "showing the old picture from the columns it covered"
     );
 }
 

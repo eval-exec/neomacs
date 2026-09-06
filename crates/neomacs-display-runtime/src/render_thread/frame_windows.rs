@@ -437,7 +437,7 @@ impl GuiFrameRenderState {
     /// a theme change is waiting to be drawn.
     ///
     /// Read before the pending observations are drained. If it were read after,
-    /// it would always say no, `use_transition_offscreen` would be false, and
+    /// it would always say no, `compose_offscreen` would be false, and
     /// the crossfade would render down a branch that cannot show it — silently.
     /// The `Option` distinguishes "no frame yet" from "no theme change".
     pub(super) fn pending_theme_change(&self) -> Option<bool> {
