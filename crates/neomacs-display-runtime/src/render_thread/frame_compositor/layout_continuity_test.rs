@@ -1,4 +1,5 @@
 use super::*;
+use crate::render_thread::render_quality::WindowAnimationSpecs;
 
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::motion_spec::{MotionDuration, MotionSpec, TweenSpec};
@@ -19,11 +20,17 @@ fn now() -> EventTime {
 /// false) and forced to `Instant` outside full quality, and `try_new` builds no
 /// morph for `Instant`. Every test here therefore enables it explicitly, or it
 /// would observe "no morph" for a reason that has nothing to do with the origin.
-fn tween() -> MotionSpec {
-    MotionSpec::Tween(TweenSpec {
-        duration: MotionDuration::new(Duration::from_millis(120)).expect("a positive duration"),
+fn tween() -> WindowAnimationSpecs {
+    let spec = MotionSpec::Tween(TweenSpec {
+        duration: MotionDuration::new(Duration::from_millis(100)).expect("a positive duration"),
         easing: TransitionEasing::Linear,
-    })
+    });
+    WindowAnimationSpecs {
+        resize: spec,
+        movement: spec,
+        open: spec,
+        close: spec,
+    }
 }
 
 fn window(id: i64, bounds: Rect) -> WindowInfo {

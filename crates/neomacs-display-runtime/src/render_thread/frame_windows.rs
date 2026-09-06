@@ -2233,10 +2233,10 @@ impl GuiFrameWindowManager {
     /// leave panes wherever the policy change happened to catch them.
     pub(super) fn apply_top_level_pane_motion(
         &mut self,
-        spec: neomacs_display_protocol::motion_spec::MotionSpec,
+        specs: crate::render_thread::render_quality::WindowAnimationSpecs,
     ) {
         self.for_each_top_level_window_mut(|window_state| {
-            window_state.render.compositor.pane_motion = spec;
+            window_state.render.compositor.pane_motion = specs;
         });
     }
 

@@ -19,9 +19,9 @@
 //! to be drawn. Nothing else may touch the motion.
 
 use super::continuity::pane_layout::{PaneLayoutComposition, PaneLayoutMorph};
+use crate::render_thread::render_quality::WindowAnimationSpecs;
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
-use neomacs_display_protocol::motion_spec::MotionSpec;
 use neomacs_display_protocol::{InteractionProjection, PresentationId};
 use neomacs_renderer_wgpu::SnapshotLease;
 
@@ -137,20 +137,18 @@ impl LayoutDriver {
     pub(in crate::render_thread) fn on_commit(
         self,
         delta: LayoutDelta<'_>,
-        spec: MotionSpec,
+        specs: WindowAnimationSpecs,
         at: EventTime,
     ) -> Self {
         match self {
             // Nothing in flight: a rearrangement starts one, anything else is
             // still nothing. `try_new` answers both by returning `None` when no
             // pane moved.
-            Self::Settled => PaneLayoutMorph::try_new(delta.previous, delta.next, spec, at).map_or(
-                Self::Settled,
-                |morph| Self::Animating {
+            Self::Settled => PaneLayoutMorph::try_new(delta.previous, delta.next, specs, at)
+                .map_or(Self::Settled, |morph| Self::Animating {
                     morph,
                     outgoing: OutgoingPicture::Unpinned,
-                },
-            ),
+                }),
             Self::Animating {
                 mut morph,
                 outgoing,
@@ -161,7 +159,7 @@ impl LayoutDriver {
                 // while one runs — a keystroke, a blink, a mode-line tick — so
                 // retargeting on all of them is what made the panes crawl.
                 if morph.destination_differs_from(delta.next) {
-                    morph.retarget(delta.next, spec, at);
+                    morph.retarget(delta.next, specs, at);
                 }
                 // The pinned picture is kept across a retarget. It is what the
                 // user last saw settled, which a change of destination does not
@@ -214,16 +212,24 @@ impl LayoutDriver {
                 // only be answered by rebuilding with a probe. That cost real
                 // time twice.
                 tracing::debug!(
-                    progress = sample.motion.progress,
+                    progress = sample.motion.geometry.progress,
                     panes = sample.panes.len(),
-                    first_pane_width = sample.panes.first().map(|pane| pane.bounds.width),
+                    // The travelling frontier, not a pane's painted width:
+                    // since a placement carries what it *paints*, a shrinking
+                    // pane's own quad is its destination size from the first
+                    // frame and says nothing about how far along the motion is.
+                    frontier = sample
+                        .panes
+                        .iter()
+                        .map(|pane| pane.bounds.x + pane.bounds.width)
+                        .fold(0.0_f32, f32::max),
                     "pane morph placed"
                 );
                 let composition = PaneLayoutComposition {
                     blits: sample.pane_blits(),
                     projection: Some(sample.projection(presentation)),
                 };
-                if sample.motion.finished {
+                if sample.motion.finished() {
                     // The last frame still draws the panes, at their
                     // destination; only then is the motion over.
                     (Self::Settled, composition)

@@ -37,9 +37,9 @@
 //! samples and travels with its own pane for free.
 
 use crate::render_thread::frame_compositor::motion::{Motion, MotionSample};
+use crate::render_thread::render_quality::{GeometryRole, WindowAnimationSpecs};
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
-use neomacs_display_protocol::motion_spec::MotionSpec;
 use neomacs_display_protocol::types::{LiveDisplayWindowId, Rect};
 
 /// What happened to one pane between two presentations.
@@ -87,7 +87,25 @@ impl PaneChange {
 /// means there is something to animate — no caller has to check.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::render_thread) struct PaneLayoutMorph {
-    motion: Motion,
+    /// One motion for every pane that travels.
+    ///
+    /// One, not one per pane, and not one per role: `placed_bounds` reads a
+    /// single progress and adjacent panes tile edge to edge. Two panes on two
+    /// clocks disagree about where their shared edge is, and a one-pixel gap on
+    /// a moving seam is far more visible than the motion itself. niri gives
+    /// every window its own curve because its windows have gaps between them.
+    ///
+    /// `None` when no pane persists, or when the geometry slot is disabled --
+    /// then every pane is placed at rest, which for an entering or leaving pane
+    /// is exactly where it belongs.
+    geometry: Option<Motion>,
+    /// Opacity of entering panes. Independent, and safe to be: an `Entered`
+    /// pane is placed at its destination unconditionally, so its curve cannot
+    /// move a seam.
+    open: Option<Motion>,
+    /// Opacity of leaving panes. Independent for the same reason -- an `Exited`
+    /// pane holds the rect it had, and what *uncovers* it is the geometry.
+    close: Option<Motion>,
     first: PaneChange,
     additional: Vec<PaneChange>,
     /// A layout committed while these panes were still travelling.
@@ -107,8 +125,47 @@ struct PendingRetarget {
     /// Destination rects ordered by window id, so a spliced morph is as
     /// reproducible as `try_new`'s sort makes a fresh one.
     destination: Vec<(LiveDisplayWindowId, Rect)>,
-    spec: MotionSpec,
+    specs: WindowAnimationSpecs,
     requested: EventTime,
+}
+
+/// One sample of each role, taken from one frame.
+///
+/// Passed around together so a placement cannot read one role's progress and
+/// another's opacity by accident -- which is silent, and looks like a curve
+/// that is subtly wrong rather than like a bug.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::render_thread) struct RoleSamples {
+    pub(in crate::render_thread) geometry: MotionSample,
+    open: MotionSample,
+    close: MotionSample,
+}
+
+/// A role with no motion samples as *arrived*, never as absent.
+///
+/// A disabled slot must place its panes at their destination. Sampling it as
+/// progress zero would instead pin them at the start forever, so "open on,
+/// resize off" would leave every pane at its old rect for the length of the
+/// open fade.
+impl RoleSamples {
+    /// Whether every role has arrived.
+    ///
+    /// All of them, not the geometry alone: an entering pane's fade outlasts a
+    /// spring that has already settled, and dropping the morph at the first
+    /// role to finish would cut that fade off mid-way. A role with no motion
+    /// samples as arrived, so it never holds the morph open.
+    pub(in crate::render_thread) const fn finished(self) -> bool {
+        self.geometry.finished && self.open.finished && self.close.finished
+    }
+}
+
+fn rest() -> MotionSample {
+    MotionSample {
+        progress: 1.0,
+        content_mix: neomacs_display_protocol::motion_spec::UnitInterval::clamp(1.0),
+        rate: 0.0,
+        finished: true,
+    }
 }
 
 /// Rects closer than this are the same rect.
@@ -117,6 +174,26 @@ struct PendingRetarget {
 /// would call a pane "moved" over a rounding difference and animate a frame
 /// that is not moving.
 const RECT_EPSILON: f32 = 0.5;
+
+/// Which geometry slot a morph's changes ask for, or `None` if no pane travels.
+///
+/// Resize wins a mixed morph: in an edge-to-edge tiling, moving one pane's edge
+/// resizes its neighbour, so the mixed morph is the common one, and resize is
+/// the change the reflow crossfade and the vacated strip are built for.
+fn geometry_role(changes: impl Iterator<Item = PaneChange>) -> Option<GeometryRole> {
+    let mut role = None;
+    for change in changes {
+        if let PaneChange::Persisted { from, to, .. } = change {
+            if (from.width - to.width).abs() > RECT_EPSILON
+                || (from.height - to.height).abs() > RECT_EPSILON
+            {
+                return Some(GeometryRole::Resize);
+            }
+            role = Some(GeometryRole::Movement);
+        }
+    }
+    role
+}
 
 fn rect_changed(from: Rect, to: Rect) -> bool {
     (from.x - to.x).abs() > RECT_EPSILON
@@ -156,10 +233,9 @@ impl PaneLayoutMorph {
     pub(in crate::render_thread) fn try_new(
         previous: &[WindowInfo],
         next: &[WindowInfo],
-        spec: MotionSpec,
+        specs: WindowAnimationSpecs,
         origin: EventTime,
     ) -> Option<Self> {
-        let motion = Motion::start(spec, origin)?;
         let before = panes_by_window(previous);
         let after = panes_by_window(next);
 
@@ -193,14 +269,49 @@ impl PaneLayoutMorph {
         // hits differently each time.
         changes.sort_by_key(|change| change.window().get());
 
+        // The motions are built *after* the diff, and only for roles that have
+        // changes. Building all of them up front would keep the morph -- and
+        // its standing frame demand -- alive for the slowest slot even when a
+        // single role is in play.
+        let (geometry, open, close) = Self::motions(&changes, specs, origin);
+        if geometry.is_none() && open.is_none() && close.is_none() {
+            // Every role that has changes asked for no motion. A policy that
+            // wants none must not allocate one: that is what keeps a
+            // reduced-motion setting free rather than merely fast.
+            return None;
+        }
+
         let mut changes = changes.into_iter();
         let first = changes.next()?;
         Some(Self {
-            motion,
+            geometry,
+            open,
+            close,
             first,
             additional: changes.collect(),
             pending: None,
         })
+    }
+
+    /// One motion per role that `changes` actually asks for.
+    fn motions(
+        changes: &[PaneChange],
+        specs: WindowAnimationSpecs,
+        origin: EventTime,
+    ) -> (Option<Motion>, Option<Motion>, Option<Motion>) {
+        let geometry = geometry_role(changes.iter().copied())
+            .and_then(|role| Motion::start(specs.geometry(role), origin));
+        let open = changes
+            .iter()
+            .any(|change| matches!(change, PaneChange::Entered { .. }))
+            .then(|| Motion::start(specs.open, origin))
+            .flatten();
+        let close = changes
+            .iter()
+            .any(|change| matches!(change, PaneChange::Exited { .. }))
+            .then(|| Motion::start(specs.close, origin))
+            .flatten();
+        (geometry, open, close)
     }
 
     /// Where these panes are currently heading, ordered by window id.
@@ -258,7 +369,7 @@ impl PaneLayoutMorph {
     pub(in crate::render_thread) fn retarget(
         &mut self,
         next: &[WindowInfo],
-        spec: MotionSpec,
+        specs: WindowAnimationSpecs,
         requested: EventTime,
     ) {
         let mut destination: Vec<(LiveDisplayWindowId, Rect)> =
@@ -266,7 +377,7 @@ impl PaneLayoutMorph {
         destination.sort_by_key(|(window, _)| window.get());
         self.pending = Some(PendingRetarget {
             destination,
-            spec,
+            specs,
             requested,
         });
     }
@@ -277,12 +388,12 @@ impl PaneLayoutMorph {
     /// are already where the new layout wants them, so the motion is over.
     pub(in crate::render_thread) fn spliced(&self, frame: FrameSample) -> Option<Self> {
         let pending = self.pending.as_ref()?;
-        let sample = self.motion.sample(frame);
+        let samples = self.sample_roles(frame);
         // Where the panes actually are on screen right now. This, not the
         // committed layout, is what the next motion must start from.
         let placed: std::collections::HashMap<LiveDisplayWindowId, Rect> = self
             .changes()
-            .filter_map(|change| PanePlacement::at(change, sample))
+            .filter_map(|change| PanePlacement::at(change, samples))
             .map(|placement| (placement.window, placement.bounds))
             .collect();
 
@@ -314,20 +425,44 @@ impl PaneLayoutMorph {
         }
         changes.sort_by_key(|change| change.window().get());
 
-        // Hand the speed across so the panes do not visibly stall at the
-        // splice. One shared rate for one shared motion: with a single scalar
-        // progress driving independent per-pane lerps, per-pane velocity
-        // continuity is not expressible, and claiming it would be a lie about
-        // what the motion does.
-        let motion = Motion::resume(
-            pending.spec,
-            pending.requested,
-            super::super::motion::ProgressRate::new(sample.rate),
-        )?;
+        // Hand each role's speed across so the panes do not visibly stall at
+        // the splice, and hand across the *matching* rate: resuming geometry
+        // from an opacity's rate is silently wrong and looks like a curve that
+        // is merely mistuned. Within geometry there is one shared rate for one
+        // shared motion -- with a single scalar progress driving independent
+        // per-pane lerps, per-pane velocity continuity is not expressible, and
+        // claiming it would be a lie about what the motion does.
+        let resume = |spec, rate: f32| {
+            Motion::resume(
+                spec,
+                pending.requested,
+                super::super::motion::ProgressRate::new(rate),
+            )
+        };
+        let role = geometry_role(changes.iter().copied());
+        let geometry =
+            role.and_then(|role| resume(pending.specs.geometry(role), samples.geometry.rate));
+        let open = changes
+            .iter()
+            .any(|change| matches!(change, PaneChange::Entered { .. }))
+            .then(|| resume(pending.specs.open, samples.open.rate))
+            .flatten();
+        let close = changes
+            .iter()
+            .any(|change| matches!(change, PaneChange::Exited { .. }))
+            .then(|| resume(pending.specs.close, samples.close.rate))
+            .flatten();
+        // Only when *no* role is live is there nothing left to animate. A `?`
+        // on one role's resume would abort the splice on another's behalf.
+        if geometry.is_none() && open.is_none() && close.is_none() {
+            return None;
+        }
         let mut changes = changes.into_iter();
         let first = changes.next()?;
         Some(Self {
-            motion,
+            geometry,
+            open,
+            close,
             first,
             additional: changes.collect(),
             pending: None,
@@ -344,8 +479,17 @@ impl PaneLayoutMorph {
     }
 
     /// Where every pane sits at `frame`.
+    /// One sample of every role at `frame`.
+    fn sample_roles(&self, frame: FrameSample) -> RoleSamples {
+        RoleSamples {
+            geometry: self.geometry.map_or_else(rest, |m| m.sample(frame)),
+            open: self.open.map_or_else(rest, |m| m.sample(frame)),
+            close: self.close.map_or_else(rest, |m| m.sample(frame)),
+        }
+    }
+
     pub(in crate::render_thread) fn sample(&self, frame: FrameSample) -> LayoutSample {
-        let motion = self.motion.sample(frame);
+        let motion = self.sample_roles(frame);
         // What the surviving panes have reached, computed before anything is
         // placed because a departing pane has to be trimmed to what is left.
         //
@@ -421,7 +565,7 @@ impl PanePlacement {
     ///
     /// One placement each. A shrinking or growing pane contributes more, and
     /// [`place`] is what adds them.
-    fn at(change: PaneChange, motion: MotionSample) -> Option<Self> {
+    fn at(change: PaneChange, motion: RoleSamples) -> Option<Self> {
         Some(match change {
             PaneChange::Persisted { window, from, to } => {
                 let bounds = placed_bounds(change, motion);
@@ -483,7 +627,7 @@ impl PanePlacement {
                 painted: to,
                 content_origin: (to.x, to.y),
                 source: neomacs_renderer_wgpu::PaneSource::Destination,
-                opacity: motion.content_mix.get(),
+                opacity: motion.open.content_mix.get(),
             },
             // A leaving pane holds still at the rect it had reached, reading
             // from the *previous* composition. That source is the whole point:
@@ -515,10 +659,10 @@ fn grows(from: Rect, to: Rect) -> bool {
 }
 
 /// The whole rect a pane covers at `motion`, before any clipping.
-fn placed_bounds(change: PaneChange, motion: MotionSample) -> Rect {
+fn placed_bounds(change: PaneChange, motion: RoleSamples) -> Rect {
     match change {
         PaneChange::Persisted { from, to, .. } => {
-            let t = motion.progress;
+            let t = motion.geometry.progress;
             Rect {
                 x: lerp(from.x, to.x, t),
                 y: lerp(from.y, to.y, t),
@@ -622,14 +766,35 @@ const REFLOW_WIDTH_EPSILON: f32 = 1.0;
 /// destination nothing in the frame is moving. Holding it opaque means the
 /// frame is partitioned at every instant: new pane, old picture, new pane —
 /// and the boundary between them is the divider, travelling.
-fn place(change: PaneChange, motion: MotionSample, claimed: &[Rect], out: &mut Vec<PanePlacement>) {
+fn place(change: PaneChange, motion: RoleSamples, claimed: &[Rect], out: &mut Vec<PanePlacement>) {
     let bounds = placed_bounds(change, motion);
     if let PaneChange::Persisted { window, from, to } = change {
-        if (from.width - to.width).abs() > REFLOW_WIDTH_EPSILON {
-            // The outgoing wrapping, over the area the pane keeps, fading out
-            // as the destination underneath fades in. Clipped to that area:
-            // beyond it the pane is not rewrapping, it is vacating, and the
-            // strip below says what belongs there.
+        // The pane's old wrapping, fading out as the destination underneath
+        // fades in. Anchored where the old picture actually *is* -- never
+        // carried along with the travelling pane, which is what made
+        // `delete-window` draw doubled, half-transparent text across the whole
+        // frame: the ghost sampled the old picture at the pane's old origin but
+        // drew it at the pane's current one, so the two pictures showed the
+        // same buffer at two wrap widths from two different offsets.
+        //
+        // A growing pane keeps everything it had, so its ghost is its whole old
+        // rect standing still while the destination is revealed over it. It
+        // must not be dropped: a delete-window is *only* visible because of it.
+        // The survivor's own area is where the divider, the second mode line
+        // and the reflowed text all change, and a pure geometric reveal leaves
+        // that area showing the destination from the first frame -- while the
+        // ground the survivor has not yet taken shows old and new pixels that
+        // are identical. The whole change would snap on frame one.
+        if grows(from, to) {
+            out.push(PanePlacement {
+                window,
+                bounds: from,
+                painted: from,
+                content_origin: (from.x, from.y),
+                source: neomacs_renderer_wgpu::PaneSource::Previous,
+                opacity: 1.0 - motion.geometry.content_mix.get(),
+            });
+        } else if from.width - to.width > REFLOW_WIDTH_EPSILON {
             let ghost = Rect {
                 width: bounds.width.min(to.width),
                 height: bounds.height.min(to.height),
@@ -641,7 +806,7 @@ fn place(change: PaneChange, motion: MotionSample, claimed: &[Rect], out: &mut V
                 painted: ghost,
                 content_origin: (from.x, from.y),
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
-                opacity: 1.0 - motion.content_mix.get(),
+                opacity: 1.0 - motion.geometry.content_mix.get(),
             });
         }
         // The area the pane still covers but will not keep, on each axis it is
@@ -735,7 +900,7 @@ fn vacated_strips(from: Rect, to: Rect, bounds: Rect) -> impl Iterator<Item = Va
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::render_thread) struct LayoutSample {
     pub(in crate::render_thread) panes: Vec<PanePlacement>,
-    pub(in crate::render_thread) motion: MotionSample,
+    pub(in crate::render_thread) motion: RoleSamples,
 }
 
 /// What one composition places, and the transform matching those pixels.

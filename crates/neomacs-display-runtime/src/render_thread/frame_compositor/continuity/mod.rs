@@ -58,7 +58,7 @@ impl GuiFrameRenderState {
         next: Option<&crate::core::frame_glyphs::FrameGlyphBuffer>,
         now: neomacs_display_protocol::frame_time::EventTime,
     ) {
-        let spec = self.compositor.pane_motion;
+        let specs = self.compositor.pane_motion;
         let (Some(previous), Some(next)) = (self.compositor.baseline.as_ref(), next) else {
             self.compositor.layout = super::layout_driver::LayoutDriver::Settled;
             return;
@@ -70,7 +70,7 @@ impl GuiFrameRenderState {
             next: &next.window_infos,
         };
         let driver = std::mem::take(&mut self.compositor.layout);
-        self.compositor.layout = driver.on_commit(delta, spec, now);
+        self.compositor.layout = driver.on_commit(delta, specs, now);
     }
 
     /// Place the panes for the frame about to be drawn.

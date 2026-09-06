@@ -37,6 +37,7 @@ pub mod tty_palette;
 pub mod types;
 pub mod ui_types;
 pub mod visual_config;
+pub mod window_animation;
 pub mod xterm_palette;
 pub mod xwidget_extent;
 pub use glyph_matrix::*;
