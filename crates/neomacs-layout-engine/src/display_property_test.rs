@@ -59,7 +59,13 @@ fn classify_display_property_separates_replacements_from_text_modifiers() {
     );
     assert_eq!(
         classify_display_property(
-            Value::list(vec![Value::symbol("image")]),
+            Value::list(vec![
+                Value::symbol("image"),
+                Value::keyword(":type"),
+                Value::symbol("png"),
+                Value::keyword(":file"),
+                Value::string("x.png")
+            ]),
             &crate::display_when::DisplayWhenConditions::structural(),
             DisplayPropertyObject::Buffer
         )
@@ -170,7 +176,13 @@ fn display_property_classification_names_replacement_accessors() {
         DisplayPropertyObject::Buffer,
     );
     let media = classify_display_property(
-        Value::list(vec![Value::symbol("image")]),
+        Value::list(vec![
+            Value::symbol("image"),
+            Value::keyword(":type"),
+            Value::symbol("png"),
+            Value::keyword(":file"),
+            Value::string("x.png"),
+        ]),
         &crate::display_when::DisplayWhenConditions::structural(),
         DisplayPropertyObject::Buffer,
     );

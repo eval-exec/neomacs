@@ -34195,6 +34195,97 @@ fn a_when_clause_whose_form_is_nil_leaves_the_prefix_out() {
 
 // Regression coverage for the conditional display review of PR #354.
 #[test]
+fn display_when_string_continues_after_an_invalid_image() {
+    assert_display_when_image_reachability("(image)", true);
+}
+
+#[test]
+fn display_when_string_continues_after_an_unsupported_image() {
+    assert_display_when_image_reachability(r#"(image :type unsupported :file "x.png")"#, true);
+}
+
+#[test]
+fn display_when_string_stops_after_a_valid_image() {
+    assert_display_when_image_reachability(r#"(image :type png :file "x.png")"#, false);
+}
+
+fn assert_display_when_image_reachability(image_spec: &str, continues: bool) {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("a\n", 640, 200);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(&format!(
+        r#"(progn (setq image-followed nil)
+              (put-text-property 1 2 'line-prefix
+                (propertize " " 'display
+                  '({image_spec} (when (progn (setq image-followed t) t) . "Y")))))"#,
+    ))
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(
+        !eval.eval_str("image-followed").expect("flag").is_nil(),
+        continues,
+        "only a valid image can suppress a later condition: {image_spec}"
+    );
+    if continues {
+        let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+        assert_eq!(rows[0], "Ya");
+    }
+}
+
+#[test]
+fn display_when_restores_numeric_point_after_a_multibyte_edit() {
+    assert_display_when_point_after_edit("nil");
+}
+
+#[test]
+fn display_when_restores_numeric_point_after_an_edit_and_error() {
+    assert_display_when_point_after_edit("(car 1)");
+}
+
+#[test]
+fn display_when_restores_numeric_point_after_an_edit_and_throw() {
+    assert_display_when_point_after_edit("(throw 'abort-display t)");
+}
+
+fn assert_display_when_point_after_edit(outcome: &str) {
+    let (mut eval, frame_id, buf_id, selected_window) =
+        incr_editing_frame("αβγδεζηθικ\n", 800, 300);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str("(goto-char 5)").expect("selected point");
+    let right = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected_window,
+            neovm_core::window::SplitDirection::Horizontal,
+            buf_id,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split");
+    eval.set_window_point_for_redisplay(frame_id, right, LispCharPos1::new(8));
+    eval.eval_str(&format!(
+        r#"(progn (setq point-edited nil point-seen nil)
+          (put-text-property 1 2 'display
+            '(when (progn
+                     (setq point-seen (cons (point) point-seen))
+                     (if point-edited nil
+                       (if (= (point) 8)
+                           (progn (setq point-edited t) (goto-char 1) (insert "λ"))))
+                     {outcome}) . "HIDDEN")))"#,
+    ))
+    .expect("setup");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert!(
+        !eval.eval_str("point-edited").expect("edit flag").is_nil(),
+        "observed points: {:?}",
+        neovm_core::emacs_core::value::list_to_vec(&eval.eval_str("point-seen").expect("points"))
+    );
+    assert_eq!(eval.eval_str("(point)").expect("point"), Value::fixnum(5));
+}
+
+#[test]
 fn display_when_change_invalidates_retained_body() {
     let (mut eval, frame_id, _, _) = incr_editing_frame("X\n", 640, 200);
     realize_test_gui_frame(&mut eval, frame_id);
