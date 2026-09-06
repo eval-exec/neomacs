@@ -260,18 +260,19 @@ pub(crate) enum DisplayPropertyObject {
 /// interpreter cannot disagree about it. They did: this classifier had no VECTOR
 /// arm, so `(put-text-property … 'display ["REPLACEMENT"])` rendered nothing.
 ///
-/// GNU keeps the LAST element whose `handle_single_display_spec` reported a
-/// replacement (`replacing = rv`) for buffer text, stops at the FIRST for a
-/// string, and merges non-replacement modifiers (`raise`/`height`) from
-/// every element; all three are reproduced here.
+/// String objects stop at their first replacing element, as GNU does. The
+/// buffer classifier currently keeps the last replacement and merges modifiers
+/// from every element. Declared difference: GNU continues buffer lists but
+/// guards ordinary replacements with `display_replaced == 0` (xdisp.c:6523).
 pub(crate) fn classify_display_property(
     value: Value,
     conditions: &DisplayWhenConditions,
     object: DisplayPropertyObject,
 ) -> DisplayPropertyClassification {
     let mut result = DisplayPropertyClassification::default();
-    DisplayPropertySpecs::of(value).for_each(|spec| {
-        let element = classify_single_display_spec(spec, conditions);
+    let specs = DisplayPropertySpecs::of(value);
+    specs.for_each(|spec| {
+        let element = classify_single_display_spec(spec, conditions, specs.eval_enabled);
         if element.replacement.is_some() {
             result.replacement = element.replacement;
             result.replacement_spec = element.replacement_spec;
@@ -300,10 +301,11 @@ pub(crate) fn classify_display_property_modifiers_only(
     conditions: &DisplayWhenConditions,
 ) -> DisplayTextPropertyModifiers {
     let mut modifiers = DisplayTextPropertyModifiers::default();
-    DisplayPropertySpecs::of(value).for_each(|spec| {
+    let specs = DisplayPropertySpecs::of(value);
+    specs.for_each(|spec| {
         merge_modifiers(
             &mut modifiers,
-            classify_single_display_spec(spec, conditions).modifiers,
+            classify_single_display_spec(spec, conditions, specs.eval_enabled).modifiers,
         );
         ControlFlow::Continue(())
     });
@@ -315,9 +317,10 @@ pub(crate) fn classify_display_property_modifiers_only(
 /// The head taxonomy is `neovm_core`'s [`display_spec_kind`], so the arms are
 /// exhaustive: a spec kind this crate forgets to render is a compile error rather
 /// than a display property that silently does nothing.
-fn classify_single_display_spec(
+pub(crate) fn classify_single_display_spec(
     value: Value,
     conditions: &DisplayWhenConditions,
+    eval_enabled: bool,
 ) -> DisplayPropertyClassification {
     let kind = display_spec_kind(value);
 
@@ -328,15 +331,17 @@ fn classify_single_display_spec(
     // nothing, like GNU's `if (NILP (form)) return 0`.
     if matches!(kind, DisplaySpecKind::When) {
         return match display_spec_when_parts(value) {
-            Some((form, spec)) if conditions.holds(form) => {
-                classify_single_display_spec(spec, conditions)
+            Some((form, spec))
+                if (eval_enabled || form.is_symbol_named("t")) && conditions.holds(form) =>
+            {
+                classify_single_display_spec(spec, conditions, eval_enabled)
             }
             _ => DisplayPropertyClassification::default(),
         };
     }
 
     if matches!(kind, DisplaySpecKind::Margin) {
-        return classify_margin_display_spec(value, conditions);
+        return classify_margin_display_spec(value, conditions, eval_enabled);
     }
 
     let replacement = match kind {
@@ -425,11 +430,12 @@ fn classify_single_display_spec(
 fn classify_margin_display_spec(
     value: Value,
     conditions: &DisplayWhenConditions,
+    eval_enabled: bool,
 ) -> DisplayPropertyClassification {
     let Some(spec) = display_margin_spec(value) else {
         return DisplayPropertyClassification::default();
     };
-    let inner = classify_single_display_spec(spec.content(), conditions);
+    let inner = classify_single_display_spec(spec.content(), conditions, eval_enabled);
 
     // GNU's `((margin nil) CONTENT)` selects TEXT_AREA and is otherwise the
     // ordinary CONTENT replacement.  Preserve the inner classification rather

@@ -145,8 +145,17 @@ fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
         CharPos0::new(4),
     );
     let form = when_form(disabled, 0);
-    assert_eq!(conditions.verdict(form), DisplayWhenVerdict::Fails);
-    assert!(!conditions.holds(form));
+    assert_eq!(conditions.verdict(form), DisplayWhenVerdict::Unseen);
+    assert!(
+        crate::display_property::classify_display_property(
+            disabled,
+            &conditions,
+            crate::display_property::DisplayPropertyObject::Buffer,
+        )
+        .replacement()
+        .is_none(),
+        "disable-eval suppresses this occurrence without caching a false answer"
+    );
 }
 
 #[test]

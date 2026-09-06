@@ -102,34 +102,104 @@ fn sites_are_evaluated_once_per_form_with_the_buffer_current_and_survive_gc() {
     let named = eval
         .eval_str("'(string-equal (buffer-name) \"other\")")
         .expect("read");
+    let property = |form| Value::cons(Value::symbol("when"), Value::cons(form, Value::string("X")));
     let sites = [
         DisplayWhenSite {
-            form: collecting,
+            property: property(collecting),
             object: buffer,
             position: 1,
             buffer_position: 1,
-            eval_enabled: true,
         },
         DisplayWhenSite {
-            form: named,
+            property: property(named),
             object: buffer,
             position: 2,
             buffer_position: 2,
-            eval_enabled: true,
         },
         DisplayWhenSite {
-            form: named,
+            property: Value::list(vec![Value::symbol("disable-eval"), property(named)]),
             object: buffer,
             position: 3,
             buffer_position: 3,
-            eval_enabled: false,
         },
     ];
     let results = eval
-        .evaluate_display_when_sites(other, &sites)
+        .evaluate_display_when_sites(other, None, &sites, |spec| spec.is_string())
         .expect("no flow");
     assert_eq!(results.get(&collecting), Some(&true));
     assert_eq!(results.get(&named), Some(&true), "first occurrence decides");
     assert_eq!(results.len(), 2);
     assert_eq!(eval.buffers.current_buffer_id(), Some(original));
+}
+
+#[test]
+fn a_form_cannot_collect_its_detached_replacement_before_classification() {
+    use crate::emacs_core::display_when::DisplayWhenSite;
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let property = eval
+        .eval_str(
+            "(setq when-spec (cons 'when
+           (cons '(progn (setcdr when-spec nil) (garbage-collect) t)
+                 (list 'space :width 3))))",
+        )
+        .expect("self-modifying property");
+    let sites = [DisplayWhenSite {
+        property,
+        object: Value::string(" "),
+        position: 0,
+        buffer_position: 1,
+    }];
+    let mut classified = false;
+    eval.evaluate_display_when_sites(buf_id, None, &sites, |spec| {
+        assert_eq!(
+            spec.cons_car(),
+            Value::symbol("space"),
+            "saved replacement must survive collection"
+        );
+        classified = true;
+        true
+    })
+    .expect("evaluation");
+    assert!(classified);
+}
+
+#[test]
+fn a_later_form_roots_the_replacement_installed_by_an_earlier_form() {
+    use crate::emacs_core::display_when::DisplayWhenSite;
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let property = eval
+        .eval_str(
+            "(progn
+           (setq when-later (cons 'when (cons t \"OLD\")))
+           (list
+             (cons 'when
+               (cons '(progn
+                        (setcdr when-later
+                          (cons '(progn (setcdr when-later nil) (garbage-collect) t)
+                                (list 'space :width 3)))
+                        nil)
+                     '(height 1)))
+             when-later))",
+        )
+        .expect("mutating property");
+    let sites = [DisplayWhenSite {
+        property,
+        object: Value::string(" "),
+        position: 0,
+        buffer_position: 1,
+    }];
+    let mut classified = false;
+    eval.evaluate_display_when_sites(buf_id, None, &sites, |spec| {
+        assert_eq!(
+            spec.cons_car(),
+            Value::symbol("space"),
+            "newly installed replacement must survive collection"
+        );
+        classified = true;
+        true
+    })
+    .expect("evaluation");
+    assert!(classified);
 }
