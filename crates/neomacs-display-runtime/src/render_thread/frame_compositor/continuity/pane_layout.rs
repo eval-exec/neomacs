@@ -365,6 +365,8 @@ pub(in crate::render_thread) struct PanePlacement {
     pub(in crate::render_thread) window: LiveDisplayWindowId,
     /// The pane's rect on the surface right now.
     pub(in crate::render_thread) bounds: Rect,
+    /// How much of that picture the pane owns, at its destination size.
+    pub(in crate::render_thread) content_extent: (f32, f32),
     /// Where the pane's top-left sits in the picture it samples.
     ///
     /// While a pane is still travelling, the pixels under it belong to a
@@ -405,6 +407,10 @@ impl PanePlacement {
                     // top-left. Interpolating the content origin instead would
                     // scroll the text inside the pane as it travelled.
                     content_origin: (to.x, to.y),
+                    // Its destination size, so while it is still larger than
+                    // that it draws only what it owns and the frame underneath
+                    // shows through the rest.
+                    content_extent: (to.width, to.height),
                     source: neomacs_renderer_wgpu::PaneSource::Destination,
                     opacity: 1.0,
                 }
@@ -418,6 +424,7 @@ impl PanePlacement {
                 window,
                 bounds: to,
                 content_origin: (to.x, to.y),
+                content_extent: (to.width, to.height),
                 source: neomacs_renderer_wgpu::PaneSource::Destination,
                 opacity: motion.content_mix.get(),
             },
@@ -432,6 +439,7 @@ impl PanePlacement {
                 window,
                 bounds: from,
                 content_origin: (from.x, from.y),
+                content_extent: (from.width, from.height),
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
                 opacity: 1.0 - motion.content_mix.get(),
             },
@@ -449,32 +457,99 @@ const REFLOW_WIDTH_EPSILON: f32 = 1.0;
 /// Every placement `change` contributes at `motion`.
 ///
 /// A pane that only *moved* contributes one: its text did not rewrap, so the
-/// destination picture is correct for it at every instant. A pane whose width
-/// changed contributes two, because its text did rewrap — the destination
-/// picture shows the new line breaks, and using it alone means the wrapping
-/// snaps to its final shape on the very first frame while the geometry spends
-/// the whole motion catching up. The second placement is the *previous*
-/// picture at the same rect, fading out, so the old wrapping is still visible
-/// while the pane is still the old shape.
+/// destination picture is correct for it at every instant.
+///
+/// A pane that *shrank* contributes up to three, because two different things
+/// are true of it at once. Its text rewrapped, so the destination picture shows
+/// line breaks the pane is not yet the right shape for — that is the reflow
+/// crossfade, over the area the pane keeps. And it has not yet given up the
+/// area it is vacating — that is the strip, and it is what a split actually
+/// looks like: the old picture holding its ground while the divider sweeps
+/// across it.
+///
+/// The strip is opaque, and that is the whole point. Fading it instead —
+/// which is what a single full-width crossfade does — leaves the old text and
+/// the new pane's text both visible across the vacated area for the length of
+/// the motion. That renders as doubled, half-transparent text and reads as a
+/// dissolve rather than a split, because with every pane already at its
+/// destination nothing in the frame is moving. Holding it opaque means the
+/// frame is partitioned at every instant: new pane, old picture, new pane —
+/// and the boundary between them is the divider, travelling.
 fn place(change: PaneChange, motion: MotionSample, out: &mut Vec<PanePlacement>) {
     let Some(destination) = PanePlacement::at(change, motion) else {
         return;
     };
-    if let PaneChange::Persisted { window, from, to } = change
-        && (from.width - to.width).abs() > REFLOW_WIDTH_EPSILON
-    {
-        // The outgoing wrapping, anchored where the pane used to be so its
-        // lines sit where the reader last saw them, fading out as the
-        // destination fades in underneath.
-        out.push(PanePlacement {
-            window,
-            bounds: destination.bounds,
-            content_origin: (from.x, from.y),
-            source: neomacs_renderer_wgpu::PaneSource::Previous,
-            opacity: 1.0 - motion.content_mix.get(),
-        });
+    if let PaneChange::Persisted { window, from, to } = change {
+        if (from.width - to.width).abs() > REFLOW_WIDTH_EPSILON {
+            // The outgoing wrapping, over the area the pane keeps, fading out
+            // as the destination underneath fades in. Clipped to that area:
+            // beyond it the pane is not rewrapping, it is vacating, and the
+            // strip below says what belongs there.
+            out.push(PanePlacement {
+                window,
+                bounds: Rect {
+                    width: destination.bounds.width.min(to.width),
+                    ..destination.bounds
+                },
+                content_origin: (from.x, from.y),
+                content_extent: (to.width, to.height),
+                source: neomacs_renderer_wgpu::PaneSource::Previous,
+                opacity: 1.0 - motion.content_mix.get(),
+            });
+        }
+        // The area the pane still covers but will not keep, on each axis it is
+        // shrinking along. A pane shrinking on both contributes both, and they
+        // overlap in one corner — harmlessly, since both draw the same opaque
+        // picture at the coordinates it already occupied.
+        for strip in vacated_strips(from, to, destination.bounds) {
+            out.push(PanePlacement {
+                window,
+                bounds: strip.bounds,
+                content_origin: strip.content_origin,
+                content_extent: strip.content_extent,
+                source: neomacs_renderer_wgpu::PaneSource::Previous,
+                opacity: 1.0,
+            });
+        }
     }
     out.push(destination);
+}
+
+/// One rectangle of the old picture that a shrinking pane has not vacated.
+struct VacatedStrip {
+    bounds: Rect,
+    content_origin: (f32, f32),
+    content_extent: (f32, f32),
+}
+
+/// The strips of `bounds` that lie beyond what the pane will keep.
+///
+/// Anchored to the pane's *old* rect, not to the screen: the strip shows the
+/// picture that was under this pane, so as a pane that both moves and shrinks
+/// travels, the old text travels with it rather than standing still while the
+/// pane slides out from under it.
+fn vacated_strips(from: Rect, to: Rect, bounds: Rect) -> impl Iterator<Item = VacatedStrip> {
+    let horizontal = (bounds.width - to.width > REFLOW_WIDTH_EPSILON).then(|| VacatedStrip {
+        bounds: Rect {
+            x: bounds.x + to.width,
+            y: bounds.y,
+            width: bounds.width - to.width,
+            height: bounds.height,
+        },
+        content_origin: (from.x + to.width, from.y),
+        content_extent: (from.width - to.width, from.height),
+    });
+    let vertical = (bounds.height - to.height > REFLOW_WIDTH_EPSILON).then(|| VacatedStrip {
+        bounds: Rect {
+            x: bounds.x,
+            y: bounds.y + to.height,
+            width: bounds.width,
+            height: bounds.height - to.height,
+        },
+        content_origin: (from.x, from.y + to.height),
+        content_extent: (from.width, from.height - to.height),
+    });
+    horizontal.into_iter().chain(vertical)
 }
 
 /// Every pane's placement for one frame, from one shared motion sample.
@@ -503,6 +578,7 @@ impl LayoutSample {
             .map(|placement| neomacs_renderer_wgpu::PaneBlit {
                 bounds: placement.bounds,
                 content_origin: placement.content_origin,
+                content_extent: placement.content_extent,
                 source: placement.source,
                 opacity: placement.opacity,
             })

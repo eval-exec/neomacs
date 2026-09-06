@@ -56,6 +56,16 @@ pub struct PaneBlit {
     pub bounds: Rect,
     /// Where in its source picture its content lives.
     pub content_origin: (f32, f32),
+    /// How much of the source the pane owns, at its destination size.
+    ///
+    /// A travelling pane is often larger than the content it will settle into.
+    /// Sampling `bounds` worth from `content_origin` would then read past its
+    /// own edge into whatever the destination puts beside it — and because the
+    /// composed picture is the destination, that read is pixel-identical to
+    /// what is already on the target, so the pane draws nothing visible and the
+    /// motion is invisible. Clamping to the extent it actually owns is what
+    /// makes the area it has not yet claimed show the frame underneath.
+    pub content_extent: (f32, f32),
     pub source: PaneSource,
     /// How opaque to draw it, for a pane entering or leaving.
     pub opacity: f32,
@@ -89,11 +99,18 @@ impl WgpuRenderer {
         };
 
         let mut vertices = Vec::with_capacity((panes.len() + 1) * 6);
-        // The composed frame, unmoved, underneath everything. Panes are not the
-        // whole frame: the echo area is excluded from every morph, and the tab
-        // bar, tool bar and frame padding belong to no pane at all. Drawing only
-        // the panes over a cleared target would make all of that disappear for
-        // the length of the motion.
+        let mut departing = Vec::new();
+        // The settled picture, underneath everything: the frame the motion is
+        // travelling toward. It is a backdrop, not the animation — every pane
+        // draws over it at where the motion currently puts it, and the parts of
+        // the frame no pane owns (echo area, tab bar, tool bar, padding) are
+        // visible because of it.
+        //
+        // What makes the motion visible is the `Previous`-sourced group drawn
+        // on top of this and fading out. That group is the only place the
+        // picture from *before* the change exists, which is why the composition
+        // ring has to already be warm when the change lands: see
+        // `RenderFeaturePlan::compose_offscreen`.
         vertices.extend_from_slice(&[
             corner(0.0, 0.0, 0.0, 0.0, 1.0),
             corner(frame_width, 0.0, 1.0, 0.0, 1.0),
@@ -103,24 +120,23 @@ impl WgpuRenderer {
             corner(0.0, frame_height, 0.0, 1.0, 1.0),
         ]);
         // Quads are grouped by source, because a bind group cannot change
-        // within one draw call. Destination-sourced panes are emitted first so
-        // a departing pane, which is leaving and should read as on top of what
-        // replaces it, draws over them.
-        let mut departing = Vec::new();
-
+        // within one draw call.
         for pane in panes {
             // The pane samples its own size from the picture, not its
             // destination's: while it is still wider than it will end up, it
             // shows more of the row, and the extra is clipped by its own quad
             // rather than squeezed into it.
+            // Never past what this pane owns: see `content_extent`.
+            let drawn_w = pane.bounds.width.min(pane.content_extent.0);
+            let drawn_h = pane.bounds.height.min(pane.content_extent.1);
             let u0 = pane.content_origin.0 / frame_width;
             let v0 = pane.content_origin.1 / frame_height;
-            let u1 = (pane.content_origin.0 + pane.bounds.width) / frame_width;
-            let v1 = (pane.content_origin.1 + pane.bounds.height) / frame_height;
+            let u1 = (pane.content_origin.0 + drawn_w) / frame_width;
+            let v1 = (pane.content_origin.1 + drawn_h) / frame_height;
             let x0 = pane.bounds.x;
             let y0 = pane.bounds.y;
-            let x1 = pane.bounds.x + pane.bounds.width;
-            let y1 = pane.bounds.y + pane.bounds.height;
+            let x1 = pane.bounds.x + drawn_w;
+            let y1 = pane.bounds.y + drawn_h;
             let quad = [
                 corner(x0, y0, u0, v0, pane.opacity),
                 corner(x1, y0, u1, v0, pane.opacity),
@@ -138,9 +154,13 @@ impl WgpuRenderer {
                 PaneSource::Previous => {}
             }
         }
+        // The previous-sourced group draws last, over the destination: it
+        // holds the outgoing picture at `1.0 - content_mix`, so it starts
+        // opaque — the frame as it was — and fades to reveal the new layout
+        // underneath. Drawn first it would be hidden from the very first frame
+        // and the motion would be invisible again.
         let destination_vertices = vertices.len() as u32;
         vertices.extend_from_slice(&departing);
-
         let upload = self
             .arenas
             .image

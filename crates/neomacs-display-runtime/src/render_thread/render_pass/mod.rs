@@ -229,8 +229,11 @@ fn render_frame_window_contents_to_surface(
 
     // A morph draws the composed frame once and then places it a pane at a
     // time, which needs the frame in a texture rather than straight on the
-    // surface.
-    let need_offscreen = feature_plan.use_transition_offscreen || !pane_blits.is_empty();
+    // surface. The plan is what usually decides this, and it says yes for
+    // whole frames before a morph begins so the picture the morph fades *from*
+    // has been kept; the blits are a floor for the case where one is already
+    // running.
+    let need_offscreen = feature_plan.compose_offscreen || !pane_blits.is_empty();
 
     let present_mapping = render
         .present_mapping()
