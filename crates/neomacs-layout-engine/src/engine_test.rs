@@ -33971,3 +33971,77 @@ fn redisplay_fontifies_visible_text_after_a_large_invisible_span() {
          tail props/calls={tail_props}"
     );
 }
+
+/// A mini-window left shorter than one line of the current font -- a window
+/// configuration saved under a smaller font and restored after the default
+/// font grew, or a leaf carried over the engine's own metrics sync
+/// (`frame.char_height = geometry.metrics.line_height`, which never touches
+/// the mini-window) -- must grow to one line on the next redisplay of a
+/// one-line echo message.  GNU `resize_mini_window` compares pixel heights
+/// (xdisp.c:13276,13395-13406) and `grow_mini_window` adds the pixel
+/// difference (window.c:5896-5930), so the window lands on exactly one line
+/// of the font, never on "old height + one line".
+#[test]
+fn inactive_echo_area_grows_a_sub_line_mini_window_to_one_line_of_the_font() {
+    let mut eval = Context::new();
+    eval.obarray_mut()
+        .set_symbol_value("resize-mini-windows", Value::symbol("grow-only"));
+    eval.obarray_mut()
+        .set_symbol_value("max-mini-window-height", Value::fixnum(10));
+    let root = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("sub-line-echo", 502, 430, root);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.set_current_message(Some(LispString::from_utf8(
+        "Loading pragmatapro font configuration",
+    )));
+
+    // Let layout settle the frame's line height from the realized font.
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let unit = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .char_height;
+    assert!(unit > 4.0, "realized GUI line height, got {unit}");
+
+    // Plant the stale state: a mini-window shorter than one line of that
+    // font, as a restored configuration saved under a smaller font leaves it.
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        let mini = frame.minibuffer_leaf.as_mut().expect("own minibuffer");
+        let mut bounds = *mini.bounds();
+        bounds.height = unit - 4.0;
+        mini.set_bounds(bounds);
+        frame.sync_window_area_bounds();
+    }
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let frame = eval.frame_manager().get(frame_id).expect("frame");
+    let mini = frame
+        .minibuffer_leaf
+        .as_ref()
+        .expect("own minibuffer")
+        .bounds();
+    let root_bounds = frame.root_window.bounds();
+    assert_eq!(
+        mini.height, unit,
+        "a sub-line mini-window grows to exactly one line of the font"
+    );
+    assert_eq!(
+        mini.y + mini.height,
+        430.0,
+        "mini-window ends at the frame bottom"
+    );
+    assert_eq!(
+        root_bounds.y + root_bounds.height,
+        mini.y,
+        "root window ends where the mini-window starts"
+    );
+}

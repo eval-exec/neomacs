@@ -568,15 +568,58 @@ fn sync_live_frame_font_state_in_state(
     };
 
     let font_changed = frame.parameter("font-parameter") != Some(resolution.font_value);
-    let geometry_changed = frame.font_pixel_size != metrics.pixel_size.max(1) as f32
-        || frame.char_width != metrics.average_width.max(1) as f32
-        || frame.char_height != metrics.height.max(1) as f32;
+    let new_font_pixel_size = metrics.pixel_size.max(1) as f32;
+    let new_char_width = metrics.average_width.max(1) as f32;
+    let new_char_height = metrics.height.max(1) as f32;
+    let line_height_changed = frame.char_height != new_char_height;
+    let geometry_changed = line_height_changed
+        || frame.font_pixel_size != new_font_pixel_size
+        || frame.char_width != new_char_width;
 
     frame.set_known_parameter(FrameParam::Font, public_font_name);
     frame.set_parameter(Value::symbol("font-parameter"), resolution.font_value);
-    frame.font_pixel_size = metrics.pixel_size.max(1) as f32;
-    frame.char_width = metrics.average_width.max(1) as f32;
-    frame.char_height = metrics.height.max(1) as f32;
+    frame.font_pixel_size = new_font_pixel_size;
+    frame.char_width = new_char_width;
+    frame.char_height = new_char_height;
+
+    // GNU's `set_new_font_hook` ends in `adjust_frame_size (f, FRAME_COLS (f)
+    // * FRAME_COLUMN_WIDTH (f), FRAME_LINES (f) * FRAME_LINE_HEIGHT (f), 3,
+    // false, Qfont)` (`ns_new_font`, src/nsterm.m:11425-11428; `x_new_font`,
+    // src/xterm.c:27178-27181, emacs-31.0.90).  With `font` outside
+    // `frame-inhibit-implied-resize` (the NS/X default, src/frame.c:7684-7687)
+    // that call asks the window system for a frame that keeps FRAME_LINES at
+    // the new line height and returns (src/frame.c:993-998); the toolkit's
+    // `change_frame_size` then re-enters `adjust_frame_size` with inhibit 5
+    // (src/nsterm.m:1906, src/dispnew.c:6726-6728), which reaches
+    // `resize_frame_windows` (src/frame.c:1076-1082) and gives the
+    // mini-window `unit + decorations` pixels with `unit` the NEW
+    // `FRAME_LINE_HEIGHT` (src/window.c:5051-5053,5125-5128) while
+    // re-deriving every window's character edges.  When the implied resize
+    // is inhibited GNU still lands there on the next redisplay:
+    // `resize_mini_window` compares the content's pixel height against the
+    // window's (src/xdisp.c:13276,13395-13406).
+    //
+    // Here the mini-window's pixel height is carried forward verbatim by
+    // `window_text_area_bounds_with_chrome`, so apply `resize_frame_windows`'
+    // one-line rule at the font boundary (the mini-window's box height is
+    // `unit`: it has no mode line, so "decorations" are zero) and re-derive
+    // the character edges for any metric change, own or shared minibuffer.
+    // The next redisplay re-grows the mini-window for multi-line content.
+    //
+    // Not ported, deliberately: the implied native resize itself (the frame
+    // keeps its pixel size and the root loses lines; only an explicit
+    // width/height parameter is deferred through
+    // `defer_next_gui_parameter_resize` below), the `width`/`height` frame
+    // parameters in the new units (`resize_pixelwise` owns those), and the
+    // per-toolkit gates that skip the whole resize -- NS when the view is
+    // fullscreen (src/nsterm.m:11425), X for tooltip frames (src/xterm.c:
+    // 27178) -- under which GNU keeps a grown mini-window's pixel height.
+    if line_height_changed {
+        frame.shrink_mini_window();
+    }
+    if geometry_changed {
+        frame.sync_window_area_bounds();
+    }
 
     let mut geometry_hints = None;
     if font_changed || geometry_changed {
