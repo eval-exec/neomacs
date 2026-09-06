@@ -703,8 +703,11 @@ fn builtin_gethash_values(
     match table.kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             let ht = table.as_hash_table().unwrap();
-            let key = key_value.to_hash_key_swp(&ht.test, symbols_with_pos_enabled);
-            Ok(ht.data.get(&key).cloned().unwrap_or(default))
+            Ok(ht
+                .data
+                .get_by_value(key_value, ht.test, symbols_with_pos_enabled)
+                .cloned()
+                .unwrap_or(default))
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -799,12 +802,15 @@ fn builtin_puthash_values(
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
             let test = table.as_hash_table().unwrap().test;
-            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
             let _ = table.with_hash_table_mut(|ht| {
-                if let Some(slot) = ht.data.get_mut(&key) {
+                if let Some(slot) =
+                    ht.data
+                        .get_mut_by_value(key_value, test, symbols_with_pos_enabled)
+                {
                     *slot = value;
                 } else {
                     maybe_resize_hash_table_for_insert(ht, true);
+                    let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
                     ht.insert(key, key_value, value);
                 }
             });
@@ -898,9 +904,10 @@ pub(crate) fn builtin_remhash_values(
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
             let test = table.as_hash_table().unwrap().test;
-            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
             let _ = table.with_hash_table_mut(|ht| {
-                let _ = ht.data.remove(&key);
+                let _ = ht
+                    .data
+                    .remove_by_value(key_value, test, symbols_with_pos_enabled);
             });
             Ok(Value::NIL)
         }

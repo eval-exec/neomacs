@@ -690,7 +690,7 @@ pub struct HashTableEntry {
 /// behind one interface instead of mirroring every key across five containers.
 #[derive(Clone, Debug, Default)]
 pub struct HashTableStorage {
-    index: FxHashMap<HashKey, usize>,
+    index: HashIndex,
     slots: Vec<Option<HashTableEntry>>,
     free_slots: Vec<usize>,
     /// Dump entries not yet hydrated into `index`/`slots` (GNU pdumper's
@@ -706,7 +706,7 @@ pub struct HashTableStorage {
 }
 
 pub struct HashTableIter<'a> {
-    index: std::collections::hash_map::Iter<'a, HashKey, usize>,
+    index: hashbrown::hash_map::Iter<'a, HashKey, usize>,
     slots: &'a [Option<HashTableEntry>],
 }
 
@@ -743,7 +743,7 @@ impl std::ops::Index<&HashKey> for HashTableStorage {
 impl HashTableStorage {
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            index: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            index: HashIndex::with_capacity_and_hasher(capacity, Default::default()),
             slots: Vec::with_capacity(capacity),
             free_slots: Vec::new(),
             pending: None,
@@ -790,6 +790,58 @@ impl HashTableStorage {
             .map(|entry| &entry.value)
     }
 
+    /// `get` for a Lisp key: probe in place when the key's shape allows it
+    /// (GNU `hash_lookup`), otherwise materialize the [`HashKey`].
+    pub fn get_by_value(
+        &self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Option<&Value> {
+        let slot = match ValueKeyProbe::new(value, test, symbols_with_pos_enabled) {
+            Some(probe) => *self.index.get(&probe)?,
+            None => *self
+                .index
+                .get(&value.to_hash_key_swp(&test, symbols_with_pos_enabled))?,
+        };
+        self.slots
+            .get(slot)
+            .and_then(Option::as_ref)
+            .map(|entry| &entry.value)
+    }
+    /// `get_mut` counterpart of [`Self::get_by_value`].
+    pub fn get_mut_by_value(
+        &mut self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Option<&mut Value> {
+        let slot = match ValueKeyProbe::new(value, test, symbols_with_pos_enabled) {
+            Some(probe) => *self.index.get(&probe)?,
+            None => *self
+                .index
+                .get(&value.to_hash_key_swp(&test, symbols_with_pos_enabled))?,
+        };
+        self.slots
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .map(|entry| &mut entry.value)
+    }
+    /// `remove` counterpart of [`Self::get_by_value`].
+    pub fn remove_by_value(
+        &mut self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Option<Value> {
+        let slot = match ValueKeyProbe::new(value, test, symbols_with_pos_enabled) {
+            Some(probe) => self.index.remove(&probe)?,
+            None => self
+                .index
+                .remove(&value.to_hash_key_swp(&test, symbols_with_pos_enabled))?,
+        };
+        self.remove_slot(slot)
+    }
     pub fn get_mut(&mut self, key: &HashKey) -> Option<&mut Value> {
         let slot = *self.index.get(key)?;
         self.slots
@@ -855,6 +907,11 @@ impl HashTableStorage {
 
     pub fn remove(&mut self, key: &HashKey) -> Option<Value> {
         let slot = self.index.remove(key)?;
+        self.remove_slot(slot)
+    }
+    /// Free the entry at `slot` (already unlinked from the index) and hand
+    /// its value back; the slot joins the free list for reuse.
+    fn remove_slot(&mut self, slot: usize) -> Option<Value> {
         let entry = self.slots[slot]
             .take()
             .expect("hash index points to an empty entry slot");
@@ -1162,6 +1219,218 @@ pub enum HashKey {
     Cycle(u32),
     /// Owned textual key used for structural hashing.
     Text(Box<str>),
+}
+
+/// Hash index of a Lisp hash table: materialized [`HashKey`] → entry slot.
+/// hashbrown rather than std so a lookup can probe with any
+/// `Q: Hash + Equivalent<HashKey>` — see [`ValueKeyProbe`].
+type HashIndex =
+    hashbrown::HashMap<HashKey, usize, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
+
+/// A lookup key that hashes and compares a [`Value`] in place, the way GNU
+/// `hash_lookup` runs `hashfn` over the object and `cmpfn` against each
+/// candidate (fns.c) — instead of first materializing a [`HashKey`], which
+/// for an `equal` table costs an allocation per cons/string plus a `seen`
+/// vector and a drop on every `gethash`.
+///
+/// Only shapes whose [`HashKey`] form is a pure function of the visible
+/// structure are admitted ([`fast_probe_supported`]); the hash stream and
+/// the equivalence relation then match `to_hash_key_swp` + `HashKey::hash` /
+/// `HashKey::eq` exactly, so the probe finds precisely the entries the
+/// materialized key would. Everything else (bignums, vectors, markers,
+/// overlays, closures, symbols-with-position, non-UTF-8 strings, deep or
+/// cyclic lists) takes the materializing path unchanged.
+pub(crate) struct ValueKeyProbe {
+    value: Value,
+    test: HashTableTest,
+    symbols_with_pos_enabled: bool,
+}
+
+/// Depth beyond which `to_equal_key_depth_swp` degrades to identity keys;
+/// the probe declines such structures rather than mirror that switch.
+const FAST_PROBE_MAX_DEPTH: usize = 200;
+/// Total conses a probe may visit; shared substructure can otherwise make
+/// an `equal` walk exponential, and a cyclic list would never terminate.
+const FAST_PROBE_NODE_BUDGET: usize = 4096;
+
+impl ValueKeyProbe {
+    /// The probe for `value` under `test`, or `None` when the value's key
+    /// form is not one the in-place walker reproduces.
+    pub(crate) fn new(
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Option<Self> {
+        let mut budget = FAST_PROBE_NODE_BUDGET;
+        fast_probe_supported(value, test, symbols_with_pos_enabled, 0, &mut budget).then_some(
+            Self {
+                value,
+                test,
+                symbols_with_pos_enabled,
+            },
+        )
+    }
+}
+
+/// Whether `to_hash_key_swp(value, test)` would produce a key the probe can
+/// hash and compare in place. Mirrors the arms of `to_eq_key` /
+/// `to_eql_key` / `to_equal_key_depth_swp` case by case.
+pub(crate) fn fast_probe_supported(
+    value: Value,
+    test: HashTableTest,
+    symbols_with_pos_enabled: bool,
+    depth: usize,
+    budget: &mut usize,
+) -> bool {
+    if symbols_with_pos_enabled && value.is_symbol_with_pos() {
+        return false;
+    }
+    match value.kind() {
+        ValueKind::Nil | ValueKind::T | ValueKind::Fixnum(_) | ValueKind::Symbol(_) => true,
+        // `to_eq_key` keys a float by identity; the value tests key its bits.
+        ValueKind::Float | ValueKind::Subr(_) | ValueKind::Unbound | ValueKind::Unknown => true,
+        ValueKind::String => match test {
+            HashTableTest::Equal => value.as_utf8_str().is_some(),
+            HashTableTest::Eq | HashTableTest::Eql => true,
+        },
+        ValueKind::Cons => match test {
+            HashTableTest::Eq | HashTableTest::Eql => true,
+            HashTableTest::Equal => {
+                if depth >= FAST_PROBE_MAX_DEPTH || *budget == 0 {
+                    return false;
+                }
+                *budget -= 1;
+                fast_probe_supported(
+                    value.cons_car(),
+                    test,
+                    symbols_with_pos_enabled,
+                    depth + 1,
+                    budget,
+                ) && fast_probe_supported(
+                    value.cons_cdr(),
+                    test,
+                    symbols_with_pos_enabled,
+                    depth + 1,
+                    budget,
+                )
+            }
+        },
+        ValueKind::Veclike(kind) => match test {
+            // `to_eq_key`: every pseudovector keys by identity.
+            HashTableTest::Eq => true,
+            // `to_eql_key`: bignums key by value.
+            HashTableTest::Eql => !matches!(kind, VecLikeType::Bignum),
+            // `to_equal_key`: structural keys for vectors, markers, overlays,
+            // closures, bignums, symbols-with-position — leave them all to
+            // the materializing path.
+            HashTableTest::Equal => false,
+        },
+    }
+}
+
+impl ValueKeyProbe {
+    /// Emit exactly the stream `HashKey::hash` emits for
+    /// `to_hash_key_swp(value, test)`; `fast_probe_supported` guarantees the
+    /// arms below cover the value.
+    fn hash_value<H: std::hash::Hasher>(&self, value: Value, state: &mut H) {
+        use std::hash::Hash;
+        let identity = |state: &mut H| {
+            10u8.hash(state);
+            value.bits().hash(state);
+        };
+        match value.kind() {
+            ValueKind::Nil => 0u8.hash(state),
+            ValueKind::T => 1u8.hash(state),
+            ValueKind::Fixnum(n) => {
+                2u8.hash(state);
+                n.hash(state);
+            }
+            ValueKind::Symbol(id) => {
+                5u8.hash(state);
+                id.hash(state);
+            }
+            ValueKind::Float => match self.test {
+                HashTableTest::Eq => identity(state),
+                HashTableTest::Eql | HashTableTest::Equal => {
+                    3u8.hash(state);
+                    value.xfloat().to_bits().hash(state);
+                }
+            },
+            ValueKind::String => match self.test {
+                HashTableTest::Equal => {
+                    16u8.hash(state);
+                    value
+                        .as_utf8_str()
+                        .expect("fast probe admits only UTF-8 strings under `equal`")
+                        .hash(state);
+                }
+                HashTableTest::Eq | HashTableTest::Eql => identity(state),
+            },
+            ValueKind::Cons => match self.test {
+                HashTableTest::Equal => {
+                    12u8.hash(state);
+                    self.hash_value(value.cons_car(), state);
+                    self.hash_value(value.cons_cdr(), state);
+                }
+                HashTableTest::Eq | HashTableTest::Eql => identity(state),
+            },
+            ValueKind::Subr(_)
+            | ValueKind::Veclike(_)
+            | ValueKind::Unbound
+            | ValueKind::Unknown => identity(state),
+        }
+    }
+
+    /// `to_hash_key_swp(value, test) == *key`, decided without building the
+    /// left-hand side.
+    fn value_matches(&self, value: Value, key: &HashKey) -> bool {
+        match (value.kind(), key) {
+            (ValueKind::Nil, HashKey::Nil) | (ValueKind::T, HashKey::True) => true,
+            (ValueKind::Fixnum(n), HashKey::Int(m)) => n == *m,
+            (ValueKind::Symbol(id), HashKey::Symbol(k)) => id == *k,
+            (ValueKind::Float, HashKey::Float(bits)) => {
+                !matches!(self.test, HashTableTest::Eq) && value.xfloat().to_bits() == *bits
+            }
+            (ValueKind::String, HashKey::Text(text)) => {
+                matches!(self.test, HashTableTest::Equal)
+                    && value.as_utf8_str().is_some_and(|s| s == &**text)
+            }
+            (ValueKind::Cons, HashKey::EqualCons(car, cdr)) => {
+                matches!(self.test, HashTableTest::Equal)
+                    && self.value_matches(value.cons_car(), car)
+                    && self.value_matches(value.cons_cdr(), cdr)
+            }
+            (kind, HashKey::Ptr(ptr)) => {
+                let keyed_by_identity = match kind {
+                    ValueKind::Float => matches!(self.test, HashTableTest::Eq),
+                    ValueKind::String | ValueKind::Cons => {
+                        !matches!(self.test, HashTableTest::Equal)
+                    }
+                    ValueKind::Subr(_)
+                    | ValueKind::Veclike(_)
+                    | ValueKind::Unbound
+                    | ValueKind::Unknown => true,
+                    ValueKind::Nil | ValueKind::T | ValueKind::Fixnum(_) | ValueKind::Symbol(_) => {
+                        false
+                    }
+                };
+                keyed_by_identity && value.bits() == *ptr
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::hash::Hash for ValueKeyProbe {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.hash_value(self.value, state);
+    }
+}
+
+impl hashbrown::Equivalent<HashKey> for ValueKeyProbe {
+    fn equivalent(&self, key: &HashKey) -> bool {
+        self.value_matches(self.value, key)
+    }
 }
 
 impl std::hash::Hash for HashKey {

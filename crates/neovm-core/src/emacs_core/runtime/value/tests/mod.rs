@@ -1338,3 +1338,5 @@ fn list_iter_terminates_on_a_circular_list() {
         "list_to_vec still reports the cycle"
     );
 }
+
+mod hash_probe;
