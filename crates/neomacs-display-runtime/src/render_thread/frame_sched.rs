@@ -169,6 +169,11 @@ demand_reasons! {
     CursorColorCycle => "cursor_color_cycle",
     FiniteEffect => "finite_effect",
     Transition => "transition",
+    /// Panes travelling between two layouts. Distinct from `Transition`, which
+    /// is a cross-presentation content effect: a morph changes where the panes
+    /// are drawn, so it needs frames even when the content is unchanged and
+    /// nothing else on screen is moving.
+    PaneMotion => "pane_motion",
     Video => "video",
     WebKit => "webkit",
     /// Animated shader surfaces visible in a composited frame
