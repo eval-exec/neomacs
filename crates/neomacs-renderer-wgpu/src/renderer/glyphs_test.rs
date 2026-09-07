@@ -585,6 +585,7 @@ fn vertical_bar_cursor_aligned_to_its_glyph_cell_is_not_a_mismatch() {
         geometry: RenderedGlyphGeometry::new(
             Rect::new(233.0, 123.0, 13.0, 18.0),
             Rect::new(233.5, 125.5, 12.5, 13.0),
+            Rect::new(233.5, 125.5, 12.5, 13.0),
         ),
     }];
 
@@ -769,12 +770,13 @@ fn char_bounds(label: &str, x: f32, y: f32, width: f32, height: f32) -> Rendered
         geometry: RenderedGlyphGeometry::new(
             Rect::new(x, y, width, height),
             Rect::new(x, y, width, height),
+            Rect::new(x, y, width, height),
         ),
     }
 }
 
 fn with_bitmap(mut bounds: RenderedCharBounds, bitmap: Rect) -> RenderedCharBounds {
-    bounds.geometry = RenderedGlyphGeometry::new(bounds.geometry.cell, bitmap);
+    bounds.geometry = RenderedGlyphGeometry::new(bounds.geometry.cell, bitmap, bitmap);
     bounds
 }
 
@@ -845,18 +847,74 @@ fn char_overlap_classifies_overhang_past_a_narrower_intervening_cell_separately(
 }
 
 #[test]
+fn char_overlap_accepts_combining_ink_wholly_left_of_its_advance() {
+    // JetBrainsMono Nerd Font Regular, U+0338 at 15 px: advance 0,
+    // outline x=-7.35..-1.65. GNU lbearing < 0 permits all the ink to
+    // lie left of the cell. Baseline y=15; preceding R advances 9 px.
+    let r = with_bitmap(
+        char_bounds("R", 0.0, 0.0, 9.0, 20.0),
+        Rect::new(1.395, 4.05, 6.78, 10.95),
+    );
+    let mut mark = with_bitmap(
+        char_bounds("\u{0338}", 9.0, 0.0, 0.0, 20.0),
+        Rect::new(1.65, 5.1, 5.7, 11.55),
+    );
+    mark.slot_id.col = 1;
+    for (a, b) in [(&r, &mark), (&mark, &r)] {
+        assert_eq!(
+            char_overlap(a, b).unwrap().classification,
+            CharOverlapClassification::Expected(ExpectedCharOverlap::HorizontalOverhang),
+        );
+    }
+}
+
+#[test]
+fn char_overlap_rejects_placement_outside_raster_bounds_even_inside_own_cell() {
+    let a = char_bounds("A", 0.0, 0.0, 9.0, 12.0);
+    let mut b = with_bitmap(
+        char_bounds("B", 9.0, 0.0, 9.0, 12.0),
+        Rect::new(9.0, 0.0, 8.0, 12.0),
+    );
+    b.slot_id.col = 1;
+    // A downstream placement error moves B left of its rasterizer bounds.
+    // Most of B's ink still lies inside its advance cell.
+    b.geometry.bitmap.x -= 2.0;
+    assert_eq!(
+        char_overlap(&a, &b).unwrap().classification,
+        CharOverlapClassification::Unexpected,
+    );
+}
+
+#[test]
+fn char_overlap_accepts_overhang_clipped_away_from_its_own_cell() {
+    let mut icon = with_bitmap(
+        char_bounds("icon", 0.0, 0.0, 9.0, 12.0),
+        Rect::new(0.0, 0.0, 24.0, 12.0),
+    );
+    // Only the portion of the original raster to the right of x=10 survives.
+    icon.geometry.bitmap = Rect::new(10.0, 0.0, 14.0, 12.0);
+    let mut next = char_bounds("R", 13.0, 0.0, 9.0, 12.0);
+    next.slot_id.col = 2;
+    assert_eq!(
+        char_overlap(&icon, &next).unwrap().classification,
+        CharOverlapClassification::Expected(ExpectedCharOverlap::HorizontalOverhang),
+    );
+}
+
+#[test]
 fn char_overlap_keeps_a_bitmap_displaced_from_its_own_cell_a_collision() {
-    // Ink that never touches its own advance cell is a placement defect (an
-    // x-offset, scale or slot bug), whatever it lands on. GNU overhang is
-    // `rbearing > width` / `lbearing < 0`: ink that starts in the cell.
+    // The font's raster belongs at x=19, but the submitted bitmap is shifted
+    // to x=1. It is the mismatch with the raster bearings, not separation
+    // from the advance cell, that proves a placement defect.
     let a = with_bitmap(
         char_bounds("A", 0.0, 0.0, 9.0, 12.0),
         Rect::new(0.5, 0.0, 8.0, 12.0),
     );
     let mut displaced = with_bitmap(
         char_bounds("B", 18.0, 0.0, 9.0, 12.0),
-        Rect::new(1.0, 0.0, 7.0, 12.0),
+        Rect::new(19.0, 0.0, 7.0, 12.0),
     );
+    displaced.geometry.bitmap.x = 1.0;
     displaced.slot_id.col = 2;
 
     let overlap = char_overlap(&a, &displaced).expect("bitmap collision");
@@ -868,9 +926,8 @@ fn char_overlap_keeps_a_bitmap_displaced_from_its_own_cell_a_collision() {
 
 #[test]
 fn char_overlap_classifies_ink_starting_at_its_cell_edge_as_overhang() {
-    // GNU `lbearing >= width` (ink wholly right of the advance, e.g. a
-    // zero-width combining mark's cell) is still a bearing; the own-cell rule
-    // tolerates the shared threshold rather than demanding ink strictly inside.
+    // A zero-width glyph can draw at or beyond its cell edge; GNU's bearing
+    // conditions do not require ink strictly inside the advance cell.
     let mut mark = with_bitmap(
         char_bounds("\u{0301}", 9.0, 0.0, 0.0, 12.0),
         Rect::new(9.0, 0.0, 4.0, 12.0),

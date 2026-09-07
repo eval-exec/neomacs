@@ -47,11 +47,19 @@ pub(super) struct RenderedGlyphGeometry {
     cell: Rect,
     /// The clipped bitmap rectangle actually submitted for rendering.
     bitmap: Rect,
+    /// Unclipped ink bounds from the atlas bearings and snapped glyph origin.
+    /// Kept separately from submitted geometry so clipping is allowed, but
+    /// placement outside the rasterizer's horizontal bounds is not overhang.
+    raster_bounds: Rect,
 }
 
 impl RenderedGlyphGeometry {
-    pub(super) const fn new(cell: Rect, bitmap: Rect) -> Self {
-        Self { cell, bitmap }
+    pub(super) const fn new(cell: Rect, bitmap: Rect, raster_bounds: Rect) -> Self {
+        Self {
+            cell,
+            bitmap,
+            raster_bounds,
+        }
     }
 
     #[cfg(test)]
@@ -67,6 +75,7 @@ impl RenderedGlyphGeometry {
     pub(super) fn translated_y(mut self, dy: f32) -> Self {
         self.cell.y += dy;
         self.bitmap.y += dy;
+        self.raster_bounds.y += dy;
         self
     }
 
@@ -216,10 +225,20 @@ fn overlap_is_expected_on_axis(
         // following (preceding) glyphs while the overhang still exceeds their
         // summed `pixel_width`, so a bearing legitimately reaches past a
         // narrower intervening cell; the cells need not touch. GNU bounds
-        // that reach by the font's own bearing (`gui_get_glyph_overhangs`),
-        // which this diagnostic cannot see; the substitute below is that the
-        // reaching ink must start inside its own cell.
-        OverlapAxis::Horizontal => {}
+        // that reach by the font's own bearing (`gui_get_glyph_overhangs`).
+        // Our atlas supplies raster bearings, including combining ink wholly
+        // outside its cell. Submitted ink may be clipped but cannot extend
+        // outside those bounds and still be explained by those bearings.
+        OverlapAxis::Horizontal => {
+            for geometry in [a.geometry, b.geometry] {
+                if geometry.bitmap.x < geometry.raster_bounds.x - CHAR_OVERLAP_MIN_AXIS
+                    || geometry.bitmap.right()
+                        > geometry.raster_bounds.right() + CHAR_OVERLAP_MIN_AXIS
+                {
+                    return false;
+                }
+            }
+        }
         // Vertical overlap belongs to adjacent rows and must straddle the
         // boundary they share.
         OverlapAxis::Vertical => {
@@ -237,19 +256,11 @@ fn overlap_is_expected_on_axis(
 
     // Overhang is derived from the two rectangles. Keeping it out of stored
     // state makes a bitmap/cell pair with contradictory overhang impossible.
-    // Horizontally, a bitmap that lies wholly outside its own cell is
-    // displaced, not overhanging: GNU's `rbearing > width` / `lbearing < 0`
-    // describe ink that starts in the cell and extends past it. Vertical
-    // overlap is already bound to the shared row boundary above.
-    let starts_in_own_cell = |bitmap: AxisSpan, cell: AxisSpan| {
-        axis == OverlapAxis::Vertical
-            || (bitmap.start < cell.end + CHAR_OVERLAP_MIN_AXIS
-                && bitmap.end > cell.start - CHAR_OVERLAP_MIN_AXIS)
-    };
-    let before_extends_after_cell =
-        before_bitmap.end > before_cell.end && starts_in_own_cell(before_bitmap, before_cell);
-    let after_extends_before_cell =
-        after_bitmap.start < after_cell.start && starts_in_own_cell(after_bitmap, after_cell);
+    // GNU's lbearing < 0 / rbearing > width do not require ink to intersect
+    // its advance cell. The atlas-bound check above distinguishes a bearing
+    // from a placement error without imposing that invalid restriction.
+    let before_extends_after_cell = before_bitmap.end > before_cell.end;
+    let after_extends_before_cell = after_bitmap.start < after_cell.start;
     if !before_extends_after_cell && !after_extends_before_cell {
         return false;
     }

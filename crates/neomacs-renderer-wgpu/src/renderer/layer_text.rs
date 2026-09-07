@@ -360,6 +360,7 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                         let glyph_y = (y_int as f32 - metrics.bearing_y) / sf;
                         let glyph_w = content_rect.width() as f32 / sf;
                         let glyph_h = content_rect.height() as f32 / sf;
+                        let raster_bounds = Rect::new(glyph_x, glyph_y, glyph_w, glyph_h);
 
                         let tex_u_min = uv.min()[0];
                         let tex_u_max = uv.max()[0];
@@ -449,6 +450,7 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                                 geometry: RenderedGlyphGeometry::new(
                                     Rect::new(*x, *y, *width, *height),
                                     Rect::new(glyph_x, glyph_y, glyph_w, glyph_h),
+                                    raster_bounds,
                                 ),
                             });
                         }
