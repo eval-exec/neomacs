@@ -408,6 +408,69 @@ fn allows_negative(property: &str) -> bool {
     )
 }
 
+/// What a numeric property's own name says about it.
+///
+/// The single place the registry's name-keyed number rules are *published*
+/// rather than merely enforced. `value_for_target` applies the same predicates
+/// when a value arrives; this states them ahead of time so a customization
+/// widget can be built with the right bounds instead of discovering them by
+/// having a value clamped underneath it.
+#[must_use]
+pub const fn kind_for_number_property(property: &str) -> crate::effect_config::PropertyKind {
+    use crate::effect_config::PropertyKind;
+    // `const fn` cannot call the predicates below (they use `matches!` on a
+    // `&str`, which is fine, but `contains` is not const), so the two are kept
+    // in step by `number_property_kinds_match_the_rules_that_enforce_them`
+    // rather than by sharing code.
+    if konst_contains(property, b"opacity") {
+        PropertyKind::UnitInterval
+    } else if konst_ends_with(property, b"_pct") {
+        PropertyKind::Percentage
+    } else {
+        PropertyKind::Number
+    }
+}
+
+const fn konst_contains(haystack: &str, needle: &[u8]) -> bool {
+    let hay = haystack.as_bytes();
+    if needle.len() > hay.len() {
+        return false;
+    }
+    let mut start = 0;
+    while start + needle.len() <= hay.len() {
+        let mut i = 0;
+        let mut same = true;
+        while i < needle.len() {
+            if hay[start + i] != needle[i] {
+                same = false;
+                break;
+            }
+            i += 1;
+        }
+        if same {
+            return true;
+        }
+        start += 1;
+    }
+    false
+}
+
+const fn konst_ends_with(haystack: &str, suffix: &[u8]) -> bool {
+    let hay = haystack.as_bytes();
+    if suffix.len() > hay.len() {
+        return false;
+    }
+    let offset = hay.len() - suffix.len();
+    let mut i = 0;
+    while i < suffix.len() {
+        if hay[offset + i] != suffix[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 fn is_unit_interval(property: &str) -> bool {
     property.contains("opacity")
         || matches!(
