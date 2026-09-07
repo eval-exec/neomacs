@@ -158,7 +158,6 @@ pub(super) fn clipped_media_rect(
 /// Untinted (white) textured quad spanning the full u range and the given
 /// (possibly clip-trimmed) v range.
 // Default features use this only from test and feature-gated video/WebKit paths.
-#[allow(dead_code)]
 pub(super) fn textured_quad_vertices(
     x: f32,
     y: f32,
