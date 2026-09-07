@@ -5393,15 +5393,24 @@ impl Context {
         let result = self.maybe_grow_eval_stack(|ctx| {
             ctx.maybe_quit_before_gc()?;
             if ctx.gc_safe_point_exact_should_collect() {
-                let specpdl_root_scope = ctx.save_specpdl_roots();
-                ctx.push_specpdl_root(form);
-                ctx.gc_collect_from_current_roots();
-                ctx.restore_specpdl_roots(specpdl_root_scope);
+                ctx.collect_at_eval_safe_point(form);
             }
             ctx.eval_sub_cons(form)
         });
         self.depth -= 1;
         result
+    }
+
+    /// GNU `maybe_gc` inside `eval_sub`, with FORM rooted for the collection
+    /// (GNU's conservative scan sees it on the C stack).  Out of line so the
+    /// per-form path carries only the predicate.
+    #[cold]
+    #[inline(never)]
+    fn collect_at_eval_safe_point(&mut self, form: Value) {
+        let specpdl_root_scope = self.save_specpdl_roots();
+        self.push_specpdl_root(form);
+        self.gc_collect_from_current_roots();
+        self.restore_specpdl_roots(specpdl_root_scope);
     }
 
     /// GNU's `max_lisp_eval_depth` -- the `DEFVAR_INT` cell (`src/eval.c:4405`)
@@ -5427,8 +5436,25 @@ impl Context {
             .map(|n| n.max(100) as usize)
     }
 
+    /// GNU `eval_sub` (`src/eval.c:2585`): `lisp_eval_depth++` and one
+    /// compare against `max_lisp_eval_depth` on the common path; the
+    /// localized cell, the cache refresh and the signal are the cold tail.
+    #[inline(always)]
     fn enter_interpreted_eval_depth(&mut self) -> Result<(), Flow> {
         self.depth += 1;
+        if self.depth <= self.max_depth && !self.obarray.is_localized(max_lisp_eval_depth_symbol())
+        {
+            return Ok(());
+        }
+        self.enter_interpreted_eval_depth_slow()
+    }
+
+    /// The tail of [`Self::enter_interpreted_eval_depth`]: `depth` is already
+    /// counted; decide against the localized or refreshed limit, undoing the
+    /// count when the nesting signal fires.
+    #[cold]
+    #[inline(never)]
+    fn enter_interpreted_eval_depth_slow(&mut self) -> Result<(), Flow> {
         if let Some(buffer_limit) = self.current_max_lisp_eval_depth() {
             if self.depth > buffer_limit {
                 let overflow_depth = self.depth as i64;
