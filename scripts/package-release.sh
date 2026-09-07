@@ -12,7 +12,8 @@ Options:
                   Defaults to x86_64-unknown-linux-gnu on Linux,
                   aarch64-apple-darwin on macOS, x86_64-pc-windows-msvc or
                   aarch64-pc-windows-msvc on Windows.
-  --skip-build    Package existing target/release artifacts without running
+  --skip-build    Package existing artifacts (target/release, or the directory
+                  named by NEOMACS_RELEASE_DIR) without running
                   cargo xtask fresh-build --release.
   --no-smoke      Do not smoke-test the extracted archive.
 
@@ -102,7 +103,9 @@ if ((skip_build == 0)); then
   cargo xtask fresh-build --release
 fi
 
-release_dir="$repo_root/target/release"
+# NEOMACS_RELEASE_DIR selects the cargo profile directory to package; the
+# release workflow points it at target/release-pgo (see release.yml).
+release_dir="${NEOMACS_RELEASE_DIR:-$repo_root/target/release}"
 dist_dir="$repo_root/dist"
 version="$(get_version)"
 product_name="neomacs"

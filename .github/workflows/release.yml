@@ -36,11 +36,13 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       TMPDIR: ${{ github.workspace }}/tmp
-      # The full product's cargo features, shared by the compile step and the
-      # bootstrap below so both describe one build. `video` is what this
+      # The full product's cargo features, handed to the single PGO build step
+      # below (xtask compiles both passes with them). `video` is what this
       # platform declares in [workspace.metadata.neomacs-production-capabilities];
       # a test pins this list to that table.
       RELEASE_FEATURES: video,neomacs-layout-engine/freetype-bundled
+      # The packaging scripts read the PGO profile directory from here.
+      NEOMACS_RELEASE_DIR: ${{ github.workspace }}/target/release-pgo
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,26 +75,12 @@ jobs:
           url: https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage
           cache_key: continuous-${{ matrix.arch }}
 
-      # Split so a compile failure is distinguishable from a bootstrap failure,
-      # and so the expensive half is a step of its own.  This build must match
-      # xtask's own EXACTLY - same package, same features, same profile - or the
-      # bootstrap below rebuilds it instead of reusing it, and where nothing
-      # verifies the result it blesses a product missing a capability the
-      # manifest promises (macOS shipped without `webview` that way).  Hence one
-      # RELEASE_FEATURES for both steps.  crates/neomacs/build.rs declares
-      # rerun-if-env-changed on NEOMACS_BUILD_PROFILE, so the profile has to
-      # agree the same way.  `-p neomacs` covers neomacs, neomacsclient and
-      # mock-display; they are bins of one package.
-      - name: Compile release binaries
-        env:
-          NEOMACS_BUILD_PROFILE: release
-        run: >-
-          cargo build -p neomacs
-          --features "$RELEASE_FEATURES"
-          --profile release
-
-      - name: Bootstrap and dump
-        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+      # One xtask invocation owns both PGO passes -- the instrumented build
+      # plus its training run, then the optimized build with the merged
+      # profile -- so both compile with the same features. A separate
+      # `cargo build` beforehand would only be discarded by pass 2.
+      - name: Build, train, and dump (PGO)
+        run: cargo xtask fresh-build --profile release-pgo --features "$RELEASE_FEATURES"
 
       - name: Set version env
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -163,12 +151,14 @@ jobs:
       # Reserve the space for every binary that goes into the bundle -- the
       # others only fit by accident of their existing padding.
       RUSTFLAGS: "-C link-arg=-Wl,-headerpad_max_install_names"
-      # Shared by the compile step and the bootstrap below so both describe one
-      # build. `webview` is what darwin declares in
+      # Handed to the single PGO build step below (xtask compiles both passes
+      # with them). `webview` is what darwin declares in
       # [workspace.metadata.neomacs-production-capabilities]; a test pins this
       # list to that table. Omitting it here is what shipped macOS without the
       # WKWebView layer, because verify_built_product only inspects Linux.
       RELEASE_FEATURES: webview,neomacs-layout-engine/freetype-bundled
+      # The packaging scripts read the PGO profile directory from here.
+      NEOMACS_RELEASE_DIR: ${{ github.workspace }}/target/release-pgo
     outputs:
       distribution_mode: ${{ steps.macos-signing.outputs.distribution_mode }}
     steps:
@@ -193,13 +183,12 @@ jobs:
       # rerun-if-env-changed=NEOMACS_BUILD_PROFILE - or the second step would
       # refingerprint and rebuild instead of reusing this.  `-p neomacs` covers
       # neomacs, neomacsclient and mock-display; they are bins of one package.
-      - name: Compile release binaries
-        env:
-          NEOMACS_BUILD_PROFILE: release
-        run: cargo build -p neomacs --features "$RELEASE_FEATURES" --profile release
-
-      - name: Bootstrap and dump
-        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+      # One xtask invocation owns both PGO passes -- the instrumented build
+      # plus its training run, then the optimized build with the merged
+      # profile -- so both compile with the same features. A separate
+      # `cargo build` beforehand would only be discarded by pass 2.
+      - name: Build, train, and dump (PGO)
+        run: cargo xtask fresh-build --profile release-pgo --features "$RELEASE_FEATURES"
 
       - name: Configure Developer ID signing and notarization
         id: macos-signing
@@ -255,8 +244,8 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       NEOMACS_RELEASE_TARGET: ${{ matrix.target }}
-      # Shared by the compile step and the bootstrap below so both describe one
-      # build. Windows declares no production capabilities in
+      # Handed to the single PGO build step below (xtask compiles both passes
+      # with them). Windows declares no production capabilities in
       # [workspace.metadata.neomacs-production-capabilities], so this is the
       # requested features alone; a test pins that to the table.
       RELEASE_FEATURES: neomacs-layout-engine/freetype-bundled
@@ -284,17 +273,13 @@ jobs:
       # NEOMACS_BUILD_PROFILE, which crates/neomacs/build.rs declares
       # rerun-if-env-changed on - otherwise the bootstrap step refingerprints
       # and rebuilds instead of reusing this.
-      - name: Compile release binaries
+      # One xtask invocation owns both PGO passes -- the instrumented build
+      # plus its training run, then the optimized build with the merged
+      # profile -- so both compile with the same features. A separate
+      # `cargo build` beforehand would only be discarded by pass 2.
+      - name: Build, train, and dump (PGO)
         shell: bash
-        timeout-minutes: 150
-        env:
-          NEOMACS_BUILD_PROFILE: release
-        run: |
-          cargo build -p neomacs --features "$RELEASE_FEATURES" --profile release
-
-      - name: Bootstrap and dump
-        shell: bash
-        timeout-minutes: 60
+        timeout-minutes: 210
         run: |
           # The pdump generation runs neomacs, whose startup expands `~`. The
           # minimal CI build environment sets USERPROFILE/APPDATA but not HOME,
@@ -302,7 +287,7 @@ jobs:
           # it HOME explicitly (a real Windows session always has one; GNU's
           # w32.c init_environment likewise guarantees HOME is set).
           export HOME="${USERPROFILE:-$GITHUB_WORKSPACE}"
-          cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+          cargo xtask fresh-build --profile release-pgo --features "$RELEASE_FEATURES"
 
       - name: Set version env (bash)
         shell: bash
@@ -314,10 +299,10 @@ jobs:
           TARGET="$NEOMACS_RELEASE_TARGET"
           STAGING="neomacs-${VERSION}-${TARGET}"
           mkdir -p "$STAGING"
-          cp target/release/neomacs.exe "$STAGING/"
-          cp target/release/neomacsclient.exe "$STAGING/"
-          cp target/release/cmdproxy.exe "$STAGING/"
-          cp target/release/neomacs.pdump "$STAGING/"
+          cp target/release-pgo/neomacs.exe "$STAGING/"
+          cp target/release-pgo/neomacsclient.exe "$STAGING/"
+          cp target/release-pgo/cmdproxy.exe "$STAGING/"
+          cp target/release-pgo/neomacs.pdump "$STAGING/"
           cp -r lisp "$STAGING/"
           cp -r etc "$STAGING/"
           cp COPYING "$STAGING/"

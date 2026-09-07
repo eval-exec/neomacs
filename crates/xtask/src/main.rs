@@ -826,8 +826,24 @@ fn llvm_profdata_path() -> Result<PathBuf> {
         .arg("sysroot")
         .output()?;
     let sysroot = String::from_utf8(sysroot.stdout)?.trim().to_string();
-    let path =
-        PathBuf::from(&sysroot).join("lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata");
+    // The tool lives under the HOST triple's rustlib dir: every release job
+    // runs on a native runner (x86_64/aarch64 Linux, aarch64 macOS,
+    // x86_64/aarch64 Windows), so the host is also the target being trained.
+    let host = Command::new("rustc")
+        .arg("--print")
+        .arg("host-tuple")
+        .output()?;
+    let host = String::from_utf8(host.stdout)?.trim().to_string();
+    let tool = if cfg!(windows) {
+        "llvm-profdata.exe"
+    } else {
+        "llvm-profdata"
+    };
+    let path = PathBuf::from(&sysroot)
+        .join("lib/rustlib")
+        .join(&host)
+        .join("bin")
+        .join(tool);
     if path.exists() {
         return Ok(path);
     }

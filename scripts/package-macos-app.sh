@@ -139,7 +139,9 @@ if ((skip_build == 0)); then
   cargo xtask fresh-build --release
 fi
 
-release_dir="$repo_root/target/release"
+# NEOMACS_RELEASE_DIR selects the cargo profile directory to package; the
+# release workflow points it at target/release-pgo (see release.yml).
+release_dir="${NEOMACS_RELEASE_DIR:-$repo_root/target/release}"
 
 for required in "$release_dir/neomacs" "$release_dir/neomacsclient" "$release_dir/neomacs.pdump"; do
   if [[ ! -f "$required" ]]; then
