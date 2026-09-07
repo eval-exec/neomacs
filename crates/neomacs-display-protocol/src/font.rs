@@ -412,24 +412,6 @@ fn append_variation_key(stable_key: &mut String, variation_coords: &[FontVariati
     }
 }
 
-/// How a resolved font was chosen. Distinguishing fallback tiers keeps
-/// traces and oracle runs able to flag unexpected selection paths.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub enum FontResolutionSource {
-    /// The realized face's primary font.
-    FacePrimary,
-    /// Chosen via fontset / per-character coverage fallback.
-    FontsetFallback,
-    /// Chosen via emoji presentation fallback.
-    EmojiFallback,
-    /// Chosen by the platform's last-resort matching.
-    PlatformFallback,
-    /// Renderer-side emergency fallback: text reached the render thread
-    /// without a resolved identity. Must be zero for normal GUI text.
-    EmergencyFallback,
-}
-
 /// Font slant as carried across the display protocol.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
@@ -823,7 +805,6 @@ pub struct ResolvedFont {
     /// canonical fixed-pitch cell.
     #[serde(default)]
     pub glyph_advance: ResolvedFontAdvance,
-    pub source: FontResolutionSource,
 }
 
 /// Resolved font table carried by frame state, keyed by [`ResolvedFontId`].

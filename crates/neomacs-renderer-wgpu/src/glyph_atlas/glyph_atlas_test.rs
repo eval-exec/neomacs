@@ -258,7 +258,7 @@ fn default_metrics_accept_explicit_default_font_size() {
 #[test]
 fn renderer_reopens_the_exact_physical_bitmap_strike_without_rescaling() {
     use neomacs_display_protocol::font::{
-        FontResolutionSource, FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
+        FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
     };
     use neomacs_display_protocol::geometry::DeviceScale;
     use neomacs_font_materializer::{FixedFontSpacing, FontMaterializer, FontOpenRequest};
@@ -293,7 +293,6 @@ fn renderer_reopens_the_exact_physical_bitmap_strike_without_rescaling() {
         descent_px: metrics.descent_px,
         space_advance_px: metrics.space_advance_px,
         glyph_advance: Default::default(),
-        source: FontResolutionSource::FacePrimary,
     };
 
     let mut cache = BitmapFontReplayCache::new().expect("renderer bitmap replay cache");
@@ -488,9 +487,7 @@ fn atlas_sampling_policy_selects_distinct_wgpu_bind_groups() {
 #[test]
 fn renderer_keeps_missing_ascii_on_primary_font() {
     use neomacs_display_protocol::face::Face;
-    use neomacs_display_protocol::font::{
-        FontResolutionSource, FontSlantKind, ResolvedFont, ResolvedFontId,
-    };
+    use neomacs_display_protocol::font::{FontSlantKind, ResolvedFont, ResolvedFontId};
     use neomacs_layout_engine::font::metrics::FontMetricsService;
 
     let requested_family = "Symbols Nerd Font Mono";
@@ -540,7 +537,6 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
         descent_px: 2.0,
         space_advance_px: 5.0,
         glyph_advance: Default::default(),
-        source: FontResolutionSource::FacePrimary,
     };
     atlas.install_frame_fonts(
         &Default::default(),
@@ -615,9 +611,7 @@ fn renderer_uses_layouts_published_fixed_cell_advance() {
 #[tracing_test::traced_test]
 fn renderer_replays_named_instance_weight_on_the_exact_raw_face() {
     use cosmic_text::{Buffer, Metrics, Shaping};
-    use neomacs_display_protocol::font::{
-        FontResolutionSource, FontSlantKind, ResolvedFont, ResolvedFontId,
-    };
+    use neomacs_display_protocol::font::{FontSlantKind, ResolvedFont, ResolvedFontId};
     use neomacs_layout_engine::font::metrics::FontMetricsService;
 
     let Some(resolved) =
@@ -652,7 +646,6 @@ fn renderer_replays_named_instance_weight_on_the_exact_raw_face() {
         descent_px: 0.0,
         space_advance_px: 0.0,
         glyph_advance: Default::default(),
-        source: FontResolutionSource::FacePrimary,
     };
 
     let attrs = atlas
@@ -682,7 +675,7 @@ fn renderer_replays_named_instance_weight_on_the_exact_raw_face() {
 #[test]
 fn renderer_exact_attrs_reject_an_unopenable_identity() {
     use neomacs_display_protocol::font::{
-        FontResolutionSource, FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
+        FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
     };
 
     let Some(mut atlas) = try_test_atlas() else {
@@ -704,7 +697,6 @@ fn renderer_exact_attrs_reject_an_unopenable_identity() {
         descent_px: 0.0,
         space_advance_px: 0.0,
         glyph_advance: Default::default(),
-        source: FontResolutionSource::FacePrimary,
     };
 
     assert!(atlas.exact_attrs_for_resolved_font(&font).is_none());
@@ -713,7 +705,7 @@ fn renderer_exact_attrs_reject_an_unopenable_identity() {
 #[test]
 fn renderer_replays_the_same_decoded_woff_face_as_layout() {
     use neomacs_display_protocol::font::{
-        FontResolutionSource, FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
+        FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
     };
 
     let Some(mut atlas) = try_test_atlas() else {
@@ -737,7 +729,6 @@ fn renderer_replays_the_same_decoded_woff_face_as_layout() {
         descent_px: 4.0,
         space_advance_px: 8.0,
         glyph_advance: Default::default(),
-        source: FontResolutionSource::FacePrimary,
     };
     atlas.install_frame_fonts(
         &Default::default(),
@@ -766,8 +757,7 @@ fn renderer_replays_the_same_decoded_woff_face_as_layout() {
 fn renderer_replays_a_native_memory_asset_in_its_own_font_system() {
     use cosmic_text::{Buffer, Metrics, Shaping};
     use neomacs_display_protocol::font::{
-        FontBackendKind, FontMemoryAsset, FontResolutionSource, FontSlantKind, ResolvedFont,
-        ResolvedFontId,
+        FontBackendKind, FontMemoryAsset, FontSlantKind, ResolvedFont, ResolvedFontId,
     };
     use std::sync::Arc;
 
@@ -815,7 +805,6 @@ fn renderer_replays_a_native_memory_asset_in_its_own_font_system() {
         descent_px: 4.0,
         space_advance_px: 8.0,
         glyph_advance: Default::default(),
-        source: FontResolutionSource::FacePrimary,
     };
     atlas.install_frame_fonts(
         &Default::default(),
@@ -856,8 +845,7 @@ fn renderer_replays_a_native_memory_asset_in_its_own_font_system() {
 #[test]
 fn reused_resolved_font_id_invalidates_renderer_identity_caches() {
     use neomacs_display_protocol::font::{
-        FontResolutionSource, FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
-        ResolvedFontTable,
+        FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity, ResolvedFontTable,
     };
 
     let Some(mut atlas) = try_test_atlas() else {
@@ -881,7 +869,6 @@ fn reused_resolved_font_id_invalidates_renderer_identity_caches() {
             descent_px: 0.0,
             space_advance_px: 0.0,
             glyph_advance: Default::default(),
-            source: FontResolutionSource::FacePrimary,
         }
     };
     let mut first = ResolvedFontTable::new();

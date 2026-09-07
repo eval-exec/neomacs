@@ -247,6 +247,33 @@ fn symbol_font_policy_tracks_the_live_char_script_table_and_invalidates_char_cac
 }
 
 #[test]
+fn covered_char_publishes_the_same_record_as_the_realized_face() {
+    // GNU keeps one font object per realized entity and size; whether the
+    // ASCII face or a fontset tier led to it is not a property of the font.
+    // The frame font table is keyed by id, so both paths must publish one
+    // identical record or the renderer sees an id reused for a new instance.
+    let mut svc = make_svc();
+    let face = svc
+        .resolved_font_for_face("Monospace", 400, false, 14.0)
+        .expect("realized primary font");
+    let Some(ch) = ['é', 'ü', 'ñ', 'ö'].into_iter().find(|ch| {
+        svc.resolved_font_for_char(*ch, "Monospace", 400, false, 14.0)
+            .is_some_and(|font| font.id == face.id)
+    }) else {
+        debug!("skipping: platform monospace font covers none of the probe characters");
+        return;
+    };
+
+    let via_char = svc
+        .resolved_font_for_char(ch, "Monospace", 400, false, 14.0)
+        .expect("covered character");
+    assert_eq!(
+        via_char, face,
+        "one resolved font id must name one record on every resolution path"
+    );
+}
+
+#[test]
 fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
     let mut eval = neovm_core::Context::new();
     eval.eval_str("(set-char-table-range char-script-table '(#x2000 . #x27ff) 'symbol)")
@@ -268,7 +295,7 @@ fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
         .materialized_font_for_realized_face_char('▶', selection)
         .expect("covered symbol font");
     assert_eq!(symbol.font.id, primary.font.id);
-    assert_eq!(symbol.font.source, FontResolutionSource::FacePrimary);
+    assert_eq!(symbol.resolution, FontResolutionSource::FacePrimary);
 
     let (_, published_fonts) = svc
         .resolve_cluster_uncached("▶", selection)
@@ -277,7 +304,7 @@ fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
         .iter()
         .find(|font| font.id == primary.font.id)
         .expect("selected primary is published for the cluster");
-    assert_eq!(published.source, FontResolutionSource::FacePrimary);
+    assert_eq!(*published, primary.font);
 }
 
 #[test]
@@ -328,7 +355,7 @@ fn realized_face_complex_run_shapes_with_the_exact_materialized_fontset_font() {
         .expect("materialized fontset font");
     assert_eq!(materialized.font.family, "JetBrainsMono Nerd Font");
     assert_eq!(
-        materialized.font.source,
+        materialized.resolution,
         FontResolutionSource::FontsetFallback
     );
     let exact_family = match svc
@@ -1398,6 +1425,31 @@ fn scalable_color_bitmap_keeps_exact_platform_identity_at_requested_size() {
     assert_eq!(resolved.pixel_size, 14.0);
 }
 
+fn fixture_record(
+    id: ResolvedFontId,
+    identity: &ResolvedFontIdentity,
+    replay: &FontReplay,
+    pixel_size: f32,
+    family: &str,
+) -> ResolvedFont {
+    ResolvedFont {
+        id,
+        identity: identity.clone(),
+        replay: replay.clone(),
+        family: family.to_owned(),
+        full_name: None,
+        postscript_name: None,
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size,
+        ascent_px: pixel_size,
+        descent_px: 0.0,
+        space_advance_px: pixel_size * 0.6,
+        glyph_advance: ResolvedFontAdvance::PerGlyph,
+    }
+}
+
 #[test]
 fn resolved_font_ids_name_a_complete_realized_instance() {
     use neomacs_display_protocol::font::{BitmapStrikeKey, FontReplay, GlyphSampling};
@@ -1415,21 +1467,182 @@ fn resolved_font_ids_name_a_complete_realized_instance() {
         sampling: GlyphSampling::Nearest,
         spacing: neomacs_display_protocol::font::FixedFontSpacing::MonospaceOrCharacterCell,
     };
+    let intern = |svc: &mut FontMetricsService, replay: FontReplay, size: f32| {
+        svc.intern_resolved_font(identity.clone(), replay, size, |id, identity, replay| {
+            fixture_record(id, &identity, &replay, size, "fixed")
+        })
+        .id
+    };
 
-    let first = svc.intern_resolved_font_id(&identity, strike(0), 13.0);
-    assert_eq!(
-        first,
-        svc.intern_resolved_font_id(&identity, strike(0), 13.0)
-    );
+    let first = intern(&mut svc, strike(0), 13.0);
+    assert_eq!(first, intern(&mut svc, strike(0), 13.0));
+    assert_ne!(first, intern(&mut svc, strike(1), 14.0));
     assert_ne!(
-        first,
-        svc.intern_resolved_font_id(&identity, strike(1), 14.0)
-    );
-    assert_ne!(
-        svc.intern_resolved_font_id(&identity, swash_replay_for(&identity), 13.0),
-        svc.intern_resolved_font_id(&identity, swash_replay_for(&identity), 14.0),
+        intern(&mut svc, swash_replay_for(&identity), 13.0),
+        intern(&mut svc, swash_replay_for(&identity), 14.0),
         "metrics-bearing protocol entries at distinct sizes cannot share an id"
     );
+}
+
+#[test]
+fn interner_owns_the_record_published_under_an_id() {
+    // Four builders realize records independently; the interner must hand
+    // every later builder the first record for the key, or the id-keyed frame
+    // table can carry two records for one id across frames.
+    let mut svc = make_svc();
+    let identity = ResolvedFontIdentity::from_file("/fonts/one.ttf", 0, None);
+    let replay = swash_replay_for(&identity);
+    let first = svc.intern_resolved_font(
+        identity.clone(),
+        replay.clone(),
+        12.0,
+        |id, identity, replay| fixture_record(id, &identity, &replay, 12.0, "First Family"),
+    );
+    let second = svc.intern_resolved_font(identity, replay, 12.0, |id, identity, replay| {
+        fixture_record(id, &identity, &replay, 12.0, "Second Family")
+    });
+    assert_eq!(second, first);
+    assert_eq!(second.family, "First Family");
+}
+
+#[test]
+fn catalog_advance_republishes_records_under_stable_ids() {
+    // A file replaced in place keeps its id (frames keep referencing it) but
+    // must republish its metrics: GNU `font_clear_cache` closes the objects in
+    // `FONT_OBJLIST_INDEX` when the font set changes.
+    let pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let advances = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            pending: std::sync::Arc::clone(&pending),
+            advances: std::sync::Arc::clone(&advances),
+        }));
+    let identity = ResolvedFontIdentity::from_file("/fonts/replaced.ttf", 0, None);
+    let replay = swash_replay_for(&identity);
+    let before = svc.intern_resolved_font(
+        identity.clone(),
+        replay.clone(),
+        12.0,
+        |id, identity, replay| fixture_record(id, &identity, &replay, 12.0, "Version 1"),
+    );
+    let pinned = svc.intern_resolved_font(
+        identity.clone(),
+        replay.clone(),
+        12.0,
+        |id, identity, replay| fixture_record(id, &identity, &replay, 12.0, "Version 2"),
+    );
+    assert_eq!(
+        pinned, before,
+        "within one generation the first record stands"
+    );
+
+    pending.store(true, std::sync::atomic::Ordering::Release);
+    assert!(svc.synchronize_font_catalog().changed());
+    let after = svc.intern_resolved_font(identity, replay, 12.0, |id, identity, replay| {
+        fixture_record(id, &identity, &replay, 12.0, "Version 2")
+    });
+    assert_eq!(after.id, before.id, "the id survives the catalog advance");
+    assert_eq!(
+        after.family, "Version 2",
+        "the record is rebuilt from the new file"
+    );
+}
+
+#[test]
+fn char_first_realization_publishes_the_face_record() {
+    // The per-character builder realizes the file before any face does (a
+    // fallback-only frame); the pinned record must be the face path's.
+    let mut reference = make_svc();
+    let Some(face) = reference.resolved_font_for_face("Monospace", 400, false, 14.0) else {
+        return;
+    };
+    let Some(ch) = ['é', 'ü', 'ñ', 'ö'].into_iter().find(|ch| {
+        reference
+            .resolved_font_for_char(*ch, "Monospace", 400, false, 14.0)
+            .is_some_and(|font| font.id == face.id)
+    }) else {
+        debug!("skipping: platform monospace font covers none of the probe characters");
+        return;
+    };
+
+    let mut svc = make_svc();
+    let via_char = svc
+        .resolved_font_for_char(ch, "Monospace", 400, false, 14.0)
+        .expect("covered character");
+    let via_face = svc
+        .resolved_font_for_face("Monospace", 400, false, 14.0)
+        .expect("realized primary font");
+    assert_eq!(via_face.id, via_char.id);
+    assert_eq!(
+        via_face, face,
+        "char-first realization must not change the face record"
+    );
+}
+
+#[test]
+fn shaping_first_realization_publishes_the_face_record() {
+    // Reverse order of `shaping_selected_face_reuses_the_realized_face_record`:
+    // when shaping realizes a file before any face does, the pinned record
+    // must still be the one the face path would have built.
+    let mut reference = make_svc();
+    let Some(face) = reference.materialized_font_for_face("Monospace", 400, false, 14.0) else {
+        return;
+    };
+    let Some(file) = face.font.identity.file_path.clone() else {
+        debug!("skipping: platform identity has no file path (in-memory asset)");
+        return;
+    };
+    let face_index = face.font.identity.file_face_index();
+
+    let mut svc = make_svc();
+    let Some(fontdb_id) = svc.font_system.db().faces().find_map(|candidate| {
+        (fontdb_face_file(candidate).as_deref() == Some(file.as_str())
+            && candidate.index == face_index)
+            .then_some(candidate.id)
+    }) else {
+        debug!("skipping: fontdb has no face for the platform file");
+        return;
+    };
+    let Some(from_shaping) = svc.resolved_font_from_fontdb_id(fontdb_id, 14.0) else {
+        debug!("skipping: fontdb face has no replayable file");
+        return;
+    };
+    let via_face = svc
+        .resolved_font_for_face("Monospace", 400, false, 14.0)
+        .expect("realized primary font");
+    if via_face.id != from_shaping.id {
+        debug!("skipping: fontdb identity differs from the platform identity");
+        return;
+    }
+    assert_eq!(
+        via_face, face.font,
+        "shaping-first realization must not change the face record"
+    );
+}
+
+#[test]
+fn shaping_selected_face_reuses_the_realized_face_record() {
+    // `resolved_font_from_fontdb_id` builds from file metadata rather than the
+    // platform selection; when shaping lands on the face's own fontdb face it
+    // must still publish the face's record.
+    let mut svc = make_svc();
+    let Some(primary) = svc.materialized_font_for_face("Monospace", 400, false, 14.0) else {
+        return;
+    };
+    let Some(fontdb_id) = primary.source.fontdb_id() else {
+        debug!("skipping: primary face is a bitmap font");
+        return;
+    };
+    let Some(from_shaping) = svc.resolved_font_from_fontdb_id(fontdb_id, 14.0) else {
+        debug!("skipping: fontdb face has no replayable file");
+        return;
+    };
+    if from_shaping.id != primary.font.id {
+        debug!("skipping: fontdb identity differs from the platform identity");
+        return;
+    }
+    assert_eq!(from_shaping, primary.font);
 }
 
 #[cfg(target_os = "linux")]
@@ -1469,7 +1682,15 @@ fn ascii_character_resolution_keeps_primary_face_that_lacks_the_glyph() {
 
     assert_eq!(resolved.identity.file_path.as_deref(), Some(file.as_str()));
     assert_eq!(resolved.identity.file_face_index(), face_index);
-    assert_eq!(resolved.source, FontResolutionSource::FacePrimary);
+    assert_eq!(
+        svc.materialized_font_for_realized_face_char(
+            ' ',
+            RealizedFaceFontSelection::same_fontset(requested_family, 400, false, 10.0),
+        )
+        .expect("materialized primary face")
+        .resolution,
+        FontResolutionSource::FacePrimary
+    );
 
     let selected = svc
         .select_font_for_char(' ', requested_family, 400, false, 10.0)
@@ -2649,10 +2870,6 @@ fn resolved_font_for_face_yields_an_exact_replayable_identity() {
             assert!(!asset.bytes().is_empty());
         }
     }
-    assert_eq!(
-        font.source,
-        neomacs_display_protocol::font::FontResolutionSource::FacePrimary
-    );
     assert!(font.ascent_px > 0.0, "resolved font carries real metrics");
 }
 
@@ -3089,10 +3306,6 @@ fn realize_frame_char_fonts_stamps_cjk_fallback() {
         .get(&font_id)
         .expect("char fallback font published in frame font table");
     assert_eq!(font.id, font_id);
-    assert_eq!(
-        font.source,
-        neomacs_display_protocol::font::FontResolutionSource::FontsetFallback
-    );
     // The layout-side selection agrees with the char-selection oracle path.
     let selected = service
         .as_mut()
