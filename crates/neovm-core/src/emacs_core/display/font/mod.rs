@@ -522,18 +522,54 @@ fn resolve_live_frame_font_request_in_state(
     LiveFrameFontResolution { font_value }
 }
 
+/// GNU separates a font's realized metrics from permission to change the
+/// existing pixel allocation (`frame_inhibit_resize`, frame.c:200-218).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FontChangeGeometryPolicy {
+    PreserveAllocatedPixels,
+    ResetMinibufferToFontLine,
+}
+
+impl FontChangeGeometryPolicy {
+    fn for_live_frame(frame: &crate::window::Frame, inhibit: Value) -> Self {
+        let fullscreen = frame.parameter("fullscreen").unwrap_or(Value::NIL);
+        let vertically_fullscreen =
+            !fullscreen.is_nil() && fullscreen != Value::symbol("fullwidth");
+        if inhibit == Value::T
+            || inhibit == Value::symbol("force")
+            || list_iter(inhibit).any(|parameter| parameter == Value::symbol("font"))
+            || vertically_fullscreen
+            || frame.effective_window_system().is_none()
+        {
+            Self::PreserveAllocatedPixels
+        } else {
+            Self::ResetMinibufferToFontLine
+        }
+    }
+}
+
 pub(crate) fn sync_live_frame_font_state(
     eval: &mut super::eval::Context,
     frame_id: FrameId,
     requested: &Value,
     resolution: &LiveFrameFontResolution,
 ) {
+    let Some(frame) = eval.frames.get(frame_id) else {
+        return;
+    };
+    let inhibit = eval
+        .obarray()
+        .symbol_value("frame-inhibit-implied-resize")
+        .copied()
+        .unwrap_or(Value::NIL);
+    let geometry_policy = FontChangeGeometryPolicy::for_live_frame(frame, inhibit);
     sync_live_frame_font_state_in_state(
         &mut eval.frames,
         &mut eval.display_host,
         frame_id,
         requested,
         resolution,
+        geometry_policy,
     );
 }
 
@@ -543,6 +579,7 @@ fn sync_live_frame_font_state_in_state(
     frame_id: FrameId,
     requested: &Value,
     resolution: &LiveFrameFontResolution,
+    geometry_policy: FontChangeGeometryPolicy,
 ) {
     // A selector is public face/frame state, but it is not an opened font.
     // If the host could not realize the request, retain the last coherent
@@ -594,10 +631,10 @@ fn sync_live_frame_font_state_in_state(
     // `resize_frame_windows` (src/frame.c:1076-1082) and gives the
     // mini-window `unit + decorations` pixels with `unit` the NEW
     // `FRAME_LINE_HEIGHT` (src/window.c:5051-5053,5125-5128) while
-    // re-deriving every window's character edges.  When the implied resize
-    // is inhibited GNU still lands there on the next redisplay:
-    // `resize_mini_window` compares the content's pixel height against the
-    // window's (src/xdisp.c:13276,13395-13406).
+    // re-deriving every window's character edges. When implied resizing is
+    // inhibited, GNU preserves the existing pixel allocation instead. The
+    // next redisplay independently applies `resize-mini-windows`, including
+    // retaining a grown, nonempty mini-window in grow-only mode.
     //
     // Here the mini-window's pixel height is carried forward verbatim by
     // `window_text_area_bounds_with_chrome`, so apply `resize_frame_windows`'
@@ -614,7 +651,8 @@ fn sync_live_frame_font_state_in_state(
     // per-toolkit gates that skip the whole resize -- NS when the view is
     // fullscreen (src/nsterm.m:11425), X for tooltip frames (src/xterm.c:
     // 27178) -- under which GNU keeps a grown mini-window's pixel height.
-    if line_height_changed {
+    if line_height_changed && geometry_policy == FontChangeGeometryPolicy::ResetMinibufferToFontLine
+    {
         frame.shrink_mini_window();
     }
     if geometry_changed {
@@ -651,7 +689,16 @@ pub(crate) fn sync_live_frame_font_parameter_in_state(
 ) {
     let resolution =
         resolve_live_frame_font_request_in_state(frames, display_host, frame_id, &requested);
-    sync_live_frame_font_state_in_state(frames, display_host, frame_id, &requested, &resolution);
+    // This entry point is used while constructing a new GUI frame, before
+    // it has a live allocation to preserve (GNU's after_make_frame gate).
+    sync_live_frame_font_state_in_state(
+        frames,
+        display_host,
+        frame_id,
+        &requested,
+        &resolution,
+        FontChangeGeometryPolicy::ResetMinibufferToFontLine,
+    );
 }
 
 pub(crate) fn default_face_font_attr_affects_frame_font(attr: LFaceAttr) -> bool {

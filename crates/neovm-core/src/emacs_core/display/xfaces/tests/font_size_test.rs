@@ -326,8 +326,15 @@ fn default_face_font_change_resizes_mini_window_to_one_line_of_the_new_font() {
 fn frame_after_default_font_change(
     mini_height: Option<f32>,
     line_height: i32,
+    inhibit_font_resize: bool,
 ) -> (Context, FrameId) {
     let mut eval = Context::new();
+    if inhibit_font_resize {
+        eval.obarray_mut().set_symbol_value(
+            "frame-inhibit-implied-resize",
+            Value::list(vec![Value::symbol("font")]),
+        );
+    }
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -373,7 +380,7 @@ fn default_face_font_change_resets_a_grown_mini_window_to_one_line() {
     // GNU `resize_frame_windows` gives the mini-window one line of the new
     // unit whatever it held before (window.c:5051-5053,5125-5128); a
     // three-line 33px mini-window under the old 11px font becomes 18px.
-    let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 18);
+    let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 18, false);
     let frame = eval.frames.get(frame_id).expect("selected frame");
     let mini = frame
         .minibuffer_leaf
@@ -385,6 +392,31 @@ fn default_face_font_change_resets_a_grown_mini_window_to_one_line() {
 }
 
 #[test]
+fn inhibited_font_resize_preserves_grown_minibuffer_pixel_height() {
+    // GNU frame.c:900-923 inhibits the native resize, and its unchanged
+    // inner dimensions bypass resize_frame_windows (1076-1082). A grown
+    // mini-window keeps its allocation; redisplay separately applies the
+    // resize-mini-windows content policy.
+    let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 18, true);
+    let frame = eval.frames.get(frame_id).expect("selected frame");
+    assert_eq!(frame.char_height, 18.0);
+    let mini = frame
+        .minibuffer_leaf
+        .as_ref()
+        .expect("mini-window")
+        .bounds();
+    assert_eq!(
+        mini.height, 33.0,
+        "inhibited font changes preserve allocated pixels"
+    );
+    assert_eq!(
+        frame.root_window.bounds().y + frame.root_window.bounds().height,
+        mini.y
+    );
+    assert_eq!(mini.y + mini.height, frame.height as f32);
+}
+
+#[test]
 fn default_face_font_change_with_the_same_line_height_keeps_the_mini_window() {
     // Same line height, different font, frame height a whole number of lines:
     // GNU requests the same native height, `adjust_frame_size` sees no inner
@@ -392,7 +424,7 @@ fn default_face_font_change_with_the_same_line_height_keeps_the_mini_window() {
     // a grown mini-window keeps its height and only the edges resync.  (A
     // frame with a fractional last line would be resized to whole lines by
     // the implied native resize, which is not ported.)
-    let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 11);
+    let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 11, false);
     let frame = eval.frames.get(frame_id).expect("selected frame");
     assert_eq!(frame.char_height, 11.0);
     let mini = frame
@@ -412,7 +444,7 @@ fn default_face_font_change_resyncs_a_frame_without_its_own_mini_window() {
     // `FRAME_HAS_MINIBUF_P && !FRAME_MINIBUF_ONLY_P` is false for a frame
     // whose minibuffer lives elsewhere (window.c:5051): no mini-window rule,
     // but the root window still spans the frame in the new units.
-    let (eval, frame_id) = frame_after_default_font_change(None, 18);
+    let (eval, frame_id) = frame_after_default_font_change(None, 18, false);
     let frame = eval.frames.get(frame_id).expect("selected frame");
     assert_eq!(frame.char_height, 18.0);
     assert!(frame.minibuffer_leaf.is_none());
