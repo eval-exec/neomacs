@@ -4632,6 +4632,33 @@ pub(crate) fn re_match(
     re_match_candidate(pattern, text, pos, stop, syntax, point)
 }
 
+/// The per-thread `MatchScratch`, leased out of its cell for one search and
+/// returned by `Drop` (so early returns and `?` hand it back too).
+struct MatchScratchLease(MatchScratch);
+
+impl MatchScratchLease {
+    fn take() -> Self {
+        Self(MATCH_SCRATCH.with(|cell| match cell.try_borrow_mut() {
+            Ok(mut cur) => std::mem::take(&mut *cur),
+            Err(_) => MatchScratch::default(),
+        }))
+    }
+    fn get(&mut self) -> &mut MatchScratch {
+        &mut self.0
+    }
+}
+
+impl Drop for MatchScratchLease {
+    fn drop(&mut self) {
+        let scratch = std::mem::take(&mut self.0);
+        MATCH_SCRATCH.with(|cell| {
+            if let Ok(mut cur) = cell.try_borrow_mut() {
+                *cur = scratch;
+            }
+        });
+    }
+}
+
 /// `re_match` without the overflow-flag reset — `re_search` uses this per
 /// fastmap candidate so an overflow set by one candidate survives until
 /// the search loop checks it.
@@ -4643,31 +4670,11 @@ fn re_match_candidate(
     syntax: &dyn SyntaxLookup,
     point: usize,
 ) -> Option<(usize, MatchRegisters)> {
-    // Test hook: pin the Pike VM (fuzzer engine side).
-    if pattern.pike_eligible && force_pike() {
-        return pike_match(pattern, text, pos, stop, syntax, point);
-    }
-
-    // Production default: run the backtracker.  For an eligible pattern it
-    // runs under a linear step budget so catastrophic backtracking trips the
-    // Pike fallback below.  Ineligible patterns (and the forced-backtracker
-    // test hook) run the backtracker with no budget — unchanged behaviour.
-    let budgeted = pattern.pike_eligible && !force_backtrack();
-    let result = MATCH_SCRATCH.with(|cell| match cell.try_borrow_mut() {
-        Ok(mut scratch) => re_match_internal(
-            &mut scratch,
-            pattern,
-            text,
-            pos,
-            stop,
-            syntax,
-            point,
-            budgeted,
-        ),
-        // Defensive: if a syntax/category callback ever re-enters the
-        // matcher, fall back to fresh (allocating) state for the nested
-        // match rather than corrupting the outer one.
-        Err(_) => re_match_internal(
+    MATCH_SCRATCH.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut scratch) => {
+            re_match_candidate_in(&mut scratch, pattern, text, pos, stop, syntax, point)
+        }
+        Err(_) => re_match_candidate_in(
             &mut MatchScratch::default(),
             pattern,
             text,
@@ -4675,9 +4682,27 @@ fn re_match_candidate(
             stop,
             syntax,
             point,
-            budgeted,
         ),
-    });
+    })
+}
+
+/// One match attempt on a caller-held scratch: the search loop borrows the
+/// per-thread scratch ONCE and tries every candidate on it (17.6K attempts
+/// per org font-lock op paid a thread-local RefCell borrow each).
+fn re_match_candidate_in(
+    scratch: &mut MatchScratch,
+    pattern: &CompiledPattern,
+    text: &[u8],
+    pos: usize,
+    stop: usize,
+    syntax: &dyn SyntaxLookup,
+    point: usize,
+) -> Option<(usize, MatchRegisters)> {
+    if pattern.pike_eligible && force_pike() {
+        return pike_match(pattern, text, pos, stop, syntax, point);
+    }
+    let budgeted = pattern.pike_eligible && !force_backtrack();
+    let result = re_match_internal(scratch, pattern, text, pos, stop, syntax, point, budgeted);
     // The budgeted backtracker gave up on a catastrophic match: recompute it
     // linearly (and byte-exactly) with the Pike VM.
     if budgeted && take_pike_fallback() {
@@ -7867,9 +7892,15 @@ pub(crate) fn re_search(
     // that hits the fail-stack limit sets it, aborting the whole scan
     // (GNU re_search_2 propagates re_match_2_internal's -2 immediately).
     clear_matcher_overflow();
+    // One scratch for the whole search (see re_match_candidate_in): lease
+    // the per-thread one out of its cell for the duration (its Vec capacity
+    // moves with it, nothing allocates) and hand it back on every exit; a
+    // re-entrant search finds an empty cell and works on a fresh one.
+    let mut lease = MatchScratchLease::take();
+    let scratch: &mut MatchScratch = lease.get();
     macro_rules! try_candidate {
         ($pos:expr, $stop:expr) => {
-            match re_match_candidate(pattern, text, $pos, $stop, syntax, point) {
+            match re_match_candidate_in(scratch, pattern, text, $pos, $stop, syntax, point) {
                 Some(result) => Some(result),
                 None => {
                     if matcher_overflow_pending() {
