@@ -4,8 +4,8 @@ use super::*;
 use crate::terminal::content::{RenderCell, RenderCursor, TerminalContent};
 #[cfg(feature = "neo-term")]
 use neomacs_display_protocol::font::{
-    FontFileAsset, FontOutlineAsset, FontReplay, FontResolutionSource, FontSlantKind, ResolvedFont,
-    ResolvedFontAdvance, ResolvedFontId, ResolvedFontIdentity,
+    FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont, ResolvedFontAdvance,
+    ResolvedFontId, ResolvedFontIdentity,
 };
 #[cfg(feature = "neo-term")]
 use rio_vt::crosswords::style::StyleFlags as CellFlags;
@@ -67,7 +67,6 @@ fn terminal_face_for_flags_and_font(
         descent_px: 4.0,
         space_advance_px: 10.0,
         glyph_advance: ResolvedFontAdvance::fixed_cell(10.0),
-        source: FontResolutionSource::FacePrimary,
     };
     let mut default_face = Face::new(FaceId::new(0));
     default_face.default_resolved_font_id = Some(font_id);

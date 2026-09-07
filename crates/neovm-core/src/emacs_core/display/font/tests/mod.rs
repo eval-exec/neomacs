@@ -1703,8 +1703,8 @@ fn query_font_uses_opened_object_metrics_without_a_font_file() {
 #[test]
 fn opened_font_retains_exact_backend_identity_and_variations() {
     use neomacs_display_protocol::font::{
-        FontFileAsset, FontOutlineAsset, FontReplay, FontResolutionSource, FontSlantKind,
-        FontVariationCoord, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, FontVariationCoord,
+        ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
     };
 
     crate::test_utils::init_test_tracing();
@@ -1744,7 +1744,6 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
                 descent_px: 6.0,
                 space_advance_px: 9.0,
                 glyph_advance: Default::default(),
-                source: FontResolutionSource::FacePrimary,
             },
             foundry: Some(LispString::from_utf8("TEST")),
             slant: FontSlant::Normal,

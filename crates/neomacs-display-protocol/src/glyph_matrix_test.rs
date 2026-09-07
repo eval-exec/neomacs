@@ -2848,8 +2848,8 @@ fn frame_display_state_integer_map_keys_round_trip() {
 #[test]
 fn resolved_fonts_survive_materialize_and_round_trip() {
     use crate::font::{
-        FontFileAsset, FontOutlineAsset, FontReplay, FontResolutionSource, FontSlantKind,
-        ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont, ResolvedFontId,
+        ResolvedFontIdentity,
     };
 
     let mut state = state_with_text("f");
@@ -2876,7 +2876,6 @@ fn resolved_fonts_survive_materialize_and_round_trip() {
             descent_px: 3.0,
             space_advance_px: 8.0,
             glyph_advance: Default::default(),
-            source: FontResolutionSource::FacePrimary,
         },
     );
 
