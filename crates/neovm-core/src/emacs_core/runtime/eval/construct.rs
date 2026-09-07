@@ -2225,6 +2225,8 @@ impl Context {
             compiler_function_overrides_symbol: core_eval_symbols
                 .compiler_function_overrides_symbol,
             compiler_function_overrides_active,
+            symbol_bytecode_call_cache:
+                crate::emacs_core::bytecode::vm::SymbolByteCodeCallCache::new(),
             named_call_cache: FxHashMap::with_capacity_and_hasher(
                 NAMED_CALL_CACHE_CAPACITY,
                 Default::default(),

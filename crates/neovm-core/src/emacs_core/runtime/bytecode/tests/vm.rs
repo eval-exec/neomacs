@@ -11622,3 +11622,88 @@ fn vm_inline_opcode_builtins_dispatch_directly_like_gnu() {
     result.expect("garbage-collect");
     assert_eq!(direct, 0, "VM specials do not take the inline path");
 }
+
+/// The stack-call cache lives in the Context, not the Vm: a Bcall to a builtin
+/// from a FRESH Vm must find the callee cached and never re-read the function
+/// cell. (The per-Vm cache this replaced started cold on every bytecode entry
+/// -- 65K times per org-journal operation -- and had 8 direct-mapped slots
+/// for an org font-lock pass that calls ~75 distinct builtins.)
+#[test]
+fn second_bytecode_call_to_a_builtin_resolves_from_the_context_cache() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness();
+    let mut func = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let callee_idx = func.add_symbol("symbol-name");
+    let arg_idx = func.add_constant(Value::symbol("neovm-cache-probe"));
+    func.ops = vec![
+        Op::Constant(callee_idx),
+        Op::Constant(arg_idx),
+        Op::Call(1),
+        Op::Return,
+    ];
+    func.max_stack = 2;
+    func.lexical = true;
+    let run = |eval: &mut Context| {
+        let mut vm = new_vm(eval);
+        vm.execute(&func, vec![]).expect("symbol-name via Bcall")
+    };
+    assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-cache-probe"));
+    crate::emacs_core::symbol::reset_function_cell_lookup_count();
+    assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-cache-probe"));
+    assert_eq!(
+        crate::emacs_core::symbol::function_cell_lookup_count(),
+        0,
+        "a fresh Vm must resolve the builtin from the Context's stack-call cache, not the function cell"
+    );
+}
+
+/// `compiler-function-overrides` changing bumps the function epoch, so a
+/// builtin cached under the previous state cannot be served while overrides
+/// are active (the call must take the generic path and still succeed).
+#[test]
+fn compiler_function_overrides_change_bumps_the_function_epoch() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness();
+    let mut func = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let callee_idx = func.add_symbol("symbol-name");
+    let arg_idx = func.add_constant(Value::symbol("neovm-epoch-probe"));
+    func.ops = vec![
+        Op::Constant(callee_idx),
+        Op::Constant(arg_idx),
+        Op::Call(1),
+        Op::Return,
+    ];
+    func.max_stack = 2;
+    func.lexical = true;
+    let run = |eval: &mut Context| {
+        let mut vm = new_vm(eval);
+        vm.execute(&func, vec![]).expect("symbol-name via Bcall")
+    };
+    assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-epoch-probe"));
+    let before = eval.obarray.function_epoch();
+    eval.eval_str("(setq internal--compiler-function-overrides '((neovm-epoch-probe . ignore)))")
+        .expect("activate overrides");
+    assert_ne!(
+        eval.obarray.function_epoch(),
+        before,
+        "activating compiler function overrides must invalidate cached stack callees"
+    );
+    assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-epoch-probe"));
+    let active = eval.obarray.function_epoch();
+    eval.eval_str("(setq internal--compiler-function-overrides nil)")
+        .expect("deactivate overrides");
+    assert_ne!(
+        eval.obarray.function_epoch(),
+        active,
+        "deactivating must invalidate again"
+    );
+    assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-epoch-probe"));
+}

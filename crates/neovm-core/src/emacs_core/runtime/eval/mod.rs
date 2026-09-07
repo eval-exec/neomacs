@@ -3166,6 +3166,9 @@ pub struct Context {
     /// binding paths that already maintain `quit-flag` and `noninteractive`.
     compiler_function_overrides_symbol: SymId,
     compiler_function_overrides_active: bool,
+    /// See `SymbolByteCodeCallCache`: what each symbol's function cell resolves
+    /// to for a bytecode stack call, epoch-tagged.
+    pub(crate) symbol_bytecode_call_cache: crate::emacs_core::bytecode::vm::SymbolByteCodeCallCache,
     /// Hot cache for named callable resolution in `funcall`/`apply`.
     /// Keyed by symbol id; entries are validated against the obarray's
     /// `function_epoch` so that any `defalias` / `fset` / autoload
@@ -3984,7 +3987,13 @@ impl Context {
         } else if sym_id == self.throw_on_input_symbol {
             self.throw_on_input = value;
         } else if sym_id == self.compiler_function_overrides_symbol {
-            self.compiler_function_overrides_active = value.is_cons();
+            let active = value.is_cons();
+            if active != self.compiler_function_overrides_active {
+                // The stack-call cache keys on the function epoch; a change
+                // here changes what every symbol resolves to.
+                self.obarray.bump_function_epoch();
+            }
+            self.compiler_function_overrides_active = active;
         } else if sym_id == self.noninteractive_symbol {
             self.noninteractive = value.is_truthy();
         } else if sym_id == self.symbols_with_pos_enabled_symbol {

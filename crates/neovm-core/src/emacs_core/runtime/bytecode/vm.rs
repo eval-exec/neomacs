@@ -756,9 +756,14 @@ impl std::ops::DerefMut for StackCursor {
 /// the corresponding metadata before creating the token, so dispatch can
 /// materialize the relatively large [`SubrEntry`] only after selecting the
 /// builtin branch.
+/// A builtin resolved for a stack call: the subr `Value` itself. The call
+/// reads arity and the function pointer straight off the `SubrObj` it points
+/// at (`dispatch_parts`) -- GNU's `Lisp_Subr *` in hand -- instead of copying
+/// a 56-byte registry entry out of a thread-local per call. One word, so the
+/// classification stays register-sized through every Bcall.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
-struct ResolvedBuiltinCallee(Value);
+pub(crate) struct ResolvedBuiltinCallee(Value);
 
 /// One-word proof that a value is the bytecode object read from a symbol's
 /// live function cell.
@@ -1371,36 +1376,39 @@ impl ResolvedBuiltinCallee {
             .is_some_and(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin)
             .then_some(Self(Value::from_sym_id(sym_id)))
     }
-
     #[inline(always)]
     fn from_subr_value(value: Value) -> Option<Self> {
         if value.veclike_type() != Some(VecLikeType::Subr) {
             return None;
         }
         let ptr = value.as_veclike_ptr()? as *const SubrObj;
-        // SAFETY: the veclike type check above proves this points to a live
-        // SubrObj. This reads only intrinsic GNU Lisp_Subr metadata; no Lisp
-        // runs between classification and dispatch.
         let subr = unsafe { &*ptr };
         (subr.dispatch_kind == SubrDispatchKind::Builtin && subr.function.is_some())
             .then_some(Self(value))
     }
-
-    #[inline]
-    fn entry(self) -> (SymId, SubrEntry) {
+    /// What a call needs: symbol, function pointer, arity -- read off the
+    /// `SubrObj` for a subr object (the common case: function cells hold
+    /// them), or from the static registry for a bare static symbol.
+    #[inline(always)]
+    fn dispatch_parts(self) -> (SymId, Option<SubrFn>, u16, Option<u16>) {
         if let Some(sym_id) = self.0.as_symbol_id() {
             let entry = lookup_global_subr_entry(sym_id)
                 .expect("resolved static builtin must retain its registered entry");
             debug_assert_eq!(entry.dispatch_kind, SubrDispatchKind::Builtin);
-            (sym_id, entry)
+            (sym_id, entry.function, entry.min_args, entry.max_args)
         } else {
-            let (sym_id, entry) = subr_call_entry_from_value(self.0)
-                .expect("resolved builtin object must remain a valid subr");
-            debug_assert_eq!(entry.dispatch_kind, SubrDispatchKind::Builtin);
-            (sym_id, entry)
+            let ptr = self
+                .0
+                .as_veclike_ptr()
+                .expect("resolved builtin object must remain a subr object")
+                as *const SubrObj;
+            // SAFETY: `from_subr_value` checked the tag; the function cell (or
+            // the caller's operand stack) keeps the object alive across the call.
+            let subr = unsafe { &*ptr };
+            debug_assert_eq!(subr.dispatch_kind, SubrDispatchKind::Builtin);
+            (subr.sym_id, subr.function, subr.min_args, subr.max_args)
         }
     }
-
     #[inline]
     fn wrong_arity_value(self) -> Value {
         if let Some(sym_id) = self.0.as_symbol_id() {
@@ -1410,7 +1418,6 @@ impl ResolvedBuiltinCallee {
         }
     }
 }
-
 const _: () = assert!(std::mem::size_of::<ResolvedBuiltinCallee>() == std::mem::size_of::<Value>());
 
 /// Debug check for env-less bytecode frames: after the frame body runs,
@@ -1510,31 +1517,39 @@ fn aset_sym_id() -> SymId {
 /// epoch mismatch makes the old bits unreachable before they can be used.
 /// `u64::MAX` is reserved by the epoch implementation, so it is an
 /// unambiguous empty-entry marker without `Option` padding.
-const SYMBOL_BYTECODE_CALL_CACHE_CAPACITY: usize = 8;
+/// Direct-mapped by symbol id. An org font-lock pass calls ~75 distinct
+/// builtins per operation, so the 8 slots this replaced collided constantly;
+/// 4096 makes a hot working set of ~100 symbols effectively collision-free.
+/// The cache lives in the `Context` (one per evaluator, long-lived), not in
+/// the `Vm`, which is constructed per bytecode entry and used to start every
+/// call cold.
+const SYMBOL_BYTECODE_CALL_CACHE_CAPACITY: usize = 4096;
 const EMPTY_FUNCTION_EPOCH: u64 = u64::MAX;
 
 #[derive(Clone, Copy)]
+enum CachedStackCallee {
+    Empty,
+    ByteCode(Value),
+    Builtin(ResolvedBuiltinCallee),
+}
+#[derive(Clone, Copy)]
 struct SymbolByteCodeCallCacheEntry {
     function_epoch: u64,
-    /// Raw classified callee. Populated ONLY through the typed
-    /// `insert_bytecode`/`insert_builtin` proofs, whose value kinds are
-    /// disjoint: a bytecode callee is always a ByteCode veclike, a builtin
-    /// callee is always a subr object or the static-table symbol fallback.
-    /// `get` maps the stored value back to its wrapper class by that kind.
-    callee: Value,
     symbol: SymId,
+    callee: CachedStackCallee,
 }
-
 impl SymbolByteCodeCallCacheEntry {
     const EMPTY: Self = Self {
         function_epoch: EMPTY_FUNCTION_EPOCH,
-        callee: Value::NIL,
         symbol: crate::emacs_core::intern::NIL_SYM_ID,
+        callee: CachedStackCallee::Empty,
     };
 }
-
-struct SymbolByteCodeCallCache {
-    entries: [SymbolByteCodeCallCacheEntry; SYMBOL_BYTECODE_CALL_CACHE_CAPACITY],
+/// Per-`Context` cache of what a symbol's function cell resolves to for a
+/// stack call, tagged with the function epoch so any `fset` (or a change of
+/// `compiler_function_overrides`, which bumps the same epoch) invalidates it.
+pub(crate) struct SymbolByteCodeCallCache {
+    entries: Box<[SymbolByteCodeCallCacheEntry; SYMBOL_BYTECODE_CALL_CACHE_CAPACITY]>,
 }
 
 /// The most recently proven symbol-bound Tier-0 call.
@@ -1594,41 +1609,31 @@ impl RecentInterpreterCall {
 }
 
 impl SymbolByteCodeCallCache {
-    const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            entries: [SymbolByteCodeCallCacheEntry::EMPTY; SYMBOL_BYTECODE_CALL_CACHE_CAPACITY],
+            entries: Box::new(
+                [SymbolByteCodeCallCacheEntry::EMPTY; SYMBOL_BYTECODE_CALL_CACHE_CAPACITY],
+            ),
         }
     }
-
     #[inline(always)]
     const fn index(symbol: SymId) -> usize {
         symbol.0 as usize & (SYMBOL_BYTECODE_CALL_CACHE_CAPACITY - 1)
     }
-
     #[inline(always)]
     fn get(&self, symbol: SymId, function_epoch: u64) -> Option<ResolvedStackCallTarget> {
-        let entry = self.entries[Self::index(symbol)];
+        let entry = &self.entries[Self::index(symbol)];
         if entry.function_epoch != function_epoch || entry.symbol != symbol {
             return None;
         }
-        // Insert-side value kinds are disjoint (see the `callee` field doc),
-        // so one kind test recovers the wrapper class proven at insert.
-        Some(
-            if matches!(
-                entry.callee.kind(),
-                ValueKind::Veclike(VecLikeType::ByteCode)
-            ) {
-                ResolvedStackCallTarget::ByteCode {
-                    callee: ResolvedByteCodeCallee(entry.callee),
-                }
-            } else {
-                ResolvedStackCallTarget::Builtin {
-                    callee: ResolvedBuiltinCallee(entry.callee),
-                }
-            },
-        )
+        match entry.callee {
+            CachedStackCallee::ByteCode(value) => Some(ResolvedStackCallTarget::ByteCode {
+                callee: ResolvedByteCodeCallee(value),
+            }),
+            CachedStackCallee::Builtin(callee) => Some(ResolvedStackCallTarget::Builtin { callee }),
+            CachedStackCallee::Empty => None,
+        }
     }
-
     #[inline(always)]
     fn insert_bytecode(
         &mut self,
@@ -1636,9 +1641,12 @@ impl SymbolByteCodeCallCache {
         function_epoch: u64,
         callee: ResolvedByteCodeCallee,
     ) {
-        self.store(symbol, function_epoch, callee.0);
+        self.store(
+            symbol,
+            function_epoch,
+            CachedStackCallee::ByteCode(callee.0),
+        );
     }
-
     #[inline(always)]
     fn insert_builtin(
         &mut self,
@@ -1646,22 +1654,22 @@ impl SymbolByteCodeCallCache {
         function_epoch: u64,
         callee: ResolvedBuiltinCallee,
     ) {
-        self.store(symbol, function_epoch, callee.0);
+        self.store(symbol, function_epoch, CachedStackCallee::Builtin(callee));
     }
-
     #[inline(always)]
-    fn store(&mut self, symbol: SymId, function_epoch: u64, callee: Value) {
+    fn store(&mut self, symbol: SymId, function_epoch: u64, callee: CachedStackCallee) {
         self.entries[Self::index(symbol)] = SymbolByteCodeCallCacheEntry {
             function_epoch,
-            callee,
             symbol,
+            callee,
         };
     }
 }
 
 const _: () = {
     assert!(SYMBOL_BYTECODE_CALL_CACHE_CAPACITY.is_power_of_two());
-    assert!(std::mem::size_of::<SymbolByteCodeCallCacheEntry>() == 3 * std::mem::size_of::<u64>());
+    // epoch + symbol + a one-word callee behind a tag: four words.
+    assert!(std::mem::size_of::<SymbolByteCodeCallCacheEntry>() <= 4 * std::mem::size_of::<u64>());
     assert!(std::mem::size_of::<RecentInterpreterCall>() <= 4 * std::mem::size_of::<u64>());
 };
 
@@ -1699,7 +1707,6 @@ impl BytecodeTierPolicy {
 /// Operates on an Context's obarray and dynamic binding stack.
 pub struct Vm<'a> {
     ctx: &'a mut crate::emacs_core::eval::Context,
-    symbol_bytecode_call_cache: SymbolByteCodeCallCache,
     recent_interpreter_call: RecentInterpreterCall,
     #[cfg(feature = "jit")]
     bytecode_tier_policy: BytecodeTierPolicy,
@@ -1838,7 +1845,6 @@ impl<'a> Vm<'a> {
     pub(crate) fn from_context(ctx: &'a mut crate::emacs_core::eval::Context) -> Self {
         Self {
             ctx,
-            symbol_bytecode_call_cache: SymbolByteCodeCallCache::new(),
             recent_interpreter_call: RecentInterpreterCall::EMPTY,
             #[cfg(feature = "jit")]
             bytecode_tier_policy: BytecodeTierPolicy::for_process(),
@@ -6879,49 +6885,48 @@ impl<'a> Vm<'a> {
         nargs: usize,
         callee: ResolvedBuiltinCallee,
     ) -> EvalResult {
-        let (sym_id, entry) = callee.entry();
+        let (sym_id, function, min_args, max_args) = callee.dispatch_parts();
         let backtrace = ctx.push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
-        let result = if nargs < entry.min_args as usize
-            || entry.max_args.is_some_and(|max| nargs > max as usize)
-        {
-            Err(signal(
-                LispCondition::WrongNumberOfArguments,
-                vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
-            ))
-        } else {
-            // The fixnum fast paths exist only for `+`/`logand`/`logior`/`logxor`,
-            // all registered as slice builtins; skip the four symbol compares for
-            // every fixed-arity call.
-            if matches!(entry.function, Some(SubrFn::ManySlice(_)))
-                && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
-                    ctx, sym_id, args_start, nargs,
-                )
-            {
-                return match ctx.pop_fast_bytecode_backtrace_frame(backtrace) {
-                    crate::emacs_core::eval::FastBytecodePop::Popped => Ok(value),
-                    // GNU's exit debugger replaces the value it is shown
-                    // (`src/bytecode.c:825-828`).
-                    crate::emacs_core::eval::FastBytecodePop::OwesDebugOnExit(frame) => {
-                        ctx.pop_bytecode_backtrace_token_with_result(frame, Ok(value))
-                    }
-                };
-            }
-            match entry.function {
-                Some(function) => Self::dispatch_builtin_subr_from_stack_args_unchecked(
-                    ctx, function, args_start, nargs,
-                )
-                .unwrap_or_else(|| {
-                    Err(signal(
+        let result =
+            if nargs < min_args as usize || max_args.is_some_and(|max| nargs > max as usize) {
+                Err(signal(
+                    LispCondition::WrongNumberOfArguments,
+                    vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
+                ))
+            } else {
+                // The fixnum fast paths exist only for `+`/`logand`/`logior`/`logxor`,
+                // all registered as slice builtins; skip the four symbol compares for
+                // every fixed-arity call.
+                if matches!(function, Some(SubrFn::ManySlice(_)))
+                    && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
+                        ctx, sym_id, args_start, nargs,
+                    )
+                {
+                    return match ctx.pop_fast_bytecode_backtrace_frame(backtrace) {
+                        crate::emacs_core::eval::FastBytecodePop::Popped => Ok(value),
+                        // GNU's exit debugger replaces the value it is shown
+                        // (`src/bytecode.c:825-828`).
+                        crate::emacs_core::eval::FastBytecodePop::OwesDebugOnExit(frame) => {
+                            ctx.pop_bytecode_backtrace_token_with_result(frame, Ok(value))
+                        }
+                    };
+                }
+                match function {
+                    Some(function) => Self::dispatch_builtin_subr_from_stack_args_unchecked(
+                        ctx, function, args_start, nargs,
+                    )
+                    .unwrap_or_else(|| {
+                        Err(signal(
+                            LispCondition::VoidFunction,
+                            vec![Value::from_sym_id(sym_id)],
+                        ))
+                    }),
+                    None => Err(signal(
                         LispCondition::VoidFunction,
                         vec![Value::from_sym_id(sym_id)],
-                    ))
-                }),
-                None => Err(signal(
-                    LispCondition::VoidFunction,
-                    vec![Value::from_sym_id(sym_id)],
-                )),
-            }
-        };
+                    )),
+                }
+            };
         let result = ctx.dispatch_signal_result_if_needed(result);
         ctx.pop_bytecode_backtrace_token_fast_or_slow(backtrace, result)
     }
@@ -7274,12 +7279,19 @@ impl<'a> Vm<'a> {
                 callee: ResolvedByteCodeCallee::from_direct_value(func_val),
             },
             ValueKind::Symbol(sym_id) => {
+                let function_epoch = self.ctx.obarray.function_epoch();
+                if let Some(target) = self
+                    .ctx
+                    .symbol_bytecode_call_cache
+                    .get(sym_id, function_epoch)
+                {
+                    return target;
+                }
+                // A change of `compiler_function_overrides` bumps the function
+                // epoch, so nothing cached under the previous state can hit
+                // above; only the miss path needs the check.
                 if self.ctx.compiler_function_overrides_active() {
                     return ResolvedStackCallTarget::Generic;
-                }
-                let function_epoch = self.ctx.obarray.function_epoch();
-                if let Some(target) = self.symbol_bytecode_call_cache.get(sym_id, function_epoch) {
-                    return target;
                 }
                 match self.ctx.obarray.symbol_function_id(sym_id) {
                     Some(value) => {
@@ -7291,7 +7303,7 @@ impl<'a> Vm<'a> {
                             ) {
                                 match ResolvedBuiltinCallee::from_subr_value(value) {
                                     Some(callee) => {
-                                        self.symbol_bytecode_call_cache.insert_builtin(
+                                        self.ctx.symbol_bytecode_call_cache.insert_builtin(
                                             sym_id,
                                             function_epoch,
                                             callee,
@@ -7304,7 +7316,7 @@ impl<'a> Vm<'a> {
                                 ResolvedStackCallTarget::Generic
                             };
                         };
-                        self.symbol_bytecode_call_cache.insert_bytecode(
+                        self.ctx.symbol_bytecode_call_cache.insert_bytecode(
                             sym_id,
                             function_epoch,
                             callee,
@@ -7317,7 +7329,7 @@ impl<'a> Vm<'a> {
                     // static table again on the hot path.
                     None => match ResolvedBuiltinCallee::from_static_symbol(sym_id) {
                         Some(callee) => {
-                            self.symbol_bytecode_call_cache.insert_builtin(
+                            self.ctx.symbol_bytecode_call_cache.insert_builtin(
                                 sym_id,
                                 function_epoch,
                                 callee,
