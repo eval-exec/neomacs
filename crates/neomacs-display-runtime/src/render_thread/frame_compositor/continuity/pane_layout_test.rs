@@ -347,6 +347,49 @@ fn three_panes_stay_flush_across_both_seams_for_the_whole_motion() {
 }
 
 #[test]
+fn a_pane_that_only_shrinks_vertically_still_gets_an_outgoing_picture() {
+    // `C-x 2`: the top window keeps its width and loses half its height. No
+    // line rewraps, so the gate that asks only about width said there was
+    // nothing to fade — and the destination was drawn opaque from the first
+    // frame, mode line already sitting at the middle of the frame.
+    //
+    // Wrapping is not the only thing that changes when a pane shrinks. A
+    // window's rect ends in a mode line, and a height change moves it; a
+    // header line, fringes and margins move with the edges too. The outgoing
+    // picture is what covers them until the pane arrives, and it is needed on
+    // whichever axis gives ground.
+    let origin = origin();
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [
+        window(1, rect(0.0, 0.0, 800.0, 300.0)),
+        window(2, rect(0.0, 300.0, 800.0, 300.0)),
+    ];
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+    let sample = morph.sample(frame_at(origin, 20), grid());
+
+    let ghost = sample
+        .panes
+        .iter()
+        .filter(|p| p.window == live(1))
+        .filter(|p| p.source == neomacs_renderer_wgpu::PaneSource::Previous)
+        // The vacated strip starts below what the pane keeps; the outgoing
+        // picture covers the part it keeps.
+        .find(|p| p.bounds.y < 300.0)
+        .expect("a vertically shrinking pane still has an outgoing picture");
+    assert!(
+        ghost.opacity > 0.5,
+        "early in the motion the old picture should still be covering the new \
+         mode line, not at {} opacity",
+        ghost.opacity
+    );
+    assert!(
+        (ghost.bounds.height - 300.0).abs() < 1.0,
+        "the outgoing picture should cover the area the pane keeps, not {:?}",
+        ghost.bounds
+    );
+}
+
+#[test]
 fn every_placement_lands_on_a_device_pixel_without_opening_the_seam() {
     // Two properties that pull against each other.
     //
