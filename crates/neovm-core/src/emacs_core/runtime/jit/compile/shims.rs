@@ -732,10 +732,27 @@ pub extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
 pub extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use crate::emacs_core::intern::SymId;
+        use crate::emacs_core::symbol::SymbolRedirect;
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
+        let sym_id = SymId(sym as u32);
+        // The interpreter's `fast_path_var_ref` first branch, without a Vm:
+        // a plain, bound, non-nil value is the answer (28K reads per org
+        // font-lock op paid a Vm construction and two frames for it). nil
+        // (a possible dedicated buffer-local), unbound, forwarded and
+        // buffer-local symbols keep the full path below.
+        if let Some(symbol) = ctx.obarray.get_by_id(sym_id)
+            && symbol.redirect() == SymbolRedirect::Plainval
+        {
+            let val = unsafe { symbol.val.plain };
+            if !val.is_unbound() && !val.is_nil() {
+                // SAFETY: `out` is the generated code's result stack slot.
+                unsafe { *out = val.bits() as i64 };
+                return STATUS_OK;
+            }
+        }
         let mut vm = Vm::from_context(ctx);
-        match vm.varref_for_jit(SymId(sym as u32)) {
+        match vm.varref_for_jit(sym_id) {
             Ok(value) => {
                 // SAFETY: `out` is the generated code's result stack slot.
                 unsafe { *out = value.bits() as i64 };
