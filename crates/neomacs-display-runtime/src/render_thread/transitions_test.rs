@@ -9,8 +9,8 @@ use std::time::Duration;
 fn default_transition_state_has_expected_policy_defaults() {
     let ts = TransitionState::default();
     // BOTH transitions are off by default (stock-Emacs-like instant repaint);
-    // opt in via `(neomacs-effect-set 'buffer-transition :enabled t)` or
-    // `(neomacs-effect-set 'scroll-transition :enabled t)`.  The
+    // opt in via `(setq neomacs-buffer-transition-enabled t)` or
+    // `(setq neomacs-scroll-transition-enabled t)`.  The
     // effect/duration/easing asserted below are the values used once enabled.
     assert!(!ts.policy.buffer.enabled);
     assert!(!ts.policy.scroll.enabled);

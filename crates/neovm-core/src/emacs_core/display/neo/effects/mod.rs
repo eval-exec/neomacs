@@ -48,11 +48,11 @@ fn apply_operations(
 }
 
 fn set(eval: &mut Context, args: Vec<Value>) -> EvalResult {
-    expect_min_args("neomacs-effect-set", &args, 1)?;
+    expect_min_args("neomacs--effect-set", &args, 1)?;
     let operation = effect_set_operation_from_lisp(args[0], &args[1..], EffectScope::All)
-        .map_err(|error| effect_error("neomacs-effect-set", error))?;
+        .map_err(|error| effect_error("neomacs--effect-set", error))?;
     let base = eval.visual_config.clone();
-    apply_operations(eval, "neomacs-effect-set", &base, &[operation])
+    apply_operations(eval, "neomacs--effect-set", &base, &[operation])
 }
 
 fn get(eval: &mut Context, args: Vec<Value>) -> EvalResult {
@@ -140,26 +140,13 @@ fn entries_push_allowed(entry: &mut Vec<Value>, allowed: &[&str]) {
     }
 }
 
-fn reset(eval: &mut Context, args: Vec<Value>) -> EvalResult {
-    expect_args("neomacs-effect-reset", &args, 1)?;
-    let effect = effect_name_from_lisp(args[0], EffectScope::All)
-        .map_err(|error| effect_error("neomacs-effect-reset", error))?;
-    let base = eval.visual_config.clone();
-    apply_operations(
-        eval,
-        "neomacs-effect-reset",
-        &base,
-        &[EffectOperation::reset(effect)],
-    )
-}
-
 fn apply(eval: &mut Context, args: Vec<Value>) -> EvalResult {
-    expect_args("neomacs-effects-apply", &args, 1)?;
+    expect_args("neomacs--effects-apply", &args, 1)?;
     let operations = effect_operations_from_lisp(args[0], EffectScope::All)
-        .map_err(|error| effect_error("neomacs-effects-apply", error))?;
+        .map_err(|error| effect_error("neomacs--effects-apply", error))?;
     apply_operations(
         eval,
-        "neomacs-effects-apply",
+        "neomacs--effects-apply",
         &VisualConfig::default(),
         &operations,
     )
