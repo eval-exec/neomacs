@@ -1088,3 +1088,67 @@ fn position_anchors_survive_edits_and_stay_exact() {
         );
     }
 }
+
+/// The backward position walks count character starts per chunk instead of
+/// stepping one byte at a time through the rope. Querying a multibyte text
+/// in DESCENDING order keeps the cached anchor ahead of every target, so
+/// each conversion takes the backward path; the naive reference counts
+/// character starts in the raw bytes. Targets inside a multibyte character
+/// resolve to that character (the per-byte walk's stopping rule).
+#[test]
+fn backward_position_walks_count_chunks_like_the_per_byte_walk() {
+    crate::test_utils::init_test_tracing();
+    let mut text = BufferText::new();
+    text.set_multibyte(true);
+    let unit = "abc\u{20ac}\u{65e5}\u{672c}\u{8a9e} xyz\n";
+    let mut content = String::new();
+    for _ in 0..3000 {
+        content.push_str(unit);
+    }
+    insert_storage_string(&mut text, EmacsBytePos::ZERO, &content);
+    let bytes = crate::emacs_core::string_escape::storage_string_to_buffer_bytes(&content, true);
+    let is_start = |i: usize| i >= bytes.len() || (bytes[i] & 0xC0) != 0x80;
+    // Naive references over the raw bytes.
+    let naive_char_of_byte = |target: usize| -> usize {
+        let mut starts = 0usize;
+        for i in 0..target {
+            if is_start(i) {
+                starts += 1;
+            }
+        }
+        // Inside a character: the character containing `target`.
+        if target < bytes.len() && !is_start(target) {
+            starts - 1
+        } else {
+            starts
+        }
+    };
+    let mut char_starts: Vec<usize> = Vec::new();
+    for i in 0..bytes.len() {
+        if is_start(i) {
+            char_starts.push(i);
+        }
+    }
+    // Byte -> char, descending (backward walks from the cached anchor).
+    let _ = byte_pos_to_char_pos(&text, bytes.len());
+    let mut target = bytes.len();
+    while target >= 7 {
+        target -= 7; // lands on ASCII, on lead bytes and inside characters
+        assert_eq!(
+            byte_pos_to_char_pos(&text, target),
+            naive_char_of_byte(target),
+            "byte {target}"
+        );
+    }
+    // Char -> byte, descending.
+    let _ = text.char_pos_to_emacs_byte_pos(CharPos0::new(char_starts.len()));
+    let mut ci = char_starts.len();
+    while ci > 0 {
+        ci = ci.saturating_sub(5);
+        assert_eq!(
+            text.char_pos_to_emacs_byte_pos(CharPos0::new(ci)).get(),
+            char_starts[ci],
+            "char {ci}"
+        );
+    }
+}

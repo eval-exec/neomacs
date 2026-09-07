@@ -2995,22 +2995,58 @@ fn scan_backward(
     anchor: TextPositionAnchor,
     target: CharPos0,
 ) -> EmacsBytePos {
-    let mut cp = anchor.char_pos();
+    let cp = anchor.char_pos();
     let mut bp = anchor.emacs_byte_pos();
-    while cp > target {
-        if !backend.is_multibyte() {
-            bp = bp.saturating_sub_len(EmacsByteLen::new(1));
-            cp = cp.saturating_sub_len(CharLen::new(1));
-            continue;
+    if cp <= target {
+        return bp;
+    }
+    if !backend.is_multibyte() {
+        return bp.saturating_sub_len(EmacsByteLen::new(cp.saturating_offset_from(target).get()));
+    }
+    // Walk back `remaining` characters in fixed windows (chunk-counted, no
+    // per-byte lookups); the window that contains the answer is resolved by
+    // listing its character starts.
+    const WINDOW: usize = 4096;
+    let mut remaining = cp.saturating_offset_from(target).get();
+    while remaining > 0 {
+        let win_start = EmacsBytePos::new(bp.get().saturating_sub(WINDOW));
+        let range = EmacsByteRange::new(win_start, bp);
+        let mut count = 0usize;
+        let _ = backend.for_each_emacs_byte_range_chunk(range, |chunk| {
+            count += chunk.iter().filter(|&&b| (b & 0xC0) != 0x80).count();
+            Ok::<(), ()>(())
+        });
+        if count >= remaining {
+            // The answer is the (count - remaining)-th character start of
+            // this window, counting from its beginning.
+            let wanted = count - remaining;
+            let mut seen = 0usize;
+            let mut pos = win_start.get();
+            let found = backend.for_each_emacs_byte_range_chunk(range, |chunk| {
+                for &b in chunk {
+                    if (b & 0xC0) != 0x80 {
+                        if seen == wanted {
+                            return Err(pos);
+                        }
+                        seen += 1;
+                    }
+                    pos += 1;
+                }
+                Ok(())
+            });
+            return match found {
+                Err(pos) => EmacsBytePos::new(pos),
+                Ok(()) => win_start,
+            };
         }
-        bp = previous_multibyte_char_start(backend, bp);
-        cp = cp.saturating_sub_len(CharLen::new(1));
+        remaining -= count;
+        bp = win_start;
+        if bp == EmacsBytePos::ZERO {
+            break;
+        }
     }
     bp
 }
-
-/// Walk forward from `anchor` to reach `target` bytepos.
-/// Returns the char position.
 fn scan_forward_bytes(
     backend: &TextBackend,
     anchor: TextPositionAnchor,
@@ -3043,20 +3079,30 @@ fn scan_backward_bytes(
     anchor: TextPositionAnchor,
     target: EmacsBytePos,
 ) -> CharPos0 {
-    let mut bp = anchor.emacs_byte_pos();
-    let mut cp = anchor.char_pos();
-    while bp > target {
-        if !backend.is_multibyte() {
-            bp = bp.saturating_sub_len(EmacsByteLen::new(1));
-            cp = cp.saturating_sub_len(CharLen::new(1));
-            continue;
-        }
-        bp = previous_multibyte_char_start(backend, bp);
-        cp = cp.saturating_sub_len(CharLen::new(1));
+    let bp = anchor.emacs_byte_pos();
+    let cp = anchor.char_pos();
+    if bp <= target {
+        return cp;
     }
-    cp
+    if !backend.is_multibyte() {
+        return cp.saturating_sub_len(CharLen::new(bp.saturating_offset_from(target).get()));
+    }
+    // The per-byte walk this replaces stepped to the previous character
+    // start until it reached `target`, once per character; the profile of a
+    // large-file scenario showed it at ~36% of the run (a rope lookup per
+    // byte). The count of character-start bytes in `[target, anchor)` is
+    // the same number of steps, plus one when `target` sits inside a
+    // character (the walk then stops at that character's start).
+    let mut starts = 0usize;
+    let _ = backend.for_each_emacs_byte_range_chunk(EmacsByteRange::new(target, bp), |chunk| {
+        starts += chunk.iter().filter(|&&b| (b & 0xC0) != 0x80).count();
+        Ok::<(), ()>(())
+    });
+    let inside_char = backend
+        .emacs_byte_at_pos(target)
+        .is_some_and(|b| (b & 0xC0) == 0x80);
+    cp.saturating_sub_len(CharLen::new(starts + usize::from(inside_char)))
 }
-
 fn previous_multibyte_char_start(backend: &TextBackend, pos: EmacsBytePos) -> EmacsBytePos {
     let mut prev = pos.saturating_sub_len(EmacsByteLen::new(1));
     while prev > EmacsBytePos::ZERO && (backend.byte_at_emacs_byte_pos(prev) & 0xC0) == 0x80 {
