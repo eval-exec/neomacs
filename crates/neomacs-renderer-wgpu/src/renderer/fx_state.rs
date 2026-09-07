@@ -149,11 +149,10 @@ pub(crate) struct WindowFadeEntry {
 /// Entry for an active title/breadcrumb crossfade animation
 pub(crate) struct TitleFadeEntry {
     pub(crate) window_id: i64,
-    #[allow(dead_code)]
-    pub(crate) bounds: Rect,
+    /// The title on its way out. Only the outgoing text is stored: the
+    /// incoming one is read from the live window info at draw time, so keeping
+    /// a copy here would be a second source for the same string.
     pub(crate) old_text: String,
-    #[allow(dead_code)]
-    pub(crate) new_text: String,
     pub(crate) started: EventTime,
     pub(crate) duration: std::time::Duration,
 }
@@ -431,8 +430,7 @@ pub(crate) struct EdgeGlowState {
     pub(crate) entries: Vec<EdgeGlowEntry>,
 }
 
-/// Ambient rain drops. The spawn clock lives in
-/// [`EffectClocks::rain_last_spawn`].
+/// Ambient rain drops.
 #[derive(Default)]
 pub(crate) struct RainState {
     pub(crate) drops: Vec<RainDrop>,
@@ -523,8 +521,6 @@ pub(crate) struct EffectClocks {
     pub(crate) focus_ring_start: EventTime,
     /// Last lightning bolt regeneration time
     pub(crate) lightning_bolt_last: EventTime,
-    #[allow(dead_code)]
-    pub(crate) rain_last_spawn: EventTime,
 }
 
 impl Default for EffectClocks {
@@ -539,7 +535,6 @@ impl Default for EffectClocks {
             cursor_color_cycle_start: now,
             focus_ring_start: now,
             lightning_bolt_last: now,
-            rain_last_spawn: now,
         }
     }
 }

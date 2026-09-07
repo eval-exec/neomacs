@@ -1548,9 +1548,7 @@ impl WgpuRenderer {
                     self.fx.title_fade.active.retain(|f| f.window_id != wid);
                     self.fx.title_fade.active.push(TitleFadeEntry {
                         window_id: wid,
-                        bounds: info.bounds,
                         old_text,
-                        new_text: new_text.clone(),
                         // Detected while building this frame: the crossfade is
                         // anchored to when this frame's pixels appear.
                         started: self.frame_sample.presentation_time(),
