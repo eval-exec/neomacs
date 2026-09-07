@@ -3296,7 +3296,9 @@ impl<'a> Vm<'a> {
                 )
             };
             let ops = func.executable_ops();
-            let constants = &func.constants;
+            // One `as_slice` (a match on the storage kind) per activation,
+            // not one per `Constant` op.
+            let constants: &[Value] = func.constants.as_slice();
             let ops_len = ops.len();
             let ops_ptr = ops.as_ptr();
             let mut pc_local = callers.active().pc();
