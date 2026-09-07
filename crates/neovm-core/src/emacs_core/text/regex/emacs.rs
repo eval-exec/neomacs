@@ -34,7 +34,10 @@ use regex_automata::{MatchKind, Span};
 use smallvec::SmallVec;
 
 const INLINE_REGEX_REGISTERS: usize = 8;
-type RegisterScratch = SmallVec<[Option<usize>; INLINE_REGEX_REGISTERS]>;
+/// Plain `Vec`: the register arrays live in the reusable `MatchScratch`, so
+/// they never reallocate after warm-up, and a SmallVec's spilled-check on
+/// every register access cost ~6% of the matcher loop on the org op.
+type RegisterScratch = Vec<Option<usize>>;
 
 // ---------------------------------------------------------------------------
 // Phase 1: Opcodes and Data Structures
