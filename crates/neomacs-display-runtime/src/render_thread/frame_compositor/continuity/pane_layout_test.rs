@@ -430,6 +430,66 @@ fn a_shrinking_panes_mode_line_travels_to_its_new_edge_instead_of_being_clipped(
 }
 
 #[test]
+fn a_narrowing_panes_right_edge_chrome_travels_with_the_divider() {
+    // `C-x 3`: the left window keeps its height and halves its width. Its right
+    // fringe, right scroll bar and right divider all sit at the right edge, so
+    // they have somewhere to go — and blitted whole they were clipped away at
+    // the old edge while their replacements dissolved in at the new one.
+    //
+    // 1200x600 halving in width, with 8px of left chrome and 24px of right
+    // (fringe plus divider). At the midpoint the pane covers 900, so the right
+    // chrome should be at 876 — not 1176 where it started, nor 576 where it
+    // ends.
+    let origin = origin();
+    let change = PaneChange::Persisted {
+        window: live(1),
+        from: rect(0.0, 0.0, 1200.0, 600.0),
+        to: rect(0.0, 0.0, 600.0, 600.0),
+        insets: ChromeInsets::for_test(0.0, 0.0, 8.0, 24.0),
+    };
+    let mut out = Vec::new();
+    place(change, half_way(origin), &[], &[], &mut out);
+
+    let right_chrome = out
+        .iter()
+        .filter(|p| p.source == neomacs_renderer_wgpu::PaneSource::Previous)
+        .find(|p| (p.bounds.width - 24.0).abs() < 0.5)
+        .expect("the right edge chrome is its own patch");
+    assert!(
+        (right_chrome.bounds.x - 876.0).abs() < 1.0,
+        "the old right chrome should ride the divider to 876, not sit at {}",
+        right_chrome.bounds.x
+    );
+    assert!(
+        (right_chrome.content_origin.0 - 1176.0).abs() < 1.0,
+        "and be sampled from where it was, not {}",
+        right_chrome.content_origin.0
+    );
+
+    // The left chrome does not move: its edge is not the one travelling.
+    let left_chrome = out
+        .iter()
+        .filter(|p| p.source == neomacs_renderer_wgpu::PaneSource::Previous)
+        .find(|p| (p.bounds.width - 8.0).abs() < 0.5 && p.bounds.x < 1.0)
+        .expect("the left edge chrome is its own patch");
+    assert_eq!(left_chrome.content_origin.0, 0.0);
+
+    // And the columns still tile the pane's rect exactly.
+    let mut columns: Vec<(f32, f32)> = out
+        .iter()
+        .filter(|p| p.source == neomacs_renderer_wgpu::PaneSource::Previous)
+        .map(|p| (p.bounds.x, p.bounds.x + p.bounds.width))
+        .collect();
+    columns.sort_by(|a, b| a.0.total_cmp(&b.0));
+    columns.dedup();
+    assert_eq!(columns.first().expect("a patch").0, 0.0);
+    assert_eq!(columns.last().expect("a patch").1, 900.0);
+    for pair in columns.windows(2) {
+        assert_eq!(pair[0].1, pair[1].0, "gap between columns: {columns:?}");
+    }
+}
+
+#[test]
 fn a_pane_that_only_shrinks_vertically_still_gets_an_outgoing_picture() {
     // `C-x 2`: the top window keeps its width and loses half its height. No
     // line rewraps, so the gate that asks only about width said there was
