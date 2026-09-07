@@ -1913,3 +1913,195 @@ pub struct EffectsConfig {
     pub zen_mode: ZenModeConfig,
     pub zigzag_pattern: ZigzagPatternConfig,
 }
+
+/// Look an effect's schema up by the name Lisp uses.
+///
+/// A table rather than something derived from `EffectsConfig`, because that
+/// struct is hand-written and serde reflection carries values, not types. The
+/// risk of a hand-maintained table is that it drifts from the struct beside it,
+/// so `every_effect_name_has_a_schema` walks `effect_names()` and fails if any
+/// effect is missing one — which is the same guarantee at a fraction of the
+/// churn of macro-generating a 149-field struct.
+#[must_use]
+pub fn schema_for(effect: &str) -> Option<&'static [PropertySchema]> {
+    let rust_name = effect.replace('-', "_");
+    schema_by_field(&rust_name)
+}
+
+macro_rules! effect_schema_table {
+    ($($field:ident => $ty:ty,)*) => {
+        fn schema_by_field(field: &str) -> Option<&'static [PropertySchema]> {
+            match field {
+                $(stringify!($field) => Some(<$ty>::PROPERTIES),)*
+                // The behavioural slots are not fields of `EffectsConfig`; they
+                // sit beside it on `VisualConfig`.
+                "cursor_blink" => Some(crate::visual_config::CursorBlinkConfig::PROPERTIES),
+                "cursor_motion" => Some(crate::visual_config::CursorMotionConfig::PROPERTIES),
+                "cursor_size_transition" => {
+                    Some(crate::visual_config::CursorSizeTransitionConfig::PROPERTIES)
+                }
+                "buffer_transition" => Some(crate::visual_config::BufferTransitionConfig::PROPERTIES),
+                "scroll_transition" => Some(crate::visual_config::ScrollTransitionConfig::PROPERTIES),
+                "window_animations" => {
+                    Some(crate::window_animation::WindowAnimationsConfig::PROPERTIES)
+                }
+                "window_open" | "window_close" | "window_resize" | "window_movement" => {
+                    Some(crate::window_animation::WindowAnimation::PROPERTIES)
+                }
+                _ => None,
+            }
+        }
+    };
+}
+
+effect_schema_table! {
+    accent_strip => AccentStripConfig,
+    argyle_pattern => ArgylePatternConfig,
+    aurora => AuroraConfig,
+    basket_weave => BasketWeaveConfig,
+    bg_gradient => BgGradientConfig,
+    bg_pattern => BgPatternConfig,
+    border_transition => BorderTransitionConfig,
+    breadcrumb => BreadcrumbConfig,
+    breathing_border => BreathingBorderConfig,
+    brick_wall => BrickWallConfig,
+    celtic_knot => CelticKnotConfig,
+    chevron_pattern => ChevronPatternConfig,
+    circuit_trace => CircuitTraceConfig,
+    click_halo => ClickHaloConfig,
+    concentric_rings => ConcentricRingsConfig,
+    constellation => ConstellationConfig,
+    corner_fold => CornerFoldConfig,
+    crosshatch_pattern => CrosshatchPatternConfig,
+    cursor_aurora_borealis => CursorAuroraBorealisConfig,
+    cursor_bubble => CursorBubbleConfig,
+    cursor_candle_flame => CursorCandleFlameConfig,
+    cursor_color_cycle => CursorColorCycleConfig,
+    cursor_comet => CursorCometConfig,
+    cursor_compass => CursorCompassConfig,
+    cursor_compass_needle => CursorCompassNeedleConfig,
+    cursor_crosshair => CursorCrosshairConfig,
+    cursor_crystal => CursorCrystalConfig,
+    cursor_dna_helix => CursorDnaHelixConfig,
+    cursor_elastic_snap => CursorElasticSnapConfig,
+    cursor_error_pulse => CursorErrorPulseConfig,
+    cursor_feather => CursorFeatherConfig,
+    cursor_firework => CursorFireworkConfig,
+    cursor_flame => CursorFlameConfig,
+    cursor_galaxy => CursorGalaxyConfig,
+    cursor_ghost => CursorGhostConfig,
+    cursor_glow => CursorGlowConfig,
+    cursor_gravity_well => CursorGravityWellConfig,
+    cursor_heartbeat => CursorHeartbeatConfig,
+    cursor_lighthouse => CursorLighthouseConfig,
+    cursor_lightning => CursorLightningConfig,
+    cursor_magnetism => CursorMagnetismConfig,
+    cursor_metronome => CursorMetronomeConfig,
+    cursor_moth => CursorMothConfig,
+    cursor_moth_flame => CursorMothFlameConfig,
+    cursor_orbit_particles => CursorOrbitParticlesConfig,
+    cursor_particles => CursorParticlesConfig,
+    cursor_pendulum => CursorPendulumConfig,
+    cursor_pixel_dust => CursorPixelDustConfig,
+    cursor_plasma_ball => CursorPlasmaBallConfig,
+    cursor_portal => CursorPortalConfig,
+    cursor_prism => CursorPrismConfig,
+    cursor_pulse => CursorPulseConfig,
+    cursor_quill_pen => CursorQuillPenConfig,
+    cursor_radar => CursorRadarConfig,
+    cursor_ripple_ring => CursorRippleRingConfig,
+    cursor_ripple_wave => CursorRippleWaveConfig,
+    cursor_scope => CursorScopeConfig,
+    cursor_shadow => CursorShadowConfig,
+    cursor_shockwave => CursorShockwaveConfig,
+    cursor_snowflake => CursorSnowflakeConfig,
+    cursor_sonar_ping => CursorSonarPingConfig,
+    cursor_sparkle_burst => CursorSparkleBurstConfig,
+    cursor_sparkler => CursorSparklerConfig,
+    cursor_spotlight => CursorSpotlightConfig,
+    cursor_stardust => CursorStardustConfig,
+    cursor_tornado => CursorTornadoConfig,
+    cursor_trail_fade => CursorTrailFadeConfig,
+    cursor_wake => CursorWakeConfig,
+    cursor_water_drop => CursorWaterDropConfig,
+    depth_shadow => DepthShadowConfig,
+    diamond_lattice => DiamondLatticeConfig,
+    dot_matrix => DotMatrixConfig,
+    edge_glow => EdgeGlowConfig,
+    edge_snap => EdgeSnapConfig,
+    fish_scale => FishScaleConfig,
+    focus_gradient_border => FocusGradientBorderConfig,
+    focus_mode => FocusModeConfig,
+    focus_ring => FocusRingConfig,
+    frost_border => FrostBorderConfig,
+    frosted_border => FrostedBorderConfig,
+    frosted_glass => FrostedGlassConfig,
+    guilloche => GuillocheConfig,
+    header_shadow => HeaderShadowConfig,
+    heat_distortion => HeatDistortionConfig,
+    herringbone_pattern => HerringbonePatternConfig,
+    hex_grid => HexGridConfig,
+    honeycomb_dissolve => HoneycombDissolveConfig,
+    idle_dim => IdleDimConfig,
+    inactive_dim => InactiveDimConfig,
+    inactive_tint => InactiveTintConfig,
+    indent_guides => IndentGuidesConfig,
+    kaleidoscope => KaleidoscopeConfig,
+    lightning_bolt => LightningBoltConfig,
+    line_animation => LineAnimationConfig,
+    line_highlight => LineHighlightConfig,
+    line_number_pulse => LineNumberPulseConfig,
+    matrix_rain => MatrixRainConfig,
+    minibuffer_highlight => MinibufferHighlightConfig,
+    minimap => MinimapConfig,
+    mode_line_gradient => ModeLineGradientConfig,
+    mode_line_separator => ModeLineSeparatorConfig,
+    mode_line_transition => ModeLineTransitionConfig,
+    modified_indicator => ModifiedIndicatorConfig,
+    moire_pattern => MoirePatternConfig,
+    neon_border => NeonBorderConfig,
+    noise_field => NoiseFieldConfig,
+    noise_grain => NoiseGrainConfig,
+    padding_gradient => PaddingGradientConfig,
+    plaid_pattern => PlaidPatternConfig,
+    plasma_border => PlasmaBorderConfig,
+    prism_edge => PrismEdgeConfig,
+    rain_effect => RainEffectConfig,
+    region_glow => RegionGlowConfig,
+    resize_padding => ResizePaddingConfig,
+    rotating_gear => RotatingGearConfig,
+    scanlines => ScanlinesConfig,
+    scroll_bar => ScrollBarConfig,
+    scroll_line_spacing => ScrollLineSpacingConfig,
+    scroll_momentum => ScrollMomentumConfig,
+    scroll_progress => ScrollProgressConfig,
+    scroll_velocity_fade => ScrollVelocityFadeConfig,
+    search_pulse => SearchPulseConfig,
+    show_whitespace => ShowWhitespaceConfig,
+    sine_wave => SineWaveConfig,
+    spiral_vortex => SpiralVortexConfig,
+    stained_glass => StainedGlassConfig,
+    sunburst_pattern => SunburstPatternConfig,
+    target_reticle => TargetReticleConfig,
+    tessellation => TessellationConfig,
+    text_fade_in => TextFadeInConfig,
+    theme_transition => ThemeTransitionConfig,
+    title_fade => TitleFadeConfig,
+    topo_contour => TopoContourConfig,
+    trefoil_knot => TrefoilKnotConfig,
+    typing_heatmap => TypingHeatmapConfig,
+    typing_ripple => TypingRippleConfig,
+    typing_speed => TypingSpeedConfig,
+    vignette => VignetteConfig,
+    warp_grid => WarpGridConfig,
+    wave_interference => WaveInterferenceConfig,
+    window_border_radius => WindowBorderRadiusConfig,
+    window_content_shadow => WindowContentShadowConfig,
+    window_glow => WindowGlowConfig,
+    window_mode_tint => WindowModeTintConfig,
+    window_switch_fade => WindowSwitchFadeConfig,
+    window_watermark => WindowWatermarkConfig,
+    wrap_indicator => WrapIndicatorConfig,
+    zen_mode => ZenModeConfig,
+    zigzag_pattern => ZigzagPatternConfig,
+}

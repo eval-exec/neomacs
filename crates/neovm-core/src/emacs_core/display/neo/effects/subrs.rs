@@ -25,6 +25,11 @@ crate::emacs_core::subr::define_subrs! {
         SubrArity::new(1, Some(1)),
     ),
     SubrSpec::new(
+        "neomacs-effect-schema",
+        NativeFn::ContextVec(schema),
+        SubrArity::new(1, Some(1)),
+    ),
+    SubrSpec::new(
         "neomacs-effect-names",
         NativeFn::ContextVec(names),
         SubrArity::new(0, Some(1)),

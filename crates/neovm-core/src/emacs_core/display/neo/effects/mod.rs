@@ -71,6 +71,75 @@ fn get(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     Ok(Value::list(result))
 }
 
+/// `(neomacs-effect-schema EFFECT)` — what each property of EFFECT accepts.
+///
+/// Returns one entry per property, `(:PROPERTY KIND . ALLOWED)`, where ALLOWED
+/// is present only for a symbol-valued property:
+///
+///     (neomacs-effect-schema 'window-resize)
+///     => ((:enabled boolean)
+///         (:kind symbol easing spring)
+///         (:duration seconds)
+///         (:stiffness integer)
+///         (:damping-ratio number)
+///         ...)
+///
+/// This exists so Lisp can build a real customization widget. `effect-get`
+/// answers with values, from which only the current shape can be guessed — a
+/// float that happens to be 1.0 reads as an integer, and nothing says that
+/// `opacity` is clamped to the unit interval or which symbols `easing` accepts.
+/// That is why the effect profile has been a `sexp` field rather than a typed
+/// option.
+fn schema(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    use neomacs_display_protocol::effect_config::PropertyKind;
+    expect_args("neomacs-effect-schema", &args, 1)?;
+    let effect = effect_name_from_lisp(args[0], EffectScope::All)
+        .map_err(|error| effect_error("neomacs-effect-schema", error))?;
+    // Ask the registry first, so an effect that exists but publishes no schema
+    // is a loud error rather than an empty list a caller would read as "no
+    // properties".
+    eval.visual_config
+        .effect_values(&effect)
+        .map_err(|error| effect_error("neomacs-effect-schema", error))?;
+    let Some(schema) = neomacs_display_protocol::effect_config::schema_for(&effect) else {
+        return Err(effect_error(
+            "neomacs-effect-schema",
+            format!("effect `{effect}` publishes no schema"),
+        ));
+    };
+    let entries = schema
+        .iter()
+        .map(|property| {
+            let refined = property.refined();
+            let mut entry = vec![
+                Value::keyword(format!(":{}", property.property.replace('_', "-"))),
+                Value::symbol(match refined.kind {
+                    PropertyKind::Boolean => "boolean",
+                    PropertyKind::Integer => "integer",
+                    PropertyKind::Number => "number",
+                    PropertyKind::UnitInterval => "unit-interval",
+                    PropertyKind::Percentage => "percentage",
+                    PropertyKind::Color => "color",
+                    PropertyKind::ColorList => "color-list",
+                    PropertyKind::Seconds => "seconds",
+                    PropertyKind::Symbol(_) => "symbol",
+                }),
+            ];
+            if let PropertyKind::Symbol(allowed) = refined.kind {
+                entries_push_allowed(&mut entry, allowed);
+            }
+            Value::list(entry)
+        })
+        .collect::<Vec<_>>();
+    Ok(Value::list(entries))
+}
+
+fn entries_push_allowed(entry: &mut Vec<Value>, allowed: &[&str]) {
+    for name in allowed {
+        entry.push(Value::symbol(name));
+    }
+}
+
 fn reset(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-effect-reset", &args, 1)?;
     let effect = effect_name_from_lisp(args[0], EffectScope::All)
