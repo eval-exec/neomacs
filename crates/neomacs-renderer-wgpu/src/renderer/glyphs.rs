@@ -194,28 +194,62 @@ fn overlap_is_expected_on_axis(
     let a_bitmap = axis.project(a.geometry.bitmap);
     let b_bitmap = axis.project(b.geometry.bitmap);
     let overlap = axis.project(overlap);
-    let (before_cell, before_bitmap, after_cell, after_bitmap) =
-        if a_cell.start.total_cmp(&b_cell.start).is_le() {
-            (a_cell, a_bitmap, b_cell, b_bitmap)
-        } else {
-            (b_cell, b_bitmap, a_cell, a_bitmap)
-        };
+    // Order by cell start, then by cell end, so a zero-width cell sorts
+    // before the cell that begins where it sits regardless of argument order.
+    let (before_cell, before_bitmap, after_cell, after_bitmap) = if a_cell
+        .start
+        .total_cmp(&b_cell.start)
+        .then(a_cell.end.total_cmp(&b_cell.end))
+        .is_le()
+    {
+        (a_cell, a_bitmap, b_cell, b_bitmap)
+    } else {
+        (b_cell, b_bitmap, a_cell, a_bitmap)
+    };
 
-    if !approx_eq(before_cell.end, after_cell.start, CHAR_OVERLAP_MIN_AXIS) {
+    // Advance cells that intersect are a layout defect no bearing explains.
+    if before_cell.end > after_cell.start + CHAR_OVERLAP_MIN_AXIS {
         return false;
     }
-    let shared_cell_boundary = before_cell.end;
-    if axis == OverlapAxis::Vertical
-        && (overlap.start > shared_cell_boundary + CHAR_OVERLAP_MIN_AXIS
-            || overlap.end < shared_cell_boundary - CHAR_OVERLAP_MIN_AXIS)
-    {
-        return false;
+    match axis {
+        // GNU xdisp.c `right_overwritten` / `left_overwriting` walk the
+        // following (preceding) glyphs while the overhang still exceeds their
+        // summed `pixel_width`, so a bearing legitimately reaches past a
+        // narrower intervening cell; the cells need not touch. GNU bounds
+        // that reach by the font's own bearing (`gui_get_glyph_overhangs`),
+        // which this diagnostic cannot see; the substitute below is that the
+        // reaching ink must start inside its own cell.
+        OverlapAxis::Horizontal => {}
+        // Vertical overlap belongs to adjacent rows and must straddle the
+        // boundary they share.
+        OverlapAxis::Vertical => {
+            if !approx_eq(before_cell.end, after_cell.start, CHAR_OVERLAP_MIN_AXIS) {
+                return false;
+            }
+            let shared_cell_boundary = before_cell.end;
+            if overlap.start > shared_cell_boundary + CHAR_OVERLAP_MIN_AXIS
+                || overlap.end < shared_cell_boundary - CHAR_OVERLAP_MIN_AXIS
+            {
+                return false;
+            }
+        }
     }
 
     // Overhang is derived from the two rectangles. Keeping it out of stored
     // state makes a bitmap/cell pair with contradictory overhang impossible.
-    let before_extends_after_cell = before_bitmap.end > before_cell.end;
-    let after_extends_before_cell = after_bitmap.start < after_cell.start;
+    // Horizontally, a bitmap that lies wholly outside its own cell is
+    // displaced, not overhanging: GNU's `rbearing > width` / `lbearing < 0`
+    // describe ink that starts in the cell and extends past it. Vertical
+    // overlap is already bound to the shared row boundary above.
+    let starts_in_own_cell = |bitmap: AxisSpan, cell: AxisSpan| {
+        axis == OverlapAxis::Vertical
+            || (bitmap.start < cell.end + CHAR_OVERLAP_MIN_AXIS
+                && bitmap.end > cell.start - CHAR_OVERLAP_MIN_AXIS)
+    };
+    let before_extends_after_cell =
+        before_bitmap.end > before_cell.end && starts_in_own_cell(before_bitmap, before_cell);
+    let after_extends_before_cell =
+        after_bitmap.start < after_cell.start && starts_in_own_cell(after_bitmap, after_cell);
     if !before_extends_after_cell && !after_extends_before_cell {
         return false;
     }
