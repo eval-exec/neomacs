@@ -2510,9 +2510,9 @@ impl FontMetricsService {
     }
 
     /// Build a [`ResolvedFont`] for a concrete fontdb face chosen by
-    /// shaping. Unlike the face/char resolvers (which preserve selector
-    /// family/weight semantics), this records the file's own metadata: the
-    /// font was picked by shaping fallback, not by a request.
+    /// shaping. Recover native metrics and selector metadata when the platform
+    /// names the same instance; otherwise use the selected file's metrics.
+    /// Diagnostic family metadata still comes from the shaping-selected face.
     fn resolved_font_from_fontdb_id(
         &mut self,
         font_id: fontdb::ID,
@@ -2539,8 +2539,23 @@ impl FontMetricsService {
             postscript_name.clone(),
             &family,
         );
-        let px_metrics =
-            Self::probe_resolved_font_metrics(&identity, None, font_size).or_else(|| {
+        // Recover native metrics and selector metadata only for this exact
+        // instance. A same-family match can select another file or variation;
+        // neither may supply metrics for the face shaping already chose.
+        // resolve_primary finalizes the winner and attaches native metrics.
+        let selection_size = self.selection_size(font_size);
+        let platform = self
+            .font_resolver
+            .resolve_primary(
+                &family,
+                file_weight,
+                font_slant_from_fontdb(style),
+                FontWidth::Normal,
+                selection_size,
+            )
+            .filter(|matched| matched.identity == identity);
+        let px_metrics = Self::probe_resolved_font_metrics(&identity, platform.as_ref(), font_size)
+            .or_else(|| {
                 self.font_px_metrics_from_selected_face(
                     font_id,
                     font_size,
@@ -2554,26 +2569,6 @@ impl FontMetricsService {
                 line_height: metrics.height.max(1) as f32,
             })
             .or_else(|| self.font_metrics_from_selected_face(font_id, font_size));
-        // Prefer the platform's answer for this exact file (GNU `FC_SPACING`
-        // / CoreText traits and the realized weight) over the file's own
-        // metadata and the family-name heuristic, so a font first realized
-        // through shaping publishes the record the face path would. Selection
-        // only: the face is already open in `font_system`, so nothing is
-        // pinned or re-validated here.
-        let selection_size = self.selection_size(font_size);
-        let platform = self
-            .font_resolver
-            .resolve_primary(
-                &family,
-                file_weight,
-                font_slant_from_fontdb(style),
-                FontWidth::Normal,
-                selection_size,
-            )
-            .filter(|matched| {
-                matched.identity.file_path.as_deref() == file.as_deref()
-                    && matched.identity.file_face_index() == face_index
-            });
         let spacing = match platform.as_ref() {
             Some(matched) => matched.metadata.fixed_spacing_policy(),
             None if self.font_resolver.family_prefers_monospace(&family) => {
@@ -2619,7 +2614,7 @@ impl FontMetricsService {
     /// resolution path can publish a second record under an id the frame
     /// table already carries. GNU font.c `font_open_entity` likewise hands
     /// back the font object already open for an entity at that pixel size
-    /// (`FONT_OBJLIST_INDEX`) instead of opening a second one, and
+    /// (`FONT_OBJLIST_INDEX`) when the driver's `cached_font_ok` accepts it;
     /// `font_clear_cache` closes those objects when the font set changes.
     fn intern_resolved_font(
         &mut self,
