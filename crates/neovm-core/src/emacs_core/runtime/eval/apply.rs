@@ -1201,55 +1201,17 @@ impl Context {
         }
     }
 
+    /// GNU `Breturn`'s `specpdl_ptr--` after `exec_byte_code`: the frame a
+    /// bytecode call pushed is the one trivially discardable entry on top of
+    /// COUNT, which is exactly the inline fast path of
+    /// [`Self::unbind_to_with_result`]; anything else (a flagged frame, a
+    /// binding the callee left) takes its general path.
+    #[inline(always)]
     pub(crate) fn pop_bytecode_backtrace_frame_with_result(
         &mut self,
         count: usize,
         result: EvalResult,
     ) -> EvalResult {
-        // GNU Ffuncall/Breturn exit protocol: a balanced call whose only
-        // outstanding entry is its own non-debug Backtrace frame pops it with
-        // a pointer decrement (eval.c "specpdl_ptr--"). debug_on_exit: false
-        // is load-bearing — a future real backtrace-debug implementation
-        // (GNU calls call_debugger(list2(Qexit, val)) first) must land in the
-        // unbind_to_with_result fallback below.
-        let can_pop = self.specpdl.len() == count + 1
-            && matches!(
-                self.specpdl.last(),
-                Some(SpecBinding::Backtrace {
-                    args,
-                    debug_on_exit: false,
-                    ..
-                }) if args.is_evaluated()
-            )
-            || self.specpdl.len() == count + 1
-                && matches!(
-                    self.specpdl.last(),
-                    // The inline evaluated variants (structurally
-                    // debug_on_exit: false) own no side-stack payload —
-                    // pointer-decrement pop, same as GNU specpdl_ptr--.
-                    // BacktraceNative in particular is what every JIT
-                    // native call's frame is; without this arm each pop
-                    // took the full unbind_to fallback (~44 Ir measured).
-                    Some(
-                        SpecBinding::Backtrace1 {
-                            debug_on_exit: false,
-                            ..
-                        } | SpecBinding::Backtrace2 { .. }
-                            | SpecBinding::BacktraceNative { .. }
-                    )
-                );
-
-        if can_pop {
-            let binding = self.specpdl.pop().expect("can_pop checked len");
-            if let SpecBinding::Backtrace { args, .. } = &binding {
-                // Out-of-line args (Evaluated(_)) hold a backtrace_args_stack
-                // slot that must unwind LIFO; release no-ops for the inline
-                // variants.
-                self.release_backtrace_args(args);
-            }
-            return result;
-        }
-
         self.unbind_to_with_result(count, result)
     }
 
