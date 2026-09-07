@@ -663,6 +663,38 @@ impl Context {
         self.specpdl[count] = replacement;
     }
 
+    /// GNU `set_backtrace_args` (`src/eval.c:2660`) for arguments the
+    /// interpreter evaluated onto the VM operand stack: the UNEVALLED frame
+    /// at COUNT becomes EVALD over that span.  Only a span too large to
+    /// encode is copied out, as for a bytecode caller.
+    pub(crate) fn set_backtrace_args_evalled_bc_span(
+        &mut self,
+        count: usize,
+        args_start: usize,
+        nargs: usize,
+    ) {
+        let (function, debug_on_exit) = match self.specpdl.get(count) {
+            Some(SpecBinding::Backtrace {
+                function,
+                args,
+                debug_on_exit,
+            }) if args.is_unevalled() => (*function, *debug_on_exit),
+            other => panic!(
+                "set_backtrace_args_evalled_bc_span: expected UNEVALLED Backtrace at specpdl[{count}], got {other:?}"
+            ),
+        };
+        debug_assert!(args_start + nargs <= self.bc_buf.len());
+        let args = match BytecodeBacktraceSpan::try_new(args_start, nargs) {
+            Some(span) => BacktraceArgs::evaluated_bc_stack(span),
+            None => self.backtrace_args_from_oversized_bc_stack(args_start, nargs),
+        };
+        self.specpdl[count] = SpecBinding::Backtrace {
+            function,
+            args,
+            debug_on_exit,
+        };
+    }
+
     pub(crate) fn set_backtrace_args_evalled_owned(&mut self, count: usize, evaluated: LispArgVec) {
         let (function, debug_on_exit) = match self.specpdl.get(count) {
             Some(SpecBinding::Backtrace {
@@ -2084,6 +2116,91 @@ impl Context {
     }
 
     #[inline]
+    /// [`Self::dispatch_subr_entry_from_backtrace_unchecked`] for a frame
+    /// whose arguments lie on the VM operand stack at `args_start`: the
+    /// fixed-arity call reads them there, missing optionals are nil, as GNU
+    /// `eval_sub` fills `argvals` with `Qnil` up to `maxargs`.
+    pub(crate) fn dispatch_subr_entry_from_bc_stack(
+        &mut self,
+        entry: SubrEntry,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<EvalResult> {
+        let arg = |ctx: &Self, i: usize| {
+            if i < nargs {
+                ctx.bc_buf[args_start + i]
+            } else {
+                Value::NIL
+            }
+        };
+        match entry.function? {
+            SubrFn::A0(func) => Some(func(self)),
+            SubrFn::A1(func) => {
+                let a0 = arg(self, 0);
+                Some(func(self, a0))
+            }
+            SubrFn::A2(func) => {
+                let (a0, a1) = (arg(self, 0), arg(self, 1));
+                Some(func(self, a0, a1))
+            }
+            SubrFn::A3(func) => {
+                let (a0, a1, a2) = (arg(self, 0), arg(self, 1), arg(self, 2));
+                Some(func(self, a0, a1, a2))
+            }
+            SubrFn::A4(func) => {
+                let (a0, a1, a2, a3) = (arg(self, 0), arg(self, 1), arg(self, 2), arg(self, 3));
+                Some(func(self, a0, a1, a2, a3))
+            }
+            SubrFn::A5(func) => {
+                let (a0, a1, a2, a3, a4) = (
+                    arg(self, 0),
+                    arg(self, 1),
+                    arg(self, 2),
+                    arg(self, 3),
+                    arg(self, 4),
+                );
+                Some(func(self, a0, a1, a2, a3, a4))
+            }
+            SubrFn::A6(func) => {
+                let (a0, a1, a2, a3, a4, a5) = (
+                    arg(self, 0),
+                    arg(self, 1),
+                    arg(self, 2),
+                    arg(self, 3),
+                    arg(self, 4),
+                    arg(self, 5),
+                );
+                Some(func(self, a0, a1, a2, a3, a4, a5))
+            }
+            SubrFn::A7(func) => {
+                let (a0, a1, a2, a3, a4, a5, a6) = (
+                    arg(self, 0),
+                    arg(self, 1),
+                    arg(self, 2),
+                    arg(self, 3),
+                    arg(self, 4),
+                    arg(self, 5),
+                    arg(self, 6),
+                );
+                Some(func(self, a0, a1, a2, a3, a4, a5, a6))
+            }
+            SubrFn::A8(func) => {
+                let (a0, a1, a2, a3, a4, a5, a6, a7) = (
+                    arg(self, 0),
+                    arg(self, 1),
+                    arg(self, 2),
+                    arg(self, 3),
+                    arg(self, 4),
+                    arg(self, 5),
+                    arg(self, 6),
+                    arg(self, 7),
+                );
+                Some(func(self, a0, a1, a2, a3, a4, a5, a6, a7))
+            }
+            SubrFn::Many(_) | SubrFn::ManyNoContext(_) | SubrFn::ManySlice(_) => None,
+        }
+    }
+
     pub(crate) fn dispatch_subr_entry_from_backtrace_unchecked(
         &mut self,
         entry: SubrEntry,

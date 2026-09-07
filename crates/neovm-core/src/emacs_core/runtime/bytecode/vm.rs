@@ -3321,6 +3321,18 @@ impl<'a> Vm<'a> {
                 };
             }
 
+            // Operands the active frame owns.  GNU's BYTE_CODE_SAFE checks
+            // underflow against the frame's `stack_base`, never against the
+            // buffer: whatever lies beneath the frame (a bytecode caller's
+            // operands, or the arguments the interpreter parks on the same
+            // stack) is not this frame's to read or pop.  The base is an
+            // argument because the cursor outlives iterative frame changes.
+            macro_rules! depth {
+                ($frame_base:expr) => {
+                    cursor.len - $frame_base
+                };
+            }
+
             // Resume nonlocal flow at the innermost VM handler, or propagate out
             // of run_loop. The cursor must be PUBLISHED before this runs:
             // resume_nonlocal truncates bc_buf to the handler's stack height and
@@ -3647,7 +3659,7 @@ impl<'a> Vm<'a> {
 
                             let offset = 1 + *n as usize;
                             let len = stk!().len();
-                            if offset <= len {
+                            if offset <= depth!(frame_base) {
                                 let value = unsafe { *stk!().get_unchecked(len - offset) };
                                 stk_push!(value);
                             } else {
@@ -3662,10 +3674,10 @@ impl<'a> Vm<'a> {
                     Op::True => stk_push!(Value::T),
                     Op::Pop => {
                         debug_assert!(
-                            !VERIFIED || !stk!().is_empty(),
+                            !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && stk!().is_empty() {
+                        if !VERIFIED && depth!(frame_base) == 0 {
                             invalid_bytecode!("pop-empty-stack");
                         }
                         stk!().pop();
@@ -3679,7 +3691,7 @@ impl<'a> Vm<'a> {
                                 (next0, next1, next2)
                             {
                                 let len = cursor.len;
-                                if len == 0 {
+                                if depth!(frame_base) == 0 {
                                     invalid_bytecode!("dup-lss-gotoifnil-empty-stack");
                                 }
                                 debug_assert!(
@@ -3724,7 +3736,8 @@ impl<'a> Vm<'a> {
                             }
                         }
 
-                        if let Some(&top) = stk!().last() {
+                        if depth!(frame_base) > 0 {
+                            let top = unsafe { *stk!().get_unchecked(stk!().len() - 1) };
                             stk_push!(top);
                         } else {
                             invalid_bytecode!("dup-empty-stack");
@@ -3734,10 +3747,10 @@ impl<'a> Vm<'a> {
                         let offset = 1 + *n as usize;
                         let len = stk!().len();
                         debug_assert!(
-                            !VERIFIED || offset <= len,
+                            !VERIFIED || offset <= depth!(frame_base),
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if VERIFIED || offset <= len {
+                        if VERIFIED || offset <= depth!(frame_base) {
                             // Valid bytecode references an existing stack slot.
                             // Keep the hot path to one explicit check and avoid
                             // the slice indexer's second bounds check.
@@ -3770,10 +3783,10 @@ impl<'a> Vm<'a> {
                     Op::StackSet(n) => {
                         let len = stk!().len();
                         debug_assert!(
-                            !VERIFIED || len > *n as usize,
+                            !VERIFIED || depth!(frame_base) > *n as usize,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && len == 0 {
+                        if !VERIFIED && depth!(frame_base) == 0 {
                             invalid_bytecode!("stack-set-empty-stack");
                         }
                         let n = *n as usize;
@@ -3781,7 +3794,7 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                             continue;
                         }
-                        if VERIFIED || n < len {
+                        if VERIFIED || n < depth!(frame_base) {
                             let val = unsafe { *cursor.get_unchecked(len - 1) };
                             let idx = len - 1 - n;
                             unsafe { *cursor.get_unchecked_mut(idx) = val };
@@ -3797,11 +3810,11 @@ impl<'a> Vm<'a> {
                             continue;
                         }
                         let len = stk!().len();
-                        if n > len {
+                        if n > depth!(frame_base) {
                             invalid_bytecode!("discard-n-out-of-range");
                         }
                         if preserve_tos {
-                            if n >= len {
+                            if n >= depth!(frame_base) {
                                 invalid_bytecode!("discard-n-preserve-tos-out-of-range");
                             }
                             let top = unsafe { *cursor.get_unchecked(len - 1) };
@@ -4188,10 +4201,10 @@ impl<'a> Vm<'a> {
                     Op::GotoIfNil(addr) => {
                         let len = cursor.len;
                         debug_assert!(
-                            !VERIFIED || len > 0,
+                            !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && len == 0 {
+                        if !VERIFIED && depth!(frame_base) == 0 {
                             invalid_bytecode!("goto-if-nil-empty-stack");
                         }
                         let val = unsafe { *cursor.get_unchecked(len - 1) };
@@ -4203,10 +4216,10 @@ impl<'a> Vm<'a> {
                     Op::GotoIfNotNil(addr) => {
                         let len = cursor.len;
                         debug_assert!(
-                            !VERIFIED || len > 0,
+                            !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && len == 0 {
+                        if !VERIFIED && depth!(frame_base) == 0 {
                             invalid_bytecode!("goto-if-not-nil-empty-stack");
                         }
                         let val = unsafe { *cursor.get_unchecked(len - 1) };
@@ -4218,10 +4231,10 @@ impl<'a> Vm<'a> {
                     Op::GotoIfNilElsePop(addr) => {
                         let len = cursor.len;
                         debug_assert!(
-                            !VERIFIED || len > 0,
+                            !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && len == 0 {
+                        if !VERIFIED && depth!(frame_base) == 0 {
                             invalid_bytecode!("goto-if-nil-else-pop-empty-stack");
                         }
                         if unsafe { cursor.get_unchecked(len - 1) }.is_nil() {
@@ -4233,10 +4246,10 @@ impl<'a> Vm<'a> {
                     Op::GotoIfNotNilElsePop(addr) => {
                         let len = cursor.len;
                         debug_assert!(
-                            !VERIFIED || len > 0,
+                            !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && len == 0 {
+                        if !VERIFIED && depth!(frame_base) == 0 {
                             invalid_bytecode!("goto-if-not-nil-else-pop-empty-stack");
                         }
                         if unsafe { cursor.get_unchecked(len - 1) }.is_truthy() {
@@ -4371,7 +4384,7 @@ impl<'a> Vm<'a> {
                     Op::Add => {
                         let fallback = {
                             let len = cursor.len;
-                            if len < 2 {
+                            if depth!(frame_base) < 2 {
                                 invalid_bytecode!("add-stack-underflow");
                             }
                             let b = unsafe { *cursor.get_unchecked(len - 1) };
@@ -4530,7 +4543,7 @@ impl<'a> Vm<'a> {
                     Op::Add1 => {
                         let fallback = {
                             let len = cursor.len;
-                            if len == 0 {
+                            if depth!(frame_base) == 0 {
                                 invalid_bytecode!("add1-empty-stack");
                             }
                             let top = unsafe { *cursor.get_unchecked(len - 1) };
@@ -4638,7 +4651,7 @@ impl<'a> Vm<'a> {
                     Op::Lss => {
                         let fallback = {
                             let len = cursor.len;
-                            if len < 2 {
+                            if depth!(frame_base) < 2 {
                                 invalid_bytecode!("lss-stack-underflow");
                             }
                             let b = unsafe { *cursor.get_unchecked(len - 1) };

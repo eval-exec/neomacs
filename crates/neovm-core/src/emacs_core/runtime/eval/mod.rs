@@ -5502,6 +5502,7 @@ impl Context {
         // evaluated (eval.c:2638, 2660, 3299). Special forms leave
         // the frame UNEVALLED throughout.
         let outer_bt_count = self.specpdl.len();
+        let stack_base = self.bc_buf.len();
         self.push_unevalled_backtrace_frame(original_fun, original_args);
         // GNU eval.c:2601-2602, immediately after `record_in_backtrace` and
         // before any dispatch: `if (debug_on_next_call) do_debug_on_call (Qt,
@@ -5515,7 +5516,12 @@ impl Context {
         };
         let result = self.dispatch_signal_result_if_needed(dispatch_result);
         self.record_sequence_temp_roots_from_backtrace(outer_bt_count);
-        self.unbind_to_with_result(outer_bt_count, result)
+        let result = self.unbind_to_with_result(outer_bt_count, result);
+        // The evaluated call parked its function and arguments on the VM
+        // operand stack (see `eval_sub_cons_dispatch`); the frame that
+        // referenced them is gone, so is their span.
+        self.bc_buf.truncate(stack_base);
+        result
     }
 
     fn eval_sub_cons_dispatch(
@@ -5788,27 +5794,35 @@ impl Context {
         if direct_subr_entry.is_none() && list_length(&original_args).is_none() {
             return Err(self.listp_error(original_args));
         }
-        let mut args = LispArgVec::new();
-        self.push_specpdl_root(func);
-        let args_roots_base = self.specpdl.len();
+        // GNU eval.c:2640-2680 evaluates the arguments into a C array
+        // (`argvals`, or `vals` from SAFE_ALLOCA) and records that array as
+        // the frame's EVALD args before the call.  The port's array is the VM
+        // operand stack: the precise root walk traces it in full, so a push
+        // roots an argument -- no specpdl entry per argument -- and
+        // `eval_sub_cons` truncates the stack back once the frame is gone.
+        // The function value sits below the arguments for the same reason
+        // (GNU's `fun` is a C local).
+        let func_slot = self.bc_buf.len();
+        self.bc_buf.push(func);
+        let first_arg = func_slot + 1;
         let mut cursor = original_args;
         while cursor.is_cons() {
             let arg_form = cursor.cons_car();
             let arg_val = self.eval_sub(arg_form)?;
-            self.push_specpdl_root(arg_val);
-            args.push(arg_val);
+            self.bc_buf.push(arg_val);
             cursor = cursor.cons_cdr();
         }
         if !cursor.is_nil() {
             return Err(self.listp_error(cursor));
         }
+        let nargs = self.bc_buf.len() - first_arg;
+        self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
+
         if let Some((sym_id, entry)) = direct_subr_entry
             && Self::subr_entry_uses_fixed_value_call(entry)
         {
-            self.set_backtrace_args_evalled_owned(outer_bt_count, args);
-
-            let result = self.maybe_grow_eval_stack(|ctx| {
-                ctx.dispatch_subr_entry_from_backtrace_unchecked(entry, outer_bt_count)
+            return self.maybe_grow_eval_stack(|ctx| {
+                ctx.dispatch_subr_entry_from_bc_stack(entry, first_arg, nargs)
                     .unwrap_or_else(|| {
                         Err(signal(
                             LispCondition::VoidFunction,
@@ -5816,13 +5830,11 @@ impl Context {
                         ))
                     })
             });
-            return self.unbind_to_with_result(args_roots_base, result);
         }
 
-        self.set_backtrace_args_evalled(outer_bt_count, &args);
-
         if let Some((sym_id, entry)) = direct_subr_entry {
-            let result = self.maybe_grow_eval_stack(|ctx| {
+            return self.maybe_grow_eval_stack(|ctx| {
+                let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..first_arg + nargs]);
                 if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
                     return ctx.apply_evaluator_callable_by_id(sym_id, args);
                 }
@@ -5834,11 +5846,22 @@ impl Context {
                         ))
                     })
             });
-            return self.unbind_to_with_result(args_roots_base, result);
         }
 
-        let result = self.maybe_grow_eval_stack(|ctx| ctx.funcall_general_untraced(func, args));
-        self.unbind_to_with_result(args_roots_base, result)
+        // A byte-code callee takes its arguments where they lie, through the
+        // same stack path as a `Bcall` (leaf slot and tiered plan included);
+        // the frame recorded above is its backtrace frame, as GNU's
+        // `apply_lambda` adds none of its own.
+        if let Some(bc_data) = func.get_bytecode_data() {
+            return self.maybe_grow_eval_stack(|ctx| {
+                ctx.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func)
+            });
+        }
+
+        self.maybe_grow_eval_stack(|ctx| {
+            let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..first_arg + nargs]);
+            ctx.funcall_general_untraced(func, args)
+        })
     }
 
     /// Legacy eval_value: delegates to eval_sub.
