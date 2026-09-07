@@ -254,6 +254,24 @@ pub fn default_window_resize() -> WindowAnimation {
 }
 
 /// Moving a pane without resizing it: niri's `window-movement`, same spring.
+///
+/// **Currently unreachable, and structurally so.** A morph picks one geometry
+/// curve for the whole frame and picks `resize` whenever *any* surviving pane
+/// changed size -- it must, because adjacent panes share an edge and two curves
+/// either side of it would tear. In a tiling where all space is allocated, a
+/// pane cannot move unless some pane resized to release the space, so `resize`
+/// always wins.
+///
+/// Measured rather than assumed: `split-window-right`, `split-window-below`,
+/// `delete-window`, `delete-other-windows`, `enlarge-window-horizontally`,
+/// `shrink-window-horizontally`, deleting the first or middle of three columns,
+/// and `balance-windows` all classify as `resize`. `window-swap-states` changes
+/// no rect at all, so it is a buffer transition rather than a pane morph.
+///
+/// Kept rather than deleted because it is niri's vocabulary, it is the natural
+/// home for the curve if a layout operation ever does produce a pure
+/// translation, and `geometry_role` already returns it -- the slot is wired,
+/// not stubbed. Anyone tuning it should know it will not take effect today.
 #[must_use]
 pub fn default_window_movement() -> WindowAnimation {
     WindowAnimation::spring(1.0, 800)
