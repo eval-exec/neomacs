@@ -5064,7 +5064,50 @@ fn re_match_loop<const SEALED: bool>(
                 let lit = &bytecode[literal_start..literal_end];
                 let mut matched = true;
                 let mut lit_off = 0usize;
-                while lit_off < count {
+                // Run-level fast path for an all-ASCII literal against an
+                // all-ASCII text window: one slice compare (no translation)
+                // or one tight translated byte loop, instead of a per-char
+                // helper call (43K per org font-lock op at ~45 Ir each). On a
+                // mismatch `d` advances over the matched prefix exactly as the
+                // per-char loop leaves it; a translation that leaves ASCII
+                // defers to that loop, which handles every representation.
+                if count > 0
+                    && d + count <= stop
+                    && lit.iter().all(|&b| b < 0x80)
+                    && let Some(win) = text.get(d..d + count)
+                    && win.iter().all(|&b| b < 0x80)
+                {
+                    let decided = match translate {
+                        None => Some(
+                            win.iter()
+                                .zip(lit)
+                                .position(|(&tb, &lb)| tb != lb)
+                                .unwrap_or(count),
+                        ),
+                        Some(table) => {
+                            let mut at = count;
+                            let mut leaves_ascii = false;
+                            for (i, (&tb, &lb)) in win.iter().zip(lit).enumerate() {
+                                let tr = table.translate(tb as u32);
+                                if tr >= 0x80 {
+                                    leaves_ascii = true;
+                                    break;
+                                }
+                                if tr as u8 != lb {
+                                    at = i;
+                                    break;
+                                }
+                            }
+                            (!leaves_ascii).then_some(at)
+                        }
+                    };
+                    if let Some(at) = decided {
+                        d += at;
+                        lit_off = at;
+                        matched = at == count;
+                    }
+                }
+                while matched && lit_off < count {
                     match match_exactn_char_at(
                         lit,
                         lit_off,
@@ -6362,6 +6405,7 @@ fn check_infinite_loop(frames: &[FailFrame], origin: FailureOrigin, d: usize) ->
 /// Mirrors GNU `POP_FAILURE_POINT` (regex-emacs.c:1128): replay the undo
 /// log down to the popped frame's mark (restoring registers and counters
 /// delta-saved since the push), then resume at the frame's positions.
+#[inline(always)] // GNU's POP_FAILURE_POINT is a macro at the fail site; 70K failures per org op paid a 7-arg call each
 fn goto_fail(
     pc: &mut usize,
     d: &mut usize,
