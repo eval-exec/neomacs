@@ -1233,7 +1233,8 @@ impl TaggedHeap {
         // GNU's static `Lisp_Subr` storage. They are not swept by this heap.
         let roots: Vec<(TaggedValue, &'static str)> = self
             .buffer_registry
-            .values()
+            .iter()
+            .flatten()
             .map(|value| (*value, "buffer-registry"))
             .chain(
                 self.window_registry

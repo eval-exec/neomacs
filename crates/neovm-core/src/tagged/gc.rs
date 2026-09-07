@@ -522,7 +522,10 @@ pub struct TaggedHeap {
     marker_chain_head_slots: Vec<*mut *mut MarkerObj>,
 
     /// Canonical runtime handle wrappers keyed by their underlying object id.
-    buffer_registry: FxHashMap<crate::buffer::BufferId, TaggedValue>,
+    /// Buffer object per `BufferId`, indexed by the id (ids are small slab
+    /// indices): `Value::make_buffer` runs ~9K times per org font-lock op
+    /// and paid a hash probe per call.
+    buffer_registry: Vec<Option<TaggedValue>>,
     window_registry: FxHashMap<u64, TaggedValue>,
     frame_registry: FxHashMap<u64, TaggedValue>,
     timer_registry: FxHashMap<u64, TaggedValue>,
@@ -881,7 +884,7 @@ impl TaggedHeap {
             mapped_string_index_by_addr: FxHashMap::default(),
             cons_live_count: 0,
             marker_chain_head_slots: Vec::new(),
-            buffer_registry: FxHashMap::default(),
+            buffer_registry: Vec::new(),
             window_registry: FxHashMap::default(),
             frame_registry: FxHashMap::default(),
             timer_registry: FxHashMap::default(),
@@ -1145,11 +1148,15 @@ impl TaggedHeap {
     }
 
     pub fn buffer_value(&self, id: crate::buffer::BufferId) -> Option<TaggedValue> {
-        self.buffer_registry.get(&id).copied()
+        self.buffer_registry.get(id.0 as usize).copied().flatten()
     }
 
     pub fn register_buffer_value(&mut self, id: crate::buffer::BufferId, value: TaggedValue) {
-        self.buffer_registry.insert(id, value);
+        let idx = id.0 as usize;
+        if self.buffer_registry.len() <= idx {
+            self.buffer_registry.resize(idx + 1, None);
+        }
+        self.buffer_registry[idx] = Some(value);
     }
 
     pub fn window_value(&self, id: u64) -> Option<TaggedValue> {

@@ -369,6 +369,34 @@ pub extern "C" fn neovm_jit_save_window_excursion(ctx: *mut u8, body: i64, out: 
 /// the extra compare is a perfectly-predicted never-taken branch there (~0 tax).
 pub(crate) const SPEC_EPOCH_DISARMED: u64 = u64::MAX;
 
+/// The strict call the spec shim falls back to (callee not natively
+/// runnable, or the site not armed): the args go onto the operand stack once
+/// and the call takes the stack-span path — `call_for_jit_stack` →
+/// `call_function_from_stack_args` → `execute_bytecode_call_from_stack` —
+/// like the generic shim, so a compiled callee reaches the leaf-slot entry
+/// and an interpreted one enters the interpreter without a second copy.
+/// `target` is scratch-rooted across the call; the args are rooted by the
+/// operand stack.
+#[cfg(feature = "jit")]
+fn call_for_jit_from_native(
+    ctx: &mut Context,
+    target: Value,
+    args_ptr: *const i64,
+    nargs: usize,
+) -> crate::emacs_core::error::EvalResult {
+    let saved = save_scratch_gc_roots();
+    push_scratch_gc_root(target);
+    let args_start = ctx.bc_buf.len();
+    // SAFETY: the generated code stored exactly `nargs` argument words at
+    // `args_ptr` (its call-args slot) immediately before this call.
+    ctx.bc_buf
+        .extend((0..nargs).map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize)));
+    let res = Vm::from_context(ctx).call_for_jit_stack(target, args_start, nargs);
+    ctx.bc_buf.truncate(args_start);
+    restore_scratch_gc_roots(saved);
+    res
+}
+
 /// Speculated direct call (`Op::Call` whose callee slot provably holds a
 /// constant symbol that was fbound to a bytecode object at compile time).
 /// Quit poll FIRST (the interpreter's Op::Call order — quit processing can run
@@ -403,17 +431,6 @@ pub extern "C" fn neovm_jit_call_spec(
         // the strict-call fallback paths (call_for_jit), inside their own
         // scratch-root scope. The native-to-native fast path passes `args_ptr`
         // straight through and touches no scratch-root state at all.
-        let read_rooted_args = || {
-            let mut args = LispArgVec::new();
-            for i in 0..nargs {
-                // SAFETY: the generated code stored exactly `nargs` argument words
-                // at `args_ptr` (its call-args slot) immediately before this call.
-                let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-                push_scratch_gc_root(v);
-                args.push(v);
-            }
-            args
-        };
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         // Same split as the interpreter's Op::Call poll: the loads-only fast
@@ -475,23 +492,15 @@ pub extern "C" fn neovm_jit_call_spec(
                     // measured per-call tax.
                     match Vm::call_armed_callee_native(ctx, target, &slot.leaf, args_ptr, nargs) {
                         Some(o) => o,
-                        None => {
-                            let saved = save_scratch_gc_roots();
-                            push_scratch_gc_root(target);
-                            let mut vm = Vm::from_context(ctx);
-                            let res = vm.call_for_jit(target, read_rooted_args());
-                            restore_scratch_gc_roots(saved);
-                            NativeCallOutcome::from_result(res)
-                        }
+                        None => NativeCallOutcome::from_result(call_for_jit_from_native(
+                            ctx, target, args_ptr, nargs,
+                        )),
                     }
                 } else {
                     let target = Value::from_sym_id(SymId(sym as u32));
-                    let saved = save_scratch_gc_roots();
-                    push_scratch_gc_root(target);
-                    let mut vm = Vm::from_context(ctx);
-                    let res = vm.call_for_jit(target, read_rooted_args());
-                    restore_scratch_gc_roots(saved);
-                    NativeCallOutcome::from_result(res)
+                    NativeCallOutcome::from_result(call_for_jit_from_native(
+                        ctx, target, args_ptr, nargs,
+                    ))
                 };
                 match outcome {
                     NativeCallOutcome::Value(value) => {

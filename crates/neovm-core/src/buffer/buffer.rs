@@ -5934,12 +5934,17 @@ impl BufferManager {
         id: BufferId,
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
-        {
+        let (point, has_state_markers) = {
             let buf = self.buffers.get_mut(&id)?;
             buf.goto_emacs_byte_pos(pos);
+            (buf.point_emacs_byte_pos(), buf.state_markers.is_some())
+        };
+        // One buffer lookup per point move: the state markers (indirect-buffer
+        // base state) exist for few buffers, and this runs ~13.5K times per
+        // org font-lock op.
+        if has_state_markers {
+            let _ = self.record_buffer_state_markers(id);
         }
-        let point = self.buffers.get(&id)?.point_emacs_byte_pos();
-        let _ = self.record_buffer_state_markers(id);
         Some(point)
     }
 
