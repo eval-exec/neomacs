@@ -1633,55 +1633,48 @@ impl Context {
     ) -> BytecodeStackCallDispatch {
         #[cfg(feature = "jit")]
         {
-            use crate::emacs_core::jit::Plan;
+            use crate::emacs_core::jit::{Plan, cache};
+            let ctx_ptr = self as *mut Context;
+            // Direct entry first (slice C1): an armed slot means this function
+            // already tiered up, so the heat dispatcher's threshold/deferral/cap
+            // math is redundant — the slot check advances the heat itself. The
+            // args go straight from the operand stack into the leaf's
+            // premarshaled ABI, nil-padded up to its arity for omitted optionals.
+            if let Some((leaf, arity)) = cache::armed_leaf_for_stack_call(bc_data, nargs) {
+                crate::emacs_core::jit::stats::record_dispatch(true);
+                let saved_roots = save_scratch_gc_roots();
+                push_scratch_gc_root(func_value);
+                let nil = Value::NIL.bits() as i64;
+                let bits: smallvec::SmallVec<[i64; 8]> = self.bc_buf
+                    [args_start..args_start + nargs]
+                    .iter()
+                    .map(|v| v.bits() as i64)
+                    .chain(std::iter::repeat_n(nil, arity - nargs))
+                    .collect();
+                let native =
+                    cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr());
+                restore_scratch_gc_roots(saved_roots);
+                return Self::stack_call_dispatch_from_native(native);
+            }
             match bc_data
                 .jit_runtime()
                 .dispatch_sized(bc_data.executable_ops().len())
             {
                 Plan::Interpret => BytecodeStackCallDispatch::Interpret,
                 Plan::Compiled => {
-                    use crate::emacs_core::jit::cache;
+                    // Tier-up entry: compiles / loads AOT / defers / re-tiers,
+                    // and arms the slot once its leaf ran.
                     let saved_roots = save_scratch_gc_roots();
                     push_scratch_gc_root(func_value);
-                    let ctx_ptr = self as *mut Context;
-                    let native = match cache::armed_leaf_for_stack_call(bc_data, nargs) {
-                        // Direct entry (slice C1): the args go straight from
-                        // the operand stack into the leaf's premarshaled ABI,
-                        // nil-padded up to its arity for omitted optionals.
-                        Some((leaf, arity)) => {
-                            let nil = Value::NIL.bits() as i64;
-                            let bits: smallvec::SmallVec<[i64; 8]> = self.bc_buf
-                                [args_start..args_start + nargs]
-                                .iter()
-                                .map(|v| v.bits() as i64)
-                                .chain(std::iter::repeat_n(nil, arity - nargs))
-                                .collect();
-                            cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
-                        }
-                        None => {
-                            let args = LispArgVec::from_slice(
-                                &self.bc_buf[args_start..args_start + nargs],
-                            );
-                            let native = crate::emacs_core::jit::try_run_compiled(
-                                ctx_ptr, bc_data, func_value, &args,
-                            );
-                            if matches!(native, Ok(Some(_))) {
-                                cache::arm_leaf_slot(ctx_ptr, bc_data);
-                            }
-                            native
-                        }
-                    };
-                    restore_scratch_gc_roots(saved_roots);
-                    match native {
-                        Ok(Some(bits)) => BytecodeStackCallDispatch::Complete(Ok(
-                            crate::emacs_core::value::Value::from_bits(bits),
-                        )),
-                        Ok(None) => {
-                            crate::emacs_core::jit::note_seam_interp_fallback();
-                            BytecodeStackCallDispatch::Interpret
-                        }
-                        Err(flow) => BytecodeStackCallDispatch::Complete(Err(flow)),
+                    let args = LispArgVec::from_slice(&self.bc_buf[args_start..args_start + nargs]);
+                    let native = crate::emacs_core::jit::try_run_compiled(
+                        ctx_ptr, bc_data, func_value, &args,
+                    );
+                    if matches!(native, Ok(Some(_))) {
+                        cache::arm_leaf_slot(ctx_ptr, bc_data);
                     }
+                    restore_scratch_gc_roots(saved_roots);
+                    Self::stack_call_dispatch_from_native(native)
                 }
             }
         }
@@ -1689,6 +1682,25 @@ impl Context {
         {
             let _ = (bc_data, args_start, nargs, func_value);
             BytecodeStackCallDispatch::Interpret
+        }
+    }
+
+    /// `Ok(Some(bits))` = the leaf produced a value; `Ok(None)` = run the
+    /// bytecode in the interpreter instead; `Err` = a non-local exit.
+    #[cfg(feature = "jit")]
+    #[inline]
+    fn stack_call_dispatch_from_native(
+        native: Result<Option<usize>, Flow>,
+    ) -> BytecodeStackCallDispatch {
+        match native {
+            Ok(Some(bits)) => BytecodeStackCallDispatch::Complete(Ok(
+                crate::emacs_core::value::Value::from_bits(bits),
+            )),
+            Ok(None) => {
+                crate::emacs_core::jit::note_seam_interp_fallback();
+                BytecodeStackCallDispatch::Interpret
+            }
+            Err(flow) => BytecodeStackCallDispatch::Complete(Err(flow)),
         }
     }
 

@@ -3059,14 +3059,14 @@ impl<'a> Vm<'a> {
                         let result = self.ctx.dispatch_signal_result_if_needed(result);
                         InterpreterStackCall::Complete(
                             self.ctx
-                                .pop_bytecode_backtrace_token_with_result(backtrace, result),
+                                .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result),
                         )
                     }
                     BytecodeStackCallDispatch::Complete(result) => {
                         let result = self.ctx.dispatch_signal_result_if_needed(result);
                         InterpreterStackCall::Complete(
                             self.ctx
-                                .pop_bytecode_backtrace_token_with_result(backtrace, result),
+                                .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result),
                         )
                     }
                 }
@@ -3084,7 +3084,7 @@ impl<'a> Vm<'a> {
                 let result = self.ctx.dispatch_signal_result_if_needed(result);
                 InterpreterStackCall::Complete(
                     self.ctx
-                        .pop_bytecode_backtrace_token_with_result(backtrace, result),
+                        .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result),
                 )
             }
         }

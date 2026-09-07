@@ -995,7 +995,8 @@ pub fn try_run_compiled(
 /// re-tier at `retier_heat()` (the slot steps aside on exactly that call so
 /// the crossing is seen) and the `NEOVM_JIT_DEBUG_ID` trace. Only
 /// inline-dep-free leaves are ever armed (`resolve_compiled_leaf_ptr`), so
-/// the `inline_epoch` staleness backstop does not apply to them.
+/// the `inline_epoch` staleness backstop does not apply to them. Checked
+/// BEFORE `dispatch_sized`: on a hit it advances the heat in its place.
 #[inline]
 pub(crate) fn armed_leaf_for_stack_call(
     func: &ByteCodeFunction,
@@ -1003,12 +1004,22 @@ pub(crate) fn armed_leaf_for_stack_call(
 ) -> Option<(*const CompiledLeaf, usize)> {
     let rt = func.jit_runtime();
     let leaf = rt.armed_leaf_slot(leaf_slot_epoch())?;
+    #[cfg(test)]
+    if rt.force_interpret_for_test() {
+        return None;
+    }
     // SAFETY: armed from a live `COMPILED` entry under the current epoch;
     // every retire/clear bumps the epoch, and retired leaves stay allocated.
     let (has_rest, arity, accepts) =
         unsafe { ((*leaf).has_rest, (*leaf).arity, (*leaf).accepts(nargs)) };
-    (!has_rest && accepts && !super::retier_heat().is_some_and(|at| rt.heat() == at))
-        .then_some((leaf, arity))
+    if has_rest || !accepts {
+        return None;
+    }
+    // This entry replaces `dispatch_sized` for an armed function (already
+    // tiered up: its threshold/deferral/cap math is settled), so it advances
+    // the heat itself and steps aside on the re-tier crossing.
+    let now = rt.bump_heat();
+    (!super::retier_heat().is_some_and(|at| now == at)).then_some((leaf, arity))
 }
 
 /// Run a leaf returned by `armed_leaf_for_stack_call` on `args_ptr`

@@ -845,6 +845,22 @@ impl RuntimeState {
     }
 
     /// Current invocation count.
+    /// Advance the call heat by one (what `dispatch_sized` does before its
+    /// tier decision) and return the new value — the direct stack entry keeps
+    /// the re-tier trigger honest without the rest of the dispatcher.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn bump_heat(&self) -> u32 {
+        let now = self.heat.load(Ordering::Relaxed).saturating_add(1);
+        self.heat.store(now, Ordering::Relaxed);
+        now
+    }
+
+    #[cfg(all(feature = "jit", test))]
+    pub(crate) fn force_interpret_for_test(&self) -> bool {
+        self.force_interpret.load(Ordering::Relaxed)
+    }
+
     /// The leaf armed for the direct stack entry, if it was armed under
     /// `epoch` (the current `cache::leaf_slot_epoch()`); a stale slot reads
     /// as empty and is re-armed through the cache by the tier-up entry.

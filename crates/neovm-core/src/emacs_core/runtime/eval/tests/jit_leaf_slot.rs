@@ -116,9 +116,15 @@ fn direct_stack_entry_arms_after_the_tier_up_entry_and_agrees_with_it() {
         slot_armed(callee),
         "the tier-up entry arms the slot from the cache"
     );
+    let heat = callee.get_bytecode_data().unwrap().jit_runtime().heat();
     for _ in 0..8 {
         assert_eq!(call0(&mut ev, caller), Value::make_int(42), "direct entry");
     }
+    assert_eq!(
+        callee.get_bytecode_data().unwrap().jit_runtime().heat(),
+        heat + 8,
+        "the direct entry advances the heat like the dispatcher (re-tier trigger)"
+    );
 }
 
 #[test]
