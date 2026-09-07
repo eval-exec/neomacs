@@ -7574,6 +7574,11 @@ mod tests;
 #[path = "tests/jit_crash_repro.rs"]
 mod jit_crash_repro_tests;
 
+// JIT call seam slice C1: the interpreter's direct entry into armed leaves.
+#[cfg(test)]
+#[path = "tests/jit_leaf_slot.rs"]
+mod jit_leaf_slot_tests;
+
 /// Allocator for [`Context::context_instance_id`].
 fn next_context_instance_id() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);

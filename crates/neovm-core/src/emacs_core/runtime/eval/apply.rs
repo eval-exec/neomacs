@@ -1640,13 +1640,37 @@ impl Context {
             {
                 Plan::Interpret => BytecodeStackCallDispatch::Interpret,
                 Plan::Compiled => {
-                    let args = LispArgVec::from_slice(&self.bc_buf[args_start..args_start + nargs]);
+                    use crate::emacs_core::jit::cache;
                     let saved_roots = save_scratch_gc_roots();
                     push_scratch_gc_root(func_value);
                     let ctx_ptr = self as *mut Context;
-                    let native = crate::emacs_core::jit::try_run_compiled(
-                        ctx_ptr, bc_data, func_value, &args,
-                    );
+                    let native = match cache::armed_leaf_for_stack_call(bc_data, nargs) {
+                        // Direct entry (slice C1): the args go straight from
+                        // the operand stack into the leaf's premarshaled ABI,
+                        // nil-padded up to its arity for omitted optionals.
+                        Some((leaf, arity)) => {
+                            let nil = Value::NIL.bits() as i64;
+                            let bits: smallvec::SmallVec<[i64; 8]> = self.bc_buf
+                                [args_start..args_start + nargs]
+                                .iter()
+                                .map(|v| v.bits() as i64)
+                                .chain(std::iter::repeat_n(nil, arity - nargs))
+                                .collect();
+                            cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                        }
+                        None => {
+                            let args = LispArgVec::from_slice(
+                                &self.bc_buf[args_start..args_start + nargs],
+                            );
+                            let native = crate::emacs_core::jit::try_run_compiled(
+                                ctx_ptr, bc_data, func_value, &args,
+                            );
+                            if matches!(native, Ok(Some(_))) {
+                                cache::arm_leaf_slot(ctx_ptr, bc_data);
+                            }
+                            native
+                        }
+                    };
                     restore_scratch_gc_roots(saved_roots);
                     match native {
                         Ok(Some(bits)) => BytecodeStackCallDispatch::Complete(Ok(

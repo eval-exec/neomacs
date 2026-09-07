@@ -83,6 +83,9 @@ impl DenseCache {
             if let CacheEntry::Compiled(leaf) = entry {
                 self.retired.push(leaf);
             }
+            // Every armed leaf slot (RuntimeState::leaf_slot) re-resolves:
+            // a retired leaf stays ALLOCATED but is never CALLED again.
+            bump_leaf_slot_epoch();
         }
     }
 
@@ -129,7 +132,23 @@ impl DenseCache {
     fn clear(&mut self) {
         self.slots.clear();
         self.retired.clear();
+        bump_leaf_slot_epoch();
     }
+}
+
+/// Validity epoch of every `RuntimeState::leaf_slot`: bumped whenever a
+/// compiled entry leaves a cache (retire or clear), so a slot armed earlier
+/// reads as empty and re-resolves through the cache. Starts at 1 so a fresh
+/// slot (epoch 0) never matches.
+static LEAF_SLOT_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+#[inline]
+pub(crate) fn leaf_slot_epoch() -> u64 {
+    LEAF_SLOT_EPOCH.load(Ordering::Relaxed)
+}
+
+fn bump_leaf_slot_epoch() {
+    LEAF_SLOT_EPOCH.fetch_add(1, Ordering::Relaxed);
 }
 
 thread_local! {
@@ -967,6 +986,70 @@ pub fn try_run_compiled(
 /// `clear()` never fires — while a spec-slot pointer is live on the native stack.
 /// The spec slots are owned by the executing caller leaf, so a `clear()` would
 /// drop the caller and its slots together; no stale slot can outlive it.
+/// Slice C1 of the JIT call seam: the leaf the interpreter's `Bcall` arm may
+/// enter DIRECTLY — no cache probe, no `LispArgVec`, no rest list — and the
+/// premarshaled slot count the caller must supply: `nargs` values followed
+/// by nil for each omitted `&optional` (what `call_consts` pads). `&rest`
+/// callees need a consed list and stay on the entry path. `None` = take
+/// `try_run_compiled`, which alone owns AOT loads, profit deferral, the
+/// re-tier at `retier_heat()` (the slot steps aside on exactly that call so
+/// the crossing is seen) and the `NEOVM_JIT_DEBUG_ID` trace. Only
+/// inline-dep-free leaves are ever armed (`resolve_compiled_leaf_ptr`), so
+/// the `inline_epoch` staleness backstop does not apply to them.
+#[inline]
+pub(crate) fn armed_leaf_for_stack_call(
+    func: &ByteCodeFunction,
+    nargs: usize,
+) -> Option<(*const CompiledLeaf, usize)> {
+    let rt = func.jit_runtime();
+    let leaf = rt.armed_leaf_slot(leaf_slot_epoch())?;
+    // SAFETY: armed from a live `COMPILED` entry under the current epoch;
+    // every retire/clear bumps the epoch, and retired leaves stay allocated.
+    let (has_rest, arity, accepts) =
+        unsafe { ((*leaf).has_rest, (*leaf).arity, (*leaf).accepts(nargs)) };
+    (!has_rest && accepts && !super::retier_heat().is_some_and(|at| rt.heat() == at))
+        .then_some((leaf, arity))
+}
+
+/// Run a leaf returned by `armed_leaf_for_stack_call` on `args_ptr`
+/// (its premarshaled `Value` bits, NOT a pointer into the operand stack: a
+/// nested call's shim pushes onto it and may reallocate). Same result shape
+/// as `try_run_compiled`: `Ok(None)` = interpret instead.
+pub(crate) fn run_armed_leaf(
+    ctx: *mut Context,
+    func: &ByteCodeFunction,
+    func_value: Value,
+    leaf: *const CompiledLeaf,
+    args_ptr: *const i64,
+) -> Result<Option<usize>, Flow> {
+    // SAFETY: see armed_leaf_for_stack_call.
+    let leaf = unsafe { &*leaf };
+    super::stats::record_native_entry();
+    match run_resolved_leaf_native(ctx, func, func_value, leaf, args_ptr) {
+        NativeCallOutcome::Value(v) => Ok(Some(v.bits())),
+        NativeCallOutcome::Fallback => Ok(None),
+        NativeCallOutcome::FlowStashed => {
+            Err(take_pending_flow()
+                .expect("FlowStashed from a compiled leaf implies a stashed Flow"))
+        }
+    }
+}
+
+/// Arm `func`'s leaf slot after a tier-up entry ran its leaf, so the next
+/// exact-arity call takes the direct entry. Reads the cache only (the entry
+/// exists: the leaf just ran); Deferred/NotCompilable/inlining leaves leave
+/// the slot empty.
+pub(crate) fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
+    let rt = func.jit_runtime();
+    let epoch = leaf_slot_epoch();
+    if rt.armed_leaf_slot(epoch).is_some() {
+        return;
+    }
+    if let Some(leaf) = resolve_compiled_leaf_ptr(ctx, func) {
+        rt.arm_leaf_slot(leaf, epoch);
+    }
+}
+
 pub(crate) fn resolve_compiled_leaf_ptr(
     ctx: *mut Context,
     func: &ByteCodeFunction,

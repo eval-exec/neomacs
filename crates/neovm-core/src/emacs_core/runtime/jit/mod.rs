@@ -299,6 +299,14 @@ pub struct RuntimeState {
     /// elisp, which never gets hot. One relaxed load on the dispatch path,
     /// never set in the default (AOT-off) configuration.
     aot_prewarmed: std::sync::atomic::AtomicBool,
+    /// Slice C1 of the JIT call seam: the compiled leaf the interpreter's
+    /// `Bcall` arm enters DIRECTLY (no cache probe, no arg marshaling), as a
+    /// raw `*const CompiledLeaf`, valid only while `leaf_slot_epoch` equals
+    /// `cache::leaf_slot_epoch()` (bumped on every retire/clear). Zero = empty.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    leaf_slot: AtomicU64,
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    leaf_slot_epoch: AtomicU64,
     /// Widest `make-closure` patch seen for this source: the number of leading
     /// constant slots that hold PER-INSTANCE captured values (the prototype
     /// carries placeholder symbols `V0..Vn` there — `byte-compile-make-closure`).
@@ -570,6 +578,8 @@ impl RuntimeState {
             feedback: FeedbackVec::new(),
             compiled_id: AtomicU64::new(0),
             aot_prewarmed: std::sync::atomic::AtomicBool::new(false),
+            leaf_slot: AtomicU64::new(0),
+            leaf_slot_epoch: AtomicU64::new(0),
             patched_prefix: AtomicU32::new(0),
             #[cfg(test)]
             force_interpret: std::sync::atomic::AtomicBool::new(false),
@@ -835,6 +845,26 @@ impl RuntimeState {
     }
 
     /// Current invocation count.
+    /// The leaf armed for the direct stack entry, if it was armed under
+    /// `epoch` (the current `cache::leaf_slot_epoch()`); a stale slot reads
+    /// as empty and is re-armed through the cache by the tier-up entry.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn armed_leaf_slot(&self, epoch: u64) -> Option<*const compile::CompiledLeaf> {
+        let ptr = self.leaf_slot.load(Ordering::Relaxed);
+        (ptr != 0 && self.leaf_slot_epoch.load(Ordering::Relaxed) == epoch)
+            .then_some(ptr as *const compile::CompiledLeaf)
+    }
+
+    /// Arm the direct stack entry with a leaf resolved from the cache under
+    /// `epoch`. Epoch first, pointer second: a reader that sees the pointer
+    /// sees an epoch at least as new.
+    #[cfg(feature = "jit")]
+    pub(crate) fn arm_leaf_slot(&self, leaf: *const compile::CompiledLeaf, epoch: u64) {
+        self.leaf_slot_epoch.store(epoch, Ordering::Relaxed);
+        self.leaf_slot.store(leaf as u64, Ordering::Relaxed);
+    }
+
     #[inline]
     pub fn heat(&self) -> u32 {
         self.heat.load(Ordering::Relaxed)
