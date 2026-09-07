@@ -2090,39 +2090,28 @@ impl BufferText {
         None
     }
 
+    /// Unchain the marker with `marker_id`: one walk that finds and splices
+    /// it (GNU `unchain_marker` keeps the predecessor as it goes).  Between
+    /// GC cycles every chain node is live: `unchain_dead_markers` splices
+    /// unmarked MarkerObjs out between the mark and sweep phases.
     pub fn remove_marker(&self, marker_id: u64) {
-        // Post-T8: `unchain_dead_markers` splices unmarked MarkerObjs
-        // out of this buffer's chain between the mark and sweep GC
-        // phases, so a chain walk between GC cycles never dereferences
-        // a freed allocation. Walk the chain directly and splice the
-        // matching node.
-        let marker_ptr: Option<*mut crate::tagged::header::MarkerObj> = {
-            let storage = self.storage.borrow();
-            let mut curr = storage.markers_head;
-            let mut found = None;
-            // SAFETY: chain walks live chain-owned MarkerObj pointers
-            // from `storage.markers_head` until null.
-            unsafe {
-                while !curr.is_null() {
-                    if (*curr).data.marker_id == Some(marker_id) {
-                        found = Some(curr);
-                        break;
-                    }
-                    curr = (*curr).data.next_marker;
+        let mut storage = self.storage.borrow_mut();
+        let mut prev_slot: *mut *mut crate::tagged::header::MarkerObj = &mut storage.markers_head;
+        // SAFETY: `prev_slot` walks the intrusive chain from
+        // `storage.markers_head`; every non-null `*prev_slot` is a live
+        // chain-owned `MarkerObj` (see `chain_unlink`), and the only writes
+        // are to chain-owned `next_marker` slots and the leaving marker's
+        // own fields.
+        unsafe {
+            while !(*prev_slot).is_null() {
+                let curr = *prev_slot;
+                if (*curr).data.marker_id == Some(marker_id) {
+                    *prev_slot = (*curr).data.next_marker;
+                    (*curr).data.next_marker = std::ptr::null_mut();
+                    (*curr).data.buffer = None;
+                    return;
                 }
-            }
-            found
-        };
-        if let Some(ptr) = marker_ptr {
-            self.chain_unlink(ptr);
-            // SAFETY: `ptr` was read from this buffer's chain; chain-
-            // owned allocations stay live until the next GC sweep.
-            // `chain_unlink` left it detached; field writes are sound.
-            unsafe {
-                (*ptr).data.buffer = None;
-                // GNU `unchain_marker` (marker.c:684) preserves charpos so
-                // `marker-last-position` can still report the marker's last
-                // attached location.  `last_position_valid` stays true.
+                prev_slot = &mut (*curr).data.next_marker;
             }
         }
     }

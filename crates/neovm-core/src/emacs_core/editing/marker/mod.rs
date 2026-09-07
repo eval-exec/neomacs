@@ -190,13 +190,32 @@ fn marker_charpos_to_lisp_pos(charpos: usize) -> LispCharPos1 {
     CharPos0::new(charpos).to_lisp()
 }
 
-pub(crate) fn detach_marker_in_buffers(buffers: &mut BufferManager, marker: &Value) {
-    if !is_marker(marker) {
+/// GNU `unchain_marker` (`src/marker.c`): a marker knows its buffer, so
+/// leaving it is one walk of THAT buffer's chain, by pointer.  The id-keyed
+/// `BufferManager::remove_marker` walks every live buffer's chain and stays
+/// only as the fallback for a marker whose buffer slot does not name a live
+/// buffer (`save-match-data` reseats several markers per search, and each
+/// used to pay a walk of every chain).
+pub(crate) fn unchain_marker(buffers: &mut BufferManager, marker: &Value) {
+    let ptr = marker
+        .as_veclike_ptr()
+        .map(|p| p as *mut crate::tagged::header::MarkerObj);
+    if let (Some(buffer_id), Some(ptr)) = (marker_buffer_id(marker), ptr)
+        && buffers.unlink_marker_ptr(buffer_id, ptr).is_some()
+    {
+        let _ = marker.with_marker_data_mut(|data| data.buffer = None);
         return;
     }
     if let Some(mid) = marker_id_value(marker) {
         buffers.remove_marker(mid);
     }
+}
+
+pub(crate) fn detach_marker_in_buffers(buffers: &mut BufferManager, marker: &Value) {
+    if !is_marker(marker) {
+        return;
+    }
+    unchain_marker(buffers, marker);
     let _ = marker.with_marker_data_mut(|data| {
         data.buffer = None;
         // Preserve charpos/bytepos/last_position_valid so
@@ -658,8 +677,8 @@ fn register_marker_in_buffers(
     // Remove old registration from all buffers (this also unchains the
     // marker on the old buffer's intrusive chain, clearing
     // LispMarker.buffer/bytepos/charpos).
-    if let Some(mid) = existing_mid {
-        buffers.remove_marker(mid);
+    if existing_mid.is_some() {
+        unchain_marker(buffers, marker);
     }
 
     if let (Some(buf_id), Some(pos)) = (buffer_id, position) {

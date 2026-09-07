@@ -832,7 +832,7 @@ impl Context {
                     SpecBinding::SaveExcursion {
                         buffer_id,
                         marker_id,
-                        marker: _,
+                        marker,
                     } => {
                         self.restore_current_buffer_if_live(buffer_id);
                         if let Some(saved_pt) =
@@ -840,7 +840,7 @@ impl Context {
                         {
                             let _ = self.buffers.goto_buffer_emacs_byte_pos(buffer_id, saved_pt);
                         }
-                        self.buffers.remove_marker(marker_id);
+                        super::super::marker::unchain_marker(&mut self.buffers, &marker);
                     }
                     SpecBinding::SaveCurrentBuffer { buffer_id } => {
                         self.restore_current_buffer_if_live(buffer_id);

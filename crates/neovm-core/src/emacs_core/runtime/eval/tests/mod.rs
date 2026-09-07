@@ -8297,6 +8297,42 @@ fn watched_variables_carry_gnu_trapped_write_on_their_symbol() {
 /// `SET_SYMBOL_VAL` per `let`; every value must come back, and an entry that
 /// changed shape inside the body (a `make-local-variable`) still restores
 /// through the general path.
+/// GNU `unchain_marker` leaves a marker's OWN buffer's chain in one walk.
+/// A marker moved to another buffer, one reseated by `set-match-data`, and
+/// the marker a `save-excursion` made must all be gone from the old chain
+/// (edits there no longer move them) and report no buffer.
+#[test]
+fn markers_leave_their_own_buffers_chain_when_moved_reseated_or_released() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_all(
+        "(progn
+           (set-buffer (get-buffer-create \" mk-a\"))
+           (insert \"abcdef\")
+           (set-buffer (get-buffer-create \" mk-b\"))
+           (insert \"xyz\")
+           t)
+         (setq mk-m (save-current-buffer (set-buffer \" mk-a\") (copy-marker 4)))
+         (set-marker mk-m 2 (get-buffer \" mk-b\"))
+         (save-current-buffer (set-buffer \" mk-a\") (goto-char 1) (insert \"ZZ\"))
+         (list (buffer-name (marker-buffer mk-m)) (marker-position mk-m))
+         (setq mk-md (save-current-buffer
+                       (set-buffer \" mk-a\")
+                       (goto-char 1)
+                       (re-search-forward \"cd\")
+                       (match-data)))
+         (buffer-name (marker-buffer (setq mk-m2 (car mk-md))))
+         (set-match-data mk-md t)
+         (list (car mk-md) (marker-buffer mk-m2) (marker-position mk-m2))
+         (save-current-buffer (set-buffer \" mk-a\") (goto-char 1) (insert \"Q\") (buffer-string))
+         (marker-position mk-m)",
+    );
+    assert_eq!(results[4], "OK (\" mk-b\" 2)");
+    assert_eq!(results[6], "OK \" mk-a\"");
+    assert_eq!(results[8], "OK (nil nil nil)");
+    assert_eq!(results[9], "OK \"QZZabcdef\"");
+    assert_eq!(results[10], "OK 2");
+}
+
 #[test]
 fn unbind_restores_plain_lets_beneath_a_backtrace_frame_and_mixed_suffixes() {
     crate::test_utils::init_test_tracing();
