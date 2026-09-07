@@ -90,6 +90,30 @@ fn set_default_internal_with(
     bindflag: SetInternalBind,
 ) -> EvalResult {
     let symbol = original;
+    // GNU `set_default_internal` (`src/data.c`) switches on `trapped_write`
+    // first: an untrapped symbol is neither a constant (`SYMBOL_NOWRITE`)
+    // nor watched (`SYMBOL_TRAPPED_WRITE`), so it goes straight to the
+    // store.  This is the `let` of a per-buffer variable being unwound.
+    if bindflag != SetInternalBind::ThreadSwitch
+        && ctx
+            .obarray()
+            .get_by_id(resolved)
+            .is_some_and(|sym| sym.trapped_write() == super::symbol::SymbolTrappedWrite::Untrapped)
+    {
+        debug_assert!(
+            super::builtins::constant_set_outcome_in_obarray(
+                ctx.obarray(),
+                resolved,
+                reported_symbol,
+                value
+            )
+            .is_none(),
+            "an untrapped symbol must not be a constant"
+        );
+        debug_assert!(!ctx.watchers.has_watchers(resolved));
+        store_default_internal(ctx, resolved, value, bindflag)?;
+        return Ok(value);
+    }
     if let Some(result) = super::builtins::constant_set_outcome_in_obarray(
         ctx.obarray(),
         resolved,
