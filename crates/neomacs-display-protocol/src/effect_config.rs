@@ -33,6 +33,128 @@ impl FrameRate {
 
 /// Macro for defining effect config structs with Default implementations.
 ///
+/// What one effect property is, in enough detail to build a typed
+/// customization widget for it.
+///
+/// The registry can already *validate* all of this — `number_for_target` knows
+/// which properties are unit intervals, which are percentages, which must be
+/// non-negative integers, which are colours and which are durations. But it
+/// knows it privately, inside a function that runs when a value arrives, so the
+/// only thing Lisp can learn about a property is the shape of its current
+/// value. That is why `neomacs-effects` is a `sexp` field: there is nothing to
+/// build a `:type` out of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PropertyKind {
+    Boolean,
+    /// A whole number. Fractions are refused by the registry, not rounded.
+    Integer,
+    Number,
+    /// A number the registry clamps to `0.0..=1.0`.
+    UnitInterval,
+    /// A number the registry refuses above `100.0`.
+    Percentage,
+    /// Colour channels, accepted as `"#RRGGBB"` or a channel list.
+    Color,
+    /// A list of colours, such as a gradient's stops.
+    ColorList,
+    /// A duration, carried to Lisp as seconds.
+    Seconds,
+    /// One of a fixed set of symbols.
+    Symbol(&'static [&'static str]),
+}
+
+/// The kind a property has by virtue of its Rust type.
+///
+/// A trait rather than a match inside the macro, so adding a property type
+/// fails to compile until its kind is stated rather than silently degrading to
+/// something vague.
+pub trait EffectProperty {
+    const KIND: PropertyKind;
+}
+
+impl EffectProperty for bool {
+    const KIND: PropertyKind = PropertyKind::Boolean;
+}
+impl EffectProperty for f32 {
+    const KIND: PropertyKind = PropertyKind::Number;
+}
+impl EffectProperty for u32 {
+    const KIND: PropertyKind = PropertyKind::Integer;
+}
+impl EffectProperty for i32 {
+    const KIND: PropertyKind = PropertyKind::Integer;
+}
+impl EffectProperty for usize {
+    const KIND: PropertyKind = PropertyKind::Integer;
+}
+impl EffectProperty for std::time::Duration {
+    const KIND: PropertyKind = PropertyKind::Seconds;
+}
+impl EffectProperty for (f32, f32, f32) {
+    const KIND: PropertyKind = PropertyKind::Color;
+}
+impl EffectProperty for (f32, f32, f32, f32) {
+    const KIND: PropertyKind = PropertyKind::Color;
+}
+impl EffectProperty for Vec<(f32, f32, f32, f32)> {
+    const KIND: PropertyKind = PropertyKind::ColorList;
+}
+impl EffectProperty for FrameRate {
+    /// Frames per second, and strictly positive — the registry refuses zero,
+    /// which is why this is not merely an integer.
+    const KIND: PropertyKind = PropertyKind::Integer;
+}
+impl EffectProperty for crate::types::FaceId {
+    /// A face identifier, not a quantity. It is an integer only incidentally.
+    const KIND: PropertyKind = PropertyKind::Integer;
+}
+impl EffectProperty for crate::TransitionEasing {
+    const KIND: PropertyKind = PropertyKind::Symbol(TRANSITION_EASING_NAMES);
+}
+
+/// Every `TransitionEasing` a user may name.
+///
+/// Written out rather than derived, because `strum`'s `IntoStaticStr` gives a
+/// name *from* a value and there is no value here to ask. Pinned to the enum by
+/// `every_transition_easing_name_round_trips`, so a new variant fails a test
+/// rather than silently missing from the widget.
+pub const TRANSITION_EASING_NAMES: &[&str] = &[
+    "ease-out-quad",
+    "ease-out-cubic",
+    "spring",
+    "linear",
+    "ease-in-out-cubic",
+    "ease-out-expo",
+    "cubic-bezier",
+];
+
+/// One property, as a customization widget would need it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PropertySchema {
+    /// The name Lisp sees, kebab-cased.
+    pub property: &'static str,
+    pub kind: PropertyKind,
+}
+
+impl PropertySchema {
+    /// Refine a type-derived kind with what the registry knows by name.
+    ///
+    /// `opacity: f32` is not merely a number: `number_for_target` clamps it to
+    /// the unit interval, and a widget that does not say so lets a user set 5.0
+    /// and wonder why it came back 1.0. The name rules live in
+    /// `effect_command.rs` because that is where they are enforced; this is the
+    /// one place they are *published*, and the test beside it pins the two
+    /// together.
+    #[must_use]
+    pub const fn refined(self) -> Self {
+        let kind = match self.kind {
+            PropertyKind::Number => crate::effect_command::kind_for_number_property(self.property),
+            other => other,
+        };
+        Self { kind, ..self }
+    }
+}
+
 macro_rules! effect_config {
     (
         $(#[$meta:meta])*
@@ -53,6 +175,17 @@ macro_rules! effect_config {
                     $($field: $default),*
                 }
             }
+        }
+        impl $name {
+            /// Every property of this effect, with the kind a customization
+            /// widget needs. Emitted from the same declaration that defines the
+            /// fields, so the two cannot drift.
+            pub const PROPERTIES: &'static [$crate::effect_config::PropertySchema] = &[
+                $($crate::effect_config::PropertySchema {
+                    property: stringify!($field),
+                    kind: <$ty as $crate::effect_config::EffectProperty>::KIND,
+                }),*
+            ];
         }
     };
 }

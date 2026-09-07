@@ -2757,3 +2757,87 @@ fn the_master_switch_and_a_zero_duration_both_resolve_to_instant() {
         MotionSpec::Instant
     );
 }
+
+#[test]
+fn every_effect_publishes_a_schema_for_every_property_it_accepts() {
+    // The schema is emitted from the same declaration that defines the fields,
+    // so it cannot list a property the struct lacks. What it *can* do is fall
+    // out of step with what the registry actually accepts, which is what this
+    // checks: for a sample of effects, the published property names are exactly
+    // the ones `effect_values` reports.
+    let config = VisualConfig::default();
+    for (effect, schema) in [
+        ("cursor-glow", CursorGlowConfig::PROPERTIES),
+        ("accent-strip", AccentStripConfig::PROPERTIES),
+        ("argyle-pattern", ArgylePatternConfig::PROPERTIES),
+    ] {
+        let mut published: Vec<String> = schema
+            .iter()
+            .map(|property| property.property.replace('_', "-"))
+            .collect();
+        published.sort();
+        let mut accepted: Vec<String> = config
+            .effect_values(effect)
+            .unwrap_or_else(|_| panic!("{effect} is a registry effect"))
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        accepted.sort();
+        assert_eq!(published, accepted, "schema drifted for {effect}");
+    }
+}
+
+#[test]
+fn number_property_kinds_match_the_rules_that_enforce_them() {
+    use crate::effect_command::kind_for_number_property;
+    use crate::effect_config::PropertyKind;
+
+    // `kind_for_number_property` is what a widget is built from;
+    // `value_for_target` is what actually clamps an incoming value. They are
+    // separate code because one is `const` and the other is not, so a widget
+    // could promise a range the registry does not enforce — or worse, not
+    // promise one it does, and silently clamp a user's value underneath them.
+    assert_eq!(
+        kind_for_number_property("opacity"),
+        PropertyKind::UnitInterval
+    );
+    assert_eq!(
+        kind_for_number_property("glow_opacity"),
+        PropertyKind::UnitInterval,
+        "the rule is `contains`, not equality"
+    );
+    assert_eq!(
+        kind_for_number_property("dim_pct"),
+        PropertyKind::Percentage
+    );
+    assert_eq!(kind_for_number_property("radius"), PropertyKind::Number);
+
+    // And the refinement is applied where a schema is read.
+    let glow = CursorGlowConfig::PROPERTIES
+        .iter()
+        .find(|property| property.property == "opacity")
+        .expect("cursor-glow has an opacity");
+    assert_eq!(glow.kind, PropertyKind::Number, "unrefined, from the type");
+    assert_eq!(
+        glow.refined().kind,
+        PropertyKind::UnitInterval,
+        "refined, from the name"
+    );
+}
+
+#[test]
+fn every_transition_easing_name_round_trips() {
+    use crate::TransitionEasing;
+    use crate::effect_config::TRANSITION_EASING_NAMES;
+
+    // The widget offers these names; the parser must accept every one, or a
+    // user picks a value from a menu and the registry rejects it.
+    for name in TRANSITION_EASING_NAMES {
+        let parsed = TransitionEasing::from_str(name);
+        let back: &'static str = parsed.into();
+        assert_eq!(
+            &back, name,
+            "`{name}` did not round-trip; the published list has drifted from the enum"
+        );
+    }
+}
