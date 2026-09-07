@@ -18,7 +18,7 @@
 //! Two events drive it: a commit arriving from the evaluator, and a frame about
 //! to be drawn. Nothing else may touch the motion.
 
-use super::continuity::pane_layout::{PaneLayoutComposition, PaneLayoutMorph};
+use super::continuity::pane_layout::{PaneLayoutComposition, PaneLayoutMorph, PixelGrid};
 use crate::render_thread::render_quality::WindowAnimationSpecs;
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
@@ -179,6 +179,7 @@ impl LayoutDriver {
         self,
         presentation: PresentationId,
         frame: FrameSample,
+        grid: PixelGrid,
     ) -> (Self, PaneLayoutComposition) {
         match self {
             Self::Settled => (Self::Settled, PaneLayoutComposition::default()),
@@ -203,7 +204,7 @@ impl LayoutDriver {
                     }
                     None => morph,
                 };
-                let sample = morph.sample(frame);
+                let sample = morph.sample(frame, grid);
                 // The only externally visible evidence that a morph is running.
                 // A pane morph leaves no trace in the frame snapshot — that
                 // reports the layout engine's output, and a morph happens

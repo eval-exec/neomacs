@@ -1,4 +1,10 @@
 use super::*;
+
+/// A 1x device grid: logical pixels are device pixels, so snapping is to whole
+/// numbers and the fixtures below read as written.
+fn grid() -> PixelGrid {
+    PixelGrid::new(1.0)
+}
 use crate::render_thread::render_quality::WindowAnimationSpecs;
 use neomacs_display_protocol::motion_spec::MotionSpec;
 use neomacs_display_protocol::motion_spec::{MotionDuration, TweenSpec};
@@ -233,7 +239,7 @@ fn every_pane_is_placed_from_one_shared_sample() {
     let origin = origin();
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
     for ms in [0, 25, 50, 75, 100] {
-        let sample = morph.sample(frame_at(origin, ms));
+        let sample = morph.sample(frame_at(origin, ms), grid());
         let left = placed(&sample, 1);
         let right = placed(&sample, 2);
         assert!(
@@ -250,10 +256,24 @@ fn a_persisted_pane_starts_at_its_old_rect_and_arrives_at_its_new_one() {
     let origin = origin();
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
 
-    assert!((placed(&morph.sample(frame_at(origin, 0)), 1).bounds.width - 800.0).abs() < 1e-3);
-    assert!((placed(&morph.sample(frame_at(origin, 50)), 1).bounds.width - 600.0).abs() < 1e-3);
+    assert!(
+        (placed(&morph.sample(frame_at(origin, 0), grid()), 1)
+            .bounds
+            .width
+            - 800.0)
+            .abs()
+            < 1e-3
+    );
+    assert!(
+        (placed(&morph.sample(frame_at(origin, 50), grid()), 1)
+            .bounds
+            .width
+            - 600.0)
+            .abs()
+            < 1e-3
+    );
 
-    let arrived = morph.sample(frame_at(origin, 100));
+    let arrived = morph.sample(frame_at(origin, 100), grid());
     assert!((placed(&arrived, 1).bounds.width - 400.0).abs() < 1e-3);
     assert!(arrived.motion.finished());
 }
@@ -268,10 +288,78 @@ fn a_moving_pane_keeps_showing_its_destination_content() {
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
     for ms in [0, 50, 100] {
         assert_eq!(
-            placed(&morph.sample(frame_at(origin, ms)), 1).content_origin,
+            placed(&morph.sample(frame_at(origin, ms), grid()), 1).content_origin,
             (400.0, 0.0),
             "the destination's content origin, at every instant"
         );
+    }
+}
+
+#[test]
+fn every_placement_lands_on_a_device_pixel_without_opening_the_seam() {
+    // Two properties that pull against each other.
+    //
+    // A morph lerps rects as floats, so an edge lands mid-texel on almost every
+    // frame. The pass draws 1:1 -- no magnification -- but the snapshot is
+    // sampled through a linear filter, so a fractional offset still resamples
+    // already-rasterized glyphs, at a phase that walks frame to frame. Text
+    // softens for the whole motion.
+    //
+    // The obvious fix reintroduces a worse bug: rounding `x` and `width`
+    // independently makes two tiled neighbours disagree about their shared
+    // edge by a pixel, which is the reported swayfx and Hyprland symptom.
+    // Rounding *edges* is what keeps them flush, because adjacent panes share
+    // an edge value and so round to the same number.
+    let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
+    let after = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(400.0, 0.0, 400.0, 600.0)),
+    ];
+    let origin = origin();
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+
+    for scale in [1.0, 1.5, 2.0] {
+        let grid = PixelGrid::new(scale);
+        for ms in [7, 33, 61, 88] {
+            let sample = morph.sample(frame_at(origin, ms), grid);
+            for placement in &sample.panes {
+                for edge in [
+                    placement.bounds.x,
+                    placement.bounds.x + placement.bounds.width,
+                    placement.painted.x,
+                    placement.painted.x + placement.painted.width,
+                    placement.content_origin.0,
+                ] {
+                    let device = edge * scale as f32;
+                    assert!(
+                        (device - device.round()).abs() < 1e-3,
+                        "edge {edge} is {device} device px at scale {scale}, off the grid"
+                    );
+                }
+            }
+
+            // The seam: the shrinking pane's travelling right edge and the
+            // entering pane's left edge are one number, and snapping must not
+            // separate them.
+            let shrinking = placed(&sample, 1);
+            let entering = placed(&sample, 2);
+            let strip = sample
+                .panes
+                .iter()
+                .filter(|p| p.source == neomacs_renderer_wgpu::PaneSource::Previous)
+                .find(|p| p.bounds.x > 0.0)
+                .expect("a shrinking pane leaves a strip");
+            assert_eq!(
+                strip.bounds.x + strip.bounds.width,
+                entering.bounds.x,
+                "seam opened at {ms}ms, scale {scale}"
+            );
+            assert_eq!(
+                shrinking.painted.x + shrinking.painted.width,
+                strip.bounds.x,
+                "pane and strip separated at {ms}ms, scale {scale}"
+            );
+        }
     }
 }
 
@@ -296,7 +384,7 @@ fn an_entering_pane_arrives_on_the_divider_it_was_carved_from() {
     // Window 1 spans 800 - 400t, so the divider is at 800 at the start and 400
     // at rest; the entering pane's left edge tracks it exactly.
     for (ms, edge) in [(0, 800.0), (50, 600.0), (100, 400.0)] {
-        let sample = morph.sample(frame_at(origin, ms));
+        let sample = morph.sample(frame_at(origin, ms), grid());
         let entering = placed(&sample, 2);
         assert!(
             (entering.bounds.x - edge).abs() < 1.0,
@@ -312,7 +400,7 @@ fn an_entering_pane_arrives_on_the_divider_it_was_carved_from() {
     // And it rides the GEOMETRY motion, not its own: two clocks either side of
     // a moving seam is exactly what tears one. At 50ms the shrinking pane's
     // right edge and the entering pane's left edge must be the same number.
-    let sample = morph.sample(frame_at(origin, 50));
+    let sample = morph.sample(frame_at(origin, 50), grid());
     let shrinking = placed(&sample, 1);
     let entering = placed(&sample, 2);
     let strip = sample
@@ -341,7 +429,7 @@ fn the_projection_maps_a_surface_point_back_to_the_content_under_it() {
     let origin = origin();
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
     // Halfway: the pane spans x ∈ [200, 800) while showing content from 400.
-    let sample = morph.sample(frame_at(origin, 50));
+    let sample = morph.sample(frame_at(origin, 50), grid());
     let presentation = neomacs_display_protocol::PresentationId::new(3);
     let projection = sample.projection(presentation);
 
@@ -452,7 +540,7 @@ fn a_click_on_the_area_a_pane_has_not_given_up_does_not_resolve_off_the_frame() 
     let after = [window(1, rect(400.0, 0.0, 400.0, 600.0))];
     let origin = origin();
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    let sample = morph.sample(frame_at(origin, 50));
+    let sample = morph.sample(frame_at(origin, 50), grid());
     let projection = sample.projection(neomacs_display_protocol::PresentationId::new(3));
 
     let surface = neomacs_display_protocol::GeometryPoint::<
@@ -485,7 +573,9 @@ fn at_rest_the_projection_is_the_identity_the_settled_frame_would_use() {
     let origin = origin();
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
     let presentation = neomacs_display_protocol::PresentationId::new(3);
-    let projection = morph.sample(frame_at(origin, 100)).projection(presentation);
+    let projection = morph
+        .sample(frame_at(origin, 100), grid())
+        .projection(presentation);
 
     let surface = neomacs_display_protocol::GeometryPoint::<
         neomacs_display_protocol::RootSurfaceSpace,
@@ -557,6 +647,7 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
         .sample_pane_layout(
             &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
             frame_at(origin, 50),
+            grid(),
         )
         .blits;
     // Four, not two: window 1 narrows from 800 to 400, so alongside the two
@@ -571,6 +662,7 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
         .sample_pane_layout(
             &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
             frame_at(origin, 100),
+            grid(),
         )
         .blits;
     assert_eq!(blits.len(), 3);
@@ -580,7 +672,8 @@ fn a_split_installs_a_morph_that_settles_and_is_dropped() {
         render
             .sample_pane_layout(
                 &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
-                frame_at(origin, 150)
+                frame_at(origin, 150),
+                grid()
             )
             .blits
             .is_empty(),
@@ -611,7 +704,8 @@ fn a_disabled_policy_installs_no_morph_at_all() {
         render
             .sample_pane_layout(
                 &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
-                frame_at(origin, 0)
+                frame_at(origin, 0),
+                grid()
             )
             .blits
             .is_empty()
@@ -646,6 +740,7 @@ fn the_settled_projection_replaces_the_morphs_on_the_last_frame() {
     let composition = render.sample_pane_layout(
         &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
         frame_at(origin, 100),
+        grid(),
     );
     render.publish_presented_projection(composition.projection);
     let after_last_frame = render
@@ -675,7 +770,9 @@ fn a_layout_arriving_mid_motion_carries_the_panes_on_from_where_they_are() {
         PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
 
     // Halfway: the pane is 600 wide.
-    let midpoint = placed(&morph.sample(frame_at(origin, 50)), 1).bounds.width;
+    let midpoint = placed(&morph.sample(frame_at(origin, 50), grid()), 1)
+        .bounds
+        .width;
     assert!((midpoint - 600.0).abs() < 1e-3);
 
     // A second layout change arrives, wanting 200 wide.
@@ -689,7 +786,7 @@ fn a_layout_arriving_mid_motion_carries_the_panes_on_from_where_they_are() {
     let spliced = morph
         .spliced(frame_at(origin, 50))
         .expect("the retarget still has ground to cover");
-    let resumed = placed(&spliced.sample(frame_at(origin, 50)), 1)
+    let resumed = placed(&spliced.sample(frame_at(origin, 50), grid()), 1)
         .bounds
         .width;
     assert!(
@@ -709,7 +806,7 @@ fn a_spliced_motion_does_not_stall_at_the_splice() {
     let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
     let mut morph =
         PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    let at_splice = morph.sample(frame_at(origin, 50));
+    let at_splice = morph.sample(frame_at(origin, 50), grid());
     assert!(
         at_splice.motion.geometry.rate > 0.0,
         "the motion is moving before it is cut"
@@ -723,7 +820,7 @@ fn a_spliced_motion_does_not_stall_at_the_splice() {
     let spliced = morph
         .spliced(frame_at(origin, 50))
         .expect("a spliced morph");
-    let just_after = spliced.sample(frame_at(origin, 51));
+    let just_after = spliced.sample(frame_at(origin, 51), grid());
     assert!(
         just_after.motion.geometry.rate > 0.0,
         "the spliced motion left the splice already moving, rather than from rest"
@@ -768,7 +865,7 @@ fn a_window_the_new_layout_drops_keeps_the_position_it_had_reached() {
     ];
     let mut morph =
         PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    let travelled = placed(&morph.sample(frame_at(origin, 50)), 2).bounds;
+    let travelled = placed(&morph.sample(frame_at(origin, 50), grid()), 2).bounds;
 
     morph.retarget(
         &[window(1, rect(0.0, 0.0, 800.0, 600.0))],
@@ -812,6 +909,7 @@ fn a_sampled_projection_is_not_visible_to_a_hit_test_until_it_has_been_presented
     let composition = render.sample_pane_layout(
         &crate::render_thread::render_pass::surface::SurfaceAcquired::for_test(),
         frame_at(origin, 50),
+        grid(),
     );
     assert!(!composition.blits.is_empty(), "the panes are in motion");
     assert!(
@@ -846,7 +944,7 @@ fn a_leaving_pane_reads_the_previous_composition_because_the_new_one_has_none_of
     ];
     let after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    let leaving = departing(&morph.sample(frame_at(origin, 50)), 2);
+    let leaving = departing(&morph.sample(frame_at(origin, 50), grid()), 2);
     assert_eq!(leaving.source, neomacs_renderer_wgpu::PaneSource::Previous);
     // Trimmed to the ground window 1 has not reached. Halfway through, window 1
     // spans [0, 600), so the only part of the frame still showing the deleted
@@ -906,7 +1004,7 @@ fn resize_wins_a_mixed_morph_because_the_panes_have_to_share_one_curve() {
 
     // At 100ms the 100ms resize curve has arrived and the 1000ms movement curve
     // would be a tenth of the way along.
-    let sample = morph.sample(frame_at(origin, 100));
+    let sample = morph.sample(frame_at(origin, 100), grid());
     assert!(
         (sample.motion.geometry.progress - 1.0).abs() < 1e-3,
         "the movement curve drove a morph containing a resize: progress {}",
@@ -920,7 +1018,7 @@ fn resize_wins_a_mixed_morph_because_the_panes_have_to_share_one_curve() {
     ];
     let morph = PaneLayoutMorph::try_new(&before, &moved_only, distinguishable_roles(), origin)
         .expect("a morph");
-    let sample = morph.sample(frame_at(origin, 100));
+    let sample = morph.sample(frame_at(origin, 100), grid());
     assert!(
         (sample.motion.geometry.progress - 0.1).abs() < 1e-2,
         "a pure move should use the movement curve: progress {}",
@@ -943,7 +1041,7 @@ fn an_entering_pane_fades_on_its_own_curve_and_holds_the_morph_open() {
 
     // 100ms in: geometry (100ms resize) has arrived, the 200ms open curve is
     // halfway. Reading the geometry curve here would report a fully opaque pane.
-    let sample = morph.sample(frame_at(origin, 100));
+    let sample = morph.sample(frame_at(origin, 100), grid());
     let entering = placed(&sample, 2);
     assert!(
         (entering.opacity - 0.5).abs() < 1e-2,
@@ -957,7 +1055,12 @@ fn an_entering_pane_fades_on_its_own_curve_and_holds_the_morph_open() {
         !sample.motion.finished(),
         "the morph ended while the open fade was still running"
     );
-    assert!(morph.sample(frame_at(origin, 200)).motion.finished());
+    assert!(
+        morph
+            .sample(frame_at(origin, 200), grid())
+            .motion
+            .finished()
+    );
 }
 
 #[test]
@@ -977,13 +1080,13 @@ fn the_close_slot_decides_whether_a_departing_pane_fades_at_all() {
     let mut specs = linear_100ms();
     specs.close = MotionSpec::Instant;
     let morph = PaneLayoutMorph::try_new(&before, &after, specs, origin).expect("a morph");
-    let leaving = departing(&morph.sample(frame_at(origin, 50)), 2);
+    let leaving = departing(&morph.sample(frame_at(origin, 50), grid()), 2);
     assert_eq!(leaving.opacity, 1.0, "a disabled close must not fade");
 
     // Enabled -- it fades on its own curve, independent of the geometry.
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    let early = departing(&morph.sample(frame_at(origin, 10)), 2).opacity;
-    let late = departing(&morph.sample(frame_at(origin, 90)), 2).opacity;
+    let early = departing(&morph.sample(frame_at(origin, 10), grid()), 2).opacity;
+    let late = departing(&morph.sample(frame_at(origin, 90), grid()), 2).opacity;
     assert!(
         early > late && early < 1.0 && late > 0.0,
         "an enabled close fades out: {early} then {late}"
@@ -1005,7 +1108,7 @@ fn deleting_a_window_leaves_the_old_picture_standing_where_the_survivor_has_not_
     let morph =
         PaneLayoutMorph::try_new(&before, &after, close_disabled(), origin).expect("a morph");
 
-    let sample = morph.sample(frame_at(origin, 50));
+    let sample = morph.sample(frame_at(origin, 50), grid());
     // Halfway the survivor spans [328, 1312), so the deleted window still shows
     // in [0, 328).
     let leaving = departing(&sample, 1);
@@ -1040,8 +1143,8 @@ fn an_entering_pane_fades_in_and_a_leaving_one_is_uncovered_rather_than_faded() 
     ];
     let entering = PaneLayoutMorph::try_new(&split_before, &split_after, linear_100ms(), origin)
         .expect("a morph");
-    let early = placed(&entering.sample(frame_at(origin, 10)), 2).opacity;
-    let late = placed(&entering.sample(frame_at(origin, 90)), 2).opacity;
+    let early = placed(&entering.sample(frame_at(origin, 10), grid()), 2).opacity;
+    let late = placed(&entering.sample(frame_at(origin, 90), grid()), 2).opacity;
     assert!(
         early < late,
         "an entering pane fades in: {early} then {late}"
@@ -1058,8 +1161,8 @@ fn an_entering_pane_fades_in_and_a_leaving_one_is_uncovered_rather_than_faded() 
     let delete_after = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let leaving = PaneLayoutMorph::try_new(&split_after, &delete_after, close_disabled(), origin)
         .expect("a morph");
-    let early = departing(&leaving.sample(frame_at(origin, 10)), 2);
-    let late = departing(&leaving.sample(frame_at(origin, 90)), 2);
+    let early = departing(&leaving.sample(frame_at(origin, 10), grid()), 2);
+    let late = departing(&leaving.sample(frame_at(origin, 90), grid()), 2);
     assert_eq!(early.opacity, 1.0, "opaque throughout");
     assert_eq!(late.opacity, 1.0);
     assert!(
@@ -1079,7 +1182,7 @@ fn a_persisted_pane_is_always_fully_opaque_and_reads_the_destination() {
     let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
     for ms in [0, 50, 100] {
-        let pane = placed(&morph.sample(frame_at(origin, ms)), 1);
+        let pane = placed(&morph.sample(frame_at(origin, ms), grid()), 1);
         assert_eq!(pane.opacity, 1.0);
         assert_eq!(pane.source, neomacs_renderer_wgpu::PaneSource::Destination);
     }
@@ -1110,7 +1213,7 @@ fn a_pane_whose_width_changed_shows_its_old_wrapping_while_it_is_still_the_old_s
     let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
 
-    let placements = all_placed(&morph.sample(frame_at(origin, 50)), 1);
+    let placements = all_placed(&morph.sample(frame_at(origin, 50), grid()), 1);
     assert_eq!(
         placements.len(),
         3,
@@ -1161,7 +1264,7 @@ fn a_pane_that_only_moved_does_not_crossfade_anything() {
     let before = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
     let after = [window(1, rect(400.0, 0.0, 400.0, 600.0))];
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    let placements = all_placed(&morph.sample(frame_at(origin, 50)), 1);
+    let placements = all_placed(&morph.sample(frame_at(origin, 50), grid()), 1);
     assert_eq!(placements.len(), 1);
     assert_eq!(
         placements[0].source,
@@ -1179,7 +1282,7 @@ fn the_outgoing_wrapping_is_anchored_where_the_reader_last_saw_it() {
     let after = [window(1, rect(400.0, 0.0, 400.0, 600.0))];
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
     for ms in [0, 50, 100] {
-        let ghost = all_placed(&morph.sample(frame_at(origin, ms)), 1)[0];
+        let ghost = all_placed(&morph.sample(frame_at(origin, ms), grid()), 1)[0];
         assert_eq!(
             ghost.content_origin,
             (100.0, 0.0),
@@ -1197,7 +1300,7 @@ fn a_reflow_ghost_never_answers_a_hit_test() {
     let before = [window(1, rect(0.0, 0.0, 800.0, 600.0))];
     let after = [window(1, rect(0.0, 0.0, 400.0, 600.0))];
     let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
-    let sample = morph.sample(frame_at(origin, 50));
+    let sample = morph.sample(frame_at(origin, 50), grid());
     let projection = sample.projection(neomacs_display_protocol::PresentationId::new(3));
     assert_eq!(
         projection.panes().len(),
@@ -1226,13 +1329,13 @@ fn a_pane_moving_under_a_still_pointer_changes_what_the_pointer_is_over() {
     .expect("a finite point");
 
     let early = morph
-        .sample(frame_at(origin, 25))
+        .sample(frame_at(origin, 25), grid())
         .projection(presentation)
         .map(still)
         .expect("mapped")
         .x();
     let late = morph
-        .sample(frame_at(origin, 75))
+        .sample(frame_at(origin, 75), grid())
         .projection(presentation)
         .map(still)
         .expect("mapped")

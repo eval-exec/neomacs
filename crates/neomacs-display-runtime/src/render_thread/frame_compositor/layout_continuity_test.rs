@@ -1,4 +1,10 @@
 use super::*;
+
+/// A 1x device grid: logical pixels are device pixels, so snapping is to whole
+/// numbers and the fixtures below read as written.
+fn grid() -> crate::render_thread::frame_compositor::continuity::pane_layout::PixelGrid {
+    crate::render_thread::frame_compositor::continuity::pane_layout::PixelGrid::new(1.0)
+}
 use crate::render_thread::render_quality::WindowAnimationSpecs;
 
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
