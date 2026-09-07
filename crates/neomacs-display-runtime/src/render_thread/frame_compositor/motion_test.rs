@@ -226,3 +226,48 @@ fn a_deceleration_covers_ground_quickly_then_creeps_and_finally_stops() {
         "a decay with no target still has to stop asking for redraws"
     );
 }
+
+#[test]
+fn a_spring_that_cannot_overshoot_settles_when_it_arrives_not_long_after() {
+    use neomacs_display_protocol::motion_spec::{AngularFrequency, DampingRatio, SpringSpec};
+
+    // niri's default window-resize spring, converted: stiffness 800 with mass 1
+    // is omega = sqrt(800), damping ratio 1.0. niri ends this spring when its
+    // envelope falls below epsilon, at 325.7ms. Requiring the rate to fall as
+    // well pushed ours to ~460ms — 40% of the motion spent holding a morph open
+    // for movement below a pixel, and a curve transcribed from a niri config
+    // running visibly slower here than there.
+    let critical = MotionSpec::Spring(SpringSpec {
+        omega: AngularFrequency::new(800f32.sqrt()).expect("positive"),
+        damping: DampingRatio::new(1.0).expect("positive"),
+    });
+    let origin = origin();
+    let motion = Motion::start(critical, origin).expect("a spring is not instant");
+    assert!(
+        !motion.sample(frame_at(origin, 250)).finished,
+        "settled before arriving"
+    );
+    let settled = (300..=420)
+        .step_by(5)
+        .find(|ms| motion.sample(frame_at(origin, *ms)).finished)
+        .expect("a critically damped spring settles once it is at its target");
+    assert!(
+        (300..=380).contains(&settled),
+        "settled at {settled}ms; niri's own duration for this spring is 326ms"
+    );
+
+    // An under-damped spring still has to clear the rate gate, or it would stop
+    // mid-swing the first time it crossed its target.
+    let bouncy = MotionSpec::Spring(SpringSpec {
+        omega: AngularFrequency::new(800f32.sqrt()).expect("positive"),
+        damping: DampingRatio::new(0.4).expect("positive"),
+    });
+    let motion = Motion::start(bouncy, origin).expect("a spring is not instant");
+    let crossing = (1..=400)
+        .find(|ms| (motion.sample(frame_at(origin, *ms)).progress - 1.0).abs() < 1e-3)
+        .expect("an under-damped spring crosses its target");
+    assert!(
+        !motion.sample(frame_at(origin, crossing)).finished,
+        "stopped mid-swing at {crossing}ms, while still moving"
+    );
+}
