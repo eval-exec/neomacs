@@ -1993,7 +1993,7 @@ impl<'a> Vm<'a> {
     /// max-lisp-eval-depth still leaves room to run the error handler.
     #[cold]
     #[inline(never)]
-    fn bytecode_depth_exceeded(&mut self) -> Result<(), Flow> {
+    pub(crate) fn bytecode_depth_exceeded(&mut self) -> Result<(), Flow> {
         if self.ctx.max_depth < 100 {
             self.ctx.max_depth = 100;
         }

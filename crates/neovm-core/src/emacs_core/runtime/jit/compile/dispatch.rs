@@ -619,6 +619,95 @@ pub(crate) fn subr_spec_armed(ctx: &Context, sym: i64, expected: i64, slot: &Spe
     }
 }
 
+/// The spec shim's direct fixed-arity builtin call: `target` is the armed
+/// `#<subr>` value. `None` = take the stack path (not a builtin subr, a
+/// Many/slice signature, or an arity the fixed entry does not accept — the
+/// stack path signals that one). Same observable protocol as
+/// `Context::call_spec_subr_from_bc_stack`: eval-depth accounting, a
+/// backtrace frame recording the SYMBOL (over the native args slot, as the
+/// bytecode direct path does), the signal hook, the frame pop.
+#[cfg(feature = "jit")]
+fn call_fixed_builtin_from_native(
+    ctx: &mut Context,
+    sym_id: SymId,
+    target: Value,
+    args_ptr: *const i64,
+    nargs: usize,
+) -> Option<crate::emacs_core::error::EvalResult> {
+    use crate::tagged::header::{SubrFn, SubrObj, VecLikeType};
+    let ptr = target.as_veclike_ptr()?;
+    // SAFETY: a veclike pointer from a live Value; the type tag is checked
+    // before the SubrObj view is used.
+    let subr = unsafe {
+        if (*ptr).type_tag != VecLikeType::Subr {
+            return None;
+        }
+        &*(ptr as *const SubrObj)
+    };
+    if subr.dispatch_kind != SubrDispatchKind::Builtin
+        || nargs < usize::from(subr.min_args)
+        || subr.max_args.is_some_and(|max| nargs > usize::from(max))
+    {
+        return None;
+    }
+    // Only the fixed entries whose slot count covers `nargs` (missing
+    // optionals are nil, as the stack dispatcher fills them).
+    let slots = match subr.function {
+        Some(SubrFn::A0(_)) => 0,
+        Some(SubrFn::A1(_)) => 1,
+        Some(SubrFn::A2(_)) => 2,
+        Some(SubrFn::A3(_)) => 3,
+        Some(SubrFn::A4(_)) => 4,
+        Some(SubrFn::A5(_)) => 5,
+        _ => return None,
+    };
+    if nargs > slots {
+        return None;
+    }
+    // SAFETY: the generated code stored exactly `nargs` argument words at
+    // `args_ptr` (its call-args slot) immediately before this call.
+    let arg = |i: usize| {
+        if i < nargs {
+            unsafe { Value::from_bits(*args_ptr.add(i) as usize) }
+        } else {
+            Value::NIL
+        }
+    };
+    let bt_count = ctx.specpdl.len();
+    // SAFETY: `args_ptr` stays valid for the whole call (the caller's own
+    // stack slot); the frame is popped below before returning.
+    unsafe {
+        ctx.push_backtrace_frame_from_native_args(Value::from_sym_id(sym_id), args_ptr, nargs)
+    };
+    ctx.depth += 1;
+    if ctx.depth > ctx.max_depth
+        && let Err(flow) = Vm::from_context(ctx).bytecode_depth_exceeded()
+    {
+        ctx.depth -= 1;
+        return Some(ctx.pop_bytecode_backtrace_frame_with_result(bt_count, Err(flow)));
+    }
+    let result = match subr.function {
+        Some(SubrFn::A0(f)) => f(ctx),
+        Some(SubrFn::A1(f)) => f(ctx, arg(0)),
+        Some(SubrFn::A2(f)) => f(ctx, arg(0), arg(1)),
+        Some(SubrFn::A3(f)) => f(ctx, arg(0), arg(1), arg(2)),
+        Some(SubrFn::A4(f)) => f(ctx, arg(0), arg(1), arg(2), arg(3)),
+        Some(SubrFn::A5(f)) => f(ctx, arg(0), arg(1), arg(2), arg(3), arg(4)),
+        _ => unreachable!("slot count matched above"),
+    };
+    ctx.depth -= 1;
+    let result = if result.is_err() {
+        ctx.dispatch_signal_result_if_needed(result)
+    } else {
+        result
+    };
+    Some(if ctx.pop_native_backtrace_frame(bt_count) {
+        result
+    } else {
+        ctx.pop_bytecode_backtrace_frame_with_result(bt_count, result)
+    })
+}
+
 /// Speculated direct SUBR call (`Op::Call` whose callee slot provably holds a
 /// constant symbol fbound at compile time to a fixed-arity builtin subr — see
 /// `find_spec_sites`' subr classification). Quit poll FIRST (interpreter
@@ -684,6 +773,29 @@ pub extern "C" fn neovm_jit_call_subr_spec(
         #[cfg(debug_assertions)]
         SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         let target = Value::from_bits(expected as usize);
+        // Direct fixed-arity call (the common case): the subr object is re-read
+        // on EVERY call (its entry is rewritten in place at registration, so the
+        // fn pointer is never cached), the frame records the SYMBOL over the
+        // native args slot, and the builtin is called by pointer with the args
+        // in registers — no operand-stack copy, no span frame, no dispatch hop.
+        // Everything else (Many/slice subrs, an arity the fixed entry rejects,
+        // a debugger armed) takes the stack path below, the reference protocol.
+        if !ctx.debug_on_next_call_is_armed()
+            && let Some(res) =
+                call_fixed_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs)
+        {
+            return match res {
+                Ok(value) => {
+                    // SAFETY: `out` is the generated code's result stack slot.
+                    unsafe { *out = value.bits() as i64 };
+                    STATUS_OK
+                }
+                Err(flow) => {
+                    stash_pending_flow(flow);
+                    STATUS_SIGNAL
+                }
+            };
+        }
         let saved = save_scratch_gc_roots();
         // Push the args straight onto bc_buf (GC-traced → rooted across the subr,
         // and the stack-args dispatcher reads them in place — no LispArgVec). The
@@ -694,6 +806,8 @@ pub extern "C" fn neovm_jit_call_subr_spec(
         // process knobs per call) and one frame instead of two. The callee
         // needs no root: static subr objects are Box::leak'd, never freed.
         let args_start = ctx.bc_buf.len();
+        // SAFETY: the generated code stored exactly `nargs` argument words at
+        // `args_ptr` (its call-args slot) immediately before this call.
         // SAFETY: the generated code stored exactly `nargs` argument words at
         // `args_ptr` (its call-args slot) immediately before this call.
         ctx.bc_buf
