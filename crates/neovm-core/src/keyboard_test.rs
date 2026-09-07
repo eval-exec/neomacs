@@ -459,12 +459,27 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
         )
         .unwrap()
         .unwrap();
+    // GNU distinguishes the two, and so must this: `ON_VERTICAL_BORDER` yields
+    // `vertical-line` and `ON_RIGHT_DIVIDER` yields `right-divider`
+    // (src/keyboard.c:5952-5979). They are different window parts, not two
+    // names for one.
+    //
+    // This asserted `vertical-line` because reaching `mouse-drag-vertical-line`
+    // was taken to require it. It does not: GNU binds that one command under
+    // both keys —
+    //
+    //     (global-set-key [vertical-line down-mouse-1] #'mouse-drag-vertical-line)
+    //     (global-set-key [right-divider down-mouse-1] #'mouse-drag-vertical-line)
+    //
+    // (lisp/mouse.el:3819, 3822) — so reporting the divider honestly still
+    // drags it, and reporting it as a vertical line loses the distinction GNU
+    // keeps.
     let divider_event = crate::emacs_core::value::list_to_vec(&divider_event).unwrap();
     let divider_position = crate::emacs_core::value::list_to_vec(&divider_event[1]).unwrap();
     assert_eq!(
         divider_position[1].as_symbol_name(),
-        Some("vertical-line"),
-        "the typed divider hit must reach GNU's mouse-drag-vertical-line binding"
+        Some("right-divider"),
+        "a right divider reports `right-divider`, not `vertical-line`"
     );
 
     eval.command_loop

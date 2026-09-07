@@ -129,5 +129,5 @@ impl crate::emacs_core::Context {
 }
 
 #[cfg(test)]
-#[path = "window_edge_drag_test.rs"]
+#[path = "tests/mod.rs"]
 mod tests;
