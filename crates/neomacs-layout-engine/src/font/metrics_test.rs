@@ -886,6 +886,51 @@ struct FixedNativeMemoryFontBackend {
 
 struct NoCandidateFontBackend;
 
+struct NativeMetricsPrimaryBackend {
+    candidate: crate::font_backend::PlatformFontCandidate,
+    metrics: crate::font_backend::PlatformFontDesignMetrics,
+}
+
+impl crate::font_backend::FontBackend for NativeMetricsPrimaryBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::CoreText
+    }
+
+    fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        true
+    }
+
+    fn list_candidates(
+        &self,
+        _query: &crate::font_backend::FontCandidateQuery,
+    ) -> Vec<crate::font_backend::FontCandidate> {
+        vec![crate::font_backend::FontCandidate {
+            matched: self.candidate.clone(),
+        }]
+    }
+
+    fn design_metrics(
+        &self,
+        _matched: &crate::font_backend::PlatformFontMatch,
+    ) -> Option<crate::font_backend::PlatformFontDesignMetrics> {
+        Some(self.metrics)
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
 struct ChangingCatalogBackend {
     pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     advances: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -1580,52 +1625,135 @@ fn char_first_realization_publishes_the_face_record() {
     );
 }
 
-#[test]
-fn shaping_first_realization_publishes_the_face_record() {
-    // Reverse order of `shaping_selected_face_reuses_the_realized_face_record`:
-    // when shaping realizes a file before any face does, the pinned record
-    // must still be the one the face path would have built.
-    let mut reference = make_svc();
-    let Some(face) = reference.materialized_font_for_face("Monospace", 400, false, 14.0) else {
-        return;
+fn native_metrics_fixture_service(
+    variations: Vec<neomacs_display_protocol::font::FontVariationCoord>,
+) -> (
+    FontMetricsService,
+    fontdb::ID,
+    String,
+    crate::font_backend::PlatformFontDesignMetrics,
+) {
+    let fixture = test_font_path(neomacs_test_fonts::spleen_2_2_0().woff());
+    let design_metrics = crate::font_backend::PlatformFontDesignMetrics {
+        units_per_em: 1000,
+        ascent: 1010,
+        descent: 300,
+        line_gap: 0,
+        max_advance: 600,
+        space_advance: 600,
+        average_advance: 600,
     };
-    let Some(file) = face.font.identity.file_path.clone() else {
-        debug!("skipping: platform identity has no file path (in-memory asset)");
-        return;
-    };
-    let face_index = face.font.identity.file_face_index();
-
     let mut svc = make_svc();
-    let Some(fontdb_id) = svc.font_system.db().faces().find_map(|candidate| {
-        (fontdb_face_file(candidate).as_deref() == Some(file.as_str())
-            && candidate.index == face_index)
-            .then_some(candidate.id)
-    }) else {
-        debug!("skipping: fontdb has no face for the platform file");
-        return;
-    };
-    let Some(from_shaping) = svc.resolved_font_from_fontdb_id(fontdb_id, 14.0) else {
-        debug!("skipping: fontdb face has no replayable file");
-        return;
-    };
-    let via_face = svc
-        .resolved_font_for_face("Monospace", 400, false, 14.0)
-        .expect("realized primary font");
-    if via_face.id != from_shaping.id {
-        debug!("skipping: fontdb identity differs from the platform identity");
-        return;
-    }
-    assert_eq!(
-        via_face, face.font,
-        "shaping-first realization must not change the face record"
+    let ids = FontFileCache::open_file(svc.font_system.db_mut(), &fixture, 0)
+        .expect("decode pinned font fixture");
+    let fontdb_id = *ids.first().expect("fixture has a fontdb face");
+    let face = svc.font_system.db().face(fontdb_id).expect("fixture face");
+    let family = face.families[0].0.clone();
+    let identity = ResolvedFontIdentity::from_platform_file_with_variations(
+        FontBackendKind::CoreText,
+        &fixture,
+        face.index,
+        Some(face.post_script_name.clone()),
+        variations,
     );
+    svc.font_resolver
+        .replace_backend(Box::new(NativeMetricsPrimaryBackend {
+            candidate: platform_file_candidate(
+                identity,
+                crate::font_backend::PlatformFontMetadata {
+                    foundry: None,
+                    family: family.clone(),
+                    weight: Some(400),
+                    slant: FontSlant::Normal,
+                    width: Some(FontWidth::Normal),
+                    spacing: Some(100),
+                    // Exercise the resolver's native-metric enrichment,
+                    // not metadata pre-attached to a catalog candidate.
+                    design_metrics: None,
+                    size: crate::font_backend::PlatformFontSize::Scalable,
+                },
+            ),
+            metrics: design_metrics,
+        }));
+    (svc, fontdb_id, family, design_metrics)
+}
+
+#[test]
+fn shaping_first_realization_publishes_the_native_face_metrics() {
+    // Catch table metrics being interned before the resolver attaches native
+    // metrics. The fixture and backend do not depend on installed system fonts.
+    for size in [10.6, 14.0] {
+        let (mut reference, _, family, design_metrics) = native_metrics_fixture_service(Vec::new());
+        let expected = reference
+            .materialized_font_for_face(&family, 400, false, size)
+            .expect("fixture primary face");
+        let native = design_metrics.at_pixel_size(size).expect("native metrics");
+        assert_eq!(expected.font.ascent_px, native.ascent as f32);
+        assert_eq!(expected.font.space_advance_px, native.space_width as f32);
+
+        let (mut svc, fontdb_id, _, _) = native_metrics_fixture_service(Vec::new());
+        let shaping = svc
+            .resolved_font_from_fontdb_id(fontdb_id, size)
+            .expect("shaping-selected fixture");
+        let via_face = svc
+            .materialized_font_for_face(&family, 400, false, size)
+            .expect("primary after shaping");
+        assert_eq!(shaping, via_face.font, "one id must publish one record");
+        assert_eq!(
+            via_face.font, expected.font,
+            "shaping-first must preserve native metrics at {size}px"
+        );
+        let handle_metrics = via_face.px_metrics.expect("native handle metrics");
+        assert_eq!(via_face.font.ascent_px, handle_metrics.ascent as f32);
+        assert_eq!(via_face.font.descent_px, handle_metrics.descent as f32);
+        assert_eq!(
+            via_face.font.space_advance_px,
+            handle_metrics.space_width as f32
+        );
+        assert_eq!(
+            via_face.font.glyph_advance,
+            resolved_font_advance(
+                neomacs_display_protocol::font::FixedFontSpacing::MonospaceOrCharacterCell,
+                Some(handle_metrics),
+            )
+        );
+    }
+}
+
+#[test]
+fn shaping_metrics_do_not_come_from_another_variation_of_the_same_file() {
+    let variation = neomacs_display_protocol::font::FontVariationCoord::try_new(
+        u32::from_be_bytes(*b"wght"),
+        700.0,
+    )
+    .expect("finite weight coordinate");
+    let (mut svc, fontdb_id, family, _) = native_metrics_fixture_service(vec![variation]);
+    let size = 10.6;
+    let selected = svc.font_system.db().face(fontdb_id).expect("fixture face");
+    let identity = svc.fontdb_face_identity(
+        fontdb_face_file(selected).as_deref(),
+        selected.index,
+        Some(selected.post_script_name.clone()),
+        &family,
+    );
+    let expected = FontMetricsService::probe_resolved_font_metrics(&identity, None, size)
+        .or_else(|| svc.font_px_metrics_from_selected_face(fontdb_id, size, &[]))
+        .expect("selected file metrics");
+    let shaping = svc
+        .resolved_font_from_fontdb_id(fontdb_id, size)
+        .expect("selected face");
+    assert_eq!(shaping.identity, identity);
+    assert_eq!(
+        shaping.ascent_px, expected.ascent as f32,
+        "same-file native metrics belong to a different variation identity"
+    );
+    assert_eq!(shaping.space_advance_px, expected.space_width as f32);
 }
 
 #[test]
 fn shaping_selected_face_reuses_the_realized_face_record() {
-    // `resolved_font_from_fontdb_id` builds from file metadata rather than the
-    // platform selection; when shaping lands on the face's own fontdb face it
-    // must still publish the face's record.
+    // When shaping lands on the face's own fontdb face, it must publish the
+    // already interned record even if its diagnostic family metadata differs.
     let mut svc = make_svc();
     let Some(primary) = svc.materialized_font_for_face("Monospace", 400, false, 14.0) else {
         return;
