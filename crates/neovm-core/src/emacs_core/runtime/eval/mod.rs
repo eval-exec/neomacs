@@ -488,8 +488,31 @@ pub(crate) fn tls_quit_pending() -> bool {
     })
 }
 
+/// One bit per `SymId` (the first million): "registered with
+/// `dispatch_kind == Builtin`". A lock-free mirror of `GLOBAL_SUBR_TABLE`
+/// for the JIT's pure-read shim (`neovm_jit_cbsym_read`, ~34K reads per org
+/// font-lock op), which paid a thread-local `RefCell` borrow per read.
+const BUILTIN_SYM_BITS_WORDS: usize = 1 << 14;
+static BUILTIN_SYM_BITS: [std::sync::atomic::AtomicU64; BUILTIN_SYM_BITS_WORDS] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; BUILTIN_SYM_BITS_WORDS];
+
+fn set_builtin_sym_bit(sym_id: SymId, on: bool) {
+    use std::sync::atomic::Ordering;
+    let idx = sym_id.0 as usize;
+    if idx >= BUILTIN_SYM_BITS_WORDS * 64 {
+        return;
+    }
+    let mask = 1u64 << (idx & 63);
+    if on {
+        BUILTIN_SYM_BITS[idx >> 6].fetch_or(mask, Ordering::Relaxed);
+    } else {
+        BUILTIN_SYM_BITS[idx >> 6].fetch_and(!mask, Ordering::Relaxed);
+    }
+}
+
 /// Register a subr entry in the global static table.
 pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
+    set_builtin_sym_bit(sym_id, entry.dispatch_kind == SubrDispatchKind::Builtin);
     GLOBAL_SUBR_TABLE.with(|table| {
         let idx = sym_id.0 as usize;
         let mut table = table.borrow_mut();
@@ -617,6 +640,12 @@ pub(crate) fn inline_subr_function(sym_id: SymId) -> Option<SubrFn> {
 pub(crate) fn global_subr_is_builtin(sym_id: SymId) -> bool {
     #[cfg(test)]
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));
+    let idx = sym_id.0 as usize;
+    if idx < BUILTIN_SYM_BITS_WORDS * 64 {
+        return BUILTIN_SYM_BITS[idx >> 6].load(std::sync::atomic::Ordering::Relaxed)
+            & (1u64 << (idx & 63))
+            != 0;
+    }
     GLOBAL_SUBR_TABLE.with(|table| {
         table.borrow().get(sym_id.0 as usize).is_some_and(|entry| {
             entry
@@ -728,6 +757,9 @@ pub(crate) fn with_global_subr_entry<R>(
 /// Clear all subr entries (used during heap reset).
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn clear_global_subr_table() {
+    for word in BUILTIN_SYM_BITS.iter() {
+        word.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
     GLOBAL_SUBR_TABLE.with(|table| table.borrow_mut().clear());
     INLINE_SUBR_TABLE.with(|table| table.borrow_mut().clear());
 }

@@ -1186,60 +1186,70 @@ pub extern "C" fn neovm_jit_cbsym_read(
         // DELEGATE to the builtin body (GC-free OK path). match-beginning/end read
         // ctx.match_data through the same published-register interface, so a
         // separate register-read reimplementation could drift from Lisp.
-        use crate::emacs_core::builtins::search;
+        // These are GNU's inline opcodes (Bpoint .. Bmatch_end): like the
+        // interpreter's inline tier (`Vm::op_point`, `call_fixed_builtin_direct`)
+        // they neither poll for quit nor push a frame, and the three hottest
+        // read the Context directly (34K reads per org font-lock op: point
+        // 14K, match-beginning 11K, match-end 5K).
         use crate::emacs_core::{editfns, navigation};
         let res = match which {
-            CBSYM_A_POINT => crate::emacs_core::buffer::builtin_point_0(ctx),
-            CBSYM_A_POINT_MIN => crate::emacs_core::buffer::builtin_point_min_0(ctx),
-            CBSYM_A_POINT_MAX => crate::emacs_core::buffer::builtin_point_max_0(ctx),
+            CBSYM_A_POINT | CBSYM_A_POINT_MIN | CBSYM_A_POINT_MAX => {
+                let Some(buf) = ctx.buffers.current_buffer() else {
+                    return STATUS_NEED_GENERIC;
+                };
+                let pos = match which {
+                    CBSYM_A_POINT => buf.point_lisp_char_pos(),
+                    CBSYM_A_POINT_MIN => buf.point_min_lisp_char_pos(),
+                    _ => buf.point_max_lisp_char_pos(),
+                };
+                Ok(Value::fixnum(pos.as_i64()))
+            }
+            CBSYM_A_MATCH_BEGINNING | CBSYM_A_MATCH_END => {
+                let group = Value::from_bits(unsafe { *args_ptr } as usize);
+                let Some(index) = group.as_fixnum().filter(|g| *g >= 0) else {
+                    return STATUS_NEED_GENERIC;
+                };
+                // Same reads as `builtin_match_beginning/end_with_state`, minus
+                // the argument re-validation and the timing wrapper.
+                Ok(
+                    match ctx
+                        .match_data
+                        .as_ref()
+                        .and_then(|md| md.group(index as usize))
+                    {
+                        Some(g) if which == CBSYM_A_MATCH_BEGINNING => {
+                            Value::fixnum(g.start() as i64)
+                        }
+                        Some(g) => Value::fixnum(g.end() as i64),
+                        None => Value::NIL,
+                    },
+                )
+            }
             CBSYM_A_BOLP => navigation::builtin_bolp_0(ctx),
             CBSYM_A_EOLP => navigation::builtin_eolp_0(ctx),
             CBSYM_A_BOBP => navigation::builtin_bobp_0(ctx),
             CBSYM_A_EOBP => navigation::builtin_eobp_0(ctx),
             CBSYM_A_FOLLOWING_CHAR => editfns::builtin_following_char_0(ctx),
             CBSYM_A_PRECEDING_CHAR => editfns::builtin_preceding_char(ctx, Vec::new()),
-            // Tier-A char-after is 0-arg (nargs gated above): reads at point.
             CBSYM_A_CHAR_AFTER => crate::emacs_core::buffer::builtin_char_after_1(ctx, Value::NIL),
-            CBSYM_A_MATCH_BEGINNING => {
-                // SAFETY: the generated code stored exactly nargs==1 word at args_ptr.
-                let group = Value::from_bits(unsafe { *args_ptr } as usize);
-                search::builtin_match_beginning_with_state(&ctx.match_data, &[group])
-            }
-            CBSYM_A_MATCH_END => {
-                // SAFETY: the generated code stored exactly nargs==1 word at args_ptr.
-                let group = Value::from_bits(unsafe { *args_ptr } as usize);
-                search::builtin_match_end_with_state(&ctx.match_data, &[group])
-            }
-            // Unknown discriminant (unreachable for a classified site): bounce.
             _ => return STATUS_NEED_GENERIC,
         };
-        // Run the SAME signal post-processing the interpreter arm gets for free via
-        // funcall_general (`dispatch_signal_result_if_needed`): a no-op on Ok (stays
-        // GC-free), and on a signal it runs the debugger dispatch + sets
-        // `search_complete` — so the Err Flow is byte-identical to the interpreter's
-        // (which routes match-beginning/end through funcall_general). The residual
-        // stack is discarded on STATUS_SIGNAL, so any allocation here is UAF-safe.
-        let res = ctx.dispatch_signal_result_if_needed(res);
         match res {
             Ok(value) => {
-                // Quit poll AFTER (GNU CallBuiltinSym order). maybe_quit's Flow is
-                // Rust-heap, so this stays GC-free.
-                match ctx.maybe_quit() {
-                    Ok(()) => {
-                        // SAFETY: `out` is the generated code's result stack slot.
-                        unsafe { *out = value.bits() as i64 };
-                        STATUS_OK
-                    }
-                    Err(flow) => {
-                        stash_pending_flow(flow);
-                        STATUS_SIGNAL
-                    }
+                // SAFETY: `out` is the generated code's result stack slot.
+                unsafe { *out = value.bits() as i64 };
+                STATUS_OK
+            }
+            Err(flow) => match ctx.dispatch_signal_result_if_needed(Err(flow)) {
+                Ok(value) => {
+                    unsafe { *out = value.bits() as i64 };
+                    STATUS_OK
                 }
-            }
-            Err(flow) => {
-                stash_pending_flow(flow);
-                STATUS_SIGNAL
-            }
+                Err(flow) => {
+                    stash_pending_flow(flow);
+                    STATUS_SIGNAL
+                }
+            },
         }
     })
 }
