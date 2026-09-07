@@ -1384,6 +1384,30 @@ fn strip_local_variables_comment_prefix(line: &str) -> Option<&str> {
     Some(rest.strip_prefix(' ').unwrap_or(rest))
 }
 
+/// GNU `hack-local-variables--find-variables` (`lisp/files.el`), which
+/// `hack-read-symbol-shorthands` runs for every loaded source file, looks for
+/// the `Local Variables:` section only within the last 3000 characters
+/// (`(max (- (point-max) 3000) (point-min))`).  Render just that window: the
+/// whole-file rendering cost ~100 Ir per byte of every `.el` a session loads.
+fn local_variables_window_text(content: &LispString) -> String {
+    const WINDOW_CHARS: usize = 3000;
+    let bytes = content.as_bytes();
+    let start = if content.is_multibyte() {
+        let mut chars = 0usize;
+        let mut start = bytes.len();
+        while start > 0 && chars < WINDOW_CHARS {
+            start -= 1;
+            if bytes[start] & 0xC0 != 0x80 {
+                chars += 1;
+            }
+        }
+        start
+    } else {
+        bytes.len().saturating_sub(WINDOW_CHARS)
+    };
+    crate::emacs_core::emacs_char::to_utf8_lossy(&bytes[start..])
+}
+
 fn source_read_symbol_shorthands_text(source: &str) -> Option<String> {
     let mut local_variables_seen = false;
     let mut collecting = false;
@@ -2707,14 +2731,13 @@ fn load_file_body(
             &content,
             Some(Value::heap_string(found.clone())),
         )?;
-        let shorthands = match source_read_symbol_shorthands_text(
-            &crate::emacs_core::emacs_char::to_utf8_lossy(content.as_bytes()),
-        ) {
-            Some(text) => {
-                read_symbol_shorthands_value_text(&text, content.is_multibyte(), &eval.obarray)?
-            }
-            None => None,
-        };
+        let shorthands =
+            match source_read_symbol_shorthands_text(&local_variables_window_text(&content)) {
+                Some(text) => {
+                    read_symbol_shorthands_value_text(&text, content.is_multibyte(), &eval.obarray)?
+                }
+                None => None,
+            };
         with_load_context(eval, &hist_file_name, found, lexical_binding, |eval| {
             let macroexpand_fn = get_eager_macroexpand_fn(eval);
             // Reached only when `load-source-file-function` is nil, i.e. when
@@ -2761,7 +2784,7 @@ pub(crate) fn eval_lisp_source_file_in_context(
     // Unicode (incl. PUA) while dropping the buggy storage-string sentinels.
     // The actual forms are evaluated from the original `content` LispString via
     // the byte-faithful reader below.
-    let source_text = crate::emacs_core::emacs_char::to_utf8_lossy(content.as_bytes());
+    let source_text = local_variables_window_text(content);
     let shorthands_text = source_read_symbol_shorthands_text(&source_text);
     let shorthands = match shorthands_text {
         Some(text) => {

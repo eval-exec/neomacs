@@ -8389,6 +8389,55 @@ fn load_source_applies_read_symbol_shorthands_from_file_local_variables() {
     );
 }
 
+/// GNU `hack-local-variables--find-variables` looks for the section only in
+/// the last 3000 characters of the file; a section buried earlier is not a
+/// Local Variables section for `read-symbol-shorthands` either.  The window
+/// is measured in characters, so multibyte padding must not push a valid
+/// section out of it by byte count.
+#[test]
+fn load_source_reads_shorthands_only_from_the_final_local_variables_window() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let section = r#";; Local Variables:
+;; read-symbol-shorthands: (("short$" . "neomacs-long$"))
+;; End:
+"#;
+    let head = "(defmacro neomacs-long$ (&rest body) (cons 'progn body))\n";
+
+    // The section sits 3200 characters before the end: outside GNU's window.
+    let buried = dir.path().join("buried-section.el");
+    let mut buried_src = String::from(head);
+    buried_src.push_str(section);
+    buried_src.push_str(
+        "(setq neomacs-buried-tail (condition-case nil (short$ 1) (void-function 'void)))\n",
+    );
+    while buried_src.len() < head.len() + section.len() + 3200 {
+        buried_src.push_str(";; padding\n");
+    }
+    std::fs::write(&buried, &buried_src).expect("write buried fixture");
+    assert_eq!(
+        fresh_bootstrap_eval_with_loaded_file(&buried, "neomacs-buried-tail"),
+        "OK void"
+    );
+
+    // 1500 multibyte characters (4500 bytes) of padding before a section
+    // that ends the file: inside the window by characters, and it must win.
+    let tail = dir.path().join("tail-section.el");
+    let mut tail_src = String::from(head);
+    tail_src.push_str("(setq neomacs-tail-result (short$ 7))\n");
+    for _ in 0..150 {
+        tail_src.push_str(";; ");
+        tail_src.push_str(&"日".repeat(7));
+        tail_src.push('\n');
+    }
+    tail_src.push_str(section);
+    std::fs::write(&tail, &tail_src).expect("write tail fixture");
+    assert_eq!(
+        fresh_bootstrap_eval_with_loaded_file(&tail, "neomacs-tail-result"),
+        "OK 7"
+    );
+}
+
 #[test]
 fn profile_single_bootstrap_file_load() {
     crate::test_utils::init_test_tracing();
