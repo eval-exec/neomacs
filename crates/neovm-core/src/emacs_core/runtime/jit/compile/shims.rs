@@ -793,14 +793,6 @@ pub extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     })
 }
 
-std::thread_local! {
-    /// Per-thread analogue of the interpreter's per-frame `bind_stack`: the
-    /// specpdl depth recorded before each JIT-made `varbind`, consumed by the
-    /// `unbind` shim. [`CompiledLeaf::call`] truncates a frame's segment on
-    /// every exit (the `cleanup_bytecode_frame` parity unwind).
-    pub(crate) static JIT_BIND_STACK: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 /// Dynamically bind a variable (`Op::VarBind` semantics: GNU `Bvarbind`,
 /// `specbind(sym, POP)`). Records the pre-bind specpdl depth for the matching
 /// `unbind`, or stashes the predicate signal and returns [`STATUS_SIGNAL`].
@@ -818,7 +810,7 @@ pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
         let bind_depth = ctx.specpdl.len();
         let status = match ctx.try_specbind(SymId(sym as u32), value) {
             Ok(()) => {
-                JIT_BIND_STACK.with(|stack| stack.borrow_mut().push(bind_depth));
+                ctx.jit_bind_stack.push(bind_depth);
                 STATUS_OK
             }
             Err(flow) => {
@@ -841,17 +833,18 @@ pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
 pub extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
-    let target = JIT_BIND_STACK.with(|s| {
-        let mut s = s.borrow_mut();
+    let target = {
+        let s = &mut ctx.jit_bind_stack;
         let take = (n as usize).min(s.len());
         if take == 0 {
-            return None;
+            None
+        } else {
+            let target = s[s.len() - take];
+            let new_len = s.len() - take;
+            s.truncate(new_len);
+            Some(target)
         }
-        let target = s[s.len() - take];
-        let new_len = s.len() - take;
-        s.truncate(new_len);
-        Some(target)
-    });
+    };
     let result = match target {
         Some(target) => ctx.unbind_to_with_result(target, Ok(Value::NIL)),
         None => Ok(Value::NIL),

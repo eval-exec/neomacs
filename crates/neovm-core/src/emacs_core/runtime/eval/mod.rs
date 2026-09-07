@@ -3223,6 +3223,13 @@ pub struct Context {
     /// Pooled backing stores for the interpreter's per-entry stacks (see
     /// `vm::InterpreterStackPool`).
     pub(crate) interpreter_stacks: crate::emacs_core::bytecode::vm::InterpreterStackPool,
+    /// specpdl depths of the dynamic bindings generated code has made in
+    /// the current native frames (`neovm_jit_varbind` pushes, `Op::Unbind`
+    /// pops N, a frame exit truncates to its base).  A Context field, not a
+    /// thread-local: every shim already holds the Context, and the
+    /// thread-local's lookup plus RefCell borrow ran on every bind, unbind
+    /// and native entry.
+    pub(crate) jit_bind_stack: Vec<usize>,
     /// Hot cache for named callable resolution in `funcall`/`apply`.
     /// Keyed by symbol id; entries are validated against the obarray's
     /// `function_epoch` so that any `defalias` / `fset` / autoload

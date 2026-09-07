@@ -1420,7 +1420,7 @@ pub extern "C" fn neovm_jit_save_current_buffer(ctx: *mut u8) {
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     if let Some(buffer_id) = ctx.buffers.current_buffer().map(|buffer| buffer.id) {
-        JIT_BIND_STACK.with(|s| s.borrow_mut().push(ctx.specpdl.len()));
+        ctx.jit_bind_stack.push(ctx.specpdl.len());
         ctx.specpdl
             .push(SpecBinding::SaveCurrentBuffer { buffer_id });
     }
@@ -1436,7 +1436,7 @@ pub extern "C" fn neovm_jit_save_excursion(ctx: *mut u8) {
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     if let Some(count) = ctx.record_save_excursion() {
-        JIT_BIND_STACK.with(|s| s.borrow_mut().push(count));
+        ctx.jit_bind_stack.push(count);
     }
 }
 
@@ -1450,7 +1450,7 @@ pub extern "C" fn neovm_jit_save_restriction(ctx: *mut u8) {
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     if let Some(saved) = ctx.buffers.save_current_restriction_state() {
-        JIT_BIND_STACK.with(|s| s.borrow_mut().push(ctx.specpdl.len()));
+        ctx.jit_bind_stack.push(ctx.specpdl.len());
         ctx.specpdl.push(SpecBinding::save_restriction(saved));
     }
 }
@@ -1468,7 +1468,7 @@ pub extern "C" fn neovm_jit_unwind_protect(ctx: *mut u8, forms: i64) {
     let forms = Value::from_bits(forms as usize);
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
-    JIT_BIND_STACK.with(|s| s.borrow_mut().push(ctx.specpdl.len()));
+    ctx.jit_bind_stack.push(ctx.specpdl.len());
     let lexenv = ctx.lexenv;
     ctx.specpdl
         .push(SpecBinding::UnwindProtect { forms, lexenv });
@@ -1487,7 +1487,7 @@ pub extern "C" fn neovm_jit_push_cc(ctx: *mut u8, target: i64, stack_len: i64) {
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let resume_id = ctx.allocate_resume_id();
-    let bind_stack_len = JIT_BIND_STACK.with(|s| s.borrow().len());
+    let bind_stack_len = ctx.jit_bind_stack.len();
     let spec_depth = ctx.specpdl.len();
     ctx.push_condition_frame(ConditionFrame::ConditionCase {
         conditions: Value::symbol("error"),
@@ -1517,7 +1517,7 @@ pub extern "C" fn neovm_jit_push_cc_raw(
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let resume_id = ctx.allocate_resume_id();
-    let bind_stack_len = JIT_BIND_STACK.with(|s| s.borrow().len());
+    let bind_stack_len = ctx.jit_bind_stack.len();
     let spec_depth = ctx.specpdl.len();
     ctx.push_condition_frame(ConditionFrame::ConditionCase {
         conditions,
@@ -1541,7 +1541,7 @@ pub extern "C" fn neovm_jit_push_catch(ctx: *mut u8, target: i64, stack_len: i64
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let resume_id = ctx.allocate_resume_id();
-    let bind_stack_len = JIT_BIND_STACK.with(|s| s.borrow().len());
+    let bind_stack_len = ctx.jit_bind_stack.len();
     let spec_depth = ctx.specpdl.len();
     ctx.push_condition_frame(ConditionFrame::Catch {
         tag,
@@ -1645,7 +1645,7 @@ pub extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64
                             push_scratch_gc_root(tag);
                             push_scratch_gc_root(value);
                             let unwind = ctx.unbind_to_with_result(spec_depth, Ok(Value::NIL));
-                            JIT_BIND_STACK.with(|s| s.borrow_mut().truncate(bind_stack_len));
+                            ctx.jit_bind_stack.truncate(bind_stack_len);
                             restore_scratch_gc_roots(saved);
                             if let Err(next) = unwind {
                                 let popped = m + 1;
@@ -1726,7 +1726,7 @@ pub extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64
                                 push_scratch_gc_root(raw);
                             }
                             let unwind = ctx.unbind_to_with_result(spec_depth, Ok(Value::NIL));
-                            JIT_BIND_STACK.with(|s| s.borrow_mut().truncate(bind_stack_len));
+                            ctx.jit_bind_stack.truncate(bind_stack_len);
                             if let Err(next) = unwind {
                                 restore_scratch_gc_roots(saved);
                                 let popped = m + 1;

@@ -792,7 +792,7 @@ impl CompiledLeaf {
             // SAFETY: the vmctx contract (dormant seam-provided Context); only
             // a length read here.
             let spec_base = unsafe { (*(vmctx as *const Context)).specpdl.len() };
-            let stack_base = JIT_BIND_STACK.with(|s| s.borrow().len());
+            let stack_base = unsafe { (*(vmctx as *const Context)).jit_bind_stack.len() };
             Some((spec_base, stack_base))
         } else {
             None
@@ -932,10 +932,11 @@ impl CompiledLeaf {
                 .map(|j| Value::from_bits(self.deopt_spill[j].get() as usize))
                 .collect();
             let binds: Vec<usize> = match bind_frame {
-                Some((_, stack_base)) => JIT_BIND_STACK.with(|s| {
-                    let mut s = s.borrow_mut();
-                    s.split_off(stack_base)
-                }),
+                Some((_, stack_base)) => unsafe {
+                    (*(vmctx as *mut Context))
+                        .jit_bind_stack
+                        .split_off(stack_base)
+                },
                 None => Vec::new(),
             };
             // SAFETY: dormant seam Context; length reads only.
@@ -1023,7 +1024,11 @@ impl CompiledLeaf {
             unsafe { (*(vmctx as *mut Context)).truncate_condition_stack(base) };
         }
         if let Some((spec_base, stack_base)) = bind_frame {
-            JIT_BIND_STACK.with(|s| s.borrow_mut().truncate(stack_base));
+            unsafe {
+                (*(vmctx as *mut Context))
+                    .jit_bind_stack
+                    .truncate(stack_base)
+            };
             if parked_panic.is_some() {
                 // Panic is already the winning module-boundary outcome. Drain
                 // every binding, but do not let cleanup Lisp replace it.
