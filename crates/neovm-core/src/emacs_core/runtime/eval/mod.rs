@@ -3540,8 +3540,11 @@ pub(crate) struct SequenceTempRootScopeState {
 #[derive(Clone, Debug)]
 struct SequenceTempRootFrame {
     saved_len: usize,
-    call_roots: Vec<Value>,
-    let_temp_roots: Vec<Value>,
+    // `LispArgVec`: the values arrive as one from the backtrace entry and
+    // are at most a handful, so rooting them per interpreted form must not
+    // allocate (a `Vec` here was a malloc+free on every cons form).
+    call_roots: LispArgVec,
+    let_temp_roots: LispArgVec,
 }
 
 #[derive(Clone, Copy, Debug)]

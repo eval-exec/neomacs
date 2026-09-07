@@ -762,9 +762,12 @@ impl Context {
     pub(super) fn restore_eval_temp_roots_to_sequence(&mut self, scope: EvalTempRootScopeState) {
         let current_len = self.eval_temp_roots.len();
         let let_temp_roots = if current_len > scope.saved_len {
-            self.eval_temp_roots[scope.saved_len..].to_vec()
+            self.eval_temp_roots[scope.saved_len..]
+                .iter()
+                .copied()
+                .collect()
         } else {
-            Vec::new()
+            LispArgVec::new()
         };
         self.eval_temp_roots
             .truncate(scope.saved_len.min(current_len));
@@ -798,8 +801,8 @@ impl Context {
         let saved_len = self.eval_temp_roots.len();
         self.sequence_temp_root_frames.push(SequenceTempRootFrame {
             saved_len,
-            call_roots: Vec::new(),
-            let_temp_roots: Vec::new(),
+            call_roots: LispArgVec::new(),
+            let_temp_roots: LispArgVec::new(),
         });
         SequenceTempRootScopeState { saved_len }
     }
@@ -829,7 +832,7 @@ impl Context {
             return;
         }
         let frame_index = self.sequence_temp_root_frames.len() - 1;
-        self.sequence_temp_root_frames[frame_index].call_roots = values.to_vec();
+        self.sequence_temp_root_frames[frame_index].call_roots = values;
         debug_assert!(self.eval_temp_roots.len() >= saved_len);
         self.refresh_current_sequence_temp_roots();
     }
