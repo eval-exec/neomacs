@@ -1152,3 +1152,72 @@ fn backward_position_walks_count_chunks_like_the_per_byte_walk() {
         );
     }
 }
+
+/// The anchor table is SORTED by byte position and bounded: conversions far
+/// from every remembered anchor add one (skipping a neighbour closer than
+/// half a stride), the table grows well past the 16-slot ring it replaced,
+/// a full table halves its density instead of forgetting the far end, and an
+/// edit in front shifts every anchor while keeping the order -- so lookups
+/// stay exact against a from-scratch buffer.
+#[test]
+fn anchor_table_stays_sorted_bounded_and_exact_across_a_front_insert() {
+    // 2 bytes per char: byte offsets and char offsets differ everywhere.
+    let body = "é".repeat(2_400_000);
+    let mut text = BufferText::from_str(&body);
+    let total_bytes = body.len();
+    // One conversion per KiB of the buffer: each walk from its nearest
+    // anchor exceeds the stride, so each records an anchor -- more than the
+    // cap, which forces the halving.
+    let step = 1024;
+    let mut byte = step;
+    while byte < total_bytes {
+        let _ = byte_pos_to_char_pos(&text, byte);
+        byte += step;
+    }
+    let anchors = text.scan_anchor_bytes_for_test();
+    assert!(
+        anchors.len() > 16,
+        "the table must outgrow the old 16-slot ring, got {}",
+        anchors.len()
+    );
+    assert!(
+        anchors.len() <= 4096,
+        "the table is bounded by its cap, got {}",
+        anchors.len()
+    );
+    for pair in anchors.windows(2) {
+        assert!(
+            pair[1] > pair[0] && pair[1] - pair[0] >= 256,
+            "anchors must stay sorted with at least half a stride between them: {pair:?}"
+        );
+    }
+    let last = *anchors.last().expect("anchors");
+    assert!(
+        last > total_bytes / 2,
+        "halving must keep the far end of the buffer covered: last anchor {last} of {total_bytes}"
+    );
+
+    // Insert three multibyte chars at the very front: every anchor shifts.
+    let front = char_pos_to_byte_pos(&text, 0);
+    insert_storage_string(&mut text, EmacsBytePos::new(front), "日本語");
+    let expected = format!("日本語{body}");
+    let shifted = text.scan_anchor_bytes_for_test();
+    assert!(
+        !shifted.is_empty(),
+        "a front insert must not drop the anchors"
+    );
+    for pair in shifted.windows(2) {
+        assert!(
+            pair[1] > pair[0],
+            "anchors must stay sorted after the shift: {pair:?}"
+        );
+    }
+    let fresh = BufferText::from_str(&expected);
+    let n = expected.chars().count();
+    for k in 0..=200 {
+        let c = k * n / 200;
+        let b = char_pos_to_byte_pos(&fresh, c);
+        assert_eq!(char_pos_to_byte_pos(&text, c), b, "char->byte at char {c}");
+        assert_eq!(byte_pos_to_char_pos(&text, b), c, "byte->char at byte {b}");
+    }
+}

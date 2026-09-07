@@ -2428,14 +2428,32 @@ impl BufferText {
     /// Remember a completed scan's endpoint as a reusable anchor, replacing
     /// round-robin once the ring is full.
     fn remember_scan_anchor(storage: &BufferTextStorage, anchor: TextPositionAnchor) {
+        // A SORTED anchor table (by byte, hence by char) with binary-search
+        // neighbours (see `char_position_bounds`): the 16-slot ring it
+        // replaced covered ~8 KB of a buffer, so on a large file every jump
+        // beyond it walked from a distant hint. Near-duplicates are skipped;
+        // a full table halves its density.
         let mut cache = storage.anchor_cache.borrow_mut();
-        if cache.len() < POSITION_ANCHOR_RING_CAP {
-            cache.push(anchor);
-        } else {
-            let slot = storage.anchor_cache_cursor.get() % POSITION_ANCHOR_RING_CAP;
-            cache[slot] = anchor;
-            storage.anchor_cache_cursor.set(slot + 1);
+        let byte = anchor.emacs_byte_pos().get();
+        let idx = cache.partition_point(|a| a.emacs_byte_pos().get() < byte);
+        let near = POSITION_ANCHOR_STRIDE / 2;
+        if idx < cache.len() && cache[idx].emacs_byte_pos().get() - byte < near {
+            return;
         }
+        if idx > 0 && byte - cache[idx - 1].emacs_byte_pos().get() < near {
+            return;
+        }
+        if cache.len() >= POSITION_ANCHOR_TABLE_CAP {
+            let mut i = 0usize;
+            cache.retain(|_| {
+                i += 1;
+                i % 2 == 0
+            });
+            let idx = cache.partition_point(|a| a.emacs_byte_pos().get() < byte);
+            cache.insert(idx, anchor);
+            return;
+        }
+        cache.insert(idx, anchor);
     }
 
     fn ensure_position_anchor_cache_current(storage: &BufferTextStorage, content_epoch: u64) {
@@ -2462,8 +2480,15 @@ impl BufferText {
             bounds.consider_char_anchor(target, cached.anchor);
         }
 
-        for &anchor in storage.anchor_cache.borrow().iter() {
-            bounds.consider_char_anchor(target, anchor);
+        {
+            let cache = storage.anchor_cache.borrow();
+            let idx = cache.partition_point(|a| a.char_pos() < target);
+            if idx < cache.len() {
+                bounds.consider_char_anchor(target, cache[idx]);
+            }
+            if idx > 0 {
+                bounds.consider_char_anchor(target, cache[idx - 1]);
+            }
         }
 
         let mut distance = CharLen::new(POSITION_DISTANCE_BASE);
@@ -2510,8 +2535,15 @@ impl BufferText {
             bounds.consider_byte_anchor(target, cached.anchor);
         }
 
-        for &anchor in storage.anchor_cache.borrow().iter() {
-            bounds.consider_byte_anchor(target, anchor);
+        {
+            let cache = storage.anchor_cache.borrow();
+            let idx = cache.partition_point(|a| a.emacs_byte_pos() < target);
+            if idx < cache.len() {
+                bounds.consider_byte_anchor(target, cache[idx]);
+            }
+            if idx > 0 {
+                bounds.consider_byte_anchor(target, cache[idx - 1]);
+            }
         }
 
         let mut distance = EmacsByteLen::new(POSITION_DISTANCE_BASE);
@@ -2777,6 +2809,18 @@ impl BufferText {
     pub fn anchor_cache_len(&self) -> usize {
         self.storage.borrow().anchor_cache.borrow().len()
     }
+
+    /// Test-only: the remembered anchors' Emacs byte positions, in table order.
+    #[cfg(test)]
+    pub fn scan_anchor_bytes_for_test(&self) -> Vec<usize> {
+        self.storage
+            .borrow()
+            .anchor_cache
+            .borrow()
+            .iter()
+            .map(|anchor| anchor.emacs_byte_pos().get())
+            .collect()
+    }
 }
 
 impl fmt::Display for BufferText {
@@ -2812,7 +2856,9 @@ const POSITION_ANCHOR_STRIDE: usize = 512;
 /// Bound on remembered scan anchors per epoch (round-robin replacement):
 /// keeps the per-conversion consider loop O(1) while covering several hot
 /// regions at once.
-const POSITION_ANCHOR_RING_CAP: usize = 16;
+/// Sorted anchor table capacity (16 bytes each; only buffers whose
+/// conversions walked past a stride fill it).
+const POSITION_ANCHOR_TABLE_CAP: usize = 4096;
 
 struct ForwardMultibytePositionScan {
     byte_pos: EmacsBytePos,
