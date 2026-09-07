@@ -6388,15 +6388,14 @@ impl<'a> Vm<'a> {
                 .copied()
                 .collect()
         });
+        // One resolution: the direct-builtin variant of the stack call covers
+        // the builtin probe (same resolved callee, same dispatcher) and the
+        // bytecode arm (backtrace span + one run_frame copy, as the
+        // interpreter's Op::Call), so the generic seam no longer resolves
+        // twice and pays an extra layer per call (17K generic calls per org
+        // font-lock op).
         let result = self.with_bytecode_call_depth(|vm| {
-            match vm.try_call_builtin_subr_from_stack_args(func_val, args_start, nargs) {
-                Some(result) => result,
-                // The shim already staged the args on bc_buf at args_start:
-                // take the zero-copy stack call protocol (backtrace span +
-                // one run_frame copy), same as the interpreter's Op::Call.
-                // The direct-builtin probe above already ran, so skip it.
-                None => vm.call_function_from_stack_args(func_val, args_start, nargs, false),
-            }
+            vm.call_function_from_stack_args(func_val, args_start, nargs, true)
         })?;
         if let (Some((called_name, alias_target)), Some(writeback_args)) =
             (writeback_names.as_ref(), writeback_args.as_ref())
@@ -6768,7 +6767,7 @@ impl<'a> Vm<'a> {
                     let result = self.ctx.dispatch_signal_result_if_needed(result);
                     return self
                         .ctx
-                        .pop_bytecode_backtrace_token_with_result(backtrace, result);
+                        .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result);
                 }
                 ResolvedStackCallTarget::Interpreter { .. } => {
                     unreachable!(
