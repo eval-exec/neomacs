@@ -724,6 +724,10 @@ pub struct AnimatedCursor {
 #[repr(u8)]
 #[non_exhaustive]
 #[derive(strum::VariantNames)]
+// See `MotionKind`: strum's casing is a separate attribute from serde's, and
+// publishing `Exponential` where the registry accepts `exponential` puts a
+// value in a menu that is then refused.
+#[strum(serialize_all = "kebab-case")]
 pub enum CursorAnimStyle {
     /// Exponential decay (current default). No fixed duration; `speed` controls rate.
     Exponential = 0,

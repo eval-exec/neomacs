@@ -42,6 +42,10 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[derive(strum::VariantNames)]
+// strum needs its own casing attribute: `serde(rename_all)` does not reach it,
+// and without this `VariantNames` publishes `Easing`/`Spring` — names the
+// registry then refuses, in a menu the user picked them from.
+#[strum(serialize_all = "kebab-case")]
 pub enum MotionKind {
     /// A fixed-duration curve. Reads `duration` and `easing`.
     #[default]

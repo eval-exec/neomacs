@@ -2855,6 +2855,44 @@ fn number_property_kinds_match_the_rules_that_enforce_them() {
 }
 
 #[test]
+fn every_symbol_property_offers_names_the_registry_accepts() {
+    use crate::effect_config::PropertyKind;
+
+    // A symbol property's menu is built from `VariantNames`, and the registry
+    // validates against serde's names. Those come from different attributes —
+    // `strum(serialize_all)` and `serde(rename_all)` — so an enum can publish
+    // `Easing` while the registry only accepts `easing`, and the user picks a
+    // value from a menu that is then refused. `MotionKind` shipped exactly that
+    // for one commit.
+    //
+    // Checked by round-tripping every published name through `apply_effects`,
+    // which is the path a customization `:set` will take.
+    let config = VisualConfig::default();
+    for effect in config.effect_names() {
+        let Some(schema) = crate::effect_config::schema_for(&effect) else {
+            continue;
+        };
+        for property in schema {
+            let PropertyKind::Symbol(allowed) = property.refined().kind else {
+                continue;
+            };
+            let lisp_name = property.property.replace('_', "-");
+            for name in allowed {
+                assert!(
+                    config
+                        .apply_effects(&[EffectOperation::set(
+                            effect.as_str(),
+                            [(lisp_name.as_str(), EffectValue::Symbol((*name).into()))],
+                        )])
+                        .is_ok(),
+                    "`{effect}` offers `{lisp_name} = {name}` but the registry refuses it"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn every_transition_easing_name_round_trips() {
     use crate::TransitionEasing;
     use strum::VariantNames;
@@ -2871,4 +2909,40 @@ fn every_transition_easing_name_round_trips() {
             "`{name}` did not round-trip; the published list has drifted from the enum"
         );
     }
+}
+
+#[test]
+fn every_effect_name_has_a_schema_covering_exactly_its_properties() {
+    // The one guarantee that makes a hand-maintained lookup table safe. Every
+    // effect the registry will answer about must publish a schema, and that
+    // schema must name exactly the properties the registry accepts — no more,
+    // no fewer. A customization widget is built from this, so a missing entry
+    // is an effect nobody can configure and a stale one is a widget for a
+    // property that does not exist.
+    let config = VisualConfig::default();
+    let mut missing = Vec::new();
+    for effect in config.effect_names() {
+        let Some(schema) = crate::effect_config::schema_for(&effect) else {
+            missing.push(effect);
+            continue;
+        };
+        let mut published: Vec<String> = schema
+            .iter()
+            .map(|property| property.property.replace('_', "-"))
+            .collect();
+        published.sort();
+        let mut accepted: Vec<String> = config
+            .effect_values(&effect)
+            .expect("a named effect answers")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        accepted.sort();
+        assert_eq!(published, accepted, "schema drifted for `{effect}`");
+    }
+    assert!(
+        missing.is_empty(),
+        "these effects publish no schema, so nothing can build a widget for \
+         them: {missing:?}"
+    );
 }
