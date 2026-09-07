@@ -5531,6 +5531,32 @@ impl Context {
         result
     }
 
+    /// Evaluate a call's argument forms onto the VM operand stack, FUNC
+    /// parked beneath them (both rooted by the stack), and return the first
+    /// argument's slot and the count.  An improper tail signals `listp` at
+    /// the point GNU's `eval_sub` loop reaches it.
+    #[inline]
+    fn eval_call_args_onto_stack(
+        &mut self,
+        func: Value,
+        original_args: Value,
+    ) -> Result<(usize, usize), Flow> {
+        let func_slot = self.bc_buf.len();
+        self.bc_buf.push(func);
+        let first_arg = func_slot + 1;
+        let mut cursor = original_args;
+        while cursor.is_cons() {
+            let arg_form = cursor.cons_car();
+            let arg_val = self.eval_sub(arg_form)?;
+            self.bc_buf.push(arg_val);
+            cursor = cursor.cons_cdr();
+        }
+        if !cursor.is_nil() {
+            return Err(self.listp_error(cursor));
+        }
+        Ok((first_arg, self.bc_buf.len() - first_arg))
+    }
+
     fn eval_sub_cons_dispatch(
         &mut self,
         original_fun: Value,
@@ -5556,6 +5582,79 @@ impl Context {
             return result;
         }
 
+        // GNU `eval_sub` (`src/eval.c:2600-2680`): the symbol's function cell
+        // is read once; a SUBRP that is not UNEVALLED evaluates its arguments
+        // into `argvals` and calls by `maxargs`, a COMPILEDP goes to
+        // `apply_lambda`.  Neither path re-examines aliases, autoloads,
+        // macros, overrides or callability -- the cell already IS a fixed-
+        // arity builtin or a byte-code object -- so those probes stay on the
+        // full resolution below, which every other cell shape still takes.
+        let prefetched_cell = match sym_id {
+            Some(sym_id) if !self.compiler_function_overrides_active() => {
+                self.obarray.symbol_function_id(sym_id)
+            }
+            _ => None,
+        };
+        if let Some(sym_id) = sym_id
+            && let Some(func) = prefetched_cell
+        {
+            if let Some((target_sym_id, entry)) = subr_entry_from_value(func)
+                && entry.dispatch_kind == SubrDispatchKind::SpecialForm
+                && target_sym_id == sym_id
+            {
+                // GNU eval.c:2624: `list_length (args_left)` runs for every
+                // SUBRP, UNEVALLED ones included, before the dispatch.  The
+                // frame stays UNEVALLED (eval.c:2618-2619).
+                if list_length(&original_args).is_none() {
+                    return Err(self.listp_error(original_args));
+                }
+                if let Some(result) = self.try_special_form_value_id(sym_id, original_args) {
+                    return result;
+                }
+            }
+            if let Some((target_sym_id, entry)) = subr_entry_from_value(func)
+                && entry.dispatch_kind == SubrDispatchKind::Builtin
+                && Self::subr_entry_uses_fixed_value_call(entry)
+            {
+                let numargs = match list_length(&original_args) {
+                    Some(n) => n,
+                    None => return Err(self.listp_error(original_args)),
+                };
+                let min = entry.min_args as usize;
+                let max_ok = match entry.max_args {
+                    Some(m) => numargs <= m as usize,
+                    None => true,
+                };
+                if numargs < min || !max_ok {
+                    return Err(signal(
+                        LispCondition::WrongNumberOfArguments,
+                        vec![original_fun, Value::fixnum(numargs as i64)],
+                    ));
+                }
+                let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
+                self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
+                return self.maybe_grow_eval_stack(|ctx| {
+                    ctx.dispatch_subr_entry_from_bc_stack(entry, first_arg, nargs)
+                        .unwrap_or_else(|| {
+                            Err(signal(
+                                LispCondition::VoidFunction,
+                                vec![Value::from_sym_id(target_sym_id)],
+                            ))
+                        })
+                });
+            }
+            if let Some(bc_data) = func.get_bytecode_data() {
+                if list_length(&original_args).is_none() {
+                    return Err(self.listp_error(original_args));
+                }
+                let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
+                self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
+                return self.maybe_grow_eval_stack(|ctx| {
+                    ctx.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func)
+                });
+            }
+        }
+
         // Resolve function value
         let func = if let Some(sym_id) = sym_id {
             if let Some(override_func) = self
@@ -5565,7 +5664,7 @@ impl Context {
             {
                 override_func
             } else {
-                match self.obarray.symbol_function_id(sym_id) {
+                match prefetched_cell.or_else(|| self.obarray.symbol_function_id(sym_id)) {
                     Some(f) => {
                         let mut f = f;
                         // Follow symbol indirection (GNU eval.c:2604)
@@ -5809,20 +5908,7 @@ impl Context {
         // `eval_sub_cons` truncates the stack back once the frame is gone.
         // The function value sits below the arguments for the same reason
         // (GNU's `fun` is a C local).
-        let func_slot = self.bc_buf.len();
-        self.bc_buf.push(func);
-        let first_arg = func_slot + 1;
-        let mut cursor = original_args;
-        while cursor.is_cons() {
-            let arg_form = cursor.cons_car();
-            let arg_val = self.eval_sub(arg_form)?;
-            self.bc_buf.push(arg_val);
-            cursor = cursor.cons_cdr();
-        }
-        if !cursor.is_nil() {
-            return Err(self.listp_error(cursor));
-        }
-        let nargs = self.bc_buf.len() - first_arg;
+        let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
         self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
 
         if let Some((sym_id, entry)) = direct_subr_entry
