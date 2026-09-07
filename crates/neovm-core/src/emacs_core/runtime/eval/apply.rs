@@ -171,33 +171,42 @@ impl Context {
     ) {
         // SAFETY: caller contract.
         let read = |i: usize| Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-        match nargs {
-            1 => {
-                self.specpdl.push(SpecBinding::Backtrace1 {
-                    function,
-                    arg: read(0),
-                    debug_on_exit: false,
-                });
-            }
-            2 => {
-                self.specpdl.push(SpecBinding::Backtrace2 {
-                    function,
-                    arg0: read(0),
-                    arg1: read(1),
-                });
-            }
-            _ => {
-                // GNU stores exactly this: a pointer into the caller's
-                // frame plus the count. The 3+-arity path previously
-                // copied the args twice and parked them on the owned
-                // side-stack — ~100 Ir per call on 3-arg native
-                // recursion (tak).
-                self.specpdl.push(SpecBinding::BacktraceNative {
-                    function,
-                    args_ptr,
-                    nargs: nargs as u32,
-                });
-            }
+        let entry = match nargs {
+            1 => SpecBinding::Backtrace1 {
+                function,
+                arg: read(0),
+                debug_on_exit: false,
+            },
+            2 => SpecBinding::Backtrace2 {
+                function,
+                arg0: read(0),
+                arg1: read(1),
+            },
+            // GNU stores exactly this: a pointer into the caller's frame
+            // plus the count. The 3+-arity path previously copied the args
+            // twice and parked them on the owned side-stack — ~100 Ir per
+            // call on 3-arg native recursion (tak).
+            _ => SpecBinding::BacktraceNative {
+                function,
+                args_ptr,
+                nargs: nargs as u32,
+            },
+        };
+        // Written straight into the specpdl's next slot.  `Vec::push` took
+        // the 32-byte entry by value: built in a stack temporary with narrow
+        // stores and read back with one wide load for the copy -- a
+        // store-forwarding stall on every native call (perf annotate put
+        // 72% of this function's samples on that load).
+        let len = self.specpdl.len();
+        if len == self.specpdl.capacity() {
+            self.specpdl.reserve(1);
+        }
+        // SAFETY: capacity for one more entry was just ensured; the slot at
+        // `len` is uninitialised spare capacity, written before the length
+        // grows to cover it.
+        unsafe {
+            std::ptr::write(self.specpdl.as_mut_ptr().add(len), entry);
+            self.specpdl.set_len(len + 1);
         }
     }
 
