@@ -166,7 +166,33 @@ pub(crate) static LIVE_MACRO_PAGES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LIVE_RECORD_PAGES: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 pub(crate) static LIVE_SYMBOL_WITH_POS_PAGES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+pub(crate) static LIVE_MARKER_PAGES: AtomicUsize = AtomicUsize::new(0);
+// Marker: `MarkerObj` is VecLikeHeader 24 + LispMarker (buffer, marker_id,
+// bytepos, charpos, chain link, two flags) ≈ 88B → the 128B class (512
+// slots/page, link in bytes 120..128). Markers are the highest-churn editor
+// object (`save-excursion` makes and frees one per call — thousands per
+// org-mode operation); GNU keeps them in `marker_block`s for the same
+// reason. POD: `LispMarker` holds no Values, so the sweep's drop_in_place
+// compiles out. If this assert fails the struct grew — bump the stride.
+const _: () = assert!(
+    size_of::<MarkerObj>() <= 120,
+    "MarkerObj must fit a 128-byte slot with its trailing free-list link \
+     (bytes 120..128); bump the marker stride if the struct grew",
+);
 
+impl PagedObject for MarkerObj {
+    // 128B class, own arena: POD-like (no Values; the intrusive buffer-chain
+    // link is a raw pointer that `unchain_dead_markers` detaches before any
+    // sweep frees the slot).
+    const SLOT_BYTES: usize = 128;
+    const KIND: HeapObjectKind = HeapObjectKind::VecLike;
+    const CLASS: &'static str = "marker";
+    #[cfg(test)]
+    fn live_page_counter() -> &'static AtomicUsize {
+        &LIVE_MARKER_PAGES
+    }
+}
 impl PagedObject for FloatObj {
     const SLOT_BYTES: usize = 32;
     const KIND: HeapObjectKind = HeapObjectKind::Float;
@@ -277,6 +303,10 @@ pub(super) const RECORD_PAGE_SLOTS: usize =
 #[cfg(test)]
 pub(super) const SYMBOL_WITH_POS_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <SymbolWithPosObj as PagedObject>::SLOT_BYTES;
+/// Slot count of a marker page (512: 128B stride).
+#[cfg(test)]
+pub(super) const MARKER_PAGE_SLOTS: usize =
+    OBJECT_PAGE_BYTES / <MarkerObj as PagedObject>::SLOT_BYTES;
 
 /// One 64KB-aligned arena page of fixed-stride `T` slots.
 ///

@@ -693,12 +693,25 @@ impl TaggedHeap {
 
     /// Allocate a marker.
     pub fn alloc_marker(&mut self, data: crate::heap_types::LispMarker) -> TaggedValue {
-        let obj = Box::new(MarkerObj {
-            header: VecLikeHeader::new(VecLikeType::Marker),
-            data,
-        });
-        let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // Page-only (GNU `marker_block`): a freed slot is reused from the
+        // class free list, so `save-excursion`'s make/free churn cycles
+        // through a few cache-warm slots instead of scattering `Box`es
+        // across the general heap.
+        let ptr = self.marker_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                MarkerObj {
+                    header: VecLikeHeader::new(VecLikeType::Marker),
+                    data,
+                },
+            );
+            // BORN-AT-PARITY, unconditionally.
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        #[cfg(test)]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.allocated_count += 1;
         self.note_allocation_bytes(size_of::<MarkerObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }

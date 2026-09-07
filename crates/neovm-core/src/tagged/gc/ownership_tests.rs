@@ -71,6 +71,7 @@ fn dirty_owner_tracking_is_cleared_at_begin_so_freed_slot_reuse_is_not_deduped()
         (0, 0),
         (0, 0),
         (0, 0),
+        (0, 0),
     );
     assert!(
         freed >= 2,

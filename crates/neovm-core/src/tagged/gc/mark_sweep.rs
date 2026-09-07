@@ -331,6 +331,7 @@ impl TaggedHeap {
         walk_one(&mut self.macro_arena);
         walk_one(&mut self.record_arena);
         walk_one(&mut self.symbol_with_pos_arena);
+        walk_one(&mut self.marker_arena);
     }
 
     /// Scan every permanent object (mapped dump + tenured old gen) for edges to
@@ -970,6 +971,9 @@ impl TaggedHeap {
         for slot in self.symbol_with_pos_arena.collect_allocated_slots() {
             push(slot as *mut GcHeader);
         }
+        for slot in self.marker_arena.collect_allocated_slots() {
+            push(slot as *mut GcHeader);
+        }
         out
     }
 
@@ -1005,6 +1009,9 @@ impl TaggedHeap {
             push(slot as *mut GcHeader);
         }
         for slot in self.symbol_with_pos_arena.collect_allocated_slots() {
+            push(slot as *mut GcHeader);
+        }
+        for slot in self.marker_arena.collect_allocated_slots() {
             push(slot as *mut GcHeader);
         }
         out
@@ -1553,6 +1560,7 @@ impl TaggedHeap {
             (0, self.macro_arena.pages.len()),
             (0, self.record_arena.pages.len()),
             (0, self.symbol_with_pos_arena.pages.len()),
+            (0, self.marker_arena.pages.len()),
         );
         let _released_cons_blocks = self.release_empty_cons_blocks();
         let _released_object_pages = self.release_empty_object_pages();

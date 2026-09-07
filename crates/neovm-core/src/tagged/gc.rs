@@ -485,6 +485,11 @@ pub struct TaggedHeap {
     /// Symbols-with-position (task 03/3b): 64B class, own arena. POD-like
     /// ({sym, pos} Values, `needs_drop` == false — no payload to free).
     symbol_with_pos_arena: ObjectArena<SymbolWithPosObj>,
+    /// Markers: 128B class, own arena. The highest-churn editor object
+    /// (`save-excursion` allocates and frees one per call); GNU's
+    /// `marker_block` equivalent. POD payload; the buffer-chain link is
+    /// detached by `unchain_dead_markers` before the sweep frees a slot.
+    marker_arena: ObjectArena<MarkerObj>,
     /// Cons cells loaded directly from a mapped pdump image.  GNU's pdumper
     /// uses external mark bits for dumped objects rather than writing mark
     /// state into malloc/GC allocation headers; mirror that for mapped conses.
@@ -744,6 +749,7 @@ pub struct TaggedHeap {
     sweep_macro_page_cursor: usize,
     sweep_record_page_cursor: usize,
     sweep_symbol_with_pos_page_cursor: usize,
+    sweep_marker_page_cursor: usize,
     /// Non-cons objects detached from `all_objects` at sweep start, reclaimed
     /// incrementally. New non-cons allocations link onto a fresh `all_objects`
     /// and are not swept this cycle.
@@ -866,6 +872,7 @@ impl TaggedHeap {
             macro_arena: ObjectArena::new(),
             record_arena: ObjectArena::new(),
             symbol_with_pos_arena: ObjectArena::new(),
+            marker_arena: ObjectArena::new(),
             mapped_cons_ranges: Vec::new(),
             mapped_float_ranges: Vec::new(),
             mapped_veclike_objects: Vec::new(),
@@ -936,6 +943,7 @@ impl TaggedHeap {
             sweep_macro_page_cursor: 0,
             sweep_record_page_cursor: 0,
             sweep_symbol_with_pos_page_cursor: 0,
+            sweep_marker_page_cursor: 0,
             sweep_noncons_pending: std::ptr::null_mut(),
             sweep_noncons_live_bytes: 0,
             sweep_mark_us: 0,
@@ -1849,6 +1857,7 @@ impl TaggedHeap {
                 .layout_stats(|object| Self::value_vec_payload_layout(&object.data)),
             self.symbol_with_pos_arena
                 .layout_stats(|_| PayloadLayout::default()),
+            self.marker_arena.layout_stats(|_| PayloadLayout::default()),
         ];
 
         let mapped_conses = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
@@ -2190,6 +2199,8 @@ pub use arena_pages::*;
 
 mod gc_thread;
 pub use gc_thread::*;
+#[cfg(test)]
+mod marker_arena_tests;
 #[cfg(test)]
 mod symbol_with_pos_arena_tests;
 
