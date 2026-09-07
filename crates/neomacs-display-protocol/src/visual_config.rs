@@ -175,3 +175,36 @@ impl Default for VisualConfig {
         }
     }
 }
+
+// The behavioural slots publish their schema too. Hand-written rather than
+// macro-declared because their defaults differ per instance, but a widget needs
+// the same description of them either way.
+crate::effect_schema!(CursorBlinkConfig {
+    enabled: bool,
+    interval: Duration
+});
+crate::effect_schema!(CursorMotionConfig {
+    enabled: bool,
+    speed: f32,
+    style: CursorAnimStyle,
+    duration: Duration,
+    trail_size: f32,
+});
+crate::effect_schema!(CursorSizeTransitionConfig {
+    enabled: bool,
+    duration: Duration
+});
+crate::effect_schema!(BufferTransitionConfig {
+    enabled: bool,
+    duration: Duration,
+    effect: TransitionEffect,
+    easing: TransitionEasing,
+    axis: TransitionAxisPreference,
+    direction: TransitionDirection,
+});
+crate::effect_schema!(ScrollTransitionConfig {
+    enabled: bool,
+    duration: Duration,
+    effect: TransitionEffect,
+    easing: TransitionEasing,
+});

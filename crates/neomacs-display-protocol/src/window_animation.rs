@@ -41,6 +41,7 @@ use std::time::Duration;
 /// Which family of curve a slot uses.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(strum::VariantNames)]
 pub enum MotionKind {
     /// A fixed-duration curve. Reads `duration` and `easing`.
     #[default]
@@ -280,3 +281,20 @@ pub fn default_window_movement() -> WindowAnimation {
 #[cfg(test)]
 #[path = "window_animation_test.rs"]
 mod tests;
+
+crate::effect_schema!(WindowAnimation {
+    enabled: bool,
+    kind: MotionKind,
+    duration: Duration,
+    easing: TransitionEasing,
+    bezier_x1: f32,
+    bezier_y1: f32,
+    bezier_x2: f32,
+    bezier_y2: f32,
+    damping_ratio: f32,
+    stiffness: u32,
+});
+crate::effect_schema!(WindowAnimationsConfig {
+    off: bool,
+    slowdown: f32
+});

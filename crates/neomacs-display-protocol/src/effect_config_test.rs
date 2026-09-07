@@ -2767,9 +2767,38 @@ fn every_effect_publishes_a_schema_for_every_property_it_accepts() {
     // the ones `effect_values` reports.
     let config = VisualConfig::default();
     for (effect, schema) in [
+        // Macro-declared gallery effects...
         ("cursor-glow", CursorGlowConfig::PROPERTIES),
         ("accent-strip", AccentStripConfig::PROPERTIES),
         ("argyle-pattern", ArgylePatternConfig::PROPERTIES),
+        // ...and the hand-written behavioural slots, which publish the same
+        // way but through `effect_schema!` because their defaults differ per
+        // instance. These are the ones a user actually tunes, so a drift here
+        // matters more than in the gallery.
+        (
+            "window-resize",
+            crate::window_animation::WindowAnimation::PROPERTIES,
+        ),
+        (
+            "window-animations",
+            crate::window_animation::WindowAnimationsConfig::PROPERTIES,
+        ),
+        (
+            "cursor-blink",
+            crate::visual_config::CursorBlinkConfig::PROPERTIES,
+        ),
+        (
+            "cursor-motion",
+            crate::visual_config::CursorMotionConfig::PROPERTIES,
+        ),
+        (
+            "buffer-transition",
+            crate::visual_config::BufferTransitionConfig::PROPERTIES,
+        ),
+        (
+            "scroll-transition",
+            crate::visual_config::ScrollTransitionConfig::PROPERTIES,
+        ),
     ] {
         let mut published: Vec<String> = schema
             .iter()
@@ -2828,15 +2857,17 @@ fn number_property_kinds_match_the_rules_that_enforce_them() {
 #[test]
 fn every_transition_easing_name_round_trips() {
     use crate::TransitionEasing;
-    use crate::effect_config::TRANSITION_EASING_NAMES;
+    use strum::VariantNames;
 
     // The widget offers these names; the parser must accept every one, or a
-    // user picks a value from a menu and the registry rejects it.
-    for name in TRANSITION_EASING_NAMES {
+    // user picks a value from a menu and the registry rejects it. `VARIANTS`
+    // comes straight from the enum, so a new easing joins the menu without
+    // anyone remembering to add it — and this proves the menu is parseable.
+    for name in <TransitionEasing as VariantNames>::VARIANTS {
         let parsed = TransitionEasing::from_str(name);
         let back: &'static str = parsed.into();
         assert_eq!(
-            &back, name,
+            back, *name,
             "`{name}` did not round-trip; the published list has drifted from the enum"
         );
     }

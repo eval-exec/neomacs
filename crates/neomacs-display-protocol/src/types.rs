@@ -723,6 +723,7 @@ pub struct AnimatedCursor {
 #[serde(rename_all = "kebab-case")]
 #[repr(u8)]
 #[non_exhaustive]
+#[derive(strum::VariantNames)]
 pub enum CursorAnimStyle {
     /// Exponential decay (current default). No fixed duration; `speed` controls rate.
     Exponential = 0,
