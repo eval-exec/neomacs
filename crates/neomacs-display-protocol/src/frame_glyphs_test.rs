@@ -21,8 +21,8 @@ fn assert_color_eq(actual: &Color, expected: &Color) {
 #[test]
 fn frame_default_resolved_font_is_one_coherent_binding_lookup() {
     use crate::font::{
-        FontFileAsset, FontOutlineAsset, FontReplay, FontResolutionSource, FontSlantKind,
-        ResolvedFont, ResolvedFontAdvance, ResolvedFontId, ResolvedFontIdentity,
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont,
+        ResolvedFontAdvance, ResolvedFontId, ResolvedFontIdentity,
     };
 
     let mut frame = FrameGlyphBuffer::with_size(120.0, 80.0);
@@ -52,7 +52,6 @@ fn frame_default_resolved_font_is_one_coherent_binding_lookup() {
             descent_px: 4.0,
             space_advance_px: 10.0,
             glyph_advance: ResolvedFontAdvance::fixed_cell(10.0),
-            source: FontResolutionSource::FacePrimary,
         },
     );
 

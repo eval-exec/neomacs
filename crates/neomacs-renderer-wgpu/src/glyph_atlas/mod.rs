@@ -225,7 +225,6 @@ fn frame_font_bindings_identity(
         font.descent_px.to_bits().hash(&mut hasher);
         font.space_advance_px.to_bits().hash(&mut hasher);
         font.glyph_advance.hash(&mut hasher);
-        font.source.hash(&mut hasher);
     }
 
     let mut char_faces: Vec<_> = char_fonts.iter().collect();
@@ -1349,10 +1348,10 @@ impl WgpuGlyphAtlas {
         char_fonts: &CharFontTable,
         shaped_clusters: &ShapedClusterTable,
     ) {
-        if fonts.iter().any(|(id, incoming)| {
+        if let Some((id, incoming)) = fonts.iter().find(|(id, incoming)| {
             self.frame_fonts
                 .get(id)
-                .is_some_and(|existing| existing != incoming)
+                .is_some_and(|existing| existing != *incoming)
         }) {
             // ResolvedFontId is stable within one layout resolver. If a
             // resolver restart reuses an id, every cache that hashed or mapped
@@ -1360,6 +1359,9 @@ impl WgpuGlyphAtlas {
             // before the replacement becomes visible.
             tracing::warn!(
                 target: "font_boundary",
+                id = id.0,
+                ?incoming,
+                existing = ?self.frame_fonts[id],
                 "resolved font id was reused for a different realized instance; clearing renderer font caches"
             );
             self.clear();

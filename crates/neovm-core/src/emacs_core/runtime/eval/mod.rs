@@ -2181,7 +2181,7 @@ pub(crate) fn test_resolved_opened_font(
 ) -> ResolvedOpenedFont {
     use neomacs_display_protocol::font::{
         FontBackendKind, FontFileAsset, FontMemoryAsset, FontOutlineAsset, FontReplay,
-        FontResolutionSource, FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
+        FontSlantKind, ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
     };
     use std::sync::Arc;
 
@@ -2239,7 +2239,6 @@ pub(crate) fn test_resolved_opened_font(
             descent_px: metrics.descent as f32,
             space_advance_px: metrics.space_width as f32,
             glyph_advance: Default::default(),
-            source: FontResolutionSource::FacePrimary,
         },
         foundry: foundry.map(crate::heap_types::LispString::from_utf8),
         slant,
