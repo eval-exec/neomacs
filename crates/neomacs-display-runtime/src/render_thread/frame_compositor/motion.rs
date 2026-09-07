@@ -227,12 +227,28 @@ impl Motion {
         match self.spec {
             MotionSpec::Instant => true,
             MotionSpec::Tween(tween) => seconds >= tween.duration.as_secs_f32(),
-            // Both conditions are needed. An under-damped spring passes through
-            // its target on every bounce while still moving fast, so value
-            // alone would stop the motion mid-swing.
-            MotionSpec::Spring(_) => {
-                (progress - 1.0).abs() < SPRING_REST_EPSILON
-                    && self.rate_at(seconds).abs() < SPRING_REST_EPSILON
+            MotionSpec::Spring(spring) => {
+                let at_target = (progress - 1.0).abs() < SPRING_REST_EPSILON;
+                // The rate gate is only meaningful for a spring that can
+                // overshoot: an under-damped one passes through its target on
+                // every bounce while still moving fast, so value alone would
+                // stop it mid-swing.
+                //
+                // A critically or over-damped spring approaches monotonically
+                // and never crosses, so the rate says nothing the value has not
+                // already said -- and it says it much later. For the default
+                // (zeta 1.0, stiffness 800) the value gate is met at ~326ms and
+                // the rate gate not until ~460ms, so requiring both spent 40% of
+                // the motion holding a morph open for sub-pixel movement. That
+                // also made a curve transcribed from a niri config visibly
+                // slower here than there: niri ends the same spring when its
+                // envelope falls below epsilon, which for these parameters is
+                // 325.7ms.
+                if spring.damping.get() >= 1.0 {
+                    at_target
+                } else {
+                    at_target && self.rate_at(seconds).abs() < SPRING_REST_EPSILON
+                }
             }
             // A decay has no target to converge on, so its end has to come from
             // the decay itself falling below what a pixel can show.
