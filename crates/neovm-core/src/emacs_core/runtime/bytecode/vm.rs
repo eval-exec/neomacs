@@ -11,7 +11,7 @@ use crate::emacs_core::builtins;
 use crate::emacs_core::error::*;
 use crate::emacs_core::eval::{
     BytecodeBacktraceFrame, BytecodeStackCallDispatch, ConditionFrame, LispArgVec, ResumeTarget,
-    SubrEntry, lookup_global_subr_entry, subr_call_entry_from_value, subr_entry_from_value,
+    lookup_global_subr_entry, subr_call_entry_from_value, subr_entry_from_value,
 };
 use crate::emacs_core::intern::{SymId, intern, lookup_interned, resolve_sym};
 // storage_char_len and storage_substring no longer needed here — using emacs_char + LispString
