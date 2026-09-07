@@ -197,7 +197,13 @@ fn render_frame_window_contents_to_surface(
     // transform hit testing uses and the geometry this pass draws come
     // from one sample of one motion rather than from two evaluations that
     // could land on different sides of a frame boundary.
-    let composition = render.sample_pane_layout(&acquired, renderer.frame_sample());
+    let composition = render.sample_pane_layout(
+        &acquired,
+        renderer.frame_sample(),
+        crate::render_thread::frame_compositor::continuity::pane_layout::PixelGrid::new(
+            native.scale_factor,
+        ),
+    );
     let pane_projection = composition.projection.clone();
     let pane_blits = composition.blits;
     if !pane_blits.is_empty() {

@@ -164,17 +164,24 @@ impl RoleSamples {
     /// as it arrives -- not `1 - progress`, which is what made a `C-x 3` show
     /// the left window's scroll bar at its final position from the first frame.
     ///
-    /// The reason it can be held is that the old picture is not merely a
-    /// stand-in. A pane whose lines are truncated renders, at width w, exactly
-    /// the leftmost w pixels of its old picture -- so clipping the old picture
-    /// to the travelling rect is the *correct* rendering of the pane at that
-    /// instant, not an approximation of it. Only wrapped lines differ, and only
-    /// at the wrap boundary, which is why the crossfade still has to happen at
-    /// all rather than snapping.
+    /// Holding it is defensible for the pane's *body*: a window whose lines are
+    /// truncated renders, at width w, very nearly the leftmost w pixels of its
+    /// old picture, so the old picture clipped to the travelling rect is close
+    /// to right rather than a placeholder.
     ///
-    /// niri and Hyprland avoid this question by scaling the window's pixels
-    /// onto the animating rect. That is fine for a photo or a toolbar and bad
-    /// for text: the source is already-rasterized, hinted glyphs, and a split
+    /// It is NOT right for the pane's *chrome*, and an earlier version of this
+    /// comment claimed otherwise. A window's rect ends in a right fringe, a
+    /// right divider, a scroll bar and a mode line, and all four are at or
+    /// determined by the right edge -- the mode line's right-aligned segments
+    /// most of all. Clipping the old picture puts old body pixels exactly where
+    /// the new chrome belongs, so the destination's divider and mode line are
+    /// hidden on the first frame and arrive through this crossfade. That is why
+    /// it cannot simply be held at 1.0 and snapped: every window re-chromes,
+    /// even one that never rewraps a line.
+    ///
+    /// niri and Hyprland avoid the question by scaling the window's pixels onto
+    /// the animating rect. That is fine for a photo or a toolbar and bad for
+    /// text: the source is already-rasterized, hinted glyphs, and a split
     /// scales one axis only.
     fn outgoing_opacity(self) -> f32 {
         let arrived = self.geometry.content_mix.get();
@@ -220,6 +227,79 @@ fn rest() -> MotionSample {
 /// would call a pane "moved" over a rounding difference and animate a frame
 /// that is not moving.
 const RECT_EPSILON: f32 = 0.5;
+
+/// The physical pixel grid every placement has to land on.
+///
+/// A morph interpolates rects as floats, so a pane's edge lands mid-texel on
+/// almost every frame. The pass draws a 1:1 blit -- no magnification -- but the
+/// snapshot is sampled through a `FilterMode::Linear` sampler, so a fractional
+/// offset still resamples: already-rasterized, hinted glyphs get bilinearly
+/// mixed with their neighbours, at a phase that walks from frame to frame. Text
+/// softens for the length of the motion and hinted stems shimmer.
+///
+/// That is the same principle this module refuses to break when it declines to
+/// *scale* a pane's content -- the translation term was simply overlooked.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::render_thread) struct PixelGrid {
+    scale: f32,
+}
+
+impl PixelGrid {
+    /// The grid for a surface at `scale_factor` device pixels per logical one.
+    pub(in crate::render_thread) fn new(scale_factor: f64) -> Self {
+        let scale = scale_factor as f32;
+        Self {
+            scale: if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            },
+        }
+    }
+
+    /// Snap one edge to a device pixel.
+    ///
+    /// Device, not logical: on a 2x display a logical `.5` *is* a whole device
+    /// pixel, and rounding it away would discard precision the screen can show.
+    fn edge(self, logical: f32) -> f32 {
+        (logical * self.scale).round() / self.scale
+    }
+
+    /// Snap a rect by its **edges**, never by origin and extent separately.
+    ///
+    /// Rounding `x` and `width` independently is what opens a one-pixel seam
+    /// between tiled neighbours -- it is the reported swayfx and Hyprland
+    /// symptom. Two adjacent panes share an edge *value*, so rounding edges
+    /// makes them round to the same number and the seam stays closed. This is
+    /// the one place where fixing the resampling could reintroduce the tearing
+    /// we do not have.
+    fn rect(self, rect: Rect) -> Rect {
+        let x = self.edge(rect.x);
+        let y = self.edge(rect.y);
+        Rect::new(
+            x,
+            y,
+            self.edge(rect.x + rect.width) - x,
+            self.edge(rect.y + rect.height) - y,
+        )
+    }
+
+    /// Snap a placement whole, so the pixels it draws and the rect the
+    /// interaction projection clips to stay the same rectangle.
+    fn placement(self, mut placement: PanePlacement) -> PanePlacement {
+        placement.bounds = self.rect(placement.bounds);
+        placement.painted = self.rect(placement.painted);
+        // The source origin too: the offset from destination pixel to source
+        // texel is `content_origin - bounds.x`, and only whole-texel offsets
+        // sample without filtering. Snapping one end and not the other leaves
+        // the phase fractional and fixes nothing.
+        placement.content_origin = (
+            self.edge(placement.content_origin.0),
+            self.edge(placement.content_origin.1),
+        );
+        placement
+    }
+}
 
 /// Which geometry slot a morph's changes ask for, or `None` if no pane travels.
 ///
@@ -553,7 +633,11 @@ impl PaneLayoutMorph {
         }
     }
 
-    pub(in crate::render_thread) fn sample(&self, frame: FrameSample) -> LayoutSample {
+    pub(in crate::render_thread) fn sample(
+        &self,
+        frame: FrameSample,
+        grid: PixelGrid,
+    ) -> LayoutSample {
         let motion = self.sample_roles(frame);
         // What the surviving panes have reached, computed before anything is
         // placed because a departing pane has to be trimmed to what is left.
@@ -573,6 +657,11 @@ impl PaneLayoutMorph {
         let mut panes = Vec::new();
         for change in self.changes() {
             place(change, motion, &claimed, &vacated, &mut panes);
+        }
+        // Snapped once, here, after every placement exists: one rect for what
+        // is drawn and what is hit-tested, landing on the device grid.
+        for placement in &mut panes {
+            *placement = grid.placement(*placement);
         }
         LayoutSample { panes, motion }
     }

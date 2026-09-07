@@ -87,6 +87,7 @@ impl GuiFrameRenderState {
         &mut self,
         _acquired: &crate::render_thread::render_pass::surface::SurfaceAcquired,
         frame: neomacs_display_protocol::frame_time::FrameSample,
+        grid: super::continuity::pane_layout::PixelGrid,
     ) -> super::continuity::pane_layout::PaneLayoutComposition {
         let Some(presentation) = self
             .compositor
@@ -98,7 +99,7 @@ impl GuiFrameRenderState {
             return super::continuity::pane_layout::PaneLayoutComposition::default();
         };
         let driver = std::mem::take(&mut self.compositor.layout);
-        let (driver, composition) = driver.on_frame(presentation, frame);
+        let (driver, composition) = driver.on_frame(presentation, frame, grid);
         self.compositor.layout = driver;
         composition
     }

@@ -1,4 +1,10 @@
 use super::*;
+
+/// A 1x device grid: logical pixels are device pixels, so snapping is to whole
+/// numbers and the fixtures below read as written.
+fn grid() -> PixelGrid {
+    PixelGrid::new(1.0)
+}
 use crate::render_thread::render_quality::WindowAnimationSpecs;
 use neomacs_display_protocol::motion_spec::MotionSpec;
 use neomacs_display_protocol::motion_spec::{MotionDuration, TweenSpec};
@@ -149,7 +155,7 @@ fn a_commit_that_moves_nothing_does_not_restart_a_motion_in_flight() {
 
     // Halfway through a 100ms tween the pane must be halfway, not back at the
     // start. 800 -> 400 means it still covers 600 at the midpoint.
-    let (_, composition) = driver.on_frame(presentation(), frame_at(origin, 50));
+    let (_, composition) = driver.on_frame(presentation(), frame_at(origin, 50), grid());
 
     // Measured from the vacated strip, not from the pane's own quad. A blit
     // carries the rect it *paints*, and a shrinking pane paints its
@@ -188,7 +194,7 @@ fn a_commit_that_wants_the_panes_elsewhere_retargets() {
         &elsewhere,
         origin.plus(Duration::from_millis(50)),
     );
-    let (_, composition) = driver.on_frame(presentation(), frame_at(origin, 150));
+    let (_, composition) = driver.on_frame(presentation(), frame_at(origin, 150), grid());
     assert!(
         !composition.blits.is_empty(),
         "the retarget is still carrying the panes to the new destination"
@@ -202,7 +208,7 @@ fn a_commit_that_wants_the_panes_elsewhere_retargets() {
 #[test]
 fn a_settled_compositor_places_nothing_and_names_no_transform() {
     let (driver, composition) =
-        LayoutDriver::Settled.on_frame(presentation(), frame_at(origin(), 0));
+        LayoutDriver::Settled.on_frame(presentation(), frame_at(origin(), 0), grid());
     assert!(!driver.wants_frames());
     assert!(composition.blits.is_empty());
     assert!(composition.projection.is_none());
@@ -214,7 +220,7 @@ fn the_last_frame_of_a_motion_still_places_the_panes_and_then_settles() {
     // previous placement, one frame short of the destination.
     let origin = origin();
     let driver = commit(LayoutDriver::Settled, &one_pane(), &two_panes(), origin);
-    let (driver, composition) = driver.on_frame(presentation(), frame_at(origin, 100));
+    let (driver, composition) = driver.on_frame(presentation(), frame_at(origin, 100), grid());
     assert!(
         !composition.blits.is_empty(),
         "the destination frame is drawn"
@@ -232,7 +238,7 @@ fn a_frame_with_no_presentation_settles_rather_than_animating_nothing() {
     assert!(driver.wants_frames());
     // The compositor-level adapter settles the driver when it has no frame;
     // this asserts the driver itself is safe to ask.
-    let (_, composition) = driver.on_frame(presentation(), frame_at(origin, 50));
+    let (_, composition) = driver.on_frame(presentation(), frame_at(origin, 50), grid());
     assert!(composition.projection.is_some());
 }
 
@@ -272,7 +278,7 @@ fn a_retarget_onto_where_the_panes_already_are_settles_but_still_names_the_trans
         origin.plus(Duration::from_millis(50)),
     );
 
-    let (driver, composition) = driver.on_frame(presentation(), frame_at(origin, 50));
+    let (driver, composition) = driver.on_frame(presentation(), frame_at(origin, 50), grid());
     assert!(
         composition.blits.is_empty(),
         "the pane is already where the new layout wants it"
