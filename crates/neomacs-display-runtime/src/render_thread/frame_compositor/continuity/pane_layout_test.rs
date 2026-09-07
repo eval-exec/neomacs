@@ -296,6 +296,57 @@ fn a_moving_pane_keeps_showing_its_destination_content() {
 }
 
 #[test]
+fn three_panes_stay_flush_across_both_seams_for_the_whole_motion() {
+    // The claim that one shared motion coordinates N panes has only ever been
+    // exercised with two. With three there are two interior seams, and a pane
+    // in the middle that shrinks *and* moves — the shape that separates a
+    // shared clock from per-window clocks that merely start together.
+    //
+    // niri, Hyprland, Neovide and swayfx all give each window its own clock and
+    // rely on a non-zero gap to absorb the disagreement. Emacs panes abut, so
+    // this has to hold exactly rather than nearly.
+    let before = [
+        window(1, rect(0.0, 0.0, 400.0, 600.0)),
+        window(2, rect(400.0, 0.0, 400.0, 600.0)),
+        window(3, rect(800.0, 0.0, 400.0, 600.0)),
+    ];
+    // Every pane changes: 1 grows, 2 shrinks and moves, 3 shrinks and moves.
+    let after = [
+        window(1, rect(0.0, 0.0, 600.0, 600.0)),
+        window(2, rect(600.0, 0.0, 300.0, 600.0)),
+        window(3, rect(900.0, 0.0, 300.0, 600.0)),
+    ];
+    let origin = origin();
+    let morph = PaneLayoutMorph::try_new(&before, &after, linear_100ms(), origin).expect("a morph");
+
+    for scale in [1.0, 2.0] {
+        let grid = PixelGrid::new(scale);
+        for ms in [0, 17, 50, 83, 100] {
+            let sample = morph.sample(frame_at(origin, ms), grid);
+            // `bounds` is where a pane *is*, and it is the tiling that must
+            // hold: adjacent panes' bounds meet with no gap and no overlap.
+            let mut edges: Vec<(f32, f32)> = (1..=3)
+                .map(|id| {
+                    let pane = placed(&sample, id);
+                    (pane.bounds.x, pane.bounds.x + pane.bounds.width)
+                })
+                .collect();
+            edges.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for pair in edges.windows(2) {
+                assert_eq!(
+                    pair[0].1, pair[1].0,
+                    "seam opened at {ms}ms, scale {scale}: {:?} then {:?}",
+                    pair[0], pair[1]
+                );
+            }
+            // And the row is still fully covered end to end.
+            assert_eq!(edges[0].0, 0.0, "left edge drifted at {ms}ms");
+            assert_eq!(edges[2].1, 1200.0, "right edge drifted at {ms}ms");
+        }
+    }
+}
+
+#[test]
 fn every_placement_lands_on_a_device_pixel_without_opening_the_seam() {
     // Two properties that pull against each other.
     //
