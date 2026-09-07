@@ -749,6 +749,18 @@ impl RuntimeState {
             super::jit::stats::record_dispatch(false);
             return Plan::Interpret;
         }
+        // A body the profit gate refused tiers up exactly at its deferral
+        // heat. It already proved hot once — usually on first sight from
+        // compiled code, where the seam compiles with no threshold at all —
+        // so the size-scaled first-sight threshold below must not apply
+        // again: for the 200–800-op font-lock bodies it meant 5–12K more
+        // calls, i.e. never within a session (org op −7.6% Ir when they run
+        // native).
+        if self.profit_deferred_heat.load(Ordering::Relaxed) != 0 {
+            #[cfg(feature = "jit")]
+            super::jit::stats::record_dispatch(true);
+            return Plan::Compiled;
+        }
         let cap = max_tier_ops();
         if cap != 0 && ops_len > cap as usize {
             return Plan::Interpret;
