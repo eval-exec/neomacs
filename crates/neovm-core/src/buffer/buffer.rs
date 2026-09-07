@@ -4809,12 +4809,97 @@ pub enum UndoBoundaryOutcome {
     UndoDisabled,
 }
 
+/// Live buffers indexed by their dense `BufferId` (a counter from 1), so the
+/// hot lookups -- `current_buffer()` and the buffer-local access/bind path
+/// (specbind, get_buffer_local) -- are a bounds check and a deref instead of
+/// a hash probe. GNU's `current_buffer` is a global pointer; this is the
+/// safe-Rust equivalent, and it iterates in id order, which makes anything
+/// derived from a walk (the pdump image) deterministic.
+///
+/// Buffers are boxed so a live buffer's address is stable for its whole life:
+/// growing the slab moves 8-byte slots, never a `Buffer`. The GC hands raw
+/// pointers into a buffer's storage across a cycle (`markers_head_slot_raw`);
+/// with values inline in a hash map those were only safe because no buffer
+/// happened to be created mid-cycle.
+#[derive(Clone, Default)]
+struct LiveBuffers {
+    slots: Vec<Option<Box<Buffer>>>,
+    live: usize,
+}
+
+impl LiveBuffers {
+    #[inline]
+    fn get(&self, id: &BufferId) -> Option<&Buffer> {
+        self.slots.get(id.0 as usize)?.as_deref()
+    }
+    #[inline]
+    fn get_mut(&mut self, id: &BufferId) -> Option<&mut Buffer> {
+        self.slots.get_mut(id.0 as usize)?.as_deref_mut()
+    }
+    fn contains_key(&self, id: &BufferId) -> bool {
+        self.get(id).is_some()
+    }
+    fn len(&self) -> usize {
+        self.live
+    }
+    /// Install `buffer` under `id`, returning the buffer previously there.
+    fn insert(&mut self, id: BufferId, buffer: Buffer) -> Option<Buffer> {
+        let index = id.0 as usize;
+        // Ids come from `next_id` (a counter restored by pdump); a sparse id
+        // would make this slab a memory bomb, so it is a bug, not a case.
+        debug_assert!(
+            index < 1 << 24,
+            "BufferId {index} is not a dense counter value"
+        );
+        if index >= self.slots.len() {
+            self.slots.resize_with(index + 1, || None);
+        }
+        let previous = self.slots[index].replace(Box::new(buffer)).map(|b| *b);
+        if previous.is_none() {
+            self.live += 1;
+        }
+        previous
+    }
+    fn remove(&mut self, id: &BufferId) -> Option<Buffer> {
+        let removed = self.slots.get_mut(id.0 as usize)?.take().map(|b| *b);
+        if removed.is_some() {
+            self.live -= 1;
+        }
+        removed
+    }
+    fn keys(&self) -> impl Iterator<Item = BufferId> + '_ {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| slot.as_ref().map(|_| BufferId(index as u64)))
+    }
+    fn values(&self) -> impl Iterator<Item = &Buffer> {
+        self.slots.iter().filter_map(|slot| slot.as_deref())
+    }
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut Buffer> {
+        self.slots.iter_mut().filter_map(|slot| slot.as_deref_mut())
+    }
+    fn iter(&self) -> impl Iterator<Item = (BufferId, &Buffer)> {
+        self.slots.iter().enumerate().filter_map(|(index, slot)| {
+            slot.as_deref()
+                .map(|buffer| (BufferId(index as u64), buffer))
+        })
+    }
+    fn from_map(map: FxHashMap<BufferId, Buffer>) -> Self {
+        let mut slab = Self::default();
+        for (id, buffer) in map {
+            slab.insert(id, buffer);
+        }
+        slab
+    }
+}
+
 #[derive(Clone)]
 pub struct BufferManager {
-    // FxHashMap (not default SipHash): `buffers` is looked up on the hot
-    // buffer-local access/bind path (specbind, get_buffer_local) keyed by the
-    // small-int BufferId, where SipHash dominated the per-lookup cost.
-    buffers: FxHashMap<BufferId, Buffer>,
+    // Dense-id slab (was FxHashMap, before that SipHash): `buffers` is looked
+    // up on the hot buffer-local access/bind path (specbind, get_buffer_local)
+    // and by every `current_buffer()`, so the lookup is an index, not a probe.
+    buffers: LiveBuffers,
     /// Killed buffer objects. GNU does not destroy the Lisp buffer object;
     /// it makes `BUFFER_LIVE_P` false while keeping slots like
     /// `last_name` and `filename` queryable.
@@ -5024,7 +5109,7 @@ impl BufferManager {
             buffer_defaults[info.offset.index()] = info.default.to_value();
         }
         let mut mgr = Self {
-            buffers: FxHashMap::default(),
+            buffers: LiveBuffers::default(),
             dead_buffers: FxHashMap::default(),
             buffer_order: Vec::new(),
             current: None,
@@ -5644,12 +5729,8 @@ impl BufferManager {
             }
         }
         if ids.len() < self.buffers.len() {
-            let mut missing: Vec<BufferId> = self
-                .buffers
-                .keys()
-                .copied()
-                .filter(|id| !ids.contains(id))
-                .collect();
+            let mut missing: Vec<BufferId> =
+                self.buffers.keys().filter(|id| !ids.contains(id)).collect();
             missing.sort_by_key(|id| id.0);
             ids.extend(missing);
         }
@@ -6869,8 +6950,9 @@ impl BufferManager {
     }
 
     // pdump accessors
-    pub(crate) fn dump_buffers(&self) -> &FxHashMap<BufferId, Buffer> {
-        &self.buffers
+    /// Live buffers in id order (deterministic for the dump image).
+    pub(crate) fn dump_buffers(&self) -> impl Iterator<Item = (BufferId, &Buffer)> {
+        self.buffers.iter()
     }
     pub(crate) fn dump_buffer_order(&self) -> &[BufferId] {
         &self.buffer_order
@@ -6953,7 +7035,7 @@ impl BufferManager {
             }
         }
         let mut manager = Self {
-            buffers,
+            buffers: LiveBuffers::from_map(buffers),
             buffer_order: Vec::new(),
             current,
             next_id,
@@ -6974,13 +7056,12 @@ impl BufferManager {
             let mut missing: Vec<BufferId> = manager
                 .buffers
                 .keys()
-                .copied()
                 .filter(|id| seen.insert(*id))
                 .collect();
             missing.sort_by_key(|id| id.0);
             manager.buffer_order.extend(missing);
         } else {
-            manager.buffer_order = manager.buffers.keys().copied().collect();
+            manager.buffer_order = manager.buffers.keys().collect();
             manager.buffer_order.sort_by_key(|id| id.0);
             if let Some(current) = manager.current
                 && manager.buffers.contains_key(&current)

@@ -606,7 +606,10 @@ fn from_dump_restores_indirect_buffer_shared_text_state() {
         );
         let _ = mgr.insert_into_buffer(base_id, "z");
 
-        let mut dumped = mgr.dump_buffers().clone();
+        let mut dumped: FxHashMap<BufferId, Buffer> = mgr
+            .dump_buffers()
+            .map(|(id, buf)| (id, buf.clone()))
+            .collect();
         let independent_indirect = dumped.get(&indirect_id).expect("indirect buffer").clone();
         let indirect = dumped.get_mut(&indirect_id).expect("indirect buffer");
         indirect.replace_text_snapshot_for_test(
@@ -657,7 +660,9 @@ fn from_dump_preserves_dumped_buffer_order() {
     let three = mgr.create_buffer("three");
 
     let restored = BufferManager::from_dump(
-        mgr.dump_buffers().clone(),
+        mgr.dump_buffers()
+            .map(|(id, buf)| (id, buf.clone()))
+            .collect(),
         Some(three),
         mgr.dump_next_id(),
         mgr.dump_next_marker_id(),

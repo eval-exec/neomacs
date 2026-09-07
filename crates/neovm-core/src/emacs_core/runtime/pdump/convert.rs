@@ -3751,7 +3751,6 @@ pub(crate) fn dump_buffer_manager(
     DumpBufferManager {
         buffers: bm
             .dump_buffers()
-            .iter()
             .map(|(id, buf)| (DumpBufferId(id.0), dump_buffer(encoder, buf)))
             .collect(),
         buffer_order: bm
