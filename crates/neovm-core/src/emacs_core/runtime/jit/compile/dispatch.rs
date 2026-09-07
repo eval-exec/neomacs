@@ -679,16 +679,18 @@ pub extern "C" fn neovm_jit_call_subr_spec(
         // Push the args straight onto bc_buf (GC-traced → rooted across the subr,
         // and the stack-args dispatcher reads them in place — no LispArgVec). The
         // callee needs no root: static subr objects are Box::leak'd, never freed.
+        // One reserve (exact size hint) onto bc_buf (GC-traced → rooted across
+        // the subr; the stack-args dispatcher reads them in place), then the
+        // call straight on the Context: no `Vm` (its constructor reads three
+        // process knobs per call) and one frame instead of two. The callee
+        // needs no root: static subr objects are Box::leak'd, never freed.
         let args_start = ctx.bc_buf.len();
-        for i in 0..nargs {
-            // SAFETY: the generated code stored exactly `nargs` argument words at
-            // `args_ptr` (its call-args slot) immediately before this call.
-            let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-            ctx.bc_buf.push(v);
-        }
-        let mut vm = Vm::from_context(ctx);
-        let res = vm.call_spec_subr_stack(SymId(sym as u32), target, args_start, nargs);
-        vm.bc_buf_truncate(args_start);
+        // SAFETY: the generated code stored exactly `nargs` argument words at
+        // `args_ptr` (its call-args slot) immediately before this call.
+        ctx.bc_buf
+            .extend((0..nargs).map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize)));
+        let res = ctx.call_spec_subr_from_bc_stack(SymId(sym as u32), target, args_start, nargs);
+        ctx.bc_buf.truncate(args_start);
         let status = match res {
             Ok(value) => {
                 // SAFETY: `out` is the generated code's result stack slot.
@@ -1141,8 +1143,7 @@ pub extern "C" fn neovm_jit_cbsym_read(
         // harness forces it.
         let armed = !force_cbsym_generic()
             && nargs == cbsym_read_expected_nargs(which)
-            && lookup_global_subr_entry(sym_id)
-                .is_some_and(|e| e.dispatch_kind == SubrDispatchKind::Builtin);
+            && crate::emacs_core::eval::global_subr_is_builtin(sym_id);
         if !armed {
             #[cfg(debug_assertions)]
             CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);

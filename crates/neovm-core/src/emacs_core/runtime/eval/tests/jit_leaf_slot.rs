@@ -19,10 +19,22 @@ fn bc(
     constants: Vec<Value>,
     hot: bool,
 ) -> ByteCodeFunction {
+    bc_with(required, optional, false, ops, constants, hot)
+}
+
+fn bc_with(
+    required: u32,
+    optional: u32,
+    rest: bool,
+    ops: Vec<Op>,
+    constants: Vec<Value>,
+    hot: bool,
+) -> ByteCodeFunction {
+    let nonrest = required + optional;
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: (1..=required).map(SymId).collect(),
-        optional: (required + 1..=required + optional).map(SymId).collect(),
-        rest: None,
+        optional: (required + 1..=nonrest).map(SymId).collect(),
+        rest: rest.then_some(SymId(nonrest + 1)),
     });
     f.lexical = true;
     f.ops = ops;
@@ -189,6 +201,53 @@ fn omitted_optionals_are_nil_padded_on_the_direct_entry() {
             call0(&mut ev, two),
             Value::make_int(7),
             "2-arg call: direct"
+        );
+    }
+}
+
+/// `(lambda (a &rest r) r)`: the direct entry conses the tail into the rest
+/// list exactly as the tier-up entry's `call_consts` does — nil for none,
+/// a fresh list otherwise — from the same slot, interleaved arities.
+#[test]
+fn rest_callees_take_the_direct_entry_with_a_consed_list() {
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    let (sym, callee) = bind_fn(
+        &mut ev,
+        "c1-leaf-slot-rest",
+        bc_with(1, 0, true, vec![Op::StackRef(0), Op::Return], vec![], true),
+    );
+    let call_n = |n: usize| {
+        let mut ops = vec![Op::Constant(0)];
+        let mut constants = vec![sym];
+        for i in 0..n {
+            ops.push(Op::Constant(1 + i as u16));
+            constants.push(Value::make_int(5 + 2 * i as i64));
+        }
+        ops.push(Op::Call(n as u16));
+        ops.push(Op::Return);
+        Value::make_bytecode(bc(0, 0, ops, constants, false))
+    };
+    let (one, two, three) = (call_n(1), call_n(2), call_n(3));
+    assert_eq!(
+        call0(&mut ev, two),
+        Value::list_from_slice(&[Value::make_int(7)])
+    );
+    assert_eq!(
+        cache::cache_entry_kind_for_test(compiled_id(callee)),
+        "compiled",
+        "premise: a &rest leaf compiles"
+    );
+    assert!(slot_armed(callee));
+    for _ in 0..3 {
+        assert_eq!(call0(&mut ev, one), Value::NIL, "no rest args: nil");
+        assert_eq!(
+            call0(&mut ev, two),
+            Value::list_from_slice(&[Value::make_int(7)])
+        );
+        assert_eq!(
+            call0(&mut ev, three),
+            Value::list_from_slice(&[Value::make_int(7), Value::make_int(9)])
         );
     }
 }

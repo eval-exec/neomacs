@@ -609,6 +609,23 @@ pub(crate) fn inline_subr_function(sym_id: SymId) -> Option<SubrFn> {
     inline_subr(sym_id).function
 }
 
+/// Whether `sym_id` names a REGISTERED builtin — the opcode-like test the
+/// JIT's pure-read shim keys on (like GNU's `Bpoint`, it ignores the live
+/// function cell; the interpreter's inline tier does too). Reads one byte
+/// instead of copying the entry.
+#[inline]
+pub(crate) fn global_subr_is_builtin(sym_id: SymId) -> bool {
+    #[cfg(test)]
+    GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));
+    GLOBAL_SUBR_TABLE.with(|table| {
+        table.borrow().get(sym_id.0 as usize).is_some_and(|entry| {
+            entry
+                .as_ref()
+                .is_some_and(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin)
+        })
+    })
+}
+
 pub(crate) fn lookup_global_subr_entry(sym_id: SymId) -> Option<SubrEntry> {
     #[cfg(test)]
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));

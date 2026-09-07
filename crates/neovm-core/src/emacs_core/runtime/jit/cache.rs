@@ -987,10 +987,10 @@ pub fn try_run_compiled(
 /// The spec slots are owned by the executing caller leaf, so a `clear()` would
 /// drop the caller and its slots together; no stale slot can outlive it.
 /// Slice C1 of the JIT call seam: the leaf the interpreter's `Bcall` arm may
-/// enter DIRECTLY — no cache probe, no `LispArgVec`, no rest list — and the
-/// premarshaled slot count the caller must supply: `nargs` values followed
-/// by nil for each omitted `&optional` (what `call_consts` pads). `&rest`
-/// callees need a consed list and stay on the entry path. `None` = take
+/// enter DIRECTLY — no cache probe, no `LispArgVec` — with the premarshaled
+/// shape the caller must supply: `(leaf, nonrest, has_rest)` = the first
+/// `nonrest` slots are the args nil-padded for omitted `&optional`, plus one
+/// consed `&rest` list when `has_rest` (what `call_consts` builds). `None` = take
 /// `try_run_compiled`, which alone owns AOT loads, profit deferral, the
 /// re-tier at `retier_heat()` (the slot steps aside on exactly that call so
 /// the crossing is seen) and the `NEOVM_JIT_DEBUG_ID` trace. Only
@@ -1001,7 +1001,7 @@ pub fn try_run_compiled(
 pub(crate) fn armed_leaf_for_stack_call(
     func: &ByteCodeFunction,
     nargs: usize,
-) -> Option<(*const CompiledLeaf, usize)> {
+) -> Option<(*const CompiledLeaf, usize, bool)> {
     let rt = func.jit_runtime();
     let leaf = rt.armed_leaf_slot(leaf_slot_epoch())?;
     #[cfg(test)]
@@ -1012,14 +1012,18 @@ pub(crate) fn armed_leaf_for_stack_call(
     // every retire/clear bumps the epoch, and retired leaves stay allocated.
     let (has_rest, arity, accepts) =
         unsafe { ((*leaf).has_rest, (*leaf).arity, (*leaf).accepts(nargs)) };
-    if has_rest || !accepts {
+    if !accepts {
         return None;
     }
     // This entry replaces `dispatch_sized` for an armed function (already
     // tiered up: its threshold/deferral/cap math is settled), so it advances
     // the heat itself and steps aside on the re-tier crossing.
     let now = rt.bump_heat();
-    (!super::retier_heat().is_some_and(|at| now == at)).then_some((leaf, arity))
+    (!super::retier_heat().is_some_and(|at| now == at)).then_some((
+        leaf,
+        arity - usize::from(has_rest),
+        has_rest,
+    ))
 }
 
 /// Run a leaf returned by `armed_leaf_for_stack_call` on `args_ptr`

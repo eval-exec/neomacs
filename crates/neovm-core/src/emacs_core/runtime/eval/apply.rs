@@ -1639,18 +1639,35 @@ impl Context {
             // already tiered up, so the heat dispatcher's threshold/deferral/cap
             // math is redundant — the slot check advances the heat itself. The
             // args go straight from the operand stack into the leaf's
-            // premarshaled ABI, nil-padded up to its arity for omitted optionals.
-            if let Some((leaf, arity)) = cache::armed_leaf_for_stack_call(bc_data, nargs) {
+            // premarshaled ABI: nil-padded for omitted optionals, the tail
+            // consed into the `&rest` list.
+            if let Some((leaf, nonrest, has_rest)) =
+                cache::armed_leaf_for_stack_call(bc_data, nargs)
+            {
                 crate::emacs_core::jit::stats::record_dispatch(true);
                 let saved_roots = save_scratch_gc_roots();
                 push_scratch_gc_root(func_value);
                 let nil = Value::NIL.bits() as i64;
-                let bits: smallvec::SmallVec<[i64; 8]> = self.bc_buf
-                    [args_start..args_start + nargs]
+                let fixed = nargs.min(nonrest);
+                let mut bits: smallvec::SmallVec<[i64; 8]> = self.bc_buf
+                    [args_start..args_start + fixed]
                     .iter()
                     .map(|v| v.bits() as i64)
-                    .chain(std::iter::repeat_n(nil, arity - nargs))
+                    .chain(std::iter::repeat_n(nil, nonrest - fixed))
                     .collect();
+                if has_rest {
+                    // Consed after the fixed slots are read; nothing allocates
+                    // between here and the leaf's prologue, which roots it (the
+                    // operand-stack args stay rooted on bc_buf meanwhile).
+                    let rest = if nargs > nonrest {
+                        Value::list_from_slice(
+                            &self.bc_buf[args_start + nonrest..args_start + nargs],
+                        )
+                    } else {
+                        Value::NIL
+                    };
+                    bits.push(rest.bits() as i64);
+                }
                 let native =
                     cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr());
                 restore_scratch_gc_roots(saved_roots);

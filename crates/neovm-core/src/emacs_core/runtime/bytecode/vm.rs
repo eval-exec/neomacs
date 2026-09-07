@@ -8141,3 +8141,59 @@ fn sym_id_at(constants: &[Value], idx: u16) -> SymId {
 #[cfg(test)]
 #[path = "tests/vm.rs"]
 mod tests;
+
+impl crate::emacs_core::eval::Context {
+    /// The JIT's armed builtin call (`neovm_jit_call_subr_spec`) without a
+    /// `Vm`: `subr_value` is the subr object the site was armed for, the args
+    /// sit on `bc_buf[args_start..args_start + nargs]`. Same observable steps
+    /// as [`Vm::call_spec_subr_stack`] — eval-depth accounting, a backtrace
+    /// frame over the stack span, the arity check, the builtin dispatch, the
+    /// signal hook, the fast pop — in one frame. The rare shapes (debugger
+    /// armed, a callee that is not a builtin subr) take the `Vm` path.
+    #[cfg(feature = "jit")]
+    pub(crate) fn call_spec_subr_from_bc_stack(
+        &mut self,
+        sym_id: SymId,
+        subr_value: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        let entry = subr_call_entry_from_value(subr_value)
+            .map(|(_, entry)| entry)
+            .filter(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin);
+        let (Some(entry), false) = (entry, self.debug_on_next_call_is_armed()) else {
+            return Vm::from_context(self)
+                .call_spec_subr_stack(sym_id, subr_value, args_start, nargs);
+        };
+        self.depth += 1;
+        if self.depth > self.max_depth
+            && let Err(flow) = Vm::from_context(self).bytecode_depth_exceeded()
+        {
+            self.depth -= 1;
+            return Err(flow);
+        }
+        let func_val = Value::from_sym_id(sym_id);
+        let backtrace = self.push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
+        let result = if nargs < entry.min_args as usize
+            || entry.max_args.is_some_and(|max| nargs > max as usize)
+        {
+            Err(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![subr_value, Value::fixnum(nargs as i64)],
+            ))
+        } else {
+            match entry.function {
+                Some(function) => Vm::dispatch_builtin_subr_from_stack_args_unchecked(
+                    self, function, args_start, nargs,
+                )
+                .unwrap_or_else(|| Err(signal(LispCondition::VoidFunction, vec![func_val]))),
+                None => Err(signal(LispCondition::VoidFunction, vec![func_val])),
+            }
+        };
+        let result = self.dispatch_signal_result_if_needed(result);
+        let result = self.pop_bytecode_backtrace_token_fast_or_slow(backtrace, result);
+        debug_assert!(self.depth > 0);
+        self.depth -= 1;
+        result
+    }
+}
