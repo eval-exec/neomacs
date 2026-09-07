@@ -221,7 +221,7 @@ fn overlap_is_expected_on_axis(
         return false;
     }
     match axis {
-        // GNU xdisp.c `right_overwritten` / `left_overwriting` walk the
+        // GNU xdisp.c `right_overwritten` / `left_overwritten` walk the
         // following (preceding) glyphs while the overhang still exceeds their
         // summed `pixel_width`, so a bearing legitimately reaches past a
         // narrower intervening cell; the cells need not touch. GNU bounds

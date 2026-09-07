@@ -393,7 +393,8 @@ struct LayoutFontHandle {
     /// Which GNU lookup tier produced this handle for the requesting
     /// character. A property of the request, not of the font: GNU keeps one
     /// font object per entity and pixel size (font.c `font_open_entity`
-    /// returns the already-open object from `FONT_OBJLIST_INDEX`), whether
+    /// reuses a live object from `FONT_OBJLIST_INDEX` when the driver's
+    /// `cached_font_ok` permits it), whether
     /// fontset.c `face_for_char` returned the ASCII face's font or a fontset
     /// tier found the same font again. It therefore stays off
     /// [`ResolvedFont`], whose id-keyed frame table holds one record per
