@@ -29,7 +29,9 @@ use crate::scroll_policy::{
     line_start_below,
 };
 use crate::types::WindowParams;
-use crate::viewport_resolution::{ForwardViewportMeasurement, ViewportDecision};
+use crate::viewport_resolution::{
+    ForwardViewportMeasurement, ViewportAttemptStart, ViewportDecision,
+};
 use crate::window_output::{
     DisplayTextRowBegin, TextWindowBegin, TextWindowBodyOutputInstall, TextWindowCursorEffects,
     TextWindowOutputTarget, TextWindowPendingRowFinish, TextWindowRedisplayPositions,
@@ -337,7 +339,9 @@ impl TextWindowFinishOutput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TextWindowVisibilityRetryOutcome {
-    semantic_window_start: i64,
+    /// The start the rows behind this outcome were laid out from: the
+    /// publishable one, or a forward measurement probe and its origin.
+    start: ViewportAttemptStart,
     visible_end_lisp: Option<LispCharPos1>,
     visible_progress: i64,
     point_beyond_visible_span: bool,
@@ -795,11 +799,12 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
     }
 
     pub(crate) fn decide(self) -> TextWindowVisibilityRetryOutcome {
-        let semantic_window_start = self
-            .forward_viewport_measurement
-            .map_or(self.window_start, |measurement| {
-                measurement.origin_window_start().get()
-            });
+        let start = self.forward_viewport_measurement.map_or(
+            ViewportAttemptStart::Semantic(self.window_start),
+            |measurement| ViewportAttemptStart::MeasurementProbe {
+                origin: measurement.origin_window_start().get(),
+            },
+        );
         let point_lisp = layout_i64_char_pos_to_lisp_char_pos(self.point_charpos);
         let visible_end_lisp = self.rows.iter().rev().find_map(|row| row.end_buffer_pos);
         let visible_end_lisp = if self.point_is_visible_eob {
@@ -844,7 +849,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         );
 
         TextWindowVisibilityRetryOutcome {
-            semantic_window_start,
+            start,
             visible_end_lisp,
             visible_progress,
             point_beyond_visible_span,
@@ -1025,7 +1030,7 @@ impl TextWindowFinishRequest {
 
 impl TextWindowVisibilityRetryOutcome {
     pub(crate) fn semantic_window_start(&self) -> i64 {
-        self.semantic_window_start
+        self.start.semantic_window_start()
     }
 
     pub(crate) fn visible_end_lisp(&self) -> Option<LispCharPos1> {
@@ -1048,6 +1053,10 @@ impl TextWindowVisibilityRetryOutcome {
 
     pub(crate) fn viewport_decision(&self) -> ViewportDecision {
         self.scroll_down.clone()
+    }
+
+    pub(crate) fn start(&self) -> ViewportAttemptStart {
+        self.start
     }
 
     pub(crate) fn point_row_window_start(&self) -> Option<i64> {
