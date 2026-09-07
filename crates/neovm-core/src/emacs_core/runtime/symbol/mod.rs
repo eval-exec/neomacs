@@ -740,6 +740,12 @@ impl LispSymbol {
         self.flags.redirect()
     }
 
+    /// GNU `SYMBOL_TRAPPED_WRITE_P`: the symbol's `trapped_write` field.
+    #[inline]
+    pub fn trapped_write(&self) -> SymbolTrappedWrite {
+        self.flags.trapped_write()
+    }
+
     #[inline]
     pub fn is_interned_global(&self) -> bool {
         self.interned_global
@@ -1541,6 +1547,29 @@ impl Obarray {
         true
     }
 
+    /// GNU `set_symbol_trapped_write` as `Fadd_variable_watcher` and
+    /// `Fremove_variable_watcher` call it (`src/data.c`): a watched variable
+    /// is `SYMBOL_TRAPPED_WRITE`, and it returns to `SYMBOL_UNTRAPPED_WRITE`
+    /// when its last watcher goes.  Constants keep `NoWrite` (their write
+    /// check runs first, and no `let` can reach them), so on any bindable
+    /// symbol the flag answers "does a watcher exist" from the slot already
+    /// in hand -- GNU's `specbind`/`do_one_unbind` never probe a side table,
+    /// and this port's watcher map is never empty (the display variables are
+    /// watched from startup), so every bind and unbind used to hash into it.
+    pub(crate) fn note_watchers_changed(&mut self, id: SymId, has_watchers: bool) {
+        let sym = self.ensure_slot(id);
+        match (sym.flags.trapped_write(), has_watchers) {
+            (SymbolTrappedWrite::Untrapped, true) => {
+                sym.flags.set_trapped_write(SymbolTrappedWrite::Trapped);
+            }
+            (SymbolTrappedWrite::Trapped, false) => {
+                sym.flags.set_trapped_write(SymbolTrappedWrite::Untrapped);
+            }
+            _ => {}
+        }
+    }
+
+    #[inline]
     fn ensure_global_member_if_canonical(&mut self, id: SymId) {
         // Steady state is one presence-checked slot read: membership is a
         // slot property (GNU: `intern` sets it once), so ask the slot before
@@ -2112,14 +2141,25 @@ impl Obarray {
     /// note stay; the alias walk, slot growth and redirect re-arming of the
     /// general store do not apply.  `Value::UNBOUND` stores "unbound", exactly
     /// as `makunbound_id` leaves a plain cell.
+    #[inline]
     pub(crate) fn store_plain_value_id(&mut self, id: SymId, value: Value) {
         self.ensure_global_member_if_canonical(id);
-        let _seq_guard = self.seqlock_guard(id);
+        // One read of the concurrent-mark gate serves both the seqlock
+        // bracket and the SATB pre-image note; each used to read it.
+        let marking = crate::tagged::gc::concurrent_mark_active();
+        let seq = if marking {
+            self.symbols.chunk_seq_ptr(Self::slot_index(id))
+        } else {
+            None
+        };
+        let _seq_guard = SeqlockWriteGuard::new(seq);
         let Some(sym) = self.slot_mut(id) else {
             return self.set_symbol_value_id_inner(id, value);
         };
         debug_assert_eq!(sym.flags.redirect(), SymbolRedirect::Plainval);
-        crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
+        if marking {
+            crate::tagged::gc::note_root_overwrite_while_marking(unsafe { sym.val.plain });
+        }
         store_value_atomic(unsafe { &mut sym.val.plain }, value);
     }
 

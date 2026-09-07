@@ -49,8 +49,16 @@ impl Context {
             && sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
         {
             let old_value = SavedBindingValue::from_plain(sym.plain());
+            // GNU `specbind` on a plain cell: `SET_SYMBOL_VAL` when the
+            // symbol is untrapped, `set_internal` (watchers) when it is
+            // `SYMBOL_TRAPPED_WRITE`.  The flag sits on the slot in hand.
+            let trapped =
+                sym.trapped_write() == crate::emacs_core::symbol::SymbolTrappedWrite::Trapped;
+            debug_assert_eq!(trapped, self.watchers.has_watchers(sym_id));
             self.specpdl.push(SpecBinding::Let { sym_id, old_value });
-            self.run_specbind_watcher(sym_id, value, "let")?;
+            if trapped {
+                self.run_specbind_watcher(sym_id, value, "let")?;
+            }
             self.obarray.store_plain_value_id(sym_id, value);
             self.sync_cached_runtime_binding_by_id(sym_id, value);
             return Ok(());

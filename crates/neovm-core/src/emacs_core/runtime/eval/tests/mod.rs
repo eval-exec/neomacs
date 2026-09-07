@@ -8225,6 +8225,116 @@ fn variable_watchers_report_let_and_unlet_runtime_transitions() {
     assert_eq!(results[8], "OK ((unlet 9) (let 2))");
 }
 
+/// GNU keeps "is this variable watched" on the symbol itself
+/// (`SYMBOL_TRAPPED_WRITE`, set by `Fadd_variable_watcher` and cleared by
+/// `Fremove_variable_watcher` when the last watcher goes), which is what
+/// `specbind` and `do_one_unbind` consult.  The port mirrors that flag from
+/// its watcher map so the hot bind/unbind paths never probe the map.
+#[test]
+fn watched_variables_carry_gnu_trapped_write_on_their_symbol() {
+    use crate::emacs_core::symbol::SymbolTrappedWrite;
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let flag = |ev: &Context, name: &str| {
+        ev.obarray
+            .get_by_id(intern(name))
+            .map(|sym| sym.trapped_write())
+            .unwrap_or(SymbolTrappedWrite::Untrapped)
+    };
+    let run = |ev: &mut Context, src: &str| {
+        let form = crate::emacs_core::value_reader::read_all(src, &test_ob())
+            .expect("parse")
+            .into_iter()
+            .next()
+            .expect("one form");
+        ev.eval_form(form).expect("eval");
+    };
+    run(&mut ev, "(defvar tw-target 1)");
+    run(&mut ev, "(defvar tw-alias-base 1)");
+    run(&mut ev, "(defalias 'tw-watch-a #'(lambda (&rest _) nil))");
+    run(&mut ev, "(defalias 'tw-watch-b #'(lambda (&rest _) nil))");
+    assert_eq!(flag(&ev, "tw-target"), SymbolTrappedWrite::Untrapped);
+
+    run(&mut ev, "(add-variable-watcher 'tw-target 'tw-watch-a)");
+    assert_eq!(flag(&ev, "tw-target"), SymbolTrappedWrite::Trapped);
+    run(&mut ev, "(add-variable-watcher 'tw-target 'tw-watch-b)");
+    run(&mut ev, "(remove-variable-watcher 'tw-target 'tw-watch-a)");
+    assert_eq!(
+        flag(&ev, "tw-target"),
+        SymbolTrappedWrite::Trapped,
+        "one watcher left keeps the symbol trapped"
+    );
+    run(&mut ev, "(remove-variable-watcher 'tw-target 'tw-watch-b)");
+    assert_eq!(flag(&ev, "tw-target"), SymbolTrappedWrite::Untrapped);
+
+    // A watcher registered through an alias lands on the base variable,
+    // which is the symbol `let` binds and the flag must therefore sit on.
+    run(&mut ev, "(defvaralias 'tw-alias 'tw-alias-base)");
+    run(&mut ev, "(add-variable-watcher 'tw-alias 'tw-watch-a)");
+    assert_eq!(flag(&ev, "tw-alias-base"), SymbolTrappedWrite::Trapped);
+
+    // Constants are `NoWrite` and stay so: their write check comes first.
+    assert_eq!(flag(&ev, "nil"), SymbolTrappedWrite::NoWrite);
+
+    // The flag is consulted when an entry is popped, not when it was pushed:
+    // a watcher added inside the `let` body still sees the `unlet`.
+    let results = eval_all(
+        "(setq tw-events nil)
+         (defvar tw-late 5)
+         (defalias 'tw-rec #'(lambda (sym new op where)
+           (setq tw-events (cons (list op new) tw-events))))
+         (let ((tw-late 1)) (add-variable-watcher 'tw-late 'tw-rec) 'done)
+         tw-events
+         tw-late",
+    );
+    assert_eq!(results[4], "OK ((unlet 5))");
+    assert_eq!(results[5], "OK 5");
+}
+
+/// The unbind of a call frame pops `let`s of the arguments above the
+/// backtrace entry -- the shape every interpreted dynamic-binding call
+/// leaves.  GNU's `unbind_to` walks that suffix top-down with one
+/// `SET_SYMBOL_VAL` per `let`; every value must come back, and an entry that
+/// changed shape inside the body (a `make-local-variable`) still restores
+/// through the general path.
+#[test]
+fn unbind_restores_plain_lets_beneath_a_backtrace_frame_and_mixed_suffixes() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_all(
+        "(defvar ub-a 1)
+         (defvar ub-b 2)
+         (defvar ub-c 3)
+         (defalias 'ub-f #'(lambda (ub-a ub-b) (setq ub-c (+ ub-a ub-b)) (list ub-a ub-b)))
+         (ub-f 10 20)
+         (list ub-a ub-b ub-c)
+         (let ((ub-a 7) (ub-b 8)) (list ub-a ub-b))
+         (list ub-a ub-b)
+         (save-current-buffer
+           (set-buffer (get-buffer-create \" ub-local\"))
+           (prog1
+               (let ((ub-a 100) (ub-b 200))
+                 (make-local-variable 'ub-a)
+                 (setq ub-a 111)
+                 (list ub-a ub-b))
+             (kill-buffer (current-buffer))))
+         (list ub-a ub-b)
+         (let ((ub-a 'inner))
+           (makunbound 'ub-b)
+           (let ((ub-b 'bound)) ub-b))
+         (boundp 'ub-b)
+         ub-a",
+    );
+    assert_eq!(results[4], "OK (10 20)");
+    assert_eq!(results[5], "OK (1 2 30)");
+    assert_eq!(results[6], "OK (7 8)");
+    assert_eq!(results[7], "OK (1 2)");
+    assert_eq!(results[8], "OK (111 200)");
+    assert_eq!(results[9], "OK (1 2)");
+    assert_eq!(results[10], "OK bound");
+    assert_eq!(results[11], "OK nil");
+    assert_eq!(results[12], "OK 1");
+}
+
 #[test]
 fn special_form_type_payloads_match_oracle_edges() {
     crate::test_utils::init_test_tracing();

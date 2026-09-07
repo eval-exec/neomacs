@@ -397,28 +397,6 @@ impl Context {
         self.backtrace_args_stack.len()
     }
 
-    pub(super) fn release_backtrace_args_in_specpdl_suffix(&mut self, count: usize) {
-        let mut truncate_to = self.backtrace_args_stack.len();
-        for binding in self.specpdl[count..].iter().rev() {
-            if let SpecBinding::Backtrace { args, .. } = binding
-                && let BacktraceArgsView::Evaluated(index) = args.view()
-            {
-                if index >= truncate_to {
-                    // Healed residue (see `release_backtrace_args`): the slot
-                    // was already truncated by a containment boundary restore.
-                    continue;
-                }
-                debug_assert_eq!(
-                    index + 1,
-                    truncate_to,
-                    "backtrace args stack should match the specpdl unwind suffix"
-                );
-                truncate_to = index;
-            }
-        }
-        self.backtrace_args_stack.truncate(truncate_to);
-    }
-
     pub(crate) fn backtrace_args_values(&self, args: &BacktraceArgs) -> LispArgVec {
         match args.view() {
             BacktraceArgsView::Unevalled(value) => smallvec::smallvec![value],
@@ -566,8 +544,8 @@ impl Context {
     /// [`SpecBinding::Backtrace`] shape with `debug_on_exit` set.
     ///
     /// The one subtlety is `backtrace_args_stack`: its slots are pushed in
-    /// specpdl order and released LIFO (`release_backtrace_args_in_specpdl_suffix`
-    /// asserts exactly that), so a promotion in the middle of the stack has to
+    /// specpdl order and released LIFO (`release_backtrace_args` asserts
+    /// exactly that), so a promotion in the middle of the stack has to
     /// *insert* at the position this frame's slot would have occupied and shift
     /// the frames above it, not push on top.  For the entry-debugger path the
     /// frame is always the specpdl top and the insert degenerates to a push.
@@ -987,6 +965,14 @@ impl Context {
         }
     }
 
+    /// GNU `unbind_to` (`src/eval.c:3907`) carrying RESULT.
+    ///
+    /// The two shapes every Lisp call pops -- nothing above COUNT, or one
+    /// trivially discardable frame -- stay inline; everything else is the
+    /// out-of-line [`Self::unbind_to_with_result_slow`], so the sites that
+    /// pop a backtrace frame do not carry the general unwinder's register
+    /// traffic.
+    #[inline]
     pub(crate) fn unbind_to_with_result(&mut self, count: usize, result: EvalResult) -> EvalResult {
         let specpdl_len = self.specpdl.len();
         if specpdl_len == count {
@@ -1007,6 +993,11 @@ impl Context {
                 return result;
             }
         }
+        self.unbind_to_with_result_slow(count, result)
+    }
+
+    #[inline(never)]
+    fn unbind_to_with_result_slow(&mut self, count: usize, result: EvalResult) -> EvalResult {
         // GNU's six `if (backtrace_debug_on_exit (...)) val = call_debugger
         // (list2 (Qexit, val));` sites, as one.  Reaching here means the suffix
         // is not all-trivial, and `trivial_spec_binding_pop` treats exactly the
@@ -1021,28 +1012,77 @@ impl Context {
             return result;
         }
 
-        // GNU `unbind_to` over a suffix of plain, untrapped `let` bindings:
-        // pop each entry and store its old value back.  No Lisp runs, so
-        // `result` needs no root protection and only GNU's own quit-flag
-        // bracket applies.
-        if self.specpdl_suffix_is_plain_lets(count) {
-            self.unbind_plain_lets(count);
-            return result;
+        // GNU's `unbind_to` loop, one `do_one_unbind` per entry from the top,
+        // under GNU's own quit-flag bracket: a plain untrapped `let` is one
+        // `SET_SYMBOL_VAL`, a backtrace frame is a pointer move.  No Lisp can
+        // run on these, so RESULT needs no root.  The first entry that needs
+        // more (a buffer-local or forwarded `let`, a watched symbol, an
+        // `unwind-protect`, ...) hands the remaining suffix -- in the same
+        // top-down order -- to the general unwinder.
+        let quitf = self.quit_flag_value();
+        if !quitf.is_nil() {
+            self.set_quit_flag_value(Value::NIL);
         }
-
-        if self.specpdl[count..]
-            .iter()
-            .all(spec_binding_has_trivial_unbind)
-        {
-            // GNU's common eval path pops SPECPDL_BACKTRACE by moving
-            // specpdl_ptr. Avoid result rooting and full unwind work when the
-            // suffix has no cleanup or dynamic binding restoration.
-            self.release_backtrace_args_in_specpdl_suffix(count);
-            self.specpdl.truncate(count);
-            return result;
+        self.pop_simple_specpdl_suffix(count);
+        let result = if self.specpdl.len() > count {
+            self.drain_unwind_to(count, result)
+        } else {
+            result
+        };
+        if !quitf.is_nil() && self.quit_flag_value().is_nil() {
+            self.set_quit_flag_value(quitf);
         }
+        result
+    }
 
-        self.drain_unwind_to(count, result)
+    /// Pop entries from the top of the specpdl down toward COUNT while each
+    /// is a GNU `do_one_unbind` arm with no Lisp behind it: a `let` of a
+    /// plain, untrapped cell (restored with one store), or a frame
+    /// [`trivial_spec_binding_pop`] admits.  Stops at the first entry that is
+    /// neither.  The symbol's shape is read when the entry is popped, not
+    /// when it was pushed: a watcher added or a local made inside the `let`
+    /// body sends that entry to the general path, as in GNU.
+    fn pop_simple_specpdl_suffix(&mut self, count: usize) {
+        use crate::emacs_core::symbol::{SymbolRedirect, SymbolTrappedWrite};
+        while self.specpdl.len() > count {
+            let Some(top) = self.specpdl.last() else {
+                break;
+            };
+            match top {
+                SpecBinding::Let { sym_id, old_value } => {
+                    let (sym_id, old_value) = (*sym_id, *old_value);
+                    let Some(sym) = self.obarray.get_by_id(sym_id) else {
+                        break;
+                    };
+                    if sym.redirect() != SymbolRedirect::Plainval
+                        || sym.trapped_write() != SymbolTrappedWrite::Untrapped
+                    {
+                        break;
+                    }
+                    self.specpdl.pop();
+                    // `UNBOUND` stored to a plain cell is `makunbound`.
+                    self.obarray
+                        .store_plain_value_id(sym_id, old_value.as_plain());
+                    self.sync_cached_runtime_binding_by_id(
+                        sym_id,
+                        old_value.get().unwrap_or(Value::NIL),
+                    );
+                }
+                other => match trivial_spec_binding_pop(other) {
+                    Some(TrivialSpecBindingPop::BacktraceArgs(args)) => {
+                        self.release_backtrace_args(&args);
+                        // SAFETY: as in the inline fast path -- the closed
+                        // proof says the entry owns nothing else.
+                        unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                    }
+                    Some(TrivialSpecBindingPop::NoOwnedArgs) => {
+                        // SAFETY: same proof; nothing owned at all.
+                        unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                    }
+                    None => break,
+                },
+            }
+        }
     }
 
     /// Drain every specbinding down to COUNT while carrying RESULT through
@@ -1051,39 +1091,6 @@ impl Context {
     /// Each failed cleanup has already popped its own entry. Keep unwinding so
     /// lower bindings cannot leak; if another cleanup exits nonlocally, that
     /// later/lower flow supersedes the earlier one just as it does in GNU.
-    /// Every specpdl entry above `count` is a `let` of a plain value cell with
-    /// no variable watcher — the bindings GNU's `unbind_to` restores with a
-    /// bare `SET_SYMBOL_VAL`.
-    pub(super) fn specpdl_suffix_is_plain_lets(&self, count: usize) -> bool {
-        self.specpdl[count..].iter().all(|binding| match binding {
-            SpecBinding::Let { sym_id, .. } => {
-                self.obarray.get_by_id(*sym_id).is_some_and(|sym| {
-                    sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
-                }) && !self.watchers.has_watchers(*sym_id)
-            }
-            _ => false,
-        })
-    }
-
-    /// Restore a suffix that [`Self::specpdl_suffix_is_plain_lets`] accepted.
-    pub(super) fn unbind_plain_lets(&mut self, count: usize) {
-        let quitf = self.quit_flag_value();
-        if !quitf.is_nil() {
-            self.set_quit_flag_value(Value::NIL);
-        }
-        while self.specpdl.len() > count {
-            let Some(SpecBinding::Let { sym_id, old_value }) = self.specpdl.pop() else {
-                unreachable!("the suffix was checked to hold only plain let bindings");
-            };
-            self.obarray
-                .store_plain_value_id(sym_id, old_value.as_plain());
-            self.sync_cached_runtime_binding_by_id(sym_id, old_value.get().unwrap_or(Value::NIL));
-        }
-        if !quitf.is_nil() && self.quit_flag_value().is_nil() {
-            self.set_quit_flag_value(quitf);
-        }
-    }
-
     pub(super) fn drain_unwind_to(&mut self, count: usize, result: EvalResult) -> EvalResult {
         // GNU eval.c `unbind_to(count, value)` carries VALUE through cleanup.
         // In Rust the value is not on the C stack/register root set, so keep

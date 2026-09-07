@@ -1173,6 +1173,17 @@ pub(crate) fn note_root_overwrite(pre_image: TaggedValue) {
     with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image));
 }
 
+/// [`note_root_overwrite`] for a caller that has just read
+/// [`concurrent_mark_active`] and found it true, so the thread-local gate is
+/// not read a second time.
+#[inline]
+pub(crate) fn note_root_overwrite_while_marking(pre_image: TaggedValue) {
+    if !pre_image.is_heap_object() {
+        return;
+    }
+    with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image));
+}
+
 /// Whether a concurrent mark is active on this (mutator) thread — the gate the
 /// Stage 1b symbol-cell seqlock uses to bracket value-cell ARM changes only
 /// while the GC thread might be scanning the obarray. A thread-local load;

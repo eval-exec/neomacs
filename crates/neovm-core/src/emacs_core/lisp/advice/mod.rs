@@ -205,6 +205,7 @@ pub(crate) fn builtin_add_variable_watcher(
     let callback = args[1];
 
     eval.watchers.add_watcher(resolved, callback);
+    eval.obarray.note_watchers_changed(resolved, true);
     Ok(Value::NIL)
 }
 
@@ -223,6 +224,8 @@ pub(crate) fn builtin_remove_variable_watcher(
     let callback = args[1];
 
     eval.watchers.remove_watcher(resolved, &callback);
+    let still_watched = eval.watchers.has_watchers(resolved);
+    eval.obarray.note_watchers_changed(resolved, still_watched);
     Ok(Value::NIL)
 }
 

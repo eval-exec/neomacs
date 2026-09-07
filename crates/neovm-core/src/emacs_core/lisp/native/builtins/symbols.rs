@@ -362,6 +362,8 @@ pub(crate) fn builtin_defvaralias(eval: &mut super::eval::Context, args: Vec<Val
     )?;
     install_defvaralias_state(eval, &state_change);
     eval.watchers.clear_watchers(state_change.alias_id);
+    eval.obarray
+        .note_watchers_changed(state_change.alias_id, false);
     // GNU `Fdefvaralias` treats the alias as a variable definition in its own
     // right: `LOADHIST_ATTACH (new_alias)` records the bare alias symbol after
     // the alias edge is installed and before its documentation is written.

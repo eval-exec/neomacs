@@ -1359,11 +1359,6 @@ fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingP
     }
 }
 
-#[inline]
-fn spec_binding_has_trivial_unbind(binding: &SpecBinding) -> bool {
-    trivial_spec_binding_pop(binding).is_some()
-}
-
 const _: () = assert!(!std::mem::needs_drop::<TrivialSpecBindingPop>());
 
 #[derive(Clone, Debug, Default)]
