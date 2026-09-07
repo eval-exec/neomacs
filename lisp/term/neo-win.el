@@ -155,10 +155,10 @@ DISPLAY is the name of the display Emacs should connect to."
   (x-create-frame-with-faces params))
 
 ;; Typed visual configuration owned by the Rust display protocol.
-(declare-function neomacs-effect-set "neomacsterm.c" (effect &rest properties))
+(declare-function neomacs--effect-set "neomacsterm.c" (effect &rest properties))
 (declare-function neomacs-effect-get "neomacsterm.c" (effect))
-(declare-function neomacs-effect-reset "neomacsterm.c" (effect))
-(declare-function neomacs-effects-apply "neomacsterm.c" (profile))
+(declare-function neomacs-effect-schema "neomacsterm.c" (effect))
+(declare-function neomacs--effects-apply "neomacsterm.c" (profile))
 (declare-function neomacs-effect-names "neomacsterm.c" (&optional scope))
 
 ;; Clipboard integration
@@ -172,8 +172,8 @@ DISPLAY is the name of the display Emacs should connect to."
 
 (defun neomacs--sync-cursor-blink ()
   "Sync `blink-cursor-mode' state to the render thread."
-  (when (fboundp 'neomacs-effect-set)
-    (neomacs-effect-set
+  (when (fboundp 'neomacs--effect-set)
+    (neomacs--effect-set
      'cursor-blink
      :enabled (and (boundp 'blink-cursor-mode) blink-cursor-mode t)
      :interval (if (boundp 'blink-cursor-interval) blink-cursor-interval 0.5))))
@@ -678,26 +678,12 @@ different font files.
 
 ;;; Background gradient
 
-(defcustom neomacs-effects nil
-  "Visual effect and animation profile for the Neomacs renderer.
-Each entry has the form (EFFECT :PROPERTY VALUE ...).  EFFECT and its
-accepted properties come from the Rust effect registry; inspect them with
-`neomacs-effect-names' and `neomacs-effect-get'.
-
-Changing this option replaces the complete effect profile atomically.  For
-example:
-
-  ((cursor-glow :enabled t :color \"#66CCFF\" :radius 48)
-   (rain-effect :enabled t :drop-count 30 :speed 120.0)
-   (scroll-transition :effect page-curl :easing spring))
-
-Use `neomacs-effect-set' for an incremental update to one effect and
-`neomacs-effect-reset' to restore one effect's Rust-defined defaults."
-  :type '(repeat (sexp :tag "Effect entry"))
-  :group 'frames
-  :set (lambda (symbol value)
-         (neomacs-effects-apply value)
-         (set-default symbol value)))
+;; The effect profile is no longer a single opaque option.  Every property is
+;; its own `defcustom' in neomacs-effects.el, generated for the decorative
+;; effects and written by hand for the ones people tune, so customization is
+;; discoverable and typed rather than a list of sexps.  There is no public
+;; setter: `neomacs--effect-set' exists only to mirror GNU options such as
+;; `blink-cursor-mode' into the renderer, and for buffer-local cursor profiles.
 
 (defvar-local neomacs-cursor-effect nil
   "Per-buffer cursor effect profile.
@@ -705,6 +691,12 @@ The value is one entry or a list of entries in `neomacs-effects' format.
 Only cursor effects are used when rendering this buffer's cursor.")
 
 ;; Provide the feature
+;; The customization surface: one option per property for the slots people
+;; tune, one per effect for the decorative gallery.  Loaded here so the options
+;; exist as soon as the display does, which is what lets `custom-file' restore
+;; them without an explicit `require'.
+(require 'neomacs-effects nil t)
+
 (provide 'neo-win)
 (provide 'term/neo-win)
 

@@ -21,7 +21,7 @@
 //! requirement rather than a modelling choice: a property key is validated
 //! against the value already stored, so a shape carrying only the active
 //! variant's fields would make switching kind from Lisp unreachable --
-//! `(neomacs-effect-set 'window-resize :kind 'spring :stiffness 800)` would
+//! `(setq neomacs-window-resize-kind 'spring)` would
 //! fail with "has no property `stiffness`".
 //!
 //! # Why `kind` rather than overloading `easing`

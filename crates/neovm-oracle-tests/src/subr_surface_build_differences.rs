@@ -53,8 +53,8 @@ const DECLARED_HERE_ONLY: &str = "
   neomacs--heap-layout-stats neomacs--write-frame-snapshot neomacs-buffer-text-backend
   neomacs-clipboard-get neomacs-clipboard-set neomacs-core-backend
   neomacs-default-buffer-text-backend neomacs-display-monitor-attributes-list neomacs-effect-get
-  neomacs-effect-names neomacs-effect-reset neomacs-effect-set
-  neomacs-effects-apply neomacs-frame-edges neomacs-frame-geometry
+  neomacs-effect-names neomacs-effect-schema neomacs--effect-set
+  neomacs--effects-apply neomacs-frame-edges neomacs-frame-geometry
   neomacs-frame-shader neomacs-frame-shader-set-uniform neomacs-image-extent
   neomacs-mouse-absolute-pixel-position neomacs-open-tls-stream neomacs-primary-selection-get
   neomacs-primary-selection-owner neomacs-primary-selection-set neomacs-set-buffer-text-backend

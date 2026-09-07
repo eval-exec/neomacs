@@ -5,7 +5,7 @@ use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 
 crate::emacs_core::subr::define_subrs! {
     SubrSpec::new(
-        "neomacs-effect-set",
+        "neomacs--effect-set",
         NativeFn::ContextVec(set),
         SubrArity::new(1, None),
     ),
@@ -15,12 +15,7 @@ crate::emacs_core::subr::define_subrs! {
         SubrArity::new(1, Some(1)),
     ),
     SubrSpec::new(
-        "neomacs-effect-reset",
-        NativeFn::ContextVec(reset),
-        SubrArity::new(1, Some(1)),
-    ),
-    SubrSpec::new(
-        "neomacs-effects-apply",
+        "neomacs--effects-apply",
         NativeFn::ContextVec(apply),
         SubrArity::new(1, Some(1)),
     ),

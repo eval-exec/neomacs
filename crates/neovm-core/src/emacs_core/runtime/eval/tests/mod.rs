@@ -685,7 +685,7 @@ fn eval_with_explicit_lexenv_restores_outer_lexenv() {
 }
 
 #[test]
-fn neomacs_effect_api_sets_queries_and_resets_named_properties() {
+fn neomacs_effect_api_sets_and_queries_named_properties() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let effect_calls = Rc::new(RefCell::new(Vec::new()));
@@ -697,7 +697,7 @@ fn neomacs_effect_api_sets_queries_and_resets_named_properties() {
     let value = ev
         .eval_str(
             r##"(progn
-                 (neomacs-effect-set 'cursor-glow
+                 (neomacs--effect-set 'cursor-glow
                    :enabled t :color "#66ccff" :radius 48)
                  (let ((config (neomacs-effect-get 'cursor-glow)))
                    (list (plist-get config :enabled)
@@ -709,12 +709,16 @@ fn neomacs_effect_api_sets_queries_and_resets_named_properties() {
     assert_eq!(effect_calls.borrow().len(), 1);
     assert!(effect_calls.borrow()[0].effects.cursor_glow.enabled);
 
+    // There is no `neomacs-effect-reset` any more. Every property is a
+    // `defcustom`, and Custom already knows how to put one back: restoring the
+    // standard value runs the same `:set` this would have. Setting the property
+    // back explicitly is what that now looks like.
     let reset = ev
         .eval_str(
-            "(progn (neomacs-effect-reset 'cursor-glow)\
+            "(progn (neomacs--effect-set 'cursor-glow :enabled nil)\
              (plist-get (neomacs-effect-get 'cursor-glow) :enabled))",
         )
-        .expect("effect reset should evaluate");
+        .expect("effect set should evaluate");
     assert!(reset.is_nil());
     assert_eq!(effect_calls.borrow().len(), 2);
 }
@@ -731,7 +735,7 @@ fn neomacs_effect_profiles_validate_atomically() {
 
     let error = ev
         .eval_str(
-            r#"(neomacs-effects-apply
+            r#"(neomacs--effects-apply
                  '((cursor-glow :enabled t :radius 12)
                    (missing-effect :enabled t)))"#,
         )
@@ -744,12 +748,12 @@ fn neomacs_effect_profiles_validate_atomically() {
         .unwrap();
     assert!(enabled.is_nil());
 
-    ev.eval_str("(neomacs-effect-set 'cursor-glow :enabled t)")
+    ev.eval_str("(neomacs--effect-set 'cursor-glow :enabled t)")
         .unwrap();
     let replaced = ev
         .eval_str(
             r#"(progn
-                 (neomacs-effects-apply '((rain-effect :enabled t)))
+                 (neomacs--effects-apply '((rain-effect :enabled t)))
                  (list (plist-get (neomacs-effect-get 'cursor-glow) :enabled)
                        (plist-get (neomacs-effect-get 'rain-effect) :enabled)
                        (and (memq 'rain-effect (neomacs-effect-names)) t)))"#,
@@ -767,11 +771,11 @@ fn named_visual_behavior_configs_replace_positional_animation_setters() {
     let value = ev
         .eval_str(
             r#"(progn
-                 (neomacs-effect-set 'cursor-motion
+                 (neomacs--effect-set 'cursor-motion
                    :enabled t :speed 18.0 :style 'linear :duration 0.2)
-                 (neomacs-effect-set 'scroll-transition
+                 (neomacs--effect-set 'scroll-transition
                    :effect 'page-curl :easing 'spring)
-                 (neomacs-effect-set 'buffer-transition
+                 (neomacs--effect-set 'buffer-transition
                    :effect 'slide :axis 'horizontal :direction 'backward)
                  (list (plist-get (neomacs-effect-get 'cursor-motion) :style)
                        (plist-get (neomacs-effect-get 'scroll-transition) :effect)
