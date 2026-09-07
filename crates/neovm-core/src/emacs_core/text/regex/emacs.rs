@@ -4837,14 +4837,18 @@ fn re_match_loop<const SEALED: bool>(
     let posix_longest = pattern.posix;
     let mut best_regs_set = false;
     let mut best_match_end: usize = pos;
-    if best_regstart.len() == scratch_regs {
-        best_regstart.fill(None);
-        best_regend.fill(None);
-    } else {
-        best_regstart.clear();
-        best_regstart.resize(scratch_regs, None);
-        best_regend.clear();
-        best_regend.resize(scratch_regs, None);
+    // The best-match registers are read only under POSIX longest-match
+    // (`posix_longest` below); a non-POSIX attempt skips their reset.
+    if posix_longest {
+        if best_regstart.len() == scratch_regs {
+            best_regstart.fill(None);
+            best_regend.fill(None);
+        } else {
+            best_regstart.clear();
+            best_regstart.resize(scratch_regs, None);
+            best_regend.clear();
+            best_regend.resize(scratch_regs, None);
+        }
     }
 
     let mut pc = 0usize; // Bytecode program counter
@@ -5092,33 +5096,64 @@ fn re_match_loop<const SEALED: bool>(
                 let lit = &bytecode[literal_start..literal_end];
                 let mut matched = true;
                 let mut lit_off = 0usize;
-                // Run-level fast path for an all-ASCII literal against an
-                // all-ASCII text window: one slice compare (no translation)
-                // or one tight translated byte loop, instead of a per-char
-                // helper call (43K per org font-lock op at ~45 Ir each). On a
-                // mismatch `d` advances over the matched prefix exactly as the
-                // per-char loop leaves it; a translation that leaves ASCII
-                // defers to that loop, which handles every representation.
+                // Run-level fast path: compare the literal run against the text
+                // window in one pass (no per-char helper call, no pre-scans).
+                // With no case translation and one representation on both
+                // sides, byte equality is character equality, so a full match
+                // is decided outright; a mismatch is decided only when the
+                // matched prefix is pure ASCII (then `d` advances over it
+                // exactly as the per-char loop would), otherwise the per-char
+                // loop below re-runs the run from the start.
                 if count > 0
                     && d + count <= stop
-                    && lit.iter().all(|&b| b < 0x80)
                     && let Some(win) = text.get(d..d + count)
-                    && win.iter().all(|&b| b < 0x80)
                 {
                     let decided = match translate {
-                        None => Some(
-                            win.iter()
-                                .zip(lit)
-                                .position(|(&tb, &lb)| tb != lb)
-                                .unwrap_or(count),
-                        ),
+                        None if pattern_multibyte == target_multibyte => {
+                            match win.iter().zip(lit).position(|(&tb, &lb)| tb != lb) {
+                                None => Some(count),
+                                Some(at)
+                                    if win[..at].iter().all(|&b| b < 0x80)
+                                        && lit[..at].iter().all(|&b| b < 0x80)
+                                        && lit[at] < 0x80
+                                        && win[at] < 0x80 =>
+                                {
+                                    Some(at)
+                                }
+                                Some(_) => None,
+                            }
+                        }
+                        // Mixed representations (the common case: an ASCII
+                        // unibyte pattern against a multibyte buffer): one pass
+                        // that compares and checks ASCII on both sides; a
+                        // non-ASCII byte on either side hands the run to the
+                        // per-char loop.
+                        None => {
+                            let mut at = count;
+                            let mut undecided = false;
+                            for (i, (&tb, &lb)) in win.iter().zip(lit).enumerate() {
+                                if tb >= 0x80 || lb >= 0x80 {
+                                    undecided = true;
+                                    break;
+                                }
+                                if tb != lb {
+                                    at = i;
+                                    break;
+                                }
+                            }
+                            (!undecided).then_some(at)
+                        }
                         Some(table) => {
                             let mut at = count;
-                            let mut leaves_ascii = false;
+                            let mut undecided = false;
                             for (i, (&tb, &lb)) in win.iter().zip(lit).enumerate() {
+                                if tb >= 0x80 || lb >= 0x80 {
+                                    undecided = true;
+                                    break;
+                                }
                                 let tr = table.translate(tb as u32);
                                 if tr >= 0x80 {
-                                    leaves_ascii = true;
+                                    undecided = true;
                                     break;
                                 }
                                 if tr as u8 != lb {
@@ -5126,7 +5161,7 @@ fn re_match_loop<const SEALED: bool>(
                                     break;
                                 }
                             }
-                            (!leaves_ascii).then_some(at)
+                            (!undecided).then_some(at)
                         }
                     };
                     if let Some(at) = decided {
