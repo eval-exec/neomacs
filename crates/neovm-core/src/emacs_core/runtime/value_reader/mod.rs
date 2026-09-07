@@ -2593,7 +2593,24 @@ impl<'a> Reader<'a> {
     /// Decode the char at `pos`, returning `(code, next_pos)`, through the
     /// one-entry `step_cache`.  The read hot path peeks then advances over the
     /// same position, so caching makes it decode each char once.
+    /// One character of source at `pos`.  GNU `readchar` reads a byte and
+    /// takes the multibyte path only for a lead byte; the ASCII byte of a
+    /// string source is answered here before the memo and the source
+    /// dispatch (this ran once per character of every loaded file, and its
+    /// call overhead alone was 40% of its cost).
+    #[inline(always)]
     fn code_and_next(&self, pos: usize) -> Option<(u32, usize)> {
+        if let ReaderSource::LispString(input) = self.source
+            && pos < self.limit
+            && let Some(&byte) = input.as_bytes().get(pos)
+            && byte < 0x80
+        {
+            return Some((u32::from(byte), pos + 1));
+        }
+        self.code_and_next_memo(pos)
+    }
+
+    fn code_and_next_memo(&self, pos: usize) -> Option<(u32, usize)> {
         if let Some((cached_pos, code, next)) = self.step_cache.get()
             && cached_pos == pos
         {
