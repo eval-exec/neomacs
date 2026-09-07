@@ -1730,17 +1730,22 @@ impl FontMetricsService {
         let materialized = self.materialized_font_for_realized_face_char(ch, selection)?;
         let resolved = materialized.font;
         let metrics = materialized.px_metrics?;
+        // Encode through the OPEN font, like GNU's `font->driver->encode_char`
+        // on the realized font object. `get_font` is cosmic-text's cache of
+        // parsed faces; `with_face_data` on a file-backed face would open,
+        // read and re-parse the whole font file on every call -- and this runs
+        // per realized character per frame (`realize_frame_fonts`), which made
+        // the GUI worker read font files thousands of times per edit.
         let glyph_code = match &materialized.source {
             LayoutFontSource::Swash(fontdb_id) => self
                 .font_system
-                .db()
-                .with_face_data(*fontdb_id, |font_data, face_index| {
-                    TtfFace::parse(font_data, face_index)
-                        .ok()?
-                        .glyph_index(ch)
-                        .map(|glyph| u32::from(glyph.0))
-                })
-                .flatten(),
+                .get_font(*fontdb_id, fontdb::Weight(resolved.weight))
+                .and_then(|font| {
+                    // swash reports a missing glyph as 0 (`.notdef`); keep the
+                    // `Option` contract ttf-parser's `glyph_index` had.
+                    let glyph = font.as_swash().charmap().map(ch);
+                    (glyph != 0).then_some(u32::from(glyph))
+                }),
             LayoutFontSource::FreeTypeBitmap(font) => {
                 font.glyph_for_char(ch).map(|glyph| glyph.get())
             }
