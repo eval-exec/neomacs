@@ -32,6 +32,7 @@ use strum::{EnumString, IntoStaticStr};
 #[strum(serialize_all = "kebab-case")]
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(strum::VariantNames)]
 pub enum TransitionEffect {
     // ── Transition effects (2D, vertex position/alpha changes) ──────────
     /// Default: old content slides out, new content slides in.
@@ -255,6 +256,7 @@ impl TransitionEffect {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
+#[derive(strum::VariantNames)]
 pub enum TransitionEasing {
     /// Standard ease-out quadratic (current default).
     #[strum(

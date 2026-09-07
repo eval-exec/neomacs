@@ -21,6 +21,7 @@ use strum::{EnumString, IntoStaticStr};
 )]
 #[strum(serialize_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
+#[derive(strum::VariantNames)]
 pub enum TransitionAxisPreference {
     #[default]
     Auto,
@@ -79,6 +80,7 @@ impl TransitionAxisPreference {
 )]
 #[strum(serialize_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
+#[derive(strum::VariantNames)]
 pub enum TransitionDirection {
     #[default]
     Forward,

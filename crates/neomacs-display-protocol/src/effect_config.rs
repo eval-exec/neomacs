@@ -108,25 +108,25 @@ impl EffectProperty for crate::types::FaceId {
     /// A face identifier, not a quantity. It is an integer only incidentally.
     const KIND: PropertyKind = PropertyKind::Integer;
 }
-impl EffectProperty for crate::TransitionEasing {
-    const KIND: PropertyKind = PropertyKind::Symbol(TRANSITION_EASING_NAMES);
+/// The legal names of a symbol-valued property, straight from the enum.
+///
+/// `strum::VariantNames` rather than a hand-written list: a new variant then
+/// appears in the widget automatically instead of being silently missing from
+/// a menu the user picks from.
+macro_rules! symbol_property {
+    ($ty:ty) => {
+        impl EffectProperty for $ty {
+            const KIND: PropertyKind = PropertyKind::Symbol(<$ty as strum::VariantNames>::VARIANTS);
+        }
+    };
 }
 
-/// Every `TransitionEasing` a user may name.
-///
-/// Written out rather than derived, because `strum`'s `IntoStaticStr` gives a
-/// name *from* a value and there is no value here to ask. Pinned to the enum by
-/// `every_transition_easing_name_round_trips`, so a new variant fails a test
-/// rather than silently missing from the widget.
-pub const TRANSITION_EASING_NAMES: &[&str] = &[
-    "ease-out-quad",
-    "ease-out-cubic",
-    "spring",
-    "linear",
-    "ease-in-out-cubic",
-    "ease-out-expo",
-    "cubic-bezier",
-];
+symbol_property!(crate::TransitionEasing);
+symbol_property!(crate::TransitionEffect);
+symbol_property!(crate::TransitionAxisPreference);
+symbol_property!(crate::TransitionDirection);
+symbol_property!(crate::CursorAnimStyle);
+symbol_property!(crate::window_animation::MotionKind);
 
 /// One property, as a customization widget would need it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +153,28 @@ impl PropertySchema {
         };
         Self { kind, ..self }
     }
+}
+
+/// A `PROPERTIES` table for a config struct the `effect_config!` macro does not
+/// declare.
+///
+/// The behavioural slots — the window-animation four, cursor blink and motion,
+/// the buffer and scroll transitions — are hand-written because their defaults
+/// differ per instance (`window-open` is an easing, `window-resize` a spring)
+/// and the macro derives one `Default` from the field list. They still have to
+/// publish a schema, so this states one from the same field-and-type pairs.
+#[macro_export]
+macro_rules! effect_schema {
+    ($name:ty { $($field:ident : $ty:ty),* $(,)? }) => {
+        impl $name {
+            pub const PROPERTIES: &'static [$crate::effect_config::PropertySchema] = &[
+                $($crate::effect_config::PropertySchema {
+                    property: stringify!($field),
+                    kind: <$ty as $crate::effect_config::EffectProperty>::KIND,
+                }),*
+            ];
+        }
+    };
 }
 
 macro_rules! effect_config {
