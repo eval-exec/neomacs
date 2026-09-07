@@ -22994,6 +22994,11 @@ Optional COLS, ROWS set the terminal size.
 (register-definition-prefixes "neo-term" '("neo-term-"))
 
 
+;;; Generated autoloads from neomacs-effects.el
+
+(register-definition-prefixes "neomacs-effects" '("neomacs-"))
+
+
 ;;; Generated autoloads from neomacs-gradients.el
 
 (register-definition-prefixes "neomacs-gradients" '("neomacs-"))
