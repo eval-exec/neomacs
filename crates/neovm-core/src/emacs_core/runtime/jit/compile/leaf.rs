@@ -869,7 +869,22 @@ impl CompiledLeaf {
         if status == STATUS_DEOPT_AT {
             return self.deopt_at_outcome(vmctx, bind_frame, cond_base);
         }
-        if status == STATUS_SIGNAL || cond_base.is_some() || bind_frame.is_some() {
+        // A body that made dynamic bindings has normally unbound every one
+        // of them itself (`Op::Unbind` before its return), so its frame exit
+        // has nothing to do: GNU's exec_byte_code returns straight through
+        // `unbind_to (count)` with `count == SPECPDL_INDEX ()`.  Only a
+        // signal, a handler frame, or bindings still standing take the
+        // out-of-line exit.
+        let bind_frame_clean = match bind_frame {
+            None => true,
+            // SAFETY: `has_binds` leaves run with a live Context; length
+            // reads only.
+            Some((spec_base, stack_base)) => unsafe {
+                let ctx = &*(vmctx as *const Context);
+                ctx.specpdl.len() == spec_base && ctx.jit_bind_stack.len() == stack_base
+            },
+        };
+        if status == STATUS_SIGNAL || cond_base.is_some() || !bind_frame_clean {
             // Everything below the fast path is a no-op unless a signal is
             // pending or this leaf registered frames — outlined so the hot
             // OK-exit stops paying their register spills.
