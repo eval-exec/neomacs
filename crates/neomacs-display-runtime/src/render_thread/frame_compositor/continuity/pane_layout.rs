@@ -51,6 +51,10 @@ pub(in crate::render_thread) enum PaneChange {
         window: LiveDisplayWindowId,
         from: Rect,
         to: Rect,
+        /// How thick this pane's chrome was in the picture being animated
+        /// away. Cutting the outgoing blit on these is what lets a mode line
+        /// travel to its new edge instead of being clipped away at its old one.
+        insets: ChromeInsets,
     },
     /// A window the destination has and the source did not.
     ///
@@ -354,15 +358,25 @@ fn rect_changed(from: Rect, to: Rect) -> bool {
 /// A window whose id is a placeholder is skipped rather than matched: it has no
 /// identity to match *by*, so pairing two of them would be pairing whatever
 /// happened to be published in the same slot.
-fn panes_by_window(windows: &[WindowInfo]) -> std::collections::HashMap<LiveDisplayWindowId, Rect> {
+fn panes_by_window(
+    windows: &[WindowInfo],
+) -> std::collections::HashMap<LiveDisplayWindowId, (Rect, ChromeInsets)> {
     windows
         .iter()
         .filter(|info| !info.is_minibuffer)
         .filter_map(|info| {
             LiveDisplayWindowId::try_from(info.window_id)
                 .ok()
-                .map(|window| (window, info.bounds))
+                .map(|window| (window, (info.bounds, ChromeInsets::of(info.geometry))))
         })
+        .collect()
+}
+
+/// Just the rects, for the callers that only compare destinations.
+fn rects_by_window(windows: &[WindowInfo]) -> std::collections::HashMap<LiveDisplayWindowId, Rect> {
+    panes_by_window(windows)
+        .into_iter()
+        .map(|(window, (rect, _))| (window, rect))
         .collect()
 }
 
@@ -387,13 +401,19 @@ impl PaneLayoutMorph {
         let after = panes_by_window(next);
 
         let mut changes = Vec::new();
-        for (window, to) in &after {
+        for (window, (to, _)) in &after {
             match before.get(window) {
-                Some(&from) if rect_changed(from, *to) => changes.push(PaneChange::Persisted {
-                    window: *window,
-                    from,
-                    to: *to,
-                }),
+                // The insets come from the *previous* presentation: they
+                // describe the picture being animated away, which is the only
+                // one this pane's outgoing patches sample.
+                Some(&(from, insets)) if rect_changed(from, *to) => {
+                    changes.push(PaneChange::Persisted {
+                        window: *window,
+                        from,
+                        to: *to,
+                        insets,
+                    });
+                }
                 Some(_) => {}
                 None => changes.push(PaneChange::Entered {
                     window: *window,
@@ -401,7 +421,7 @@ impl PaneLayoutMorph {
                 }),
             }
         }
-        for (window, from) in &before {
+        for (window, (from, _)) in &before {
             if !after.contains_key(window) {
                 changes.push(PaneChange::Exited {
                     window: *window,
@@ -494,7 +514,7 @@ impl PaneLayoutMorph {
     /// not to happen, and then the layout arrives.
     pub(in crate::render_thread) fn destination_differs_from(&self, next: &[WindowInfo]) -> bool {
         let mut wanted: Vec<(LiveDisplayWindowId, Rect)> =
-            panes_by_window(next).into_iter().collect();
+            rects_by_window(next).into_iter().collect();
         wanted.sort_by_key(|(window, _)| window.get());
         let heading = self.destination();
         if wanted.len() != heading.len() {
@@ -520,7 +540,7 @@ impl PaneLayoutMorph {
         requested: EventTime,
     ) {
         let mut destination: Vec<(LiveDisplayWindowId, Rect)> =
-            panes_by_window(next).into_iter().collect();
+            rects_by_window(next).into_iter().collect();
         destination.sort_by_key(|(window, _)| window.get());
         self.pending = Some(PendingRetarget {
             destination,
@@ -545,6 +565,19 @@ impl PaneLayoutMorph {
             .map(|placement| (placement.window, placement.bounds))
             .collect();
 
+        // The insets travel with the window across a splice. A retarget does
+        // not repin the outgoing picture -- it is still the one this morph
+        // started from -- so the chrome thickness inside it is unchanged, and
+        // re-deriving it from the new presentation would describe a picture
+        // nothing is sampling.
+        let insets_before: std::collections::HashMap<LiveDisplayWindowId, ChromeInsets> = self
+            .changes()
+            .filter_map(|change| match change {
+                PaneChange::Persisted { window, insets, .. } => Some((window, insets)),
+                PaneChange::Entered { .. } | PaneChange::Exited { .. } => None,
+            })
+            .collect();
+
         let mut changes = Vec::new();
         for (window, to) in &pending.destination {
             match placed.get(window) {
@@ -552,6 +585,10 @@ impl PaneLayoutMorph {
                     window: *window,
                     from,
                     to: *to,
+                    insets: insets_before
+                        .get(window)
+                        .copied()
+                        .unwrap_or(ChromeInsets::ZERO),
                 }),
                 Some(_) => {}
                 None => changes.push(PaneChange::Entered {
@@ -743,7 +780,9 @@ impl PanePlacement {
     /// [`place`] is what adds them.
     fn at(change: PaneChange, motion: RoleSamples, vacated: &[VacatedStrip]) -> Option<Self> {
         Some(match change {
-            PaneChange::Persisted { window, from, to } => {
+            PaneChange::Persisted {
+                window, from, to, ..
+            } => {
                 let bounds = placed_bounds(change, motion);
                 if !grows(from, to) {
                     return Some(Self {
@@ -962,7 +1001,10 @@ fn place(
     out: &mut Vec<PanePlacement>,
 ) {
     let bounds = placed_bounds(change, motion);
-    if let PaneChange::Persisted { window, from, to } = change {
+    if let PaneChange::Persisted {
+        window, from, to, ..
+    } = change
+    {
         // The pane's old picture over the area it keeps, fading out as the
         // destination underneath fades in. Anchored where the old picture
         // actually *is* -- never carried along with the travelling pane, which
@@ -993,43 +1035,66 @@ fn place(
             || from.height - to.height > REFLOW_WIDTH_EPSILON
         {
             // Either axis. Rewrapping is not the only thing that changes when a
-            // pane shrinks, and gating on width alone left `C-x 2` with no
-            // outgoing picture at all: a vertical split rewraps nothing, so the
-            // top pane's destination was drawn opaque from the first frame with
-            // its mode line already at the middle of the screen.
+            // pane shrinks: a mode line moves with the bottom edge, a header
+            // line with the top, fringes and margins with their sides. The
+            // outgoing picture covers that chrome until the pane arrives, and
+            // is needed on whichever axis gives ground.
             //
-            // A window's rect ends in a mode line, and it moves with the bottom
-            // edge; a header line, fringes and margins move with the edges too.
-            // The outgoing picture is what covers that chrome until the pane
-            // actually arrives, which is needed on whichever axis gives ground.
-
-            let ghost = Rect {
-                width: bounds.width.min(to.width),
-                height: bounds.height.min(to.height),
-                ..bounds
-            };
-            out.push(PanePlacement {
-                window,
-                bounds: ghost,
-                painted: ghost,
-                content_origin: (from.x, from.y),
-                source: neomacs_renderer_wgpu::PaneSource::Previous,
-                opacity: motion.outgoing_opacity(),
-            });
-        }
-        // The area the pane still covers but will not keep, on each axis it is
-        // shrinking along. A pane shrinking on both contributes both, and they
-        // overlap in one corner -- harmlessly, since both draw the same opaque
-        // picture at the coordinates it already occupied.
-        for strip in vacated_strips(from, to, bounds) {
-            out.push(PanePlacement {
-                window,
-                bounds: strip.bounds,
-                painted: strip.bounds,
-                content_origin: strip.content_origin,
-                source: neomacs_renderer_wgpu::PaneSource::Previous,
-                opacity: 1.0,
-            });
+            // Cut into bands rather than blitted whole, so the chrome inside it
+            // rides the interpolated edge instead of being clipped away while
+            // its replacement dissolves in somewhere else. `ChromeInsets` say
+            // how thick the bands are; at zero this collapses to a single patch
+            // covering `bounds` and reproduces a plain whole-picture blit
+            // exactly.
+            let insets = insets_of(change);
+            // The area the pane keeps. Inside it a patch is crossfading into
+            // its replacement; beyond it the pane simply has not let go yet, so
+            // the old picture is opaque.
+            let kept_right = bounds.x + bounds.width.min(to.width);
+            let kept_bottom = bounds.y + bounds.height.min(to.height);
+            let columns = split_spans_at(
+                cut_axis(
+                    from.x,
+                    from.width,
+                    bounds.x,
+                    bounds.width,
+                    // Horizontal chrome is Stage 2. Zero here means the cut
+                    // yields one column, which is the whole-picture blit this
+                    // axis has always done.
+                    0.0,
+                    0.0,
+                ),
+                kept_right,
+            );
+            let rows = split_spans_at(
+                cut_axis(
+                    from.y,
+                    from.height,
+                    bounds.y,
+                    bounds.height,
+                    insets.top,
+                    insets.bottom,
+                ),
+                kept_bottom,
+            );
+            for row in &rows {
+                for column in &columns {
+                    let inside_kept =
+                        column.dest < kept_right - 0.01 && row.dest < kept_bottom - 0.01;
+                    out.push(PanePlacement {
+                        window,
+                        bounds: Rect::new(column.dest, row.dest, column.extent, row.extent),
+                        painted: Rect::new(column.dest, row.dest, column.extent, row.extent),
+                        content_origin: (column.source, row.source),
+                        source: neomacs_renderer_wgpu::PaneSource::Previous,
+                        opacity: if inside_kept {
+                            motion.outgoing_opacity()
+                        } else {
+                            1.0
+                        },
+                    });
+                }
+            }
         }
     }
     let Some(mut placement) = PanePlacement::at(change, motion, vacated) else {
@@ -1086,6 +1151,172 @@ fn entry_offset(to: Rect, vacated: &[VacatedStrip]) -> (f32, f32) {
             StripAxis::Horizontal => (strip.bounds.x + strip.bounds.width - to.x, 0.0),
             StripAxis::Vertical => (0.0, strip.bounds.y + strip.bounds.height - to.y),
         })
+}
+
+/// The four edge insets that make one window a nine-patch.
+///
+/// Derived from `outer` and `text_body`, the only two unconditional rects a
+/// presentation publishes per window, because every optional band — fringe,
+/// margin, scroll bar, divider, mode/header/tab line — is already inside one of
+/// these four sums. Reading the twelve optional rects would add twelve `None`
+/// cases and answer the same question.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(in crate::render_thread) struct ChromeInsets {
+    top: f32,
+    bottom: f32,
+    left: f32,
+    right: f32,
+}
+
+impl ChromeInsets {
+    #[cfg(test)]
+    pub(in crate::render_thread) const fn for_test(
+        top: f32,
+        bottom: f32,
+        left: f32,
+        right: f32,
+    ) -> Self {
+        Self {
+            top,
+            bottom,
+            left,
+            right,
+        }
+    }
+
+    const ZERO: Self = Self {
+        top: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+        right: 0.0,
+    };
+}
+
+impl ChromeInsets {
+    /// The insets of the picture being animated away.
+    ///
+    /// All zero for a window whose regions were never materialized. That is a
+    /// correct answer rather than a fallback that loses the animation: at zero
+    /// the cut yields one patch covering the whole rect, which is a plain
+    /// whole-picture blit — exactly what this replaced.
+    fn of(geometry: neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry) -> Self {
+        use neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry as Geometry;
+        let Geometry::Complete { regions, .. } = geometry else {
+            return Self::default();
+        };
+        let (outer, body) = (regions.outer, regions.text_body);
+        Self {
+            top: (body.y - outer.y).max(0.0),
+            bottom: (outer.y + outer.height - body.y - body.height).max(0.0),
+            left: (body.x - outer.x).max(0.0),
+            right: (outer.x + outer.width - body.x - body.width).max(0.0),
+        }
+    }
+}
+
+/// How thick this pane's chrome was in the picture being animated away.
+const fn insets_of(change: PaneChange) -> ChromeInsets {
+    match change {
+        PaneChange::Persisted { insets, .. } => insets,
+        // An entering pane has no old picture, and a leaving pane's old picture
+        // is drawn at its old rect where its chrome is already correct.
+        PaneChange::Entered { .. } | PaneChange::Exited { .. } => ChromeInsets::ZERO,
+    }
+}
+
+/// One patch's extent on one axis: where it lands, and where it came from.
+///
+/// Within a span the mapping from destination to source is a pure translation,
+/// which is what lets a span be split at an arbitrary boundary without
+/// recomputing anything.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Span {
+    dest: f32,
+    source: f32,
+    extent: f32,
+}
+
+/// Cut one axis of the outgoing picture into leading chrome, a clipped middle,
+/// and trailing chrome.
+///
+/// This is the nine-patch. A window is not a uniform picture: its chrome is
+/// anchored to its edges — a mode line and a horizontal scroll bar ride the
+/// bottom, a header and tab line the top, fringes, margins, scroll bars and
+/// dividers the sides — while only the text body between them reflows. Blitting
+/// the whole old picture as one rectangle can only translate or clip all of it
+/// together, so a shrinking pane's old mode line gets clipped away at the
+/// bottom of the frame while its replacement dissolves in at the new edge. Cut
+/// into bands, the old mode line *travels* to where the new one is and lands on
+/// it.
+///
+/// `lead` and `trail` are the source's own thicknesses, used unchanged: the
+/// blit is 1:1 and interpolating a chrome thickness would mean scaling glyphs.
+/// Trailing wins a squeeze, which matches GNU — a window too short for its
+/// chrome drops the header line before the mode line.
+fn cut_axis(
+    src: f32,
+    src_extent: f32,
+    dst: f32,
+    dst_extent: f32,
+    lead: f32,
+    trail: f32,
+) -> Vec<Span> {
+    let lead = lead.min(dst_extent).min(src_extent).max(0.0);
+    let trail = trail.min(dst_extent - lead).min(src_extent - lead).max(0.0);
+    let middle = (dst_extent - lead - trail)
+        .min(src_extent - lead - trail)
+        .max(0.0);
+    [
+        Span {
+            dest: dst,
+            source: src,
+            extent: lead,
+        },
+        Span {
+            dest: dst + lead,
+            source: src + lead,
+            extent: middle,
+        },
+        Span {
+            dest: dst + dst_extent - trail,
+            source: src + src_extent - trail,
+            extent: trail,
+        },
+    ]
+    .into_iter()
+    .filter(|span| span.extent > 0.0)
+    .collect()
+}
+
+/// Split every span that straddles `boundary`, so each one is wholly on one
+/// side of it.
+///
+/// The boundary is the edge of the area the pane keeps. Patches inside it are
+/// crossfading into their replacement; patches beyond it are ground the pane
+/// has not yet given up and are opaque. Splitting here means a patch never has
+/// to carry two opacities.
+fn split_spans_at(spans: Vec<Span>, boundary: f32) -> Vec<Span> {
+    spans
+        .into_iter()
+        .flat_map(|span| {
+            let offset = boundary - span.dest;
+            if offset > 0.0 && offset < span.extent {
+                vec![
+                    Span {
+                        extent: offset,
+                        ..span
+                    },
+                    Span {
+                        dest: boundary,
+                        source: span.source + offset,
+                        extent: span.extent - offset,
+                    },
+                ]
+            } else {
+                vec![span]
+            }
+        })
+        .collect()
 }
 
 /// One rectangle of the old picture that a shrinking pane has not vacated.

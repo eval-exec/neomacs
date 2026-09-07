@@ -1,5 +1,24 @@
 use super::*;
 
+/// The role samples halfway through a 100ms linear motion.
+fn half_way(origin: EventTime) -> RoleSamples {
+    let motion = Motion::start(
+        MotionSpec::Tween(TweenSpec {
+            duration: MotionDuration::new(Duration::from_millis(100)).expect("positive"),
+            easing: TransitionEasing::Linear,
+            bezier: None,
+        }),
+        origin,
+    )
+    .expect("a tween is not instant");
+    let sample = motion.sample(frame_at(origin, 50));
+    RoleSamples {
+        geometry: sample,
+        open: sample,
+        close: Some(sample),
+    }
+}
+
 /// A 1x device grid: logical pixels are device pixels, so snapping is to whole
 /// numbers and the fixtures below read as written.
 fn grid() -> PixelGrid {
@@ -347,6 +366,70 @@ fn three_panes_stay_flush_across_both_seams_for_the_whole_motion() {
 }
 
 #[test]
+fn a_shrinking_panes_mode_line_travels_to_its_new_edge_instead_of_being_clipped() {
+    // The nine-patch. A window is not a uniform picture: its mode line is
+    // anchored to the bottom edge, so when the pane shrinks the old mode line
+    // has somewhere to go. Blitted whole, the old picture can only be clipped —
+    // the old mode line stays at the bottom of the frame and is cut away, while
+    // the destination's mode line dissolves in at the new edge from frame one.
+    //
+    // Cut into bands, the old mode line rides the interpolated bottom edge and
+    // lands exactly on its replacement.
+    //
+    // 1200x600 window with a 20px mode line, halving in height. At the midpoint
+    // the pane covers 450, so the old mode line should be at 430 — not at 580
+    // where it started, and not at 280 where it ends.
+    let origin = origin();
+    let insets = ChromeInsets::for_test(0.0, 20.0, 0.0, 0.0);
+    let change = PaneChange::Persisted {
+        window: live(1),
+        from: rect(0.0, 0.0, 1200.0, 600.0),
+        to: rect(0.0, 0.0, 1200.0, 300.0),
+        insets,
+    };
+    let mut out = Vec::new();
+    place(change, half_way(origin), &[], &[], &mut out);
+
+    let mode_line = out
+        .iter()
+        .filter(|p| p.source == neomacs_renderer_wgpu::PaneSource::Previous)
+        .find(|p| (p.bounds.height - 20.0).abs() < 0.5)
+        .expect("the outgoing picture is cut, so its mode line is its own patch");
+    assert!(
+        (mode_line.bounds.y - 430.0).abs() < 1.0,
+        "the old mode line should ride the pane's edge to 430, not sit at {}",
+        mode_line.bounds.y
+    );
+    assert!(
+        (mode_line.content_origin.1 - 580.0).abs() < 1.0,
+        "and be sampled from where it was in the old picture, not {}",
+        mode_line.content_origin.1
+    );
+    assert_eq!(
+        mode_line.opacity, 1.0,
+        "it is over ground the pane has not given up, so it is opaque"
+    );
+
+    // The patches tile the pane's rect with no gap: every row of the outgoing
+    // picture is covered exactly once.
+    let mut rows: Vec<(f32, f32)> = out
+        .iter()
+        .filter(|p| p.source == neomacs_renderer_wgpu::PaneSource::Previous)
+        .map(|p| (p.bounds.y, p.bounds.y + p.bounds.height))
+        .collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rows.dedup();
+    assert_eq!(rows.first().expect("at least one patch").0, 0.0);
+    assert_eq!(rows.last().expect("at least one patch").1, 450.0);
+    for pair in rows.windows(2) {
+        assert_eq!(
+            pair[0].1, pair[1].0,
+            "gap between outgoing patches: {rows:?}"
+        );
+    }
+}
+
+#[test]
 fn a_pane_that_only_shrinks_vertically_still_gets_an_outgoing_picture() {
     // `C-x 2`: the top window keeps its width and loses half its height. No
     // line rewraps, so the gate that asks only about width said there was
@@ -567,6 +650,7 @@ fn an_overshooting_pane_never_gets_a_negative_extent_or_a_strip_it_is_not_owed()
             window: live(1),
             from: rect(0.0, 0.0, 400.0, 600.0),
             to: rect(0.0, 0.0, 800.0, 600.0),
+            insets: ChromeInsets::default(),
         },
         motion,
         &[],
@@ -598,6 +682,7 @@ fn an_overshooting_pane_never_gets_a_negative_extent_or_a_strip_it_is_not_owed()
             window: live(1),
             from: rect(0.0, 0.0, 600.0, 600.0),
             to: rect(0.0, 0.0, 20.0, 600.0),
+            insets: ChromeInsets::default(),
         },
         motion,
         &[],
