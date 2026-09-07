@@ -662,6 +662,25 @@ impl<'a> Reader<'a> {
 
     fn skip_ws_and_comments(&mut self) -> bool {
         loop {
+            if let Some(src) = self.byte_backed_source() {
+                let mut p = self.pos;
+                loop {
+                    while p < src.len() && src[p] <= 32 {
+                        p += 1;
+                    }
+                    if p < src.len() && src[p] == b';' {
+                        match memchr::memchr(b'\n', &src[p..]) {
+                            Some(off) => {
+                                p += off + 1;
+                                continue;
+                            }
+                            None => p = src.len(),
+                        }
+                    }
+                    break;
+                }
+                self.pos = p;
+            }
             let Some(ch) = self.current_code() else {
                 return false;
             };
@@ -962,6 +981,26 @@ impl<'a> Reader<'a> {
         // unibyte unless a real multibyte character is forced while reading.
         let mut unibyte_buf = Some(Vec::new());
         loop {
+            // The ASCII run up to the next quote, backslash or non-ASCII
+            // character in one copy.
+            if let Some(src) = self.byte_backed_source() {
+                let start = self.pos;
+                let mut p = start;
+                while p < src.len() {
+                    let b = src[p];
+                    if b >= 0x80 || b == b'"' || b == b'\\' {
+                        break;
+                    }
+                    p += 1;
+                }
+                if p > start {
+                    buf.extend_from_slice(&src[start..p]);
+                    if let Some(bytes) = unibyte_buf.as_mut() {
+                        bytes.extend_from_slice(&src[start..p]);
+                    }
+                    self.pos = p;
+                }
+            }
             let Some(ch) = self.current_code() else {
                 return Err(self.end_of_file_error());
             };
@@ -2398,7 +2437,27 @@ impl<'a> Reader<'a> {
     fn read_symbol_token(&mut self) -> ReaderToken {
         let mut bytes = ReaderTokenBytes::new();
         let mut had_escape = false;
-        while let Some(ch) = self.current_code() {
+        loop {
+            // The ASCII run of the token in one copy; an escape, a non-ASCII
+            // character or the delimiter is left to the per-character step.
+            if let Some(src) = self.byte_backed_source() {
+                let start = self.pos;
+                let mut p = start;
+                while p < src.len() {
+                    let b = src[p];
+                    if b >= 0x80 || b == b'\\' || is_symbol_delimiter_code(u32::from(b)) {
+                        break;
+                    }
+                    p += 1;
+                }
+                if p > start {
+                    bytes.extend_from_slice(&src[start..p]);
+                    self.pos = p;
+                }
+            }
+            let Some(ch) = self.current_code() else {
+                break;
+            };
             if is_symbol_delimiter_code(ch) {
                 break;
             }
@@ -2600,14 +2659,30 @@ impl<'a> Reader<'a> {
     /// call overhead alone was 40% of its cost).
     #[inline(always)]
     fn code_and_next(&self, pos: usize) -> Option<(u32, usize)> {
-        if let ReaderSource::LispString(input) = self.source
-            && pos < self.limit
-            && let Some(&byte) = input.as_bytes().get(pos)
+        if let Some(src) = self.byte_backed_source()
+            && let Some(&byte) = src.get(pos)
             && byte < 0x80
         {
             return Some((u32::from(byte), pos + 1));
         }
         self.code_and_next_memo(pos)
+    }
+
+    /// The source's bytes up to `limit` when the source is byte-backed (a
+    /// loaded file's text, or a Lisp string).  Every storage-string sentinel
+    /// is a code point at or above U+E080 and every multibyte lead byte is at
+    /// or above 0x80, so an ASCII byte of either source is that character
+    /// and one position wide: the byte-run fast paths below read such runs
+    /// directly, the way GNU `read0` walks `readchar` bytes.  A buffer source
+    /// has no contiguous bytes and keeps the per-character step.
+    #[inline(always)]
+    fn byte_backed_source(&self) -> Option<&'a [u8]> {
+        let bytes: &'a [u8] = match self.source {
+            ReaderSource::Runtime(s) => s.as_bytes(),
+            ReaderSource::LispString(input) => input.as_bytes(),
+            ReaderSource::Buffer(_) => return None,
+        };
+        Some(&bytes[..self.limit.min(bytes.len())])
     }
 
     fn code_and_next_memo(&self, pos: usize) -> Option<(u32, usize)> {
