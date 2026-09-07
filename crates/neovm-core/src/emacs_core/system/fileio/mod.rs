@@ -6187,6 +6187,23 @@ fn restore_empty_buffer_after_auto_coding_probe(
         .goto_buffer_emacs_byte_pos(buffer_id, EmacsBytePos::new(0));
 }
 
+/// The bytes GNU shows `set-auto-coding-function`: the whole file when it is
+/// at most 4 KiB, else its first 1 KiB followed by its tail from
+/// `max(len - 3 KiB, 4 KiB)` (fileio.c `Finsert_file_contents`).
+pub(crate) fn auto_coding_probe_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    const HEAD_READ: usize = 4 * 1024;
+    const HEAD_KEEP: usize = 1024;
+    const TAIL: usize = 3 * 1024;
+    if bytes.len() <= HEAD_READ {
+        return std::borrow::Cow::Borrowed(bytes);
+    }
+    let tail_start = bytes.len().saturating_sub(TAIL).max(HEAD_READ);
+    let mut probe = Vec::with_capacity(HEAD_KEEP + (bytes.len() - tail_start));
+    probe.extend_from_slice(&bytes[..HEAD_KEEP]);
+    probe.extend_from_slice(&bytes[tail_start..]);
+    std::borrow::Cow::Owned(probe)
+}
+
 fn decide_auto_coding_for_empty_insert_file_contents(
     eval: &mut super::eval::Context,
     filename: crate::heap_types::LispString,
@@ -6213,7 +6230,16 @@ fn decide_auto_coding_for_empty_insert_file_contents(
     if let Some(buf) = eval.buffers.get_mut(current_id) {
         buf.set_undo_list(Value::T);
     }
-    let raw = crate::heap_types::LispString::from_unibyte(bytes.to_vec());
+    // GNU probes the HEAD and TAIL only (fileio.c `Finsert_file_contents`,
+    // "Assume that the 1 KiB and 3 KiB for heading and tailing respectively
+    // are sufficient"): it reads up to 4 KiB, and when the file continues it
+    // keeps the first 1 KiB of that and appends the last ~3 KiB read from
+    // max(end - 3 KiB, 4 KiB), then hands `set-auto-coding-function` that
+    // concatenation and its length. Inserting the whole file here made
+    // insert-file-contents 6x GNU on an 876 KB org journal, and taxed every
+    // source .el load at startup the same way.
+    let probe = auto_coding_probe_bytes(bytes);
+    let raw = crate::heap_types::LispString::from_unibyte(probe.to_vec());
     eval.buffers
         .insert_lisp_string_into_buffer(current_id, &raw)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -6225,7 +6251,7 @@ fn decide_auto_coding_for_empty_insert_file_contents(
         function,
         vec![
             Value::heap_string(filename),
-            Value::fixnum(bytes.len() as i64),
+            Value::fixnum(probe.len() as i64),
         ],
     );
     let value = match result {

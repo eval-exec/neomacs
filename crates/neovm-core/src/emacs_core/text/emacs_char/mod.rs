@@ -1038,19 +1038,29 @@ pub fn str_as_multibyte(src: &[u8]) -> Vec<u8> {
 /// Mirrors GNU `str_as_unibyte` (character.c:709). The GNU version is
 /// in-place (the result is shorter); here we return a new `Vec<u8>`.
 pub fn str_as_unibyte(src: &[u8]) -> Vec<u8> {
+    // Only eight-bit raw-byte chars change shape; every other char's bytes
+    // are copied through unchanged. Their lead bytes (0xC0/0xC1) never occur
+    // as continuation bytes in the internal encoding, so the runs between
+    // them are copied in bulk -- and text without any (nearly all text) is
+    // one copy. The per-char loop this replaces cost ~50 Ir/byte on every
+    // `write-region`.
     let mut out = Vec::with_capacity(src.len());
     let mut p = 0usize;
     while p < src.len() {
-        let lead = src[p];
-        let len = bytes_by_char_head(lead);
-        if char_byte8_head_p(lead) && p + len <= src.len() {
+        let next = memchr::memchr2(0xC0, 0xC1, &src[p..]).map_or(src.len(), |offset| p + offset);
+        out.extend_from_slice(&src[p..next]);
+        p = next;
+        if p >= src.len() {
+            break;
+        }
+        let len = bytes_by_char_head(src[p]);
+        if p + len <= src.len() {
             let (c, _) = string_char_unchecked(&src[p..]);
             out.push(char_to_byte8(c));
             p += len;
         } else {
-            let take = (p + len).min(src.len());
-            out.extend_from_slice(&src[p..take]);
-            p = take;
+            out.extend_from_slice(&src[p..]);
+            break;
         }
     }
     out

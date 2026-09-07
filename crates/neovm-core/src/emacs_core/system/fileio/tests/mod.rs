@@ -6397,3 +6397,66 @@ fn set_visited_file_modtime_asks_the_file_name_handler_before_it_stats() {
         Value::symbol("set-visited-file-modtime"),
     );
 }
+
+/// GNU shows `set-auto-coding-function` the head and tail only (fileio.c
+/// `Finsert_file_contents`): the whole file up to 4 KiB, otherwise its first
+/// 1 KiB followed by its tail from max(len - 3 KiB, 4 KiB).
+#[test]
+fn auto_coding_probe_shows_the_head_and_tail_like_gnu() {
+    let small: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    assert_eq!(&*auto_coding_probe_bytes(&small), &small[..]);
+    // 5 KiB: 1 KiB of head, then everything past the 4 KiB head read.
+    let mid: Vec<u8> = (0..5120u32).map(|i| (i % 253) as u8).collect();
+    let probe = auto_coding_probe_bytes(&mid);
+    assert_eq!(probe.len(), 1024 + 1024);
+    assert_eq!(&probe[..1024], &mid[..1024]);
+    assert_eq!(&probe[1024..], &mid[4096..]);
+    // 20 KiB: 1 KiB of head plus the last 3 KiB.
+    let big: Vec<u8> = (0..20480u32).map(|i| (i % 241) as u8).collect();
+    let probe = auto_coding_probe_bytes(&big);
+    assert_eq!(probe.len(), 1024 + 3072);
+    assert_eq!(&probe[..1024], &big[..1024]);
+    assert_eq!(&probe[1024..], &big[20480 - 3072..]);
+}
+
+/// A coding cookie in the tail's `Local Variables` block is still seen when
+/// the file is far larger than the probe, and the function receives the
+/// probe's length as SIZE, not the file's.
+#[test]
+fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("big-auto-coding.txt");
+    let mut content = "x".repeat(40_000);
+    content.push_str("\n;; Local Variables:\n;; coding: latin-1\n;; End:\n");
+    fs::write(&path, content.as_bytes()).expect("write fixture");
+    let path_str = path.to_string_lossy().to_string();
+    let mut eval = Context::new();
+    eval.eval_str(
+        r#"(progn
+             (defalias 'neovm-test-set-auto-coding-function
+               (lambda (_filename size)
+                 (setq neovm-test-auto-coding-size size
+                       neovm-test-auto-coding-saw-tail
+                       (save-excursion
+                         (goto-char (point-max))
+                         (search-backward "coding: latin-1" nil t)))
+                 nil))
+             (setq set-auto-coding-function
+                   'neovm-test-set-auto-coding-function))"#,
+    )
+    .expect("install set-auto-coding-function probe");
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should succeed");
+    assert_eq!(
+        eval.visible_variable_value_or_nil("neovm-test-auto-coding-size")
+            .as_fixnum(),
+        Some(1024 + 3072)
+    );
+    assert!(
+        !eval
+            .visible_variable_value_or_nil("neovm-test-auto-coding-saw-tail")
+            .is_nil(),
+        "the tail's coding cookie must be inside the probe"
+    );
+}

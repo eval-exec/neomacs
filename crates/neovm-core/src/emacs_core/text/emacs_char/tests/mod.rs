@@ -899,3 +899,20 @@ fn unibyte_case_fold_match_len_advances_byte_by_byte() {
     // ASCII folding still works.
     assert_eq!(unibyte_case_fold_match_len(b"ABC", 0, b"abc"), Some(3));
 }
+
+/// The bulk-copy path: runs of ordinary chars around eight-bit raw-byte
+/// chars come through untouched, and the raw bytes collapse to one byte.
+#[test]
+fn str_as_unibyte_copies_runs_around_byte8_chars() {
+    let plain = "héllo wörld, 日本".as_bytes().to_vec();
+    assert_eq!(str_as_unibyte(&plain), plain, "no byte8 chars: identity");
+    let mut mixed = b"abc".to_vec();
+    mixed.extend_from_slice(&str_to_multibyte(&[0xFF, 0x80]));
+    mixed.extend_from_slice("xyz日".as_bytes());
+    mixed.extend_from_slice(&str_to_multibyte(&[0xC3]));
+    let mut expected = b"abc".to_vec();
+    expected.extend_from_slice(&[0xFF, 0x80]);
+    expected.extend_from_slice("xyz日".as_bytes());
+    expected.push(0xC3);
+    assert_eq!(str_as_unibyte(&mixed), expected);
+}
