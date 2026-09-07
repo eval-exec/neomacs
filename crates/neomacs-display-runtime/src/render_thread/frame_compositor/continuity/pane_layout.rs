@@ -1047,23 +1047,31 @@ fn place(
             // covering `bounds` and reproduces a plain whole-picture blit
             // exactly.
             let insets = insets_of(change);
+            // Cut an axis only where the pane is actually giving ground on it.
+            // An unchanged axis has chrome that does not move, so cutting it
+            // would emit three spans describing one unbroken picture.
+            //
+            // Neither axis can be *growing* here: `grows` is checked first and
+            // takes the branch above. That matters, because a growing axis has
+            // no source pixels past its old end and the clamp inside `cut_axis`
+            // would leave a gap for the backdrop to show through.
+            let (lead_x, trail_x) = if from.width - to.width > REFLOW_WIDTH_EPSILON {
+                (insets.left, insets.right)
+            } else {
+                (0.0, 0.0)
+            };
+            let (lead_y, trail_y) = if from.height - to.height > REFLOW_WIDTH_EPSILON {
+                (insets.top, insets.bottom)
+            } else {
+                (0.0, 0.0)
+            };
             // The area the pane keeps. Inside it a patch is crossfading into
             // its replacement; beyond it the pane simply has not let go yet, so
             // the old picture is opaque.
             let kept_right = bounds.x + bounds.width.min(to.width);
             let kept_bottom = bounds.y + bounds.height.min(to.height);
             let columns = split_spans_at(
-                cut_axis(
-                    from.x,
-                    from.width,
-                    bounds.x,
-                    bounds.width,
-                    // Horizontal chrome is Stage 2. Zero here means the cut
-                    // yields one column, which is the whole-picture blit this
-                    // axis has always done.
-                    0.0,
-                    0.0,
-                ),
+                cut_axis(from.x, from.width, bounds.x, bounds.width, lead_x, trail_x),
                 kept_right,
             );
             let rows = split_spans_at(
@@ -1072,8 +1080,8 @@ fn place(
                     from.height,
                     bounds.y,
                     bounds.height,
-                    insets.top,
-                    insets.bottom,
+                    lead_y,
+                    trail_y,
                 ),
                 kept_bottom,
             );
