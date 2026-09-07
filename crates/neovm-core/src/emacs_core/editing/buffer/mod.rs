@@ -2524,6 +2524,17 @@ pub(crate) fn builtin_constrain_to_field(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("constrain-to-field", &args, 2, 5)?;
+    builtin_constrain_to_field_5(eval, &args)
+}
+
+/// `constrain-to-field` on an argument slice (2..=5 values, already
+/// arity-checked): the internal callers (`line-beginning-position`,
+/// `line-end-position`, `forward-word`) pass a stack array instead of
+/// consing a `Vec` per call.
+pub(crate) fn builtin_constrain_to_field_5(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
     let current = &mut eval
         .buffers
         .current_buffer()

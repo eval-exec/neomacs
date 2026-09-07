@@ -482,10 +482,20 @@ impl TaggedHeap {
         let Some(addr) = Self::value_heap_addr(value) else {
             return false;
         };
-        if !self.owns_heap_value_object(value, addr) {
-            return false; // mapped, not a tenured heap object
-        }
-        unsafe { (*(addr as *const GcHeader)).tenured }
+        // Every non-cons heap-tagged value points at a `GcHeader`-prefixed
+        // object (arena, boxed, leaked static, or mapped), so the bit is read
+        // straight from the header: the ownership oracle it replaced on the
+        // write-barrier path was eight hash probes (seven arena page maps and
+        // the boxed-object set) per tracked write, ~170 Ir on the org op.
+        // Mapped objects are excluded by the barrier's `owner_is_mapped`
+        // check before this runs; anything else the oracle would have
+        // rejected (a leaked static) carries `tenured == false` anyway.
+        let tenured = unsafe { (*(addr as *const GcHeader)).tenured };
+        debug_assert!(
+            !tenured || self.owns_heap_value_object(value, addr),
+            "a tenured header outside the owned heap: {value:?}"
+        );
+        tenured
     }
 
     /// First-cycle only: seed the heap children of EVERY mapped object so they

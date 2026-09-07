@@ -1034,6 +1034,19 @@ struct InterpreterFrameAuxStack {
 
 impl InterpreterFrameAuxStack {
     fn new(handlers: HandlerStack, bind_stack: BindStack) -> Self {
+        Self::with_suspended(handlers, bind_stack, Vec::new())
+    }
+    fn into_suspended(self) -> Vec<SuspendedInterpreterFrameAux> {
+        self.suspended
+    }
+    /// Like [`new`](Self::new) with pooled (emptied) storage for the
+    /// suspended frames.
+    fn with_suspended(
+        handlers: HandlerStack,
+        bind_stack: BindStack,
+        mut suspended: Vec<SuspendedInterpreterFrameAux>,
+    ) -> Self {
+        suspended.clear();
         let current = InterpreterFrameAux::new(handlers, bind_stack);
         let current_occupancy = if current.is_empty() {
             InterpreterFrameAuxOccupancy::KnownEmpty
@@ -1043,7 +1056,7 @@ impl InterpreterFrameAuxStack {
         Self {
             current,
             current_occupancy,
-            suspended: Vec::new(),
+            suspended,
         }
     }
 
@@ -1226,6 +1239,47 @@ struct InterpreterCallerStack {
     continuations: Vec<BytecodeCallContinuation>,
 }
 
+/// Reusable backing stores for the interpreter's per-entry stacks: the
+/// caller frames, the call continuations and the suspended aux frames.
+/// `run_loop` used to allocate the first two fresh on EVERY nested
+/// interpreter entry (`Vec::with_capacity(8)` twice ≈ 9,100 malloc/free
+/// pairs per org font-lock op) and grow the third from empty (≈2,500
+/// reallocations); a pooled trio is taken on entry and handed back emptied.
+#[derive(Default)]
+pub(crate) struct InterpreterStackPool {
+    free: Vec<InterpreterStacks>,
+}
+
+#[derive(Default)]
+struct InterpreterStacks {
+    frames: Vec<InterpreterFrame>,
+    continuations: Vec<BytecodeCallContinuation>,
+    suspended: Vec<SuspendedInterpreterFrameAux>,
+}
+
+impl InterpreterStackPool {
+    /// Nested interpreter entries beyond this many keep allocating (bounded
+    /// retention; the org op nests fewer than 20 deep).
+    const MAX_FREE: usize = 64;
+
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    fn take(&mut self) -> InterpreterStacks {
+        self.free.pop().unwrap_or_default()
+    }
+
+    fn give_back(&mut self, mut stacks: InterpreterStacks) {
+        stacks.frames.clear();
+        stacks.continuations.clear();
+        stacks.suspended.clear();
+        if self.free.len() < Self::MAX_FREE {
+            self.free.push(stacks);
+        }
+    }
+}
+
 impl InterpreterCallerStack {
     fn new(entry: InterpreterFrame) -> Self {
         let mut frames = Vec::with_capacity(8);
@@ -1234,6 +1288,23 @@ impl InterpreterCallerStack {
             frames,
             continuations: Vec::with_capacity(8),
         }
+    }
+    /// Like [`new`](Self::new) on pooled (emptied) storage.
+    fn with_storage(
+        mut frames: Vec<InterpreterFrame>,
+        mut continuations: Vec<BytecodeCallContinuation>,
+        entry: InterpreterFrame,
+    ) -> Self {
+        frames.clear();
+        continuations.clear();
+        frames.push(entry);
+        Self {
+            frames,
+            continuations,
+        }
+    }
+    fn into_storage(self) -> (Vec<InterpreterFrame>, Vec<BytecodeCallContinuation>) {
+        (self.frames, self.continuations)
     }
 
     /// The frame currently executing.
@@ -3157,12 +3228,17 @@ impl<'a> Vm<'a> {
         // allocating. The first iterative Bcall grows this once and thereafter
         // gets Vec's single-representation push/pop path; SmallVec's repeated
         // inline-vs-spilled branch was measurable on every Bcall/Breturn.
-        let mut callers = InterpreterCallerStack::new(entry_frame);
+        let stacks = self.ctx.interpreter_stacks.take();
+        let mut callers =
+            InterpreterCallerStack::with_storage(stacks.frames, stacks.continuations, entry_frame);
         // GNU bytecode.c keeps one unsigned quit counter for the whole
         // exec_byte_code driver. setup_frame/Breturn do not save or reset it.
         let mut quitcounter = 1;
-        let mut aux_stack =
-            InterpreterFrameAuxStack::new(std::mem::take(handlers), std::mem::take(bind_stack));
+        let mut aux_stack = InterpreterFrameAuxStack::with_suspended(
+            std::mem::take(handlers),
+            std::mem::take(bind_stack),
+            stacks.suspended,
+        );
 
         // One driver source, two monomorphizations: the VERIFIED instance
         // drops the per-push capacity guard on the strength of the decode-time
@@ -3177,6 +3253,12 @@ impl<'a> Vm<'a> {
         let (entry_handlers, entry_bind_stack) = aux_stack.take_entry();
         *handlers = entry_handlers;
         *bind_stack = entry_bind_stack;
+        let (frames, continuations) = callers.into_storage();
+        self.ctx.interpreter_stacks.give_back(InterpreterStacks {
+            frames,
+            continuations,
+            suspended: aux_stack.into_suspended(),
+        });
         result
     }
 

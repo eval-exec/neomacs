@@ -185,6 +185,7 @@ impl Context {
             compiler_function_overrides_active,
             symbol_bytecode_call_cache:
                 crate::emacs_core::bytecode::vm::SymbolByteCodeCallCache::new(),
+            interpreter_stacks: crate::emacs_core::bytecode::vm::InterpreterStackPool::new(),
             named_call_cache: FxHashMap::with_capacity_and_hasher(
                 NAMED_CALL_CACHE_CAPACITY,
                 Default::default(),

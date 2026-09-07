@@ -685,9 +685,9 @@ pub(crate) fn builtin_line_beginning_position_1(
     // GNU `Fline_beginning_position` (editfns.c:700) constrains the result to
     // the current input field. ESCAPE-FROM-EDGE is t when any lines were
     // scanned (count != 0), nil otherwise; ONLY-IN-LINE is always t.
-    crate::emacs_core::builtins::builtin_constrain_to_field(
+    crate::emacs_core::builtins::builtin_constrain_to_field_5(
         ctx,
-        vec![
+        &[
             Value::fixnum(bol_charpos),
             Value::fixnum(orig_charpos),
             if count != 0 { Value::T } else { Value::NIL },
@@ -716,9 +716,9 @@ pub(crate) fn builtin_line_end_position_1(ctx: &mut super::eval::Context, n: Val
     let (eol_charpos, orig_charpos) = pos_eol_compute(ctx, scan_count)?;
     // GNU `Fline_end_position` (editfns.c:755): constrain to current input
     // field with ESCAPE-FROM-EDGE = nil and ONLY-IN-LINE = t.
-    crate::emacs_core::builtins::builtin_constrain_to_field(
+    crate::emacs_core::builtins::builtin_constrain_to_field_5(
         ctx,
-        vec![
+        &[
             Value::fixnum(eol_charpos),
             Value::fixnum(orig_charpos),
             Value::NIL,

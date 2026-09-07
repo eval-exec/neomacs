@@ -5379,9 +5379,9 @@ pub(crate) fn builtin_forward_word(
     // `Fconstrain_to_field` so that motion does not cross input-field
     // boundaries (e.g. the minibuffer prompt). The full call is
     // (constrain-to-field VAL PT nil nil nil).
-    let constrained = crate::emacs_core::builtins::builtin_constrain_to_field(
+    let constrained = crate::emacs_core::builtins::builtin_constrain_to_field_5(
         eval,
-        vec![
+        &[
             Value::fixnum(raw_char),
             Value::fixnum(orig_char),
             Value::NIL,

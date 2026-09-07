@@ -3186,6 +3186,9 @@ pub struct Context {
     /// See `SymbolByteCodeCallCache`: what each symbol's function cell resolves
     /// to for a bytecode stack call, epoch-tagged.
     pub(crate) symbol_bytecode_call_cache: crate::emacs_core::bytecode::vm::SymbolByteCodeCallCache,
+    /// Pooled backing stores for the interpreter's per-entry stacks (see
+    /// `vm::InterpreterStackPool`).
+    pub(crate) interpreter_stacks: crate::emacs_core::bytecode::vm::InterpreterStackPool,
     /// Hot cache for named callable resolution in `funcall`/`apply`.
     /// Keyed by symbol id; entries are validated against the obarray's
     /// `function_epoch` so that any `defalias` / `fset` / autoload
@@ -3449,7 +3452,9 @@ pub(crate) fn parse_eval_lexical_arg(arg: Option<Value>) -> Result<(bool, Option
 
     // Non-nil atom (like t) => lexical mode, env = (t)  [the list!]
     if !arg.is_cons() {
-        return Ok((true, Some(Value::list(vec![Value::T]))));
+        // GNU `list1 (Qt)`: one cons, no heap vector (this runs once per
+        // `(eval FORM t)` — 3,923 times per org font-lock op).
+        return Ok((true, Some(Value::list_from_slice(&[Value::T]))));
     };
 
     // Cons (alist) => lexical mode, env = the alist
