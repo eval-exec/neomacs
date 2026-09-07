@@ -963,13 +963,14 @@ fn place(
 ) {
     let bounds = placed_bounds(change, motion);
     if let PaneChange::Persisted { window, from, to } = change {
-        // The pane's old wrapping, fading out as the destination underneath
-        // fades in. Anchored where the old picture actually *is* -- never
-        // carried along with the travelling pane, which is what made
-        // `delete-window` draw doubled, half-transparent text across the whole
-        // frame: the ghost sampled the old picture at the pane's old origin but
-        // drew it at the pane's current one, so the two pictures showed the
-        // same buffer at two wrap widths from two different offsets.
+        // The pane's old picture over the area it keeps, fading out as the
+        // destination underneath fades in. Anchored where the old picture
+        // actually *is* -- never carried along with the travelling pane, which
+        // is what made `delete-window` draw doubled, half-transparent text
+        // across the whole frame: the ghost sampled the old picture at the
+        // pane's old origin but drew it at the pane's current one, so the two
+        // pictures showed the same buffer at two wrap widths from two
+        // different offsets.
         //
         // A growing pane keeps everything it had, so its ghost is its whole old
         // rect standing still while the destination is revealed over it. It
@@ -988,7 +989,20 @@ fn place(
                 source: neomacs_renderer_wgpu::PaneSource::Previous,
                 opacity: motion.outgoing_opacity(),
             });
-        } else if from.width - to.width > REFLOW_WIDTH_EPSILON {
+        } else if from.width - to.width > REFLOW_WIDTH_EPSILON
+            || from.height - to.height > REFLOW_WIDTH_EPSILON
+        {
+            // Either axis. Rewrapping is not the only thing that changes when a
+            // pane shrinks, and gating on width alone left `C-x 2` with no
+            // outgoing picture at all: a vertical split rewraps nothing, so the
+            // top pane's destination was drawn opaque from the first frame with
+            // its mode line already at the middle of the screen.
+            //
+            // A window's rect ends in a mode line, and it moves with the bottom
+            // edge; a header line, fringes and margins move with the edges too.
+            // The outgoing picture is what covers that chrome until the pane
+            // actually arrives, which is needed on whichever axis gives ground.
+
             let ghost = Rect {
                 width: bounds.width.min(to.width),
                 height: bounds.height.min(to.height),
