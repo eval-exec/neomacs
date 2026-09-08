@@ -3230,6 +3230,34 @@ fn prune_bootstrap_cache_generations(dump_path: &Path, keep: usize) {
     }
 }
 
+/// Path of a test's fixed-purpose bootstrap image, keyed by the same Lisp
+/// source fingerprint the production cache is keyed by.
+///
+/// A test image cached under a purpose-only name outlives every change to
+/// `lisp/`: nothing in the name moves, so the stale image keeps loading and
+/// the tests sharing it assert against Lisp that is no longer on disk.  That
+/// is not hypothetical -- the GNU 31.1 Lisp sync left three advice tests
+/// failing against an image built from the previous tree, and deleting the
+/// file was the whole fix.  Naming the image
+/// `neovm-bootstrap-test-<kind>-v<schema>-<fingerprint>.pdump` invalidates it
+/// when the sources move, and the `neovm-bootstrap-` prefix lets
+/// `prune_bootstrap_cache_generations` reclaim the superseded generations,
+/// which run 15-20 MB apiece.
+#[cfg(test)]
+pub(crate) fn test_bootstrap_cache_path(kind: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("target/test-cache");
+    let _ = std::fs::create_dir_all(&dir);
+    let fingerprint = bootstrap_source_fingerprint(&runtime_project_root());
+    let path = dir.join(format!(
+        "neovm-bootstrap-test-{kind}-v{BOOTSTRAP_IMAGE_SCHEMA_VERSION}-{fingerprint}.pdump"
+    ));
+    // Keep a couple of generations per live kind; the newest are never the
+    // ones evicted, so a concurrent test's image is not pulled out from
+    // under it.
+    prune_bootstrap_cache_generations(&path, 4);
+    path
+}
+
 fn bootstrap_cache_dir(runtime_root: &Path) -> PathBuf {
     if let Ok(dir) = std::env::var(BOOTSTRAP_CACHE_DIR_ENV)
         && !dir.is_empty()

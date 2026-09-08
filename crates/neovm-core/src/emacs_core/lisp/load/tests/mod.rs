@@ -115,14 +115,7 @@ fn load_error_formatting_handles_raw_unibyte_signal_names() {
 }
 
 fn isolated_runtime_bootstrap_eval() -> Context {
-    let dump_path = PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
-        .join("target/test-cache/neovm-advice-stack-minibuffer-partial.pdump");
-    std::fs::create_dir_all(
-        dump_path
-            .parent()
-            .expect("advice-stack partial bootstrap cache parent"),
-    )
-    .expect("create advice-stack partial bootstrap cache dir");
+    let dump_path = test_bootstrap_cache_path("advice-stack-minibuffer-partial");
     if dump_path.exists()
         && let Ok(eval) = crate::emacs_core::pdump::load_from_dump(&dump_path)
     {
@@ -9760,10 +9753,7 @@ fn ensure_startup_compat_variables_backfills_xfaces_bootstrap_state() {
 }
 
 fn restored_runtime_identity_eval() -> Context {
-    let dump_path =
-        PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("target/test-cache/runtime-identity.pdump");
-    std::fs::create_dir_all(dump_path.parent().expect("runtime identity cache parent"))
-        .expect("create runtime identity cache parent");
+    let dump_path = test_bootstrap_cache_path("runtime-identity");
     create_runtime_startup_evaluator_at_path(&[], &dump_path)
         .expect("create evaluator from the restored runtime image")
 }
@@ -15388,5 +15378,39 @@ fn final_runtime_image_activation_restores_the_gnu_eval_depth() {
             .symbol_value("max-lisp-eval-depth")
             .copied(),
         Some(Value::fixnum(1600))
+    );
+}
+
+/// Every test that caches a bootstrap image must name it after the Lisp it
+/// was built from.
+///
+/// The GNU 31.1 sync proved why: two test images lived at fixed paths, so a
+/// tree-wide `.elc` rebuild could not invalidate them, and three advice tests
+/// spent a session failing against an image of the previous Lisp.  Deleting
+/// the file was the entire fix, which is exactly the kind of fix a name
+/// should make unnecessary.
+#[test]
+fn test_bootstrap_cache_paths_are_keyed_by_the_lisp_source_fingerprint() {
+    crate::test_utils::init_test_tracing();
+    let fingerprint = bootstrap_source_fingerprint(&runtime_project_root());
+    let path = test_bootstrap_cache_path("runtime-identity");
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("test bootstrap cache file name")
+        .to_string();
+
+    assert!(
+        name.contains(&fingerprint),
+        "{name} must carry the Lisp source fingerprint {fingerprint}"
+    );
+    assert!(
+        name.starts_with("neovm-bootstrap-"),
+        "{name} must be reclaimable by prune_bootstrap_cache_generations"
+    );
+    assert_ne!(
+        path,
+        test_bootstrap_cache_path("advice-stack-minibuffer-partial"),
+        "distinct cached images must not collide on one path"
     );
 }
