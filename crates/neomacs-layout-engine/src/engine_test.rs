@@ -34515,6 +34515,34 @@ fn inactive_echo_area_grows_a_sub_line_mini_window_to_one_line_of_the_font() {
     }
 }
 
+#[test]
+fn buffer_display_keeps_first_replacement_while_evaluating_later_clauses() {
+    let (mut eval, frame_id, _, _) = incr_editing_frame("ab\n", 640, 200);
+    eval.eval_str(
+        r##"(progn
+          (setq later-display-clause-seen nil)
+          (put-text-property 1 2 'display
+            '("FIRST"
+              (when (progn (setq later-display-clause-seen t) t) . "SECOND"))))"##,
+    )
+    .expect("install competing display replacements");
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
+    assert_eq!(
+        rows.first().map(|row| row.trim_end()),
+        Some("FIRSTb"),
+        "GNU's display_replaced guard keeps the first ordinary replacement"
+    );
+    assert!(
+        eval.eval_str("later-display-clause-seen")
+            .expect("condition side effect")
+            .is_truthy(),
+        "buffer clauses still execute after a replacement wins"
+    );
+}
+
 /// Dashboard centers its banner with a `line-prefix` whose `display` value is
 /// a list of two `(when FORM . SPEC)` clauses, `(display-graphic-p)` first and
 /// its negation second.  GNU evaluates FORM (xdisp.c:6130-6160) and, for a

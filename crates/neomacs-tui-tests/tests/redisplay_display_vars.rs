@@ -58,6 +58,28 @@ fn settle_after_eval(gnu: &mut TuiSession, neo: &mut TuiSession) {
 }
 
 #[test]
+fn buffer_display_list_keeps_gnus_first_replacement() {
+    let (mut gnu, mut neo) = boot_pair("");
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        r##"(progn
+          (erase-buffer)
+          (insert "ab\n")
+          (put-text-property 1 2 'display '("FIRST" "SECOND"))
+          (goto-char (point-max))
+          nil)"##,
+    );
+    settle_after_eval(&mut gnu, &mut neo);
+    assert!(
+        gnu.text_grid().iter().any(|row| row.starts_with("FIRSTb")),
+        "GNU keeps the first ordinary replacement:\n{}",
+        gnu.text_grid().join("\n")
+    );
+    assert_pair_exact_display("buffer display list replacement ownership", &gnu, &neo);
+}
+
+#[test]
 fn setq_truncate_lines_repaints_without_extra_keystroke() {
     let (mut gnu, mut neo) = boot_pair("");
     seed_long_line(&mut gnu, &mut neo);

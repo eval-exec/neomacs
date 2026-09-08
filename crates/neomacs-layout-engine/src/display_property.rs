@@ -240,9 +240,9 @@ pub(crate) type DisplayTextPropertyModifiers = DisplayItemLayout;
 
 /// The object a `display` property was found on.  GNU stops at the first
 /// element that replaces text of a STRING -- `position` would no longer
-/// point into `object` -- and lets a later replacing element override an
-/// earlier one for buffer text (`if (!it || STRINGP (object)) break;`,
-/// src/xdisp.c:6034-6040 and 6055-6061).
+/// point into `object`. Buffer lists continue processing later clauses, but
+/// `display_replaced == 0` keeps the first ordinary replacement in charge
+/// (src/xdisp.c:6034-6040, 6055-6061, 6517).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DisplayPropertyObject {
     Buffer,
@@ -260,10 +260,9 @@ pub(crate) enum DisplayPropertyObject {
 /// interpreter cannot disagree about it. They did: this classifier had no VECTOR
 /// arm, so `(put-text-property … 'display ["REPLACEMENT"])` rendered nothing.
 ///
-/// String objects stop at their first replacing element, as GNU does. The
-/// buffer classifier currently keeps the last replacement and merges modifiers
-/// from every element. Declared difference: GNU continues buffer lists but
-/// guards ordinary replacements with `display_replaced == 0` (xdisp.c:6517).
+/// String objects stop at their first replacing element. Buffer lists continue
+/// processing later elements without transferring replacement ownership, like
+/// GNU's `display_replaced` guard (xdisp.c:6517).
 pub(crate) fn classify_display_property(
     value: Value,
     conditions: &DisplayWhenConditions,
@@ -273,7 +272,7 @@ pub(crate) fn classify_display_property(
     let specs = DisplayPropertySpecs::of(value);
     specs.for_each(|spec| {
         let element = classify_single_display_spec(spec, conditions, specs.eval_enabled);
-        if element.replacement.is_some() {
+        if result.replacement.is_none() && element.replacement.is_some() {
             result.replacement = element.replacement;
             result.replacement_spec = element.replacement_spec;
         }

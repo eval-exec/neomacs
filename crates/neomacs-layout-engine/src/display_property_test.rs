@@ -822,10 +822,12 @@ fn an_evaluated_when_form_that_did_not_hold_disables_its_spec() {
 }
 
 #[test]
-fn a_string_object_takes_the_first_replacing_spec_and_a_buffer_the_last() {
+fn buffer_and_string_objects_keep_the_first_replacing_spec() {
     // GNU `handle_display_spec` breaks after the first element that replaced
     // text of a STRING (`if (!it || STRINGP (object)) break;`,
-    // xdisp.c:6034-6040) and lets later elements override for buffer text.
+    // xdisp.c:6034-6040). Buffer lists continue, but display_replaced guards
+    // their already chosen replacement (xdisp.c:6517). The ExactDisplay TUI
+    // regression pins this expectation against a running GNU Emacs.
     let _eval = Context::new();
     let specs = Value::list(vec![Value::string("FIRST"), Value::string("LAST")]);
     let structural = crate::display_when::DisplayWhenConditions::structural();
@@ -839,6 +841,6 @@ fn a_string_object_takes_the_first_replacing_spec_and_a_buffer_the_last() {
         classify_display_property(specs, &structural, DisplayPropertyObject::Buffer)
             .replacement_spec()
             .as_utf8_str(),
-        Some("LAST")
+        Some("FIRST")
     );
 }
