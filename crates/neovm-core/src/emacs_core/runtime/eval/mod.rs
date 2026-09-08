@@ -1548,6 +1548,9 @@ struct NamedCallCacheEntry {
 struct LexenvAssqCacheEntry {
     lexenv_bits: usize,
     symbol: SymId,
+    /// The `(symbol . value)` cell this environment binds the symbol to, or
+    /// `nil` for "this environment binds it nowhere".  A binding cell is
+    /// always a cons, so `nil` cannot be confused for one.
     cell: Value,
 }
 
@@ -7355,16 +7358,25 @@ impl Context {
         let lexenv_bits = lexenv.bits();
         let cache = &self.lexenv_assq_cache;
         if let Some(cell) = cache.find(lexenv_bits, sym_id) {
-            return Some(cell);
+            // `nil` is not a binding cell -- `lexenv_assq` only ever returns a
+            // cons -- so it is free to record the other answer: this
+            // environment has no binding for this symbol.  Absence is the
+            // common answer and used to be the one nobody remembered.  Every
+            // reference to a dynamically-bound variable in interpreted code
+            // walks the environment to its end and finds nothing, and then
+            // the next reference to the same variable walks it again; that
+            // walk was 130M of the 208M a magit-status run spent resolving
+            // symbols.
+            return (!cell.is_nil()).then_some(cell);
         }
 
-        let cell = lexenv_assq(lexenv, sym_id)?;
+        let cell = lexenv_assq(lexenv, sym_id);
         cache.push(LexenvAssqCacheEntry {
             lexenv_bits,
             symbol: sym_id,
-            cell,
+            cell: cell.unwrap_or(Value::NIL),
         });
-        Some(cell)
+        cell
     }
 
     pub(crate) fn lexenv_lookup_cached_in(&self, lexenv: Value, sym_id: SymId) -> Option<Value> {

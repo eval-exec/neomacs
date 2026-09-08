@@ -25501,3 +25501,39 @@ fn cached_throw_on_input_tracks_every_write_path() {
     ev.eval_str("(set 'throw-on-input nil)").expect("set");
     agrees(&ev, "after set to nil");
 }
+
+/// The lexical-environment lookup cache remembers that a symbol is absent, and
+/// that answer must not outlive the environment it was true in.
+///
+/// A reference to a dynamically-bound variable inside lexically-bound code
+/// walks the whole environment and finds nothing, every time; caching that
+/// absence is what makes the second reference free.  It is only sound while
+/// "absent from THIS environment" cannot be read back for a different one, so
+/// this interleaves both answers for one symbol: absent (resolve
+/// dynamically), then rebound dynamically around the same closure, then
+/// absent again.  The second half does the same for a lexical symbol that is
+/// present, shadowed, and present again.
+///
+/// Measured on the pinned GNU Emacs 31.1, `emacs -Q --batch`, with
+/// `lexical-binding` t: `((outer inner outer) (1 2 1))`.
+#[test]
+fn a_cached_absence_from_the_lexical_environment_does_not_outlive_it() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        crate::test_utils::runtime_startup_eval_all(
+            r#"
+(progn
+  (defvar neo-dyn-probe 'outer)
+  (let* ((seen nil)
+         (f (lambda () neo-dyn-probe)))
+    (setq seen (list (funcall f)))
+    (let ((neo-dyn-probe 'inner))
+      (setq seen (append seen (list (funcall f)))))
+    (setq seen (append seen (list (funcall f))))
+    (list seen
+          (let ((a 1)) (list a (let ((a 2)) a) a)))))
+"#,
+        ),
+        vec!["OK ((outer inner outer) (1 2 1))"],
+    );
+}
