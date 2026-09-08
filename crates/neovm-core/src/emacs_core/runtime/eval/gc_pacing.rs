@@ -28,6 +28,12 @@ impl Context {
         for root in self.eval_temp_roots.iter().copied() {
             visit(root);
         }
+        // GNU's `eval_sub` argument arrays, one live run per sequence frame
+        // (see `Context::eval_call_roots`): the same logical root set of
+        // transient evaluator C-stack slots, so the same group.
+        for root in self.eval_call_roots.iter().copied() {
+            visit(root);
+        }
         group("treesit");
         for root in self.treesit.roots() {
             visit(root);

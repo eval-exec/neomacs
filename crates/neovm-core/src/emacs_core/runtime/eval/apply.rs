@@ -406,6 +406,16 @@ impl Context {
         self.backtrace_args_stack.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn eval_temp_roots_len_for_test(&self) -> usize {
+        self.eval_temp_roots.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn eval_call_roots_len_for_test(&self) -> usize {
+        self.eval_call_roots.len()
+    }
+
     pub(crate) fn backtrace_args_values(&self, args: &BacktraceArgs) -> LispArgVec {
         match args.view() {
             BacktraceArgsView::Unevalled(value) => smallvec::smallvec![value],
@@ -778,26 +788,47 @@ impl Context {
         self.eval_temp_roots.truncate(scope.saved_len);
     }
 
+    /// A special form returned: its temps stay visible to the rest of the
+    /// body sequence, the way GNU's freed-but-still-scanned stack slots do,
+    /// and the residue of the PREVIOUS such form in this sequence stops
+    /// being rooted.
+    ///
+    /// The retained run is compacted down onto the dead one when the two are
+    /// adjacent.  When something live sits between them -- an enclosing
+    /// `let*`'s value slot, whose index was handed out and must stay valid --
+    /// the dead run is blanked in place instead: same un-rooting, stable
+    /// indices.
     pub(super) fn restore_eval_temp_roots_to_sequence(&mut self, scope: EvalTempRootScopeState) {
         let current_len = self.eval_temp_roots.len();
-        let let_temp_roots = if current_len > scope.saved_len {
-            self.eval_temp_roots[scope.saved_len..]
-                .iter()
-                .copied()
-                .collect()
-        } else {
-            LispArgVec::new()
-        };
-        self.eval_temp_roots
-            .truncate(scope.saved_len.min(current_len));
-        let Some(frame) = self.sequence_temp_root_frames.last_mut() else {
-            return;
-        };
-        if scope.saved_len < frame.saved_len {
-            return;
+        let base = scope.saved_len.min(current_len);
+        let keep = current_len - base;
+        let mut dst = base;
+        if let Some(&frame) = self.sequence_temp_root_frames.last()
+            && base >= frame.eval_base
+        {
+            // Clamp against a boundary restore that truncated below the run.
+            let old_lo = frame.let_floor.min(current_len);
+            let old_hi = (frame.let_floor + frame.let_len)
+                .min(current_len)
+                .max(old_lo);
+            if base == old_hi {
+                dst = old_lo;
+                if dst != base && keep > 0 {
+                    self.eval_temp_roots.copy_within(base..current_len, dst);
+                }
+            } else {
+                for root in &mut self.eval_temp_roots[old_lo..old_hi] {
+                    *root = Value::NIL;
+                }
+            }
+            let frame = self
+                .sequence_temp_root_frames
+                .last_mut()
+                .expect("frame observed above");
+            frame.let_floor = dst;
+            frame.let_len = keep;
         }
-        frame.let_temp_roots = let_temp_roots;
-        self.refresh_current_sequence_temp_roots();
+        self.eval_temp_roots.truncate(dst + keep);
     }
 
     pub(super) fn push_eval_temp_root(&mut self, value: Value) {
@@ -811,19 +842,27 @@ impl Context {
     }
 
     pub(super) fn set_eval_temp_root_slot(&mut self, slot: usize, value: Value) {
+        // `eval_temp_roots` is a pure stack now, so a slot stays valid until
+        // its own scope closes -- except after a contained panic, whose
+        // boundary restore truncates below live slots on purpose.
         if let Some(root) = self.eval_temp_roots.get_mut(slot) {
             *root = value;
         }
     }
 
     pub(super) fn save_sequence_temp_roots(&mut self) -> SequenceTempRootScopeState {
-        let saved_len = self.eval_temp_roots.len();
+        let eval_base = self.eval_temp_roots.len();
+        let call_base = self.eval_call_roots.len();
         self.sequence_temp_root_frames.push(SequenceTempRootFrame {
-            saved_len,
-            call_roots: LispArgVec::new(),
-            let_temp_roots: LispArgVec::new(),
+            eval_base,
+            let_floor: eval_base,
+            let_len: 0,
+            call_base,
         });
-        SequenceTempRootScopeState { saved_len }
+        SequenceTempRootScopeState {
+            eval_base,
+            call_base,
+        }
     }
 
     pub(super) fn restore_sequence_temp_roots(&mut self, scope: SequenceTempRootScopeState) {
@@ -831,16 +870,59 @@ impl Context {
             .sequence_temp_root_frames
             .pop()
             .expect("sequence temp root restore without matching save");
-        let saved_len = frame.saved_len;
-        debug_assert_eq!(saved_len, scope.saved_len);
-        self.eval_temp_roots.truncate(scope.saved_len);
+        debug_assert_eq!(frame.eval_base, scope.eval_base);
+        debug_assert_eq!(frame.call_base, scope.call_base);
+        self.eval_temp_roots.truncate(scope.eval_base);
+        self.eval_call_roots.truncate(scope.call_base);
     }
 
-    pub(super) fn record_sequence_temp_roots_from_backtrace(&mut self, count: usize) {
-        let Some(frame) = self.sequence_temp_root_frames.last() else {
+    /// GNU's `eval_sub` leaves the call it just finished with its evaluated
+    /// argument array still in its own C frame (`argvals`/`vals`), and the
+    /// surrounding `Fprogn` keeps seeing it until the next call overwrites
+    /// it.  Mirror that by replacing this sequence frame's run in
+    /// `eval_call_roots` with the finished call's arguments: one truncate
+    /// and one copy, where this used to materialize a vector per form and
+    /// rebuild a shared root array.
+    ///
+    /// The copy out of `bc_buf` is load-bearing: `eval_sub_cons` truncates
+    /// the operand stack a few lines later, so a span into it would go dead
+    /// immediately (see the weak-hash-table regressions).
+    #[inline]
+    pub(super) fn record_sequence_call_roots(&mut self, count: usize) {
+        let Some(&frame) = self.sequence_temp_root_frames.last() else {
             return;
         };
-        let saved_len = frame.saved_len;
+        let base = frame.call_base;
+        let ctx = &mut *self;
+        let Some(entry) = ctx.specpdl.get(count) else {
+            return;
+        };
+        let SpecBinding::Backtrace { args, .. } = entry else {
+            return ctx.record_sequence_call_roots_slow(count, base);
+        };
+        match args.view() {
+            // A special form contributes nothing, leaving the previous run
+            // in place: today's `if unevalled { return }`.
+            BacktraceArgsView::Unevalled(_) => (),
+            BacktraceArgsView::Evaluated0 => ctx.eval_call_roots.truncate(base),
+            BacktraceArgsView::EvaluatedBcStack(span) => {
+                let start = span.start();
+                let end = start.saturating_add(span.len());
+                ctx.eval_call_roots.truncate(base);
+                if end <= ctx.bc_buf.len() {
+                    let (bc_buf, eval_call_roots) = (&ctx.bc_buf, &mut ctx.eval_call_roots);
+                    eval_call_roots.extend_from_slice(&bc_buf[start..end]);
+                }
+            }
+            BacktraceArgsView::Evaluated(_) => ctx.record_sequence_call_roots_slow(count, base),
+        }
+    }
+
+    /// The shapes that do not address the operand stack: an owned argument
+    /// vector, or a compact one- or two-argument frame.
+    #[cold]
+    #[inline(never)]
+    fn record_sequence_call_roots_slow(&mut self, count: usize, base: usize) {
         let Some(entry) = self.specpdl.get(count) else {
             return;
         };
@@ -850,21 +932,8 @@ impl Context {
         if unevalled {
             return;
         }
-        let frame_index = self.sequence_temp_root_frames.len() - 1;
-        self.sequence_temp_root_frames[frame_index].call_roots = values;
-        debug_assert!(self.eval_temp_roots.len() >= saved_len);
-        self.refresh_current_sequence_temp_roots();
-    }
-
-    pub(super) fn refresh_current_sequence_temp_roots(&mut self) {
-        let Some(frame) = self.sequence_temp_root_frames.last() else {
-            return;
-        };
-        self.eval_temp_roots.truncate(frame.saved_len);
-        self.eval_temp_roots
-            .extend(frame.call_roots.iter().copied());
-        self.eval_temp_roots
-            .extend(frame.let_temp_roots.iter().copied());
+        self.eval_call_roots.truncate(base);
+        self.eval_call_roots.extend(values.iter().copied());
     }
 
     pub(crate) fn record_save_excursion(&mut self) -> Option<usize> {

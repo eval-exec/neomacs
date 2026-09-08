@@ -3198,6 +3198,14 @@ pub struct Context {
     /// argument array while it evaluates the next form, and `Flet` retaining
     /// its `temps` array until `SAFE_FREE_UNBIND_TO`.
     eval_temp_roots: Vec<Value>,
+    /// Per-sequence-frame mirror of the argument array GNU's `eval_sub`
+    /// leaves in its own C frame (`argvals`/`vals`, `src/eval.c:2607/2643`)
+    /// and points the backtrace entry at (`set_backtrace_args`).  The last
+    /// evaluated call's arguments for the innermost sequence frame live at
+    /// `[frame.call_base ..]`; frames below hold their own frozen runs, so
+    /// the whole vector is exactly the live set and the GC walks it flat.
+    /// Grow-only, like `bc_buf`.
+    eval_call_roots: Vec<Value>,
     sequence_temp_root_frames: Vec<SequenceTempRootFrame>,
     /// Contiguous bytecode stack buffer, matching GNU Emacs's bc_thread_state.
     /// All bytecode frames share this single buffer. GC scans it directly.
@@ -3622,17 +3630,28 @@ pub(crate) struct EvalTempRootScopeState {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SequenceTempRootScopeState {
-    saved_len: usize,
+    eval_base: usize,
+    call_base: usize,
 }
 
-#[derive(Clone, Debug)]
+/// Where one body sequence's transient roots live in the two arenas.
+///
+/// Four indices, `Copy`: pushing and popping a sequence frame no longer
+/// constructs and drops two `SmallVec`s per `progn`.
+#[derive(Clone, Copy, Debug)]
 struct SequenceTempRootFrame {
-    saved_len: usize,
-    // `LispArgVec`: the values arrive as one from the backtrace entry and
-    // are at most a handful, so rooting them per interpreted form must not
-    // allocate (a `Vec` here was a malloc+free on every cons form).
-    call_roots: LispArgVec,
-    let_temp_roots: LispArgVec,
+    /// `eval_temp_roots.len()` at push: the pop floor.
+    eval_base: usize,
+    /// Floor of this frame's retained let/let* residue run.  A returned
+    /// special form's temps stay visible to the rest of the sequence, as
+    /// GNU's freed-but-still-scanned stack slots do.
+    let_floor: usize,
+    /// Length of that run.
+    let_len: usize,
+    /// `eval_call_roots.len()` at push.  This frame's call-argument run is
+    /// `eval_call_roots[call_base..]`, so its length is implicit and the
+    /// recorder never writes the frame back.
+    call_base: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3797,6 +3816,7 @@ pub(crate) struct ModuleBoundarySnapshot {
     bc_buf_len: usize,
     backtrace_args_len: usize,
     eval_temp_roots_len: usize,
+    eval_call_roots_len: usize,
     sequence_temp_root_frames_len: usize,
     vm_root_frames_len: usize,
     scratch_gc_roots_len: usize,
@@ -3857,6 +3877,7 @@ impl Context {
             bc_buf_len: self.bc_buf.len(),
             backtrace_args_len: self.backtrace_args_stack.len(),
             eval_temp_roots_len: self.eval_temp_roots.len(),
+            eval_call_roots_len: self.eval_call_roots.len(),
             sequence_temp_root_frames_len: self.sequence_temp_root_frames.len(),
             vm_root_frames_len: self.vm_root_frames.len(),
             scratch_gc_roots_len: save_scratch_gc_roots(),
@@ -3897,6 +3918,7 @@ impl Context {
         // owning specpdl entry.
         self.backtrace_args_stack.truncate(snap.backtrace_args_len);
         self.eval_temp_roots.truncate(snap.eval_temp_roots_len);
+        self.eval_call_roots.truncate(snap.eval_call_roots_len);
         self.sequence_temp_root_frames
             .truncate(snap.sequence_temp_root_frames_len);
         self.vm_root_frames.truncate(snap.vm_root_frames_len);
@@ -3977,6 +3999,7 @@ impl Context {
         self.bc_buf.truncate(snap.bc_buf_len);
         self.backtrace_args_stack.truncate(snap.backtrace_args_len);
         self.eval_temp_roots.truncate(snap.eval_temp_roots_len);
+        self.eval_call_roots.truncate(snap.eval_call_roots_len);
         self.sequence_temp_root_frames
             .truncate(snap.sequence_temp_root_frames_len);
         self.vm_root_frames.truncate(snap.vm_root_frames_len);
@@ -5548,7 +5571,7 @@ impl Context {
             None => self.eval_sub_cons_dispatch(original_fun, original_args, outer_bt_count),
         };
         let result = self.dispatch_signal_result_if_needed(dispatch_result);
-        self.record_sequence_temp_roots_from_backtrace(outer_bt_count);
+        self.record_sequence_call_roots(outer_bt_count);
         let result = self.unbind_to_with_result(outer_bt_count, result);
         // The evaluated call parked its function and arguments on the VM
         // operand stack (see `eval_sub_cons_dispatch`); the frame that

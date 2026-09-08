@@ -545,6 +545,75 @@ fn weak_key_hash_table_keeps_entry_for_same_sequence_eval_args() {
     );
 }
 
+/// A returned special form's temporaries stay visible to the rest of the body
+/// sequence, as GNU's freed-but-still-scanned stack slots do -- including
+/// across an intervening call, where this port used to clobber the live slot.
+/// Answers verified on the pinned GNU build.
+#[test]
+fn weak_key_hash_table_keeps_let_star_temp_across_an_intervening_call() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::Context::new();
+    assert_eq!(
+        ev.eval_str(
+            "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
+               (list 1 2 3 4 5) \
+               (let* ((obj (cons 1 2))) \
+                 (progn (puthash obj :val ht)) \
+                 (setq obj nil) \
+                 (garbage-collect) \
+                 (hash-table-count ht)))",
+        )
+        .unwrap()
+        .as_fixnum(),
+        Some(1),
+        "the let* value slot must survive the calls the body makes around it"
+    );
+}
+
+/// The residue of one returned special form stops being rooted when the next
+/// special form in the same sequence returns -- even when that next form
+/// pushed no temporaries of its own.
+#[test]
+fn weak_key_hash_table_empty_let_clears_previous_let_residue() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::Context::new();
+    assert_eq!(
+        ev.eval_str(
+            "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
+               (let ((obj (cons 1 2))) (puthash obj :val ht) nil) \
+               (let () 1) \
+               (garbage-collect) \
+               (hash-table-count ht))",
+        )
+        .unwrap()
+        .as_fixnum(),
+        Some(0),
+        "an empty let still retires the previous form's temporaries"
+    );
+}
+
+/// The same, when the next form's own temporary sits above a live enclosing
+/// `let*` slot: the dead run cannot be truncated away without killing that
+/// slot, so it is un-rooted in place.
+#[test]
+fn weak_key_hash_table_nested_let_in_let_star_init_clears_residue() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::Context::new();
+    assert_eq!(
+        ev.eval_str(
+            "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
+               (let ((obj (cons 1 2))) (puthash obj :val ht) nil) \
+               (let* ((a (let ((z 1)) z))) \
+                 (garbage-collect) \
+                 (hash-table-count ht)))",
+        )
+        .unwrap()
+        .as_fixnum(),
+        Some(0),
+        "a live let* slot must not keep the previous form's residue rooted"
+    );
+}
+
 #[test]
 fn weak_key_hash_table_drops_entry_after_inner_sequence_returns() {
     // The same temporary key is no longer kept once the inner Fprogn frame has

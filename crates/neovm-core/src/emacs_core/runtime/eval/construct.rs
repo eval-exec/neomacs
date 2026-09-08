@@ -2213,6 +2213,7 @@ impl Context {
             vm_root_frames: Vec::new(),
             backtrace_args_stack: Vec::new(),
             eval_temp_roots: Vec::new(),
+            eval_call_roots: Vec::new(),
             sequence_temp_root_frames: Vec::new(),
             bc_buf: Vec::with_capacity(4096),
             jit_root_stack: Vec::new(),

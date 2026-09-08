@@ -500,12 +500,9 @@ impl InstrStarts {
     /// Byte offset and instruction index of every instruction start, in byte
     /// order.
     fn entries(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.0
-            .iter()
-            .enumerate()
-            .filter_map(|(byte_offset, &idx)| {
-                (idx != Self::NOT_A_START).then_some((byte_offset, idx as usize))
-            })
+        self.0.iter().enumerate().filter_map(|(byte_offset, &idx)| {
+            (idx != Self::NOT_A_START).then_some((byte_offset, idx as usize))
+        })
     }
 }
 
