@@ -1670,9 +1670,8 @@ impl Context {
                     // between here and the leaf's prologue, which roots it (the
                     // operand-stack args stay rooted on bc_buf meanwhile).
                     let rest = if nargs > nonrest {
-                        Value::list_from_slice(
-                            &self.bc_buf[args_start + nonrest..args_start + nargs],
-                        )
+                        self.tagged_heap
+                            .list_from_slice(&self.bc_buf[args_start + nonrest..args_start + nargs])
                     } else {
                         Value::NIL
                     };

@@ -7,62 +7,93 @@ use super::*;
 
 impl TaggedHeap {
     /// Allocate a cons cell. Returns a tagged Value.
+    ///
+    /// GNU `Fcons` (`src/alloc.c:2599`): pop the free list, else bump the
+    /// current block (allocating a fresh one only when it is full), store
+    /// car and cdr, advance the consing counters.  Like `Fcons`, this MUST
+    /// NOT collect or run Lisp: the list builders below and the JIT shims
+    /// (`neovm_jit_cons`, `neovm_jit_list`) hold an unrooted accumulator
+    /// across it, exactly as GNU's C locals do.
+    #[inline]
     pub fn alloc_cons(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
+        let cell = if !self.cons_free_list.is_null() {
+            let cell = self.cons_free_list;
+            // SAFETY: the free list links reclaimed cells of owned blocks
+            // through `free_next`; the head is such a cell.
+            unsafe { self.cons_free_list = (*cell).free_next() };
+            cell
+        } else if let Some(block) = self.cons_blocks.last_mut()
+            && let Some(cell) = block.alloc_bump_cell()
+        {
+            cell
+        } else {
+            self.alloc_cons_from_fresh_block()
+        };
+        // SAFETY: `cell` is a live, cell-aligned slot of a block this heap
+        // owns, and is not on the free list any more.
+        unsafe {
+            (*cell).set_car(car);
+            (*cell).set_cdr(cdr);
+        }
         self.add_memory_use_count(MemoryUseCountSlot::ConsCells, 1);
+        self.allocated_count += 1;
+        self.cons_live_count += 1;
+        self.note_allocation_bytes(size_of::<ConsCell>());
         // Allocate-black during the deferred sweep OR a concurrent mark: a cons
         // born while a block is unswept must survive that block's reclaim, and a
         // cons born during concurrent marking must survive this cycle's sweep
         // (the GC thread won't reach it, and a black owner may point at it before
         // the next root snapshot). New conses are always live, so this is exact
         // (cleared at the next mark's begin).
-        let sweeping = self.sweep_in_progress || self.concurrent_mark_running;
-        if !self.cons_free_list.is_null() {
-            let cell = self.cons_free_list;
-            unsafe {
-                self.cons_free_list = (*cell).free_next();
-                (*cell).set_car(car);
-                (*cell).set_cdr(cdr);
-            }
-            self.allocated_count += 1;
-            self.cons_live_count += 1;
-            self.note_allocation_bytes(size_of::<ConsCell>());
-            if sweeping {
-                self.mark_cons(cell);
-            }
-            return unsafe { TaggedValue::from_cons_ptr(cell) };
+        if self.sweep_in_progress || self.concurrent_mark_running {
+            self.mark_cons_allocated_black(cell);
         }
+        // SAFETY: `cell` was just fully initialized.
+        unsafe { TaggedValue::from_cons_ptr(cell) }
+    }
 
-        if let Some(block) = self.cons_blocks.last_mut()
-            && let Some(cell) = block.alloc_bump(car, cdr)
-        {
-            if sweeping {
-                block.mark_ptr(cell);
-            }
-            self.allocated_count += 1;
-            self.cons_live_count += 1;
-            self.note_allocation_bytes(size_of::<ConsCell>());
-            return unsafe { TaggedValue::from_cons_ptr(cell) };
-        }
-
-        // All existing blocks are exhausted and there are no reclaimed cells,
-        // so allocate a fresh current block and bump from it, matching GNU's
-        // cons_block/cons_block_index path.
+    /// Every existing block is exhausted and nothing was reclaimed: take a
+    /// fresh block and bump from it, matching GNU's `cons_block`/
+    /// `cons_block_index` path.  Out of line so the hot path is the free-list
+    /// pop and the cursor bump.
+    #[cold]
+    #[inline(never)]
+    fn alloc_cons_from_fresh_block(&mut self) -> *mut ConsCell {
         let mut block = ConsBlock::new();
         let block_base = block.base_addr();
         let cell = block
-            .alloc_bump(car, cdr)
+            .alloc_bump_cell()
             .expect("fresh block should have space");
         self.cons_blocks.push(block);
         let block_index = self.cons_blocks.len() - 1;
         self.cons_block_index_by_base
             .insert(block_base, block_index);
-        self.allocated_count += 1;
-        self.cons_live_count += 1;
-        self.note_allocation_bytes(size_of::<ConsCell>());
-        if sweeping {
-            self.mark_cons(cell);
+        cell
+    }
+
+    /// The allocate-black tail (see `alloc_cons`): reached only while a
+    /// deferred sweep or a concurrent mark is in flight.
+    #[cold]
+    #[inline(never)]
+    fn mark_cons_allocated_black(&mut self, cell: *mut ConsCell) {
+        self.mark_cons(cell);
+    }
+
+    /// GNU `Flist` (`src/alloc.c:2699`): `val = Qnil; while (nargs > 0) val =
+    /// Fcons (args[--nargs], val);`.
+    ///
+    /// The accumulator crosses only `alloc_cons`, which cannot collect or run
+    /// Lisp, so it needs no root — GNU's `Flist` roots nothing either.  VALUES
+    /// stay the caller's responsibility (they are its operand-stack span, its
+    /// subr arguments, or its own locals), exactly as for `alloc_cons`'s
+    /// `car`.
+    #[inline]
+    pub fn list_from_slice(&mut self, values: &[TaggedValue]) -> TaggedValue {
+        let mut acc = TaggedValue::NIL;
+        for &value in values.iter().rev() {
+            acc = self.alloc_cons(value, acc);
         }
-        unsafe { TaggedValue::from_cons_ptr(cell) }
+        acc
     }
 
     /// Allocate a string object from the STRING ARENA PAGES.

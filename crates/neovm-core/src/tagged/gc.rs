@@ -2207,6 +2207,8 @@ pub use arena_pages::*;
 mod gc_thread;
 pub use gc_thread::*;
 #[cfg(test)]
+mod cons_alloc_tests;
+#[cfg(test)]
 mod marker_arena_tests;
 #[cfg(test)]
 mod symbol_with_pos_arena_tests;

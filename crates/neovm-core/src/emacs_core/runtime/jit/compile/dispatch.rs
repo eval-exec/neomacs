@@ -187,26 +187,20 @@ pub extern "C" fn neovm_jit_builtin3(
     })
 }
 
-/// `Op::List`: build a list from `n` operand words (the interpreter's
-/// `Value::list_from_slice` on the live stack slice). The values are rooted
-/// here across the per-cell allocations; the generated code rooted the rest of
-/// its frame. Infallible, context-free.
+/// `Op::List`: build a list from `n` operand words, GNU `Flist (n, &TOP)` on
+/// the live stack slice. Nothing here can collect or run Lisp (cons
+/// allocation is GC-atomic, see `TaggedHeap::alloc_cons`), so the operand
+/// words need no scratch roots -- the same contract `neovm_jit_cons`
+/// documents. Infallible, context-free.
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_list(args_ptr: *const i64, nargs: i64) -> i64 {
-    let nargs = nargs as usize;
-    let saved = save_scratch_gc_roots();
-    let mut args: SmallVec<[Value; 8]> = SmallVec::with_capacity(nargs);
-    for i in 0..nargs {
-        // SAFETY: the generated code stored exactly `nargs` words at
-        // `args_ptr` (its call-args stack slot) immediately before this call.
-        let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-        push_scratch_gc_root(v);
-        args.push(v);
-    }
-    let result = Value::list_from_slice(&args).bits() as i64;
-    restore_scratch_gc_roots(saved);
-    result
+    // SAFETY: the generated code stored exactly `nargs` words at `args_ptr`
+    // (its call-args stack slot) immediately before this call, and `Value` is
+    // `#[repr(transparent)]` over a word, so the slot IS a `&[Value]` for the
+    // duration of the call; nothing below writes to generated-code memory.
+    let args = unsafe { std::slice::from_raw_parts(args_ptr.cast::<Value>(), nargs as usize) };
+    Value::list_from_slice(args).bits() as i64
 }
 
 /// Call a slice-shaped direct builtin (`JIT_BUILTIN_SLICE[idx]`) — the

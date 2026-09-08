@@ -154,24 +154,20 @@ impl ConsBlock {
             .fetch_or(mark.mask, Ordering::Relaxed);
     }
 
-    /// Allocate a fresh cons cell from this block's bump cursor.
-    /// Returns None if the block has no never-used cells left.
-    pub(super) fn alloc_bump(
-        &mut self,
-        car: TaggedValue,
-        cdr: TaggedValue,
-    ) -> Option<*mut ConsCell> {
-        if self.next_index as usize >= CONS_BLOCK_SIZE {
+    /// Take the next never-used cell from this block's bump cursor, or None
+    /// when the block is full.  The cursor only: `alloc_cons` writes car and
+    /// cdr once, for cells from all three sources (GNU's `cons_block_index`
+    /// bump is likewise just the cursor).
+    #[inline(always)]
+    pub(super) fn alloc_bump_cell(&mut self) -> Option<*mut ConsCell> {
+        let idx = self.next_index;
+        if idx as usize >= CONS_BLOCK_SIZE {
             return None;
         }
-        let idx = self.next_index;
-        self.next_index += 1;
-        let cell = unsafe { self.cells_ptr().add(idx as usize) };
-        unsafe {
-            (*cell).set_car(car);
-            (*cell).set_cdr(cdr);
-        }
-        Some(cell)
+        self.next_index = idx + 1;
+        // SAFETY: `idx` is below the block's cell count, so the offset lands
+        // inside this block's cells.
+        Some(unsafe { self.cells_ptr().add(idx as usize) })
     }
 
     /// Clear all mark bits used by this block. Runs stop-the-world (at

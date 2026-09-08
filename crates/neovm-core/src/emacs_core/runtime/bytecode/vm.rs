@@ -2534,9 +2534,9 @@ impl<'a> Vm<'a> {
                 // The rest args are read from the GC-traced caller slots,
                 // which stay live through the cons allocations.
                 let rest_list = if nargs > nonrest {
-                    Value::list_from_slice(
-                        &self.ctx.bc_buf[args_start + nonrest..args_start + nargs],
-                    )
+                    self.ctx
+                        .tagged_heap
+                        .list_from_slice(&self.ctx.bc_buf[args_start + nonrest..args_start + nargs])
                 } else {
                     Value::NIL
                 };
@@ -2636,9 +2636,9 @@ impl<'a> Vm<'a> {
             }
             if let Some(rest_name) = func.params.rest {
                 let rest_list = if arg_idx < nargs {
-                    Value::list_from_slice(
-                        &self.ctx.bc_buf[args_start + arg_idx..args_start + nargs],
-                    )
+                    self.ctx
+                        .tagged_heap
+                        .list_from_slice(&self.ctx.bc_buf[args_start + arg_idx..args_start + nargs])
                 } else {
                     Value::NIL
                 };
@@ -4819,7 +4819,7 @@ impl<'a> Vm<'a> {
                         // GNU bytecode.c:BlistN keeps operands on the bytecode
                         // stack and calls Flist(n, &TOP).  Keep the same stack
                         // rooting discipline here and build from the live slice.
-                        let result = Value::list_from_slice(&stk!()[start..]);
+                        let result = self.ctx.tagged_heap.list_from_slice(&stk!()[start..]);
                         stk!().truncate(start);
                         stk_push!(result);
                     }

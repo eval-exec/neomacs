@@ -1969,38 +1969,24 @@ impl TaggedValue {
     }
 
     /// Build a proper list from a Vec.
-    pub fn list(mut values: Vec<Value>) -> Self {
-        // Root the elements in one go and keep the growing list rooted through
-        // a single slot re-pointed per cons: two thread-local pushes per
-        // element made an 11-element `parse-partial-sexp' state cost ~1.1K Ir
-        // (GNU conses it for ~200).
-        let saved_roots = super::eval::save_scratch_gc_roots();
-        super::eval::push_scratch_gc_roots(&values);
-        let acc_slot = super::eval::push_scratch_gc_root_slot(Value::NIL);
-        let mut acc = Value::NIL;
-        while let Some(item) = values.pop() {
-            acc = Value::cons(item, acc);
-            super::eval::set_scratch_gc_root(acc_slot, acc);
-        }
-        super::eval::restore_scratch_gc_roots(saved_roots);
-        acc
+    pub fn list(values: Vec<Value>) -> Self {
+        Self::list_from_slice(&values)
     }
 
     /// Build a proper list from a slice without first cloning into a `Vec`.
+    ///
+    /// GNU `Flist` (`src/alloc.c:2699`), which conses from the end and roots
+    /// nothing: the accumulator crosses only cons allocation, which cannot
+    /// collect or run Lisp (see `TaggedHeap::alloc_cons`), and the elements
+    /// belong to the caller that is holding them across this call -- an
+    /// operand-stack span, a subr argument span, or its own rooted locals.
+    /// One heap borrow for the whole list; the per-element scratch-root
+    /// pushes this used to make were inert.
     pub fn list_from_slice(values: &[Value]) -> Self {
-        let saved_roots = super::eval::save_scratch_gc_roots();
-        for value in values.iter().copied() {
-            super::eval::push_scratch_gc_root(value);
+        if values.is_empty() {
+            return Value::NIL;
         }
-        let mut acc = Value::NIL;
-        let mut idx = values.len();
-        while idx > 0 {
-            idx -= 1;
-            acc = Value::cons(values[idx], acc);
-            super::eval::push_scratch_gc_root(acc);
-        }
-        super::eval::restore_scratch_gc_roots(saved_roots);
-        acc
+        with_tagged_heap(|heap| heap.list_from_slice(values))
     }
 
     /// Allocate a vector (old API name).
