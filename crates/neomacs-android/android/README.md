@@ -5,6 +5,13 @@ This Gradle project is the thin Android application host for the
 Rust outputs: callers must supply one target-built native library and one
 complete portable runtime asset directory.
 
+The launcher name is **NEO Emacs**. Its checked-in launcher resources are
+generated from `crates/neomacs-display-runtime/assets/window-icon.svg`.
+After changing that shared artwork, regenerate the legacy and adaptive icons
+with `bash crates/neomacs-android/android/scripts/generate-launcher-icons.sh`
+(requires `rsvg-convert` and ImageMagick's `magick`). Normal APK builds do not
+require these image conversion tools.
+
 Build those inputs from the repository root, then assemble the package:
 
 ```sh
