@@ -556,9 +556,11 @@ fn frame_render_state_syncs_visual_cursor_config_from_defaults() {
     let mut defaults = crate::render_thread::cursor::CursorState::new(
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
-    defaults.anim_enabled = false;
-    defaults.trail_size = 17.0;
-    defaults.size_transition_enabled = false;
+    let mut config = neomacs_display_protocol::VisualConfig::default();
+    config.cursor_motion.enabled = false;
+    config.cursor_motion.trail_size = 17.0;
+    config.cursor_size_transition.enabled = false;
+    defaults.apply_visual_config(&config);
 
     render.sync_cursor_config(&defaults, true);
 
