@@ -132,6 +132,20 @@
       :unspecified-font-family
       (lambda () (seq-subseq (font-info (font-spec)) 0 12)))
      (neomacs-image-oracle-cell
+      :svg-fractional-size
+      (lambda ()
+        ;; svg-lib's fractional tag dimensions must follow GNU's sizing
+        ;; order, including preservation of the original aspect ratio.
+        (let ((svg (svg-create 52.910000000000004 17.75))
+              (image-scaling-factor 1.3))
+          (mapcar
+           (lambda (properties)
+             (image-size (apply #'svg-image svg properties) t))
+           '((:scale 1) (:scale default) (:scale 1.3)
+             (:scale 1 :width 40) (:scale 1 :height 12)
+             (:scale 1 :max-width 40) (:scale 1 :max-height 12)
+             (:scale 1 :width 1000) (:scale 1 :height 17))))))
+     (neomacs-image-oracle-cell
       :svg-tag
       (lambda ()
         ;; Exercise svg-lib's public font-info -> SVG text -> image path

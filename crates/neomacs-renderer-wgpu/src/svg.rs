@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::image_cache::constrain_raster_extent;
 use neomacs_display_protocol::{
-    ImageColorContext, ImageNativeExtent, ImageRealization, ImageRotation, ImageSizeSpec,
+    ImageColorContext, ImageIntrinsicExtent, ImageRealization, ImageRotation, ImageSizeSpec,
     ResolvedImageGeometry,
 };
 
@@ -48,8 +48,7 @@ enum SvgColorMode {
 
 struct LoadedSvg {
     tree: usvg::Tree,
-    natural_width: f64,
-    natural_height: f64,
+    intrinsic: ImageIntrinsicExtent,
 }
 
 #[derive(Debug)]
@@ -68,18 +67,13 @@ pub(crate) const MAX_SVG_INPUT_SIZE: usize = 8 * 1024 * 1024;
 const MAX_SVG_RASTER_BYTES: usize = 64 * 1024 * 1024;
 const FALLBACK_VIEWPORT_SIZE: f32 = 0.001;
 
-pub(crate) fn query_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-    catch_unwind(AssertUnwindSafe(|| query_dimensions_inner(data)))
-        .ok()
-        .flatten()
-}
-
-fn query_dimensions_inner(data: &[u8]) -> Option<(u32, u32)> {
-    let loaded = load(data, &SvgResourceContext::Isolated, SvgColorMode::Intrinsic)?;
-    Some((
-        loaded.natural_width.ceil() as u32,
-        loaded.natural_height.ceil() as u32,
-    ))
+pub(crate) fn query_intrinsic_extent(data: &[u8]) -> Option<ImageIntrinsicExtent> {
+    catch_unwind(AssertUnwindSafe(|| {
+        load(data, &SvgResourceContext::Isolated, SvgColorMode::Intrinsic)
+            .map(|loaded| loaded.intrinsic)
+    }))
+    .ok()
+    .flatten()
 }
 
 pub(crate) fn decode(
@@ -110,13 +104,7 @@ fn decode_inner(
     // `compute_image_size` is applied against its natural extent here rather
     // than by resampling afterwards. Pixel extents use layout×report scale so
     // `:scale default` on HiDPI recovers img->width without inverting ceil.
-    let native_width = loaded.natural_width.ceil() as u32;
-    let native_height = loaded.natural_height.ceil() as u32;
-    let geometry = realization.resolve_geometry(
-        size,
-        ImageNativeExtent::new(native_width, native_height),
-        ImageRotation::None,
-    );
+    let geometry = realization.resolve_geometry(size, loaded.intrinsic, ImageRotation::None);
     // Match GNU `scale_image_size`: ceil so fractional device scales never
     // discard a partial SVG pixel. Constrain once more to the GPU limit.
     let geometry = geometry.with_raster(constrain_raster_extent(geometry.raster()));
@@ -132,9 +120,10 @@ fn decode_inner(
     // Render in the document's measured coordinate space, then scale that
     // complete space into the constrained output. This keeps dimensionless
     // documents and GNU's generated outer-viewBox behavior coherent.
+    let (natural_width, natural_height) = loaded.intrinsic.dimensions();
     let transform = tiny_skia::Transform::from_scale(
-        raster_width as f32 / loaded.natural_width as f32,
-        raster_height as f32 / loaded.natural_height as f32,
+        raster_width as f32 / natural_width as f32,
+        raster_height as f32 / natural_height as f32,
     );
     resvg::render(&loaded.tree, transform, &mut pixmap.as_mut());
     let rgba = pixmap.take_demultiplied();
@@ -169,27 +158,13 @@ fn load(
 ) -> Option<LoadedSvg> {
     let data = bounded_svg_data(data)?;
     let geometry = root_geometry(data.as_ref())?;
-    if let Some((natural_width, natural_height)) = geometry.view_box_dimensions() {
-        return load_with_dimensions(
-            data,
-            geometry,
-            natural_width,
-            natural_height,
-            resources,
-            color_mode,
-        );
+    if let Some(intrinsic) = geometry.view_box_dimensions() {
+        return load_with_dimensions(data, geometry, intrinsic, resources, color_mode);
     }
     if let (Some(natural_width), Some(natural_height)) = (geometry.width, geometry.height)
-        && valid_dimensions(natural_width, natural_height)
+        && let Some(intrinsic) = ImageIntrinsicExtent::new(natural_width, natural_height)
     {
-        return load_with_dimensions(
-            data,
-            geometry,
-            natural_width,
-            natural_height,
-            resources,
-            color_mode,
-        );
+        return load_with_dimensions(data, geometry, intrinsic, resources, color_mode);
     }
 
     // A dimensionless SVG has no viewport in GNU/librsvg. Relative child
@@ -199,34 +174,23 @@ fn load(
     let measurement_data = suppress_unresolved_percentages(data.as_ref())?;
     let options = svg_options(&geometry, resources);
     let measurement_tree = usvg::Tree::from_data(measurement_data.as_ref(), &options).ok()?;
-    let (natural_width, natural_height) = fallback_dimensions(&measurement_tree)?;
-    load_with_dimensions(
-        data,
-        geometry,
-        natural_width,
-        natural_height,
-        resources,
-        color_mode,
-    )
+    let intrinsic = fallback_dimensions(&measurement_tree)?;
+    load_with_dimensions(data, geometry, intrinsic, resources, color_mode)
 }
 
 fn load_with_dimensions(
     data: Cow<'_, [u8]>,
     geometry: RootGeometry,
-    natural_width: f64,
-    natural_height: f64,
+    intrinsic: ImageIntrinsicExtent,
     resources: &SvgResourceContext,
     color_mode: SvgColorMode,
 ) -> Option<LoadedSvg> {
     let data = inject_root_face_color(data, &geometry, color_mode);
+    let (natural_width, natural_height) = intrinsic.dimensions();
     let (data, geometry) = normalize_root_dimensions(data, geometry, natural_width, natural_height);
     let options = svg_options(&geometry, resources);
     let tree = usvg::Tree::from_data(data.as_ref(), &options).ok()?;
-    Some(LoadedSvg {
-        tree,
-        natural_width,
-        natural_height,
-    })
+    Some(LoadedSvg { tree, intrinsic })
 }
 
 /// Establish GNU's face colors on the SVG document (src/image.c:12344).
@@ -709,10 +673,12 @@ fn find_start_tag_insert_pos(data: &[u8], start: usize) -> Option<usize> {
 }
 
 impl RootGeometry {
-    fn view_box_dimensions(&self) -> Option<(f64, f64)> {
+    fn view_box_dimensions(&self) -> Option<ImageIntrinsicExtent> {
         let (view_width, view_height) = self.view_box?;
         let dimensions = match (self.width, self.height) {
-            (Some(width), Some(height)) if valid_dimensions(width, height) => (width, height),
+            (Some(width), Some(height)) if ImageIntrinsicExtent::new(width, height).is_some() => {
+                (width, height)
+            }
             (Some(width), _) if width.is_finite() && width > 0.0 => {
                 (width, width * view_height / view_width)
             }
@@ -721,7 +687,7 @@ impl RootGeometry {
             }
             _ => (view_width, view_height),
         };
-        valid_dimensions(dimensions.0, dimensions.1).then_some(dimensions)
+        ImageIntrinsicExtent::new(dimensions.0, dimensions.1)
     }
 }
 
@@ -853,7 +819,7 @@ fn validate_embedded_raster(data: &[u8]) -> Option<()> {
     (size.width <= 4096 && size.height <= 4096 && bytes <= MAX_SVG_RASTER_BYTES).then_some(())
 }
 
-fn fallback_dimensions(tree: &usvg::Tree) -> Option<(f64, f64)> {
+fn fallback_dimensions(tree: &usvg::Tree) -> Option<ImageIntrinsicExtent> {
     if tree.root().children().is_empty() {
         return None;
     }
@@ -864,7 +830,7 @@ fn fallback_dimensions(tree: &usvg::Tree) -> Option<(f64, f64)> {
     let ink = tree.root().abs_layer_bounding_box();
     let width = f64::from(ink.right());
     let height = f64::from(ink.bottom());
-    valid_dimensions(width, height).then_some((width, height))
+    ImageIntrinsicExtent::new(width, height)
 }
 
 fn absolute_length_in_pixels(value: &str) -> Option<f64> {
@@ -887,13 +853,47 @@ fn valid_root_length(value: &str) -> bool {
         .is_some_and(|length| length.number.is_finite() && length.number > 0.0)
 }
 
-fn valid_dimensions(width: f64, height: f64) -> bool {
-    width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fractional_svg_sizing_matches_gnu_before_rasterization() {
+        use neomacs_display_protocol::image::AxisSize::{Exact, Native};
+
+        // Measured with GNU Emacs 31.1 by image-size-oracle.el. The native
+        // path truncates before scaling; constrained axes retain the ratio.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="52.910000000000004" height="17.75"/>"##;
+        let intrinsic = query_intrinsic_extent(svg).expect("measure fractional SVG");
+        for (size, scale, expected) in [
+            (ImageSizeSpec::default(), 1.0, (52, 17)),
+            (ImageSizeSpec::default(), 1.3, (68, 23)),
+            (ImageSizeSpec::new(Exact(40), Native), 1.0, (40, 14)),
+            (ImageSizeSpec::new(Native, Exact(12)), 1.0, (36, 12)),
+            (ImageSizeSpec::new(Exact(1000), Native), 1.0, (1000, 336)),
+            (ImageSizeSpec::new(Native, Exact(17)), 1.0, (51, 17)),
+        ] {
+            let decoded = decode(
+                svg,
+                size,
+                ImageRotation::None,
+                ImageRealization::with_device_scale(scale, 1.0),
+                ImageColorContext::default(),
+                SvgResourceContext::Isolated,
+            )
+            .expect("fractional SVG should decode");
+            assert_eq!(decoded.geometry.layout().dimensions(), expected);
+            assert_eq!(decoded.geometry.reported().dimensions(), expected);
+            assert_eq!(decoded.geometry.raster().dimensions(), expected);
+            assert_eq!(decoded.rgba.len(), (expected.0 * expected.1 * 4) as usize);
+            let pending = ImageRealization::with_device_scale(scale, 1.0).resolve_geometry(
+                size,
+                intrinsic,
+                ImageRotation::None,
+            );
+            assert_eq!(pending, decoded.geometry);
+        }
+    }
 
     /// Telega's `etc/symbols/reply.svg`: a default-black (no `fill`, no
     /// `currentColor`) path, loaded with `:mask heuristic` like

@@ -659,6 +659,39 @@ pub type ImageLayoutExtent = ImageExtent<ImageLayoutSpace>;
 pub type ImageRasterExtent = ImageExtent<ImageRasterSpace>;
 pub type ImageReportedExtent = ImageExtent<ImageReportedSpace>;
 
+/// Finite, positive source dimensions before conversion to integer pixels.
+///
+/// Vector documents may have fractional dimensions. Keep these distinct from
+/// pixel extents: GNU truncates native dimensions before scaling, but uses
+/// their full precision when a requested axis determines the aspect ratio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageIntrinsicExtent {
+    width: f64,
+    height: f64,
+}
+
+impl ImageIntrinsicExtent {
+    #[must_use]
+    pub fn new(width: f64, height: f64) -> Option<Self> {
+        (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+            .then_some(Self { width, height })
+    }
+
+    #[must_use]
+    pub const fn dimensions(self) -> (f64, f64) {
+        (self.width, self.height)
+    }
+}
+
+impl From<ImageNativeExtent> for ImageIntrinsicExtent {
+    fn from(native: ImageNativeExtent) -> Self {
+        Self {
+            width: f64::from(native.width().max(1)),
+            height: f64::from(native.height().max(1)),
+        }
+    }
+}
+
 /// All extents derived for one decoded image realization.
 ///
 /// Keeping the spaces in one value gives bitmap and SVG decoders one sizing
@@ -837,14 +870,14 @@ impl ImageRealization {
     pub fn resolve_geometry(
         self,
         size: ImageSizeSpec,
-        native: ImageNativeExtent,
+        native: impl Into<ImageIntrinsicExtent>,
         rotation: ImageRotation,
     ) -> ResolvedImageGeometry {
-        let (native_width, native_height) = native.dimensions();
+        let native = native.into();
         let (layout_width, layout_height) =
-            size.desired(native_width, native_height, f64::from(self.layout_scale()));
+            size.desired_intrinsic(native, f64::from(self.layout_scale()));
         let (reported_width, reported_height) =
-            size.desired(native_width, native_height, self.image_pixel_scale());
+            size.desired_intrinsic(native, self.image_pixel_scale());
         let raster_width = self.raster_dimension(layout_width);
         let raster_height = self.raster_dimension(layout_height);
 
@@ -896,7 +929,7 @@ impl AxisSize {
     fn target(self, scale: f64) -> Option<u32> {
         match self {
             // GNU scales the target too (src/image.c:2766).
-            Self::Exact(size) => Some(scale_size(size, 1, scale)),
+            Self::Exact(size) => Some(scale_size(size, 1.0, scale)),
             _ => None,
         }
     }
@@ -1011,8 +1044,16 @@ impl ImageSizeSpec {
     /// Mirrors GNU `compute_image_size` (src/image.c:2750) step for step.
     #[must_use]
     pub fn desired(self, native_width: u32, native_height: u32, scale: f64) -> (u32, u32) {
-        let native_width = native_width.max(1);
-        let native_height = native_height.max(1);
+        self.desired_intrinsic(
+            ImageNativeExtent::new(native_width, native_height).into(),
+            scale,
+        )
+    }
+
+    /// Resolve source dimensions without prematurely rounding vector geometry.
+    #[must_use]
+    pub fn desired_intrinsic(self, native: ImageIntrinsicExtent, scale: f64) -> (u32, u32) {
+        let (native_width, native_height) = native.dimensions();
 
         let (mut width, mut height) = match (self.width.target(scale), self.height.target(scale)) {
             // Both given: GNU skips the aspect-preserving work entirely.
@@ -1020,8 +1061,10 @@ impl ImageSizeSpec {
             (Some(width), None) => (width, ratio(width, native_width, native_height)),
             (None, Some(height)) => (ratio(height, native_height, native_width), height),
             (None, None) => (
-                scale_size(native_width, 1, scale),
-                scale_size(native_height, 1, scale),
+                // GNU compute_image_size passes double dimensions to the
+                // integer SIZE parameter of scale_image_size here only.
+                scale_size(native_width as u32, 1.0, scale),
+                scale_size(native_height as u32, 1.0, scale),
             ),
         };
 
@@ -1042,8 +1085,8 @@ impl ImageSizeSpec {
 /// GNU `scale_image_size` (src/image.c:2700): `size * multiplier / divisor`.
 ///
 /// Uses `ceil` like GNU so fractional SVG/device pixels are never discarded.
-fn scale_size(size: u32, divisor: u32, multiplier: f64) -> u32 {
-    let scaled = f64::from(size) * multiplier / f64::from(divisor.max(1));
+fn scale_size(size: u32, divisor: f64, multiplier: f64) -> u32 {
+    let scaled = f64::from(size) * multiplier / divisor;
     if scaled.is_finite() && scaled >= 1.0 {
         scaled.ceil() as u32
     } else {
@@ -1052,13 +1095,47 @@ fn scale_size(size: u32, divisor: u32, multiplier: f64) -> u32 {
 }
 
 /// Keep the aspect ratio: `size * to / from`.
-fn ratio(size: u32, from: u32, to: u32) -> u32 {
-    scale_size(size, from, f64::from(to))
+fn ratio(size: u32, from: f64, to: f64) -> u32 {
+    scale_size(size, from, to)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{AxisSize, ImageRealization, ImageRotation, ImageSizeSpec};
+
+    #[test]
+    fn intrinsic_extent_rejects_invalid_dimensions_without_rounding_valid_ones() {
+        use super::ImageIntrinsicExtent;
+
+        for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(ImageIntrinsicExtent::new(invalid, 10.0).is_none());
+            assert!(ImageIntrinsicExtent::new(10.0, invalid).is_none());
+        }
+        let extent = ImageIntrinsicExtent::new(52.91, 17.75).unwrap();
+        assert_eq!(extent.dimensions(), (52.91, 17.75));
+    }
+
+    #[test]
+    fn fractional_intrinsic_extent_keeps_the_ratio_through_geometry_resolution() {
+        use super::ImageIntrinsicExtent;
+
+        // GNU 31.1 image-size-oracle.el: scaling native dimensions gives
+        // 68x23, while :height 17 uses the fractional ratio to give 51x17.
+        let intrinsic = ImageIntrinsicExtent::new(52.910000000000004, 17.75).unwrap();
+        let geometry = ImageRealization::with_device_scale(1.3, 2.0).resolve_geometry(
+            ImageSizeSpec::default(),
+            intrinsic,
+            ImageRotation::Quarter,
+        );
+        assert_eq!(geometry.layout().dimensions(), (23, 68));
+        assert_eq!(geometry.reported().dimensions(), (23, 68));
+        assert_eq!(geometry.raster().dimensions(), (46, 136));
+        assert_eq!(
+            ImageSizeSpec::new(AxisSize::Native, AxisSize::Exact(17))
+                .desired_intrinsic(intrinsic, 1.0),
+            (51, 17)
+        );
+    }
 
     /// Every expectation below was measured from GNU Emacs 31 on a 40x20 PNG
     /// with `image-scaling-factor` pinned to 1, so the numbers are observed

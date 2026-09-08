@@ -530,6 +530,29 @@ fn svgz_expanding_past_the_svg_input_limit_is_rejected() {
 }
 
 #[test]
+fn fractional_svg_pending_geometry_matches_decoded_geometry() {
+    let data =
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="52.910000000000004" height="17.75"/>"##;
+    // The public dimension query keeps its bounding-pixel contract. Pending
+    // sizing must not feed that rounded answer back into the aspect ratio.
+    assert_eq!(
+        ImageCache::query_data_dimensions(data)
+            .unwrap()
+            .dimensions(),
+        (53, 18)
+    );
+    let size = ImageSizeSpec::new(AxisSize::Exact(1000), AxisSize::Native);
+    let intrinsic = ImageCache::query_data_intrinsic_extent(data).unwrap();
+    let pending =
+        ImageRealization::default().resolve_geometry(size, intrinsic, ImageRotation::None);
+    let decoded = ImageCache::decode_data_with_metadata(data, size, ImageRotation::None, (0, 0))
+        .expect("fractional SVG should decode");
+    // Observed in GNU Emacs 31.1 by image-size-oracle.el.
+    assert_eq!(pending.layout().dimensions(), (1000, 336));
+    assert_eq!(pending, decoded.geometry);
+}
+
+#[test]
 fn svg_physical_units_are_resolved_at_96_dpi() {
     let data = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1in" height="25.4mm">
         <rect width="100%" height="100%" fill="#123456"/>

@@ -8,10 +8,10 @@
 
 use neomacs_display_protocol::{
     ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex, ImageHeuristicMask,
-    ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageMaskKind, ImageMaskPolicy,
-    ImageNativeExtent, ImageRasterExtent, ImageRealization, ImageReportedExtent, ImageRotation,
-    ImageSequenceId, ImageSequenceRetirement, ImageSizeSpec, ResolvedImageGeometry,
-    RetainedImageSet,
+    ImageId, ImageIntrinsicExtent, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
+    ImageMaskKind, ImageMaskPolicy, ImageNativeExtent, ImageRasterExtent, ImageRealization,
+    ImageReportedExtent, ImageRotation, ImageSequenceId, ImageSequenceRetirement, ImageSizeSpec,
+    ResolvedImageGeometry, RetainedImageSet,
 };
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -1189,6 +1189,10 @@ impl ImageCache {
     ///
     /// Raster formats read only their header; SVG requires document parsing.
     pub fn query_file_dimensions(path: &str) -> Option<ImageNativeExtent> {
+        Self::query_file_intrinsic_extent(path).map(Self::unscaled_dimensions)
+    }
+
+    fn query_file_intrinsic_extent(path: &str) -> Option<ImageIntrinsicExtent> {
         let file = File::open(path).ok()?;
         let reader = BufReader::new(file);
 
@@ -1198,45 +1202,50 @@ impl ImageCache {
             .ok()?
             .into_dimensions()
         {
-            return Some(ImageNativeExtent::new(dims.0, dims.1));
+            return Some(ImageNativeExtent::new(dims.0, dims.1).into());
         }
 
         // Fallback: try SVG.
         let data = std::fs::read(path).ok()?;
-        Self::query_svg_dimensions(&data)
+        crate::svg::query_intrinsic_extent(&data)
     }
 
     /// Query image data dimensions.
     ///
     /// Raster formats read only their header; SVG requires document parsing.
     pub fn query_data_dimensions(data: &[u8]) -> Option<ImageNativeExtent> {
+        Self::query_data_intrinsic_extent(data).map(Self::unscaled_dimensions)
+    }
+
+    fn query_data_intrinsic_extent(data: &[u8]) -> Option<ImageIntrinsicExtent> {
         let cursor = std::io::Cursor::new(data);
         if let Ok(dims) = image::ImageReader::new(BufReader::new(cursor))
             .with_guessed_format()
             .ok()?
             .into_dimensions()
         {
-            return Some(ImageNativeExtent::new(dims.0, dims.1));
+            return Some(ImageNativeExtent::new(dims.0, dims.1).into());
         }
 
         // Fallback: try XPM header
         if let Some((w, h)) = crate::xpm::query_xpm_dimensions(data) {
-            return Some(ImageNativeExtent::new(w, h));
+            return Some(ImageNativeExtent::new(w, h).into());
         }
 
         // Fallback: try XBM header
         if let Some((w, h)) = crate::xbm::query_xbm_dimensions(data) {
-            return Some(ImageNativeExtent::new(w, h));
+            return Some(ImageNativeExtent::new(w, h).into());
         }
 
         // Fallback: try SVG.
-        Self::query_svg_dimensions(data)
+        crate::svg::query_intrinsic_extent(data)
     }
 
-    /// Query SVG dimensions without full rendering
-    fn query_svg_dimensions(data: &[u8]) -> Option<ImageNativeExtent> {
-        let (width, height) = crate::svg::query_dimensions(data)?;
-        Some(ImageNativeExtent::new(width, height))
+    /// Preserve the pixel-query contract: return a bounding integer extent.
+    /// Pending-image sizing must instead retain the fractional source extent.
+    fn unscaled_dimensions(intrinsic: ImageIntrinsicExtent) -> ImageNativeExtent {
+        let (width, height) = intrinsic.dimensions();
+        ImageNativeExtent::new(width.ceil() as u32, height.ceil() as u32)
     }
 
     /// Load image from file (async)
@@ -1283,7 +1292,7 @@ impl ImageCache {
         let load = self.begin_load(load);
         let image = load.image();
         // Query dimensions for the pending-image placeholder.
-        if let Some(dims) = Self::query_data_dimensions(data) {
+        if let Some(dims) = Self::query_data_intrinsic_extent(data) {
             self.pending_dimensions.insert(
                 image,
                 realization.resolve_geometry(size, dims, rotation).layout(),
@@ -1325,7 +1334,7 @@ impl ImageCache {
         let load = self.begin_load(load);
         let image = load.image();
         // Query dimensions for the pending-image placeholder.
-        if let Some(dims) = Self::query_file_dimensions(path) {
+        if let Some(dims) = Self::query_file_intrinsic_extent(path) {
             self.pending_dimensions.insert(
                 image,
                 realization.resolve_geometry(size, dims, rotation).layout(),
@@ -1380,7 +1389,7 @@ impl ImageCache {
         let realization = ImageRealization::with_device_scale(1.0, raster_scale);
 
         // Query dimensions for the pending-image placeholder.
-        if let Some(dims) = Self::query_data_dimensions(data) {
+        if let Some(dims) = Self::query_data_intrinsic_extent(data) {
             self.pending_dimensions.insert(
                 image,
                 realization.resolve_geometry(size, dims, rotation).layout(),
