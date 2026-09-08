@@ -82,7 +82,10 @@ pub enum GlyphType {
     /// graphical shaper.
     AutomaticComposite {
         text: Box<str>,
-        terminal: TerminalComposition,
+        /// Like GNU's composition-cache identity, keep the plan out of each
+        /// ordinary glyph. Shared ownership also makes row reuse cheap without
+        /// making the protocol depend on the lifetime of the VM's cache.
+        terminal: std::sync::Arc<TerminalComposition>,
     },
     /// Whitespace/filler — occupies `width_cols` character cells.
     Stretch { width_cols: u16 },
@@ -510,6 +513,7 @@ impl GlyphStringSourceId {
 /// buffer position, an index in a particular string, and redisplay-owned
 /// output before interpreting it.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "GlyphProvenanceWire", into = "GlyphProvenanceWire")]
 pub enum GlyphProvenance {
     Buffer {
         charpos: usize,
@@ -518,7 +522,50 @@ pub enum GlyphProvenance {
         source: GlyphStringSourceId,
         index: usize,
     },
+    LineEnd,
+    Mark,
+    EmptyLineNewline {
+        charpos: usize,
+    },
+}
+
+// Keep the established transport shape independently of the hot in-memory
+// representation. Nesting RedisplayGlyphProvenance here is harmless; nesting
+// it in every glyph costs a second, aligned discriminant per screen cell.
+#[derive(serde::Serialize, serde::Deserialize)]
+enum GlyphProvenanceWire {
+    Buffer {
+        charpos: usize,
+    },
+    Str {
+        source: GlyphStringSourceId,
+        index: usize,
+    },
     Redisplay(RedisplayGlyphProvenance),
+}
+
+impl From<GlyphProvenanceWire> for GlyphProvenance {
+    fn from(wire: GlyphProvenanceWire) -> Self {
+        match wire {
+            GlyphProvenanceWire::Buffer { charpos } => Self::buffer(charpos),
+            GlyphProvenanceWire::Str { source, index } => Self::string(source, index),
+            GlyphProvenanceWire::Redisplay(provenance) => Self::redisplay(provenance),
+        }
+    }
+}
+
+impl From<GlyphProvenance> for GlyphProvenanceWire {
+    fn from(provenance: GlyphProvenance) -> Self {
+        match provenance {
+            GlyphProvenance::Buffer { charpos } => Self::Buffer { charpos },
+            GlyphProvenance::Str { source, index } => Self::Str { source, index },
+            GlyphProvenance::LineEnd => Self::Redisplay(RedisplayGlyphProvenance::LineEnd),
+            GlyphProvenance::Mark => Self::Redisplay(RedisplayGlyphProvenance::Mark),
+            GlyphProvenance::EmptyLineNewline { charpos } => {
+                Self::Redisplay(RedisplayGlyphProvenance::EmptyLineNewline { charpos })
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -538,38 +585,50 @@ impl GlyphProvenance {
     }
 
     pub const fn line_end() -> Self {
-        Self::Redisplay(RedisplayGlyphProvenance::LineEnd)
+        Self::LineEnd
     }
 
     pub const fn mark() -> Self {
-        Self::Redisplay(RedisplayGlyphProvenance::Mark)
+        Self::Mark
     }
 
     pub const fn empty_line_newline(charpos: usize) -> Self {
-        Self::Redisplay(RedisplayGlyphProvenance::EmptyLineNewline { charpos })
+        Self::EmptyLineNewline { charpos }
+    }
+
+    pub const fn redisplay(provenance: RedisplayGlyphProvenance) -> Self {
+        match provenance {
+            RedisplayGlyphProvenance::LineEnd => Self::LineEnd,
+            RedisplayGlyphProvenance::Mark => Self::Mark,
+            RedisplayGlyphProvenance::EmptyLineNewline { charpos } => {
+                Self::EmptyLineNewline { charpos }
+            }
+        }
     }
 
     pub const fn buffer_charpos(self) -> Option<usize> {
         match self {
             Self::Buffer { charpos } => Some(charpos),
-            Self::Str { .. } | Self::Redisplay(_) => None,
+            Self::Str { .. } | Self::LineEnd | Self::Mark | Self::EmptyLineNewline { .. } => None,
         }
     }
 
     pub const fn string_index(self) -> Option<(GlyphStringSourceId, usize)> {
         match self {
             Self::Str { source, index } => Some((source, index)),
-            Self::Buffer { .. } | Self::Redisplay(_) => None,
+            Self::Buffer { .. } | Self::LineEnd | Self::Mark | Self::EmptyLineNewline { .. } => {
+                None
+            }
         }
     }
 
     pub fn shifted_buffer_positions(self, from: usize, delta: i64) -> Self {
         match self {
             Self::Buffer { charpos } => Self::buffer(shifted_buffer_position(charpos, from, delta)),
-            Self::Redisplay(RedisplayGlyphProvenance::EmptyLineNewline { charpos }) => {
+            Self::EmptyLineNewline { charpos } => {
                 Self::empty_line_newline(shifted_buffer_position(charpos, from, delta))
             }
-            Self::Str { .. } | Self::Redisplay(_) => self,
+            Self::Str { .. } | Self::LineEnd | Self::Mark => self,
         }
     }
 
@@ -580,7 +639,7 @@ impl GlyphProvenance {
                 source,
                 index: index.saturating_add(char_offset),
             },
-            Self::Redisplay(sentinel) => Self::Redisplay(sentinel),
+            Self::LineEnd | Self::Mark | Self::EmptyLineNewline { .. } => self,
         }
     }
 
@@ -590,10 +649,8 @@ impl GlyphProvenance {
         match self {
             Self::Buffer { charpos } => charpos,
             Self::Str { index, .. } => index,
-            Self::Redisplay(RedisplayGlyphProvenance::EmptyLineNewline { charpos }) => charpos,
-            Self::Redisplay(RedisplayGlyphProvenance::LineEnd | RedisplayGlyphProvenance::Mark) => {
-                NO_BUFFER_POSITION_CHARPOS
-            }
+            Self::EmptyLineNewline { charpos } => charpos,
+            Self::LineEnd | Self::Mark => NO_BUFFER_POSITION_CHARPOS,
         }
     }
 }
@@ -659,6 +716,10 @@ pub struct Glyph {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pointer_appearance: Option<GlyphPointerAppearanceId>,
 }
+
+// Adding a cold payload or nesting an enum must not silently inflate every
+// screen cell. This budget is checked in all builds, not just the test suite.
+const _: () = assert!(std::mem::size_of::<Glyph>() <= 80);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
@@ -1322,7 +1383,9 @@ impl GlyphRow {
             GlyphProvenance::Str { source, .. } => self
                 .string_source(source)
                 .is_some_and(|source| source.covers_buffer_charpos(charpos)),
-            GlyphProvenance::Redisplay(_) => false,
+            GlyphProvenance::LineEnd
+            | GlyphProvenance::Mark
+            | GlyphProvenance::EmptyLineNewline { .. } => false,
         }
     }
 

@@ -1270,7 +1270,7 @@ impl DisplayTextSourceMapping<'_> {
                 GlyphProvenance::string(source, index)
             }
             ProducedGlyphProvenance::Redisplay(provenance) => {
-                GlyphProvenance::Redisplay(provenance)
+                GlyphProvenance::redisplay(provenance)
             }
         };
         ResolvedDisplayTextSourceMapping { start, advances }
@@ -2306,7 +2306,7 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
         let mut base = Glyph::char_with_provenance(first, face_id, source_mapping.provenance(0));
         base.glyph_type = GlyphType::AutomaticComposite {
             text: text.into(),
-            terminal,
+            terminal: terminal.into(),
         };
         base.pixel_width = pixel_width.max(0.0);
         if let Some(vertical) = self

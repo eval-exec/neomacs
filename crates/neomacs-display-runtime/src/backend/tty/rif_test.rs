@@ -2625,7 +2625,7 @@ fn automatic_composite(text: &str, width_cols: u16) -> Glyph {
     Glyph {
         glyph_type: GlyphType::AutomaticComposite {
             text: text.into(),
-            terminal,
+            terminal: terminal.into(),
         },
         face_id: FaceId::new(0),
         box_vertical_edges: Default::default(),

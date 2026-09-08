@@ -2903,7 +2903,7 @@ impl GlyphTrace {
             GlyphType::Char { ch } => GlyphKindTrace::Char(*ch),
             GlyphType::Composite { text } => GlyphKindTrace::Composite(text.to_string()),
             GlyphType::AutomaticComposite { text, terminal } => {
-                GlyphKindTrace::AutomaticComposite(text.to_string(), terminal.clone())
+                GlyphKindTrace::AutomaticComposite(text.to_string(), (**terminal).clone())
             }
             GlyphType::Stretch { width_cols } => GlyphKindTrace::Stretch(*width_cols),
             GlyphType::Image { image_id, .. } => GlyphKindTrace::Image(*image_id),

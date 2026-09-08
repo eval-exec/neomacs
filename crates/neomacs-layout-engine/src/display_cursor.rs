@@ -11,9 +11,7 @@ use crate::window_output::{
     publish_text_window_cursor, publish_text_window_decorative_cursor,
 };
 use neomacs_display_protocol::frame_glyphs::{CursorStyle, DisplaySlotId};
-use neomacs_display_protocol::glyph_matrix::{
-    Glyph, GlyphArea, GlyphProvenance, GlyphRow, RedisplayGlyphProvenance,
-};
+use neomacs_display_protocol::glyph_matrix::{Glyph, GlyphArea, GlyphProvenance, GlyphRow};
 use neomacs_display_protocol::types::{Color, DisplayWindowId, Rect};
 use neovm_core::buffer::CharPos0;
 use neovm_core::emacs_core::Value;
@@ -528,10 +526,7 @@ impl CursorVisualColumnResolutionRequest {
         let text_glyphs = &row.glyphs[GlyphArea::Text.index()];
         let mut text_end = text_glyphs.len();
         if let Some(fill) = text_glyphs.last()
-            && matches!(
-                fill.provenance,
-                GlyphProvenance::Redisplay(RedisplayGlyphProvenance::LineEnd)
-            )
+            && matches!(fill.provenance, GlyphProvenance::LineEnd)
             && matches!(
                 fill.glyph_type,
                 neomacs_display_protocol::glyph_matrix::GlyphType::Stretch { .. }
@@ -541,7 +536,7 @@ impl CursorVisualColumnResolutionRequest {
             while text_end > 0
                 && matches!(
                     text_glyphs[text_end - 1].provenance,
-                    GlyphProvenance::Redisplay(RedisplayGlyphProvenance::LineEnd)
+                    GlyphProvenance::LineEnd
                 )
                 && text_glyphs[text_end - 1].face_id == fill_face
             {
@@ -551,7 +546,7 @@ impl CursorVisualColumnResolutionRequest {
         if text_end > 0
             && matches!(
                 text_glyphs[text_end - 1].provenance,
-                GlyphProvenance::Redisplay(RedisplayGlyphProvenance::LineEnd)
+                GlyphProvenance::LineEnd
             )
             && matches!(
                 text_glyphs[text_end - 1].glyph_type,
@@ -592,7 +587,10 @@ impl CursorVisualColumnResolutionRequest {
                         replacement_candidate = Some((index, col_acc));
                     }
                 }
-                GlyphProvenance::Str { .. } | GlyphProvenance::Redisplay(_) => {}
+                GlyphProvenance::Str { .. }
+                | GlyphProvenance::LineEnd
+                | GlyphProvenance::Mark
+                | GlyphProvenance::EmptyLineNewline { .. } => {}
             }
             col_acc = col_acc.saturating_add(glyph.materialized_slot_span());
         }
@@ -642,12 +640,7 @@ impl CursorVisualColumnResolutionRequest {
         let first_text_content = loop {
             match text_after_marks.next() {
                 Some(glyph) if glyph.padding => continue,
-                Some(glyph)
-                    if matches!(
-                        glyph.provenance,
-                        GlyphProvenance::Redisplay(RedisplayGlyphProvenance::Mark)
-                    ) =>
-                {
+                Some(glyph) if matches!(glyph.provenance, GlyphProvenance::Mark) => {
                     leading_mark_cols =
                         leading_mark_cols.saturating_add(glyph.materialized_slot_span());
                 }

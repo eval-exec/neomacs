@@ -17,7 +17,7 @@ use crate::glyph_row_writer::push_stretch_to_area;
 use neomacs_display_protocol::face::BoxVerticalEdges;
 use neomacs_display_protocol::frame_glyphs::PhysCursor;
 use neomacs_display_protocol::glyph_matrix::{
-    Glyph, GlyphArea, GlyphProvenance, GlyphRow, GlyphType, RedisplayGlyphProvenance,
+    Glyph, GlyphArea, GlyphProvenance, GlyphRow, GlyphType,
 };
 use neomacs_display_protocol::types::{Color, FaceId, Rect};
 
@@ -284,10 +284,8 @@ impl RowTrailingFaceFill {
 
     fn matches_existing_fill(self, glyph: &Glyph) -> bool {
         const PIXEL_TOLERANCE: f32 = 0.01;
-        matches!(
-            glyph.provenance,
-            GlyphProvenance::Redisplay(RedisplayGlyphProvenance::LineEnd)
-        ) && glyph.face_id == self.face_id
+        matches!(glyph.provenance, GlyphProvenance::LineEnd)
+            && glyph.face_id == self.face_id
             && matches!(
                 glyph.glyph_type,
                 GlyphType::Stretch { width_cols } if width_cols == self.width_cols()

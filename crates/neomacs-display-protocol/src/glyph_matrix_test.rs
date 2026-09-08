@@ -78,9 +78,48 @@ fn glyph_pointer_token_has_small_niche_sized_overhead() {
     assert_eq!(std::mem::size_of::<super::GlyphImageMarginsId>(), 2);
     assert!(
         std::mem::size_of::<Glyph>() <= 80,
-        "row-side provenance must keep Glyph compact; actual size is {}",
-        std::mem::size_of::<Glyph>()
+        "row-side provenance must keep Glyph compact; actual size is {} (content {}, provenance {}, redisplay {})",
+        std::mem::size_of::<Glyph>(),
+        std::mem::size_of::<GlyphType>(),
+        std::mem::size_of::<GlyphProvenance>(),
+        std::mem::size_of::<RedisplayGlyphProvenance>()
     );
+}
+
+#[test]
+fn glyph_provenance_preserves_its_wire_format_and_full_width_positions() {
+    let source = GlyphStringSourceId::from_index(0).unwrap();
+    for (provenance, wire) in [
+        (GlyphProvenance::buffer(7), r##"{"Buffer":{"charpos":7}}"##),
+        (
+            GlyphProvenance::string(source, 7),
+            r##"{"Str":{"source":1,"index":7}}"##,
+        ),
+        (GlyphProvenance::line_end(), r##"{"Redisplay":"LineEnd"}"##),
+        (GlyphProvenance::mark(), r##"{"Redisplay":"Mark"}"##),
+        (
+            GlyphProvenance::empty_line_newline(7),
+            r##"{"Redisplay":{"EmptyLineNewline":{"charpos":7}}}"##,
+        ),
+    ] {
+        assert_eq!(serde_json::to_string(&provenance).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_str::<GlyphProvenance>(wire).unwrap(),
+            provenance
+        );
+    }
+    for provenance in [
+        GlyphProvenance::buffer(usize::MAX),
+        GlyphProvenance::string(source, usize::MAX),
+        GlyphProvenance::empty_line_newline(usize::MAX),
+    ] {
+        let wire = serde_json::to_string(&provenance).unwrap();
+        assert_eq!(
+            serde_json::from_str::<GlyphProvenance>(&wire).unwrap(),
+            provenance
+        );
+        assert_eq!(provenance.legacy_charpos(), usize::MAX);
+    }
 }
 
 #[test]
@@ -786,7 +825,7 @@ fn automatic_composition_plan_is_part_of_row_identity() {
         let mut glyph = Glyph::char(base, FaceId::new(0), 0);
         glyph.glyph_type = GlyphType::AutomaticComposite {
             text: "ab".into(),
-            terminal,
+            terminal: terminal.into(),
         };
         let mut row = GlyphRow::new(GlyphRowRole::Text);
         row.glyphs[GlyphArea::Text.index()].push(glyph);
@@ -823,7 +862,8 @@ fn automatic_composition_materialized_span_comes_from_terminal_plan() {
             ]
             .into_boxed_slice(),
             width_cols: 2,
-        },
+        }
+        .into(),
     };
 
     assert_eq!(glyph.materialized_slot_span(), 2);
