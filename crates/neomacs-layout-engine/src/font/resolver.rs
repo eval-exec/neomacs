@@ -147,7 +147,7 @@ pub struct FontResolver {
     >,
     primary_cache: Mutex<HashMap<PrimaryCacheKey, Option<PlatformFontMatch>>>,
     char_cache: Mutex<HashMap<CharCacheKey, Option<PlatformFontMatch>>>,
-    exact_cache: Mutex<HashMap<ExactFontCacheKey, Option<PlatformFontMatch>>>,
+    exact_cache: Mutex<HashMap<ResolvedFontIdentity, Option<PlatformFontMatch>>>,
 }
 
 impl FontResolver {
@@ -355,8 +355,9 @@ impl FontResolver {
     /// Observe an already selected face without running style selection again.
     ///
     /// GNU opens the selected entity in `font_open_entity`; it does not choose
-    /// another family member to obtain its metrics. FAMILY scopes discovery,
-    /// but the full identity alone authorizes native finalization/observation.
+    /// another family member to obtain its metrics. FAMILY is only a discovery
+    /// hint: pinned fontdb faces can carry synthetic family names. The full
+    /// identity alone authorizes native finalization/observation.
     /// Cache misses too, since shaping can select faces absent from the native
     /// catalog. Both outcomes expire with the catalog's other observations.
     pub(crate) fn observe_exact_font(
@@ -364,18 +365,13 @@ impl FontResolver {
         identity: &ResolvedFontIdentity,
         family: &str,
     ) -> Option<PlatformFontMatch> {
-        let family = FontFamilyName::new(family)?;
-        let key = ExactFontCacheKey {
-            identity: identity.clone(),
-            family: family.clone(),
-        };
         if let Ok(cache) = self.exact_cache.lock()
-            && let Some(cached) = cache.get(&key)
+            && let Some(cached) = cache.get(identity)
         {
             return cached.clone();
         }
-        let query = FontCandidateQuery {
-            scope: FontCandidateScope::Family(family),
+        let mut query = FontCandidateQuery {
+            scope: FontCandidateScope::All,
             required: RequiredFontCoverage::Any,
             charset_ranges: Vec::new(),
             languages: Vec::new(),
@@ -384,19 +380,26 @@ impl FontResolver {
             requested_width: FontWidth::Normal,
             direction: TextDirection::LeftToRight,
         };
-        let matched = self
-            .backend
-            .list_candidates(&query)
+        let mut scopes = FontFamilyName::new(family)
+            .map(FontCandidateScope::Family)
             .into_iter()
-            .filter(|candidate| candidate.matched.identity == *identity)
-            .find_map(|candidate| {
+            .chain(std::iter::once(FontCandidateScope::All));
+        let matched = scopes
+            .find_map(|scope| {
+                query.scope = scope;
                 self.backend
-                    .finalize_match(candidate.matched)
-                    .filter(|matched| matched.identity == *identity)
+                    .list_candidates(&query)
+                    .into_iter()
+                    .filter(|candidate| candidate.matched.identity == *identity)
+                    .find_map(|candidate| {
+                        self.backend
+                            .finalize_match(candidate.matched)
+                            .filter(|matched| matched.identity == *identity)
+                    })
             })
             .map(|matched| self.with_native_metrics(matched));
         if let Ok(mut cache) = self.exact_cache.lock() {
-            cache.insert(key, matched.clone());
+            cache.insert(identity.clone(), matched.clone());
         }
         matched
     }
@@ -669,12 +672,6 @@ impl FontResolver {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
     }
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct ExactFontCacheKey {
-    identity: ResolvedFontIdentity,
-    family: FontFamilyName,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]

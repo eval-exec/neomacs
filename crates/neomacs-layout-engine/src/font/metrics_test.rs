@@ -910,10 +910,16 @@ impl crate::font_backend::FontBackend for NativeMetricsPrimaryBackend {
 
     fn list_candidates(
         &self,
-        _query: &crate::font_backend::FontCandidateQuery,
+        query: &crate::font_backend::FontCandidateQuery,
     ) -> Vec<crate::font_backend::FontCandidate> {
         self.candidates
             .iter()
+            .filter(|candidate| {
+                query
+                    .scope
+                    .queried_family()
+                    .is_none_or(|family| candidate.metadata.family == family)
+            })
             .cloned()
             .map(|matched| crate::font_backend::FontCandidate { matched })
             .collect()
@@ -1784,6 +1790,42 @@ fn shaping_recovers_native_metrics_for_the_exact_nonpreferred_family_member() {
         selected.ascent_px, 11.0,
         "retain native ascent, not file ascent"
     );
+}
+
+#[test]
+fn shaping_recovers_native_metrics_through_a_synthetic_pinned_family() {
+    let (mut svc, _, native_family, _) = native_metrics_fixture_service(Vec::new());
+    let fixture = test_font_path(neomacs_test_fonts::spleen_2_2_0().woff());
+    let pinned_family = svc
+        .pin_file_as_family(&fixture, 0)
+        .expect("pin exact fixture");
+    assert_ne!(
+        pinned_family, native_family,
+        "exercise a synthetic family name"
+    );
+    let fontdb_id = svc
+        .font_system
+        .db()
+        .faces()
+        .find(|face| {
+            face.families
+                .iter()
+                .any(|(family, _)| family == pinned_family)
+        })
+        .expect("pinned fontdb face")
+        .id;
+    let selected = svc
+        .resolved_font_from_fontdb_id(fontdb_id, 10.6)
+        .expect("shaping-selected pinned face");
+    assert_eq!(
+        selected.identity.file_path.as_deref(),
+        Some(fixture.as_str())
+    );
+    assert_eq!(
+        selected.ascent_px, 11.0,
+        "a synthetic family must not hide exact native metrics"
+    );
+    assert_eq!(selected.space_advance_px, 6.0);
 }
 
 #[test]
