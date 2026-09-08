@@ -1472,24 +1472,14 @@ fn scalable_color_bitmap_keeps_exact_platform_identity_at_requested_size() {
     assert_eq!(resolved.pixel_size, 14.0);
 }
 
-fn fixture_record(
-    id: ResolvedFontId,
-    identity: &ResolvedFontIdentity,
-    replay: &FontReplay,
-    pixel_size: f32,
-    family: &str,
-) -> ResolvedFont {
-    ResolvedFont {
-        id,
-        identity: identity.clone(),
-        replay: replay.clone(),
+fn fixture_properties(pixel_size: f32, family: &str) -> FontInstanceProperties {
+    FontInstanceProperties {
         family: family.to_owned(),
         full_name: None,
         postscript_name: None,
         weight: 400,
         slant: FontSlantKind::Normal,
         width: 5,
-        pixel_size,
         ascent_px: pixel_size,
         descent_px: 0.0,
         space_advance_px: pixel_size * 0.6,
@@ -1515,10 +1505,11 @@ fn resolved_font_ids_name_a_complete_realized_instance() {
         spacing: neomacs_display_protocol::font::FixedFontSpacing::MonospaceOrCharacterCell,
     };
     let intern = |svc: &mut FontMetricsService, replay: FontReplay, size: f32| {
-        svc.intern_resolved_font(identity.clone(), replay, size, |id, identity, replay| {
-            fixture_record(id, &identity, &replay, size, "fixed")
-        })
-        .id
+        svc.font_instances
+            .intern(identity.clone(), replay, size, || {
+                fixture_properties(size, "fixed")
+            })
+            .id
     };
 
     let first = intern(&mut svc, strike(0), 13.0);
@@ -1539,17 +1530,36 @@ fn interner_owns_the_record_published_under_an_id() {
     let mut svc = make_svc();
     let identity = ResolvedFontIdentity::from_file("/fonts/one.ttf", 0, None);
     let replay = swash_replay_for(&identity);
-    let first = svc.intern_resolved_font(
-        identity.clone(),
-        replay.clone(),
-        12.0,
-        |id, identity, replay| fixture_record(id, &identity, &replay, 12.0, "First Family"),
-    );
-    let second = svc.intern_resolved_font(identity, replay, 12.0, |id, identity, replay| {
-        fixture_record(id, &identity, &replay, 12.0, "Second Family")
+    let first = svc
+        .font_instances
+        .intern(identity.clone(), replay.clone(), 12.0, || {
+            fixture_properties(12.0, "First Family")
+        });
+    let second = svc.font_instances.intern(identity, replay, 12.0, || {
+        fixture_properties(12.0, "Second Family")
     });
     assert_eq!(second, first);
     assert_eq!(second.family, "First Family");
+}
+
+#[test]
+fn font_instance_key_controls_the_published_size() {
+    let mut svc = make_svc();
+    let identity = ResolvedFontIdentity::from_file("/fonts/one.ttf", 0, None);
+    let replay = swash_replay_for(&identity);
+    // The observation type cannot supply key fields. Even deliberately large
+    // metrics must be published under the size chosen by the instance owner.
+    let font = svc
+        .font_instances
+        .intern(identity.clone(), replay.clone(), 12.0, || {
+            fixture_properties(99.0, "Fixture")
+        });
+    assert_eq!(font.identity, identity);
+    assert_eq!(font.replay, replay);
+    assert_eq!(
+        font.pixel_size, 12.0,
+        "the record must describe its interned key, not a builder's size"
+    );
 }
 
 #[test]
@@ -1567,18 +1577,16 @@ fn catalog_advance_republishes_records_under_stable_ids() {
         }));
     let identity = ResolvedFontIdentity::from_file("/fonts/replaced.ttf", 0, None);
     let replay = swash_replay_for(&identity);
-    let before = svc.intern_resolved_font(
-        identity.clone(),
-        replay.clone(),
-        12.0,
-        |id, identity, replay| fixture_record(id, &identity, &replay, 12.0, "Version 1"),
-    );
-    let pinned = svc.intern_resolved_font(
-        identity.clone(),
-        replay.clone(),
-        12.0,
-        |id, identity, replay| fixture_record(id, &identity, &replay, 12.0, "Version 2"),
-    );
+    let before = svc
+        .font_instances
+        .intern(identity.clone(), replay.clone(), 12.0, || {
+            fixture_properties(12.0, "Version 1")
+        });
+    let pinned = svc
+        .font_instances
+        .intern(identity.clone(), replay.clone(), 12.0, || {
+            fixture_properties(12.0, "Version 2")
+        });
     assert_eq!(
         pinned, before,
         "within one generation the first record stands"
@@ -1586,13 +1594,17 @@ fn catalog_advance_republishes_records_under_stable_ids() {
 
     pending.store(true, std::sync::atomic::Ordering::Release);
     assert!(svc.synchronize_font_catalog().changed());
-    let after = svc.intern_resolved_font(identity, replay, 12.0, |id, identity, replay| {
-        fixture_record(id, &identity, &replay, 12.0, "Version 2")
+    let after = svc.font_instances.intern(identity, replay, 12.0, || {
+        fixture_properties(12.0, "Version 2")
     });
     assert_eq!(after.id, before.id, "the id survives the catalog advance");
     assert_eq!(
         after.family, "Version 2",
         "the record is rebuilt from the new file"
+    );
+    assert_eq!(
+        before.family, "Version 1",
+        "old snapshots retain their records"
     );
 }
 

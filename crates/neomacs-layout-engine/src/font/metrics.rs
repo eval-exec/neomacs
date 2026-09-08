@@ -7,6 +7,7 @@
 //! rendered glyph widths — eliminating gaps and overlaps caused by the
 //! C fontconfig and cosmic-text resolving different font files.
 
+use super::instance::{FontInstanceInterner, FontInstanceProperties};
 use crate::font::frame_metrics::{FrameFontDomain, GraphicFontSizePx};
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Style, Weight};
 use neomacs_display_protocol::types::FaceId;
@@ -439,18 +440,6 @@ fn resolved_font_advance(
     }
 }
 
-/// Complete identity of one metrics-bearing protocol font entry.
-///
-/// A durable source identity alone is insufficient: one file can realize at
-/// several sizes or fixed strikes, and [`ResolvedFont`] carries metrics for
-/// exactly one of those instances.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct ResolvedFontInstanceKey {
-    identity: ResolvedFontIdentity,
-    replay: FontReplay,
-    pixel_size_bits: u32,
-}
-
 #[derive(Clone, Copy, Debug)]
 enum PlatformFontDbFace {
     /// Re-registered from a decoded/in-memory source; the platform identity
@@ -714,20 +703,9 @@ pub struct FontMetricsService {
     /// Cache: face attrs → the face's resolved primary font. Same generation
     /// contract as the other caches: cleared by `clear_caches`.
     resolved_face_font_cache: HashMap<MetricsCacheKey, Option<LayoutFontHandle>>,
-    /// Interner: complete realized instance → stable [`ResolvedFontId`]. NOT
-    /// cleared by `clear_caches`: ids stay stable for the service's lifetime
-    /// so consecutive frame snapshots reference the same font by the same id.
-    /// Renderer caches key on the identity anyway, so a stale id can never
-    /// alias a glyph to the wrong font.
-    resolved_font_ids: HashMap<ResolvedFontInstanceKey, ResolvedFontId>,
-    /// The one [`ResolvedFont`] record published under each interned id, so
-    /// no later resolution path can publish a second record for an id the
-    /// frame table already carries. Dropped on a native catalog advance
-    /// (the same boundary on which the renderer drops its font tables and a
-    /// file replaced in place gets fresh metrics), never on `clear_caches`.
-    /// GNU: `font_clear_cache` closes the objects in `FONT_OBJLIST_INDEX`
-    /// while `font_open_entity` otherwise hands back the open object.
-    resolved_font_records: HashMap<ResolvedFontId, ResolvedFont>,
+    /// Owns lifetime-stable IDs and catalog-local canonical records together.
+    /// Ordinary request/cache invalidation leaves these instances untouched.
+    font_instances: FontInstanceInterner,
     /// Cache: (realized face/fontset selection, char) → the exact selected
     /// font. Same generation contract as the other caches: cleared by
     /// `clear_caches`.
@@ -800,8 +778,7 @@ impl FontMetricsService {
             font_resolver,
             shaper: crate::text_shaper::default_text_shaper(),
             resolved_face_font_cache: HashMap::default(),
-            resolved_font_ids: HashMap::default(),
-            resolved_font_records: HashMap::default(),
+            font_instances: FontInstanceInterner::default(),
             resolved_char_font_cache: HashMap::default(),
             resolved_cluster_cache: HashMap::default(),
             primary_pin_cache: HashMap::default(),
@@ -845,7 +822,7 @@ impl FontMetricsService {
             // Records carry metrics read from the files; a replaced file must
             // republish under its stable id, as the renderer rebuilds its
             // tables for this generation.
-            self.resolved_font_records.clear();
+            self.font_instances.invalidate_catalog_records();
         }
         update
     }
@@ -1976,29 +1953,24 @@ impl FontMetricsService {
         let device_ascii_advances =
             self.probe_resolved_font_device_ascii_advances(&identity, font_size);
         let replay = FontReplay::Swash { asset };
-        let font =
-            self.intern_resolved_font(identity, replay, font_size, |id, identity, replay| {
-                ResolvedFont {
-                    id,
-                    identity,
-                    replay,
-                    family: resolved_family,
-                    full_name: None,
-                    postscript_name,
-                    // Preserve the resolved CSS weight, not the container face's
-                    // metadata weight (variable fonts; cf. `select_font_for_char`).
-                    weight: resolved_weight,
-                    slant: render_slant,
-                    width: stretch.to_number(),
-                    pixel_size: font_size,
-                    ascent_px: vertical.as_ref().map(|v| v.ascent).unwrap_or(0.0),
-                    descent_px: vertical.as_ref().map(|v| v.descent).unwrap_or(0.0),
-                    space_advance_px: px_metrics
-                        .map(|metrics| metrics.space_width.max(0) as f32)
-                        .unwrap_or(0.0),
-                    glyph_advance,
-                }
-            });
+        let font = self.font_instances.intern(identity, replay, font_size, || {
+            FontInstanceProperties {
+                family: resolved_family,
+                full_name: None,
+                postscript_name,
+                // Preserve the resolved CSS weight, not the container face's
+                // metadata weight (variable fonts; cf. `select_font_for_char`).
+                weight: resolved_weight,
+                slant: render_slant,
+                width: stretch.to_number(),
+                ascent_px: vertical.as_ref().map(|v| v.ascent).unwrap_or(0.0),
+                descent_px: vertical.as_ref().map(|v| v.descent).unwrap_or(0.0),
+                space_advance_px: px_metrics
+                    .map(|metrics| metrics.space_width.max(0) as f32)
+                    .unwrap_or(0.0),
+                glyph_advance,
+            }
+        });
         Some(LayoutFontHandle {
             font,
             resolution: FontResolutionSource::FacePrimary,
@@ -2045,19 +2017,16 @@ impl FontMetricsService {
         let identity = matched.identity.clone();
         let selector_slant = matched.slant();
         let replay = opened.replay();
-        let font =
-            self.intern_resolved_font(identity, replay, effective_size, |id, identity, replay| {
-                ResolvedFont {
-                    id,
-                    identity,
-                    replay,
+        let font = self
+            .font_instances
+            .intern(identity, replay, effective_size, || {
+                FontInstanceProperties {
                     family: family.to_owned(),
                     full_name: None,
                     postscript_name: matched.identity.postscript_name.clone(),
                     weight: matched.weight().unwrap_or(requested_weight),
                     slant: font_slant_kind_from_platform(selector_slant),
                     width: matched.metadata.width_class(),
-                    pixel_size: effective_size,
                     ascent_px: observed.ascent_px,
                     descent_px: observed.descent_px,
                     space_advance_px: observed.space_advance_px,
@@ -2280,29 +2249,24 @@ impl FontMetricsService {
             .or_else(|| self.font_metrics_from_selected_face(font_id, selection.font_size));
         let glyph_advance = resolved_font_advance(spacing, px_metrics);
         let replay = FontReplay::Swash { asset };
-        let font = self.intern_resolved_font(
-            identity,
-            replay,
-            selection.font_size,
-            |id, identity, replay| ResolvedFont {
-                id,
-                identity,
-                replay,
-                family: resolved.family.clone(),
-                full_name: None,
-                postscript_name,
-                weight: resolved.weight,
-                slant: render_slant,
-                width: stretch.to_number(),
-                pixel_size: selection.font_size,
-                ascent_px: vertical.as_ref().map(|v| v.ascent).unwrap_or(0.0),
-                descent_px: vertical.as_ref().map(|v| v.descent).unwrap_or(0.0),
-                space_advance_px: px_metrics
-                    .map(|metrics| metrics.space_width.max(0) as f32)
-                    .unwrap_or(0.0),
-                glyph_advance,
-            },
-        );
+        let font = self
+            .font_instances
+            .intern(identity, replay, selection.font_size, || {
+                FontInstanceProperties {
+                    family: resolved.family.clone(),
+                    full_name: None,
+                    postscript_name,
+                    weight: resolved.weight,
+                    slant: render_slant,
+                    width: stretch.to_number(),
+                    ascent_px: vertical.as_ref().map(|v| v.ascent).unwrap_or(0.0),
+                    descent_px: vertical.as_ref().map(|v| v.descent).unwrap_or(0.0),
+                    space_advance_px: px_metrics
+                        .map(|metrics| metrics.space_width.max(0) as f32)
+                        .unwrap_or(0.0),
+                    glyph_advance,
+                }
+            });
         Some(LayoutFontHandle {
             font,
             resolution: FontResolutionSource::FontsetFallback,
@@ -2579,68 +2543,22 @@ impl FontMetricsService {
             .unwrap_or(file_weight);
         let glyph_advance = resolved_font_advance(spacing, px_metrics);
         let replay = swash_file_replay(&identity)?;
-        Some(
-            self.intern_resolved_font(identity, replay, font_size, |id, identity, replay| {
-                ResolvedFont {
-                    id,
-                    identity,
-                    replay,
-                    family,
-                    full_name: None,
-                    postscript_name,
-                    weight,
-                    slant: font_slant_kind_from_fontdb(style),
-                    width: stretch.to_number(),
-                    pixel_size: font_size,
-                    ascent_px: vertical.as_ref().map(|v| v.ascent).unwrap_or(0.0),
-                    descent_px: vertical.as_ref().map(|v| v.descent).unwrap_or(0.0),
-                    space_advance_px: px_metrics
-                        .map(|metrics| metrics.space_width.max(0) as f32)
-                        .unwrap_or(0.0),
-                    glyph_advance,
-                }
-            }),
-        )
-    }
-
-    /// Intern one realized instance and return its canonical record.
-    ///
-    /// The interner owns the record: within one catalog generation the first
-    /// builder to realize a `(identity, replay, pixel_size)` key defines the
-    /// [`ResolvedFont`] every later path receives for that id, so no
-    /// resolution path can publish a second record under an id the frame
-    /// table already carries. GNU font.c `font_open_entity` likewise hands
-    /// back the font object already open for an entity at that pixel size
-    /// (`FONT_OBJLIST_INDEX`) when the driver's `cached_font_ok` accepts it;
-    /// `font_clear_cache` closes those objects when the font set changes.
-    fn intern_resolved_font(
-        &mut self,
-        identity: ResolvedFontIdentity,
-        replay: FontReplay,
-        pixel_size: f32,
-        build: impl FnOnce(ResolvedFontId, ResolvedFontIdentity, FontReplay) -> ResolvedFont,
-    ) -> ResolvedFont {
-        let key = ResolvedFontInstanceKey {
-            identity: identity.clone(),
-            replay: replay.clone(),
-            pixel_size_bits: pixel_size.to_bits(),
-        };
-        let id = match self.resolved_font_ids.get(&key) {
-            Some(&id) => id,
-            None => {
-                // Ids start at 1; 0 stays unused so an uninitialized id is visible.
-                let id = ResolvedFontId(self.resolved_font_ids.len() as u32 + 1);
-                self.resolved_font_ids.insert(key, id);
-                id
+        Some(self.font_instances.intern(identity, replay, font_size, || {
+            FontInstanceProperties {
+                family,
+                full_name: None,
+                postscript_name,
+                weight,
+                slant: font_slant_kind_from_fontdb(style),
+                width: stretch.to_number(),
+                ascent_px: vertical.as_ref().map(|v| v.ascent).unwrap_or(0.0),
+                descent_px: vertical.as_ref().map(|v| v.descent).unwrap_or(0.0),
+                space_advance_px: px_metrics
+                    .map(|metrics| metrics.space_width.max(0) as f32)
+                    .unwrap_or(0.0),
+                glyph_advance,
             }
-        };
-        if let Some(font) = self.resolved_font_records.get(&id) {
-            return font.clone();
-        }
-        let mut font = build(id, identity, replay);
-        font.id = id;
-        self.resolved_font_records.insert(id, font.clone());
-        font
+        }))
     }
 
     /// Measure one character after platform selection has produced its exact
@@ -3217,10 +3135,8 @@ impl FontMetricsService {
     }
 
     /// Clear all caches. Call when fonts change (e.g., text-scale-adjust).
-    /// `resolved_font_ids` and `resolved_font_records` intentionally survive:
-    /// complete instance keys are durable and ids must stay stable across
-    /// generations; records are dropped only by a catalog advance (see field
-    /// docs).
+    /// Canonical font instances intentionally survive: IDs are durable and
+    /// records are dropped only by a catalog advance, not request changes.
     pub fn clear_caches(&mut self) {
         self.ascii_cache.clear();
         self.char_cache.clear();

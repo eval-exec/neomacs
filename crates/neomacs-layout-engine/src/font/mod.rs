@@ -5,6 +5,7 @@ pub mod font_match;
 #[cfg(target_os = "linux")]
 pub mod fontconfig;
 pub(crate) mod frame_metrics;
+mod instance;
 pub mod metrics;
 pub mod policy;
 pub mod probe;
