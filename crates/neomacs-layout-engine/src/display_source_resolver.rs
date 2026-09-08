@@ -102,18 +102,28 @@ impl<'a> DisplaySourceFaceBasis<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct DisplaySourceResolveParams<'a> {
+    pub(crate) automatic_composition:
+        Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     face_basis: DisplaySourceFaceBasis<'a>,
     display_host: Option<&'a dyn DisplayHost>,
     image_scale_environment: ImageScaleEnvironment,
 }
 
 impl<'a> DisplaySourceResolveParams<'a> {
+    pub(crate) fn with_automatic_composition(
+        mut self,
+        rules: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
+    ) -> Self {
+        self.automatic_composition = rules;
+        self
+    }
     pub(crate) fn new(
         face_basis: DisplaySourceFaceBasis<'a>,
         display_host: Option<&'a dyn DisplayHost>,
         image_scale_environment: ImageScaleEnvironment,
     ) -> Self {
         Self {
+            automatic_composition: None,
             face_basis,
             display_host,
             image_scale_environment,
@@ -989,7 +999,8 @@ pub(crate) fn resolve_next_display_source_item(
         let mut context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
             &mut resolver,
             &mut pending_non_text_area,
-        );
+        )
+        .with_automatic_composition(params.automatic_composition);
         source
             .next_item(&mut context)
             .map(|item| resolver.resolve_item_layout(item))

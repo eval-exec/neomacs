@@ -363,12 +363,14 @@ impl DisplayCurrentRowMutation for SetRowFringeBitmapMutation {
 }
 
 pub(crate) struct TextRowOutputRenderState<'a> {
+    automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     output: TextWindowOutputTarget<'a>,
     output_emitter: &'a mut WindowOutputEmitter,
     evaluator: &'a mut Context,
 }
 
 struct DisplayRowCurrentTextSourceState<'face, 'emit> {
+    automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     row_output: DisplayRowCurrentRowOutput<'emit>,
     evaluator: &'emit mut Context,
     font_metrics: &'emit mut Option<FontMetricsService>,
@@ -378,6 +380,7 @@ struct DisplayRowCurrentTextSourceState<'face, 'emit> {
 }
 
 struct DisplayRowCurrentSourceFragmentRenderState<'face, 'emit> {
+    automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     row_output: DisplayRowCurrentRowOutput<'emit>,
     font_metrics: &'emit mut Option<FontMetricsService>,
     measurement_mode: DisplayRowMeasurementMode,
@@ -494,8 +497,10 @@ impl<'face, 'emit> DisplayRowCurrentTextSourceState<'face, 'emit> {
         measurement_mode: DisplayRowMeasurementMode,
         face_resolver: &'face FaceResolver,
         face_ids: &'emit mut FrameFaceAttempt,
+        automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     ) -> Self {
         Self {
+            automatic_composition,
             row_output,
             evaluator,
             font_metrics,
@@ -525,7 +530,8 @@ impl<'face, 'emit> DisplayRowCurrentTextSourceState<'face, 'emit> {
                 self.face_resolver,
                 self.evaluator.display_host.as_deref(),
                 self.face_ids,
-            ),
+            )
+            .with_automatic_composition(self.automatic_composition),
             render_policy,
         };
         let (result, row_height_px, row_ascent_px) =
@@ -556,7 +562,8 @@ impl<'face, 'emit> DisplayRowCurrentTextSourceState<'face, 'emit> {
                 self.face_resolver,
                 self.evaluator.display_host.as_deref(),
                 self.face_ids,
-            ),
+            )
+            .with_automatic_composition(self.automatic_composition),
             render_policy,
         };
         let (result, row_height_px, row_ascent_px) = self
@@ -578,8 +585,10 @@ impl<'face, 'emit> DisplayRowCurrentSourceFragmentRenderState<'face, 'emit> {
         face_resolver: &'face FaceResolver,
         display_host: Option<&'emit dyn DisplayHost>,
         face_ids: &'emit mut FrameFaceAttempt,
+        automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     ) -> Self {
         Self {
+            automatic_composition,
             row_output,
             font_metrics,
             measurement_mode,
@@ -601,7 +610,8 @@ impl<'face, 'emit> DisplayRowCurrentSourceFragmentRenderState<'face, 'emit> {
             self.face_resolver,
             self.display_host,
             self.face_ids,
-        );
+        )
+        .with_automatic_composition(self.automatic_composition);
         let result = self.row_output.apply_current_row_mutation(
             DisplayRowNaturalSourceFragmentMutation {
                 request,
@@ -660,11 +670,16 @@ where
 
 impl<'a> TextRowOutputRenderState<'a> {
     pub(crate) fn from_parts(
-        output: TextWindowOutputTarget<'a>,
+        mut output: TextWindowOutputTarget<'a>,
         output_emitter: &'a mut WindowOutputEmitter,
         evaluator: &'a mut Context,
     ) -> Self {
+        let automatic_composition = crate::neovm_bridge::window_string_composition_rules(
+            evaluator,
+            neovm_core::window::WindowId(output.builder().current_window_id_i64() as u64),
+        );
         Self {
+            automatic_composition,
             output,
             output_emitter,
             evaluator,
@@ -673,6 +688,7 @@ impl<'a> TextRowOutputRenderState<'a> {
 
     pub(crate) fn reborrow(&mut self) -> TextRowOutputRenderState<'_> {
         TextRowOutputRenderState {
+            automatic_composition: self.automatic_composition,
             output: self.output.reborrow(),
             output_emitter: self.output_emitter,
             evaluator: self.evaluator,
@@ -751,6 +767,7 @@ impl<'a> TextRowOutputRenderState<'a> {
         face_resolver: &'emit FaceResolver,
     ) -> TextRowSourceMeasureState<'emit> {
         TextRowSourceMeasureState {
+            automatic_composition: self.automatic_composition,
             row_output: self.output.current_row_output(),
             evaluator: self.evaluator,
             font_metrics,
@@ -773,6 +790,7 @@ impl<'a> TextRowOutputRenderState<'a> {
             measurement_mode,
             face_resolver,
             face_ids,
+            self.automatic_composition,
         )
     }
 
@@ -790,6 +808,7 @@ impl<'a> TextRowOutputRenderState<'a> {
             face_resolver,
             self.evaluator.display_host.as_deref(),
             face_ids,
+            self.automatic_composition,
         )
     }
 
@@ -1663,6 +1682,7 @@ fn current_text_render_state<'emit>(
 }
 
 pub(crate) struct TextRowSourceMeasureState<'a> {
+    automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     row_output: DisplayRowCurrentRowOutput<'a>,
     evaluator: &'a mut Context,
     font_metrics: &'a mut Option<FontMetricsService>,
@@ -1679,6 +1699,7 @@ impl<'a> TextRowSourceMeasureState<'a> {
         face_resolver: &'a FaceResolver,
     ) -> Self {
         Self {
+            automatic_composition: crate::neovm_bridge::current_string_composition_rules(evaluator),
             row_output,
             evaluator,
             font_metrics,
@@ -1728,6 +1749,7 @@ fn current_text_measure_state<'emit>(
         state.measurement_mode,
         state.face_resolver,
         face_ids,
+        state.automatic_composition,
     )
 }
 

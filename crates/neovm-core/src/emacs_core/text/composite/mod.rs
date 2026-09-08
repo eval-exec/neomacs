@@ -851,6 +851,44 @@ pub fn automatic_composition_spans(
 /// composition rules in composition-function-table" (composite.c:1597).
 pub const MAX_AUTO_COMPOSITION_LOOKBACK: usize = 3;
 
+/// The rule table and buffer-owned regexp classification used by GNU's
+/// `fast_looking_at`, even when the displayed object is a Lisp string.
+///
+/// Like other redisplay inputs these are references to live, rooted Lisp
+/// tables, not a persistent cache. Keep this value within its evaluator's
+/// redisplay transaction; it does not execute Lisp callbacks or own GC roots.
+#[derive(Clone, Copy, Debug)]
+pub struct AutomaticCompositionRules {
+    table: Value,
+    syntax: super::syntax::SyntaxTable,
+    category: Option<Value>,
+}
+
+impl AutomaticCompositionRules {
+    pub fn new(buffer: &crate::buffer::Buffer, table: Value) -> Option<Self> {
+        super::chartable::is_char_table(&table).then(|| Self {
+            table,
+            syntax: super::syntax::SyntaxTable::for_buffer(buffer),
+            category: super::category::active_category_table_for_buffer(Some(buffer))
+                .ok()
+                .filter(|table| !table.is_nil()),
+        })
+    }
+
+    pub fn spans(self, text: &str) -> Vec<AutomaticCompositionSpan> {
+        self.spans_in(text, 0)
+    }
+
+    fn spans_in(self, text: &str, char_offset: usize) -> Vec<AutomaticCompositionSpan> {
+        let syntax = super::regex_emacs::BufferSyntaxLookup {
+            syntax_table: self.syntax,
+            category_table: self.category,
+            word_boundary: Default::default(),
+        };
+        select_automatic_composition_spans(self.table, &syntax, text, char_offset)
+    }
+}
+
 /// The scan over a SLICE of a buffer's text.
 ///
 /// `text` is the slice to examine and `char_offset` is the char index of its
@@ -872,7 +910,18 @@ pub fn automatic_composition_spans_in(
     text: &str,
     char_offset: usize,
 ) -> Vec<AutomaticCompositionSpan> {
-    if !super::chartable::is_char_table(&composition_function_table) || text.is_empty() {
+    AutomaticCompositionRules::new(buffer, composition_function_table)
+        .map(|rules| rules.spans_in(text, char_offset))
+        .unwrap_or_default()
+}
+
+fn select_automatic_composition_spans(
+    composition_function_table: Value,
+    syntax: &dyn super::regex_emacs::SyntaxLookup,
+    text: &str,
+    char_offset: usize,
+) -> Vec<AutomaticCompositionSpan> {
+    if text.is_empty() {
         return Vec::new();
     }
 
@@ -937,11 +986,10 @@ pub fn automatic_composition_spans_in(
                 };
                 let suffix = &text[byte_offsets[start]..];
                 let mut match_data = None;
-                let Ok(true) = super::regex::looking_at_lisp_pattern_with_buffer_tables(
+                let Ok(true) = super::regex::looking_at_lisp_pattern_with_syntax(
                     pattern,
                     suffix,
-                    false,
-                    buffer,
+                    syntax,
                     &mut match_data,
                 ) else {
                     continue;

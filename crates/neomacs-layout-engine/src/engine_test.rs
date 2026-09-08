@@ -20221,6 +20221,168 @@ fn layout_frame_rust_advances_live_output_through_tab_line_rows() {
 }
 
 #[test]
+fn lisp_string_automatic_composition_uses_live_rules_in_all_chrome_rows() {
+    let mut eval = Context::new();
+    eval.eval_str(
+        r##"(progn
+          (setq auto-composition-mode t
+                auto-composition-function 'auto-compose-chars
+                composition-function-table (make-char-table nil))
+          (aset composition-function-table #x301
+                (list (vector ".́" 1 'font-shape-gstring)))
+          (setq tab-line-format "é" header-line-format "é" mode-line-format "é"))"##,
+    )
+    .expect("GNU composition rule and chrome fixtures");
+    let buf_id = eval.buffer_manager().current_buffer().expect("buffer").id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("composition-chrome", 320, 160, buf_id);
+    let selected = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.eval_str(
+        r##"(progn (set-buffer (get-buffer-create "ambient-no-composition"))
+                            (set (make-local-variable 'auto-composition-mode) nil))"##,
+    )
+    .expect("ambient buffer differs from the displayed buffer");
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let window = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected.0 as i64)
+        .expect("selected window");
+    for role in [
+        GlyphRowRole::TabLine,
+        GlyphRowRole::HeaderLine,
+        GlyphRowRole::ModeLine,
+    ] {
+        let row = window
+            .matrix
+            .rows
+            .iter()
+            .find(|row| row.enabled && row.role == role)
+            .expect("chrome row");
+        let glyph = &row.glyphs[GlyphArea::Text.index()][0];
+        let GlyphType::AutomaticComposite { text, terminal } = &glyph.glyph_type else {
+            panic!(
+                "{role:?} must use GNU's selected composition, got {:?}",
+                glyph.glyph_type
+            );
+        };
+        assert_eq!(text.as_ref(), "é");
+        assert_eq!(terminal.width_cols, 1);
+        assert_eq!(glyph.pixel_width, 8.0);
+    }
+}
+
+#[test]
+fn chrome_composition_preserves_original_string_boundaries_and_storage() {
+    let mut eval = Context::new();
+    eval.eval_str(
+        r##"(progn
+      (setq auto-composition-mode t auto-composition-function 'auto-compose-chars
+            composition-function-table (make-char-table nil))
+      (aset composition-function-table #x301 (list (vector ".́" 1 'font-shape-gstring)))
+      (aset composition-function-table ?x (list (vector "xy" 0 'font-shape-gstring)))
+      (setq tab-line-format '("e" "́")
+            header-line-format (list (string-to-multibyte "xy"))))"##,
+    )
+    .expect("distinct objects and explicitly multibyte ASCII source");
+    let buf_id = eval.buffer_manager().current_buffer().expect("buffer").id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("composition-objects", 320, 160, buf_id);
+    let selected = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let window = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected.0 as i64)
+        .expect("selected window");
+    let tab = window
+        .matrix
+        .rows
+        .iter()
+        .find(|row| row.enabled && row.role == GlyphRowRole::TabLine)
+        .expect("tab line");
+    assert_eq!(tab.glyphs[1][0].glyph_type, GlyphType::Char { ch: 'e' });
+    assert_eq!(tab.glyphs[1][1].glyph_type, GlyphType::Char { ch: '́' });
+    let header = window
+        .matrix
+        .rows
+        .iter()
+        .find(|row| row.enabled && row.role == GlyphRowRole::HeaderLine)
+        .expect("header line");
+    assert!(
+        matches!(&header.glyphs[1][0].glyph_type, GlyphType::AutomaticComposite { text, terminal } if text.as_ref() == "xy" && terminal.width_cols == 2)
+    );
+}
+
+#[test]
+fn margin_string_automatic_composition_uses_the_displayed_buffer_rules() {
+    let mut eval = Context::new();
+    let buf_id = eval.buffer_manager().current_buffer().expect("buffer").id();
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("X\n");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("composition-margin", 320, 160, buf_id);
+    eval.eval_str(
+        r##"(progn
+      (setq auto-composition-mode t auto-composition-function 'auto-compose-chars
+            composition-function-table (make-char-table nil))
+      (aset composition-function-table #x301 (list (vector ".́" 1 'font-shape-gstring)))
+      (set-window-margins nil 3)
+      (put-text-property 1 2 'display '((margin left-margin) "é")))"##,
+    )
+    .expect("margin string and composition rule");
+    let selected = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let window = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected.0 as i64)
+        .expect("selected window");
+    let row = window
+        .matrix
+        .rows
+        .iter()
+        .find(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .expect("text row");
+    assert!(
+        matches!(&row.glyphs[GlyphArea::LeftMargin.index()][0].glyph_type,
+        GlyphType::AutomaticComposite { text, terminal } if text.as_ref() == "é" && terminal.width_cols == 1)
+    );
+}
+
+#[test]
 fn layout_frame_rust_tab_line_unicode_uses_shared_display_row_builder() {
     let mut eval = Context::new();
     let buf_id = eval

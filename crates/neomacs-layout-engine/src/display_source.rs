@@ -31,11 +31,13 @@ use neovm_core::buffer::{
 };
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::composite::composition_display_text_for_property;
+use neovm_core::emacs_core::composite::{AutomaticCompositionRules, AutomaticCompositionSpan};
 use neovm_core::emacs_core::emacs_char::EmacsChar;
 use neovm_core::emacs_core::value::{get_string_text_properties_table_for_value, list_to_vec};
 use neovm_core::face::LispFaceId;
 
 pub(crate) struct DisplaySourceContext<'a> {
+    automatic_composition: Option<AutomaticCompositionRules>,
     face_resolver: Option<&'a mut dyn DisplayItemFaceResolver>,
     /// Typed side channel for output that does not belong to the text area.
     ///
@@ -49,6 +51,7 @@ pub(crate) struct DisplaySourceContext<'a> {
 impl<'a> DisplaySourceContext<'a> {
     pub(crate) const fn empty() -> Self {
         Self {
+            automatic_composition: None,
             face_resolver: None,
             non_text_area_sink: None,
         }
@@ -57,6 +60,7 @@ impl<'a> DisplaySourceContext<'a> {
     #[cfg(test)]
     pub(crate) fn with_face_resolver(resolver: &'a mut dyn DisplayItemFaceResolver) -> Self {
         Self {
+            automatic_composition: None,
             face_resolver: Some(resolver),
             non_text_area_sink: None,
         }
@@ -67,9 +71,18 @@ impl<'a> DisplaySourceContext<'a> {
         non_text_area_sink: &'a mut Vec<DisplayNonTextAreaEmission>,
     ) -> Self {
         Self {
+            automatic_composition: None,
             face_resolver: Some(resolver),
             non_text_area_sink: Some(non_text_area_sink),
         }
+    }
+
+    pub(crate) fn with_automatic_composition(
+        mut self,
+        rules: Option<AutomaticCompositionRules>,
+    ) -> Self {
+        self.automatic_composition = rules;
+        self
     }
 
     fn collect_fringe(&mut self, layout: crate::display_spec::DisplayFringeLayout) {
@@ -2680,6 +2693,13 @@ impl LispStringSourceCursor {
         self
     }
 
+    pub(crate) fn with_composition_source(mut self, source: LispStringCompositionSource) -> Self {
+        if let Some(root) = self.stack.frames.first_mut() {
+            root.automatic_compositions = LispStringCompositions::Unresolved(source);
+        }
+        self
+    }
+
     pub(crate) fn discard_until_row_break(&mut self) -> bool {
         let mut context = DisplaySourceContext::empty();
         while let Some(item) = self.next_item(&mut context) {
@@ -2920,6 +2940,7 @@ impl LispStringSourceStack {
 }
 
 struct LispStringSourceFrame {
+    automatic_compositions: LispStringCompositions,
     source_id: u64,
     text: Vec<u8>,
     storage: EmacsTextStorage,
@@ -2937,6 +2958,25 @@ struct LispStringSourceFrame {
     /// The walk's evaluated `(when FORM . SPEC)` results for this string's
     /// own `display` properties.
     display_when: DisplayWhenConditions,
+}
+
+/// Select once per string object, then retain only owned character ranges.
+/// Nested replacement strings are separate objects and select their own spans
+/// from the same display context; compositions never cross object boundaries.
+enum LispStringCompositions {
+    Unresolved(LispStringCompositionSource),
+    Resolved(Vec<AutomaticCompositionSpan>),
+}
+
+#[derive(Default)]
+pub(crate) enum LispStringCompositionSource {
+    #[default]
+    OriginalObject,
+    /// The formatter flattens several Lisp objects for face/layout processing.
+    /// Only these original multibyte regions may compose, each independently.
+    /// Owned ranges preserve storage and object boundaries without retaining
+    /// evaluator borrows or guessing from the flattened string's encoding.
+    FormattedRegions(Vec<neovm_core::buffer::CharRange>),
 }
 
 impl LispStringSourceFrame {
@@ -3001,6 +3041,9 @@ impl LispStringSourceFrame {
         }
         char_byte_offsets.push(text.len());
         Some(Self {
+            automatic_compositions: LispStringCompositions::Unresolved(
+                LispStringCompositionSource::OriginalObject,
+            ),
             source_id,
             text,
             storage,
@@ -3028,6 +3071,35 @@ impl LispStringSourceFrame {
     ) -> LispStringAction {
         if self.char_index >= self.char_count() {
             return LispStringAction::PopFrame;
+        }
+
+        if let LispStringCompositions::Unresolved(source) = &self.automatic_compositions {
+            let spans = match (source, context.automatic_composition) {
+                (_, None) => Vec::new(),
+                (LispStringCompositionSource::OriginalObject, Some(rules)) => match self.storage {
+                    EmacsTextStorage::Multibyte => {
+                        rules.spans(&self.text_slice(0, self.char_count()))
+                    }
+                    EmacsTextStorage::Unibyte => Vec::new(),
+                },
+                (LispStringCompositionSource::FormattedRegions(regions), Some(rules)) => regions
+                    .iter()
+                    .filter(|region| region.end().get() <= self.char_count())
+                    .flat_map(|region| {
+                        let start = region.start().get();
+                        rules
+                            .spans(&self.text_slice(start, region.end().get()))
+                            .into_iter()
+                            .map(move |span| {
+                                AutomaticCompositionSpan::new(
+                                    start + span.start(),
+                                    start + span.end(),
+                                )
+                            })
+                    })
+                    .collect(),
+            };
+            self.automatic_compositions = LispStringCompositions::Resolved(spans);
         }
 
         let start = self.char_index;
@@ -3169,6 +3241,27 @@ impl LispStringSourceFrame {
                 );
             }
         }
+        if let Some(end) = self
+            .automatic_composition_at(start)
+            .filter(|&end| end <= property_end)
+        {
+            self.char_index = end;
+            return LispStringResolvedAction::Emit(
+                DisplayItem::new(
+                    self.span(start, end),
+                    face,
+                    DisplayItemKind::TextRun(DisplayTextRun::automatic(
+                        self.text_slice(start, end),
+                    )),
+                )
+                .with_layout(item_layout)
+                .with_pointer_appearance(pointer_appearance)
+                .with_box_run_topology(
+                    context.face_has_box(face),
+                    self.box_vertical_edges_for_range(start, end, face, context),
+                ),
+            );
+        }
         if let Some(mut kind) = display_item_kind_for_text_source_char_with_tty_mapping(
             character,
             tty_glyphless_char_display.method_for(character),
@@ -3199,7 +3292,11 @@ impl LispStringSourceFrame {
             );
         }
 
-        let end = self.next_text_run_end(start, property_end, tty_glyphless_char_display);
+        let text_end = self
+            .next_automatic_composition_start(start)
+            .unwrap_or(property_end)
+            .min(property_end);
+        let end = self.next_text_run_end(start, text_end, tty_glyphless_char_display);
         self.char_index = end;
         LispStringResolvedAction::Emit(
             DisplayItem::new(
@@ -3218,6 +3315,25 @@ impl LispStringSourceFrame {
 
     fn char_count(&self) -> usize {
         self.char_byte_offsets.len().saturating_sub(1)
+    }
+
+    fn automatic_composition_at(&self, start: usize) -> Option<usize> {
+        match &self.automatic_compositions {
+            LispStringCompositions::Unresolved(_) => None,
+            LispStringCompositions::Resolved(spans) => spans
+                .binary_search_by_key(&start, |span| span.start())
+                .ok()
+                .map(|index| spans[index].end()),
+        }
+    }
+
+    fn next_automatic_composition_start(&self, start: usize) -> Option<usize> {
+        match &self.automatic_compositions {
+            LispStringCompositions::Unresolved(_) => None,
+            LispStringCompositions::Resolved(spans) => spans
+                .get(spans.partition_point(|span| span.start() <= start))
+                .map(|span| span.start()),
+        }
     }
 
     #[cfg(test)]

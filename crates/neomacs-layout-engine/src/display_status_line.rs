@@ -196,6 +196,7 @@ impl<'a> FrameChromeOutputTarget<'a> {
 }
 
 pub(crate) struct ChromeRowRenderServices<'emit, 'face> {
+    automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     font_metrics: &'emit mut Option<FontMetricsService>,
     measurement_mode: DisplayRowMeasurementMode,
     face_resolver: &'face FaceResolver,
@@ -203,12 +204,20 @@ pub(crate) struct ChromeRowRenderServices<'emit, 'face> {
 }
 
 impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
+    pub(crate) fn with_automatic_composition(
+        mut self,
+        rules: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
+    ) -> Self {
+        self.automatic_composition = rules;
+        self
+    }
     pub(crate) fn new(
         font_metrics: &'emit mut Option<FontMetricsService>,
         face_resolver: &'face FaceResolver,
         face_ids: &'emit mut FrameFaceAttempt,
     ) -> Self {
         Self {
+            automatic_composition: None,
             font_metrics,
             measurement_mode: DisplayRowMeasurementMode::from_frame_window_system(
                 face_resolver.is_window_system(),
@@ -220,6 +229,7 @@ impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
 
     pub(crate) fn reborrow(&mut self) -> ChromeRowRenderServices<'_, 'face> {
         ChromeRowRenderServices {
+            automatic_composition: self.automatic_composition,
             font_metrics: self.font_metrics,
             measurement_mode: self.measurement_mode,
             face_resolver: self.face_resolver,
@@ -257,7 +267,8 @@ impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
             self.face_resolver,
             display_host,
             &mut *self.face_ids,
-        );
+        )
+        .with_automatic_composition(self.automatic_composition);
         render_executor.render_lisp_string_source_request(request)
     }
 
@@ -1045,11 +1056,16 @@ impl<'face> WindowChromeDisplayRowRenderRequest<'face> {
         self,
         state: &mut WindowChromeRowsRenderState<'_, '_, 'face>,
         anchor: ChromeRowVerticalAnchor,
+        automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     ) -> Option<f32> {
         let output = self.output;
         let chrome_strings = self.chrome_strings;
+        let mut render_services = state
+            .render_services
+            .reborrow()
+            .with_automatic_composition(automatic_composition);
         let mut rendered = self.row.render_row(
-            &mut state.render_services,
+            &mut render_services,
             state.evaluator.display_host.as_deref(),
         )?;
         rendered.rendered.remap_root_string_provenance(
@@ -1120,11 +1136,32 @@ impl<'face> WindowChromeDisplayRowRequest<'face> {
             presented_window_chrome_area(self.kind),
             &self.formatted,
         );
+        let composition_regions = self
+            .formatted
+            .source_spans()
+            .iter()
+            .filter(|span| {
+                span.source()
+                    .as_lisp_string()
+                    .is_some_and(|string| string.is_multibyte())
+            })
+            .map(|span| {
+                neovm_core::buffer::CharRange::new(
+                    neovm_core::buffer::CharPos0::new(span.output_start()),
+                    neovm_core::buffer::CharPos0::new(span.output_end()),
+                )
+            })
+            .collect();
         let render_request = self
             .lisp_string_row_request()
             .with_symbol_values(self.symbol_values)
             .into_render_request(face_ids)
-            .with_chrome_text_area_left_px(self.text_area_left_px);
+            .with_chrome_text_area_left_px(self.text_area_left_px)
+            .with_composition_source(
+                crate::display_source::LispStringCompositionSource::FormattedRegions(
+                    composition_regions,
+                ),
+            );
         let row = ChromeDisplayRowRenderRequest {
             plan: ChromeDisplayRowPlan::WindowChrome {
                 window_id: self.window_id,
@@ -1202,9 +1239,13 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
         request.metrics = self
             .render_services
             .intrinsic_metrics_for_face(request.base_face, request.metrics);
+        let rules = crate::neovm_bridge::window_string_composition_rules(
+            self.evaluator,
+            neovm_core::window::WindowId(request.window_id),
+        );
         let rendered = request
             .into_render_request(self.render_services.face_ids())
-            .render_and_apply(self, anchor);
+            .render_and_apply(self, anchor, rules);
         neovm_core::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
         rendered
     }

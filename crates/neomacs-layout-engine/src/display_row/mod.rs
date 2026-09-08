@@ -187,6 +187,7 @@ impl<'face> DisplayRowSourceFragmentFrame<'face> {
 }
 
 pub(crate) struct DisplayRowLispStringSourceSessionRequest {
+    composition_source: crate::display_source::LispStringCompositionSource,
     source_id: DisplayRowLispStringSourceId,
     value: Value,
     base_face_id: FaceId,
@@ -296,6 +297,13 @@ impl<'a> DisplayRowLispStringSourceRequest<'a> {
 }
 
 impl<'a> DisplayRowLispStringSourceRenderRequest<'a> {
+    pub(crate) fn with_composition_source(
+        mut self,
+        source: crate::display_source::LispStringCompositionSource,
+    ) -> Self {
+        self.session_request.composition_source = source;
+        self
+    }
     pub(crate) fn from_value(
         row_request: DisplayRowSourceRenderRequest<'a>,
         value: Value,
@@ -358,6 +366,7 @@ impl DisplayRowLispStringSourceSessionRequest {
         face_scope: DisplaySourceFaceScope,
     ) -> Self {
         Self {
+            composition_source: Default::default(),
             source_id: DisplayRowLispStringSourceId::ROOT,
             value,
             base_face_id,
@@ -380,7 +389,8 @@ impl DisplayRowLispStringSourceSession {
             RenderFaceRef::FaceId(request.base_face_id),
             LispStringSourceOrigin::Normal,
         )?
-        .with_tty_glyphless_char_display(request.tty_glyphless_char_display);
+        .with_tty_glyphless_char_display(request.tty_glyphless_char_display)
+        .with_composition_source(request.composition_source);
         Some(Self {
             source,
             state: DisplayRowSourceState::with_face_scope(request.face_scope),
@@ -830,18 +840,27 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
 }
 
 pub(crate) struct DisplayRowRenderContext<'a, 'ids> {
+    automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     face_resolver: &'a FaceResolver,
     display_host: Option<&'a dyn DisplayHost>,
     face_ids: &'ids mut FrameFaceAttempt,
 }
 
 impl<'a, 'ids> DisplayRowRenderContext<'a, 'ids> {
+    pub(crate) fn with_automatic_composition(
+        mut self,
+        rules: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
+    ) -> Self {
+        self.automatic_composition = rules;
+        self
+    }
     pub(crate) fn new(
         face_resolver: &'a FaceResolver,
         display_host: Option<&'a dyn DisplayHost>,
         face_ids: &'ids mut FrameFaceAttempt,
     ) -> Self {
         Self {
+            automatic_composition: None,
             face_resolver,
             display_host,
             face_ids,
@@ -863,6 +882,7 @@ impl<'a, 'ids> DisplayRowRenderContext<'a, 'ids> {
             self.display_host.map(|host| host as &'b dyn DisplayHost),
             image_scale_environment,
         )
+        .with_automatic_composition(self.automatic_composition)
     }
 
     fn face_ids(&mut self) -> &mut FrameFaceAttempt {
@@ -881,6 +901,13 @@ pub(crate) struct DisplayRowRenderExecutor<'metrics, 'context, 'ids> {
 }
 
 impl<'metrics, 'context, 'ids> DisplayRowRenderExecutor<'metrics, 'context, 'ids> {
+    pub(crate) fn with_automatic_composition(
+        mut self,
+        rules: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
+    ) -> Self {
+        self.context = self.context.with_automatic_composition(rules);
+        self
+    }
     pub(crate) fn new(
         font_metrics: &'metrics mut Option<FontMetricsService>,
         measurement_mode: DisplayRowMeasurementMode,

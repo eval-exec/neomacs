@@ -1012,6 +1012,84 @@ fn lisp_string_source_cursor_resolves_display_property_through_context() {
 }
 
 #[test]
+fn lisp_string_automatic_compositions_respect_rules_and_object_boundaries() {
+    let mut eval = Context::new();
+    eval.eval_str(
+        r##"(progn
+      (setq auto-composition-mode t auto-composition-function 'auto-compose-chars
+            composition-function-table (make-char-table nil))
+      (aset composition-function-table #x301 (list (vector ".́" 1 'font-shape-gstring)))
+      (aset composition-function-table ?x (list (vector "xy" 0 'font-shape-gstring))))"##,
+    )
+    .expect("explicit composition rules");
+    let rules = crate::neovm_bridge::current_string_composition_rules(&eval);
+    assert!(rules.is_some());
+    let collect = |value, rules| {
+        let mut source = LispStringSourceCursor::new(
+            1,
+            value,
+            RenderFaceRef::FaceId(FaceId::new(0)),
+            LispStringSourceOrigin::Normal,
+        )
+        .expect("string");
+        let mut context = DisplaySourceContext::empty().with_automatic_composition(rules);
+        let mut items = Vec::new();
+        while let Some(item) = source.next_item(&mut context) {
+            items.push(item);
+        }
+        items
+    };
+    let items = collect(Value::string("Aéz"), rules);
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            DisplayItemKind::TextRun(DisplayTextRun::independent("A")),
+            DisplayItemKind::TextRun(DisplayTextRun::automatic("é")),
+            DisplayItemKind::TextRun(DisplayTextRun::independent("z")),
+        ]
+    );
+    assert_eq!(
+        items[1].span,
+        SourceSpan::new(
+            DisplaySourcePosition::lisp_string(1, 1, 1),
+            DisplaySourcePosition::lisp_string(1, 3, 4),
+        )
+    );
+    for value in [
+        Value::string("e"),
+        Value::string("́"),
+        Value::heap_string(neovm_core::heap_types::LispString::from_unibyte(
+            b"xy".to_vec(),
+        )),
+    ] {
+        let items = collect(value, rules);
+        assert!(items.iter().all(|item| matches!(&item.kind, DisplayItemKind::TextRun(run) if matches!(run.composition, DisplayTextComposition::Independent))));
+    }
+    let disabled = collect(Value::string("é"), None);
+    assert_eq!(
+        disabled[0].kind,
+        DisplayItemKind::TextRun(DisplayTextRun::independent("é"))
+    );
+    let replacement = Value::string_with_text_properties(
+        "X",
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 1,
+            plist: Value::list(vec![Value::symbol("display"), Value::string("é")]),
+        }],
+    );
+    let nested = collect(replacement, rules);
+    assert_eq!(nested.len(), 1);
+    assert_eq!(
+        nested[0].kind,
+        DisplayItemKind::TextRun(DisplayTextRun::automatic("é"))
+    );
+}
+
+#[test]
 fn lisp_string_source_cursor_uses_font_lock_face_when_face_is_absent() {
     let _eval = Context::new();
     let value = Value::string_with_text_properties(

@@ -89,6 +89,14 @@ impl DisplayLineNumbersMode {
 }
 
 pub(crate) trait LayoutBufferView {
+    /// Buffer-selected regexp tables for automatic composition of strings
+    /// displayed in this window. Unibyte strings are excluded by their source,
+    /// independently of the displayed buffer's own multibyte setting.
+    fn layout_string_composition_rules(
+        &self,
+    ) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
+        None
+    }
     /// The evaluated `(when FORM . SPEC)` conditions of the walk this view
     /// serves; `structural()` for a view nothing evaluated for.
     fn layout_display_when_conditions(&self) -> crate::display_when::DisplayWhenConditions {
@@ -212,6 +220,7 @@ pub(crate) struct LayoutBufferSnapshot {
     /// Non-overlapping ranges compiled from Lisp's live
     /// `composition-function-table`, in ascending buffer-character order.
     automatic_composition_spans: Vec<CharRange>,
+    string_composition_rules: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
 }
 
 impl LayoutBufferSnapshot {
@@ -231,6 +240,7 @@ impl LayoutBufferSnapshot {
             overlays: buffer.overlays().snapshot_clone(),
             category_symbol_plists: FxHashMap::default(),
             automatic_composition_spans: Vec::new(),
+            string_composition_rules: None,
         }
     }
 
@@ -256,6 +266,7 @@ impl LayoutBufferSnapshot {
         snapshot.category_symbol_plists = capture_layout_category_symbol_plists(buffer, obarray);
         snapshot.automatic_composition_spans =
             capture_automatic_composition_spans(buffer, obarray, &snapshot.vars, visible);
+        snapshot.string_composition_rules = capture_string_composition_rules(buffer, obarray);
         SNAPSHOTS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         snapshot
     }
@@ -303,18 +314,14 @@ fn capture_automatic_composition_spans(
     vars: &[Option<Value>; <LayoutVar as strum::EnumCount>::COUNT],
     visible: Option<(usize, usize)>,
 ) -> Vec<CharRange> {
-    if !buffer.get_multibyte()
-        || vars[LayoutVar::AutoCompositionMode as usize].is_none_or(Value::is_nil)
-        || !vars[LayoutVar::AutoCompositionFunction as usize]
-            .is_some_and(|value| value.is_symbol_named("auto-compose-chars"))
-    {
+    if !buffer.get_multibyte() {
         return Vec::new();
     }
-
-    let table_id = Value::symbol("composition-function-table")
-        .as_symbol_id()
-        .expect("interned symbol has an id");
-    let Some(table) = obarray.symbol_value_id(table_id).copied() else {
+    let Some(table) = active_composition_table(
+        vars[LayoutVar::AutoCompositionMode as usize],
+        vars[LayoutVar::AutoCompositionFunction as usize],
+        obarray,
+    ) else {
         return Vec::new();
     };
     // Both paths report ABSOLUTE char positions, so nothing is added here.
@@ -330,6 +337,58 @@ fn capture_automatic_composition_spans(
         .iter()
         .map(|span| CharRange::new(CharPos0::new(span.start()), CharPos0::new(span.end())))
         .collect()
+}
+
+/// Resolve the same automatic composer as buffer redisplay, but leave the
+/// multibyte gate to the string object, as GNU composition_compute_stop_pos
+/// does. The caller keeps the live Lisp tables rooted during redisplay.
+fn capture_string_composition_rules(
+    buffer: &Buffer,
+    obarray: &Obarray,
+) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
+    let value = |var| effective_buffer_value(buffer, obarray, var);
+    let table = active_composition_table(
+        value(LayoutVar::AutoCompositionMode),
+        value(LayoutVar::AutoCompositionFunction),
+        obarray,
+    )?;
+    neovm_core::emacs_core::composite::AutomaticCompositionRules::new(buffer, table)
+}
+
+fn active_composition_table(
+    mode: Option<Value>,
+    function: Option<Value>,
+    obarray: &Obarray,
+) -> Option<Value> {
+    if mode.is_none_or(Value::is_nil)
+        || !function.is_some_and(|value| value.is_symbol_named("auto-compose-chars"))
+    {
+        return None;
+    }
+    obarray.symbol_value("composition-function-table").copied()
+}
+
+pub(crate) fn window_string_composition_rules(
+    evaluator: &neovm_core::emacs_core::Context,
+    window_id: neovm_core::window::WindowId,
+) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
+    let buffer_id = evaluator
+        .frame_manager()
+        .lookup_window(window_id)?
+        .buffer_id()?;
+    capture_string_composition_rules(
+        evaluator.buffer_manager().get(buffer_id)?,
+        evaluator.obarray(),
+    )
+}
+
+pub(crate) fn current_string_composition_rules(
+    evaluator: &neovm_core::emacs_core::Context,
+) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
+    capture_string_composition_rules(
+        evaluator.buffer_manager().current_buffer()?,
+        evaluator.obarray(),
+    )
 }
 
 fn capture_layout_category_symbol_plists(
@@ -601,6 +660,11 @@ impl LayoutBufferView for Buffer {
 }
 
 impl LayoutBufferView for LayoutBufferSnapshot {
+    fn layout_string_composition_rules(
+        &self,
+    ) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
+        self.string_composition_rules
+    }
     fn layout_display_when_conditions(&self) -> crate::display_when::DisplayWhenConditions {
         self.display_when.clone()
     }

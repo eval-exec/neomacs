@@ -217,7 +217,8 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
                 DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
                     &mut resolver,
                     &mut pending_non_text_area,
-                );
+                )
+                .with_automatic_composition(params.automatic_composition);
             self.source_consumption.next_source_consumption_item(
                 &mut self.source_cursor,
                 &mut source_context,
@@ -276,7 +277,8 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         let mut context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
             &mut resolver,
             &mut pending_non_text_area,
-        );
+        )
+        .with_automatic_composition(buffer.layout_string_composition_rules());
         self.source_consumption.next_source_consumption_item(
             &mut self.source_cursor,
             &mut context,

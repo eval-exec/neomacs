@@ -4051,7 +4051,10 @@ impl LayoutEngine {
                 text: tab_bar.text,
                 image_scale_environment: frame_params.image_scale_environment,
             },
-            ChromeRowRenderServices::new(&mut self.font_metrics, face_resolver, &mut face_ids),
+            ChromeRowRenderServices::new(&mut self.font_metrics, face_resolver, &mut face_ids)
+                .with_automatic_composition(crate::neovm_bridge::current_string_composition_rules(
+                    evaluator,
+                )),
             evaluator.display_host.as_deref(),
         )?;
         let FrameTabBarDisplayRowRender::Measured(measured) = rendered_tab_bar else {

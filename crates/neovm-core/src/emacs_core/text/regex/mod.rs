@@ -3325,31 +3325,23 @@ pub fn looking_at_string(
 }
 
 /// Match a native Lisp regexp against a Rust-owned Unicode string using the
-/// syntax and category tables selected by `buffer`.
+/// explicitly captured syntax and category tables, without case folding.
 ///
 /// The `LispString` pattern preserves Emacs multibyte and raw-byte regexp
 /// characters.  Lisp-generated regexps can be valid Lisp strings without
 /// being valid UTF-8; forcing them through `&str` would either reject or alter
 /// the pattern before the Emacs regexp compiler sees it.  GNU's internal
 /// `fast_looking_at` also classifies `\s` and `\c` through the current buffer
-/// even when its bytes come from a separate string, so the buffer remains an
-/// explicit input.
-pub(crate) fn looking_at_lisp_pattern_with_buffer_tables(
+/// even when its bytes come from a separate string, so its classification
+/// remains an explicit input instead of falling back to standard tables.
+pub(crate) fn looking_at_lisp_pattern_with_syntax(
     pattern: &LispString,
     string: &str,
-    case_fold: bool,
-    buffer: &Buffer,
+    syntax: &dyn SyntaxLookup,
     match_data: &mut Option<MatchData>,
 ) -> Result<bool, String> {
-    let syntax = buffer_syntax_lookup(buffer);
-    let compiled = compile_lisp_pattern_with_posix_translation(
-        pattern,
-        case_fold,
-        false,
-        true,
-        buffer_search_translation_table(buffer, case_fold),
-        &syntax,
-    )?;
+    let compiled =
+        compile_lisp_pattern_with_posix_translation(pattern, false, false, true, None, syntax)?;
     let searched = LispString::from_utf8(string);
     let text_bytes = searched.as_bytes();
     if let Some((_end, regs)) = regex_emacs::re_match(
@@ -3357,7 +3349,7 @@ pub(crate) fn looking_at_lisp_pattern_with_buffer_tables(
         text_bytes,
         0,
         text_bytes.len(),
-        &syntax,
+        syntax,
         0,
     ) {
         let byte_md = engine_match_data_from_registers(&regs, 0);

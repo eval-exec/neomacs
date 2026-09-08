@@ -252,6 +252,7 @@ impl<'a, B: LayoutBufferView> BufferSourceFaceResolutionContext<'a, B> {
             display_host,
             self.image_scale_environment,
         )
+        .with_automatic_composition(self.buffer().layout_string_composition_rules())
     }
 
     pub(crate) fn install_pending_source_faces(
