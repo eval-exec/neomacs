@@ -98,7 +98,9 @@ impl SurfaceFrameRenderer {
         }
 
         Ok(Self {
-            cursor: Default::default(),
+            cursor: neomacs_renderer_wgpu::cursor::CursorState::new(
+                neomacs_display_protocol::frame_time::observe_platform_now(),
+            ),
             surface,
             renderer,
             glyph_atlas,
@@ -150,13 +152,19 @@ impl SurfaceFrameRenderer {
 
         self.glyph_atlas
             .set_current_frame_fonts(frame.font_bindings());
+        // The portable adapter has no predicted presentation timestamp yet.
+        // Date every visual in this frame to the same observed draw time.
+        let at = neomacs_display_protocol::frame_time::observe_platform_now();
         self.renderer
-            .set_frame_sample_time(neomacs_host_runtime::time::Instant::now());
+            .set_frame_sample(neomacs_display_protocol::frame_time::FrameSample::new(
+                at,
+                std::time::Duration::ZERO,
+            ));
         if cursor_visibility.is_visible()
             && let Some(cursor) = frame.active_cursor()
         {
-            self.cursor
-                .set_target(neomacs_renderer_wgpu::cursor::CursorTarget {
+            self.cursor.set_target(
+                neomacs_renderer_wgpu::cursor::CursorTarget {
                     window_id: cursor.window_id.get(),
                     x: cursor.x,
                     y: cursor.y,
@@ -164,9 +172,11 @@ impl SurfaceFrameRenderer {
                     height: cursor.height,
                     style: cursor.style,
                     frame_id: frame.frame_placement.frame().get(),
-                });
-            self.cursor.tick_animation();
-            self.cursor.tick_size_animation();
+                },
+                at,
+            );
+            self.cursor.tick_animation(at);
+            self.cursor.tick_size_animation(at);
         } else {
             self.cursor.clear_target();
         }
@@ -186,7 +196,7 @@ impl SurfaceFrameRenderer {
                     mapping,
                     cursor_visibility.is_visible(),
                     animated_cursor,
-                    (-1.0, -1.0),
+                    None,
                     None,
                     None,
                     None,
