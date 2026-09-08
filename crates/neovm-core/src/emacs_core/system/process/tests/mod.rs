@@ -1,4 +1,7 @@
 use super::*;
+// Exercise the process-free implementation on native test hosts too.
+#[path = "../portable_wait.rs"]
+mod portable_wait;
 use crate::emacs_core::environment::builtin_getenv_internal;
 use crate::emacs_core::wait::{CommandInputWaitOutcome, ProcessOutputWaitOutcome};
 use crate::emacs_core::{Context, builtins, format_eval_result};
