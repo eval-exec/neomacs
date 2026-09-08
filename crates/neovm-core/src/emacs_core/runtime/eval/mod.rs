@@ -917,6 +917,10 @@ pub(crate) fn subr_call_entry_from_value(function: Value) -> Option<(SymId, Subr
             max_args: subr.max_args,
             dispatch_kind: subr.dispatch_kind,
             interactive_spec: None,
+            // Call-only entries do not participate in portable-image ABI
+            // validation; that reads the registered table. Keep this hot path
+            // free of the metadata lookup, like interactive_spec above.
+            portability: super::subr::SubrPortability::AllTargets,
         },
     ))
 }
