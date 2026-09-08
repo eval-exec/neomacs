@@ -3774,3 +3774,39 @@ fn automatic_composition_memo_recomputes_when_any_input_it_reads_changes() {
         "a syntax-table change must invalidate the memo"
     );
 }
+
+/// Killing a base buffer kills its indirect children, whether or not the
+/// session had made an indirect buffer before.
+///
+/// `kill-buffer` finds those children by asking every buffer who its base is,
+/// and that walk is now skipped when no live buffer is indirect.  The skip is
+/// only sound while the "no live buffer is indirect" answer is exact, so this
+/// exercises the transition in both directions: kill with a child present,
+/// then kill an ordinary buffer once the child is gone.
+///
+/// Measured on the pinned GNU Emacs 31.1, `emacs -Q --batch`:
+///
+/// ```elisp
+/// (let* ((base (generate-new-buffer "neo-base"))
+///        (ind (make-indirect-buffer base "neo-ind")))
+///   (kill-buffer base)
+///   (list (buffer-live-p base) (buffer-live-p ind)))   ;; => (nil nil)
+/// ```
+#[test]
+fn killing_a_base_buffer_kills_its_indirect_children() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        crate::test_utils::runtime_startup_eval_all(
+            r#"
+(let* ((base (generate-new-buffer "neo-base"))
+       (ind (make-indirect-buffer base "neo-ind"))
+       (killed (progn (kill-buffer base)
+                      (list (buffer-live-p base) (buffer-live-p ind))))
+       (plain (generate-new-buffer "neo-plain")))
+  (kill-buffer plain)
+  (list killed (buffer-live-p plain)))
+"#,
+        ),
+        vec!["OK ((nil nil) nil)"],
+    );
+}

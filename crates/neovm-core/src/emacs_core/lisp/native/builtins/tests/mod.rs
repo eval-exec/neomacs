@@ -2010,8 +2010,15 @@ fn buffer_base_buffer_and_last_name_semantics() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     let base_id = eval.buffers.current_buffer().unwrap().id;
-    let indirect_id = eval.buffers.create_buffer("*indirect*");
-    eval.buffers.get_mut(indirect_id).unwrap().base_buffer = Some(base_id);
+    // Make it indirect the way `make-indirect-buffer` does.  Writing
+    // `base_buffer` behind the manager's back leaves its count of live
+    // indirect buffers -- which `kill-buffer` trusts when it decides whether
+    // to search for indirect children at all -- describing a session that no
+    // longer exists.
+    let indirect_id = eval
+        .buffers
+        .create_indirect_buffer(base_id, "*indirect*", false)
+        .expect("indirect buffer");
 
     assert_eq!(
         builtin_buffer_base_buffer(&mut eval, vec![]).unwrap(),

@@ -4825,6 +4825,16 @@ pub enum UndoBoundaryOutcome {
 struct LiveBuffers {
     slots: Vec<Option<Box<Buffer>>>,
     live: usize,
+    /// How many live buffers are indirect, i.e. carry a base buffer.
+    ///
+    /// `kill-buffer` has to kill a buffer's indirect children with it, and
+    /// finding them means asking every buffer who its base is.  Sessions that
+    /// never make an indirect buffer -- which is nearly all of them -- can
+    /// answer that question without looking: there are none.  Keeping the
+    /// count here rather than at a call site means the two mutation points
+    /// below are the only places it can be wrong, and the scan asserts it in
+    /// debug builds.
+    indirect: usize,
 }
 
 impl LiveBuffers {
@@ -4854,18 +4864,27 @@ impl LiveBuffers {
         if index >= self.slots.len() {
             self.slots.resize_with(index + 1, || None);
         }
+        let indirect = buffer.base_buffer.is_some();
         let previous = self.slots[index].replace(Box::new(buffer)).map(|b| *b);
         if previous.is_none() {
             self.live += 1;
         }
+        self.indirect += usize::from(indirect);
+        self.indirect -= usize::from(previous.as_ref().is_some_and(|b| b.base_buffer.is_some()));
         previous
     }
     fn remove(&mut self, id: &BufferId) -> Option<Buffer> {
         let removed = self.slots.get_mut(id.0 as usize)?.take().map(|b| *b);
-        if removed.is_some() {
+        if let Some(removed) = removed.as_ref() {
             self.live -= 1;
+            self.indirect -= usize::from(removed.base_buffer.is_some());
         }
         removed
+    }
+    /// Whether any live buffer is indirect.
+    #[inline]
+    fn any_indirect(&self) -> bool {
+        self.indirect != 0
     }
     fn keys(&self) -> impl Iterator<Item = BufferId> + '_ {
         self.slots
@@ -5745,7 +5764,22 @@ impl BufferManager {
     pub(crate) fn collect_killed_buffer_ids(&self, id: BufferId) -> Option<Vec<BufferId>> {
         let buf = self.buffers.get(&id)?;
         let mut killed_ids = vec![id];
-        if buf.base_buffer.is_none() {
+        debug_assert_eq!(
+            self.buffers.indirect,
+            self.buffers
+                .values()
+                .filter(|buffer| buffer.base_buffer.is_some())
+                .count(),
+            "the indirect-buffer count must match the buffers themselves"
+        );
+        // GNU's `Fkill_buffer` walks the buffer list for indirect children
+        // (`src/buffer.c`), and so does this -- but only when the session has
+        // an indirect buffer at all.  `kill-buffer` asks four times per kill
+        // (the answer can change across the Lisp each step runs), so on a
+        // workload that kills thousands of temporary buffers the walk was
+        // 158.7M instructions of a magit-status run, all of it finding
+        // nothing.
+        if buf.base_buffer.is_none() && self.buffers.any_indirect() {
             let mut indirects = self
                 .buffers
                 .values()
