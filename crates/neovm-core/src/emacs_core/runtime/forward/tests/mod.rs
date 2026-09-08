@@ -323,21 +323,22 @@ fn defvar_bool_registration_lists_the_symbol_in_byte_boolean_vars_like_gnu() {
 /// `defvar_bool` conses the symbol onto `byte-boolean-vars`
 /// (`src/lread.c:5261`), but `syms_of_lread` then writes
 /// `Vbyte_boolean_vars = Qnil` (`src/lread.c:5774`), which throws away every
-/// cons `main` had made before it got there.  Measured under GNU 31.0.90,
-/// `emacs -Q --batch`:
+/// cons `main` had made before it got there.  Measured under GNU 31.1,
+/// `emacs -Q --batch` (31.0.90 answered 117 here; the reference moved with
+/// the project, and both engines list the same symbols):
 ///
 /// ```elisp
-/// (length byte-boolean-vars)                          ;; => 117
+/// (length byte-boolean-vars)                          ;; => 116
 /// (and (memq 'visible-bell byte-boolean-vars) t)      ;; => t   (dispnew.c, after)
 /// (and (memq 'use-short-answers byte-boolean-vars) t) ;; => nil (fns.c, before)
 /// ```
 #[test]
-fn byte_boolean_vars_holds_gnus_117_and_not_the_31_erased_ones() {
+fn byte_boolean_vars_holds_gnus_list_and_not_the_erased_ones() {
     let mut eval = ev();
 
     assert_eq!(
         format_eval_result(&eval.eval_str("(length byte-boolean-vars)")),
-        "OK 117"
+        "OK 116"
     );
     for name in [
         "visible-bell",
@@ -377,8 +378,8 @@ fn byte_boolean_vars_holds_gnus_117_and_not_the_31_erased_ones() {
 }
 
 /// The list is in reverse declaration order because `defvar_bool` prepends.
-/// Measured under GNU 31.0.90: `(car byte-boolean-vars)` is the last
-/// `DEFVAR_BOOL` `main` reaches (`xsettings.c`) and `(nth 116 ...)` the first
+/// Measured under GNU 31.1: `(car byte-boolean-vars)` is the last
+/// `DEFVAR_BOOL` `main` reaches (`xsettings.c`) and `(nth 115 ...)` the first
 /// one after `syms_of_lread` cleared the list (`lread.c`, immediately below
 /// the `DEFVAR_LISP` for the list itself).
 #[test]
@@ -390,7 +391,7 @@ fn byte_boolean_vars_is_in_gnus_reverse_declaration_order() {
         "OK font-use-system-font"
     );
     assert_eq!(
-        format_eval_result(&eval.eval_str("(nth 116 byte-boolean-vars)")),
+        format_eval_result(&eval.eval_str("(nth 115 byte-boolean-vars)")),
         "OK load-dangerous-libraries"
     );
 }
