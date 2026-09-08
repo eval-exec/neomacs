@@ -291,12 +291,14 @@ fn adopt_one(obarray: &mut Obarray, var: &GnuObjectVariable) -> Adoption {
 mod tests {
     use super::*;
 
-    /// Measured against GNU Emacs 31.0.90's `src/*.c`, 2026-08-21:
-    /// 562 `DEFVAR_LISP`/`DEFVAR_LISP_NOPRO` names and 14 `DEFVAR_KBOARD`
+    /// Measured against GNU Emacs 31.1's `src/*.c`, 2026-09-08:
+    /// 563 `DEFVAR_LISP`/`DEFVAR_LISP_NOPRO` names and 14 `DEFVAR_KBOARD`
     /// ones.  The generator keeps the first declaration of a name it sees, so
     /// a variable several window-system files declare counts once.
     ///
-    /// It was 564 + 14 until ledger 183: the extractor scanned raw C text and
+    /// GNU 31.1 adds `delete-frame-choose-selected` as a Lisp object in place
+    /// of its old boolean.  Before that it was 564 + 14 until ledger 183:
+    /// the extractor scanned raw C text and
     /// therefore saw seven `DEFVAR` heads parked inside `#if 0`, of which five
     /// (`x-pointer-shape` and four cursor names in `w32fns.c`) are also
     /// declared in `xfns.c` and belong here anyway.  Two are not declared
@@ -307,7 +309,7 @@ mod tests {
     #[test]
     fn table_matches_gnu_counts() {
         let table = gnu_table::GNU_OBJECT_VARIABLES;
-        assert_eq!(table.len(), 576);
+        assert_eq!(table.len(), 577);
         assert_eq!(
             table
                 .iter()

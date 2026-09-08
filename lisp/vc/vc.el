@@ -2207,7 +2207,7 @@ have changed; continue with old fileset?" (current-buffer))))
       (unless patch-string
         ;; Must not pass non-nil NOT-ESSENTIAL because we will shortly
         ;; call (in `vc-finish-logentry') `vc-resynch-buffer' with its
-        ;; NOQUERY parameter non-nil.
+        ;; NOQUERY parameter t (unless `vc-async-checkin').
         (vc-buffer-sync-fileset (list backend files)))
       (when register (vc-register (list backend register)))
       (let (to-remove-props proc)
@@ -3643,7 +3643,8 @@ When called from Lisp, optional argument FILESET overrides the fileset."
                            ;; REFRESH nil here because we just refreshed.
                            (vc--outgoing-base-mergebase backend
                                                         upstream-location
-                                                        nil 'force-topic))))
+                                                        nil 'force-topic)
+                           'log-unintegrated)))
 
 ;;;###autoload
 (defun vc-root-log-remote-unintegrated (&optional upstream-location)
@@ -4308,6 +4309,13 @@ button for.  Same for CURRENT-REVISION.  LIMIT means the usual."
       "Show the log for the file name(s) %s the rename"
       before-after))))
 
+(defvar-local vc--shortlog nil
+  "Whether this is a shortlog.
+This is a hack to fix bug#81215 which came up after the Emacs 31 freeze.
+For Emacs 32 that bug is fixed by replacing `vc-log-view-type' with
+`vc-log-view-types'.")
+(put 'vc--shortlog 'permanent-local t)
+
 (defun vc-print-log-internal (backend files working-revision
                                       &optional is-start-revision limit type)
   "For specified BACKEND and FILES, show the VC log.
@@ -4327,6 +4335,7 @@ LIMIT can also be a string, which means the revision before which to stop."
       (vc-log-internal-common
        backend buffer-name files type
        (lambda (bk buf _type-arg files-arg)
+         (with-current-buffer buf (setq-local vc--shortlog shortlog))
          (vc-call-backend bk 'print-log files-arg buf shortlog
                           (when is-start-revision working-revision) limit)
          (when log-view-vc-prev-fileset
@@ -4718,6 +4727,7 @@ can be a remote branch name."
       (vc-incoming-outgoing-internal backend nil
                                      (current-buffer) 'log-outgoing))
     (let ((proc (get-buffer-process (current-buffer))))
+      (set-process-query-on-exit-flag proc nil)
       (while (accept-process-output proc)))
     (how-many log-view-message-re)))
 
@@ -4978,11 +4988,11 @@ If FILE is a directory, revert all files inside that directory."
                            (vc-responsible-backend file)
                          (vc-backend file))
                        'revert file backup-file))
-    `((vc-state . ,(if (eq (vc-state file) 'added)
-                       'unregistered
-                     'up-to-date))
-      (vc-checkout-time
-       . ,(file-attribute-modification-time (file-attributes file)))))
+    (let ((state (vc-state file)))
+      `(,@(and (eq state 'added) '((vc-backend . nil)))
+        (vc-state . ,(if (eq state 'added) 'unregistered 'up-to-date))
+        (vc-checkout-time
+         . ,(file-attribute-modification-time (file-attributes file))))))
   (vc-resynch-buffer file t t))
 
 (defun vc-revert-files (backend files)
@@ -4998,7 +5008,7 @@ For entries in FILES that are directories, revert all files inside them."
         ;; Use `vc-file-getprop' directly here because we may be
         ;; handling very many files and do not want to hit the disk.
         `(,@(pcase (vc-file-getprop file 'vc-state)
-              ('added '((vc-state . unregistered)))
+              ('added '((vc-backend . nil) (vc-state . unregistered)))
               ;; If we have no known state for the file somehow, leave
               ;; it that way.
               ('nil nil)
@@ -5171,7 +5181,9 @@ These are recursively deleted."
             (backend (if (file-directory-p file)
                          (vc-responsible-backend file)
                        (vc-backend file))))
-        (unless (or (file-directory-p file) (null make-backup-files)
+        (unless (or (file-directory-p file)
+                    (null make-backup-files)
+                    (backup-file-name-p file)
                     (not (file-exists-p file)))
           (with-current-buffer (or buf (find-file-noselect file))
             (let ((backup-inhibited nil))
@@ -5690,9 +5702,9 @@ yourself with a function like `vc-file-tree-walk'."
   ;; having to load `vc-dir' just to get access to this simple wrapper.
   (let ((morep t) results)
     (with-temp-buffer
-      (setq default-directory directory)
+      (setq default-directory (expand-file-name directory))
       (vc-call-backend (or backend (vc-responsible-backend directory))
-                       'dir-status-files directory files
+                       'dir-status-files default-directory files
                        (lambda (entries &optional more-to-come)
                          (let (entry)
                            (while (setq entry (pop entries))
@@ -6026,16 +6038,17 @@ non-ignored, non-up-to-date files within those directories."
         (remaining (cadr fileset))
         ret-val)
     (while remaining
-      (cond* ((bind* (next (pop remaining))))
-             ((atom next)
-              (push next (alist-get (vc-state next backend) ret-val)))
-             ((bind* (file (car next))))
-             ((file-directory-p file)
-              (setq remaining
-                    (nconc (vc-dir-status-files file nil backend)
-                           remaining)))
-             (t
-              (push file (alist-get (cadr next) ret-val)))))
+      (let* ((next (pop remaining))
+             (file (if (consp next) (car next) next)))
+        (if (file-directory-p file)
+            (setq remaining
+                  (nconc (vc-dir-status-files file nil backend)
+                         remaining))
+          (push file
+                (alist-get (if (consp next)
+                               (cadr next)
+                             (vc-state next backend))
+                           ret-val)))))
     ret-val))
 
 (declare-function diff-kill-creations-deletions "diff-mode")

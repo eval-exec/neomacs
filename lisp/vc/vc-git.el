@@ -1911,28 +1911,18 @@ If LIMIT is a non-empty string, use it as a base revision."
 		'("--")))))))
 
 (defun vc-git-incoming-revision (&optional upstream-location refresh)
-  (let* ((remotes (and (not upstream-location) (vc-git--branch-remotes)))
-         (rev (or upstream-location
-                  (cdr (assq 'push remotes))
-                  (cdr (assq 'upstream remotes)))))
-    (when (and (or refresh (null (vc-git--rev-parse rev)))
-               ;; If the branch has no upstream, and we weren't supplied
-               ;; with one, then fetching is always useless (bug#79952).
-               (or upstream-location
-                   (and-let* ((branch (vc-git-working-branch)))
-                     (with-temp-buffer
-                       (vc-git--out-ok "config" "--get"
-                                       (format "branch.%s.remote"
-                                               branch))))))
-      (vc-git-command nil 0 nil "fetch"
-                      (and upstream-location
-                           ;; Extract remote from "remote/branch".
-                           (replace-regexp-in-string "/.*" ""
-                                                     upstream-location))))
-    (ignore-errors            ; in order to return nil if no such branch
-      (with-output-to-string
-        (vc-git-command standard-output 0 nil
-                        "log" "--max-count=1" "--pretty=format:%H" rev)))))
+  (let ((remotes (and (not upstream-location) (vc-git--branch-remotes))))
+    (and-let* ((rev (or upstream-location
+                        (cdr (assq 'push remotes))
+                        (cdr (assq 'upstream remotes)))))
+      (when (or refresh (null (vc-git--rev-parse rev)))
+        (vc-git-command nil 0 nil "fetch"
+                        ;; Extract remote from "remote/branch".
+                        (replace-regexp-in-string "/.*" "" rev)))
+      (ignore-errors          ; in order to return nil if no such branch
+        (with-output-to-string
+          (vc-git-command standard-output 0 nil
+                          "log" "--max-count=1" "--pretty=format:%H" rev))))))
 
 (defun vc-git-log-search (buffer pattern)
   "Search the log of changes for PATTERN and output results into BUFFER.
@@ -1975,17 +1965,22 @@ log entries."
   (setq-local log-view-file-re regexp-unmatchable)
   (setq-local log-view-per-file-logs nil)
   (setq-local log-view-message-re
-              (if (not (memq vc-log-view-type '(long log-search with-diff)))
+              (if (if (eq vc-log-view-type 'log-unintegrated)
+                      vc--shortlog
+                    (not (memq vc-log-view-type '(long log-search with-diff))))
                   (cadr vc-git-root-log-format)
                 "^commit +\\([0-9a-z]+\\)"))
   ;; Allow expanding short log entries.
-  (when (memq vc-log-view-type
-              '(short log-outgoing log-incoming log-unintegrated mergebase))
+  (when (if (eq vc-log-view-type 'log-unintegrated)
+            vc--shortlog
+          (memq vc-log-view-type '(short log-outgoing log-incoming mergebase)))
     (setq truncate-lines t)
     (setq-local log-view-expanded-log-entry-function
                 'vc-git-expanded-log-entry))
   (setq-local log-view-font-lock-keywords
-       (if (not (memq vc-log-view-type '(long log-search with-diff)))
+       (if (if (eq vc-log-view-type 'log-unintegrated)
+               vc--shortlog
+             (not (memq vc-log-view-type '(long log-search with-diff))))
 	   (list (cons (nth 1 vc-git-root-log-format)
 		       (nth 2 vc-git-root-log-format)))
 	 (append
@@ -2889,6 +2884,28 @@ page for the meanings of these attributes."
 
 ;;; Internal commands
 
+(defun vc-git--env-vars (subcommand)
+  "Return env vars for the `process-environment' of Git processes."
+  `("GIT_DIR"
+    ,@(and vc-git-use-literal-pathspecs
+           '("GIT_LITERAL_PATHSPECS=1"))
+    ;; Avoid optional repository locking during background operations
+    ;; (bug#21559, bug#80903).  Skipping these locks is always safe and
+    ;; can only lead to subsequent commands running more slowly.
+    ;; The "git status" case covers how `vc-checkin' uses
+    ;; `vc-dir-resynch-file' to update the display state of files
+    ;; undergoing an asynchronous check-in.
+    ,@(and (or revert-buffer-in-progress
+               (equal subcommand "status"))
+           '("GIT_OPTIONAL_LOCKS=0"))))
+
+;; This is for the same purpose as `vc-git--env-vars' except that it
+;; covers older Git, which doesn't recognise the environment variable.
+(defun vc-git--no-optional-locks (subcommand)
+  (and (or revert-buffer-in-progress
+           (equal subcommand "status"))
+       '("--no-optional-locks")))
+
 (defun vc-git-command (buffer okstatus file-or-list &rest flags)
   "A wrapper around `vc-do-command' for use in vc-git.el.
 The difference to `vc-do-command' is that this function always invokes
@@ -2908,16 +2925,8 @@ The difference to `vc-do-command' is that this function always invokes
          ;; want to do it only for commands which really require it.
 	 (coding-system-for-write
           (or coding-system-for-write vc-git-commits-coding-system))
-         (process-environment
-          (append
-           `("GIT_DIR"
-             ,@(and vc-git-use-literal-pathspecs
-                    '("GIT_LITERAL_PATHSPECS=1"))
-             ;; Avoid repository locking during background operations
-             ;; (bug#21559).
-             ,@(and revert-buffer-in-progress
-                    '("GIT_OPTIONAL_LOCKS=0")))
-           process-environment))
+         (process-environment (append (vc-git--env-vars (car flags))
+                                      process-environment))
          (file1 (and (not (cdr-safe file-or-list))
                      (or (car-safe file-or-list) file-or-list)))
          (file-list-is-rootdir (and file1
@@ -2942,7 +2951,9 @@ The difference to `vc-do-command' is that this function always invokes
                   ".")
                  ((not file-list-is-rootdir)
                   file-or-list))
-           (cons "--no-pager" flags))))
+           (cons "--no-pager"
+                 (append (vc-git--no-optional-locks (car flags))
+                         flags)))))
 
 (defun vc-git--empty-db-p ()
   "Check if the git db is empty (no commit done yet)."
@@ -2959,18 +2970,12 @@ The difference to `vc-do-command' is that this function always invokes
          (or coding-system-for-read vc-git-log-output-coding-system))
 	(coding-system-for-write
          (or coding-system-for-write vc-git-commits-coding-system))
-	(process-environment
-	 (append
-	  `("GIT_DIR"
-            ,@(when vc-git-use-literal-pathspecs
-                '("GIT_LITERAL_PATHSPECS=1"))
-	    ;; Avoid repository locking during background operations
-	    ;; (bug#21559).
-	    ,@(when revert-buffer-in-progress
-		'("GIT_OPTIONAL_LOCKS=0")))
-	  process-environment)))
+	(process-environment (append (vc-git--env-vars command)
+                                     process-environment)))
     (apply #'process-file vc-git-program infile buffer nil
-           "--no-pager" command args)))
+           (cons "--no-pager"
+                 (append (vc-git--no-optional-locks command)
+                         (cons command args))))))
 
 (defun vc-git--out-ok (command &rest args)
   "Run `git COMMAND ARGS...' and insert standard output in current buffer.

@@ -16,7 +16,9 @@ fn div_face_doc_abbrev_table_name() {
 #[test]
 fn div_face_doc_blink_matching_paren_offscreen() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK \"Face for showing in the echo area matched open paren that is off-screen.\\nThis face is used only when ‘blink-matching-paren-highlight-offscreen’\\nis non-nil.\"""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         "(face-documentation 'blink-matching-paren-offscreen)",
         expect,

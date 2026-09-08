@@ -204,7 +204,7 @@ fn div_cx404_search_backward_casefold_boundary() {
 #[test]
 fn div_cx404_buffer_local_vars_mode_diff() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (33 nil (major-mode . text-mode))""#]];
+    let expect = expect_test::expect![[r#""OK (30 nil (major-mode . text-mode))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer

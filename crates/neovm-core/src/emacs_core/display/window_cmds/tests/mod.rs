@@ -6138,6 +6138,44 @@ fn x_create_frame_prefers_display_host_primary_window_size_without_explicit_geom
 }
 
 #[test]
+fn delete_frame_uses_mru_only_for_the_mru_symbol() {
+    // GNU 31.1 frame.c tests EQ(value, Qmru), not truthiness.  Its fallback
+    // walks Vframe_list, where newly created frames are prepended.
+    for (setting, expected) in [
+        ("'mru", "OK t"),
+        ("nil", "OK nil"),
+        ("t", "OK nil"),
+        ("'custom", "OK nil"),
+    ] {
+        let mut ev = Context::new();
+        let buffer = ev.buffers.create_buffer("*scratch*");
+        ev.buffers.set_current(buffer);
+        let recent = ev.frames.create_frame("recent", 800, 600, buffer);
+        ev.frames.create_frame("fallback", 800, 600, buffer);
+        let victim = ev.frames.create_frame("victim", 800, 600, buffer);
+        ev.obarray_mut()
+            .set_symbol_value("test-recent-frame", Value::make_frame(recent.0));
+        ev.obarray_mut()
+            .set_symbol_value("test-victim-frame", Value::make_frame(victim.0));
+        let form = format!(
+            r##"
+(progn
+  (select-frame test-recent-frame)
+  (select-frame test-victim-frame)
+  (let ((delete-frame-choose-selected {setting}))
+    (delete-frame test-victim-frame))
+  (eq (selected-frame) test-recent-frame))
+"##
+        );
+        assert_eq!(
+            format_eval_result(&ev.eval_str(&form)),
+            expected,
+            "setting {setting}"
+        );
+    }
+}
+
+#[test]
 fn delete_frame_works() {
     crate::test_utils::init_test_tracing();
     let results = runtime_eval_with_usable_terminal(

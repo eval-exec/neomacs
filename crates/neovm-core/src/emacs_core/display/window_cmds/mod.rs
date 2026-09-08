@@ -6599,8 +6599,8 @@ pub(crate) fn delete_frame_owned(
     let selected_frame_before_delete = eval.frames.selected_frame().map(|frame| frame.id);
     if selected_frame_before_delete == Some(fid) {
         let selection_policy = if eval
-            .special_variable_value_by_id(intern("after-delete-frame-select-mru-frame"))
-            .is_some_and(Value::is_truthy)
+            .special_variable_value_by_id(intern("delete-frame-choose-selected"))
+            == Some(Value::symbol("mru"))
         {
             FrameDeletionSelectionPolicy::MostRecentlyUsed
         } else {

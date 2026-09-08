@@ -236,7 +236,9 @@ A value of `default' means to use the value of `vc-resolve-conflicts'."
   (setq file (expand-file-name file))
   (let*
       ((status nil)
-       (default-directory (file-name-directory file))
+       (root (vc-hg-root file))
+       (file (file-relative-name file root))
+       (default-directory root)
        (out
         (with-output-to-string
           (with-current-buffer
@@ -471,8 +473,9 @@ the log starting from that revision."
 
 (define-derived-mode vc-hg-log-view-mode log-view-mode "Hg-Log-View"
   (require 'add-log) ;; we need the add-log faces
-  (let ((shortp (memq vc-log-view-type
-                      '(short log-incoming log-outgoing log-unintegrated))))
+  (let ((shortp (if (eq vc-log-view-type 'log-unintegrated)
+                    vc--shortlog
+                  (memq vc-log-view-type '(short log-incoming log-outgoing)))))
    (setq-local log-view-file-re regexp-unmatchable)
    (setq-local log-view-per-file-logs nil)
    (setq-local log-view-message-re
@@ -564,7 +567,7 @@ This requires hg 4.4 or later, for the \"-L\" option of \"hg log\"."
     (when (and (not newvers) (member oldvers (list working ".")))
       (setq oldvers nil))
     (when (and newvers (not oldvers))
-      (setq oldvers working))
+      (setq oldvers "null"))
     (apply #'vc-hg-command
 	   (or buffer "*vc-diff*")
            (if async 'async 1)
@@ -1999,9 +2002,9 @@ The return value is always a string."
   "Return `topic' or nil for BRANCH or the currently active bookmark.
 If BRANCH names a bookmark, or BRANCH is nil but there is a currently
 active bookmark, return `topic'.  Otherwise return nil."
-  (if branch
-      (member branch (vc-hg--bookmarks))
-    (and (assq 'bookmark (vc-hg--working-branch)) 'topic)))
+  (and (if branch (member branch (vc-hg--bookmarks))
+         (assq 'bookmark (vc-hg--working-branch)))
+       'topic))
 
 (defun vc-hg-topic-outgoing-base ()
   "Return outgoing base for current commit considered as a topic branch.
@@ -2012,7 +2015,7 @@ This is based on the following assumptions:
 (i) if there is an active bookmark, it will eventually be merged into
     whatever the remote head is
 (ii) there is only one remote head for the current branch."
-  (assq 'branch (vc-hg--working-branch)))
+  (cdr (assq 'branch (vc-hg--working-branch))))
 
 (provide 'vc-hg)
 

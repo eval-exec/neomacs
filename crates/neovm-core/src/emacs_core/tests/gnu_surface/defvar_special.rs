@@ -147,8 +147,8 @@ fn xdisp_defvars_are_special_with_gnu_defaults() {
 #[test]
 fn frame_window_terminal_defvars_are_special_with_gnu_defaults() {
     assert_batch(&[
-        // frame.c:7796 DEFVAR_BOOL, init true.
-        ("after-delete-frame-select-mru-frame", "(eq v t)"),
+        // GNU 31.1 frame.c:7797 DEFVAR_LISP, init Qmru.
+        ("delete-frame-choose-selected", "(eq v 'mru)"),
         // window.c:9243 DEFVAR_BOOL, init true.
         ("auto-window-vscroll", "(eq v t)"),
         // dispnew.c:7488 DEFVAR_INT, and the only one in the tree with no
@@ -194,6 +194,28 @@ fn frame_window_terminal_defvars_are_special_with_gnu_defaults() {
         // window.c:9270 DEFVAR_LISP, init nil.
         ("window-point-insertion-type", "(null v)"),
     ]);
+}
+
+#[test]
+fn gnu_31_1_delete_frame_selection_is_a_special_lisp_object() {
+    let mut eval = Context::new();
+    // GNU 31.1 replaces the old boolean with a forwarded Lisp object.
+    // In particular, non-nil values must not be coerced to t.
+    let form = r##"
+(list (special-variable-p 'delete-frame-choose-selected)
+      (default-value 'delete-frame-choose-selected)
+      (boundp 'after-delete-frame-select-mru-frame)
+      (let ((delete-frame-choose-selected 'custom))
+        delete-frame-choose-selected)
+      (condition-case err
+          (makunbound 'delete-frame-choose-selected)
+        (error (car err))))
+"##;
+    // Captured from GNU Emacs 31.1, a360712c9d27, -Q --batch.
+    assert_eq!(
+        format_eval_result(&eval.eval_str(form)),
+        "OK (t mru nil custom error)"
+    );
 }
 
 /// xfaces.c / image.c cluster.

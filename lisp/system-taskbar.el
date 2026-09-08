@@ -273,16 +273,18 @@ If PROGRESS is nil, remove the progress indicator.")
 
 ;; `progress-reporter' support.
 
-(defun system-taskbar--progress-reporter-update (_reporter state)
+(defun system-taskbar--progress-reporter-update (_reporter state _update-text)
   "Progress reporter system taskbar update function.
-REPORTER and STATE are the same as in
+REPORTER, STATE, and UPDATE-TEXT are the same as in
 `progress-reporter-update-functions'."
   (when system-taskbar-mode
     (pcase state
       ((pred floatp)
        (system-taskbar--progress state))
       ((pred integerp)
-       (system-taskbar--progress (/ (1+ state) 4.0)))
+       ;; This won't show 0.0 to indicate work in process until done.
+       (system-taskbar--progress
+        (/ (1+ (mod state 5)) 5.0)))
       ('done
        (system-taskbar--progress nil)))))
 

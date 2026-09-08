@@ -12,7 +12,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn div_f4_mode_line_format_defaults() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""OK ((\"%e\" mode-line-front-space (:propertize (\"\" mode-line-mule-info mode-line-client mode-line-modified mode-line-remote mode-line-window-dedicated) display (min-width (6.0))) mode-line-frame-identification mode-line-buffer-identification \"   \" mode-line-position (project-mode-line project-mode-line-format) (vc-mode vc-mode) \"  \" mode-line-modes mode-line-misc-info mode-line-end-spaces) nil nil)""#
+        r#""OK ((\"%e\" mode-line-front-space mode-line-mule-info mode-line-client mode-line-modified mode-line-remote mode-line-window-dedicated mode-line-frame-identification mode-line-buffer-identification \"   \" mode-line-position (project-mode-line project-mode-line-format) (vc-mode vc-mode) \"  \" mode-line-modes mode-line-misc-info mode-line-end-spaces) nil nil)""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"

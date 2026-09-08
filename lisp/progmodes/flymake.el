@@ -4,7 +4,7 @@
 
 ;; Author: Pavel Kobyakov <pk_at_work@yahoo.com>
 ;; Maintainer: Spencer Baugh <sbaugh@janestreet.com>
-;; Version: 1.4.5
+;; Version: 1.4.6
 ;; Keywords: c languages tools
 ;; Package-Requires: ((emacs "26.1") (eldoc "1.14.0") (project "0.11.1"))
 
@@ -131,7 +131,8 @@
 (add-to-list 'customize-package-emacs-version-alist
              '(Flymake ("1.3.4" . "30.1")
                        ("1.3.5" . "30.1")
-                       ("1.3.6" . "30.1")))
+                       ("1.3.6" . "30.1")
+                       ("1.4.6" . "31.1")))
 
 (defcustom flymake-error-bitmap '(flymake-double-exclamation-mark
                                   flymake-error-fringe)
@@ -1627,7 +1628,7 @@ default) no filter is applied."
                         (cl-sort retval (if (cl-plusp n) #'< #'>)
                                  :key #'overlay-start))))
          (tail ;; For compatibility with older Emacs.
-               (with-suppressed-warnings ((obsolete cl-member-if))
+               (with-no-warnings
                  (cl-member-if (lambda (ov)
                                  (if (cl-plusp n)
                                      (> (overlay-start ov)

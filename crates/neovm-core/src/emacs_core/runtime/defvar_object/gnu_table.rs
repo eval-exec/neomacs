@@ -24,12 +24,12 @@ use GnuSpecialness::Special as S;
 
 #[rustfmt::skip]
 pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
-    GnuObjectVariable { name: r#"after-change-functions"#, kind: G, special: S }, // buffer.c:5686
-    GnuObjectVariable { name: r#"after-delete-frame-functions"#, kind: G, special: S }, // frame.c:7519
+    GnuObjectVariable { name: r#"after-change-functions"#, kind: G, special: S }, // buffer.c:5687
+    GnuObjectVariable { name: r#"after-delete-frame-functions"#, kind: G, special: S }, // frame.c:7520
     GnuObjectVariable { name: r#"after-init-time"#, kind: G, special: S }, // emacs.c:3592
     GnuObjectVariable { name: r#"after-insert-file-functions"#, kind: G, special: S }, // fileio.c:6869
     GnuObjectVariable { name: r#"after-load-alist"#, kind: G, special: S }, // lread.c:5674
-    GnuObjectVariable { name: r#"alter-fullscreen-frames"#, kind: G, special: S }, // frame.c:7773
+    GnuObjectVariable { name: r#"alter-fullscreen-frames"#, kind: G, special: S }, // frame.c:7774
     GnuObjectVariable { name: r#"alternate-fontname-alist"#, kind: G, special: S }, // fontset.c:2225
     GnuObjectVariable { name: r#"ambiguous-width-chars"#, kind: G, special: S }, // character.c:1120
     GnuObjectVariable { name: r#"android-build-fingerprint"#, kind: G, special: S }, // androidterm.c:7026
@@ -40,26 +40,26 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"auto-composition-function"#, kind: G, special: S }, // composite.c:2240
     GnuObjectVariable { name: r#"auto-composition-mode"#, kind: G, special: S }, // composite.c:2231
     GnuObjectVariable { name: r#"auto-fill-chars"#, kind: G, special: S }, // character.c:1104
-    GnuObjectVariable { name: r#"auto-hscroll-mode"#, kind: G, special: S }, // xdisp.c:38865
-    GnuObjectVariable { name: r#"auto-resize-tab-bars"#, kind: G, special: S }, // xdisp.c:38695
-    GnuObjectVariable { name: r#"auto-resize-tool-bars"#, kind: G, special: S }, // xdisp.c:38708
+    GnuObjectVariable { name: r#"auto-hscroll-mode"#, kind: G, special: S }, // xdisp.c:38900
+    GnuObjectVariable { name: r#"auto-resize-tab-bars"#, kind: G, special: S }, // xdisp.c:38730
+    GnuObjectVariable { name: r#"auto-resize-tool-bars"#, kind: G, special: S }, // xdisp.c:38743
     GnuObjectVariable { name: r#"auto-save-include-big-deletions"#, kind: G, special: S }, // fileio.c:6944
     GnuObjectVariable { name: r#"auto-save-list-file-name"#, kind: G, special: S }, // fileio.c:6932
-    GnuObjectVariable { name: r#"auto-save-timeout"#, kind: G, special: S }, // keyboard.c:13850
+    GnuObjectVariable { name: r#"auto-save-timeout"#, kind: G, special: S }, // keyboard.c:13854
     GnuObjectVariable { name: r#"auto-save-visited-file-name"#, kind: G, special: S }, // fileio.c:6939
-    GnuObjectVariable { name: r#"before-change-functions"#, kind: G, special: S }, // buffer.c:5670
+    GnuObjectVariable { name: r#"before-change-functions"#, kind: G, special: S }, // buffer.c:5671
     GnuObjectVariable { name: r#"before-init-time"#, kind: G, special: S }, // emacs.c:3588
-    GnuObjectVariable { name: r#"blink-cursor-alist"#, kind: G, special: S }, // xdisp.c:38853
+    GnuObjectVariable { name: r#"blink-cursor-alist"#, kind: G, special: S }, // xdisp.c:38888
     GnuObjectVariable { name: r#"buffer-access-fontified-property"#, kind: G, special: S }, // editfns.c:4839
     GnuObjectVariable { name: r#"buffer-access-fontify-functions"#, kind: G, special: S }, // editfns.c:4822
-    GnuObjectVariable { name: r#"buffer-list-update-hook"#, kind: G, special: S }, // buffer.c:5956
+    GnuObjectVariable { name: r#"buffer-list-update-hook"#, kind: G, special: S }, // buffer.c:5957
     GnuObjectVariable { name: r#"build-files"#, kind: G, special: S }, // doc.c:695
     GnuObjectVariable { name: r#"byte-boolean-vars"#, kind: G, special: S }, // lread.c:5772
     GnuObjectVariable { name: r#"byte-code-meter"#, kind: G, special: S }, // bytecode.c:1832
     GnuObjectVariable { name: r#"bytecomp-version-regexp"#, kind: G, special: S }, // lread.c:5788
     GnuObjectVariable { name: r#"cairo-version-string"#, kind: G, special: S }, // haikufns.c:3312
-    GnuObjectVariable { name: r#"case-fold-search"#, kind: G, special: S }, // buffer.c:5981
-    GnuObjectVariable { name: r#"change-major-mode-hook"#, kind: G, special: S }, // buffer.c:5950
+    GnuObjectVariable { name: r#"case-fold-search"#, kind: G, special: S }, // buffer.c:5982
+    GnuObjectVariable { name: r#"change-major-mode-hook"#, kind: G, special: S }, // buffer.c:5951
     GnuObjectVariable { name: r#"char-code-property-alist"#, kind: G, special: S }, // chartab.c:1375
     GnuObjectVariable { name: r#"char-property-alias-alist"#, kind: G, special: S }, // textprop.c:2403
     GnuObjectVariable { name: r#"char-script-table"#, kind: G, special: S }, // character.c:1138
@@ -67,8 +67,8 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"charset-list"#, kind: G, special: S }, // charset.c:2434
     GnuObjectVariable { name: r#"charset-map-path"#, kind: G, special: S }, // charset.c:2426
     GnuObjectVariable { name: r#"charset-revision-table"#, kind: G, special: S }, // coding.c:12132
-    GnuObjectVariable { name: r#"clear-message-function"#, kind: G, special: S }, // xdisp.c:39210
-    GnuObjectVariable { name: r#"clone-indirect-buffer-hook"#, kind: G, special: S }, // buffer.c:5987
+    GnuObjectVariable { name: r#"clear-message-function"#, kind: G, special: S }, // xdisp.c:39245
+    GnuObjectVariable { name: r#"clone-indirect-buffer-hook"#, kind: G, special: S }, // buffer.c:5988
     GnuObjectVariable { name: r#"code-conversion-map-vector"#, kind: G, special: S }, // ccl.c:2378
     GnuObjectVariable { name: r#"coding-category-list"#, kind: G, special: S }, // coding.c:11958
     GnuObjectVariable { name: r#"coding-system-alist"#, kind: G, special: S }, // coding.c:11949
@@ -77,7 +77,7 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"coding-system-list"#, kind: G, special: S }, // coding.c:11941
     GnuObjectVariable { name: r#"combine-after-change-calls"#, kind: G, special: S }, // insdel.c:2571
     GnuObjectVariable { name: r#"command-debug-status"#, kind: G, special: S }, // callint.c:894
-    GnuObjectVariable { name: r#"command-error-function"#, kind: G, special: S }, // keyboard.c:14299
+    GnuObjectVariable { name: r#"command-error-function"#, kind: G, special: S }, // keyboard.c:14303
     GnuObjectVariable { name: r#"command-history"#, kind: G, special: S }, // callint.c:886
     GnuObjectVariable { name: r#"command-line-args"#, kind: G, special: S }, // emacs.c:3497
     GnuObjectVariable { name: r#"comment-use-syntax-ppss"#, kind: G, special: S }, // syntax.c:3746
@@ -99,9 +99,9 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"configure-info-directory"#, kind: G, special: S }, // callproc.c:2127
     GnuObjectVariable { name: r#"ctags-program-name"#, kind: G, special: S }, // callproc.c:2167
     GnuObjectVariable { name: r#"current-iso639-language"#, kind: G, special: S }, // charset.c:2438
-    GnuObjectVariable { name: r#"current-key-remap-sequence"#, kind: G, special: S }, // keyboard.c:14459
+    GnuObjectVariable { name: r#"current-key-remap-sequence"#, kind: G, special: S }, // keyboard.c:14463
     GnuObjectVariable { name: r#"current-load-list"#, kind: G, special: S }, // lread.c:5730
-    GnuObjectVariable { name: r#"current-minibuffer-command"#, kind: G, special: S }, // keyboard.c:13820
+    GnuObjectVariable { name: r#"current-minibuffer-command"#, kind: G, special: S }, // keyboard.c:13824
     GnuObjectVariable { name: r#"current-prefix-arg"#, kind: G, special: S }, // callint.c:878
     GnuObjectVariable { name: r#"data-directory"#, kind: G, special: S }, // callproc.c:2119
     GnuObjectVariable { name: r#"dbus-compiled-version"#, kind: G, special: S }, // dbusbind.c:2069
@@ -113,49 +113,50 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"dbus-message-type-signal"#, kind: G, special: S }, // dbusbind.c:2113
     GnuObjectVariable { name: r#"dbus-registered-objects-table"#, kind: G, special: S }, // dbusbind.c:2118
     GnuObjectVariable { name: r#"dbus-runtime-version"#, kind: G, special: S }, // dbusbind.c:2078
-    GnuObjectVariable { name: r#"deactivate-mark"#, kind: G, special: S }, // keyboard.c:14007
-    GnuObjectVariable { name: r#"debug-ignored-errors"#, kind: G, special: S }, // eval.c:4478
-    GnuObjectVariable { name: r#"debug-on-error"#, kind: G, special: S }, // eval.c:4466
-    GnuObjectVariable { name: r#"debug-on-event"#, kind: G, special: S }, // keyboard.c:14358
-    GnuObjectVariable { name: r#"debug-on-message"#, kind: G, special: S }, // xdisp.c:39191
-    GnuObjectVariable { name: r#"debug-on-signal"#, kind: G, special: S }, // eval.c:4533
-    GnuObjectVariable { name: r#"debugger"#, kind: G, special: S }, // eval.c:4515
+    GnuObjectVariable { name: r#"deactivate-mark"#, kind: G, special: S }, // keyboard.c:14011
+    GnuObjectVariable { name: r#"debug-ignored-errors"#, kind: G, special: S }, // eval.c:4497
+    GnuObjectVariable { name: r#"debug-on-error"#, kind: G, special: S }, // eval.c:4485
+    GnuObjectVariable { name: r#"debug-on-event"#, kind: G, special: S }, // keyboard.c:14362
+    GnuObjectVariable { name: r#"debug-on-message"#, kind: G, special: S }, // xdisp.c:39226
+    GnuObjectVariable { name: r#"debug-on-signal"#, kind: G, special: S }, // eval.c:4552
+    GnuObjectVariable { name: r#"debugger"#, kind: G, special: S }, // eval.c:4534
     GnuObjectVariable { name: r#"default-file-name-coding-system"#, kind: G, special: S }, // fileio.c:6774
-    GnuObjectVariable { name: r#"default-frame-alist"#, kind: G, special: S }, // frame.c:7426
-    GnuObjectVariable { name: r#"default-frame-scroll-bars"#, kind: G, special: S }, // frame.c:7451
-    GnuObjectVariable { name: r#"default-minibuffer-frame"#, kind: K, special: S }, // frame.c:7555
+    GnuObjectVariable { name: r#"default-frame-alist"#, kind: G, special: S }, // frame.c:7427
+    GnuObjectVariable { name: r#"default-frame-scroll-bars"#, kind: G, special: S }, // frame.c:7452
+    GnuObjectVariable { name: r#"default-minibuffer-frame"#, kind: K, special: S }, // frame.c:7556
     GnuObjectVariable { name: r#"default-process-coding-system"#, kind: G, special: S }, // coding.c:12139
     GnuObjectVariable { name: r#"default-text-properties"#, kind: G, special: S }, // textprop.c:2397
     GnuObjectVariable { name: r#"defining-kbd-macro"#, kind: K, special: S }, // macros.c:427
-    GnuObjectVariable { name: r#"delayed-warnings-list"#, kind: G, special: S }, // keyboard.c:14216
-    GnuObjectVariable { name: r#"delete-frame-functions"#, kind: G, special: S }, // frame.c:7507
+    GnuObjectVariable { name: r#"delayed-warnings-list"#, kind: G, special: S }, // keyboard.c:14220
+    GnuObjectVariable { name: r#"delete-frame-choose-selected"#, kind: G, special: S }, // frame.c:7797
+    GnuObjectVariable { name: r#"delete-frame-functions"#, kind: G, special: S }, // frame.c:7508
     GnuObjectVariable { name: r#"delete-terminal-functions"#, kind: G, special: S }, // terminal.c:700
     GnuObjectVariable { name: r#"describe-bindings-check-shadowing-in-ranges"#, kind: G, special: S }, // keymap.c:3400
-    GnuObjectVariable { name: r#"disable-point-adjustment"#, kind: G, special: S }, // keyboard.c:14266
-    GnuObjectVariable { name: r#"display-fill-column-indicator-character"#, kind: G, special: S }, // xdisp.c:39027
-    GnuObjectVariable { name: r#"display-fill-column-indicator-column"#, kind: G, special: S }, // xdisp.c:39017
-    GnuObjectVariable { name: r#"display-line-numbers"#, kind: G, special: S }, // xdisp.c:38945
-    GnuObjectVariable { name: r#"display-line-numbers-current-absolute"#, kind: G, special: S }, // xdisp.c:38986
-    GnuObjectVariable { name: r#"display-line-numbers-width"#, kind: G, special: S }, // xdisp.c:38976
-    GnuObjectVariable { name: r#"display-monitors-changed-functions"#, kind: G, special: S }, // keyboard.c:14422
-    GnuObjectVariable { name: r#"display-pixels-per-inch"#, kind: G, special: S }, // xdisp.c:38549
+    GnuObjectVariable { name: r#"disable-point-adjustment"#, kind: G, special: S }, // keyboard.c:14270
+    GnuObjectVariable { name: r#"display-fill-column-indicator-character"#, kind: G, special: S }, // xdisp.c:39062
+    GnuObjectVariable { name: r#"display-fill-column-indicator-column"#, kind: G, special: S }, // xdisp.c:39052
+    GnuObjectVariable { name: r#"display-line-numbers"#, kind: G, special: S }, // xdisp.c:38980
+    GnuObjectVariable { name: r#"display-line-numbers-current-absolute"#, kind: G, special: S }, // xdisp.c:39021
+    GnuObjectVariable { name: r#"display-line-numbers-width"#, kind: G, special: S }, // xdisp.c:39011
+    GnuObjectVariable { name: r#"display-monitors-changed-functions"#, kind: G, special: S }, // keyboard.c:14426
+    GnuObjectVariable { name: r#"display-pixels-per-inch"#, kind: G, special: S }, // xdisp.c:38584
     GnuObjectVariable { name: r#"doc-directory"#, kind: G, special: S }, // callproc.c:2123
     GnuObjectVariable { name: r#"dos-display-scancodes"#, kind: G, special: S }, // dosfns.c:743
     GnuObjectVariable { name: r#"dos-unsupported-char-glyph"#, kind: G, special: S }, // msdos.c:4331
     GnuObjectVariable { name: r#"dos-version"#, kind: G, special: S }, // dosfns.c:735
     GnuObjectVariable { name: r#"dos-windows-version"#, kind: G, special: S }, // dosfns.c:739
-    GnuObjectVariable { name: r#"double-click-time"#, kind: G, special: S }, // keyboard.c:13876
+    GnuObjectVariable { name: r#"double-click-time"#, kind: G, special: S }, // keyboard.c:13880
     GnuObjectVariable { name: r#"dump-mode"#, kind: G, special: S }, // emacs.c:3618
     GnuObjectVariable { name: r#"dynamic-library-alist"#, kind: G, special: S }, // emacs.c:3621
     GnuObjectVariable { name: r#"dynamic-library-suffixes"#, kind: G, special: S }, // lread.c:5640
     GnuObjectVariable { name: r#"ebrowse-program-name"#, kind: G, special: S }, // callproc.c:2218
-    GnuObjectVariable { name: r#"echo-keystrokes"#, kind: G, special: S }, // keyboard.c:13857
+    GnuObjectVariable { name: r#"echo-keystrokes"#, kind: G, special: S }, // keyboard.c:13861
     GnuObjectVariable { name: r#"emacs-copyright"#, kind: G, special: S }, // emacs.c:3601
     GnuObjectVariable { name: r#"emacs-version"#, kind: G, special: S }, // emacs.c:3605
     GnuObjectVariable { name: r#"emacsclient-program-name"#, kind: G, special: S }, // callproc.c:2193
     GnuObjectVariable { name: r#"emulation-mode-map-alists"#, kind: G, special: S }, // keymap.c:3382
     GnuObjectVariable { name: r#"enable-character-translation"#, kind: G, special: S }, // coding.c:12117
-    GnuObjectVariable { name: r#"enable-disabled-menus-and-buttons"#, kind: G, special: S }, // keyboard.c:14319
+    GnuObjectVariable { name: r#"enable-disabled-menus-and-buttons"#, kind: G, special: S }, // keyboard.c:14323
     GnuObjectVariable { name: r#"eol-mnemonic-dos"#, kind: G, special: S }, // coding.c:12102
     GnuObjectVariable { name: r#"eol-mnemonic-mac"#, kind: G, special: S }, // coding.c:12107
     GnuObjectVariable { name: r#"eol-mnemonic-undecided"#, kind: G, special: S }, // coding.c:12112
@@ -166,7 +167,7 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"exec-path"#, kind: G, special: S }, // callproc.c:2101
     GnuObjectVariable { name: r#"exec-suffixes"#, kind: G, special: S }, // callproc.c:2109
     GnuObjectVariable { name: r#"executing-kbd-macro"#, kind: G, special: S }, // macros.c:435
-    GnuObjectVariable { name: r#"expose-hidden-buffer"#, kind: G, special: S }, // frame.c:7748
+    GnuObjectVariable { name: r#"expose-hidden-buffer"#, kind: G, special: S }, // frame.c:7749
     GnuObjectVariable { name: r#"face--new-frame-defaults"#, kind: G, special: S }, // xfaces.c:7618
     GnuObjectVariable { name: r#"face-default-stipple"#, kind: G, special: S }, // xfaces.c:7624
     GnuObjectVariable { name: r#"face-font-lax-matched-attributes"#, kind: G, special: S }, // xfaces.c:7751
@@ -178,31 +179,31 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"file-name-coding-system"#, kind: G, special: S }, // fileio.c:6765
     GnuObjectVariable { name: r#"file-name-handler-alist"#, kind: G, special: S }, // fileio.c:6834
     GnuObjectVariable { name: r#"find-word-boundary-function-table"#, kind: G, special: S }, // syntax.c:3793
-    GnuObjectVariable { name: r#"first-change-hook"#, kind: G, special: S }, // buffer.c:5704
+    GnuObjectVariable { name: r#"first-change-hook"#, kind: G, special: S }, // buffer.c:5705
     GnuObjectVariable { name: r#"float-output-format"#, kind: G, special: S }, // print.c:2891
-    GnuObjectVariable { name: r#"focus-follows-mouse"#, kind: G, special: S }, // frame.c:7577
+    GnuObjectVariable { name: r#"focus-follows-mouse"#, kind: G, special: S }, // frame.c:7578
     GnuObjectVariable { name: r#"font-encoding-alist"#, kind: G, special: S }, // font.c:5955
     GnuObjectVariable { name: r#"font-encoding-charset-alist"#, kind: G, special: S }, // fontset.c:2185
     GnuObjectVariable { name: r#"font-log"#, kind: G, special: S }, // font.c:6012
     GnuObjectVariable { name: r#"font-slant-table"#, kind: G, special: S }, // font.c:5991
     GnuObjectVariable { name: r#"font-weight-table"#, kind: G, special: S }, // font.c:5982
     GnuObjectVariable { name: r#"font-width-table"#, kind: G, special: S }, // font.c:5998
-    GnuObjectVariable { name: r#"fontification-functions"#, kind: G, special: S }, // xdisp.c:38801
+    GnuObjectVariable { name: r#"fontification-functions"#, kind: G, special: S }, // xdisp.c:38836
     GnuObjectVariable { name: r#"fontset-alias-alist"#, kind: G, special: S }, // fontset.c:2231
     GnuObjectVariable { name: r#"forward-comment-function"#, kind: G, special: S }, // syntax.c:3817
-    GnuObjectVariable { name: r#"frame-alpha-lower-limit"#, kind: G, special: S }, // frame.c:7419
-    GnuObjectVariable { name: r#"frame-inhibit-implied-resize"#, kind: G, special: S }, // frame.c:7636
-    GnuObjectVariable { name: r#"frame-internal-parameters"#, kind: G, special: S }, // frame.c:7762
-    GnuObjectVariable { name: r#"frame-size-history"#, kind: G, special: S }, // frame.c:7693
-    GnuObjectVariable { name: r#"frame-title-format"#, kind: G, special: S }, // xdisp.c:38621
+    GnuObjectVariable { name: r#"frame-alpha-lower-limit"#, kind: G, special: S }, // frame.c:7420
+    GnuObjectVariable { name: r#"frame-inhibit-implied-resize"#, kind: G, special: S }, // frame.c:7637
+    GnuObjectVariable { name: r#"frame-internal-parameters"#, kind: G, special: S }, // frame.c:7763
+    GnuObjectVariable { name: r#"frame-size-history"#, kind: G, special: S }, // frame.c:7694
+    GnuObjectVariable { name: r#"frame-title-format"#, kind: G, special: S }, // xdisp.c:38656
     GnuObjectVariable { name: r#"fringe-bitmaps"#, kind: G, special: S }, // fringe.c:1779
-    GnuObjectVariable { name: r#"function-key-map"#, kind: G, special: S }, // keyboard.c:14202
+    GnuObjectVariable { name: r#"function-key-map"#, kind: G, special: S }, // keyboard.c:14206
     GnuObjectVariable { name: r#"gc-cons-percentage"#, kind: G, special: S }, // alloc.c:7412
     GnuObjectVariable { name: r#"gc-elapsed"#, kind: G, special: S }, // alloc.c:7500
-    GnuObjectVariable { name: r#"global-disable-point-adjustment"#, kind: G, special: S }, // keyboard.c:14278
-    GnuObjectVariable { name: r#"global-mode-string"#, kind: G, special: S }, // xdisp.c:38491
+    GnuObjectVariable { name: r#"global-disable-point-adjustment"#, kind: G, special: S }, // keyboard.c:14282
+    GnuObjectVariable { name: r#"global-mode-string"#, kind: G, special: S }, // xdisp.c:38526
     GnuObjectVariable { name: r#"glyph-table"#, kind: G, special: S }, // dispnew.c:7550
-    GnuObjectVariable { name: r#"glyphless-char-display"#, kind: G, special: S }, // xdisp.c:39139
+    GnuObjectVariable { name: r#"glyphless-char-display"#, kind: G, special: S }, // xdisp.c:39174
     GnuObjectVariable { name: r#"gtk-version-string"#, kind: G, special: S }, // pgtkfns.c:3788
     GnuObjectVariable { name: r#"haiku-allowed-ui-colors"#, kind: G, special: S }, // haikufns.c:3305
     GnuObjectVariable { name: r#"haiku-control-keysym"#, kind: G, special: S }, // haikuterm.c:4852
@@ -212,65 +213,65 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"haiku-meta-keysym"#, kind: G, special: S }, // haikuterm.c:4844
     GnuObjectVariable { name: r#"haiku-shift-keysym"#, kind: G, special: S }, // haikuterm.c:4868
     GnuObjectVariable { name: r#"haiku-super-keysym"#, kind: G, special: S }, // haikuterm.c:4860
-    GnuObjectVariable { name: r#"help-char"#, kind: G, special: S }, // keyboard.c:13928
-    GnuObjectVariable { name: r#"help-event-list"#, kind: G, special: S }, // keyboard.c:13934
-    GnuObjectVariable { name: r#"help-form"#, kind: G, special: S }, // keyboard.c:13939
+    GnuObjectVariable { name: r#"help-char"#, kind: G, special: S }, // keyboard.c:13932
+    GnuObjectVariable { name: r#"help-event-list"#, kind: G, special: S }, // keyboard.c:13938
+    GnuObjectVariable { name: r#"help-form"#, kind: G, special: S }, // keyboard.c:13943
     GnuObjectVariable { name: r#"hexl-program-name"#, kind: G, special: S }, // callproc.c:2183
     GnuObjectVariable { name: r#"history-add-new-input"#, kind: G, special: S }, // minibuf.c:2578
     GnuObjectVariable { name: r#"history-length"#, kind: G, special: S }, // minibuf.c:2561
-    GnuObjectVariable { name: r#"hourglass-delay"#, kind: G, special: S }, // xdisp.c:39108
-    GnuObjectVariable { name: r#"hscroll-step"#, kind: G, special: S }, // xdisp.c:38880
-    GnuObjectVariable { name: r#"icon-title-format"#, kind: G, special: S }, // xdisp.c:38629
-    GnuObjectVariable { name: r#"iconify-child-frame"#, kind: G, special: S }, // frame.c:7733
+    GnuObjectVariable { name: r#"hourglass-delay"#, kind: G, special: S }, // xdisp.c:39143
+    GnuObjectVariable { name: r#"hscroll-step"#, kind: G, special: S }, // xdisp.c:38915
+    GnuObjectVariable { name: r#"icon-title-format"#, kind: G, special: S }, // xdisp.c:38664
+    GnuObjectVariable { name: r#"iconify-child-frame"#, kind: G, special: S }, // frame.c:7734
     GnuObjectVariable { name: r#"ignore-relative-composition"#, kind: G, special: S }, // fontset.c:2216
-    GnuObjectVariable { name: r#"image-cache-eviction-delay"#, kind: G, special: S }, // image.c:13269
-    GnuObjectVariable { name: r#"image-scaling-factor"#, kind: G, special: S }, // image.c:13279
-    GnuObjectVariable { name: r#"image-types"#, kind: G, special: S }, // image.c:13028
+    GnuObjectVariable { name: r#"image-cache-eviction-delay"#, kind: G, special: S }, // image.c:13272
+    GnuObjectVariable { name: r#"image-scaling-factor"#, kind: G, special: S }, // image.c:13282
+    GnuObjectVariable { name: r#"image-types"#, kind: G, special: S }, // image.c:13031
     GnuObjectVariable { name: r#"inhibit-changing-match-data"#, kind: G, special: S }, // search.c:3468
-    GnuObjectVariable { name: r#"inhibit-debugger"#, kind: G, special: S }, // eval.c:4460
+    GnuObjectVariable { name: r#"inhibit-debugger"#, kind: G, special: S }, // eval.c:4479
     GnuObjectVariable { name: r#"inhibit-field-text-motion"#, kind: G, special: S }, // editfns.c:4818
     GnuObjectVariable { name: r#"inhibit-file-name-handlers"#, kind: G, special: S }, // fileio.c:6923
     GnuObjectVariable { name: r#"inhibit-file-name-operation"#, kind: G, special: S }, // fileio.c:6928
     GnuObjectVariable { name: r#"inhibit-point-motion-hooks"#, kind: G, special: S }, // textprop.c:2412
-    GnuObjectVariable { name: r#"inhibit-quit"#, kind: G, special: S }, // eval.c:4430
-    GnuObjectVariable { name: r#"inhibit-read-only"#, kind: G, special: S }, // buffer.c:5857
-    GnuObjectVariable { name: r#"inhibit-redisplay"#, kind: G, special: S }, // xdisp.c:38486
+    GnuObjectVariable { name: r#"inhibit-quit"#, kind: G, special: S }, // eval.c:4449
+    GnuObjectVariable { name: r#"inhibit-read-only"#, kind: G, special: S }, // buffer.c:5858
+    GnuObjectVariable { name: r#"inhibit-redisplay"#, kind: G, special: S }, // xdisp.c:38521
     GnuObjectVariable { name: r#"initial-environment"#, kind: G, special: S }, // callproc.c:2138
     GnuObjectVariable { name: r#"initial-window-system"#, kind: G, special: S }, // dispnew.c:7508
-    GnuObjectVariable { name: r#"input-decode-map"#, kind: K, special: S }, // keyboard.c:14185
-    GnuObjectVariable { name: r#"input-method-function"#, kind: G, special: S }, // keyboard.c:14232
-    GnuObjectVariable { name: r#"input-method-previous-message"#, kind: G, special: S }, // keyboard.c:14254
+    GnuObjectVariable { name: r#"input-decode-map"#, kind: K, special: S }, // keyboard.c:14189
+    GnuObjectVariable { name: r#"input-method-function"#, kind: G, special: S }, // keyboard.c:14236
+    GnuObjectVariable { name: r#"input-method-previous-message"#, kind: G, special: S }, // keyboard.c:14258
     GnuObjectVariable { name: r#"installation-directory"#, kind: G, special: S }, // emacs.c:3565
     GnuObjectVariable { name: r#"internal--daemon-sockname"#, kind: G, special: S }, // process.c:8967
     GnuObjectVariable { name: r#"internal--get-default-lexical-binding-function"#, kind: G, special: S }, // lread.c:5915
-    GnuObjectVariable { name: r#"internal--top-level-message"#, kind: G, special: S }, // keyboard.c:13407
+    GnuObjectVariable { name: r#"internal--top-level-message"#, kind: G, special: S }, // keyboard.c:13411
     GnuObjectVariable { name: r#"internal-doc-file-name"#, kind: G, special: S }, // doc.c:691
-    GnuObjectVariable { name: r#"internal-interpreter-environment"#, kind: G, special: S }, // eval.c:4569
-    GnuObjectVariable { name: r#"internal-make-interpreted-closure-function"#, kind: G, special: S }, // eval.c:4580
+    GnuObjectVariable { name: r#"internal-interpreter-environment"#, kind: G, special: S }, // eval.c:4588
+    GnuObjectVariable { name: r#"internal-make-interpreted-closure-function"#, kind: G, special: S }, // eval.c:4599
     GnuObjectVariable { name: r#"interrupt-process-functions"#, kind: G, special: S }, // process.c:8953
     GnuObjectVariable { name: r#"invocation-directory"#, kind: G, special: S }, // emacs.c:3561
     GnuObjectVariable { name: r#"invocation-name"#, kind: G, special: S }, // emacs.c:3557
     GnuObjectVariable { name: r#"kbd-macro-termination-hook"#, kind: G, special: S }, // macros.c:414
-    GnuObjectVariable { name: r#"key-translation-map"#, kind: G, special: S }, // keyboard.c:14210
-    GnuObjectVariable { name: r#"keyboard-translate-table"#, kind: K, special: S }, // keyboard.c:13957
-    GnuObjectVariable { name: r#"kill-buffer-query-functions"#, kind: G, special: S }, // buffer.c:5937
+    GnuObjectVariable { name: r#"key-translation-map"#, kind: G, special: S }, // keyboard.c:14214
+    GnuObjectVariable { name: r#"keyboard-translate-table"#, kind: K, special: S }, // keyboard.c:13961
+    GnuObjectVariable { name: r#"kill-buffer-query-functions"#, kind: G, special: S }, // buffer.c:5938
     GnuObjectVariable { name: r#"kill-emacs-hook"#, kind: G, special: S }, // emacs.c:3538
     GnuObjectVariable { name: r#"last-code-conversion-error"#, kind: G, special: S }, // coding.c:12005
     GnuObjectVariable { name: r#"last-coding-system-used"#, kind: G, special: S }, // coding.c:12000
-    GnuObjectVariable { name: r#"last-command"#, kind: K, special: S }, // keyboard.c:13782
-    GnuObjectVariable { name: r#"last-command-event"#, kind: G, special: S }, // keyboard.c:13740
-    GnuObjectVariable { name: r#"last-event-device"#, kind: G, special: S }, // keyboard.c:13913
-    GnuObjectVariable { name: r#"last-event-frame"#, kind: G, special: S }, // keyboard.c:13908
-    GnuObjectVariable { name: r#"last-input-event"#, kind: G, special: S }, // keyboard.c:13750
+    GnuObjectVariable { name: r#"last-command"#, kind: K, special: S }, // keyboard.c:13786
+    GnuObjectVariable { name: r#"last-command-event"#, kind: G, special: S }, // keyboard.c:13744
+    GnuObjectVariable { name: r#"last-event-device"#, kind: G, special: S }, // keyboard.c:13917
+    GnuObjectVariable { name: r#"last-event-frame"#, kind: G, special: S }, // keyboard.c:13912
+    GnuObjectVariable { name: r#"last-input-event"#, kind: G, special: S }, // keyboard.c:13754
     GnuObjectVariable { name: r#"last-kbd-macro"#, kind: K, special: S }, // macros.c:442
-    GnuObjectVariable { name: r#"last-nonmenu-event"#, kind: G, special: S }, // keyboard.c:13744
+    GnuObjectVariable { name: r#"last-nonmenu-event"#, kind: G, special: S }, // keyboard.c:13748
     GnuObjectVariable { name: r#"last-prefix-arg"#, kind: K, special: S }, // callint.c:874
-    GnuObjectVariable { name: r#"last-repeatable-command"#, kind: K, special: S }, // keyboard.c:13803
+    GnuObjectVariable { name: r#"last-repeatable-command"#, kind: K, special: S }, // keyboard.c:13807
     GnuObjectVariable { name: r#"latin-extra-code-table"#, kind: G, special: S }, // coding.c:12146
     GnuObjectVariable { name: r#"lexical-binding"#, kind: G, special: S }, // lread.c:5798
     GnuObjectVariable { name: r#"libgnutls-version"#, kind: G, special: S }, // gnutls.c:3021
-    GnuObjectVariable { name: r#"line-number-display-limit"#, kind: G, special: S }, // xdisp.c:38596
-    GnuObjectVariable { name: r#"line-prefix"#, kind: G, special: S }, // xdisp.c:38932
+    GnuObjectVariable { name: r#"line-number-display-limit"#, kind: G, special: S }, // xdisp.c:38631
+    GnuObjectVariable { name: r#"line-prefix"#, kind: G, special: S }, // xdisp.c:38967
     GnuObjectVariable { name: r#"load-file-name"#, kind: G, special: S }, // lread.c:5709
     GnuObjectVariable { name: r#"load-file-rep-suffixes"#, kind: G, special: S }, // lread.c:5653
     GnuObjectVariable { name: r#"load-history"#, kind: G, special: S }, // lread.c:5689
@@ -280,28 +281,28 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"load-source-file-function"#, kind: G, special: S }, // lread.c:5743
     GnuObjectVariable { name: r#"load-suffixes"#, kind: G, special: S }, // lread.c:5617
     GnuObjectVariable { name: r#"load-true-file-name"#, kind: G, special: S }, // lread.c:5717
-    GnuObjectVariable { name: r#"local-function-key-map"#, kind: K, special: S }, // keyboard.c:14156
+    GnuObjectVariable { name: r#"local-function-key-map"#, kind: K, special: S }, // keyboard.c:14160
     GnuObjectVariable { name: r#"locale-coding-system"#, kind: G, special: S }, // coding.c:12090
-    GnuObjectVariable { name: r#"long-line-threshold"#, kind: G, special: S }, // buffer.c:5994
+    GnuObjectVariable { name: r#"long-line-threshold"#, kind: G, special: S }, // buffer.c:5995
     GnuObjectVariable { name: r#"lread--unescaped-character-literals"#, kind: G, special: S }, // lread.c:5812
     GnuObjectVariable { name: r#"macroexp--dynvars"#, kind: G, special: S }, // lread.c:5930
     GnuObjectVariable { name: r#"main-thread"#, kind: G, special: S }, // thread.c:1307
-    GnuObjectVariable { name: r#"make-cursor-line-fully-visible"#, kind: G, special: S }, // xdisp.c:38721
-    GnuObjectVariable { name: r#"make-pointer-invisible"#, kind: G, special: S }, // frame.c:7494
+    GnuObjectVariable { name: r#"make-cursor-line-fully-visible"#, kind: G, special: S }, // xdisp.c:38756
+    GnuObjectVariable { name: r#"make-pointer-invisible"#, kind: G, special: S }, // frame.c:7495
     GnuObjectVariable { name: r#"mark-even-if-inactive"#, kind: G, special: S }, // callint.c:900
-    GnuObjectVariable { name: r#"max-image-size"#, kind: G, special: S }, // image.c:13034
-    GnuObjectVariable { name: r#"max-mini-window-height"#, kind: G, special: S }, // xdisp.c:38827
-    GnuObjectVariable { name: r#"maximum-scroll-margin"#, kind: G, special: S }, // xdisp.c:38541
+    GnuObjectVariable { name: r#"max-image-size"#, kind: G, special: S }, // image.c:13037
+    GnuObjectVariable { name: r#"max-mini-window-height"#, kind: G, special: S }, // xdisp.c:38862
+    GnuObjectVariable { name: r#"maximum-scroll-margin"#, kind: G, special: S }, // xdisp.c:38576
     GnuObjectVariable { name: r#"memory-full"#, kind: G, special: S }, // alloc.c:7478
     GnuObjectVariable { name: r#"memory-signal-data"#, kind: G, special: S }, // alloc.c:7468
-    GnuObjectVariable { name: r#"menu-bar-final-items"#, kind: G, special: S }, // keyboard.c:14087
-    GnuObjectVariable { name: r#"menu-bar-mode"#, kind: G, special: S }, // frame.c:7527
-    GnuObjectVariable { name: r#"menu-bar-update-hook"#, kind: G, special: S }, // xdisp.c:38903
-    GnuObjectVariable { name: r#"menu-prompt-more-char"#, kind: G, special: S }, // keyboard.c:13988
-    GnuObjectVariable { name: r#"menu-updating-frame"#, kind: G, special: S }, // xdisp.c:38910
-    GnuObjectVariable { name: r#"message-log-max"#, kind: G, special: S }, // xdisp.c:38649
-    GnuObjectVariable { name: r#"messages-buffer-name"#, kind: G, special: S }, // xdisp.c:38387
-    GnuObjectVariable { name: r#"meta-prefix-char"#, kind: G, special: S }, // keyboard.c:13777
+    GnuObjectVariable { name: r#"menu-bar-final-items"#, kind: G, special: S }, // keyboard.c:14091
+    GnuObjectVariable { name: r#"menu-bar-mode"#, kind: G, special: S }, // frame.c:7528
+    GnuObjectVariable { name: r#"menu-bar-update-hook"#, kind: G, special: S }, // xdisp.c:38938
+    GnuObjectVariable { name: r#"menu-prompt-more-char"#, kind: G, special: S }, // keyboard.c:13992
+    GnuObjectVariable { name: r#"menu-updating-frame"#, kind: G, special: S }, // xdisp.c:38945
+    GnuObjectVariable { name: r#"message-log-max"#, kind: G, special: S }, // xdisp.c:38684
+    GnuObjectVariable { name: r#"messages-buffer-name"#, kind: G, special: S }, // xdisp.c:38422
+    GnuObjectVariable { name: r#"meta-prefix-char"#, kind: G, special: S }, // keyboard.c:13781
     GnuObjectVariable { name: r#"minibuffer-completing-file-name"#, kind: G, special: S }, // minibuf.c:2630
     GnuObjectVariable { name: r#"minibuffer-completion-confirm"#, kind: G, special: S }, // minibuf.c:2619
     GnuObjectVariable { name: r#"minibuffer-completion-predicate"#, kind: G, special: S }, // minibuf.c:2615
@@ -312,60 +313,60 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"minibuffer-history-position"#, kind: G, special: S }, // minibuf.c:2650
     GnuObjectVariable { name: r#"minibuffer-history-variable"#, kind: G, special: S }, // minibuf.c:2639
     GnuObjectVariable { name: r#"minibuffer-local-map"#, kind: G, special: S }, // keymap.c:3363
-    GnuObjectVariable { name: r#"minibuffer-message-timeout"#, kind: G, special: S }, // keyboard.c:14287
+    GnuObjectVariable { name: r#"minibuffer-message-timeout"#, kind: G, special: S }, // keyboard.c:14291
     GnuObjectVariable { name: r#"minibuffer-prompt-properties"#, kind: G, special: S }, // minibuf.c:2682
-    GnuObjectVariable { name: r#"minibuffer-scroll-window"#, kind: G, special: S }, // window.c:9221
+    GnuObjectVariable { name: r#"minibuffer-scroll-window"#, kind: G, special: S }, // window.c:9245
     GnuObjectVariable { name: r#"minibuffer-setup-hook"#, kind: G, special: S }, // minibuf.c:2553
     GnuObjectVariable { name: r#"minor-mode-map-alist"#, kind: G, special: S }, // keymap.c:3367
     GnuObjectVariable { name: r#"minor-mode-overriding-map-alist"#, kind: G, special: S }, // keymap.c:3375
-    GnuObjectVariable { name: r#"mode-line-compact"#, kind: G, special: S }, // xdisp.c:38435
+    GnuObjectVariable { name: r#"mode-line-compact"#, kind: G, special: S }, // xdisp.c:38470
     GnuObjectVariable { name: r#"module-file-suffix"#, kind: G, special: S }, // lread.c:5632
     GnuObjectVariable { name: r#"most-negative-fixnum"#, kind: G, special: S }, // data.c:4379
     GnuObjectVariable { name: r#"most-positive-fixnum"#, kind: G, special: S }, // data.c:4373
     GnuObjectVariable { name: r#"motif-version-string"#, kind: G, special: S }, // xfns.c:10528
-    GnuObjectVariable { name: r#"mouse-autoselect-window"#, kind: G, special: S }, // xdisp.c:38673
-    GnuObjectVariable { name: r#"mouse-highlight"#, kind: G, special: S }, // frame.c:7486
+    GnuObjectVariable { name: r#"mouse-autoselect-window"#, kind: G, special: S }, // xdisp.c:38708
+    GnuObjectVariable { name: r#"mouse-highlight"#, kind: G, special: S }, // frame.c:7487
     GnuObjectVariable { name: r#"mouse-leave-buffer-hook"#, kind: G, special: S }, // callint.c:908
-    GnuObjectVariable { name: r#"mouse-position-function"#, kind: G, special: S }, // frame.c:7478
-    GnuObjectVariable { name: r#"move-frame-functions"#, kind: G, special: S }, // frame.c:7502
+    GnuObjectVariable { name: r#"mouse-position-function"#, kind: G, special: S }, // frame.c:7479
+    GnuObjectVariable { name: r#"move-frame-functions"#, kind: G, special: S }, // frame.c:7503
     GnuObjectVariable { name: r#"movemail-program-name"#, kind: G, special: S }, // callproc.c:2204
     GnuObjectVariable { name: r#"native-comp-eln-load-path"#, kind: G, special: S }, // comp.c:5742
     GnuObjectVariable { name: r#"native-comp-enable-subr-trampolines"#, kind: G, special: S }, // comp.c:5759
     GnuObjectVariable { name: r#"network-coding-system-alist"#, kind: G, special: S }, // coding.c:12073
     GnuObjectVariable { name: r#"next-selection-coding-system"#, kind: G, special: S }, // w16select.c:685
-    GnuObjectVariable { name: r#"nobreak-char-display"#, kind: G, special: S }, // xdisp.c:38443
+    GnuObjectVariable { name: r#"nobreak-char-display"#, kind: G, special: S }, // xdisp.c:38478
     GnuObjectVariable { name: r#"obarray"#, kind: G, special: S }, // lread.c:5586
     GnuObjectVariable { name: r#"operating-system-release"#, kind: G, special: S }, // editfns.c:4860
     GnuObjectVariable { name: r#"otf-script-alist"#, kind: G, special: S }, // fontset.c:2244
-    GnuObjectVariable { name: r#"other-window-scroll-buffer"#, kind: G, special: S }, // window.c:9231
-    GnuObjectVariable { name: r#"other-window-scroll-default"#, kind: G, special: S }, // window.c:9235
+    GnuObjectVariable { name: r#"other-window-scroll-buffer"#, kind: G, special: S }, // window.c:9255
+    GnuObjectVariable { name: r#"other-window-scroll-default"#, kind: G, special: S }, // window.c:9259
     GnuObjectVariable { name: r#"overflow-newline-into-fringe"#, kind: G, special: S }, // fringe.c:1770
-    GnuObjectVariable { name: r#"overlay-arrow-position"#, kind: G, special: S }, // xdisp.c:38495
-    GnuObjectVariable { name: r#"overlay-arrow-string"#, kind: G, special: S }, // xdisp.c:38501
-    GnuObjectVariable { name: r#"overlay-arrow-variable-list"#, kind: G, special: S }, // xdisp.c:38506
-    GnuObjectVariable { name: r#"overriding-local-map"#, kind: G, special: S }, // keyboard.c:14114
-    GnuObjectVariable { name: r#"overriding-local-map-menu-flag"#, kind: G, special: S }, // keyboard.c:14124
+    GnuObjectVariable { name: r#"overlay-arrow-position"#, kind: G, special: S }, // xdisp.c:38530
+    GnuObjectVariable { name: r#"overlay-arrow-string"#, kind: G, special: S }, // xdisp.c:38536
+    GnuObjectVariable { name: r#"overlay-arrow-variable-list"#, kind: G, special: S }, // xdisp.c:38541
+    GnuObjectVariable { name: r#"overriding-local-map"#, kind: G, special: S }, // keyboard.c:14118
+    GnuObjectVariable { name: r#"overriding-local-map-menu-flag"#, kind: G, special: S }, // keyboard.c:14128
     GnuObjectVariable { name: r#"overriding-plist-environment"#, kind: G, special: S }, // fns.c:6802
-    GnuObjectVariable { name: r#"overriding-terminal-local-map"#, kind: K, special: S }, // keyboard.c:14105
+    GnuObjectVariable { name: r#"overriding-terminal-local-map"#, kind: K, special: S }, // keyboard.c:14109
     GnuObjectVariable { name: r#"overriding-text-conversion-style"#, kind: G, special: S }, // textconv.c:2621
     GnuObjectVariable { name: r#"path-separator"#, kind: G, special: S }, // emacs.c:3549
-    GnuObjectVariable { name: r#"pdumper-fingerprint"#, kind: G, special: S }, // pdumper.c:5908
-    GnuObjectVariable { name: r#"pgtk-keysym-table"#, kind: G, special: S }, // pgtkterm.c:7494
-    GnuObjectVariable { name: r#"pgtk-lost-selection-functions"#, kind: G, special: S }, // pgtkselect.c:1912
-    GnuObjectVariable { name: r#"pgtk-selection-alias-alist"#, kind: G, special: S }, // pgtkselect.c:1954
-    GnuObjectVariable { name: r#"pgtk-sent-selection-functions"#, kind: G, special: S }, // pgtkselect.c:1920
-    GnuObjectVariable { name: r#"pgtk-sent-selection-hooks"#, kind: G, special: S }, // pgtkselect.c:1934
+    GnuObjectVariable { name: r#"pdumper-fingerprint"#, kind: G, special: S }, // pdumper.c:5919
+    GnuObjectVariable { name: r#"pgtk-keysym-table"#, kind: G, special: S }, // pgtkterm.c:7549
+    GnuObjectVariable { name: r#"pgtk-lost-selection-functions"#, kind: G, special: S }, // pgtkselect.c:1919
+    GnuObjectVariable { name: r#"pgtk-selection-alias-alist"#, kind: G, special: S }, // pgtkselect.c:1961
+    GnuObjectVariable { name: r#"pgtk-sent-selection-functions"#, kind: G, special: S }, // pgtkselect.c:1927
+    GnuObjectVariable { name: r#"pgtk-sent-selection-hooks"#, kind: G, special: S }, // pgtkselect.c:1941
     GnuObjectVariable { name: r#"pgtk-use-im-context-on-new-connection"#, kind: G, special: S }, // pgtkim.c:306
-    GnuObjectVariable { name: r#"pgtk-wait-for-event-timeout"#, kind: G, special: S }, // pgtkterm.c:7483
-    GnuObjectVariable { name: r#"polling-period"#, kind: G, special: S }, // keyboard.c:13869
-    GnuObjectVariable { name: r#"post-command-hook"#, kind: G, special: S }, // keyboard.c:14038
+    GnuObjectVariable { name: r#"pgtk-wait-for-event-timeout"#, kind: G, special: S }, // pgtkterm.c:7538
+    GnuObjectVariable { name: r#"polling-period"#, kind: G, special: S }, // keyboard.c:13873
+    GnuObjectVariable { name: r#"post-command-hook"#, kind: G, special: S }, // keyboard.c:14042
     GnuObjectVariable { name: r#"post-gc-hook"#, kind: G, special: S }, // alloc.c:7463
-    GnuObjectVariable { name: r#"post-select-region-hook"#, kind: G, special: S }, // keyboard.c:14446
+    GnuObjectVariable { name: r#"post-select-region-hook"#, kind: G, special: S }, // keyboard.c:14450
     GnuObjectVariable { name: r#"post-self-insert-hook"#, kind: G, special: S }, // cmds.c:523
-    GnuObjectVariable { name: r#"pre-command-hook"#, kind: G, special: S }, // keyboard.c:14022
-    GnuObjectVariable { name: r#"pre-redisplay-function"#, kind: G, special: S }, // xdisp.c:39128
+    GnuObjectVariable { name: r#"pre-command-hook"#, kind: G, special: S }, // keyboard.c:14026
+    GnuObjectVariable { name: r#"pre-redisplay-function"#, kind: G, special: S }, // xdisp.c:39163
     GnuObjectVariable { name: r#"prefix-arg"#, kind: K, special: S }, // callint.c:863
-    GnuObjectVariable { name: r#"prefix-help-command"#, kind: G, special: S }, // keyboard.c:13945
+    GnuObjectVariable { name: r#"prefix-help-command"#, kind: G, special: S }, // keyboard.c:13949
     GnuObjectVariable { name: r#"preloaded-file-list"#, kind: G, special: S }, // lread.c:5768
     GnuObjectVariable { name: r#"print--unreadable-callback-buffer"#, kind: G, special: S }, // print.c:3056
     GnuObjectVariable { name: r#"print-charset-text-property"#, kind: G, special: S }, // print.c:3001
@@ -382,47 +383,47 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"process-connection-type"#, kind: G, special: S }, // process.c:8923
     GnuObjectVariable { name: r#"process-environment"#, kind: G, special: S }, // callproc.c:2144
     GnuObjectVariable { name: r#"purify-flag"#, kind: G, special: S }, // alloc.c:7451
-    GnuObjectVariable { name: r#"quit-flag"#, kind: G, special: S }, // eval.c:4421
+    GnuObjectVariable { name: r#"quit-flag"#, kind: G, special: S }, // eval.c:4440
     GnuObjectVariable { name: r#"rcs2log-program-name"#, kind: G, special: S }, // callproc.c:2229
     GnuObjectVariable { name: r#"read-buffer-function"#, kind: G, special: S }, // minibuf.c:2533
     GnuObjectVariable { name: r#"read-circle"#, kind: G, special: S }, // lread.c:5603
     GnuObjectVariable { name: r#"read-expression-history"#, kind: G, special: S }, // minibuf.c:2528
     GnuObjectVariable { name: r#"read-hide-char"#, kind: G, special: S }, // minibuf.c:2688
     GnuObjectVariable { name: r#"read-symbol-shorthands"#, kind: G, special: S }, // lread.c:5921
-    GnuObjectVariable { name: r#"real-last-command"#, kind: K, special: S }, // keyboard.c:13799
-    GnuObjectVariable { name: r#"real-this-command"#, kind: G, special: S }, // keyboard.c:13815
-    GnuObjectVariable { name: r#"recenter-redisplay"#, kind: G, special: S }, // window.c:9431
-    GnuObjectVariable { name: r#"redisplay--all-windows-cause"#, kind: G, special: S }, // xdisp.c:39225
-    GnuObjectVariable { name: r#"redisplay--mode-lines-cause"#, kind: G, special: S }, // xdisp.c:39230
+    GnuObjectVariable { name: r#"real-last-command"#, kind: K, special: S }, // keyboard.c:13803
+    GnuObjectVariable { name: r#"real-this-command"#, kind: G, special: S }, // keyboard.c:13819
+    GnuObjectVariable { name: r#"recenter-redisplay"#, kind: G, special: S }, // window.c:9455
+    GnuObjectVariable { name: r#"redisplay--all-windows-cause"#, kind: G, special: S }, // xdisp.c:39260
+    GnuObjectVariable { name: r#"redisplay--mode-lines-cause"#, kind: G, special: S }, // xdisp.c:39265
     GnuObjectVariable { name: r#"region-extract-function"#, kind: G, special: S }, // casefiddle.c:723
     GnuObjectVariable { name: r#"report-emacs-bug-address"#, kind: G, special: S }, // emacs.c:3614
-    GnuObjectVariable { name: r#"resize-mini-frames"#, kind: G, special: S }, // frame.c:7564
-    GnuObjectVariable { name: r#"resize-mini-windows"#, kind: G, special: S }, // xdisp.c:38835
+    GnuObjectVariable { name: r#"resize-mini-frames"#, kind: G, special: S }, // frame.c:7565
+    GnuObjectVariable { name: r#"resize-mini-windows"#, kind: G, special: S }, // xdisp.c:38870
     GnuObjectVariable { name: r#"resume-tty-functions"#, kind: G, special: S }, // term.c:5240
     GnuObjectVariable { name: r#"ring-bell-function"#, kind: G, special: S }, // terminal.c:695
-    GnuObjectVariable { name: r#"saved-region-selection"#, kind: G, special: S }, // keyboard.c:14340
+    GnuObjectVariable { name: r#"saved-region-selection"#, kind: G, special: S }, // keyboard.c:14344
     GnuObjectVariable { name: r#"scalable-fonts-allowed"#, kind: G, special: S }, // xfaces.c:7636
     GnuObjectVariable { name: r#"script-representative-chars"#, kind: G, special: S }, // character.c:1146
-    GnuObjectVariable { name: r#"scroll-preserve-screen-position"#, kind: G, special: S }, // window.c:9251
+    GnuObjectVariable { name: r#"scroll-preserve-screen-position"#, kind: G, special: S }, // window.c:9275
     GnuObjectVariable { name: r#"search-spaces-regexp"#, kind: G, special: S }, // search.c:3457
-    GnuObjectVariable { name: r#"select-active-regions"#, kind: G, special: S }, // keyboard.c:14327
+    GnuObjectVariable { name: r#"select-active-regions"#, kind: G, special: S }, // keyboard.c:14331
     GnuObjectVariable { name: r#"select-safe-coding-system-function"#, kind: G, special: S }, // coding.c:12158
     GnuObjectVariable { name: r#"selection-coding-system"#, kind: G, special: S }, // w16select.c:681
-    GnuObjectVariable { name: r#"selection-converter-alist"#, kind: G, special: S }, // pgtkselect.c:1908
-    GnuObjectVariable { name: r#"selection-inhibit-update-commands"#, kind: G, special: S }, // keyboard.c:14348
+    GnuObjectVariable { name: r#"selection-converter-alist"#, kind: G, special: S }, // pgtkselect.c:1915
+    GnuObjectVariable { name: r#"selection-inhibit-update-commands"#, kind: G, special: S }, // keyboard.c:14352
     GnuObjectVariable { name: r#"set-auto-coding-function"#, kind: G, special: S }, // fileio.c:6856
-    GnuObjectVariable { name: r#"set-message-function"#, kind: G, special: S }, // xdisp.c:39195
+    GnuObjectVariable { name: r#"set-message-function"#, kind: G, special: S }, // xdisp.c:39230
     GnuObjectVariable { name: r#"sfnt-default-family-alist"#, kind: G, special: S }, // sfntfont.c:4171
     GnuObjectVariable { name: r#"sfnt-uninstructable-family-regexp"#, kind: G, special: S }, // sfntfont.c:4179
     GnuObjectVariable { name: r#"shared-game-score-directory"#, kind: G, special: S }, // callproc.c:2134
     GnuObjectVariable { name: r#"shell-file-name"#, kind: G, special: S }, // callproc.c:2096
-    GnuObjectVariable { name: r#"show-help-function"#, kind: G, special: S }, // keyboard.c:14261
-    GnuObjectVariable { name: r#"show-trailing-whitespace"#, kind: G, special: S }, // xdisp.c:38430
-    GnuObjectVariable { name: r#"signal-hook-function"#, kind: G, special: S }, // eval.c:4527
+    GnuObjectVariable { name: r#"show-help-function"#, kind: G, special: S }, // keyboard.c:14265
+    GnuObjectVariable { name: r#"show-trailing-whitespace"#, kind: G, special: S }, // xdisp.c:38465
+    GnuObjectVariable { name: r#"signal-hook-function"#, kind: G, special: S }, // eval.c:4546
     GnuObjectVariable { name: r#"signal-process-functions"#, kind: G, special: S }, // process.c:8960
     GnuObjectVariable { name: r#"source-directory"#, kind: G, special: S }, // lread.c:5761
-    GnuObjectVariable { name: r#"special-event-map"#, kind: G, special: S }, // keyboard.c:14130
-    GnuObjectVariable { name: r#"special-mirror-table"#, kind: G, special: S }, // xdisp.c:39169
+    GnuObjectVariable { name: r#"special-event-map"#, kind: G, special: S }, // keyboard.c:14134
+    GnuObjectVariable { name: r#"special-mirror-table"#, kind: G, special: S }, // xdisp.c:39204
     GnuObjectVariable { name: r#"standard-display-table"#, kind: G, special: S }, // dispnew.c:7561
     GnuObjectVariable { name: r#"standard-input"#, kind: G, special: S }, // lread.c:5598
     GnuObjectVariable { name: r#"standard-output"#, kind: G, special: S }, // print.c:2882
@@ -432,56 +433,56 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"system-configuration"#, kind: G, special: S }, // emacs.c:3518
     GnuObjectVariable { name: r#"system-configuration-features"#, kind: G, special: S }, // emacs.c:3526
     GnuObjectVariable { name: r#"system-configuration-options"#, kind: G, special: S }, // emacs.c:3522
-    GnuObjectVariable { name: r#"system-key-alist"#, kind: K, special: S }, // keyboard.c:14147
+    GnuObjectVariable { name: r#"system-key-alist"#, kind: K, special: S }, // keyboard.c:14151
     GnuObjectVariable { name: r#"system-messages-locale"#, kind: G, special: S }, // emacs.c:3574
     GnuObjectVariable { name: r#"system-name"#, kind: G, special: S }, // editfns.c:4846
     GnuObjectVariable { name: r#"system-time-locale"#, kind: G, special: S }, // emacs.c:3582
     GnuObjectVariable { name: r#"system-type"#, kind: G, special: S }, // emacs.c:3501
-    GnuObjectVariable { name: r#"tab-bar-border"#, kind: G, special: S }, // xdisp.c:38742
-    GnuObjectVariable { name: r#"tab-bar-button-margin"#, kind: G, special: S }, // xdisp.c:38750
-    GnuObjectVariable { name: r#"tab-bar-mode"#, kind: G, special: S }, // frame.c:7535
+    GnuObjectVariable { name: r#"tab-bar-border"#, kind: G, special: S }, // xdisp.c:38777
+    GnuObjectVariable { name: r#"tab-bar-button-margin"#, kind: G, special: S }, // xdisp.c:38785
+    GnuObjectVariable { name: r#"tab-bar-mode"#, kind: G, special: S }, // frame.c:7536
     GnuObjectVariable { name: r#"tab-bar-position"#, kind: G, special: S }, // dispnew.c:7571
-    GnuObjectVariable { name: r#"tab-bar-separator-image-expression"#, kind: G, special: S }, // keyboard.c:14093
-    GnuObjectVariable { name: r#"temp-buffer-show-function"#, kind: G, special: S }, // window.c:9213
+    GnuObjectVariable { name: r#"tab-bar-separator-image-expression"#, kind: G, special: S }, // keyboard.c:14097
+    GnuObjectVariable { name: r#"temp-buffer-show-function"#, kind: G, special: S }, // window.c:9237
     GnuObjectVariable { name: r#"temporary-file-directory"#, kind: G, special: S }, // filelock.c:814
-    GnuObjectVariable { name: r#"terminal-frame"#, kind: G, special: S }, // frame.c:7475
+    GnuObjectVariable { name: r#"terminal-frame"#, kind: G, special: S }, // frame.c:7476
     GnuObjectVariable { name: r#"text-conversion-edits"#, kind: G, special: S }, // textconv.c:2593
     GnuObjectVariable { name: r#"text-conversion-face"#, kind: G, special: S }, // textconv.c:2631
     GnuObjectVariable { name: r#"text-property-default-nonsticky"#, kind: G, special: S }, // textprop.c:2417
     GnuObjectVariable { name: r#"text-quoting-style"#, kind: G, special: S }, // doc.c:699
-    GnuObjectVariable { name: r#"this-command"#, kind: G, special: S }, // keyboard.c:13809
-    GnuObjectVariable { name: r#"this-command-keys-shift-translated"#, kind: G, special: S }, // keyboard.c:13826
-    GnuObjectVariable { name: r#"this-original-command"#, kind: G, special: S }, // keyboard.c:13834
-    GnuObjectVariable { name: r#"throw-on-input"#, kind: G, special: S }, // keyboard.c:14293
-    GnuObjectVariable { name: r#"timer-idle-list"#, kind: G, special: S }, // keyboard.c:14228
-    GnuObjectVariable { name: r#"timer-list"#, kind: G, special: S }, // keyboard.c:14224
-    GnuObjectVariable { name: r#"tool-bar-border"#, kind: G, special: S }, // xdisp.c:38762
-    GnuObjectVariable { name: r#"tool-bar-button-margin"#, kind: G, special: S }, // xdisp.c:38770
-    GnuObjectVariable { name: r#"tool-bar-mode"#, kind: G, special: S }, // frame.c:7543
-    GnuObjectVariable { name: r#"tool-bar-separator-image-expression"#, kind: G, special: S }, // keyboard.c:14099
-    GnuObjectVariable { name: r#"tool-bar-style"#, kind: G, special: S }, // xdisp.c:38782
-    GnuObjectVariable { name: r#"toolkit-theme"#, kind: G, special: S }, // frame.c:7893
-    GnuObjectVariable { name: r#"top-level"#, kind: G, special: N }, // keyboard.c:13951 non-special at keyboard.c:13955
-    GnuObjectVariable { name: r#"track-mouse"#, kind: G, special: S }, // keyboard.c:14134
-    GnuObjectVariable { name: r#"transient-mark-mode"#, kind: G, special: S }, // buffer.c:5835
+    GnuObjectVariable { name: r#"this-command"#, kind: G, special: S }, // keyboard.c:13813
+    GnuObjectVariable { name: r#"this-command-keys-shift-translated"#, kind: G, special: S }, // keyboard.c:13830
+    GnuObjectVariable { name: r#"this-original-command"#, kind: G, special: S }, // keyboard.c:13838
+    GnuObjectVariable { name: r#"throw-on-input"#, kind: G, special: S }, // keyboard.c:14297
+    GnuObjectVariable { name: r#"timer-idle-list"#, kind: G, special: S }, // keyboard.c:14232
+    GnuObjectVariable { name: r#"timer-list"#, kind: G, special: S }, // keyboard.c:14228
+    GnuObjectVariable { name: r#"tool-bar-border"#, kind: G, special: S }, // xdisp.c:38797
+    GnuObjectVariable { name: r#"tool-bar-button-margin"#, kind: G, special: S }, // xdisp.c:38805
+    GnuObjectVariable { name: r#"tool-bar-mode"#, kind: G, special: S }, // frame.c:7544
+    GnuObjectVariable { name: r#"tool-bar-separator-image-expression"#, kind: G, special: S }, // keyboard.c:14103
+    GnuObjectVariable { name: r#"tool-bar-style"#, kind: G, special: S }, // xdisp.c:38817
+    GnuObjectVariable { name: r#"toolkit-theme"#, kind: G, special: S }, // frame.c:7895
+    GnuObjectVariable { name: r#"top-level"#, kind: G, special: N }, // keyboard.c:13955 non-special at keyboard.c:13959
+    GnuObjectVariable { name: r#"track-mouse"#, kind: G, special: S }, // keyboard.c:14138
+    GnuObjectVariable { name: r#"transient-mark-mode"#, kind: G, special: S }, // buffer.c:5836
     GnuObjectVariable { name: r#"translation-hash-table-vector"#, kind: G, special: S }, // ccl.c:2382
     GnuObjectVariable { name: r#"translation-table-for-input"#, kind: G, special: S }, // coding.c:12227
     GnuObjectVariable { name: r#"translation-table-vector"#, kind: G, special: S }, // character.c:1097
-    GnuObjectVariable { name: r#"treesit-extra-load-path"#, kind: G, special: S }, // treesit.c:5373
-    GnuObjectVariable { name: r#"treesit-language-remap-alist"#, kind: G, special: S }, // treesit.c:5422
-    GnuObjectVariable { name: r#"treesit-languages-require-line-column-tracking"#, kind: G, special: S }, // treesit.c:5435
-    GnuObjectVariable { name: r#"treesit-load-name-override-list"#, kind: G, special: S }, // treesit.c:5355
-    GnuObjectVariable { name: r#"treesit-major-mode-remap-alist"#, kind: G, special: S }, // treesit.c:5446
-    GnuObjectVariable { name: r#"treesit-thing-settings"#, kind: G, special: S }, // treesit.c:5387
-    GnuObjectVariable { name: r#"truncate-partial-width-windows"#, kind: G, special: S }, // xdisp.c:38558
+    GnuObjectVariable { name: r#"treesit-extra-load-path"#, kind: G, special: S }, // treesit.c:5382
+    GnuObjectVariable { name: r#"treesit-language-remap-alist"#, kind: G, special: S }, // treesit.c:5431
+    GnuObjectVariable { name: r#"treesit-languages-require-line-column-tracking"#, kind: G, special: S }, // treesit.c:5444
+    GnuObjectVariable { name: r#"treesit-load-name-override-list"#, kind: G, special: S }, // treesit.c:5364
+    GnuObjectVariable { name: r#"treesit-major-mode-remap-alist"#, kind: G, special: S }, // treesit.c:5455
+    GnuObjectVariable { name: r#"treesit-thing-settings"#, kind: G, special: S }, // treesit.c:5396
+    GnuObjectVariable { name: r#"truncate-partial-width-windows"#, kind: G, special: S }, // xdisp.c:38593
     GnuObjectVariable { name: r#"tty-defined-color-alist"#, kind: G, special: S }, // xfaces.c:7631
-    GnuObjectVariable { name: r#"tty-erase-char"#, kind: G, special: S }, // keyboard.c:13925
+    GnuObjectVariable { name: r#"tty-erase-char"#, kind: G, special: S }, // keyboard.c:13929
     GnuObjectVariable { name: r#"undo-outer-limit"#, kind: G, special: S }, // undo.c:459
     GnuObjectVariable { name: r#"undo-outer-limit-function"#, kind: G, special: S }, // undo.c:476
     GnuObjectVariable { name: r#"unicode-category-table"#, kind: G, special: S }, // character.c:1156
-    GnuObjectVariable { name: r#"unread-command-events"#, kind: G, special: S }, // keyboard.c:13753
-    GnuObjectVariable { name: r#"unread-input-method-events"#, kind: G, special: S }, // keyboard.c:13769
-    GnuObjectVariable { name: r#"unread-post-input-method-events"#, kind: G, special: S }, // keyboard.c:13763
+    GnuObjectVariable { name: r#"unread-command-events"#, kind: G, special: S }, // keyboard.c:13757
+    GnuObjectVariable { name: r#"unread-input-method-events"#, kind: G, special: S }, // keyboard.c:13773
+    GnuObjectVariable { name: r#"unread-post-input-method-events"#, kind: G, special: S }, // keyboard.c:13767
     GnuObjectVariable { name: r#"use-default-ascent"#, kind: G, special: S }, // fontset.c:2196
     GnuObjectVariable { name: r#"user-full-name"#, kind: G, special: S }, // editfns.c:4850
     GnuObjectVariable { name: r#"user-init-file"#, kind: G, special: S }, // lread.c:5721
@@ -489,7 +490,7 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"user-real-login-name"#, kind: G, special: S }, // editfns.c:4857
     GnuObjectVariable { name: r#"values"#, kind: G, special: N }, // lread.c:5592 non-special at lread.c:5596
     GnuObjectVariable { name: r#"vertical-centering-font-regexp"#, kind: G, special: S }, // fontset.c:2237
-    GnuObjectVariable { name: r#"void-text-area-pointer"#, kind: G, special: S }, // xdisp.c:38479
+    GnuObjectVariable { name: r#"void-text-area-pointer"#, kind: G, special: S }, // xdisp.c:38514
     GnuObjectVariable { name: r#"w32-alt-is-meta"#, kind: G, special: S }, // w32fns.c:11638
     GnuObjectVariable { name: r#"w32-apps-modifier"#, kind: G, special: S }, // w32fns.c:11742
     GnuObjectVariable { name: r#"w32-capslock-is-shiftlock"#, kind: G, special: S }, // w32term.c:8293
@@ -517,48 +518,48 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"w32-swap-mouse-buttons"#, kind: G, special: S }, // w32term.c:8279
     GnuObjectVariable { name: r#"w32-tooltip-extra-pixels"#, kind: G, special: S }, // w32fns.c:11882
     GnuObjectVariable { name: r#"where-is-preferred-modifier"#, kind: G, special: S }, // keymap.c:3391
-    GnuObjectVariable { name: r#"while-no-input-ignore-events"#, kind: G, special: S }, // keyboard.c:14390
-    GnuObjectVariable { name: r#"window-buffer-change-functions"#, kind: G, special: S }, // window.c:9276
-    GnuObjectVariable { name: r#"window-combination-limit"#, kind: G, special: S }, // window.c:9456
-    GnuObjectVariable { name: r#"window-combination-resize"#, kind: G, special: S }, // window.c:9438
-    GnuObjectVariable { name: r#"window-configuration-change-hook"#, kind: G, special: S }, // window.c:9359
-    GnuObjectVariable { name: r#"window-dead-windows-table"#, kind: G, special: S }, // window.c:9541
-    GnuObjectVariable { name: r#"window-persistent-parameters"#, kind: G, special: S }, // window.c:9494
-    GnuObjectVariable { name: r#"window-point-insertion-type"#, kind: G, special: S }, // window.c:9270
-    GnuObjectVariable { name: r#"window-restore-killed-buffer-windows"#, kind: G, special: S }, // window.c:9375
-    GnuObjectVariable { name: r#"window-scroll-functions"#, kind: G, special: S }, // xdisp.c:38655
-    GnuObjectVariable { name: r#"window-selection-change-functions"#, kind: G, special: S }, // window.c:9314
-    GnuObjectVariable { name: r#"window-size-change-functions"#, kind: G, special: S }, // window.c:9295
-    GnuObjectVariable { name: r#"window-state-change-functions"#, kind: G, special: S }, // window.c:9328
-    GnuObjectVariable { name: r#"window-state-change-hook"#, kind: G, special: S }, // window.c:9346
+    GnuObjectVariable { name: r#"while-no-input-ignore-events"#, kind: G, special: S }, // keyboard.c:14394
+    GnuObjectVariable { name: r#"window-buffer-change-functions"#, kind: G, special: S }, // window.c:9300
+    GnuObjectVariable { name: r#"window-combination-limit"#, kind: G, special: S }, // window.c:9483
+    GnuObjectVariable { name: r#"window-combination-resize"#, kind: G, special: S }, // window.c:9462
+    GnuObjectVariable { name: r#"window-configuration-change-hook"#, kind: G, special: S }, // window.c:9383
+    GnuObjectVariable { name: r#"window-dead-windows-table"#, kind: G, special: S }, // window.c:9568
+    GnuObjectVariable { name: r#"window-persistent-parameters"#, kind: G, special: S }, // window.c:9521
+    GnuObjectVariable { name: r#"window-point-insertion-type"#, kind: G, special: S }, // window.c:9294
+    GnuObjectVariable { name: r#"window-restore-killed-buffer-windows"#, kind: G, special: S }, // window.c:9399
+    GnuObjectVariable { name: r#"window-scroll-functions"#, kind: G, special: S }, // xdisp.c:38690
+    GnuObjectVariable { name: r#"window-selection-change-functions"#, kind: G, special: S }, // window.c:9338
+    GnuObjectVariable { name: r#"window-size-change-functions"#, kind: G, special: S }, // window.c:9319
+    GnuObjectVariable { name: r#"window-state-change-functions"#, kind: G, special: S }, // window.c:9352
+    GnuObjectVariable { name: r#"window-state-change-hook"#, kind: G, special: S }, // window.c:9370
     GnuObjectVariable { name: r#"window-system"#, kind: K, special: S }, // dispnew.c:7523
     GnuObjectVariable { name: r#"word-combining-categories"#, kind: G, special: S }, // category.c:442
     GnuObjectVariable { name: r#"word-separating-categories"#, kind: G, special: S }, // category.c:487
-    GnuObjectVariable { name: r#"wrap-prefix"#, kind: G, special: S }, // xdisp.c:38919
+    GnuObjectVariable { name: r#"wrap-prefix"#, kind: G, special: S }, // xdisp.c:38954
     GnuObjectVariable { name: r#"write-region-annotate-functions"#, kind: G, special: S }, // fileio.c:6879
     GnuObjectVariable { name: r#"write-region-annotations-so-far"#, kind: G, special: S }, // fileio.c:6916
     GnuObjectVariable { name: r#"write-region-post-annotation-function"#, kind: G, special: S }, // fileio.c:6905
-    GnuObjectVariable { name: r#"x-allow-focus-stealing"#, kind: G, special: S }, // xterm.c:33013
+    GnuObjectVariable { name: r#"x-allow-focus-stealing"#, kind: G, special: S }, // xterm.c:33001
     GnuObjectVariable { name: r#"x-alt-keysym"#, kind: G, special: S }, // androidterm.c:7051
-    GnuObjectVariable { name: r#"x-auto-preserve-selections"#, kind: G, special: S }, // xterm.c:32976
-    GnuObjectVariable { name: r#"x-bitmap-file-path"#, kind: G, special: S }, // image.c:13265
+    GnuObjectVariable { name: r#"x-auto-preserve-selections"#, kind: G, special: S }, // xterm.c:32964
+    GnuObjectVariable { name: r#"x-bitmap-file-path"#, kind: G, special: S }, // image.c:13268
     GnuObjectVariable { name: r#"x-ctrl-keysym"#, kind: G, special: S }, // androidterm.c:7047
     GnuObjectVariable { name: r#"x-cursor-fore-pixel"#, kind: G, special: S }, // androidfns.c:3662
-    GnuObjectVariable { name: r#"x-detect-server-trust"#, kind: G, special: S }, // xterm.c:33054
-    GnuObjectVariable { name: r#"x-dnd-movement-function"#, kind: G, special: S }, // xterm.c:32885
-    GnuObjectVariable { name: r#"x-dnd-native-test-function"#, kind: G, special: S }, // xterm.c:32934
-    GnuObjectVariable { name: r#"x-dnd-targets-list"#, kind: G, special: S }, // xterm.c:32927
-    GnuObjectVariable { name: r#"x-dnd-unsupported-drop-function"#, kind: G, special: S }, // xterm.c:32901
-    GnuObjectVariable { name: r#"x-dnd-wheel-function"#, kind: G, special: S }, // xterm.c:32892
-    GnuObjectVariable { name: r#"x-fast-selection-list"#, kind: G, special: S }, // xterm.c:33000
+    GnuObjectVariable { name: r#"x-detect-server-trust"#, kind: G, special: S }, // xterm.c:33042
+    GnuObjectVariable { name: r#"x-dnd-movement-function"#, kind: G, special: S }, // xterm.c:32873
+    GnuObjectVariable { name: r#"x-dnd-native-test-function"#, kind: G, special: S }, // xterm.c:32922
+    GnuObjectVariable { name: r#"x-dnd-targets-list"#, kind: G, special: S }, // xterm.c:32915
+    GnuObjectVariable { name: r#"x-dnd-unsupported-drop-function"#, kind: G, special: S }, // xterm.c:32889
+    GnuObjectVariable { name: r#"x-dnd-wheel-function"#, kind: G, special: S }, // xterm.c:32880
+    GnuObjectVariable { name: r#"x-fast-selection-list"#, kind: G, special: S }, // xterm.c:32988
     GnuObjectVariable { name: r#"x-gtk-resize-child-frames"#, kind: G, special: S }, // xfns.c:10479
     GnuObjectVariable { name: r#"x-hourglass-pointer-shape"#, kind: G, special: S }, // androidfns.c:3597
     GnuObjectVariable { name: r#"x-hyper-keysym"#, kind: G, special: S }, // androidterm.c:7055
-    GnuObjectVariable { name: r#"x-input-coding-function"#, kind: G, special: S }, // xterm.c:32993
-    GnuObjectVariable { name: r#"x-input-coding-system"#, kind: G, special: S }, // xterm.c:32986
-    GnuObjectVariable { name: r#"x-keysym-table"#, kind: G, special: S }, // xterm.c:32808
-    GnuObjectVariable { name: r#"x-lax-frame-positioning"#, kind: G, special: S }, // xterm.c:33064
-    GnuObjectVariable { name: r#"x-lost-selection-functions"#, kind: G, special: S }, // xselect.c:3397
+    GnuObjectVariable { name: r#"x-input-coding-function"#, kind: G, special: S }, // xterm.c:32981
+    GnuObjectVariable { name: r#"x-input-coding-system"#, kind: G, special: S }, // xterm.c:32974
+    GnuObjectVariable { name: r#"x-keysym-table"#, kind: G, special: S }, // xterm.c:32796
+    GnuObjectVariable { name: r#"x-lax-frame-positioning"#, kind: G, special: S }, // xterm.c:33052
+    GnuObjectVariable { name: r#"x-lost-selection-functions"#, kind: G, special: S }, // xselect.c:3404
     GnuObjectVariable { name: r#"x-max-tooltip-size"#, kind: G, special: S }, // androidfns.c:3673
     GnuObjectVariable { name: r#"x-meta-keysym"#, kind: G, special: S }, // androidterm.c:7059
     GnuObjectVariable { name: r#"x-mode-pointer-shape"#, kind: G, special: S }, // androidfns.c:3652
@@ -568,22 +569,22 @@ pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"x-pointer-shape"#, kind: G, special: S }, // androidfns.c:3587
     GnuObjectVariable { name: r#"x-popup-menu-function"#, kind: G, special: S }, // menu.c:1629
     GnuObjectVariable { name: r#"x-pre-popup-menu-hook"#, kind: G, special: S }, // menu.c:1622
-    GnuObjectVariable { name: r#"x-quit-keysym"#, kind: G, special: S }, // xterm.c:33076
-    GnuObjectVariable { name: r#"x-resource-class"#, kind: G, special: S }, // frame.c:7407
-    GnuObjectVariable { name: r#"x-resource-name"#, kind: G, special: S }, // frame.c:7395
-    GnuObjectVariable { name: r#"x-scroll-event-delta-factor"#, kind: G, special: S }, // xterm.c:32833
-    GnuObjectVariable { name: r#"x-select-enable-clipboard-manager"#, kind: G, special: S }, // xselect.c:3419
-    GnuObjectVariable { name: r#"x-selection-alias-alist"#, kind: G, special: S }, // xselect.c:3442
+    GnuObjectVariable { name: r#"x-quit-keysym"#, kind: G, special: S }, // xterm.c:33064
+    GnuObjectVariable { name: r#"x-resource-class"#, kind: G, special: S }, // frame.c:7408
+    GnuObjectVariable { name: r#"x-resource-name"#, kind: G, special: S }, // frame.c:7396
+    GnuObjectVariable { name: r#"x-scroll-event-delta-factor"#, kind: G, special: S }, // xterm.c:32821
+    GnuObjectVariable { name: r#"x-select-enable-clipboard-manager"#, kind: G, special: S }, // xselect.c:3426
+    GnuObjectVariable { name: r#"x-selection-alias-alist"#, kind: G, special: S }, // xselect.c:3449
     GnuObjectVariable { name: r#"x-sensitive-text-pointer-shape"#, kind: G, special: S }, // androidfns.c:3601
-    GnuObjectVariable { name: r#"x-sent-selection-functions"#, kind: G, special: S }, // xselect.c:3405
+    GnuObjectVariable { name: r#"x-sent-selection-functions"#, kind: G, special: S }, // xselect.c:3412
     GnuObjectVariable { name: r#"x-session-id"#, kind: G, special: S }, // xsmfns.c:547
     GnuObjectVariable { name: r#"x-session-previous-id"#, kind: G, special: S }, // xsmfns.c:555
-    GnuObjectVariable { name: r#"x-set-frame-visibility-more-laxly"#, kind: G, special: S }, // xterm.c:32845
+    GnuObjectVariable { name: r#"x-set-frame-visibility-more-laxly"#, kind: G, special: S }, // xterm.c:32833
     GnuObjectVariable { name: r#"x-show-tooltip-timeout"#, kind: G, special: S }, // dispnew.c:7567
     GnuObjectVariable { name: r#"x-super-keysym"#, kind: G, special: S }, // androidterm.c:7063
     GnuObjectVariable { name: r#"x-toolkit-scroll-bars"#, kind: G, special: S }, // androidterm.c:7068
-    GnuObjectVariable { name: r#"x-treat-local-requests-remotely"#, kind: G, special: S }, // xselect.c:3434
-    GnuObjectVariable { name: r#"x-use-fast-mouse-position"#, kind: G, special: S }, // xterm.c:33039
+    GnuObjectVariable { name: r#"x-treat-local-requests-remotely"#, kind: G, special: S }, // xselect.c:3441
+    GnuObjectVariable { name: r#"x-use-fast-mouse-position"#, kind: G, special: S }, // xterm.c:33027
     GnuObjectVariable { name: r#"x-wait-for-event-timeout"#, kind: G, special: S }, // w32term.c:8270
     GnuObjectVariable { name: r#"x-window-bottom-edge-cursor"#, kind: G, special: S }, // androidfns.c:3646
     GnuObjectVariable { name: r#"x-window-bottom-left-corner-cursor"#, kind: G, special: S }, // androidfns.c:3657

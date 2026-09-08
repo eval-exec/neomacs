@@ -651,36 +651,35 @@ PRESERVE-UID-GID and PRESERVE-EXTENDED-ATTRIBUTES are completely ignored."
 (defun tramp-smb-handle-delete-directory (directory &optional recursive trash)
   "Like `delete-directory' for Tramp files."
   (tramp-skeleton-delete-directory directory recursive trash
-    (when (file-exists-p directory)
-      (when recursive
-	(mapc
-	 (lambda (file)
-	   (if (file-directory-p file)
-	       (delete-directory file recursive)
-	     (delete-file file)))
-	 ;; We do not want to delete "." and "..".
-	 (directory-files directory 'full directory-files-no-dot-files-regexp)))
+    (when recursive
+      (mapc
+       (lambda (file)
+	 (if (file-directory-p file)
+	     (delete-directory file recursive)
+	   (delete-file file)))
+       ;; We do not want to delete "." and "..".
+       (directory-files directory 'full directory-files-no-dot-files-regexp)))
 
-      ;; We must also flush the cache of the directory, because
-      ;; `file-attributes' reads the values from there.
-      (tramp-flush-directory-properties v localname)
-      (unless (tramp-smb-send-command
-	       v (format
-		  "%s %s"
-		  (if (tramp-smb-get-cifs-capabilities v)
-		      "posix_rmdir" "rmdir")
-		  (tramp-smb-shell-quote-localname v)))
-	;; Error.
-	(with-current-buffer (tramp-get-connection-buffer v)
-	  (goto-char (point-min))
-	  (search-forward-regexp tramp-smb-errors nil t)
-	  (tramp-error v 'file-error "%s `%s'" (match-string 0) directory)))
+    ;; We must also flush the cache of the directory, because
+    ;; `file-attributes' reads the values from there.
+    (tramp-flush-directory-properties v localname)
+    (unless (tramp-smb-send-command
+	     v (format
+		"%s %s"
+		(if (tramp-smb-get-cifs-capabilities v)
+		    "posix_rmdir" "rmdir")
+		(tramp-smb-shell-quote-localname v)))
+      ;; Error.
+      (with-current-buffer (tramp-get-connection-buffer v)
+	(goto-char (point-min))
+	(search-forward-regexp tramp-smb-errors nil t)
+	(tramp-error v 'file-error "%s `%s'" (match-string 0) directory)))
 
-      ;; "rmdir" does not report an error.  So we check ourselves.
-      ;; Deletion of a watched directory could be pending.
-      (when (and (not (tramp-directory-watched directory))
-		 (file-exists-p directory))
-        (tramp-error v 'file-error "`%s' not removed" directory)))))
+    ;; "rmdir" does not report an error.  So we check ourselves.
+    ;; Deletion of a watched directory could be pending.
+    (when (and (not (tramp-directory-watched directory))
+	       (file-exists-p directory))
+      (tramp-error v 'file-error "`%s' not removed" directory))))
 
 (defun tramp-smb-handle-delete-file (filename &optional trash)
   "Like `delete-file' for Tramp files."
@@ -1658,7 +1657,7 @@ VEC or USER, or if there is no home directory, return nil."
   "Return the share name of LOCALNAME."
   (save-match-data
     (let ((localname (tramp-file-name-unquote-localname vec)))
-      (when (string-match (rx bol (? "/") (group (+ (not "/"))) "/") localname)
+      (when (string-match (rx bos (? "/") (group (+ (not "/"))) "/") localname)
 	(match-string 1 localname)))))
 
 (defun tramp-smb-get-localname (vec &optional share)
@@ -1671,7 +1670,7 @@ If VEC has no cifs capabilities, exchange \"/\" by \"\\\\\"."
 	(setq
 	 localname
 	 (if (string-match
-	      (rx bol (? "/") (+ (not "/")) (group "/" (* nonl))) localname)
+	      (rx bos (? "/") (+ (not "/")) (group "/" (* nonl))) localname)
 	     ;; There is a share, separated by "/".
 	     (if (not (tramp-smb-get-cifs-capabilities vec))
 		 (mapconcat
@@ -1680,7 +1679,7 @@ If VEC has no cifs capabilities, exchange \"/\" by \"\\\\\"."
 	       (match-string 1 localname))
 	   ;; There is just a share.
 	   (if (string-match
-		(rx bol (? "/") (group (+ (not "/"))) eol) localname)
+		(rx bos (? "/") (group (+ (not "/"))) eos) localname)
 	       (match-string 1 localname)
 	     ""))))
 
@@ -2053,11 +2052,6 @@ If ARGUMENT is non-nil, use it as argument for
 
 	      (let* (coding-system-for-read
 		     (process-connection-type tramp-process-connection-type)
-		     ;; There might be some unfortunate values of
-                     ;; `tramp-smb-connection-local-default-system-variables'.
-                     ;(path-separator (default-value 'path-separator))
-                     ;(null-device (default-value 'null-device))
-                     ;(exec-suffixes (default-value 'exec-suffixes))
 		     (p (apply #'tramp-start-process vec
 			       (tramp-get-connection-name vec)
 			       (tramp-get-connection-buffer vec)

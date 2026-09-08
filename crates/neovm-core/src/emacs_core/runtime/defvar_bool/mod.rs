@@ -35,13 +35,15 @@
 //!
 //! Measured under GNU Emacs 31.0.90 on GNU/Linux, `-Q --batch': 148
 //! `DEFVAR_BOOL' variables are bound, and `(length byte-boolean-vars)' is 117.
+//! GNU 31.1 replaces the frame-deletion boolean with a Lisp object, reducing
+//! these counts to 147 and 116 without changing declaration order.
 //! Neomacs has no `main' whose call order could reproduce that accident, so
 //! [`ByteBooleanVars`] states it instead -- a required field of every row, not
 //! a fact a registration site can forget.
 //!
 //! # Why a table
 //!
-//! GNU's 148 declarations are spread over 24 `syms_of_*' functions, and the one
+//! GNU's declarations are spread over 24 `syms_of_*' functions, and the one
 //! thing that distinguishes them for [`ByteBooleanVars`] is *which* function --
 //! a fact that is invisible at any single site.  Collecting them keeps the GNU
 //! source citation, the initial value and the byte-optimizer visibility of each
@@ -61,7 +63,7 @@ use super::symbol::Obarray;
 pub enum ByteBooleanVars {
     /// Declared after `Vbyte_boolean_vars = Qnil' (`src/lread.c:5774'), so the
     /// cons survives and the byte optimizer refuses to fold `varset'/`varref'.
-    /// 117 variables.
+    /// 116 variables in GNU 31.1.
     Listed,
     /// Declared before it, so the cons is thrown away again and the byte
     /// optimizer folds the pair exactly as it would for a plain variable --
@@ -103,9 +105,8 @@ impl GnuBoolVariable {
 
 use GnuBoolVariable as V;
 
-/// Every `DEFVAR_BOOL' GNU Emacs 31.0.90 declares on GNU/Linux, in declaration
-/// order.  The trailing comment on each row is the GNU `file:line' the
-/// declaration is at.
+/// Every supported GNU/Linux `DEFVAR_BOOL', in declaration order.  Source
+/// locations refer to GNU 31.0.90; GNU 31.1 removes the frame-deletion boolean.
 ///
 /// Registering in this order reproduces GNU's `byte-boolean-vars' exactly,
 /// because `defvar_bool' prepends: the last row registered ends up first.
@@ -149,7 +150,7 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
     V::erased("disable-ascii-optimization", false), // coding.c:12222
     V::erased("load-in-progress", false),          // lread.c:5670
     V::erased("load-force-doc-strings", false),    // lread.c:5756
-    // ---- On `byte-boolean-vars' (117) ----
+    // ---- On `byte-boolean-vars' (116) ----
     // In GNU declaration order, so consing them in this order
     // reproduces GNU's list exactly (`defvar_bool' prepends).
     V::listed("load-dangerous-libraries", false), // lread.c:5776
@@ -205,7 +206,6 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
     V::listed("frame-resize-pixelwise", false),     // frame.c:7623
     V::listed("tooltip-reuse-hidden-frame", false), // frame.c:7710
     V::listed("use-system-tooltips", true),         // frame.c:7725
-    V::listed("after-delete-frame-select-mru-frame", true), // frame.c:7796
     V::listed("parse-sexp-ignore-comments", false), // syntax.c:3764
     V::listed("parse-sexp-lookup-properties", false), // syntax.c:3767
     V::listed("words-include-escapes", false),      // syntax.c:3780
@@ -306,17 +306,17 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
 mod tests {
     use super::*;
 
-    /// Measured under GNU Emacs 31.0.90, `-Q --batch': 148 `DEFVAR_BOOL'
-    /// variables are bound and 117 of them are on `byte-boolean-vars'.
+    /// GNU 31.1 replaces the frame-deletion boolean with a DEFVAR_LISP,
+    /// removing one entry from the 31.0.90 baseline of 148 / 117.
     #[test]
     fn table_matches_gnu_counts() {
-        assert_eq!(GNU_BOOL_VARIABLES.len(), 148);
+        assert_eq!(GNU_BOOL_VARIABLES.len(), 147);
         assert_eq!(
             GNU_BOOL_VARIABLES
                 .iter()
                 .filter(|v| v.byte_boolean_vars == ByteBooleanVars::Listed)
                 .count(),
-            117
+            116
         );
     }
 

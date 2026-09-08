@@ -3,6 +3,11 @@ use crate::emacs_core::symbol::LispVariableLocality;
 use crate::emacs_core::value::Value;
 
 pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
+    // GNU 31.1 frame.c:7797: DEFVAR_LISP, not the old DEFVAR_BOOL.
+    // Only the symbol `mru' requests MRU selection; other Lisp values survive
+    // assignment unchanged and use frame-list order in delete-frame.
+    obarray.define_special_variable("delete-frame-choose-selected", Value::symbol("mru"));
+
     // The seven `syms_of_frame' DEFVAR_LISPs entry 173's sweep found this port
     // short of.  `frame.o' is in GNU's unconditional `base_obj'
     // (`src/Makefile.in:450'), so no build gate is in play for any of them --

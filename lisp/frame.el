@@ -198,7 +198,7 @@ FRAME must be a live frame and defaults to the selected frame.
 
 FRAME cannot be safely deleted in the following cases:
 
-- FRAME is the only visible or iconified frame.
+- There is no other visible or iconified frame on FRAME's terminal.
 
 - FRAME hosts the active minibuffer window that does not follow the
   selected frame.
@@ -216,6 +216,7 @@ will be better to wrap the `delete-frame' call in a `condition-case'
 form."
   (setq frame (window-normalize-frame frame))
   (let ((active-minibuffer-window (active-minibuffer-window))
+        (terminal (frame-terminal frame))
 	deletable)
     (catch 'deletable
       (when (and active-minibuffer-window
@@ -228,12 +229,13 @@ form."
 
       (let ((frames (delq frame (frame-list))))
 	(dolist (other frames)
-	  ;; A suitable "other" frame must be either visible or
-	  ;; iconified.  Child frames and frames with a non-nil
-	  ;; 'delete-before' parameter do not qualify as other frame -
-	  ;; either of these will depend on a "suitable" frame found in
-	  ;; this loop.
-	  (unless (or (frame-parent other)
+	  ;; A suitable "other" frame must be on the same terminal as
+          ;; FRAME and must be either visible or iconified.  Child
+          ;; frames and frames with a non-nil 'delete-before' parameter
+          ;; do not qualify as other frame - either of these will depend
+          ;; on a "suitable" frame found in this loop.
+	  (unless (or (not (eq (frame-terminal other) terminal))
+                      (frame-parent other)
 		      (frame-parameter other 'delete-before)
 		      (not (frame-visible-p other)))
 	    (setq deletable t))
@@ -1782,11 +1784,7 @@ resize and move FRAME."
     (when negative
       (setq gravity 3)
       (setq left (- parent-or-display-width (- left)
-                    (+ text-width
-                       (frame-scroll-bar-width frame)
-                       (frame-fringe-width frame)
-                       (* 2 (frame-internal-border-width frame))
-                       outer-minus-text-width))))
+                    text-width outer-minus-text-width)))
 
     (setq negative nil)
     (cond
@@ -1813,9 +1811,7 @@ resize and move FRAME."
       ;; This should get us 7 or 9.
       (setq gravity (+ gravity 6))
       (setq top (- parent-or-display-height (- top)
-                   (+ text-height
-                      (* 2 (frame-internal-border-width frame)))
-                   outer-minus-text-height)))
+                   text-height outer-minus-text-height)))
 
     (set-frame-size-and-position-pixelwise
      frame text-width text-height left top gravity)))

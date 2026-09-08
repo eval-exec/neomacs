@@ -2742,6 +2742,13 @@ The candidate will still be chosen by `choose-completion' unless
     (goto-char (or (next-single-property-change (point) 'completion--string)
                    (point-max)))))
 
+(defun completions--clear-selection ()
+  "Clear the selected candidate in the completions buffer.
+
+Unlike `completions--deselect' this fully clears all selected-completion
+state from the buffer."
+  (goto-char (point-min)))
+
 (defun completions--should-show-p (metadata &optional force-eager-update)
   "Return non-nil if *Completions* should be automatically updated or displayed.
 
@@ -2764,22 +2771,24 @@ is always true."
 
 (defvar completions--background-update-timer nil)
 
-(defun completions--background-update (force-eager-update)
+(defun completions--background-update (force-eager-update buffer)
   "Try to update *Completions* without blocking input.
 
 This function uses `while-no-input' and sets `non-essential' to t
 so that the update is less likely to interfere with user typing."
   (setq completions--background-update-timer nil)
-  (when (while-no-input
-          (let ((non-essential t))
-            (redisplay)
-            (cond
-             (completion-in-region-mode (completion-help-at-point t))
-             ((completions--should-show-p
-               (completion--field-metadata (minibuffer-prompt-end))
-               force-eager-update)
-              (minibuffer-completion-help))))
-          nil)
+  (when (and
+         (eq buffer (current-buffer))
+         (while-no-input
+           (let ((non-essential t))
+             (redisplay)
+             (cond
+              (completion-in-region-mode (completion-help-at-point t))
+              ((completions--should-show-p
+                (completion--field-metadata (minibuffer-prompt-end))
+                force-eager-update)
+               (minibuffer-completion-help))))
+           nil))
     ;; If we got interrupted, try again the next time the user is idle.
     (completions--start-background-update force-eager-update)))
 
@@ -2797,7 +2806,8 @@ If FORCE-EAGER-UPDATE is non-nil, we only check eager-display."
   (unless completions--background-update-timer
     (setq completions--background-update-timer
           (run-with-idle-timer
-           0 nil #'completions--background-update force-eager-update))))
+           0 nil #'completions--background-update
+           force-eager-update (current-buffer)))))
 
 (defun completions--start-eager-display ()
   "Maybe display the *Completions* buffer when the user is next idle.
@@ -3017,7 +3027,7 @@ has been requested by the completion table."
     (with-selected-window win
       ;; Move point off any completions, so we don't move point there
       ;; again the next time `minibuffer-completion-help' is called.
-      (goto-char (point-min))
+      (completions--clear-selection)
       (bury-buffer))))
 
 (defun exit-minibuffer ()
@@ -3122,8 +3132,6 @@ Also respects the obsolete wrapper hook `completion-in-region-functions'.
       completion-in-region-functions (start end collection predicate)
     (let ((minibuffer-completion-table collection)
           (minibuffer-completion-predicate predicate))
-      ;; HACK: if the text we are completing is already in a field, we
-      ;; want the completion field to take priority (e.g. Bug#6830).
       (when completion-in-region-mode-predicate
         (setq completion-in-region--data
 	      `(,(if (markerp start) start (copy-marker start))
@@ -4608,6 +4616,11 @@ filter out additional entries (because TABLE might not obey PRED)."
                      ;; Text that goes between the new submatches and the
                      ;; completion substring.
                      (between nil))
+          ;; SUBPAT was computed with point=(length substring); remove
+          ;; the trailing `point' since that's not the real location of
+          ;; point (bug#80914).
+          (cl-assert (eq (car (last subpat)) 'point))
+          (setq subpat (butlast subpat))
           ;; Eliminate submatches that don't end with the separator.
           (dolist (submatch (prog1 suball (setq suball ())))
             (when (eq sep (aref submatch (1- (length submatch))))
@@ -4767,9 +4780,19 @@ the same set of elements."
                     (setq prefix (substring prefix 0 (length fixed))))
                   (push prefix res)
                   ;; Push all the wildcards in this stretch, to preserve `point' and
-                  ;; `star' wildcards before ELEM.
-                  (dolist (wildcard wildcards)
-                    (push wildcard res))
+                  ;; `star' wildcards before ELEM.  Collapse multiple `star's down to one
+                  ;; on each side of point. (bug#81394)
+                  (let ((star-seen nil))
+                    (dolist (wildcard wildcards)
+                      (cond
+                       ((eq wildcard 'star)
+                        (unless star-seen
+                          (push 'star res))
+                        (setq star-seen t))
+                       (t
+                        (when (eq wildcard 'point)
+                          (setq star-seen nil))
+                        (push wildcard res)))))
                   ;; Extract common suffix additionally to common prefix.
                   ;; Don't do it for `any' since it could lead to a merged
                   ;; completion that doesn't itself match the candidates.
@@ -5065,12 +5088,14 @@ usual. Returns (ALL PAT PREFIX SUFFIX)."
         ;; to /usr/share/a/e just because we mistyped "ae" for "ar",
         ;; so we probably don't want initials to touch anything that
         ;; looks like /usr/share/foo.  As a heuristic, we just check that
-        ;; the text before the boundary char is at most 1 char.
-        ;; This allows both ~/eee and /eee and not much more.
+        ;; the previous completion field is empty.
+        ;; This allows ~/eee and /eee and /usr//eee and not much more.
         ;; FIXME: It sadly also disallows the use of ~/eee when that's
         ;; embedded within something else (e.g. "(~/eee" in Info node
         ;; completion or "ancestor:/eee" in bzr-revision completion).
-        (when (< (car bounds) 3)
+        (when (let ((str-without-last-field (substring str 0 (1- (car bounds)))))
+                (= (car (completion-boundaries str-without-last-field table pred ""))
+                   (length str-without-last-field)))
           (let ((sep (substring str (1- (car bounds)) (car bounds))))
             ;; FIXME: the above string-match checks the whole string, whereas
             ;; we end up only caring about the after-boundary part.

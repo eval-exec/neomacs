@@ -19,6 +19,32 @@
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[test]
+fn oracle_delete_frame_selection_is_a_lisp_object_not_a_boolean() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU 31.1 frame.c changes the declaration from DEFVAR_BOOL to
+    // DEFVAR_LISP.  Test both its public value and byte-compiled assignment.
+    let form = r##"
+(list (boundp 'after-delete-frame-select-mru-frame)
+      (special-variable-p 'delete-frame-choose-selected)
+      (default-value 'delete-frame-choose-selected)
+      (and (memq 'delete-frame-choose-selected byte-boolean-vars) t)
+      (let ((delete-frame-choose-selected 'custom))
+        delete-frame-choose-selected)
+      (funcall (byte-compile
+                (lambda ()
+                  (setq delete-frame-choose-selected 'custom)
+                  delete-frame-choose-selected)))
+      delete-frame-choose-selected
+      (condition-case err
+          (makunbound 'delete-frame-choose-selected)
+        (error (car err))))
+"##;
+    let expect = expect_test::expect![[r#""OK (nil t mru nil custom custom custom error)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
 /// Membership and shape of the list itself.
 #[test]
 fn oracle_byte_boolean_vars_matches_gnus_declaration_set() {
@@ -27,7 +53,7 @@ fn oracle_byte_boolean_vars_matches_gnus_declaration_set() {
     let form = r#"
 (list (length byte-boolean-vars)
       (car byte-boolean-vars)
-      (nth 116 byte-boolean-vars)
+      (car (last byte-boolean-vars))
       ;; declared after `syms_of_lread' cleared the list
       (and (memq 'visible-bell byte-boolean-vars) t)
       (and (memq 'inhibit-message byte-boolean-vars) t)
@@ -38,9 +64,9 @@ fn oracle_byte_boolean_vars_matches_gnus_declaration_set() {
       (and (memq 'garbage-collection-messages byte-boolean-vars) t)
       (and (memq 'symbols-with-pos-enabled byte-boolean-vars) t)
       (and (memq 'load-in-progress byte-boolean-vars) t))"#;
-    let expect = expect_test::expect![
-        r#""OK (117 font-use-system-font load-dangerous-libraries t t t t nil nil nil nil)""#
-    ];
+    let expect = expect_test::expect![[
+        r#""OK (116 font-use-system-font load-dangerous-libraries t t t t nil nil nil nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
@@ -156,8 +182,7 @@ fn oracle_every_defvar_bool_variable_is_bound_and_canonical() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let form = r#"
-  (let ((names '(after-delete-frame-select-mru-frame
-                 attempt-orderly-shutdown-on-fatal-signal attempt-stack-overflow-recovery
+  (let ((names '(attempt-orderly-shutdown-on-fatal-signal attempt-stack-overflow-recovery
                  auto-raise-tab-bar-buttons auto-raise-tool-bar-buttons
                  auto-save-no-message auto-window-vscroll
                  backtrace-on-error-noninteractive backtrace-on-redisplay-error
@@ -237,6 +262,6 @@ fn oracle_every_defvar_bool_variable_is_bound_and_canonical() {
                    (set-default s old))))))
     (list (length names) (nreverse unbound) (nreverse nonspecial)
           (nreverse noncanonical)))"#;
-    let expect = expect_test::expect![r#""OK (147 nil nil nil)""#];
+    let expect = expect_test::expect![[r#""OK (146 nil nil nil)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

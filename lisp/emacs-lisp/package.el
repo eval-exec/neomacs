@@ -535,6 +535,22 @@ package."
   summary)
 
 
+;;; Public interfaces for accessing built-in package info
+
+(defun package-versioned-builtin-packages ()
+  "Return a list of all the versioned built-in packages.
+The return value is a list of names of built-in packages represented as
+symbols."
+  (mapcar #'car package--builtin-versions))
+
+(defun package-builtin-package-version (package)
+  "Return the version of a built-in PACKAGE given by its symbol.
+The return value is a list of integers representing the version of
+PACKAGE, in the format returned by `version-to-list', or nil if the
+package is built-in but has no version or is not a built-in package."
+  (alist-get package package--builtin-versions))
+
+
 ;;; Installed packages
 
 ;; The following functions are called on each installed package by
@@ -1834,16 +1850,27 @@ Used to populate `package-selected-packages'."
              unless (memq name dep-list)
              collect name)))
 
+(defun package--save-selected-packages-1 ()
+  "Save the current value of `package-selected-packages'."
+  (customize-save-variable
+   'package-selected-packages
+   (sort package-selected-packages #'string<)))
+
 (defun package--save-selected-packages (&optional value)
-  "Set and save `package-selected-packages' to VALUE."
+  "Set `package-selected-packages' to VALUE.
+During initialization, we record VALUE but to not persist it using
+Customize, to avoid overwriting configurations that haven't yet been
+loaded.  After initisation we update the user option directly."
   (when (or value after-init-time)
     ;; It is valid to set it to nil, for example when the last package
-    ;; is uninstalled.  But it shouldn't be done at init time, to
-    ;; avoid overwriting configurations that haven't yet been loaded.
-    (setq package-selected-packages (sort value #'string<)))
+    ;; is uninstalled.  But it shouldn't be done at init time, to avoid
+    ;; overwriting configurations that haven't yet been loaded.  We fall
+    ;; back to the default value of `package-selected-packages' when
+    ;; this function is invoked by `after-init-hook'.
+    (setq package-selected-packages value))
   (if after-init-time
-      (customize-save-variable 'package-selected-packages package-selected-packages)
-    (add-hook 'after-init-hook #'package--save-selected-packages)))
+      (package--save-selected-packages-1)
+    (add-hook 'after-init-hook #'package--save-selected-packages-1)))
 
 (defun package--user-selected-p (pkg)
   "Return non-nil if PKG is a package was installed by the user.
@@ -2170,8 +2197,8 @@ NAME should be a symbol."
                   (package-desc-version (cadr elt))
                   (package-desc-version available)))
              (not (package-vc-p (cadr elt))))))
-    (nconc (and include-builtins (package--builtin-alist))
-           (package--alist)))))
+    (append (and include-builtins (package--builtin-alist))
+            (package--alist)))))
 
 ;;;###autoload
 (defun package-upgrade-all (&optional query)
@@ -2186,7 +2213,8 @@ from ELPA by either using `\\[package-upgrade]' or
 `\\<package-menu-mode-map>\\[package-menu-mark-install]' after `\\[list-packages]'."
   (interactive (list (not noninteractive)))
   (package-refresh-contents)
-  (let ((upgradeable (package--upgradeable-packages package-install-upgrade-built-in)))
+  (let ((upgradeable (package--upgradeable-packages package-install-upgrade-built-in))
+        (upgraded '()))
     (if (not upgradeable)
         (message "No packages to upgrade")
       (when (and query
@@ -2198,7 +2226,15 @@ from ELPA by either using `\\[package-upgrade]' or
         (user-error "Upgrade aborted"))
       (dolist (pkg upgradeable)
         (with-demoted-errors "Error while upgrading: %S"
-          (package-upgrade pkg))))))
+          (package-upgrade pkg)
+          (push pkg upgraded)))
+      (let ((rejected (cl-set-difference upgradeable upgraded)))
+        (message
+         "Upgraded: %s%s"
+         (mapconcat #'symbol-name upgraded ", ")
+         (if rejected
+             (concat "; Rejected: " (mapconcat #'symbol-name rejected ", "))
+           ""))))))
 
 (defun package--dependencies (pkg)
   "Return a list of all transitive dependencies of PKG.
@@ -2379,6 +2415,15 @@ installed), maybe you need to \\[package-refresh-contents]")
   (equal (cadr (assq (package-desc-name pkg) package-alist))
          pkg))
 
+(defun package--dependency-p (pkg)
+  "Return non-nil if PKG is a dependency."
+  (let ((name (package-desc-name pkg)))
+    (catch 'is-dependency
+      (dolist (ent (package--alist) nil)
+        (dolist (desc (cdr ent))
+          (when (assq name (package-desc-reqs desc))
+            (throw 'is-dependency t)))))))
+
 (declare-function comp-el-to-eln-filename "comp.c")
 (defvar package-vc-repository-store)
 (defun package--delete-directory (dir)
@@ -2433,15 +2478,20 @@ If NOSAVE is non-nil, the package is not removed from
                               (if (null (remove pkg-desc (cdr pkgs)))
                                   (remq pkgs package-alist)
                                 package-alist)))
-        pkg-used-elsewhere-by)
+         pkg-used-elsewhere-by)
     ;; If the user is trying to delete this package, they definitely
     ;; don't want it marked as selected, so we remove it from
     ;; `package-selected-packages' even if it can't be deleted.
     (when (and (null nosave)
                (package--user-selected-p name)
-               ;; Don't deselect if this is an older version of an
-               ;; upgraded package.
-               (package--newest-p pkg-desc))
+               (or
+                ;; Don't deselect if this is an older version of an
+                ;; upgraded package.
+                (package--newest-p pkg-desc)
+                ;; Don't deselect if the package is a dependency and
+                ;; there are multiple installations (bug#81082).
+                (and (length< (alist-get name package-alist) 1)
+                     (package--dependency-p pkg-desc))))
       (package--save-selected-packages (remove name package-selected-packages)))
     (cond ((not (string-prefix-p (file-name-as-directory
                                   (expand-file-name package-user-dir))
@@ -2452,7 +2502,16 @@ If NOSAVE is non-nil, the package is not removed from
           ((and (null force)
                 (setq pkg-used-elsewhere-by
                       (let ((package-alist new-package-alist))
-                        (package--used-elsewhere-p pkg-desc)))) ;See bug#65475
+                        (package--used-elsewhere-p pkg-desc))) ;See bug#65475
+                (and-let* ((other (package-get-descriptor
+                                   name 'installed
+                                   (lambda (pkg-other)
+                                     (not (equal pkg-desc pkg-other))))))
+                  (not (yes-or-no-p
+                        (format "Package `%s' is used by `%s' as dependency, but `%s' is also available.  Use that instead?"
+                                (package-desc-full-name pkg-desc)
+                                (package-desc-name pkg-used-elsewhere-by)
+                                (package-desc-full-name other))))))
            ;; Don't delete packages used as dependency elsewhere.
            (error "Package `%s' is used by `%s' as dependency, not deleting"
                   (package-desc-full-name pkg-desc)
@@ -2564,9 +2623,23 @@ If TEMP-INIT is non-nil, or when invoked with a prefix argument, the
 Emacs user directory is set to a temporary directory.  This command is
 intended for testing Emacs and/or the packages in a clean environment."
   (interactive
-   (cl-loop for p in (append
-                      (cl-loop for p in (package--alist) append (cdr p))
-                      (cl-loop for p in (package--archive-contents) append (cdr p)))
+   (cl-loop for p in
+	    (cl-loop with installed = (cl-loop for p in (package--alist)
+                                               append (cdr p))
+		     for p in (package--archive-contents)
+		     append (cl-loop
+                             for desc in (cdr p)
+			     unless (cl-loop
+                                     for idesc in installed thereis
+                                     (and (string= (package-desc-name idesc)
+						   (package-desc-name desc))
+					  (equal (package-desc-version idesc)
+						 (package-desc-version desc))
+                                          (eq (package-desc-kind idesc)
+					      (package-desc-kind desc))))
+			     collect desc)
+		     into descs
+		     finally return (nconc installed descs))
 	    unless (package-built-in-p p)
 	    collect (cons (package-desc-full-name p) p) into table
 	    finally return
@@ -2579,8 +2652,22 @@ intended for testing Emacs and/or the packages in a clean environment."
              current-prefix-arg)))
   (let* ((name (concat "package-isolate-"
                        (mapconcat #'package-desc-full-name packages ",")))
-         (dependencies (apply #'append (mapcar #'package-desc-reqs packages)))
-         (all-packages (package-compute-transaction packages dependencies))
+         (all-packages
+          (delete-dups
+           (nconc
+            (mapcan
+             (pcase-lambda (`(,name ,vers))
+               (and (not (eq name 'emacs))
+                    (not (cl-find name packages :key #'package-desc-name))
+                    (if-let* ((desc (package-get-descriptor
+                                     name t
+                                     (lambda (desc)
+                                       (version-list-<= vers (package-desc-version desc))))))
+                        (list desc)
+                      (error "Failed to find package: (%s %S)" name vers))))
+             (package--dependencies packages))
+            packages)))
+         (all-packages (seq-remove #'package-built-in-p all-packages))
          (package-alist (copy-tree package-alist t))
          (temp-install-dir nil) initial-scratch-message load-list)
     (when-let* ((missing (seq-remove #'package-installed-p all-packages))
@@ -2621,7 +2708,7 @@ intended for testing Emacs and/or the packages in a clean environment."
                                (append (list package-user-dir)
                                        temp-install-dir
                                        package-directory-list))
-                            (setq package-load-list ',package-load-list)
+                            (setq package-load-list ',load-list)
                             (package--activate-all)))))))
 
 
@@ -2728,7 +2815,10 @@ If no such file exists, the function returns nil."
   "Insert the package description for PKG.
 Helper function for `describe-package'."
   (require 'lisp-mnt)
-  (let* ((desc (package-get-descriptor pkg t))
+  (let* ((desc (if (eq pkg 'emacs)
+                   (package--from-builtin
+                    (assq 'emacs package--builtins))
+                 (package-get-descriptor pkg t)))
          (name (if desc (package-desc-name desc) pkg))
          (pkg-dir (if desc (package-desc-dir desc)))
          (reqs (if desc (package--dependencies desc)))
@@ -3939,9 +4029,10 @@ Implementation of `package-menu-mark-upgrades'."
                   ((equal pkg-desc upgrade)
                    (package-menu-mark-install))
                   (t
-                   (unless (package-matches-selector-p
-                            package-retention-policy
-                            pkg-desc)
+                   (if (package-matches-selector-p
+                        package-retention-policy
+                        pkg-desc)
+                       (forward-line)
                      (package-menu-mark-delete)))))))
       (message "Packages marked for upgrading: %d"
                (length upgrades)))))
@@ -4029,6 +4120,7 @@ objects removed."
 (defun package-menu--perform-transaction (install-list delete-list)
   "Install packages in INSTALL-LIST and delete DELETE-LIST.
 Return nil if there were no errors; non-nil otherwise."
+  (remove-overlays (point-min) (point-max) 'pkg-menu-ov t)
   (let ((errors nil))
     (if install-list
         (let ((status-format (format ":Installing %%d/%d"

@@ -35,9 +35,6 @@ from happening repeatedly and making Emacs nonfunctional."#),
     (r#"after-delete-frame-functions"#, r#"Functions run after deleting a frame.
 The functions are run with one arg, the frame that was deleted and
 which is now dead."#),
-    (r#"after-delete-frame-select-mru-frame"#, r#"Non-nil means `delete-frame' selects most recently used frame.
-If this is nil, `delete-frame' will select the oldest visible frame on
-the same terminal."#),
     (r#"after-init-time"#, r#"Value of `current-time' after loading the init files.
 This is nil during initialization."#),
     (r#"after-insert-file-functions"#, r#"A list of functions to be called at the end of `insert-file-contents'.
@@ -1005,6 +1002,10 @@ This includes interactive calls to `delete-file' and
 `delete-directory' and the Dired deletion commands."#),
     (r#"delete-exited-processes"#, r#"Non-nil means delete processes immediately when they exit.
 A value of nil means don't delete them until `list-processes' is run."#),
+    (r#"delete-frame-choose-selected"#, r#"What frame to select after frame deletion.
+The value `mru' means `delete-frame' selects most recently used frame.
+If this is nil, `delete-frame' will select the oldest visible frame on
+the same terminal."#),
     (r#"delete-frame-functions"#, r#"Functions run before deleting a frame.
 The functions are run with one arg, the frame to be deleted.
 See `delete-frame'.
@@ -4518,7 +4519,10 @@ windows in the same combination.
 Other values are reserved for future use.
 
 A specific split operation may ignore the value of this variable if it
-is affected by a non-nil value of `window-combination-limit'."#),
+is affected by a non-nil value of `window-combination-limit'.  If you
+want to use a sequence of `split-window' calls to produce a specific,
+predefined layout of windows on a frame, bind this variable temporarily
+to nil."#),
     (r#"window-configuration-change-hook"#, r#"Functions called during redisplay when window configuration has changed.
 The value should be a list of functions that take no argument.
 

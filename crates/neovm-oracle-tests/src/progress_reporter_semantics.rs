@@ -4,8 +4,27 @@
 //! Emacs.  These tests observe the public hook states and accessors without
 //! depending on echo-area display.
 
-use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
+
+#[test]
+fn oracle_progress_reporter_31_1_update_text_hook_contract() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU 31.1 passes update text as a third hook argument rather than
+    // retaining a suffix inside the reporter's parameter vector.
+    let form = r##"
+(let (events)
+  (let* ((progress-reporter-update-functions
+          (list (lambda (_reporter state update-text)
+                  (push (list state update-text) events))))
+         (reporter (make-progress-reporter "Work" 0 10 nil 10 0)))
+    (progress-reporter-update reporter 5 "half")
+    (progress-reporter-done reporter)
+    (nreverse events)))
+"##;
+    let expect = expect_test::expect![[r#""OK ((0.0 nil) (0.5 \"half\") (done nil))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
 
 #[test]
 fn oracle_prop_progress_reporter_numeric_updates_and_throttling() {
@@ -14,12 +33,12 @@ fn oracle_prop_progress_reporter_numeric_updates_and_throttling() {
     let form = r#"
 (let (events)
   (let* ((progress-reporter-update-functions
-          (list (lambda (reporter state)
+          (list (lambda (reporter state update-text)
                   (push (list state
                               (progress-reporter-text reporter)
                               (progress-reporter-context reporter)
                               (car reporter)
-                              (aref (cdr reporter) 6))
+                              update-text)
                         events))))
          (reporter (make-progress-reporter "Work" 0 10 nil 10 0 'async)))
     (progress-reporter-update reporter 1 " one")
@@ -31,23 +50,23 @@ fn oracle_prop_progress_reporter_numeric_updates_and_throttling() {
 "#;
 
     let expect = expect_test::expect![[
-        r#""OK ((0.0 \"Work...\" async 1 nil) (0.1 \"Work...\" async 2 \" one\") (0.2 \"Work...\" async 3 \" one\") (0.5 \"Changed...\" async 6 \" forced\") (done \"Changed...\" async 6 \" forced\"))""#
+        r#""OK ((0.0 \"Work...\" async 1 nil) (0.1 \"Work...\" async 2 \" one\") (0.2 \"Work...\" async 3 nil) (0.5 \"Changed...\" async 6 \" forced\") (done \"Changed...\" async 6 nil))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]
-fn oracle_prop_progress_reporter_pulse_updates_and_suffix_memory() {
+fn oracle_prop_progress_reporter_pulse_updates_and_per_update_text() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let form = r#"
 (let (events)
   (let* ((progress-reporter-update-functions
-          (list (lambda (reporter state)
+          (list (lambda (reporter state update-text)
                   (push (list state
                               (progress-reporter-text reporter)
                               (car reporter)
-                              (aref (cdr reporter) 6))
+                              update-text)
                         events))))
          (reporter (make-progress-reporter "Pulse" nil nil nil nil 0)))
     (progress-reporter-update reporter nil " a")
@@ -59,7 +78,7 @@ fn oracle_prop_progress_reporter_pulse_updates_and_suffix_memory() {
 "#;
 
     let expect = expect_test::expect![[
-        r#""OK ((1 \"Pulse...\" 1 nil) (2 \"Pulse...\" 2 \" a\") (3 \"Pulse...\" 3 \" legacy-value\") (0 \"Pulse...\" 0 \" legacy-value\") (1 \"Pulse changed\" 1 \" forced\") (done \"Pulse changed\" 1 \" forced\"))""#
+        r#""OK ((1 \"Pulse...\" 1 nil) (2 \"Pulse...\" 2 \" a\") (3 \"Pulse...\" 3 \" legacy-value\") (4 \"Pulse...\" 4 nil) (5 \"Pulse changed\" 5 \" forced\") (done \"Pulse changed\" 5 nil))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
@@ -71,7 +90,7 @@ fn oracle_prop_progress_reporter_message_and_alias_semantics() {
     let form = r#"
 (let (events)
   (let* ((progress-reporter-update-functions
-          (list (lambda (reporter state)
+          (list (lambda (reporter state _update-text)
                   (push (list state
                               (progress-reporter-text reporter)
                               (progress-reporter-context reporter))
@@ -101,7 +120,7 @@ fn oracle_prop_progress_reporter_loop_macros_return_values() {
     let form = r#"
 (let (events)
   (let ((progress-reporter-update-functions
-         (list (lambda (reporter state)
+         (list (lambda (reporter state _update-text)
                  (push (list state (progress-reporter-text reporter))
                        events)))))
     (list
