@@ -24439,6 +24439,59 @@ fn plain_let_takes_one_obarray_visit_per_bind_and_pop() {
     );
 }
 
+/// GNU's native-call exit is `specpdl_ptr--` and does not care how many
+/// arguments the frame recorded.  This pop accepts every frame shape
+/// `push_backtrace_frame_from_native_args` can create -- one argument, two,
+/// and three or more -- and refuses anything the debugger flagged or that
+/// owns a heap payload, which keeps those on the general path where the
+/// exit debugger runs.
+#[test]
+fn native_backtrace_pop_accepts_every_arity_it_pushes() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let func = Value::from_sym_id(intern("neo-native-pop"));
+    let args = [Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)];
+    let args_ptr = args.as_ptr() as *const i64;
+
+    for nargs in [1usize, 2, 3] {
+        let count = ev.specpdl.len();
+        // SAFETY: `args` outlives the call and holds three tagged words.
+        unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, nargs) };
+        assert_eq!(ev.specpdl.len(), count + 1);
+        assert!(
+            ev.pop_native_backtrace_frame(count),
+            "a {nargs}-argument native frame must pop through the fast exit"
+        );
+        assert_eq!(ev.specpdl.len(), count);
+    }
+
+    // A frame the debugger flagged is rewritten to the owned shape and must
+    // keep the general path, which is the only place the exit debugger runs.
+    let count = ev.specpdl.len();
+    // SAFETY: as above.
+    unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, 1) };
+    assert!(ev.set_backtrace_debug_on_exit(count, true));
+    assert!(
+        !ev.pop_native_backtrace_frame(count),
+        "a debug-on-exit frame must not take the fast exit"
+    );
+    assert_eq!(ev.specpdl.len(), count + 1, "the refused frame stays put");
+    let _ = ev.unbind_to_with_result(count, Ok(Value::NIL));
+
+    // An unbalanced stack (the callee left an entry above the frame) is
+    // refused too.
+    let count = ev.specpdl.len();
+    // SAFETY: as above.
+    unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, 2) };
+    ev.push_specpdl_root(Value::T);
+    assert!(
+        !ev.pop_native_backtrace_frame(count),
+        "the fast exit requires the balanced single-frame state"
+    );
+    let _ = ev.unbind_to_with_result(count, Ok(Value::NIL));
+    assert_eq!(ev.specpdl.len(), count);
+}
+
 #[test]
 fn specpdl_entry_stays_compact_for_hot_backtrace_pushes() {
     let entry_size = std::mem::size_of::<SpecBinding>();

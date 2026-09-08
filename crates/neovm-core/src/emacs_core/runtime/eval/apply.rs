@@ -1295,27 +1295,40 @@ impl Context {
         self.jit_root_stack_cap = new_len;
     }
 
-    /// GNU `specpdl_ptr--` for the JIT native-call exit: pop the call's own
-    /// `BacktraceNative` frame without touching the result value at all.
-    /// Returns false when the stack is not in the balanced single-frame
-    /// state (nested imbalance, debug residue) — the caller then takes the
-    /// general [`Self::pop_bytecode_backtrace_frame_with_result`] path.
+    /// GNU `specpdl_ptr--` for the JIT native-call exit (`src/eval.c:3216`):
+    /// pop the call's own backtrace frame without touching the result value
+    /// at all.  Returns false when the stack is not in the balanced
+    /// single-frame state (nested imbalance, debug residue) — the caller
+    /// then takes the general
+    /// [`Self::pop_bytecode_backtrace_frame_with_result`] path.
+    ///
+    /// GNU's pop does not care how many arguments the frame recorded, and
+    /// neither does this one: `push_backtrace_frame_from_native_args`
+    /// records a one-argument call as `Backtrace1` and a two-argument call
+    /// as `Backtrace2`, which are most native calls, and accepting only the
+    /// three-or-more-argument shape sent them all through the general path.
+    /// The accepted set is derived, not listed: it is exactly the entries
+    /// [`trivial_spec_binding_pop`] admits as owning nothing, so it cannot
+    /// drift from the fast path of [`Self::unbind_to_with_result`].  A frame
+    /// the debugger flagged is rewritten in place to the owned shape, so it
+    /// fails this test and keeps the general path, which is the only place
+    /// `run_debug_on_exit` runs.
     #[inline]
     pub(crate) fn pop_native_backtrace_frame(&mut self, count: usize) -> bool {
-        if self.specpdl.len() == count + 1
-            && matches!(
-                self.specpdl.last(),
-                Some(SpecBinding::BacktraceNative { .. })
-            )
-        {
-            // SAFETY: BacktraceNative owns no heap payload (a Value plus a
-            // raw pointer and a length), so the length store alone is the
-            // pointer-decrement pop; no drop glue needs to run.
-            unsafe { self.specpdl.set_len(count) };
-            true
-        } else {
-            false
+        if self.specpdl.len() != count + 1 {
+            return false;
         }
+        if !matches!(
+            self.specpdl.last().and_then(trivial_spec_binding_pop),
+            Some(TrivialSpecBindingPop::NoOwnedArgs)
+        ) {
+            return false;
+        }
+        // SAFETY: `NoOwnedArgs` is the closed proof that the entry owns no
+        // heap payload, so the length store alone is the pointer-decrement
+        // pop and no drop glue needs to run.
+        unsafe { self.specpdl.set_len(count) };
+        true
     }
 
     /// GNU `Breturn`'s `specpdl_ptr--` after `exec_byte_code`: the frame a
