@@ -146,8 +146,14 @@ impl Context {
             Value::string("Copyright (C) 2026 Free Software Foundation, Inc."),
         );
         obarray.make_special("emacs-copyright");
-        obarray.set_symbol_value("emacs-major-version", Value::fixnum(31));
-        obarray.set_symbol_value("emacs-minor-version", Value::fixnum(0));
+        obarray.set_symbol_value(
+            "emacs-major-version",
+            Value::fixnum(i64::from(crate::GNU_EMACS_MAJOR_VERSION)),
+        );
+        obarray.set_symbol_value(
+            "emacs-minor-version",
+            Value::fixnum(i64::from(crate::GNU_EMACS_MINOR_VERSION)),
+        );
         obarray.set_symbol_value("emacs-build-number", Value::fixnum(1));
         obarray.set_symbol_value("system-type", Value::symbol(gnu_system_type()));
         obarray.make_special("system-type");

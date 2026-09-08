@@ -27,9 +27,23 @@ pub use emacs_core::value::{Value, ValueKind};
 
 pub const CORE_BACKEND: &str = "rust";
 
-/// The GNU Emacs release whose Lisp tree and user-visible compatibility
-/// surface this build tracks.
-pub const GNU_EMACS_VERSION: &str = "31.0.90";
+// GNU seeds emacs-version from configure.ac's PACKAGE_VERSION; version.el
+// derives its numeric components from that same value. Keep the bare evaluator
+// and loaded Lisp equally consistent, including for GNU's MAJOR.MINOR.MICRO
+// development versions. Integer constants make invalid components a compile
+// error, and concat! keeps the public string allocation-free.
+macro_rules! gnu_emacs_version {
+    ($major:literal, $minor:literal $(, $micro:literal)?) => {
+        /// The GNU Emacs version whose Lisp tree and compatibility surface we track.
+        pub const GNU_EMACS_VERSION: &str =
+            concat!(stringify!($major), ".", stringify!($minor) $(, ".", stringify!($micro))?);
+        pub(crate) const GNU_EMACS_MAJOR_VERSION: u32 = $major;
+        pub(crate) const GNU_EMACS_MINOR_VERSION: u32 = $minor;
+        $(const _: u32 = $micro;)?
+    };
+}
+
+gnu_emacs_version!(31, 1);
 
 use neovm_host_abi::{LispValue, SelectOp, SelectResult, Signal, TaskError, TaskOptions};
 use std::time::Duration;

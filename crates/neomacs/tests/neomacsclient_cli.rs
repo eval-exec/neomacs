@@ -10,7 +10,7 @@ fn neomacsclient_version_matches_emacs_version() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "neomacsclient 31.0.90\n"
+        "neomacsclient 31.1\n"
     );
 }
 
