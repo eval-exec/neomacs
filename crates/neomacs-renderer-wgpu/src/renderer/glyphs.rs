@@ -50,7 +50,7 @@ pub(super) struct RenderedGlyphGeometry {
     bitmap: Rect,
     /// Unclipped ink bounds from the atlas bearings and snapped glyph origin.
     /// Kept separately from submitted geometry so clipping is allowed, but
-    /// placement outside the rasterizer's horizontal bounds is not overhang.
+    /// placement outside the rasterizer's bounds is not overhang.
     raster_bounds: Rect,
 }
 
@@ -78,6 +78,13 @@ impl RenderedGlyphGeometry {
         self.bitmap.y += dy;
         self.raster_bounds.y += dy;
         self
+    }
+
+    fn submission_matches_raster(self) -> bool {
+        self.bitmap.x >= self.raster_bounds.x - CHAR_OVERLAP_MIN_AXIS
+            && self.bitmap.y >= self.raster_bounds.y - CHAR_OVERLAP_MIN_AXIS
+            && self.bitmap.right() <= self.raster_bounds.right() + CHAR_OVERLAP_MIN_AXIS
+            && self.bitmap.bottom() <= self.raster_bounds.bottom() + CHAR_OVERLAP_MIN_AXIS
     }
 
     fn overhang(self) -> GlyphOverhang {
@@ -169,6 +176,12 @@ fn classify_char_overlap(
     b: &RenderedCharBounds,
     overlap: Rect,
 ) -> CharOverlapClassification {
+    // Bearings explain only subsets of the rasterizer's ink. Validate both
+    // coordinates before either axis can explain an overlap: projecting onto
+    // the other axis must not hide an independently invalid placement.
+    if !a.geometry.submission_matches_raster() || !b.geometry.submission_matches_raster() {
+        return CharOverlapClassification::Unexpected;
+    }
     if overlap_is_expected_on_axis(a, b, overlap, OverlapAxis::Horizontal) {
         CharOverlapClassification::Expected(ExpectedCharOverlap::HorizontalOverhang)
     } else if overlap_is_expected_on_axis(a, b, overlap, OverlapAxis::Vertical) {
@@ -228,18 +241,9 @@ fn overlap_is_expected_on_axis(
         // narrower intervening cell; the cells need not touch. GNU bounds
         // that reach by the font's own bearing (`gui_get_glyph_overhangs`).
         // Our atlas supplies raster bearings, including combining ink wholly
-        // outside its cell. Submitted ink may be clipped but cannot extend
-        // outside those bounds and still be explained by those bearings.
-        OverlapAxis::Horizontal => {
-            for geometry in [a.geometry, b.geometry] {
-                if geometry.bitmap.x < geometry.raster_bounds.x - CHAR_OVERLAP_MIN_AXIS
-                    || geometry.bitmap.right()
-                        > geometry.raster_bounds.right() + CHAR_OVERLAP_MIN_AXIS
-                {
-                    return false;
-                }
-            }
-        }
+        // outside its cell. The caller has validated submitted ink against
+        // those bounds independently of the overlap axis.
+        OverlapAxis::Horizontal => {}
         // Vertical overlap belongs to adjacent rows and must straddle the
         // boundary they share.
         OverlapAxis::Vertical => {

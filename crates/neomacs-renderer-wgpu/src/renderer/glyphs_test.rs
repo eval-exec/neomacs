@@ -1027,6 +1027,30 @@ fn char_overlap_classifies_adjacent_vertical_overhang_separately() {
     );
 }
 
+#[test]
+fn char_overlap_vertical_overhang_cannot_hide_horizontal_raster_displacement() {
+    let upper = with_bitmap(
+        char_bounds("upper", 0.0, 0.0, 10.0, 10.0),
+        Rect::new(0.0, 0.0, 10.0, 12.0),
+    );
+    let mut lower = with_bitmap(
+        char_bounds("lower", 0.0, 10.0, 10.0, 10.0),
+        Rect::new(0.0, 9.0, 10.0, 11.0),
+    );
+    lower.slot_id.row = upper.slot_id.row + 1;
+    lower.geometry.bitmap.x -= 4.0;
+
+    for (a, b) in [(&upper, &lower), (&lower, &upper)] {
+        assert_eq!(
+            char_overlap(a, b)
+                .expect("displaced raster overlap")
+                .classification,
+            CharOverlapClassification::Unexpected,
+            "a valid vertical bearing cannot explain horizontal placement outside the raster"
+        );
+    }
+}
+
 fn adjacent_vertical_overhang_bounds() -> (RenderedCharBounds, RenderedCharBounds) {
     let mut upper = with_bitmap(
         char_bounds("│", 861.0, 76.0, 9.0, 19.0),
