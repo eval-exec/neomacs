@@ -13,6 +13,7 @@
 //! process-wide demand.
 
 use neomacs_display_protocol::frame_time::{EventTime, FrameSample};
+use neomacs_host_runtime::time::Instant;
 use std::collections::HashMap;
 use std::time::Duration;
 

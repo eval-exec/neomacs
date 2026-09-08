@@ -412,12 +412,7 @@ impl RenderApp {
 
         render.cursor.apply_config(cursor_config);
         if let Some(new_target) = active_cursor {
-            let old_cursor_rect = (
-                render.cursor.current_x,
-                render.cursor.current_y,
-                render.cursor.current_w,
-                render.cursor.current_h,
-            );
+            let old_cursor_rect = render.cursor.current_rect();
             let (had_target, target_moved) = render.cursor.set_target(
                 new_target.clone(),
                 neomacs_display_protocol::frame_time::observe_platform_now(),
