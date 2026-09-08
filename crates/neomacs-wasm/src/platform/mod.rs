@@ -172,6 +172,8 @@ pub fn browser_pointer_input(
     use neomacs_display_protocol::{
         PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, PresentedHitQuery,
     };
+    use neomacs_display_protocol::geometry::{GeometryPoint, LogicalPixels, RootSurfaceSpace};
+    use neomacs_display_protocol::interaction_projection::InteractionProjection;
     if !x.is_finite() || !y.is_finite() || button > 5 {
         return Err(JsValue::from_str("invalid browser pointer"));
     }
@@ -183,8 +185,17 @@ pub fn browser_pointer_input(
         let Some(frame) = state.as_ref().and_then(|state| state.displayed.as_ref()) else {
             return Ok(Vec::new());
         };
+        // The portable compositor draws settled panes at their logical
+        // top-left positions (no layout-morph transform). Name that witness
+        // explicitly, as the native compositor does for settled frames.
+        let projection = InteractionProjection::settled(frame.presentation_id);
+        let surface_point = GeometryPoint::<RootSurfaceSpace, LogicalPixels>::from_px(x, y)
+            .map_err(|error| JsValue::from_str(&format!("{error:?}")))?;
+        let Some(point) = projection.map(surface_point) else {
+            return Ok(Vec::new());
+        };
         let hit = frame
-            .resolve_presented_hit(PresentedHitQuery::new(frame.presentation_id, x, y))
+            .resolve_presented_hit(PresentedHitQuery::new(point))
             .map_err(|error| JsValue::from_str(&format!("{error:?}")))?
             .and_then(|hit| hit.semantic());
         let input = PositionedPointerInput {
