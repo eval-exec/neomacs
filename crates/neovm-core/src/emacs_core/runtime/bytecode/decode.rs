@@ -140,17 +140,13 @@ fn ops_have_switch(ops: &[Op]) -> bool {
     ops.iter().any(|op| matches!(op, Op::Switch))
 }
 
-fn offset_map_entries(
-    have_switch: bool,
-    offset_map: HashMap<usize, usize>,
-) -> Vec<GnuByteOffsetMapEntry> {
+fn offset_map_entries(have_switch: bool, offset_map: InstrStarts) -> Vec<GnuByteOffsetMapEntry> {
     if !have_switch {
         return Vec::new();
     }
-    let mut offset_pairs: Vec<_> = offset_map.into_iter().collect();
-    offset_pairs.sort_unstable_by_key(|(byte_offset, _)| *byte_offset);
-    offset_pairs
-        .into_iter()
+    // Already in byte order: the table is indexed by byte offset.
+    offset_map
+        .entries()
         .map(|(byte_offset, instruction_index)| {
             GnuByteOffsetMapEntry::new(byte_offset, instruction_index)
         })
@@ -472,14 +468,56 @@ struct JumpPatch {
     source_byte: usize,
 }
 
+/// Which byte offsets start an instruction, and the instruction index each
+/// one has.
+///
+/// A dense side table rather than a hash map: GNU's decoder walks the byte
+/// string once and every entry is keyed by a byte offset below its length, so
+/// the map was paying a hash and a probe per instruction (762K inserts and
+/// their rehashes per org load) for what an index answers.
+struct InstrStarts(Vec<u32>);
+
+impl InstrStarts {
+    const NOT_A_START: u32 = u32::MAX;
+
+    fn new(bytecode_len: usize) -> Self {
+        Self(vec![Self::NOT_A_START; bytecode_len + 1])
+    }
+
+    #[inline]
+    fn record(&mut self, byte_offset: usize, instr_idx: usize) {
+        self.0[byte_offset] = instr_idx as u32;
+    }
+
+    #[inline]
+    fn instruction_at(&self, byte_offset: usize) -> Option<usize> {
+        match self.0.get(byte_offset).copied() {
+            Some(idx) if idx != Self::NOT_A_START => Some(idx as usize),
+            _ => None,
+        }
+    }
+
+    /// Byte offset and instruction index of every instruction start, in byte
+    /// order.
+    fn entries(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(byte_offset, &idx)| {
+                (idx != Self::NOT_A_START).then_some((byte_offset, idx as usize))
+            })
+    }
+}
+
 // Pass one intentionally returns its three coupled decode artifacts together.
 #[allow(clippy::type_complexity)]
 fn decode_pass1(
     bytecodes: &[u8],
     _constants: &mut Vec<Value>,
-) -> Result<(Vec<RawOp>, HashMap<usize, usize>, Vec<JumpPatch>), DecodeError> {
-    let mut ops: Vec<RawOp> = Vec::new();
-    let mut offset_map: HashMap<usize, usize> = HashMap::default();
+) -> Result<(Vec<RawOp>, InstrStarts, Vec<JumpPatch>), DecodeError> {
+    // Every instruction is at least one byte, so this is an upper bound.
+    let mut ops: Vec<RawOp> = Vec::with_capacity(bytecodes.len());
+    let mut offset_map = InstrStarts::new(bytecodes.len());
     let mut jump_patches: Vec<JumpPatch> = Vec::new();
     let mut pos: usize = 0;
     let len = bytecodes.len();
@@ -487,7 +525,7 @@ fn decode_pass1(
     while pos < len {
         let byte_offset = pos;
         let instr_idx = ops.len();
-        offset_map.insert(byte_offset, instr_idx);
+        offset_map.record(byte_offset, instr_idx);
 
         let byte = bytecodes[pos];
         pos += 1;
@@ -839,7 +877,7 @@ fn decode_pass1(
 
 fn patch_jumps(
     raw_ops: Vec<RawOp>,
-    offset_map: &HashMap<usize, usize>,
+    offset_map: &InstrStarts,
     jump_patches: &[JumpPatch],
     bytecode_len: usize,
 ) -> Result<Vec<Op>, DecodeError> {
@@ -870,7 +908,7 @@ fn patch_jumps(
         let byte_target = byte_targets[&patch.instr_idx];
         // If byte_target equals the end of the bytecode stream, it points past
         // the last instruction (used for fall-through after the function body).
-        let instr_target = if let Some(&idx) = offset_map.get(&byte_target) {
+        let instr_target = if let Some(idx) = offset_map.instruction_at(byte_target) {
             idx
         } else {
             if byte_target == bytecode_len {
