@@ -29,6 +29,7 @@ use neovm_core::emacs_core::{Context, Value};
 
 fn layout() -> DisplayRowLayout {
     DisplayRowLayout {
+        line_number_width_px: 0.0,
         role: GlyphRowRole::Text,
         y_px: 0.0,
         height_px: 16.0,

@@ -43,6 +43,8 @@ pub mod display;
 pub mod display_host;
 #[path = "display/display_spec/mod.rs"]
 pub mod display_spec;
+#[path = "display/display_when/mod.rs"]
+pub mod display_when;
 #[path = "display/dispnew/mod.rs"]
 pub mod dispnew;
 #[path = "display/effect_profile/mod.rs"]

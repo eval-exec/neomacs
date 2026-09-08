@@ -1,4 +1,5 @@
 use super::*;
+use crate::display_property::DisplayPropertyObject;
 use neomacs_display_protocol::VideoId;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
@@ -5631,6 +5632,7 @@ fn display_row_append_surface_builds_positioned_source_requests() {
     assert_eq!(
         *request.geometry(),
         DisplayRowGeometry::new(20.0, 120.0, 16.0, 9.0, 11.0, tab_policy)
+            .with_line_number_width(10.0)
     );
     assert_eq!(output.row(), 3);
     assert_eq!(output.row_y(), 20.0);
@@ -6057,6 +6059,7 @@ fn display_row_append_surface_builds_frames_with_shared_area() {
     assert_eq!(
         *frame.geometry(),
         DisplayRowGeometry::new(20.0, 120.0, 16.0, 9.0, 11.0, tab_policy)
+            .with_line_number_width(10.0)
     );
     assert_eq!(frame.content_x(), 8.0);
     assert_eq!(frame.text_width(), 150.0);
@@ -6168,6 +6171,7 @@ fn display_row_append_frame_preserves_geometry_and_area() {
     assert_eq!(
         *frame.geometry(),
         DisplayRowGeometry::new(20.0, 120.0, 16.0, 9.0, 11.0, tab_policy)
+            .with_line_number_width(10.0)
     );
     assert_eq!(frame.default_row_height(), 14.0);
     assert_eq!(frame.content_x(), 8.0);
@@ -10241,7 +10245,11 @@ fn display_property_replacement_append_item_resolves_string_replacement() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let value = Value::string("ab");
-    let classification = classify_display_property(value);
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     let params = test_display_space_window_params();
 
     let item = test_display_property_replacement_resolve_context(
@@ -10272,7 +10280,11 @@ fn display_property_replacement_append_item_resolves_stretch_replacement() {
         Value::keyword("height"),
         Value::fixnum(3),
     ]);
-    let classification = classify_display_property(value);
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     let params = test_display_space_window_params();
 
     let item = test_display_property_replacement_resolve_context(
@@ -10336,7 +10348,11 @@ fn display_property_replacement_append_item_names_cursor_policy() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let value = Value::string("ab");
-    let classification = classify_display_property(value);
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     let params = test_display_space_window_params();
     let string = test_display_property_replacement_resolve_context(
         &classification,
@@ -10443,7 +10459,11 @@ fn display_property_replacement_row_render_request_builds_append_plan() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let value = Value::string("ab");
-    let classification = classify_display_property(value);
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     let params = test_display_space_window_params();
     let descriptor = DisplayPropertyReplacementDescriptor::new(
         value,
@@ -10606,7 +10626,11 @@ fn display_property_replacement_resolve_request_appends_and_reports_outcome() {
         Value::keyword("height"),
         Value::fixnum(3),
     ]);
-    let classification = classify_display_property(value);
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     let params = test_display_space_window_params();
 
     let descriptor = DisplayPropertyReplacementDescriptor::new(
@@ -10716,7 +10740,11 @@ fn buffer_display_property_replacement_render_outcome_updates_progress() {
         Value::keyword("height"),
         Value::fixnum(3),
     ]);
-    let classification = classify_display_property(value);
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+    );
     let params = test_display_space_window_params();
     let replacement = BufferDisplayPropertyReplacementItem::new(
         value,

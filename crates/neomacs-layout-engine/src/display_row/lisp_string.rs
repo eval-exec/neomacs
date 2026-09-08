@@ -293,6 +293,10 @@ pub(crate) struct LispStringSourceAppendSessionRequest<'a> {
     face_scope: crate::display_source_resolver::DisplaySourceFaceScope,
     base_face_id: FaceId,
     base_face: &'a ResolvedFace,
+    /// The walk's evaluated `(when FORM . SPEC)` results for the string's
+    /// `display` properties: the walk's for a buffer-scoped session,
+    /// structural for a frame-local one.
+    display_when: crate::display_when::DisplayWhenConditions,
 }
 
 impl<'a> LispStringSourceAppendSessionRequest<'a> {
@@ -307,9 +311,12 @@ impl<'a> LispStringSourceAppendSessionRequest<'a> {
             face_scope: crate::display_source_resolver::DisplaySourceFaceScope::FrameLocal,
             base_face_id,
             base_face,
+            display_when: crate::display_when::DisplayWhenConditions::structural(),
         }
     }
 
+    /// A session for a string displayed while walking `buffer`: the string's
+    /// `display` properties see the walk's evaluated `when` conditions.
     pub(crate) fn for_buffer(
         buffer: &impl LayoutBufferView,
         append_request: LispStringSourceAppendRequest,
@@ -321,6 +328,7 @@ impl<'a> LispStringSourceAppendSessionRequest<'a> {
             face_scope: crate::display_source_resolver::DisplaySourceFaceScope::for_buffer(buffer),
             base_face_id,
             base_face,
+            display_when: buffer.layout_display_when_conditions(),
         }
     }
 
@@ -338,7 +346,10 @@ pub(crate) struct LispStringSourceAppendSession<'a> {
 
 impl<'a> LispStringSourceAppendSession<'a> {
     fn new(request: LispStringSourceAppendSessionRequest<'a>) -> Option<Self> {
-        let source = request.append_request.into_source(request.base_face_id)?;
+        let source = request
+            .append_request
+            .into_source(request.base_face_id)?
+            .with_display_when(request.display_when);
         Some(Self {
             source,
             source_state: DisplayRowSourceState::with_face_scope(request.face_scope),

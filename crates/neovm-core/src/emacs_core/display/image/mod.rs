@@ -671,7 +671,9 @@ fn image_frame_char_cell_pixels(eval: &Context, frame_arg: Option<&Value>) -> Op
 /// - plist includes a supported symbolic `:type`
 /// - plist includes exactly one source key: `:file` or `:data`
 /// - source value is a string
-fn is_image_spec(value: &Value) -> bool {
+/// Whether VALUE is an image specification accepted by `imagep`.
+/// Redisplay uses the same validation before accepting a replacement.
+pub fn is_image_spec(value: &Value) -> bool {
     let items = match list_to_vec(value) {
         Some(v) => v,
         None => return false,

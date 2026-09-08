@@ -206,9 +206,11 @@ fn display_margin_location(head_cdr: Value) -> Option<DisplayMarginLocation> {
 
 /// `(when FORM . VALUE)` split into FORM and the inner spec VALUE.
 ///
-/// GNU evaluates FORM (`handle_single_display_spec`); callers that cannot eval
-/// resolve it structurally — the text was displayed, so the condition held —
-/// which is what GNU's own `single_display_spec_string_p` shortcut does.
+/// GNU evaluates FORM (`handle_single_display_spec`, src/xdisp.c:6130-6164);
+/// `Context::display_when_form_holds` is that evaluation, and the layout
+/// engine consults its results.  A caller with no evaluation behind it
+/// (GNU's own `single_display_spec_string_p` shortcut) takes a non-nil FORM
+/// as holding.
 pub fn display_spec_when_parts(spec: Value) -> Option<(Value, Value)> {
     if !matches!(display_spec_kind(spec), DisplaySpecKind::When) {
         return None;
