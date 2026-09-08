@@ -55,6 +55,12 @@ pub(crate) struct GuiFrameNativeWindowState {
 pub(super) struct NativeTextInputPolicy {
     pub(super) ime_allowed_on_create: bool,
     pub(super) initial_cursor_area: ImeCursorArea,
+    /// Whether the Option key delivers a command modifier instead of the
+    /// layout's composed character.  This is GNU's `ns-alternate-modifier`,
+    /// whose default is `meta` (`src/nsterm.m`), so Emacs reads an Option
+    /// chord from `charactersIgnoringModifiers` and never from the composed
+    /// `characters`.
+    pub(super) option_key_is_meta: bool,
 }
 
 impl NativeTextInputPolicy {
@@ -67,10 +73,12 @@ impl NativeTextInputPolicy {
                 width: 1,
                 height: 1,
             },
+            option_key_is_meta: true,
         }
     }
 
     pub(super) fn apply_to_window(self, window: &Window) {
+        apply_option_key_policy(window, self.option_key_is_meta);
         window.set_ime_allowed(self.ime_allowed_on_create);
         window.set_ime_cursor_area(
             PhysicalPosition::new(
@@ -84,6 +92,42 @@ impl NativeTextInputPolicy {
         );
     }
 }
+
+/// Make Option a command modifier the way GNU's `ns-alternate-modifier`
+/// default does.
+///
+/// macOS composes an Option chord in the window server, so AppKit hands over
+/// the composed character: Option+X arrives as `≈`, Option+Shift+, as `¯`.
+/// GNU never reads that.  `keyDown:` takes its code from
+/// `[theEvent charactersIgnoringModifiers]` (`src/nsterm.m`), which applies
+/// Shift but not Option, and re-derives it with `ns_get_shifted_character` --
+/// `UCKeyTranslate` with only the shift-like modifier bits -- when a
+/// control-like modifier is also down.  With the default
+/// `ns-alternate-modifier` of `meta` those two agree, because Option is then
+/// never shift-like, so `nil_or_none` is false and only `shiftKey` is passed.
+///
+/// `OptionAsAlt::Both` is winit's name for exactly that: it rewrites the
+/// `NSEvent` so `characters` becomes `charactersIgnoringModifiers` whenever
+/// Option is down and Control and Command are not.  It has to happen here,
+/// at the window, rather than while translating a `KeyEvent`, because winit
+/// applies it before `interpretKeyEvents` -- so an Option chord that lands on
+/// a dead key (Option+E on the US layout) stops opening a preedit and starts
+/// arriving as a key event at all.
+#[cfg(target_os = "macos")]
+fn apply_option_key_policy(window: &Window, option_key_is_meta: bool) {
+    use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
+
+    window.set_option_as_alt(if option_key_is_meta {
+        OptionAsAlt::Both
+    } else {
+        OptionAsAlt::None
+    });
+}
+
+/// No other window system composes an Option/Alt chord into a different
+/// character, so Alt already reaches Emacs as a bare modifier there.
+#[cfg(not(target_os = "macos"))]
+fn apply_option_key_policy(_window: &Window, _option_key_is_meta: bool) {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ActivePresentationTransition {

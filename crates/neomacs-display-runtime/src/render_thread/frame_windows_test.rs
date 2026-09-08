@@ -40,6 +40,18 @@ fn gui_text_input_policy_enables_native_ime_on_window_creation() {
     );
 }
 
+#[test]
+fn gui_text_input_policy_makes_the_option_key_a_command_modifier() {
+    let policy = NativeTextInputPolicy::for_gui_frame();
+
+    assert!(
+        policy.option_key_is_meta,
+        "GNU's ns-alternate-modifier defaults to meta, so an Option chord must \
+         reach Emacs as the layout's shifted base key (M-<), never as the \
+         character macOS composes from it (M-¯)"
+    );
+}
+
 #[cfg(feature = "neo-term")]
 #[test]
 fn terminal_expansion_replacement_is_atomic_and_invalidates_the_scene() {
