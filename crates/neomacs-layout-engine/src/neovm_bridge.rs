@@ -1640,7 +1640,7 @@ fn frame_cursor_foreground_pixel(frame: &Frame, face_table: &FaceTable, obarray:
     // otherwise x_set_cursor_color uses FRAME_BACKGROUND_PIXEL.
     obarray
         .symbol_value("x-cursor-fore-pixel")
-        .and_then(|value| parse_color_pixel(&value))
+        .and_then(parse_color_pixel)
         .unwrap_or_else(|| frame_background_color_pixel(frame, face_table))
 }
 
@@ -3809,6 +3809,19 @@ pub struct ResolvedFace {
     pub overstrike: bool,
     /// Preserve terminal inverse-video when both colors are terminal defaults.
     pub terminal_inverse_video: bool,
+    /// GNU's merged `:inverse-video` attribute, still in effect for this face.
+    ///
+    /// [`Self::terminal_inverse_video`] records the realized *TTY* outcome; a
+    /// GUI frame cannot express it, because the swap is already materialized
+    /// into `fg`/`bg`.  But the swap is not final: GNU merges every source
+    /// (base face, text properties, overlays) into one lface vector and swaps
+    /// once, at realization (`load_face_colors`, src/xfaces.c:1389-1400).  A
+    /// base face carrying `:inverse-video` must therefore keep the attribute
+    /// visible to later merges — a foreground-only face merged on top has its
+    /// colour land in the *background*.  Recording it here lets
+    /// [`Self::apply_specified_face_over`] undo the base's realized swap, merge
+    /// the new source, and swap once at the end.
+    pub pending_inverse_video: bool,
     /// Per-face measured character advance width (from FontMetricsService, 0.0 = use default).
     font_char_width: f32,
     /// Per-face font ascent (from FontMetricsService, 0.0 = use default).
@@ -3856,6 +3869,7 @@ impl Default for ResolvedFace {
             extend: false,
             overstrike: false,
             terminal_inverse_video: false,
+            pending_inverse_video: false,
             font_char_width: 0.0,
             font_ascent: 0.0,
             font_line_height: 0.0,
@@ -4025,6 +4039,25 @@ fn apply_resolved_face_inverse_video(face: &mut ResolvedFace) {
     (face.bg, face.terminal_bg, face.use_default_background) =
         foreground.materialize_in(FaceColorSlot::Background);
     face.terminal_inverse_video = false;
+}
+
+/// Undo [`apply_resolved_face_inverse_video`] so a later source can merge
+/// against GNU's pre-inverse colors and the swap can be re-applied once.
+///
+/// The realized swap is its own inverse whenever both colors are concrete
+/// (GUI, and TTY colors the palette resolved).  The both-terminal-default TTY
+/// case never swapped, so clearing the flag is the whole undo.
+fn unapply_resolved_face_inverse_video(face: &mut ResolvedFace) {
+    if face.terminal_inverse_video {
+        face.terminal_inverse_video = false;
+        return;
+    }
+    std::mem::swap(&mut face.fg, &mut face.bg);
+    std::mem::swap(&mut face.terminal_fg, &mut face.terminal_bg);
+    std::mem::swap(
+        &mut face.use_default_foreground,
+        &mut face.use_default_background,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4424,11 +4457,20 @@ impl FaceResolver {
             resolved.face_id = BasicFaceId::SENTINEL;
         }
         resolved.terminal_inverse_video = false;
+        resolved.pending_inverse_video = false;
         resolved
     }
 
     fn apply_specified_face_over(&self, base: &ResolvedFace, face: &NeoFace) -> ResolvedFace {
         let mut rf = base.clone();
+        // GNU swaps fg/bg for `:inverse-video` once, after every source has
+        // been merged (src/xfaces.c:1389-1400).  The base face's swap is
+        // already realized, so undo it, merge this source against the
+        // pre-inverse colors, then swap once below.
+        let base_inverse_video = rf.pending_inverse_video;
+        if base_inverse_video {
+            unapply_resolved_face_inverse_video(&mut rf);
+        }
         if let Some(c) = &face.foreground {
             rf.set_foreground(c);
         }
@@ -4436,8 +4478,20 @@ impl FaceResolver {
             rf.set_background(c);
         }
         match face.inverse_video {
-            Some(true) => apply_resolved_face_inverse_video(&mut rf),
-            Some(false) => rf.terminal_inverse_video = false,
+            Some(true) => {
+                apply_resolved_face_inverse_video(&mut rf);
+                rf.pending_inverse_video = true;
+            }
+            Some(false) => {
+                rf.terminal_inverse_video = false;
+                rf.pending_inverse_video = false;
+            }
+            // Inherited from the base face: keep it in effect for the rest of
+            // the merge chain.
+            None if base_inverse_video => {
+                apply_resolved_face_inverse_video(&mut rf);
+                rf.pending_inverse_video = true;
+            }
             None => {}
         }
 
@@ -5375,8 +5429,14 @@ impl FaceResolver {
         }
         // Inverse video: swap fg and bg
         match face.inverse_video {
-            Some(true) => apply_resolved_face_inverse_video(&mut rf),
-            Some(false) => rf.terminal_inverse_video = false,
+            Some(true) => {
+                apply_resolved_face_inverse_video(&mut rf);
+                rf.pending_inverse_video = true;
+            }
+            Some(false) => {
+                rf.terminal_inverse_video = false;
+                rf.pending_inverse_video = false;
+            }
             None => {}
         }
 
