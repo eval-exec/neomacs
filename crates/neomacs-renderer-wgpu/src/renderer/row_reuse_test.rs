@@ -268,6 +268,7 @@ impl RowTessellator for FakeTessellator<'_> {
                 geometry: RenderedGlyphGeometry::new(
                     Rect::new(*x, *y, *width, *height),
                     Rect::new(*x, *y, 8.0, 12.0),
+                    Rect::new(*x, *y, 8.0, 12.0),
                 ),
             });
         }
