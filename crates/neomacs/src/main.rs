@@ -4150,6 +4150,13 @@ pub fn run(mode: RuntimeMode) {
         std::process::exit(1);
     });
 
+    // GNU parses `--no-site-lisp` (and `-Q` / `-x`) into a C global that
+    // `init_lread` reads while it builds `load-path` (src/emacs.c:2126,
+    // src/lread.c:5514).  neovm-core never sees argv, so hand it the
+    // decision here, before any runtime image is activated and derives
+    // `load-path` from it.
+    neovm_core::emacs_core::load::set_no_site_lisp(startup.no_site_lisp);
+
     // Initialize tracing with a writer target appropriate to the
     // binary:
     //
@@ -5149,9 +5156,10 @@ fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &
     // Mirror GNU's C-side `no_site_lisp` / `build_details` globals as
     // Lisp variables. GNU itself does not expose them as Lisp vars (the
     // load-path / version code reads the C globals directly), but
-    // surfacing them here lets oracle tests verify the parsed value
-    // and lets future load-path or version code observe the choice
-    // without re-walking argv. Defaults match GNU: no_site_lisp=false
+    // surfacing them here lets oracle tests verify the parsed value.
+    // The load-path derivation reads the same decision through
+    // `load::set_no_site_lisp`, which `run` records before the runtime
+    // image is activated. Defaults match GNU: no_site_lisp=false
     // means site-lisp is included; build-details=t means build-time
     // strings are populated.
     eval.set_variable(

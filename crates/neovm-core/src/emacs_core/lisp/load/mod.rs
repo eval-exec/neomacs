@@ -14,6 +14,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 fn load_string_text(value: &Value) -> Option<String> {
@@ -5385,6 +5386,7 @@ fn clear_runtime_loader_state(eval: &mut super::eval::Context) {
 fn finalize_cached_bootstrap_eval(
     eval: &mut super::eval::Context,
     project_root: &Path,
+    role: RuntimeImageRole,
 ) -> Result<(), EvalError> {
     // Register all builtins — pdump doesn't preserve live Rust entry-point
     // pointers on heap subr objects, so the callable surface must be rebuilt.
@@ -5439,9 +5441,19 @@ fn finalize_cached_bootstrap_eval(
     eval.set_variable("gensym-counter", Value::fixnum(0));
 
     let lisp_dir = project_root.join("lisp");
+    // GNU guards the site-lisp prepend with `!will_dump_p ()`
+    // (`src/lread.c:5514`): an image that is still being constructed must
+    // not inherit whatever Lisp the host happens to have installed, or the
+    // dump would depend on it.  The image role is Neomacs' counterpart to
+    // that guard -- only a Final image is a real session.
+    let include_site_lisp = matches!(role, RuntimeImageRole::Final) && !no_site_lisp();
     eval.set_variable(
         "load-path",
-        Value::list(runtime_load_path_entries(&lisp_dir)),
+        Value::list(runtime_load_path_entries(
+            project_root,
+            &lisp_dir,
+            include_site_lisp,
+        )),
     );
 
     let etc_dir = project_root.join("etc");
@@ -5525,22 +5537,122 @@ pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
     load_path_entries
 }
 
-/// Build the runtime `load-path` from `EMACSLOADPATH` and Neomacs' bundled
-/// Lisp directories.  As in GNU `init_lread` (`src/lread.c`), an empty path
-/// element stands for the entire default load path rather than the current
-/// directory.  If there is no empty element, keep the defaults at the end:
-/// unlike an installed GNU Emacs, Neomacs currently has no launcher wrapper
-/// that appends its versioned Lisp directory to `EMACSLOADPATH`.
-fn runtime_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
-    runtime_load_path_entries_from_os(lisp_dir, std::env::var_os("EMACSLOADPATH"))
+/// The default `load-path`: the site-lisp directories in front of the
+/// bundled Lisp tree, mirroring the list GNU's `init_lread` hands to the
+/// `EMACSLOADPATH` splice (`src/lread.c:5477-5489`).
+fn default_load_path_entries(lisp_dir: &Path, site_lisp: &[PathBuf]) -> Vec<Value> {
+    let mut entries: Vec<Value> = site_lisp
+        .iter()
+        .map(|dir| {
+            Value::string(crate::emacs_core::fileio::host_path_to_lisp_file_name_string(dir))
+        })
+        .collect();
+    entries.extend(bootstrap_load_path_entries(lisp_dir));
+    entries
+}
+
+/// GNU's C-level `no_site_lisp` global (`src/emacs.c:2126`), which
+/// `init_lread` consults before prepending the site-lisp directories
+/// (`src/lread.c:5514`).  Neomacs' core never parses argv, so the frontend
+/// records the `--no-site-lisp` / `-Q` / `-x` decision here before it
+/// activates a runtime image.
+static NO_SITE_LISP: AtomicBool = AtomicBool::new(false);
+
+/// Record the frontend's `--no-site-lisp` decision.  Call this before
+/// activating a final runtime image, which is where `load-path` is derived.
+pub fn set_no_site_lisp(no_site_lisp: bool) {
+    NO_SITE_LISP.store(no_site_lisp, Ordering::Relaxed);
+}
+
+/// GNU `no_site_lisp` (`src/emacs.c:2126`).
+pub fn no_site_lisp() -> bool {
+    NO_SITE_LISP.load(Ordering::Relaxed)
+}
+
+/// Neomacs' stand-in for GNU's compile-time `PATH_SITELOADSEARCH`
+/// (`src/epaths.h`).
+///
+/// GNU's configure bakes the site-lisp directories of its own `--prefix`
+/// into the binary, and `init_lread` prepends them to the default
+/// `load-path` (`src/lread.c:5514-5519`).  That is how Lisp installed by
+/// the distribution -- Gentoo's `app-emacs/*`, Debian's `emacsen-common`
+/// packages -- becomes visible with no user configuration at all.  A
+/// relocatable Neomacs has no configure prefix to bake in, so it searches
+/// the two prefixes a GNU build is configured with in practice: the
+/// upstream default and the one every distribution uses.
+#[cfg(unix)]
+const SITE_LOAD_SEARCH_DATA_DIRS: &[&str] = &["/usr/local/share", "/usr/share"];
+#[cfg(not(unix))]
+const SITE_LOAD_SEARCH_DATA_DIRS: &[&str] = &[];
+
+/// The site-lisp directories that go in front of the default `load-path`.
+///
+/// GNU assembles these from two places, and this keeps their relative
+/// order:
+///
+/// 1. `PATH_SITELOADSEARCH` -- `<datadir>/emacs/<version>/site-lisp` and
+///    `<datadir>/emacs/site-lisp` under the installation prefix, prepended
+///    by `init_lread` (`src/lread.c:5514-5519`).
+/// 2. `<installation-directory>/site-lisp`, prepended by
+///    `load_path_default` (`src/lread.c:5398-5407`).  Neomacs'
+///    `installation-directory` is the runtime root that already supplies
+///    `lisp/` and `etc/`.
+///
+/// Divergence: GNU prepends its `PATH_SITELOADSEARCH` entries without
+/// checking whether they exist, because one configured prefix yields at
+/// most two of them.  Neomacs speculates across several prefixes, so it
+/// keeps only directories that are really there -- the `is_dir` filter
+/// `bootstrap_load_path_entries` already applies to the bundled tree.
+pub(crate) fn site_lisp_load_path_entries(project_root: &Path) -> Vec<PathBuf> {
+    fn push_directory(entries: &mut Vec<PathBuf>, dir: PathBuf) {
+        if dir.is_dir() && !entries.contains(&dir) {
+            entries.push(dir);
+        }
+    }
+
+    let mut entries = Vec::new();
+    for data_dir in SITE_LOAD_SEARCH_DATA_DIRS {
+        let emacs_dir = Path::new(data_dir).join("emacs");
+        push_directory(
+            &mut entries,
+            emacs_dir.join(crate::GNU_EMACS_VERSION).join("site-lisp"),
+        );
+        push_directory(&mut entries, emacs_dir.join("site-lisp"));
+    }
+    push_directory(&mut entries, project_root.join("site-lisp"));
+    entries
+}
+
+/// Build the runtime `load-path` from `EMACSLOADPATH`, the site-lisp
+/// directories and Neomacs' bundled Lisp directories.  As in GNU
+/// `init_lread` (`src/lread.c`), an empty path element stands for the
+/// entire default load path rather than the current directory.  If there is
+/// no empty element, keep the defaults at the end: unlike an installed GNU
+/// Emacs, Neomacs currently has no launcher wrapper that appends its
+/// versioned Lisp directory to `EMACSLOADPATH`.  GNU contributes no
+/// site-lisp at all in that case (`src/lread.c:5465-5501` computes
+/// `default_lpath` only when there is a nil element); Neomacs' appended
+/// defaults carry theirs along, so the two stay one notion of "default".
+fn runtime_load_path_entries(
+    project_root: &Path,
+    lisp_dir: &Path,
+    include_site_lisp: bool,
+) -> Vec<Value> {
+    let site_lisp = if include_site_lisp {
+        site_lisp_load_path_entries(project_root)
+    } else {
+        Vec::new()
+    };
+    runtime_load_path_entries_from_os(lisp_dir, std::env::var_os("EMACSLOADPATH"), &site_lisp)
 }
 
 /// Testable core of [`runtime_load_path_entries`].
 pub(crate) fn runtime_load_path_entries_from_os(
     lisp_dir: &Path,
     emacs_load_path: Option<std::ffi::OsString>,
+    site_lisp: &[PathBuf],
 ) -> Vec<Value> {
-    let default_load_path = bootstrap_load_path_entries(lisp_dir);
+    let default_load_path = default_load_path_entries(lisp_dir, site_lisp);
     let Some(emacs_load_path) = emacs_load_path else {
         return default_load_path;
     };
@@ -6300,7 +6412,7 @@ fn activate_runtime_evaluator_at_root(
     project_root: &Path,
     role: RuntimeImageRole,
 ) -> Result<(), EvalError> {
-    finalize_cached_bootstrap_eval(eval, project_root).map_err(|error| {
+    finalize_cached_bootstrap_eval(eval, project_root, role).map_err(|error| {
         tracing::error!("runtime evaluator activation failed: {error:?}");
         error
     })?;
@@ -6369,7 +6481,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
         project_root: &Path,
         context: &str,
     ) -> Result<(), EvalError> {
-        match finalize_cached_bootstrap_eval(eval, project_root) {
+        match finalize_cached_bootstrap_eval(eval, project_root, RuntimeImageRole::Bootstrap) {
             Ok(()) => Ok(()),
             Err(err) => {
                 let rendered = format_eval_error_in_state(eval, &err);

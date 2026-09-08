@@ -174,7 +174,7 @@ fn runtime_load_path_uses_defaults_when_emacsloadpath_is_unset() {
     let lisp_dir = temp.path().join("lisp");
     std::fs::create_dir_all(&lisp_dir).expect("create lisp dir");
 
-    let entries = runtime_load_path_entries_from_os(&lisp_dir, None);
+    let entries = runtime_load_path_entries_from_os(&lisp_dir, None, &[]);
     assert_eq!(
         load_path_entry_strings(&entries),
         vec![crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&lisp_dir)]
@@ -192,7 +192,7 @@ fn runtime_load_path_splices_defaults_at_empty_emacsloadpath_elements() {
     let emacs_load_path =
         std::env::join_paths([before.as_path(), std::path::Path::new(""), after.as_path()])
             .expect("join EMACSLOADPATH");
-    let entries = runtime_load_path_entries_from_os(&lisp_dir, Some(emacs_load_path));
+    let entries = runtime_load_path_entries_from_os(&lisp_dir, Some(emacs_load_path), &[]);
 
     assert_eq!(
         load_path_entry_strings(&entries),
@@ -214,6 +214,7 @@ fn runtime_load_path_without_empty_element_appends_defaults() {
     let entries = runtime_load_path_entries_from_os(
         &lisp_dir,
         Some(std::env::join_paths([custom.as_path()]).expect("join EMACSLOADPATH")),
+        &[],
     );
     assert_eq!(
         load_path_entry_strings(&entries),
@@ -221,6 +222,196 @@ fn runtime_load_path_without_empty_element_appends_defaults() {
             crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&custom),
             crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&lisp_dir),
         ]
+    );
+}
+
+#[test]
+fn site_lisp_directories_lead_the_default_load_path() {
+    // GNU `init_lread` prepends the site-lisp directories to the default
+    // load-path (src/lread.c:5514-5519), so distribution Lisp shadows
+    // nothing but is found without configuration.
+    let temp = tempdir().expect("tempdir");
+    let lisp_dir = temp.path().join("lisp");
+    let site_lisp = temp.path().join("site-lisp");
+    std::fs::create_dir_all(&lisp_dir).expect("create lisp dir");
+    std::fs::create_dir_all(&site_lisp).expect("create site-lisp dir");
+
+    let entries =
+        runtime_load_path_entries_from_os(&lisp_dir, None, std::slice::from_ref(&site_lisp));
+    assert_eq!(
+        load_path_entry_strings(&entries),
+        vec![
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&site_lisp),
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&lisp_dir),
+        ]
+    );
+}
+
+#[test]
+fn site_lisp_follows_the_defaults_into_an_empty_emacsloadpath_element() {
+    // GNU splices `default_lpath` -- site-lisp included -- wherever
+    // EMACSLOADPATH has an empty element (src/lread.c:5477-5501).
+    let temp = tempdir().expect("tempdir");
+    let lisp_dir = temp.path().join("lisp");
+    let site_lisp = temp.path().join("site-lisp");
+    let before = temp.path().join("before");
+    std::fs::create_dir_all(&lisp_dir).expect("create lisp dir");
+    std::fs::create_dir_all(&site_lisp).expect("create site-lisp dir");
+
+    let emacs_load_path =
+        std::env::join_paths([before.as_path(), std::path::Path::new("")]).expect("join");
+    let entries = runtime_load_path_entries_from_os(
+        &lisp_dir,
+        Some(emacs_load_path),
+        std::slice::from_ref(&site_lisp),
+    );
+
+    assert_eq!(
+        load_path_entry_strings(&entries),
+        vec![
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&before),
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&site_lisp),
+            crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&lisp_dir),
+        ]
+    );
+}
+
+#[test]
+fn site_lisp_entries_end_with_the_runtime_root_site_lisp() {
+    // GNU `load_path_default` adds `<installation-directory>/site-lisp`
+    // closest to the bundled Lisp (src/lread.c:5398-5407), behind anything
+    // PATH_SITELOADSEARCH contributed.
+    let temp = tempdir().expect("tempdir");
+    let root_site_lisp = temp.path().join("site-lisp");
+
+    assert!(
+        !site_lisp_load_path_entries(temp.path()).contains(&root_site_lisp),
+        "a runtime root without site-lisp/ must not contribute one"
+    );
+
+    std::fs::create_dir_all(&root_site_lisp).expect("create site-lisp dir");
+    let entries = site_lisp_load_path_entries(temp.path());
+    assert_eq!(
+        entries.last(),
+        Some(&root_site_lisp),
+        "the runtime root's site-lisp goes last, in front of the bundled tree"
+    );
+}
+
+/// `NO_SITE_LISP` is a process-wide global, the counterpart to GNU's C-level
+/// `no_site_lisp` (`src/emacs.c:2126`), so the tests that drive it have to run
+/// one at a time and put it back the way they found it.
+struct NoSiteLispGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    previous: bool,
+}
+
+impl NoSiteLispGuard {
+    fn set(value: bool) -> Self {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        // A panicking test must not cascade into a poisoned-lock failure in
+        // the next one: the guard restores the flag on unwind either way.
+        let lock = LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = no_site_lisp();
+        set_no_site_lisp(value);
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
+}
+
+impl Drop for NoSiteLispGuard {
+    fn drop(&mut self) {
+        set_no_site_lisp(self.previous);
+    }
+}
+
+/// Finalize a runtime image against a throwaway runtime root that carries its
+/// own `site-lisp/`, and answer the `load-path` the derivation produced.  The
+/// root's `site-lisp` is the marker: it is there exactly when site-lisp was
+/// included, whatever the host machine happens to have under `/usr`.
+fn finalized_load_path_for_role(root: &Path, role: RuntimeImageRole) -> Vec<String> {
+    std::fs::create_dir_all(root.join("lisp")).expect("create lisp dir");
+    std::fs::create_dir_all(root.join("site-lisp")).expect("create site-lisp dir");
+
+    let mut eval = Context::new();
+    finalize_cached_bootstrap_eval(&mut eval, root, role).expect("finalize cached bootstrap eval");
+    let load_path = eval
+        .obarray()
+        .symbol_value("load-path")
+        .expect("finalize should set load-path");
+    let entries = list_to_vec(load_path).expect("load-path is a list");
+    load_path_entry_strings(&entries)
+}
+
+#[test]
+fn final_image_load_path_carries_the_site_lisp_directories() {
+    crate::test_utils::init_test_tracing();
+    // A final image is a real session, which is where GNU prepends site-lisp
+    // (src/lread.c:5514).
+    let _guard = NoSiteLispGuard::set(false);
+    let temp = tempdir().expect("tempdir");
+    let root_site_lisp = crate::emacs_core::fileio::host_path_to_lisp_file_name_string(
+        &temp.path().join("site-lisp"),
+    );
+
+    let load_path = finalized_load_path_for_role(temp.path(), RuntimeImageRole::Final);
+    assert!(
+        load_path.contains(&root_site_lisp),
+        "a final image should see {root_site_lisp} on load-path, got {load_path:?}"
+    );
+}
+
+#[test]
+fn bootstrap_image_load_path_omits_the_site_lisp_directories() {
+    crate::test_utils::init_test_tracing();
+    // GNU guards the prepend with `!will_dump_p ()`: an image still being
+    // constructed must not inherit host Lisp, or the dump would depend on it.
+    // The bootstrap role is Neomacs' counterpart to that guard.
+    let _guard = NoSiteLispGuard::set(false);
+    let temp = tempdir().expect("tempdir");
+    let root_site_lisp = crate::emacs_core::fileio::host_path_to_lisp_file_name_string(
+        &temp.path().join("site-lisp"),
+    );
+
+    let load_path = finalized_load_path_for_role(temp.path(), RuntimeImageRole::Bootstrap);
+    assert!(
+        !load_path.contains(&root_site_lisp),
+        "a bootstrap image must not inherit {root_site_lisp}, got {load_path:?}"
+    );
+}
+
+#[test]
+fn no_site_lisp_suppresses_the_site_lisp_directories_in_a_final_image() {
+    crate::test_utils::init_test_tracing();
+    // `--no-site-lisp` (and `-Q`, and `-x`) reaches the derivation through the
+    // process global the frontend records before activating an image, the same
+    // decision GNU's `init_lread` reads out of its C global.
+    let temp = tempdir().expect("tempdir");
+    let root_site_lisp = crate::emacs_core::fileio::host_path_to_lisp_file_name_string(
+        &temp.path().join("site-lisp"),
+    );
+
+    let suppressed = {
+        let _guard = NoSiteLispGuard::set(true);
+        finalized_load_path_for_role(temp.path(), RuntimeImageRole::Final)
+    };
+    assert!(
+        !suppressed.contains(&root_site_lisp),
+        "--no-site-lisp must keep {root_site_lisp} off load-path, got {suppressed:?}"
+    );
+
+    // The same root and role, with the flag clear, is the control: the entry
+    // is absent because of the flag and not because of the fixture.
+    let _guard = NoSiteLispGuard::set(false);
+    let included = finalized_load_path_for_role(temp.path(), RuntimeImageRole::Final);
+    assert!(
+        included.contains(&root_site_lisp),
+        "without --no-site-lisp the same root should contribute {root_site_lisp}"
     );
 }
 
@@ -1407,8 +1598,12 @@ fn after_pdump_load_hook_runs_after_finalize_and_only_once() {
         Some(&Value::NIL)
     );
 
-    finalize_cached_bootstrap_eval(&mut loaded, &runtime_project_root())
-        .expect("finalize cached bootstrap eval");
+    finalize_cached_bootstrap_eval(
+        &mut loaded,
+        &runtime_project_root(),
+        RuntimeImageRole::Bootstrap,
+    )
+    .expect("finalize cached bootstrap eval");
     assert!(
         maybe_run_after_pdump_load_hook(&mut loaded),
         "startup helper should consume the pending pdump hook"
@@ -1445,8 +1640,12 @@ fn finalize_cached_bootstrap_eval_strips_transient_compile_features() {
             .expect("provide transient feature");
     }
 
-    finalize_cached_bootstrap_eval(&mut eval, &runtime_project_root())
-        .expect("finalize cached bootstrap eval");
+    finalize_cached_bootstrap_eval(
+        &mut eval,
+        &runtime_project_root(),
+        RuntimeImageRole::Bootstrap,
+    )
+    .expect("finalize cached bootstrap eval");
 
     for feature in TRANSIENT_RUNTIME_FEATURES {
         assert!(
@@ -2799,7 +2998,8 @@ fn bootstrap_runtime_require_cl_lib_works_under_fresh_gui_features() {
     let mut eval =
         create_bootstrap_evaluator_with_features(&["x", "neomacs"]).expect("fresh bootstrap");
     let project_root = compile_time_project_root();
-    finalize_cached_bootstrap_eval(&mut eval, &project_root).expect("finalize runtime surface");
+    finalize_cached_bootstrap_eval(&mut eval, &project_root, RuntimeImageRole::Bootstrap)
+        .expect("finalize runtime surface");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let rendered = eval_rendered(
         &mut eval,
@@ -14698,8 +14898,12 @@ fn runtime_finalize_resets_gensym_counter_like_gnu_dump() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     eval.set_variable("gensym-counter", Value::fixnum(62));
-    finalize_cached_bootstrap_eval(&mut eval, &runtime_project_root())
-        .expect("finalize runtime image");
+    finalize_cached_bootstrap_eval(
+        &mut eval,
+        &runtime_project_root(),
+        RuntimeImageRole::Bootstrap,
+    )
+    .expect("finalize runtime image");
     assert_eq!(
         eval.obarray()
             .symbol_value("gensym-counter")
