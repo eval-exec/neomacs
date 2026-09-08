@@ -173,17 +173,7 @@ impl GuiFrameRenderState {
             .compositor
             .visual_cursors
             .iter()
-            .map(|(id, state)| {
-                (
-                    *id,
-                    (
-                        state.current_x,
-                        state.current_y,
-                        state.current_w,
-                        state.current_h,
-                    ),
-                )
-            })
+            .map(|(id, state)| (*id, state.current_rect()))
             .collect();
         let Some(frame) = self.compositor.current_frame.as_mut() else {
             return;

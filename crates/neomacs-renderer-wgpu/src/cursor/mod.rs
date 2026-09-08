@@ -1,11 +1,11 @@
 //! Cursor animation, blinking, and size transition state.
 
 use neomacs_display_protocol::CursorStyle;
+use neomacs_display_protocol::VisualConfig;
 use neomacs_display_protocol::{
     AnimatedCursor, CursorAnimStyle, DisplayFrameId, DisplayWindowId, ease_in_out_cubic,
     ease_linear, ease_out_cubic, ease_out_expo, ease_out_quad,
 };
-use neomacs_display_protocol::VisualConfig;
 
 /// Target position/style for cursor animation
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub struct CursorTarget {
 /// Per-corner spring state for the 4-corner cursor trail animation.
 /// Each corner has its own position, velocity, and spring frequency.
 #[derive(Debug, Clone, Copy)]
-pub struct CornerSpring {
+struct CornerSpring {
     pub x: f32,
     pub y: f32,
     pub vx: f32,
@@ -58,39 +58,39 @@ pub struct CursorState {
     pub blink_interval: std::time::Duration,
 
     // Animation (smooth motion)
-    pub anim_enabled: bool,
-    pub anim_speed: f32,
-    pub anim_style: CursorAnimStyle,
-    pub anim_duration: f32, // seconds, for non-Exponential styles
-    pub target: Option<CursorTarget>,
-    pub current_x: f32,
-    pub current_y: f32,
-    pub current_w: f32,
-    pub current_h: f32,
-    pub animating: bool,
-    pub last_anim_time: neomacs_display_protocol::frame_time::EventTime,
+    anim_enabled: bool,
+    anim_speed: f32,
+    anim_style: CursorAnimStyle,
+    anim_duration: f32, // seconds, for non-Exponential styles
+    target: Option<CursorTarget>,
+    current_x: f32,
+    current_y: f32,
+    current_w: f32,
+    current_h: f32,
+    animating: bool,
+    last_anim_time: neomacs_display_protocol::frame_time::EventTime,
     // For easing/linear styles: capture start position when animation begins
-    pub start_x: f32,
-    pub start_y: f32,
-    pub start_w: f32,
-    pub start_h: f32,
-    pub anim_start_time: neomacs_display_protocol::frame_time::EventTime,
+    start_x: f32,
+    start_y: f32,
+    start_w: f32,
+    start_h: f32,
+    anim_start_time: neomacs_display_protocol::frame_time::EventTime,
     // 4-corner spring trail state (TL, TR, BR, BL)
-    pub corner_springs: [CornerSpring; 4],
-    pub trail_size: f32,
+    corner_springs: [CornerSpring; 4],
+    trail_size: f32,
     // Previous target center for computing travel direction
-    pub prev_target_cx: f32,
-    pub prev_target_cy: f32,
+    prev_target_cx: f32,
+    prev_target_cy: f32,
 
     // Size transition (independent of position animation)
-    pub size_transition_enabled: bool,
-    pub size_transition_duration: f32, // seconds
-    pub size_animating: bool,
-    pub size_start_w: f32,
-    pub size_start_h: f32,
-    pub size_target_w: f32,
-    pub size_target_h: f32,
-    pub size_anim_start: neomacs_display_protocol::frame_time::EventTime,
+    size_transition_enabled: bool,
+    size_transition_duration: f32, // seconds
+    size_animating: bool,
+    size_start_w: f32,
+    size_start_h: f32,
+    size_target_w: f32,
+    size_target_h: f32,
+    size_anim_start: neomacs_display_protocol::frame_time::EventTime,
 }
 
 impl CursorState {
@@ -166,6 +166,15 @@ impl CursorState {
         if !self.blink_enabled {
             self.blink_on = true;
         }
+    }
+
+    pub fn current_rect(&self) -> (f32, f32, f32, f32) {
+        (
+            self.current_x,
+            self.current_y,
+            self.current_w,
+            self.current_h,
+        )
     }
 
     pub fn config_snapshot(&self) -> CursorConfigSnapshot {
@@ -341,9 +350,7 @@ impl CursorState {
         self.animating || self.size_animating
     }
 
-    pub fn next_blink_deadline(
-        &self,
-    ) -> Option<neomacs_display_protocol::frame_time::EventTime> {
+    pub fn next_blink_deadline(&self) -> Option<neomacs_display_protocol::frame_time::EventTime> {
         (self.blink_enabled && self.target.is_some())
             .then_some(self.last_blink_toggle.plus(self.blink_interval))
     }
@@ -388,10 +395,7 @@ impl CursorState {
     }
 
     /// Tick cursor animation, returns true if position changed (needs redraw)
-    pub fn tick_animation(
-        &mut self,
-        at: neomacs_display_protocol::frame_time::EventTime,
-    ) -> bool {
+    pub fn tick_animation(&mut self, at: neomacs_display_protocol::frame_time::EventTime) -> bool {
         if !self.anim_enabled || !self.animating {
             return false;
         }
