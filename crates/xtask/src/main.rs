@@ -575,7 +575,10 @@ impl FreshBuildOptions {
                 "--no-native-comp" => native_comp = false,
                 "--skip-build" => skip_build = true,
                 "--portable-seed" => {
-                    if product_variant.replace(ProductVariant::PortableSeed).is_some() {
+                    if product_variant
+                        .replace(ProductVariant::PortableSeed)
+                        .is_some()
+                    {
                         return Err("a product variant may be selected only once".into());
                     }
                 }
@@ -1539,7 +1542,11 @@ fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
         OsString::from("neomacs"),
     ];
     let mut features = match options.product_variant {
-        ProductVariant::Full => options.production_capabilities.cargo_feature_names().map(str::to_owned).collect::<Vec<_>>(),
+        ProductVariant::Full => options
+            .production_capabilities
+            .cargo_feature_names()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
         ProductVariant::PortableSeed => Vec::new(),
     };
     features.extend(
