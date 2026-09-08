@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">NEO Emacs</string>
+    <color name="launcher_background">#0d0d12</color>
 </resources>
