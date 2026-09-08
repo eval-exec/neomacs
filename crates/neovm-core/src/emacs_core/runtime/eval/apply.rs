@@ -1147,9 +1147,14 @@ impl Context {
 
     /// Pop entries from the top of the specpdl down toward COUNT while each
     /// is a GNU `do_one_unbind` arm with no Lisp behind it: a `let` of a
-    /// plain, untrapped cell (restored with one store), or a frame
-    /// [`trivial_spec_binding_pop`] admits.  Stops at the first entry that is
-    /// neither.  The symbol's shape is read when the entry is popped, not
+    /// plain, untrapped cell (restored with one store), the lexical
+    /// environment a `let` saved, or a frame [`trivial_spec_binding_pop`]
+    /// admits.  Stops at the first entry that is neither.
+    ///
+    /// CONTRACT: no arm here may allocate, run Lisp, or push a specpdl
+    /// entry.  `unbind_to_with_result_slow` holds RESULT and the saved quit
+    /// flag in unrooted locals across this call, precisely because every arm
+    /// is a store; `drain_unwind_to` is the path that roots them.  The symbol's shape is read when the entry is popped, not
     /// when it was pushed: a watcher added or a local made inside the `let`
     /// body sends that entry to the general path, as in GNU.
     fn pop_simple_specpdl_suffix(&mut self, count: usize) {
@@ -1192,6 +1197,25 @@ impl Context {
                         sym_id,
                         old_value.get().unwrap_or(Value::NIL),
                     );
+                }
+                // GNU's `unbind_to` for the
+                // `specbind (Qinternal_interpreter_environment, ...)` a
+                // lexically-bound `let` makes: one store.  Without this arm
+                // the fast pop stops here, because `sf_let` pushes it at the
+                // BOTTOM of the suffix, under every root and dynamic
+                // binding.
+                SpecBinding::LexicalEnv { old_lexenv } => {
+                    let old_lexenv = *old_lexenv;
+                    let top_idx = self.specpdl.len() - 1;
+                    self.lexenv = old_lexenv;
+                    debug_assert_eq!(
+                        self.specpdl.len(),
+                        top_idx + 1,
+                        "a fast restore must not push a specbinding"
+                    );
+                    // SAFETY: the entry is a plain `Value`, which owns
+                    // nothing (const-asserted beside `trivial_spec_binding_pop`).
+                    unsafe { self.specpdl.set_len(top_idx) };
                 }
                 other => match trivial_spec_binding_pop(other) {
                     Some(TrivialSpecBindingPop::BacktraceArgs(args)) => {
