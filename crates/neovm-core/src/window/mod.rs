@@ -3895,7 +3895,7 @@ impl Frame {
             .saturating_add(scroll_bar_width)
     }
 
-    fn window_text_area_bounds_with_chrome(&self, reserve_chrome: bool) -> Rect {
+    fn window_area_bounds_with_chrome(&self, reserve_chrome: bool) -> Rect {
         let frame_w = self.width as f32;
         let frame_h = self.height as f32;
         // The menu / tab / tool bars reduce the window text area only when they
@@ -3917,19 +3917,24 @@ impl Frame {
         let available_height = (frame_h - chrome_top).max(0.0);
         let vertical_border = border.min(available_height / 2.0);
         let content_height = (available_height - 2.0 * vertical_border).max(0.0);
+        Rect::new(
+            horizontal_border,
+            chrome_top + vertical_border,
+            (frame_w - 2.0 * horizontal_border).max(0.0),
+            content_height,
+        )
+    }
+
+    fn window_text_area_bounds_with_chrome(&self, reserve_chrome: bool) -> Rect {
+        let mut bounds = self.window_area_bounds_with_chrome(reserve_chrome);
         let minibuffer_height = self
             .minibuffer_leaf
             .as_ref()
             .map(|mini| mini.bounds().height.max(0.0))
             .unwrap_or(0.0)
-            .min(content_height);
-        let root_height = (content_height - minibuffer_height).max(0.0);
-        Rect::new(
-            horizontal_border,
-            chrome_top + vertical_border,
-            (frame_w - 2.0 * horizontal_border).max(0.0),
-            root_height,
-        )
+            .min(bounds.height);
+        bounds.height -= minibuffer_height;
+        bounds
     }
 
     fn window_text_area_bounds(&self) -> Rect {
@@ -4769,32 +4774,78 @@ impl Frame {
     /// `max_lines` is either an absolute line count or a frame-height
     /// fraction already converted into lines.
     pub fn grow_mini_window_with_max_lines(&mut self, delta_rows: i32, max_lines: f32) {
-        // Snapshot scalar values before taking mutable borrow of minibuffer_leaf.
-        let char_h = self.char_height.max(1.0);
-        let unit = char_h;
-        let frame_inner_h = (self.height as f32) - self.chrome_top_height();
-        // `max_lines` is a resolved LINE COUNT (the caller resolves GNU
-        // `max-mini-window-height` to lines: Float -> frac*frame_rows,
-        // Fixnum -> the integer). GNU caps the mini-window at `lines * unit`
-        // pixels (xdisp.c:13330 resize_mini_window, FIXNUMP branch), clipped to
-        // [unit, frame_inner_h]. NOTE: this used to branch on `max_lines <= 1.0`
-        // to re-apply the fraction, which wrongly treated an integer cap of 1
-        // line (e.g. vertico-posframe's `(setq-local max-mini-window-height 1)`)
-        // as 100% of the frame -> the minibuffer grew to the whole frame and
-        // crushed the main window.
-        let requested_max_h = unit * max_lines;
-        let max_h = requested_max_h.min(frame_inner_h).max(unit);
-
-        let Some(mini) = self.minibuffer_leaf.as_mut() else {
+        let Some(mini) = self.minibuffer_leaf.as_ref() else {
             return;
         };
-        let current_h = mini.bounds().height;
-        let new_h = (current_h + delta_rows as f32 * unit).clamp(unit, max_h);
-        if (new_h - current_h).abs() < 0.5 {
-            return;
+        let unit = self.char_height.max(1.0);
+        let current_rows = mini_window_rows(mini.bounds().height, unit) as f32;
+        if let Some(resize) =
+            self.plan_mini_window_resize((current_rows + delta_rows as f32) * unit, max_lines)
+        {
+            self.apply_mini_window_resize(resize);
         }
+    }
+
+    /// Plan an absolute content-height resize without changing live geometry.
+    ///
+    /// GNU `resize_mini_window` compares measured pixels, rounding down to a
+    /// line multiple only when content exceeds the maximum (xdisp.c:13361).
+    /// A missing plan means the achievable allocation already matches. Do not
+    /// turn pixels into row deltas: stale font sizes and fractional rows lose
+    /// information in that conversion and can request endless no-op retries.
+    pub fn plan_mini_window_resize(
+        &self,
+        content_height_px: f32,
+        max_lines: f32,
+    ) -> Option<MiniWindowResize> {
+        let mini = self.minibuffer_leaf.as_ref()?;
+        if !content_height_px.is_finite() {
+            return None;
+        }
+        let unit = self.char_height.max(1.0);
+        let inner_height = self
+            .window_area_bounds_with_chrome(self.displays_chrome)
+            .height;
+        let maximum = (max_lines * unit).max(unit).min(inner_height);
+        let requested = content_height_px.max(unit);
+        let height = if requested > maximum {
+            mini_window_rows(maximum, unit).max(1) as f32 * unit
+        } else {
+            requested
+        }
+        .min(inner_height);
+        let previous_height = mini.bounds().height;
+        (height != previous_height).then_some(MiniWindowResize {
+            frame: self.id,
+            window: mini.id(),
+            previous_height,
+            height,
+        })
+    }
+
+    /// Apply a plan before any intervening geometry mutation. Planning lets
+    /// redisplay reject its speculative rows before resizing the live frame.
+    pub fn apply_mini_window_resize(&mut self, resize: MiniWindowResize) {
+        assert_eq!(
+            resize.frame, self.id,
+            "minibuffer resize belongs to this frame"
+        );
+        let mini = self
+            .minibuffer_leaf
+            .as_mut()
+            .expect("planned minibuffer is live");
+        assert_eq!(
+            resize.window,
+            mini.id(),
+            "planned minibuffer identity is unchanged"
+        );
+        assert_eq!(
+            resize.previous_height,
+            mini.bounds().height,
+            "resize plan is fresh"
+        );
         let mut bounds = *mini.bounds();
-        bounds.height = new_h;
+        bounds.height = resize.height;
         mini.set_bounds(bounds);
         self.sync_window_area_bounds();
     }
@@ -4805,17 +4856,49 @@ impl Frame {
     /// The freed space is returned to the root window via
     /// `sync_window_area_bounds`.
     pub fn shrink_mini_window(&mut self) {
-        let Some(mini) = self.minibuffer_leaf.as_mut() else {
-            return;
-        };
-        let unit = self.char_height.max(1.0);
-        let mut bounds = *mini.bounds();
-        if (bounds.height - unit).abs() < 0.5 {
-            return;
+        if let Some(resize) = self.plan_mini_window_resize(self.char_height, 1.0) {
+            self.apply_mini_window_resize(resize);
         }
-        bounds.height = unit;
-        mini.set_bounds(bounds);
-        self.sync_window_area_bounds();
+    }
+}
+
+/// A nonempty geometry change tied to one live minibuffer allocation.
+#[derive(Debug, PartialEq)]
+#[must_use = "a resize plan must be applied or explicitly discarded"]
+pub struct MiniWindowResize {
+    frame: FrameId,
+    window: WindowId,
+    previous_height: f32,
+    height: f32,
+}
+
+impl MiniWindowResize {
+    pub fn previous_height_px(&self) -> f32 {
+        self.previous_height
+    }
+    pub fn height_px(&self) -> f32 {
+        self.height
+    }
+    pub fn is_growth(&self) -> bool {
+        self.height > self.previous_height
+    }
+}
+
+/// Whole rows of `unit` pixels that a mini-window `height` pixels tall holds.
+///
+/// GNU works in integer pixels; here a whole-row `f32` height can divide
+/// to `k - 1e-7`. Compare the reconstructed row boundary in pixels so an
+/// exactly representable allocation keeps its last row, without forgiving
+/// real sub-pixel shortfalls. This is only for row-based requests and caps;
+/// redisplay compares measured content directly in pixels.
+fn mini_window_rows(height: f32, unit: f32) -> usize {
+    let unit = unit.max(1.0);
+    let rows = height / unit;
+    let nearest = rows.round();
+    if nearest * unit <= height {
+        nearest.max(0.0) as usize
+    } else {
+        rows.floor().max(0.0) as usize
     }
 }
 

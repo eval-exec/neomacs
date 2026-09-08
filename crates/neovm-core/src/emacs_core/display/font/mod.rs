@@ -522,18 +522,54 @@ fn resolve_live_frame_font_request_in_state(
     LiveFrameFontResolution { font_value }
 }
 
+/// GNU separates a font's realized metrics from permission to change the
+/// existing pixel allocation (`frame_inhibit_resize`, frame.c:200-218).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FontChangeGeometryPolicy {
+    PreserveAllocatedPixels,
+    ResetMinibufferToFontLine,
+}
+
+impl FontChangeGeometryPolicy {
+    fn for_live_frame(frame: &crate::window::Frame, inhibit: Value) -> Self {
+        let fullscreen = frame.parameter("fullscreen").unwrap_or(Value::NIL);
+        let vertically_fullscreen =
+            !fullscreen.is_nil() && fullscreen != Value::symbol("fullwidth");
+        if inhibit == Value::T
+            || inhibit == Value::symbol("force")
+            || list_iter(inhibit).any(|parameter| parameter == Value::symbol("font"))
+            || vertically_fullscreen
+            || frame.effective_window_system().is_none()
+        {
+            Self::PreserveAllocatedPixels
+        } else {
+            Self::ResetMinibufferToFontLine
+        }
+    }
+}
+
 pub(crate) fn sync_live_frame_font_state(
     eval: &mut super::eval::Context,
     frame_id: FrameId,
     requested: &Value,
     resolution: &LiveFrameFontResolution,
 ) {
+    let Some(frame) = eval.frames.get(frame_id) else {
+        return;
+    };
+    let inhibit = eval
+        .obarray()
+        .symbol_value("frame-inhibit-implied-resize")
+        .copied()
+        .unwrap_or(Value::NIL);
+    let geometry_policy = FontChangeGeometryPolicy::for_live_frame(frame, inhibit);
     sync_live_frame_font_state_in_state(
         &mut eval.frames,
         &mut eval.display_host,
         frame_id,
         requested,
         resolution,
+        geometry_policy,
     );
 }
 
@@ -543,6 +579,7 @@ fn sync_live_frame_font_state_in_state(
     frame_id: FrameId,
     requested: &Value,
     resolution: &LiveFrameFontResolution,
+    geometry_policy: FontChangeGeometryPolicy,
 ) {
     // A selector is public face/frame state, but it is not an opened font.
     // If the host could not realize the request, retain the last coherent
@@ -568,15 +605,59 @@ fn sync_live_frame_font_state_in_state(
     };
 
     let font_changed = frame.parameter("font-parameter") != Some(resolution.font_value);
-    let geometry_changed = frame.font_pixel_size != metrics.pixel_size.max(1) as f32
-        || frame.char_width != metrics.average_width.max(1) as f32
-        || frame.char_height != metrics.height.max(1) as f32;
+    let new_font_pixel_size = metrics.pixel_size.max(1) as f32;
+    let new_char_width = metrics.average_width.max(1) as f32;
+    let new_char_height = metrics.height.max(1) as f32;
+    let line_height_changed = frame.char_height != new_char_height;
+    let geometry_changed = line_height_changed
+        || frame.font_pixel_size != new_font_pixel_size
+        || frame.char_width != new_char_width;
 
     frame.set_known_parameter(FrameParam::Font, public_font_name);
     frame.set_parameter(Value::symbol("font-parameter"), resolution.font_value);
-    frame.font_pixel_size = metrics.pixel_size.max(1) as f32;
-    frame.char_width = metrics.average_width.max(1) as f32;
-    frame.char_height = metrics.height.max(1) as f32;
+    frame.font_pixel_size = new_font_pixel_size;
+    frame.char_width = new_char_width;
+    frame.char_height = new_char_height;
+
+    // GNU's `set_new_font_hook` ends in `adjust_frame_size (f, FRAME_COLS (f)
+    // * FRAME_COLUMN_WIDTH (f), FRAME_LINES (f) * FRAME_LINE_HEIGHT (f), 3,
+    // false, Qfont)` (`ns_new_font`, src/nsterm.m:11425-11428; `x_new_font`,
+    // src/xterm.c:27178-27181, emacs-31.0.90).  With `font` outside
+    // `frame-inhibit-implied-resize` (the NS/X default, src/frame.c:7684-7687)
+    // that call asks the window system for a frame that keeps FRAME_LINES at
+    // the new line height and returns (src/frame.c:993-998); the toolkit's
+    // `change_frame_size` then re-enters `adjust_frame_size` with inhibit 5
+    // (src/nsterm.m:1906, src/dispnew.c:6726-6728), which reaches
+    // `resize_frame_windows` (src/frame.c:1076-1082) and gives the
+    // mini-window `unit + decorations` pixels with `unit` the NEW
+    // `FRAME_LINE_HEIGHT` (src/window.c:5051-5053,5125-5128) while
+    // re-deriving every window's character edges. When implied resizing is
+    // inhibited, GNU preserves the existing pixel allocation instead. The
+    // next redisplay independently applies `resize-mini-windows`, including
+    // retaining a grown, nonempty mini-window in grow-only mode.
+    //
+    // Here the mini-window's pixel height is carried forward verbatim by
+    // `window_text_area_bounds_with_chrome`, so apply `resize_frame_windows`'
+    // one-line rule at the font boundary (the mini-window's box height is
+    // `unit`: it has no mode line, so "decorations" are zero) and re-derive
+    // the character edges for any metric change, own or shared minibuffer.
+    // The next redisplay re-grows the mini-window for multi-line content.
+    //
+    // Not ported, deliberately: the implied native resize itself (the frame
+    // keeps its pixel size and the root loses lines; only an explicit
+    // width/height parameter is deferred through
+    // `defer_next_gui_parameter_resize` below), the `width`/`height` frame
+    // parameters in the new units (`resize_pixelwise` owns those), and the
+    // per-toolkit gates that skip the whole resize -- NS when the view is
+    // fullscreen (src/nsterm.m:11425), X for tooltip frames (src/xterm.c:
+    // 27178) -- under which GNU keeps a grown mini-window's pixel height.
+    if line_height_changed && geometry_policy == FontChangeGeometryPolicy::ResetMinibufferToFontLine
+    {
+        frame.shrink_mini_window();
+    }
+    if geometry_changed {
+        frame.sync_window_area_bounds();
+    }
 
     let mut geometry_hints = None;
     if font_changed || geometry_changed {
@@ -608,7 +689,16 @@ pub(crate) fn sync_live_frame_font_parameter_in_state(
 ) {
     let resolution =
         resolve_live_frame_font_request_in_state(frames, display_host, frame_id, &requested);
-    sync_live_frame_font_state_in_state(frames, display_host, frame_id, &requested, &resolution);
+    // This entry point is used while constructing a new GUI frame, before
+    // it has a live allocation to preserve (GNU's after_make_frame gate).
+    sync_live_frame_font_state_in_state(
+        frames,
+        display_host,
+        frame_id,
+        &requested,
+        &resolution,
+        FontChangeGeometryPolicy::ResetMinibufferToFontLine,
+    );
 }
 
 pub(crate) fn default_face_font_attr_affects_frame_font(attr: LFaceAttr) -> bool {
