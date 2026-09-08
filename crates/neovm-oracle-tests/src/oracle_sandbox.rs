@@ -223,10 +223,13 @@ impl OracleSandbox {
 }
 
 pub(crate) fn project_root() -> PathBuf {
-    if let Some(root) = std::env::var_os("NEXTEST_WORKSPACE_ROOT") {
-        return PathBuf::from(root);
-    }
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+    let root = std::env::var_os("NEXTEST_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_WORKSPACE_DIR")));
+    // Cargo's relative workspace env ends in a separator; Nextest's does not.
+    // Give both engines the same lexical path under either runner, without
+    // resolving symlinks or weakening result normalization.
+    root.components().collect()
 }
 
 fn scratch_base(project_root: &Path) -> Result<PathBuf, String> {
