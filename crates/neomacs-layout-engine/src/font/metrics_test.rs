@@ -887,7 +887,7 @@ struct FixedNativeMemoryFontBackend {
 struct NoCandidateFontBackend;
 
 struct NativeMetricsPrimaryBackend {
-    candidate: crate::font_backend::PlatformFontCandidate,
+    candidates: Vec<crate::font_backend::PlatformFontCandidate>,
     metrics: crate::font_backend::PlatformFontDesignMetrics,
 }
 
@@ -912,9 +912,11 @@ impl crate::font_backend::FontBackend for NativeMetricsPrimaryBackend {
         &self,
         _query: &crate::font_backend::FontCandidateQuery,
     ) -> Vec<crate::font_backend::FontCandidate> {
-        vec![crate::font_backend::FontCandidate {
-            matched: self.candidate.clone(),
-        }]
+        self.candidates
+            .iter()
+            .cloned()
+            .map(|matched| crate::font_backend::FontCandidate { matched })
+            .collect()
     }
 
     fn design_metrics(
@@ -1658,7 +1660,7 @@ fn native_metrics_fixture_service(
     );
     svc.font_resolver
         .replace_backend(Box::new(NativeMetricsPrimaryBackend {
-            candidate: platform_file_candidate(
+            candidates: vec![platform_file_candidate(
                 identity,
                 crate::font_backend::PlatformFontMetadata {
                     foundry: None,
@@ -1672,7 +1674,7 @@ fn native_metrics_fixture_service(
                     design_metrics: None,
                     size: crate::font_backend::PlatformFontSize::Scalable,
                 },
-            ),
+            )],
             metrics: design_metrics,
         }));
     (svc, fontdb_id, family, design_metrics)
@@ -1718,6 +1720,58 @@ fn shaping_first_realization_publishes_the_native_face_metrics() {
             )
         );
     }
+}
+
+#[test]
+fn shaping_recovers_native_metrics_for_the_exact_nonpreferred_family_member() {
+    let (mut svc, fontdb_id, family, native) = native_metrics_fixture_service(Vec::new());
+    let exact = svc
+        .font_resolver
+        .resolve_primary(
+            &family,
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            svc.selection_size(10.6),
+        )
+        .expect("fixture platform identity");
+    let mut condensed = platform_file_candidate(exact.identity.clone(), exact.metadata.clone());
+    condensed.metadata.width = Some(FontWidth::Condensed);
+    condensed.metadata.design_metrics = None;
+    // The other file is the normal-width family winner, but shaping has
+    // already selected the fixture file. A second style-selection pass must
+    // neither hide that file's native metrics nor substitute this candidate.
+    let normal = platform_file_candidate(
+        ResolvedFontIdentity::from_platform_file_with_variations(
+            FontBackendKind::CoreText,
+            "/fonts/other-normal-member.ttf",
+            0,
+            Some("OtherNormalMember".to_owned()),
+            Vec::new(),
+        ),
+        exact.metadata,
+    );
+    svc.font_resolver
+        .replace_backend(Box::new(NativeMetricsPrimaryBackend {
+            candidates: vec![normal, condensed],
+            metrics: native,
+        }));
+
+    let selected = svc
+        .resolved_font_from_fontdb_id(fontdb_id, 10.6)
+        .expect("shaping-selected exact font");
+    assert_eq!(
+        selected.identity, exact.identity,
+        "do not select another family member"
+    );
+    assert_eq!(
+        selected.space_advance_px, 6.0,
+        "GNU macfont rounds the native 600/1000 em advance at 10.6 px to 6 px"
+    );
+    assert_eq!(
+        selected.ascent_px, 11.0,
+        "retain native ascent, not file ascent"
+    );
 }
 
 #[test]

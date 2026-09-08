@@ -600,3 +600,59 @@ fn native_entity_open_is_completed_with_backend_metrics() {
     assert_eq!(opened.metrics.ascent, 16);
     assert_eq!(probes.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn exact_native_observations_are_cached_until_the_catalog_advances() {
+    let probes = Arc::new(AtomicUsize::new(0));
+    let mut selected = candidate("Fixture", 400, FontSlant::Normal, 100);
+    selected.matched.metadata.design_metrics = None;
+    let identity = selected.matched.identity.clone();
+    let mut resolver = FontResolver::new(Box::new(MetricBackend {
+        candidates: vec![selected],
+        probes: Arc::clone(&probes),
+    }));
+
+    let first = resolver
+        .observe_exact_font(&identity, "Fixture")
+        .expect("native face");
+    let again = resolver
+        .observe_exact_font(&identity, "Fixture")
+        .expect("cached native face");
+    assert_eq!(first, again);
+    assert_eq!(
+        probes.load(Ordering::Relaxed),
+        1,
+        "do not reopen on a cache hit"
+    );
+
+    resolver.clear_caches();
+    let refreshed = resolver
+        .observe_exact_font(&identity, "Fixture")
+        .expect("fresh native face");
+    assert_eq!(refreshed.identity, identity);
+    assert_eq!(
+        probes.load(Ordering::Relaxed),
+        2,
+        "catalog refresh reopens the exact face"
+    );
+}
+
+#[test]
+fn an_exact_native_miss_does_not_survive_backend_replacement() {
+    let selected = candidate("Fixture", 400, FontSlant::Normal, 100);
+    let identity = selected.matched.identity.clone();
+    let mut resolver = FontResolver::new(Box::new(CandidateBackend {
+        candidates: Vec::new(),
+    }));
+    assert!(resolver.observe_exact_font(&identity, "Fixture").is_none());
+    resolver.replace_backend(Box::new(CandidateBackend {
+        candidates: vec![selected],
+    }));
+    assert_eq!(
+        resolver
+            .observe_exact_font(&identity, "Fixture")
+            .expect("new catalog face")
+            .identity,
+        identity
+    );
+}

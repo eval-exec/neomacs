@@ -13,7 +13,7 @@ use crate::font_backend::{
     FontSelectionSize, PlatformFontCandidate, PlatformFontMatch, PlatformFontSize,
     RequiredFontCoverage, TextDirection,
 };
-use neomacs_display_protocol::font::FontBackendKind;
+use neomacs_display_protocol::font::{FontBackendKind, ResolvedFontIdentity};
 use neovm_core::emacs_core::font::alternative_font_families;
 use neovm_core::emacs_core::fontset::{
     FontSpecEntry, StoredFontSpec, fontset_generation, matching_entries_for_char,
@@ -147,6 +147,7 @@ pub struct FontResolver {
     >,
     primary_cache: Mutex<HashMap<PrimaryCacheKey, Option<PlatformFontMatch>>>,
     char_cache: Mutex<HashMap<CharCacheKey, Option<PlatformFontMatch>>>,
+    exact_cache: Mutex<HashMap<ExactFontCacheKey, Option<PlatformFontMatch>>>,
 }
 
 impl FontResolver {
@@ -157,6 +158,7 @@ impl FontResolver {
             capability_cache: Mutex::new(HashMap::default()),
             primary_cache: Mutex::new(HashMap::default()),
             char_cache: Mutex::new(HashMap::default()),
+            exact_cache: Mutex::new(HashMap::default()),
         }
     }
 
@@ -350,6 +352,55 @@ impl FontResolver {
         selected
     }
 
+    /// Observe an already selected face without running style selection again.
+    ///
+    /// GNU opens the selected entity in `font_open_entity`; it does not choose
+    /// another family member to obtain its metrics. FAMILY scopes discovery,
+    /// but the full identity alone authorizes native finalization/observation.
+    /// Cache misses too, since shaping can select faces absent from the native
+    /// catalog. Both outcomes expire with the catalog's other observations.
+    pub(crate) fn observe_exact_font(
+        &self,
+        identity: &ResolvedFontIdentity,
+        family: &str,
+    ) -> Option<PlatformFontMatch> {
+        let family = FontFamilyName::new(family)?;
+        let key = ExactFontCacheKey {
+            identity: identity.clone(),
+            family: family.clone(),
+        };
+        if let Ok(cache) = self.exact_cache.lock()
+            && let Some(cached) = cache.get(&key)
+        {
+            return cached.clone();
+        }
+        let query = FontCandidateQuery {
+            scope: FontCandidateScope::Family(family),
+            required: RequiredFontCoverage::Any,
+            charset_ranges: Vec::new(),
+            languages: Vec::new(),
+            requested_weight: 400,
+            requested_slant: FontSlant::Normal,
+            requested_width: FontWidth::Normal,
+            direction: TextDirection::LeftToRight,
+        };
+        let matched = self
+            .backend
+            .list_candidates(&query)
+            .into_iter()
+            .filter(|candidate| candidate.matched.identity == *identity)
+            .find_map(|candidate| {
+                self.backend
+                    .finalize_match(candidate.matched)
+                    .filter(|matched| matched.identity == *identity)
+            })
+            .map(|matched| self.with_native_metrics(matched));
+        if let Ok(mut cache) = self.exact_cache.lock() {
+            cache.insert(key, matched.clone());
+        }
+        matched
+    }
+
     /// Resolve the first usable fontset entry for a non-ASCII character.
     pub fn resolve_for_char(
         &self,
@@ -525,6 +576,10 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+        self.exact_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
         self.capability_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -605,11 +660,21 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+        self.exact_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
         self.capability_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
     }
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct ExactFontCacheKey {
+    identity: ResolvedFontIdentity,
+    family: FontFamilyName,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]

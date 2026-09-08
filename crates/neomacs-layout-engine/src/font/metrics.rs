@@ -2548,18 +2548,9 @@ impl FontMetricsService {
         // Recover native metrics and selector metadata only for this exact
         // instance. A same-family match can select another file or variation;
         // neither may supply metrics for the face shaping already chose.
-        // resolve_primary finalizes the winner and attaches native metrics.
-        let selection_size = self.selection_size(font_size);
-        let platform = self
-            .font_resolver
-            .resolve_primary(
-                &family,
-                file_weight,
-                font_slant_from_fontdb(style),
-                FontWidth::Normal,
-                selection_size,
-            )
-            .filter(|matched| matched.identity == identity);
+        // Observe the already chosen identity instead of selecting a family
+        // winner, which can be another width, file, or variation.
+        let platform = self.font_resolver.observe_exact_font(&identity, &family);
         let px_metrics = Self::probe_resolved_font_metrics(&identity, platform.as_ref(), font_size)
             .or_else(|| {
                 self.font_px_metrics_from_selected_face(
