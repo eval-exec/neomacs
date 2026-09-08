@@ -46,6 +46,24 @@ fn materializing_a_subr_entry_reads_the_registry_once() {
     assert_eq!(global_subr_lookup_count(), 1);
 }
 
+#[test]
+fn subr_call_entry_does_not_look_up_image_or_interactive_metadata() {
+    let ev = Context::new();
+    let function = ev.obarray().symbol_function("forward-char").unwrap();
+    let (_, registered) = subr_entry_from_value(function).unwrap();
+
+    reset_global_subr_lookup_count();
+    let (symbol, call) = subr_call_entry_from_value(function).unwrap();
+
+    assert_eq!(call.min_args, registered.min_args);
+    assert_eq!(call.max_args, registered.max_args);
+    assert_eq!(call.dispatch_kind, registered.dispatch_kind);
+    assert!(call.interactive_spec.is_none());
+    assert_eq!(global_subr_lookup_count(), 0);
+    // The authoritative metadata still lives in the registered entry.
+    assert!(lookup_global_subr_entry(symbol).unwrap().interactive_spec.is_some());
+}
+
 fn install_global_map_for_test(ev: &mut Context, global_map: Value) {
     ev.assign("global-map", global_map);
     ev.select_global_map(global_map);
