@@ -3281,6 +3281,39 @@ fn face_resolver_realizes_base_face_inverse_video_after_merging_text_property_fa
     assert_eq!(resolved.bg, 0x009370DB);
 }
 
+/// GNU's `:distant-foreground` replaces the background, not the foreground,
+/// when the face is `:inverse-video` (`load_face_colors`, src/xfaces.c:1417-1425).
+#[test]
+fn face_resolver_applies_distant_foreground_to_the_inverse_video_slot() {
+    let _evaluator = neovm_core::emacs_core::Context::new();
+    let mut table = FaceTable::new();
+
+    let mut plain = NeoFace::new("plain-distant");
+    plain.foreground = Some(NeoColor::rgb(0x33, 0x33, 0x33));
+    plain.background = Some(NeoColor::rgb(0x33, 0x33, 0x34));
+    plain.distant_foreground = Some(NeoColor::rgb(0xFF, 0x00, 0x00));
+    table.define("plain-distant", plain);
+
+    let mut inverse = NeoFace::new("inverse-distant");
+    inverse.foreground = Some(NeoColor::rgb(0x33, 0x33, 0x33));
+    inverse.background = Some(NeoColor::rgb(0x33, 0x33, 0x34));
+    inverse.inverse_video = Some(true);
+    inverse.distant_foreground = Some(NeoColor::rgb(0xFF, 0x00, 0x00));
+    table.define("inverse-distant", inverse);
+
+    let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, Some("neo".into()));
+
+    let plain = resolver.resolve_named_face("plain-distant");
+    assert_eq!(plain.fg, 0x00FF0000);
+    assert_eq!(plain.bg, 0x00333334);
+
+    // The swap runs first (fg <-> bg), then the distant color replaces the
+    // background because `:inverse-video` is still in effect.
+    let inverse = resolver.resolve_named_face("inverse-distant");
+    assert_eq!(inverse.fg, 0x00333334);
+    assert_eq!(inverse.bg, 0x00FF0000);
+}
+
 #[test]
 fn test_face_resolver_can_ignore_inverse_video_for_gui_menu_bar() {
     let mut table = FaceTable::new();

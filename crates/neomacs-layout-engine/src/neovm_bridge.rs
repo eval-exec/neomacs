@@ -4585,11 +4585,18 @@ impl FaceResolver {
             rf.overstrike = true;
         }
 
-        // Distant-foreground: swap fg when too close to bg
+        // Distant-foreground: GNU substitutes it when the realized foreground
+        // and background are too close.  With `:inverse-video` the substitution
+        // lands in the background, not the foreground (`load_face_colors`,
+        // src/xfaces.c:1417-1425).
         if let Some(dfg) = &face.distant_foreground
             && colors_close(rf.fg, rf.bg)
         {
-            rf.set_foreground(dfg);
+            if rf.pending_inverse_video {
+                rf.set_background(dfg);
+            } else {
+                rf.set_foreground(dfg);
+            }
         }
 
         // Stipple: a face that specifies `:stipple` overrides the inherited
@@ -5536,13 +5543,18 @@ impl FaceResolver {
             rf.overstrike = true;
         }
 
-        // Distant-foreground: GNU Emacs (xfaces.c) uses this when the
-        // foreground is too close to the background, improving readability.
-        // Check if fg ≈ bg and substitute distant-foreground if available.
+        // Distant-foreground: GNU substitutes it when the realized foreground
+        // and background are too close.  With `:inverse-video` the substitution
+        // lands in the background, not the foreground (`load_face_colors`,
+        // src/xfaces.c:1417-1425).
         if let Some(dfg) = &face.distant_foreground
             && colors_close(rf.fg, rf.bg)
         {
-            rf.set_foreground(dfg);
+            if rf.pending_inverse_video {
+                rf.set_background(dfg);
+            } else {
+                rf.set_foreground(dfg);
+            }
         }
 
         // Stipple: realize the `:stipple` spec to the XBM pattern the renderer
