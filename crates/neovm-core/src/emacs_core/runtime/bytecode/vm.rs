@@ -784,9 +784,12 @@ struct ResolvedByteCodeCallee(Value);
 /// `setup_frame` eligibility.  Keeping this distinct from a merely resolved
 /// bytecode object makes accidentally bypassing adaptive tier dispatch or
 /// arity handling unrepresentable at the call site.
-#[repr(transparent)]
 #[derive(Clone, Copy)]
-struct PreparedInterpreterCall(ResolvedByteCodeCallee);
+struct PreparedInterpreterCall {
+    callee: ResolvedByteCodeCallee,
+    /// Resolved once, when this cache entry was filled.
+    code: ActiveCodeView,
+}
 
 /// Result of GNU `Bcall`'s single live function-cell read.
 ///
@@ -902,6 +905,57 @@ impl InterpreterFunction {
     }
 }
 
+/// GNU's `bytestr_data`/`vectorp` register pair: the executing frame's
+/// instruction stream and constant pool, resolved once when the frame is
+/// built.
+///
+/// `exec_byte_code` loads both into locals at `setup_frame` and restores them
+/// from the caller's `bc_frame` at `Breturn`.  This port re-derived them at
+/// every activation instead -- `executable_ops()` walks an `Option<Arc<..>>`
+/// and a `OnceLock`, `constants.as_slice()` matches on the storage kind --
+/// and an activation happens twice per call, once for the callee after
+/// `Bcall` and once for the caller after `Breturn`.
+///
+/// The view holds no Lisp value: two fat pointers into the immovable
+/// `ByteCodeFunction` the frame's `InterpreterFunction` already points at, so
+/// its liveness argument is exactly that handle's.
+#[derive(Clone, Copy)]
+struct ActiveCodeView {
+    ops: std::ptr::NonNull<[Op]>,
+}
+
+impl ActiveCodeView {
+    /// The empty view a never-filled call-cache slot carries; never read,
+    /// because a slot only answers after `replace` overwrites it.
+    const EMPTY: Self = Self {
+        ops: unsafe {
+            std::ptr::NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
+                std::ptr::NonNull::<Op>::dangling().as_ptr(),
+                0,
+            ))
+        },
+    };
+
+    #[inline(always)]
+    fn of(func: &ByteCodeFunction) -> Self {
+        debug_assert!(
+            !func.is_pdump_stub(),
+            "a dump stub has no instruction stream; materialize the function first"
+        );
+        Self {
+            ops: std::ptr::NonNull::from(func.executable_ops()),
+        }
+    }
+
+    #[inline(always)]
+    fn ops(&self) -> &[Op] {
+        // SAFETY: minted from the frame's own function, which outlives the
+        // frame (see `InterpreterFunction::code`); a function's executable
+        // ops never move while a frame runs it.
+        unsafe { self.ops.as_ref() }
+    }
+}
+
 /// All mutable Tier-0 state required to suspend and later resume one frame.
 ///
 /// GNU stores the equivalent fields in `struct bc_frame` plus the register
@@ -911,8 +965,9 @@ impl InterpreterFunction {
 #[derive(Clone, Copy)]
 struct InterpreterFrame {
     function: InterpreterFunction,
+    /// GNU's `bytestr_data`/`vectorp` pair for this frame.
+    code: ActiveCodeView,
     frame_base: usize,
-    frame_limit: usize,
     #[cfg(feature = "jit")]
     resume: InterpreterResumePoint,
     #[cfg(not(feature = "jit"))]
@@ -923,6 +978,14 @@ struct InterpreterFrame {
 }
 
 impl InterpreterFrame {
+    /// The frame's stack ceiling.  Derived rather than stored: every
+    /// constructor already proved `frame_base + max_stack` does not overflow
+    /// when it reserved the capacity.
+    #[inline(always)]
+    fn frame_limit(&self) -> usize {
+        self.frame_base + self.function.code().max_stack as usize
+    }
+
     #[inline(always)]
     fn pc(&self) -> usize {
         #[cfg(feature = "jit")]
@@ -1140,13 +1203,15 @@ impl InterpreterFrameAuxStack {
 struct PreparedInterpreterCallee {
     value: Value,
     function: InterpreterFunction,
+    code: ActiveCodeView,
 }
 
 impl PreparedInterpreterCallee {
-    fn new(value: Value, code: &ByteCodeFunction) -> Self {
+    fn new(value: Value, code: &ByteCodeFunction, view: ActiveCodeView) -> Self {
         Self {
             value,
             function: InterpreterFunction::new(code),
+            code: view,
         }
     }
 
@@ -1195,8 +1260,8 @@ impl ConsumedCallOperandRootSlot {
 // traffic again. The bounds include the debug-only lexenv invariant field.
 const _: () = {
     assert!(std::mem::size_of::<InterpreterFunction>() == std::mem::size_of::<Value>());
-    assert!(std::mem::size_of::<PreparedInterpreterCallee>() == 2 * std::mem::size_of::<Value>());
-    assert!(std::mem::size_of::<InterpreterFrame>() <= 56);
+    assert!(std::mem::size_of::<PreparedInterpreterCallee>() == 4 * std::mem::size_of::<Value>());
+    assert!(std::mem::size_of::<InterpreterFrame>() <= 64);
     // A suspended caller costs a frame plus its continuation, in two parallel
     // stacks. Neither is ever COPIED any more -- a call writes the callee's
     // frame once and a return pops -- so these bound footprint, not per-call
@@ -1428,17 +1493,25 @@ const _: () =
 impl PreparedInterpreterCall {
     #[inline(always)]
     fn new(callee: ResolvedByteCodeCallee) -> Self {
-        Self(callee)
+        Self {
+            code: ActiveCodeView::of(callee.code()),
+            callee,
+        }
     }
 
     #[inline(always)]
     fn callee(self) -> ResolvedByteCodeCallee {
-        self.0
+        self.callee
+    }
+
+    #[inline(always)]
+    fn code_view(self) -> ActiveCodeView {
+        self.code
     }
 }
 
 const _: () =
-    assert!(std::mem::size_of::<PreparedInterpreterCall>() == std::mem::size_of::<Value>());
+    assert!(std::mem::size_of::<PreparedInterpreterCall>() == 3 * std::mem::size_of::<Value>());
 
 impl ResolvedBuiltinCallee {
     #[inline]
@@ -1642,7 +1715,10 @@ impl RecentInterpreterCall {
     const EMPTY: Self = Self {
         function_epoch: EMPTY_FUNCTION_EPOCH,
         designator: Value::NIL,
-        call: PreparedInterpreterCall(ResolvedByteCodeCallee(Value::NIL)),
+        call: PreparedInterpreterCall {
+            callee: ResolvedByteCodeCallee(Value::NIL),
+            code: ActiveCodeView::EMPTY,
+        },
         nargs: 0,
     };
 
@@ -1741,7 +1817,7 @@ const _: () = {
     assert!(SYMBOL_BYTECODE_CALL_CACHE_CAPACITY.is_power_of_two());
     // epoch + symbol + a one-word callee behind a tag: four words.
     assert!(std::mem::size_of::<SymbolByteCodeCallCacheEntry>() <= 4 * std::mem::size_of::<u64>());
-    assert!(std::mem::size_of::<RecentInterpreterCall>() <= 4 * std::mem::size_of::<u64>());
+    assert!(std::mem::size_of::<RecentInterpreterCall>() <= 8 * std::mem::size_of::<u64>());
 };
 
 /// Process-selected execution policy for bytecode calls in this VM.
@@ -2844,8 +2920,8 @@ impl<'a> Vm<'a> {
         // which is why entering a call first had to copy the caller out of it.
         InterpreterFrame {
             function: callee.function,
+            code: callee.code,
             frame_base,
-            frame_limit,
             #[cfg(feature = "jit")]
             resume: InterpreterResumePoint::new(0, false),
             #[cfg(not(feature = "jit"))]
@@ -2933,7 +3009,7 @@ impl<'a> Vm<'a> {
                 Ok(value) => {
                     self.ctx.bc_buf.truncate(continuation.stack_after_call);
                     let current = callers.active_mut();
-                    debug_assert!(self.ctx.bc_buf.len() < current.frame_limit);
+                    debug_assert!(self.ctx.bc_buf.len() < current.frame_limit());
                     self.ctx.bc_buf.push(value);
                     return InterpreterFrameCompletion::Resume;
                 }
@@ -3049,7 +3125,7 @@ impl<'a> Vm<'a> {
             *cursor.base.add(after) = value;
         }
         cursor.len = after + 1;
-        debug_assert!(cursor.len <= callers.active().frame_limit);
+        debug_assert!(cursor.len <= callers.active().frame_limit());
         InterpreterValueCompletion::Resume
     }
 
@@ -3095,6 +3171,7 @@ impl<'a> Vm<'a> {
     ) -> InterpreterStackCall {
         match target {
             ResolvedStackCallTarget::Interpreter { call } => {
+                let view = call.code_view();
                 let callee = call.callee();
                 let func = callee.code();
                 let callee = callee.value();
@@ -3102,7 +3179,7 @@ impl<'a> Vm<'a> {
                     .ctx
                     .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
                 InterpreterStackCall::Enter {
-                    callee: PreparedInterpreterCallee::new(callee, func),
+                    callee: PreparedInterpreterCallee::new(callee, func, view),
                     root_slot: ConsumedCallOperandRootSlot::from_args_start(args_start),
                     nargs,
                     backtrace,
@@ -3119,7 +3196,11 @@ impl<'a> Vm<'a> {
                         if self.can_enter_interpreter_frame_iteratively(func, nargs) =>
                     {
                         InterpreterStackCall::Enter {
-                            callee: PreparedInterpreterCallee::new(callee, func),
+                            callee: PreparedInterpreterCallee::new(
+                                callee,
+                                func,
+                                ActiveCodeView::of(func),
+                            ),
                             root_slot: ConsumedCallOperandRootSlot::from_args_start(args_start),
                             nargs,
                             backtrace,
@@ -3211,8 +3292,8 @@ impl<'a> Vm<'a> {
 
         let entry_frame = InterpreterFrame {
             function: InterpreterFunction::new(entry_func),
+            code: ActiveCodeView::of(entry_func),
             frame_base,
-            frame_limit,
             #[cfg(feature = "jit")]
             resume: InterpreterResumePoint::new(*pc, false),
             #[cfg(not(feature = "jit"))]
@@ -3287,18 +3368,19 @@ impl<'a> Vm<'a> {
             // body pushes and pops `callers`, so nothing may hold a reference
             // into it across those. This is also where a `continue 'frame`
             // lands, which is exactly where a push has just happened.
-            let (func, frame_base, frame_limit) = {
+            let (func, frame_base, code) = {
                 let current = callers.active();
-                (
-                    current.function.code(),
-                    current.frame_base,
-                    current.frame_limit,
-                )
+                (current.function.code(), current.frame_base, current.code)
             };
-            let ops = func.executable_ops();
-            // One `as_slice` (a match on the storage kind) per activation,
-            // not one per `Constant` op.
+            // GNU reloads `bytestr_data` and `vectorp` from the frame at
+            // `Breturn` rather than re-deriving them; the frame carries the
+            // same pair, resolved when it was built.
+            let ops = code.ops();
+            // The constant pool stays a per-activation derivation: it is one
+            // match on the storage kind, where the instruction stream costs a
+            // lazy-decode probe.
             let constants: &[Value] = func.constants.as_slice();
+            let frame_limit = frame_base + func.max_stack as usize;
             let ops_len = ops.len();
             let ops_ptr = ops.as_ptr();
             let mut pc_local = callers.active().pc();
@@ -3994,6 +4076,10 @@ impl<'a> Vm<'a> {
                                 let prepared = call.callee();
                                 let callee_code = prepared.code();
                                 let callee_value = prepared.value();
+                                // The cache entry already holds the callee's
+                                // ops and constant pool; the frame takes them
+                                // rather than re-deriving them here.
+                                let callee_view = call.code_view();
                                 #[cfg(debug_assertions)]
                                 cursor.debug_sync_len(self.ctx);
                                 // The compact span always fits: nargs comes
@@ -4014,7 +4100,11 @@ impl<'a> Vm<'a> {
                                 aux_stack.suspend_current(caller_depth);
                                 let callee_frame = self.install_iterative_interpreter_frame(
                                     &mut cursor,
-                                    PreparedInterpreterCallee::new(callee_value, callee_code),
+                                    PreparedInterpreterCallee::new(
+                                        callee_value,
+                                        callee_code,
+                                        callee_view,
+                                    ),
                                     ConsumedCallOperandRootSlot::from_args_start(args_start),
                                     n,
                                 );

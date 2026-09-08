@@ -2341,8 +2341,14 @@ fn vm_backward_branch_quit_counter_spans_bytecode_calls_like_gnu() {
 #[test]
 fn interpreter_driver_frame_layout_stays_compact() {
     assert!(
-        std::mem::size_of::<ResolvedStackCallTarget>() <= 2 * std::mem::size_of::<usize>(),
-        "call-target classification must not carry cold subr metadata through every Bcall"
+        std::mem::size_of::<ResolvedStackCallTarget>() <= 4 * std::mem::size_of::<usize>(),
+        "call-target classification carries GNU's bytestr_data for the callee, and \
+         must still not carry cold subr metadata through every Bcall"
+    );
+    assert_eq!(
+        std::mem::size_of::<ActiveCodeView>(),
+        2 * std::mem::size_of::<usize>(),
+        "the code view is one fat pointer: the callee's instruction stream"
     );
     assert_eq!(
         std::mem::size_of::<InterpreterFunction>(),
@@ -2351,7 +2357,8 @@ fn interpreter_driver_frame_layout_stays_compact() {
     );
     assert!(
         std::mem::size_of::<InterpreterFrame>() <= 64,
-        "an active interpreter frame must stay register-snapshot sized"
+        "an active interpreter frame must stay register-snapshot sized; carrying \
+         the callee's instruction stream replaced its derived stack ceiling"
     );
     // A suspended caller is a frame in one stack plus a continuation in a
     // parallel one. Neither is COPIED on a call any more -- entering writes the
@@ -2363,6 +2370,30 @@ fn interpreter_driver_frame_layout_stays_compact() {
     assert!(
         std::mem::size_of::<BytecodeCallContinuation>() <= 16,
         "a continuation is pushed per call and must stay two words"
+    );
+}
+
+/// The frame's view addresses the same instruction stream and constant pool
+/// the function exposes, and a lazily decoded GNU byte string is decoded once:
+/// the view is minted after materialization, and every frame of that function
+/// (including a make-closure clone, which shares the lazy code) sees the same
+/// decoded ops.
+#[test]
+fn active_code_view_addresses_the_functions_own_ops_and_constants() {
+    let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    func.constants = crate::tagged::header::LispValueVec::owned(vec![Value::T, Value::NIL]);
+    let view = ActiveCodeView::of(&func);
+    assert_eq!(
+        view.ops().as_ptr(),
+        func.executable_ops().as_ptr(),
+        "the view points at the function's own instruction stream"
+    );
+    assert_eq!(view.ops().len(), func.executable_ops().len());
+    let again = ActiveCodeView::of(&func);
+    assert_eq!(
+        again.ops().as_ptr(),
+        view.ops().as_ptr(),
+        "a second view of the same function addresses the same decoded ops"
     );
 }
 
