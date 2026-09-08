@@ -213,11 +213,6 @@ impl DisplayOutputBuilder {
         self.window_state.current_window_row(row)
     }
 
-    /// Strip cursor decoration from every row of the current window grid.
-    pub(crate) fn clear_current_window_cursors(&mut self) {
-        self.window_state.clear_current_window_cursors();
-    }
-
     #[cfg(test)]
     pub(crate) fn begin_output_row(&mut self, row: usize, role: GlyphRowRole, mode_line: bool) {
         self.install_output_row_lifecycle(OutputRowLifecycleRequest::begin(row, role, mode_line));

@@ -388,7 +388,6 @@ impl TextWindowTailFinalizeOutcome {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn cursor_publish_status(self) -> TextWindowCursorPublishStatus {
         self.cursor_publish_status
     }

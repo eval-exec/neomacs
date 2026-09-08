@@ -13,10 +13,10 @@ use crate::display_row::walk_state::{
 };
 use crate::display_source_progress::DisplaySourceRowProgressState;
 use crate::display_text_window_row_lifecycle::{
-    TextWindowBodyInstallRenderContext, TextWindowBodyInstallRequest, TextWindowFinishRequest,
-    TextWindowFinishState, TextWindowTailFinalizeContext, TextWindowTailFinalizeRequest,
-    TextWindowTailFinalizeState, TextWindowVisibilityRetryOutcome,
-    TextWindowVisibilityRetryRequest,
+    TextWindowBodyInstallRenderContext, TextWindowBodyInstallRequest,
+    TextWindowCursorPublishStatus, TextWindowFinishRequest, TextWindowFinishState,
+    TextWindowTailFinalizeContext, TextWindowTailFinalizeRequest, TextWindowTailFinalizeState,
+    TextWindowVisibilityRetryOutcome, TextWindowVisibilityRetryRequest,
 };
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{LayoutBufferView, ResolvedFace, RustBufferAccess};
@@ -71,6 +71,7 @@ pub(crate) struct BufferSourceTailRequestContext<'a> {
 pub(crate) struct BufferSourcePostLoopRenderOutcome {
     pub(crate) retry: TextWindowVisibilityRetryOutcome,
     pub(crate) rendered_rows_len: usize,
+    pub(crate) cursor_publish_status: TextWindowCursorPublishStatus,
 }
 
 impl BufferSourceBodyInstallContext {
@@ -341,7 +342,7 @@ where
         )
         .point_is_visible_eob();
 
-    tail_context
+    let finalized = tail_context
         .tail_finalize_request(text, charpos, point_is_visible_eob)
         .finalize_and_apply(TextWindowTailFinalizeState::new(
             cursor_info,
@@ -366,5 +367,6 @@ where
     BufferSourcePostLoopRenderOutcome {
         retry,
         rendered_rows_len: source_render.output_rows_len(),
+        cursor_publish_status: finalized.cursor_publish_status(),
     }
 }

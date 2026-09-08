@@ -254,14 +254,6 @@ impl OutputWindowBuildState {
         self.current_row_grid.as_ref()?.row(row)
     }
 
-    /// Strip cursor decoration from every row of the current window grid
-    /// (Phase 2 scroll cursor re-decorate).
-    pub(crate) fn clear_current_window_cursors(&mut self) {
-        if let Some(grid) = self.current_row_grid.as_mut() {
-            grid.clear_all_cursors();
-        }
-    }
-
     fn begin_current_row(&mut self, begin: OutputRowBeginRequest) {
         self.current_row = begin.row;
         if let Some(grid) = self.current_row_grid.as_mut() {
@@ -455,22 +447,6 @@ impl OutputWindowRowGrid {
         let ncols = self.matrix.ncols;
         for row in &mut self.matrix.rows {
             f(MatrixRow::make_mut(row), ncols);
-        }
-    }
-
-    /// Strip cursor decoration from every row (Phase 2 scroll: the partial walk
-    /// decorates a spurious cursor at its pinned point; the real cursor is set
-    /// afterward).
-    pub(crate) fn clear_all_cursors(&mut self) {
-        for row in &mut self.matrix.rows {
-            // Only rows actually carrying cursor decoration are touched — a
-            // make_mut on a shared cursor-free row would deep-copy it for
-            // nothing.
-            if row.cursor_col.is_some() || row.cursor_type.is_some() {
-                let row = MatrixRow::make_mut(row);
-                row.cursor_col = None;
-                row.cursor_type = None;
-            }
         }
     }
 

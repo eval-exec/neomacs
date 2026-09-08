@@ -981,7 +981,7 @@ impl BufferSourceOutputSetup {
             let retained_chrome = scroll.chrome.take();
             // Phase A already admitted the frame-wide retained face namespace
             // before this partial walk can mint IDs.
-            let (mut output_emitter, _post_loop) = walk_setup.begin_render_body_and_tail(
+            let (mut output_emitter, post_loop) = walk_setup.begin_render_body_and_tail(
                 self.begin_request,
                 &mut output,
                 font_metrics,
@@ -1114,14 +1114,23 @@ impl BufferSourceOutputSetup {
             );
             publish_request.publish_window_end(evaluator, redisplay_positions);
 
-            // The partial walk decorated a spurious cursor at its pinned point;
-            // clear it, then re-decorate for the REAL moved point (which may sit
-            // in a reused OR a newly-exposed row); skipped when point is off-screen.
-            output.builder().clear_current_window_cursors();
-            if let Some(cursor_row) = output
-                .builder()
-                .find_current_window_cursor_row(scroll.new_point as usize)
-            {
+            // GNU try_window_id finds the cursor in reused rows only when the
+            // damaged-region walk did not already find it. Our partial walk
+            // also uses the real window point: preserve its authoritative
+            // placement, including newline and display-string positions which
+            // cannot be reconstructed from buffer glyph spans alone.
+            // Reused rows arrive without cursor decorations.
+            use crate::display_text_window_row_lifecycle::TextWindowCursorPublishStatus;
+            let cursor_row = match post_loop.cursor_publish_status {
+                TextWindowCursorPublishStatus::Published
+                | TextWindowCursorPublishStatus::NoWindowCursor
+                | TextWindowCursorPublishStatus::Clipped => None,
+                TextWindowCursorPublishStatus::NotRequested
+                | TextWindowCursorPublishStatus::MissingCapture => output
+                    .builder()
+                    .find_current_window_cursor_row(scroll.new_point as usize),
+            };
+            if let Some(cursor_row) = cursor_row {
                 decorate_window_cursor(
                     &mut output,
                     &mut output_emitter,
