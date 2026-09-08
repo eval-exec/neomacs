@@ -442,10 +442,10 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
         POINTER_RUN_GLYPH_VISITS.with(|visits| {
             visits.set(visits.get().saturating_add(row.total_glyphs()));
         });
-        self.apply_phys_cursor_remap(remapped_cursor_col);
+        self.apply_phys_cursor_remap(row, remapped_cursor_col);
     }
 
-    fn apply_phys_cursor_remap(&mut self, remapped_cursor_col: Option<u16>) {
+    fn apply_phys_cursor_remap(&mut self, row: &GlyphRow, remapped_cursor_col: Option<u16>) {
         let Some(col) = remapped_cursor_col else {
             return;
         };
@@ -460,9 +460,26 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
         cursor.slot_id.col = col;
         if self.matrix_ncols > 0 {
             let char_w = self.context.window_pixel_bounds.width / self.matrix_ncols as f32;
-            cursor.x = self.context.window_pixel_bounds.x + col as f32 * char_w;
+            // Measure the remapped visual column from the row's materialized
+            // glyph advances. `col * char_w` assumes every glyph is one frame
+            // cell wide, so a bidi row holding another face's font, a wide
+            // glyph, or a stretch put the caret off the glyph it decorates.
+            cursor.x = self.context.window_pixel_bounds.x
+                + text_glyph_index_pixel_x(row, col, char_w);
         }
     }
+}
+
+/// Pixel pen consumed by the text glyphs before `target_index`, where the
+/// index counts entries of the TEXT_AREA glyph array (padding cells included
+/// as zero-advance gaps, as `reorder_row_bidi` numbers them).
+fn text_glyph_index_pixel_x(row: &GlyphRow, target_index: u16, char_width: f32) -> f32 {
+    row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .take(target_index as usize)
+        .filter(|glyph| !glyph.padding)
+        .map(|glyph| glyph.materialized_pixel_advance(char_width))
+        .sum()
 }
 
 #[cfg(test)]

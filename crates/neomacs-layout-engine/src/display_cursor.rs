@@ -381,6 +381,10 @@ pub(crate) struct ResolvedDecoratedCursorPlacement {
 }
 
 impl ResolvedDecoratedCursorPlacement {
+    pub(crate) const fn coordinates(&self) -> ResolvedCursorCoordinatePair {
+        self.coordinates
+    }
+
     pub(crate) fn apply_to(self, cursor: &mut neomacs_display_protocol::frame_glyphs::PhysCursor) {
         self.coordinates.apply_display_to(cursor);
         cursor.x = self.x;
