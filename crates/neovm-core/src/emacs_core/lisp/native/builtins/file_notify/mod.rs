@@ -28,16 +28,13 @@ std::cfg_select! {
     _ => {}
 }
 
-std::cfg_select! {
-    any(target_os = "linux", target_os = "macos", target_os = "windows") => {
-        mod subrs;
+// Unsupported native targets still participate in startup registration with
+// an empty table; they must not advertise another platform's watch primitives.
+mod subrs;
 
-        #[cfg(test)]
-        pub(crate) use self::subrs::SUBRS;
-        pub(crate) use self::subrs::register_subrs;
-    }
-    _ => {}
-}
+#[cfg(test)]
+pub(crate) use self::subrs::SUBRS;
+pub(crate) use self::subrs::register_subrs;
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "tests/linux.rs"]
