@@ -97,6 +97,45 @@ fn load_hist_file_name(
     }
 }
 
+/// Record a preloaded file the way GNU's `Fload` does at `src/lread.c:1473`:
+///
+/// ```c
+///   if (! NILP (Vpurify_flag))
+///     Vpreloaded_file_list = Fcons (file, Vpreloaded_file_list);
+/// ```
+///
+/// `file` there is the name as *requested*, not the file that was found, which
+/// is why GNU's `preloaded-file-list` reads `"emacs-lisp/byte-run"` and never
+/// an absolute path.  GNU only reaches this after `load-source-file-function`
+/// has declined the file; `lisp/international/mule.el` pushes the ones it
+/// handles itself, so the two together cover every preloaded file.
+fn record_preloaded_file(eval: &mut super::eval::Context, requested: &LispString) {
+    if !eval
+        .obarray()
+        .symbol_value("purify-flag")
+        .is_some_and(|value| value.is_truthy())
+    {
+        return;
+    }
+
+    let roots = eval.save_specpdl_roots();
+    let entry = Value::heap_string(requested.clone());
+    eval.push_specpdl_root(entry);
+    // Read the global the way GNU does -- `Vpreloaded_file_list` is a C global,
+    // not something a `let` can shadow -- and the way `purify-flag` is read
+    // just above.
+    let list = eval
+        .obarray()
+        .symbol_value("preloaded-file-list")
+        .cloned()
+        .unwrap_or(Value::NIL);
+    eval.push_specpdl_root(list);
+    let updated = Value::cons(entry, list);
+    eval.push_specpdl_root(updated);
+    eval.set_variable("preloaded-file-list", updated);
+    eval.restore_specpdl_roots(roots);
+}
+
 /// Decode Emacs-extended UTF-8 source straight to a faithful `LispString`
 /// (Emacs internal bytes) — issue #131. Non-Unicode source character literals
 /// (e.g. `?\xF6\xA0\x87\x8A` -> 0x1A01CA) keep their real codes as extended
@@ -2663,6 +2702,12 @@ fn load_file_body(
             )
             .map_err(crate::emacs_core::error::map_flow);
     }
+
+    // GNU src/lread.c:1473, reached only once `load-source-file-function` has
+    // declined the file above.  The module arm returned earlier here than in
+    // GNU, which records modules too; nothing preloads a module, so the flag
+    // this reads is never set on that path.
+    record_preloaded_file(eval, requested);
 
     // Read raw bytes and decode (with Emacs-extended UTF-8 for .el,
     // or header-skipping for .elc).
@@ -5936,7 +5981,16 @@ pub fn create_bootstrap_evaluator_for_loadup(
         maybe_trace_bootstrap_step(
             "create_bootstrap_evaluator_with_features: applied-loadup-invocation",
         );
-        eval.set_variable("purify-flag", Value::NIL);
+        // temacs enters loadup.el with `purify-flag` already t: GNU seeds it in
+        // `init_alloc_once` (src/alloc.c) and `init_obarray_once`
+        // (src/lread.c), and only lisp/loadup.el clears it -- early at :101
+        // when there is nothing to dump, and finally at :558.  The flag is what
+        // makes a dumped image relocatable: while it is set, `Fload` records
+        // the *relative* name of every file it loads (src/lread.c:1330-1333),
+        // so a lazily-fetched doc string is dumped as ("faces.elc" . POS) and
+        // re-rooted on the running machine's `lisp-directory`, instead of
+        // freezing the build machine's absolute path into the image.
+        eval.set_variable("purify-flag", Value::T);
         eval.set_variable("max-lisp-eval-depth", Value::fixnum(1600));
         // PreloadOnly needs loadup.el:110-116's loading policy without taking
         // the dump branch; Dump repeats the same assignments idempotently in
@@ -6025,7 +6079,20 @@ pub fn create_bootstrap_evaluator_for_loadup(
         // manages eager expansion, etc.
         let loadup_path = lisp_dir.join("loadup.el");
         tracing::info!("Loading loadup.el from {}", loadup_path.display());
-        match load_file(&mut eval, &loadup_path) {
+        // GNU's temacs runs `-l loadup`, so the name it asks for is relative and
+        // the absolute path only ever appears as the file that was *found*.
+        // Keep that split here: `purify-flag` is set, so a request spelt
+        // absolutely would record this build machine's path in
+        // `preloaded-file-list` -- the one thing the flag exists to avoid.
+        let loadup_requested = load_path_lisp_string(Path::new("loadup.el"));
+        let loadup_found = load_path_lisp_string(&loadup_path);
+        match load_file_with_requested_and_found_options(
+            &mut eval,
+            &loadup_path,
+            &loadup_requested,
+            &loadup_found,
+            LoadOptions::EXPLICIT,
+        ) {
             Ok(_) => tracing::info!("loadup.el completed successfully"),
             Err(e) => {
                 if matches!(e, EvalError::Shutdown(_)) {

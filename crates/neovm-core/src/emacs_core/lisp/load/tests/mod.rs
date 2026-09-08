@@ -9539,6 +9539,57 @@ fn builtin_load_uses_hist_file_name_when_purify_flag_is_set() {
 }
 
 #[test]
+fn builtin_load_records_preloaded_files_only_while_purifying() {
+    // GNU src/lread.c:1473 pushes the name as *requested* onto
+    // `preloaded-file-list` while `purify-flag` is set, which is why the list
+    // reads "emacs-lisp/byte-run" rather than the path the file was found at.
+    crate::test_utils::init_test_tracing();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock before epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("neovm-load-preloaded-list-{unique}"));
+    fs::create_dir_all(&dir).expect("create temp fixture dir");
+    fs::write(dir.join("probe.el"), "(setq vm-preloaded-probe t)\n").expect("write fixture");
+
+    let load_path = Value::list(vec![Value::string(dir.to_string_lossy().to_string())]);
+
+    let mut purifying = super::super::eval::Context::new();
+    purifying.set_variable("load-path", load_path.clone());
+    purifying.set_variable("purify-flag", Value::T);
+    crate::emacs_core::builtins::builtin_load(&mut purifying, vec![Value::string("probe")])
+        .expect("load under purify-flag");
+    let recorded = purifying
+        .obarray()
+        .symbol_value("preloaded-file-list")
+        .cloned()
+        .unwrap_or(Value::NIL);
+    let recorded = list_to_vec(&recorded).expect("preloaded-file-list is a list");
+    assert_eq!(
+        recorded.first().and_then(|value| value.as_utf8_str()),
+        Some("probe"),
+        "a dumping load records the requested name, never an absolute path"
+    );
+
+    let mut plain = super::super::eval::Context::new();
+    plain.set_variable("load-path", load_path);
+    plain.set_variable("purify-flag", Value::NIL);
+    crate::emacs_core::builtins::builtin_load(&mut plain, vec![Value::string("probe")])
+        .expect("load without purify-flag");
+    assert_eq!(
+        plain
+            .obarray()
+            .symbol_value("preloaded-file-list")
+            .cloned()
+            .unwrap_or(Value::NIL),
+        Value::NIL,
+        "an ordinary runtime load records nothing"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn builtin_load_prepends_history_entry_and_preserves_existing_tail() {
     crate::test_utils::init_test_tracing();
     let unique = SystemTime::now()
