@@ -688,6 +688,93 @@ fn tab_pointer_test_frame(highlight_face: FaceId) -> FrameGlyphBuffer {
 }
 
 #[test]
+fn tab_bar_pointer_counts_compositions_as_one_primitive_not_one_per_source_character() {
+    let mut eval = Context::new();
+    crate::test_composition::install_rules(&mut eval);
+    for composition in ["e\u{301}", "👩‍💻"] {
+        let presentation = eval.begin_interaction_presentation();
+        let caption = eval.eval_str(&format!(
+            r##"(let ((caption (propertize "{composition}X " 'mouse-face 'tab-bar-tab-highlight)))
+              (put-text-property (1- (length caption)) (length caption) 'close-tab t caption)
+              caption)"##
+        )).expect("caption");
+        let table = FaceTable::new();
+        let resolver = FaceResolver::new(&table, 0xffffff, 0, 14.0, None);
+        let base_face = window_chrome_test_face(&resolver, &DisplayOrigin::TabBar);
+        let mut fonts = None;
+        let mut faces = FrameFaceAttempt::for_test_with_next_id(1);
+        let mut services = ChromeRowRenderServices::new(&mut fonts, &resolver, &mut faces)
+            .with_automatic_composition(crate::neovm_bridge::current_string_composition_rules(
+                &eval,
+            ));
+        let measured = FrameTabBarDisplayRowRequest {
+            row_index: 0,
+            y: 0.0,
+            width: 160.0,
+            height: 18.0,
+            metrics: DisplayRowFallbackMetrics::from_default_face_extents(8.0, 18.0, 14.0),
+            base_face: &base_face,
+            text: caption,
+            image_scale_environment: Default::default(),
+        }
+        .into_chrome_render_request(services.face_ids())
+        .render_row(&mut services, None)
+        .expect("tab row")
+        .measure();
+        let source_chars = composition.chars().count();
+        let items = [TabBarSourceItem {
+            caption,
+            key: Value::symbol("tab-1"),
+            binding: Value::symbol("tab-bar-select-tab"),
+            enabled: true,
+            char_range: 0..source_chars + 2,
+        }];
+        assert!(matches!(&measured.rendered().row().glyphs[1][0].glyph_type,
+            GlyphType::AutomaticComposite { text, .. } if text.as_ref() == composition));
+        let slots = tab_bar_pointer_slot_plan(&mut eval, measured.rendered(), caption, &items);
+        assert_eq!(slots.len(), 3, "one composition, X and close: {slots:?}");
+        let plan = tab_bar_presented_pointer_plan(
+            &mut eval,
+            presentation,
+            &slots,
+            &items,
+            18.0,
+            TabBarPointerAppearanceStyle::new(
+                test_tab_pointer_relief(true),
+                test_tab_pointer_relief(false),
+            ),
+            &[],
+            &[(Value::symbol("tab-bar-tab-highlight"), FaceId::new(33))],
+        );
+        let source = plan
+            .into_source_map(FrameRect::new(0.0, 0.0, 160.0, 18.0).unwrap(), 0)
+            .unwrap();
+        assert_eq!(
+            source.regions().len(),
+            2,
+            "body and close remain distinct clicks"
+        );
+        assert_ne!(
+            source.regions()[0].interaction(),
+            source.regions()[1].interaction()
+        );
+        assert_eq!(
+            source.appearances().len(),
+            1,
+            "whole caption shares one mouse-face"
+        );
+        assert_eq!(
+            source.appearances()[0]
+                .paint_spans()
+                .iter()
+                .map(|span| span.len())
+                .sum::<u32>(),
+            3
+        );
+    }
+}
+
+#[test]
 fn tab_bar_pointer_appearance_body_and_close_share_whole_tab_mouse_face() {
     let mut eval = Context::new();
     eval.setup_thread_locals();

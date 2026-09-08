@@ -1104,6 +1104,17 @@ pub(crate) struct DisplayRowGlyphSlot {
     col: usize,
     width_px: f32,
     width_cols: usize,
+    coverage: DisplayRowGlyphCoverage,
+}
+
+/// Source positions and paint primitives are not one-to-one. Composition
+/// members retain addressable positions, but only their head emits a glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DisplayRowGlyphCoverage {
+    Primitive {
+        source_chars: std::num::NonZeroUsize,
+    },
+    CompositionMember,
 }
 
 impl DisplayRowGlyphSlot {
@@ -1132,6 +1143,9 @@ impl DisplayRowGlyphSlot {
             col,
             width_px,
             width_cols,
+            coverage: DisplayRowGlyphCoverage::Primitive {
+                source_chars: std::num::NonZeroUsize::MIN,
+            },
         }
     }
 
@@ -1153,6 +1167,15 @@ impl DisplayRowGlyphSlot {
 
     pub(crate) fn width_cols(&self) -> usize {
         self.width_cols
+    }
+
+    /// Source characters represented by this slot's paint primitive. A
+    /// composition member is a source address only, not another paint glyph.
+    pub(crate) fn primitive_source_chars(&self) -> Option<std::num::NonZeroUsize> {
+        match self.coverage {
+            DisplayRowGlyphCoverage::Primitive { source_chars } => Some(source_chars),
+            DisplayRowGlyphCoverage::CompositionMember => None,
+        }
     }
 
     pub(crate) fn start_position(&self) -> DisplayRowPosition {
@@ -2011,9 +2034,11 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             &self.writer.row.glyphs[area_index][before_len..],
             self.writer.layout.char_width_px,
         );
+        let source_chars = std::num::NonZeroUsize::new(text.chars().count())
+            .expect("a selected automatic composition contains source characters");
         let mut byte_offset = 0usize;
         for (char_offset, ch) in text.chars().enumerate() {
-            slots.push(DisplayRowGlyphSlot::with_pointer_appearance(
+            let mut slot = DisplayRowGlyphSlot::with_pointer_appearance(
                 source_mapping.slot_source(&span.start, char_offset, byte_offset),
                 slot_start.x_px(),
                 slot_start.col(),
@@ -2028,7 +2053,13 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                     0
                 },
                 pointer_appearance.cloned(),
-            ));
+            );
+            slot.coverage = if char_offset == 0 {
+                DisplayRowGlyphCoverage::Primitive { source_chars }
+            } else {
+                DisplayRowGlyphCoverage::CompositionMember
+            };
+            slots.push(slot);
             byte_offset += ch.len_utf8();
         }
         self.advance(written);
