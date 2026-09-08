@@ -528,7 +528,7 @@ enum DisplayReplacementItemAppendFrame {
 enum DisplayReplacementItemRowGeometryUpdate {
     None,
     BeforeAppendGlyphMetrics { height_px: f32, ascent_px: f32 },
-    AfterCompleteRowExtents { height_px: f32, ascent_px: f32 },
+    AfterAppendGlyphMetrics { height_px: f32, ascent_px: f32 },
 }
 
 impl DisplayReplacementItemAppendRequest {
@@ -634,7 +634,7 @@ impl DisplayReplacementItemAppendTemplate {
                 DisplayItemKind::MediaReplacement(media_item.media()),
                 media_item.display_height_px(),
                 media_item.display_ascent_px(),
-                DisplayReplacementItemRowGeometryUpdate::AfterCompleteRowExtents {
+                DisplayReplacementItemRowGeometryUpdate::AfterAppendGlyphMetrics {
                     height_px: media_item.display_height_px(),
                     ascent_px: media_item.display_ascent_px(),
                 },
@@ -693,13 +693,16 @@ impl DisplayReplacementItemAppendTemplate {
         ) else {
             return position;
         };
-        if let DisplayReplacementItemRowGeometryUpdate::AfterCompleteRowExtents {
+        if let DisplayReplacementItemRowGeometryUpdate::AfterAppendGlyphMetrics {
             height_px,
             ascent_px,
         } = geometry_update
             && progress.is_complete_with_positive_width()
         {
-            row_geometry.include_row_extents(height_px, ascent_px);
+            // Media contributes ascent and descent around the shared baseline,
+            // like GNU's `produce_image_glyph`. Taking max(height) separately
+            // loses its descent whenever another glyph raises that baseline.
+            row_geometry.include_glyph_vertical_metrics(height_px, ascent_px);
         }
         progress.end()
     }

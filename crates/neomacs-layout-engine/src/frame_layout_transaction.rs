@@ -16,8 +16,8 @@ pub(crate) enum FrameRelayoutRequest {
     },
     Minibuffer {
         window_id: DisplayWindowId,
-        allocated_rows: usize,
-        required_rows: usize,
+        allocated_height_px: f32,
+        required_height_px: f32,
     },
     /// Lisp entered during leaf-local fontification changed canonical layout
     /// inputs. Discard the speculative frame and recollect before replaying.
@@ -79,8 +79,8 @@ mod tests {
         };
         let second = FrameRelayoutRequest::Minibuffer {
             window_id: DisplayWindowId::new(7),
-            allocated_rows: 1,
-            required_rows: 3,
+            allocated_height_px: 16.0,
+            required_height_px: 48.0,
         };
 
         assert_eq!(coordinator.request_retry(first), Ok(()));

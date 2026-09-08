@@ -651,35 +651,6 @@ fn max_mini_window_lines_for_window(
     max_mini_window_lines_from_value(raw, frame_rows)
 }
 
-/// Whole rows of `char_h` the mini-window's current pixel height holds.
-///
-/// GNU `resize_mini_window` compares the content's pixel height against the
-/// window's (`old_height = WINDOW_BOX_TEXT_HEIGHT (w)`, src/xdisp.c:13276,
-/// then `height > old_height` / `height != old_height`, 13395-13406), so a
-/// window shorter than one line grows.  Counting the allocation in rows must
-/// keep that property: a mini-window left shorter than one line of the
-/// current font -- a restored window configuration saved under a smaller
-/// font, or a leaf carried over a font change -- holds zero rows, not one.
-/// Clamping to one row here hid exactly that state and the echo area stayed
-/// clipped until something else resized the mini-window.  The row count is
-/// the same rule `grow_mini_window` lands on (`mini_window_rows`), so the
-/// grow this check requests always moves the window.  GNU's unit also adds
-/// `line-spacing` placed above the line (src/xdisp.c:13324-13325) and grows
-/// by exact pixels; rows of `char_h` are kept here, so image or line-spacing
-/// content lands on a row multiple that GNU would leave at its pixel height.
-fn allocated_mini_rows(bounds_height: f32, char_h: f32) -> usize {
-    neovm_core::window::mini_window_rows(bounds_height, char_h)
-}
-
-fn minibuffer_growth_target(
-    used_rows: usize,
-    allocated_rows: usize,
-    max_lines: f32,
-) -> Option<usize> {
-    let achievable_rows = used_rows.min(max_lines.floor().max(1.0) as usize);
-    (achievable_rows > allocated_rows).then_some(achievable_rows)
-}
-
 fn tab_bar_button_relief_geometry(evaluator: &neovm_core::emacs_core::Context) -> (f32, f32, f32) {
     let margin = evaluator
         .obarray()
@@ -2424,13 +2395,11 @@ impl LayoutEngine {
                 return Some(neovm_core::window::WindowLayoutQuery::new(end, geometry));
             }
 
-            // --- Minibuffer auto-resize check (GNU xdisp.c:13161-13301) ---
-            //
-            // After laying out all windows, check if the minibuffer used
-            // more display rows than its allocated height. If so, grow
-            // the minibuffer and re-layout the entire frame (one retry).
-            // Also shrink back when the minibuffer content fits in fewer
-            // rows than currently allocated.
+            // GNU `resize_mini_window` compares measured content pixels with
+            // the live allocation. Plan an achievable change before rejecting
+            // this speculative frame, then apply it and retry within the
+            // shared convergence budget. Resize policy controls which planned
+            // growth or shrink is permitted; the frame owns its geometry.
             if let Some(mini_params) = window_params_list.last()
                 && mini_params.is_minibuffer()
                 && let Some(mini_content_height_px) = self.output_window_content_height_px(
@@ -2439,8 +2408,6 @@ impl LayoutEngine {
                 )
             {
                 let char_h = frame_params.char_height.max(1.0);
-                let mini_rows_used = (mini_content_height_px / char_h).ceil().max(1.0) as usize;
-                let allocated_rows = allocated_mini_rows(mini_params.bounds.height, char_h);
                 let frame_rows = frame_params.height / char_h;
                 let max_mini_lines =
                     max_mini_window_lines_for_window(evaluator, mini_params, frame_rows);
@@ -2472,75 +2439,41 @@ impl LayoutEngine {
                     .map(|b| b.accessible_emacs_byte_range().is_empty())
                     .unwrap_or(true);
 
-                if let Some(required_rows) =
-                    minibuffer_growth_target(mini_rows_used, allocated_rows, max_mini_lines)
-                {
-                    // --- Grow ---
-                    let delta = (required_rows as i32) - (allocated_rows as i32);
-
-                    if resize_mode.should_grow() {
-                        tracing::debug!(
-                            "minibuffer auto-resize: grow by {} rows \
-                                         (used={}, required={}, allocated={})",
-                            delta,
-                            mini_rows_used,
-                            required_rows,
-                            allocated_rows,
-                        );
-                        let request = FrameRelayoutRequest::Minibuffer {
-                            window_id: DisplayWindowId::new(mini_params.window_id),
-                            allocated_rows,
-                            required_rows,
-                        };
-                        if !Self::accept_frame_relayout_request(
-                            &mut layout_coordinator,
-                            evaluator,
-                            &mut frame_window_end_attempts,
-                            presentation_id,
-                            request,
-                        ) {
-                            return None;
+                let resize = evaluator
+                    .frame_manager()
+                    .get(frame_id)
+                    .and_then(|frame| {
+                        frame.plan_mini_window_resize(mini_content_height_px, max_mini_lines)
+                    })
+                    .filter(|resize| {
+                        if resize.is_growth() {
+                            resize_mode.should_grow()
+                        } else {
+                            resize_mode.should_shrink(
+                                evaluator.echo_area_resize_exact_pending(),
+                                visible_region_empty,
+                            )
                         }
-                        if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
-                            frame.grow_mini_window_with_max_lines(delta, max_mini_lines);
-                        }
-                        continue; // restart the layout loop
+                    });
+                if let Some(resize) = resize {
+                    let request = FrameRelayoutRequest::Minibuffer {
+                        window_id: DisplayWindowId::new(mini_params.window_id),
+                        allocated_height_px: resize.previous_height_px(),
+                        required_height_px: resize.height_px(),
+                    };
+                    if !Self::accept_frame_relayout_request(
+                        &mut layout_coordinator,
+                        evaluator,
+                        &mut frame_window_end_attempts,
+                        presentation_id,
+                        request,
+                    ) {
+                        return None;
                     }
-                } else if mini_rows_used < allocated_rows && allocated_rows > 1 {
-                    // --- Shrink ---
-                    // `exact_p` is GNU's post-command exact resize
-                    // (`resize_echo_area_exactly`, run with
-                    // `minibuf_level == 0`); `visible_region_empty`
-                    // (computed above) is the `BEGV == ZV` case.
-                    let exact = evaluator.echo_area_resize_exact_pending();
-                    let should_shrink = resize_mode.should_shrink(exact, visible_region_empty);
-
-                    if should_shrink {
-                        tracing::debug!(
-                            "minibuffer auto-resize: shrink \
-                                         (used={}, allocated={})",
-                            mini_rows_used,
-                            allocated_rows,
-                        );
-                        let request = FrameRelayoutRequest::Minibuffer {
-                            window_id: DisplayWindowId::new(mini_params.window_id),
-                            allocated_rows,
-                            required_rows: mini_rows_used,
-                        };
-                        if !Self::accept_frame_relayout_request(
-                            &mut layout_coordinator,
-                            evaluator,
-                            &mut frame_window_end_attempts,
-                            presentation_id,
-                            request,
-                        ) {
-                            return None;
-                        }
-                        if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
-                            frame.shrink_mini_window();
-                        }
-                        continue; // restart the layout loop
+                    if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
+                        frame.apply_mini_window_resize(resize);
                     }
+                    continue;
                 }
             }
 

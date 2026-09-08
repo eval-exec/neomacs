@@ -3621,6 +3621,49 @@ fn grow_mini_window_lands_on_whole_rows_of_the_current_unit() {
 }
 
 #[test]
+fn mini_window_pixel_resize_stops_when_frame_cannot_hold_a_full_line() {
+    let mut frames = FrameManager::new();
+    let id = frames.create_frame("short-frame", 320, 10, BufferId(1));
+    let frame = frames.get_mut(id).expect("frame");
+    frame.char_height = 17.0;
+    frame.sync_window_area_bounds();
+    if let Some(resize) = frame.plan_mini_window_resize(17.0, 10.0) {
+        frame.apply_mini_window_resize(resize);
+    }
+    assert!(
+        frame.plan_mini_window_resize(17.0, 10.0).is_none(),
+        "an impossible growth must not trigger another redisplay retry"
+    );
+    let mini = frame.minibuffer_leaf.as_ref().expect("minibuffer").bounds();
+    assert_eq!(mini.height, 10.0);
+    assert_eq!(mini.y + mini.height, 10.0);
+}
+
+#[test]
+fn mini_window_pixel_resize_keeps_the_last_whole_line_at_a_fractional_unit() {
+    let mut frames = FrameManager::new();
+    let id = frames.create_frame("fractional-mini-cap", 320, 200, BufferId(1));
+    let frame = frames.get_mut(id).expect("frame");
+    frame.char_height = 11.9;
+    frame.sync_window_area_bounds();
+    let resize = frame
+        .plan_mini_window_resize(60.0, 3.0)
+        .expect("content grows to the three-line cap");
+    frame.apply_mini_window_resize(resize);
+    assert_eq!(
+        frame
+            .minibuffer_leaf
+            .as_ref()
+            .expect("minibuffer")
+            .bounds()
+            .height,
+        35.699997,
+        "a three-line cap must not lose its last line to float division"
+    );
+    assert!(frame.plan_mini_window_resize(60.0, 3.0).is_none());
+}
+
+#[test]
 fn mini_window_rows_tolerates_float_division_at_whole_rows() {
     // 3 * 11.9 divides to 2.9999998 in f32; that is three rows, not two.
     assert_eq!(mini_window_rows(3.0 * 11.9, 11.9), 3);

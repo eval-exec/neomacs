@@ -155,9 +155,30 @@ fn resize_mini_windows_mode_parses_gnu_values() {
 
 #[test]
 fn minibuffer_growth_stops_at_maximum_achievable_rows() {
-    assert_eq!(super::minibuffer_growth_target(8, 4, 10.0), Some(8));
-    assert_eq!(super::minibuffer_growth_target(11, 9, 10.0), Some(10));
-    assert_eq!(super::minibuffer_growth_target(11, 10, 10.0), None);
+    let mut eval = Context::new();
+    let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
+    let id = eval
+        .frame_manager_mut()
+        .create_frame("mini-pixel-target", 80, 50, buffer);
+    let frame = eval.frame_manager_mut().get_mut(id).expect("frame");
+    frame.char_height = 1.0;
+    for (allocated, content, expected) in [
+        (4.0, 8.0, Some(8.0)),
+        (9.0, 11.0, Some(10.0)),
+        (10.0, 11.0, None),
+    ] {
+        let mini = frame.minibuffer_leaf.as_mut().expect("mini");
+        let mut bounds = *mini.bounds();
+        bounds.height = allocated;
+        mini.set_bounds(bounds);
+        frame.sync_window_area_bounds();
+        assert_eq!(
+            frame
+                .plan_mini_window_resize(content, 10.0)
+                .map(|resize| resize.height_px()),
+            expected
+        );
+    }
 }
 
 #[test]
@@ -34457,37 +34478,39 @@ fn inactive_echo_area_grows_a_sub_line_mini_window_to_one_line_of_the_font() {
         .char_height;
     assert!(unit > 4.0, "realized GUI line height, got {unit}");
 
-    // Plant the stale state: a mini-window shorter than one line of that
-    // font, as a restored configuration saved under a smaller font leaves it.
-    {
-        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
-        let mini = frame.minibuffer_leaf.as_mut().expect("own minibuffer");
-        let mut bounds = *mini.bounds();
-        bounds.height = unit - 4.0;
-        mini.set_bounds(bounds);
-        frame.sync_window_area_bounds();
-    }
-    engine.layout_frame_rust(&mut eval, frame_id);
+    // Both stale font allocations and sub-pixel shortfalls must be repaired.
+    // Half-pixel rounding is not evidence that the content actually fits.
+    for shortfall in [4.0, 0.25] {
+        {
+            let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+            let mini = frame.minibuffer_leaf.as_mut().expect("own minibuffer");
+            let mut bounds = *mini.bounds();
+            bounds.height = unit - shortfall;
+            mini.set_bounds(bounds);
+            frame.sync_window_area_bounds();
+        }
+        engine.layout_frame_rust(&mut eval, frame_id);
 
-    let frame = eval.frame_manager().get(frame_id).expect("frame");
-    let mini = frame
-        .minibuffer_leaf
-        .as_ref()
-        .expect("own minibuffer")
-        .bounds();
-    let root_bounds = frame.root_window.bounds();
-    assert_eq!(
-        mini.height, unit,
-        "a sub-line mini-window grows to exactly one line of the font"
-    );
-    assert_eq!(
-        mini.y + mini.height,
-        430.0,
-        "mini-window ends at the frame bottom"
-    );
-    assert_eq!(
-        root_bounds.y + root_bounds.height,
-        mini.y,
-        "root window ends where the mini-window starts"
-    );
+        let frame = eval.frame_manager().get(frame_id).expect("frame");
+        let mini = frame
+            .minibuffer_leaf
+            .as_ref()
+            .expect("own minibuffer")
+            .bounds();
+        let root_bounds = frame.root_window.bounds();
+        assert_eq!(
+            mini.height, unit,
+            "a sub-line mini-window grows to exactly one line of the font"
+        );
+        assert_eq!(
+            mini.y + mini.height,
+            430.0,
+            "mini-window ends at the frame bottom"
+        );
+        assert_eq!(
+            root_bounds.y + root_bounds.height,
+            mini.y,
+            "root window ends where the mini-window starts"
+        );
+    }
 }
