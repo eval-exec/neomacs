@@ -5664,7 +5664,15 @@ impl Context {
         if let Some(sym_id) = sym_id
             && let Some(func) = prefetched_cell
         {
-            if let Some((target_sym_id, entry)) = subr_entry_from_value(func)
+            // One look at the function cell decides both shapes below.  Asking
+            // twice meant two probes of the subr registry -- a thread-local
+            // borrow and a copy of the whole entry each time -- for every
+            // interpreted form, 4.7M probes across a magit-status run where
+            // 3.4M forms were evaluated.  Nothing between the two reads can
+            // change the answer: `list_length` and a special form that
+            // declines to dispatch both leave the cell and the registry alone.
+            let subr = subr_entry_from_value(func);
+            if let Some((target_sym_id, entry)) = subr
                 && entry.dispatch_kind == SubrDispatchKind::SpecialForm
                 && target_sym_id == sym_id
             {
@@ -5678,7 +5686,7 @@ impl Context {
                     return result;
                 }
             }
-            if let Some((target_sym_id, entry)) = subr_entry_from_value(func)
+            if let Some((target_sym_id, entry)) = subr
                 && entry.dispatch_kind == SubrDispatchKind::Builtin
                 && Self::subr_entry_uses_fixed_value_call(entry)
             {
