@@ -726,7 +726,9 @@ impl Context {
         debug_assert!(args_start + nargs <= self.bc_buf.len());
         let args = match BytecodeBacktraceSpan::try_new(args_start, nargs) {
             Some(span) => BacktraceArgs::evaluated_bc_stack(span),
-            None => self.backtrace_args_from_oversized_bc_stack(args_start, nargs),
+            None => self.backtrace_args_from_oversized_bc_stack(
+                BytecodeBacktraceRange::new(args_start, nargs),
+            ),
         };
         self.specpdl[count] = SpecBinding::Backtrace {
             function,
