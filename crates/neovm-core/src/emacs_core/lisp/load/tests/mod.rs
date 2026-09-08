@@ -11076,10 +11076,15 @@ fn elc_loading_defines_defcustom_variables() {
 
     // Test Form 0 in the same evaluator using the streaming Value reader
     let raw_bytes = std::fs::read(general_elc).unwrap();
-    let content = super::skip_elc_header(&raw_bytes);
-    let (form0, _next_pos) = crate::emacs_core::value_reader::read_one(&content, 0, &test_ob())
-        .expect("read first form")
-        .expect("EOF before first form");
+    let content_start = super::skip_elc_header(&raw_bytes);
+    let (form0, _next_pos) = crate::emacs_core::value_reader::read_one_from_encoded_file_bytes(
+        &raw_bytes[content_start..],
+        0,
+        &test_ob(),
+        None,
+    )
+    .expect("read first form")
+    .expect("EOF before first form");
     eprintln!("Read Form 0 from general.elc via value reader");
 
     let result = eval

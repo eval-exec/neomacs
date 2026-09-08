@@ -872,16 +872,16 @@ fn read_window_elc_does_not_leak_docstring_fragments() {
             return;
         }
     };
-    // `.elc` loading wraps raw bytes in a Latin-1 envelope and selects the
-    // explicit encoded-file reader state, so it remains distinct from a
-    // genuine unibyte Lisp string or buffer.
-    let content: String = bytes.iter().map(|&b| b as char).collect();
+    // `.elc` loading reads the file's own bytes through the encoded-file
+    // reader state, which stays distinct from a genuine unibyte Lisp string
+    // or buffer.
+    let content: &[u8] = &bytes;
 
     // Skip the .elc preamble: header lines starting with `;` until the
     // first newline-then-paren.
     let mut pos = 0;
     while pos < content.len() {
-        if content[pos..].starts_with("\n(") {
+        if content[pos..].starts_with(b"\n(") {
             pos += 1;
             break;
         }
@@ -891,7 +891,7 @@ fn read_window_elc_does_not_leak_docstring_fragments() {
     let mut form_idx = 0;
     while form_idx < 50 {
         let res = read_one_from_encoded_file_bytes(
-            &content,
+            content,
             pos,
             &crate::emacs_core::symbol::Obarray::new(),
             None,

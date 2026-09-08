@@ -145,12 +145,12 @@ pub fn read_one_with_source_multibyte(
 /// This is intentionally separate from the unibyte string API above.  GNU
 /// decodes file input but preserves each byte of unibyte Lisp objects.
 pub(crate) fn read_one_from_encoded_file_bytes(
-    input: &str,
+    input: &[u8],
     start: usize,
     obarray: &super::symbol::Obarray,
     shorthands: Option<&ReadSymbolShorthands>,
 ) -> Result<Option<(Value, usize)>, ReadError> {
-    let mut reader = Reader::new(input, ReaderSourceSemantics::EncodedFileBytes, obarray);
+    let mut reader = Reader::new_file_bytes(input, obarray);
     reader.shorthands = shorthands;
     reader.pos = start;
     if !reader.skip_ws_and_comments() {
@@ -399,6 +399,11 @@ impl std::error::Error for ReadError {}
 
 enum ReaderSource<'a> {
     Runtime(&'a str),
+    /// A loaded `.elc` file's raw bytes.  GNU reads a byte-compiled file
+    /// straight from the file (`readbyte_from_file`); this port used to widen
+    /// every byte into a Latin-1 `String` first, which copied the whole file
+    /// and made a byte >= 0x80 two bytes wide for the rest of the read.
+    FileBytes(&'a [u8]),
     LispString(&'a crate::heap_types::LispString),
     Buffer(&'a Buffer),
 }
@@ -586,6 +591,25 @@ impl<'a> Reader<'a> {
         Self {
             source: ReaderSource::Runtime(input),
             source_semantics,
+            pos: 0,
+            limit: input.len(),
+            read_labels: std::collections::HashMap::new(),
+            locate_syms: false,
+            readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
+            obarray,
+            shorthands: None,
+            step_cache: Cell::new(None),
+        }
+    }
+
+    /// Read a `.elc` file's bytes directly, the way GNU's `readbyte_from_file`
+    /// does.  Each byte is its own character, which is exactly what the
+    /// Latin-1 envelope used to deliver, so every token, string and escape
+    /// path sees the identical code sequence.
+    fn new_file_bytes(input: &'a [u8], obarray: &'a super::symbol::Obarray) -> Self {
+        Self {
+            source: ReaderSource::FileBytes(input),
+            source_semantics: ReaderSourceSemantics::EncodedFileBytes,
             pos: 0,
             limit: input.len(),
             read_labels: std::collections::HashMap::new(),
@@ -821,6 +845,8 @@ impl<'a> Reader<'a> {
     fn source_character_distance(&self, start: usize, end: usize) -> usize {
         debug_assert!(start <= end);
         match self.source {
+            // One byte, one character.
+            ReaderSource::FileBytes(_) => end - start,
             ReaderSource::Runtime(_) => {
                 let mut byte = start;
                 let mut chars = 0;
@@ -2081,7 +2107,9 @@ impl<'a> Reader<'a> {
         }
 
         match self.source {
-            ReaderSource::Runtime(_) => self.skip_exact_source_bytes(len)?,
+            ReaderSource::Runtime(_) | ReaderSource::FileBytes(_) => {
+                self.skip_exact_source_bytes(len)?
+            }
             ReaderSource::LispString(_) | ReaderSource::Buffer(_) => {
                 self.skip_dynamic_doc_string_in_non_file_source();
             }
@@ -2604,6 +2632,19 @@ impl<'a> Reader<'a> {
     /// where docstrings contain U+2019 (`'`) stored as `0xe2 0x80 0x99`.
     fn skip_exact_source_bytes(&mut self, len: usize) -> Result<(), ReadError> {
         match self.source {
+            // GNU `skip_dyn_bytes` skips BYTES; with the file's own bytes as
+            // the source that is what a byte count means again.
+            ReaderSource::FileBytes(_) => {
+                let end = self
+                    .pos
+                    .checked_add(len)
+                    .ok_or_else(|| self.error("byte skip past end of input"))?;
+                if end > self.limit {
+                    return Err(self.error("byte skip past end of input"));
+                }
+                self.pos = end;
+                Ok(())
+            }
             ReaderSource::Runtime(input) => {
                 let mut chars = input[self.pos..self.limit].chars();
                 let mut bytes_advanced = 0usize;
@@ -2679,6 +2720,7 @@ impl<'a> Reader<'a> {
     fn byte_backed_source(&self) -> Option<&'a [u8]> {
         let bytes: &'a [u8] = match self.source {
             ReaderSource::Runtime(s) => s.as_bytes(),
+            ReaderSource::FileBytes(b) => b,
             ReaderSource::LispString(input) => input.as_bytes(),
             ReaderSource::Buffer(_) => return None,
         };
@@ -2704,6 +2746,7 @@ impl<'a> Reader<'a> {
             return None;
         }
         match self.source {
+            ReaderSource::FileBytes(input) => Some((u32::from(input[pos]), pos + 1)),
             ReaderSource::Runtime(input) => {
                 crate::emacs_core::string_escape::storage_code_step(input, pos, true)
                     .filter(|(_, next)| *next <= self.limit)
@@ -2787,6 +2830,10 @@ impl<'a> Reader<'a> {
         );
         match self.source {
             ReaderSource::Runtime(input) => input[start..end].to_string(),
+            // Only ASCII numeric sub-parsers read this slice.
+            ReaderSource::FileBytes(input) => {
+                String::from_utf8_lossy(&input[start..end]).into_owned()
+            }
             ReaderSource::LispString(input) => {
                 let slice = input
                     .slice(start, end)

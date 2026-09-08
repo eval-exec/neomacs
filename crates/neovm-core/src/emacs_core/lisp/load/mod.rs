@@ -1747,7 +1747,7 @@ fn streaming_readevalloop(
     eval: &mut super::eval::Context,
     path: &Path,
     hist_file_name: &LispString,
-    content: &str,
+    content: &[u8],
     source: super::reader::ReadSourceObject,
     shorthands: Option<&ReadSymbolShorthands>,
     macroexpand_fn: Option<Value>,
@@ -1787,7 +1787,10 @@ fn streaming_readevalloop(
 
         if tracing::enabled!(tracing::Level::DEBUG) {
             let preview = load_form_log_preview(path, || {
-                content[form_start..next_pos].chars().take(160).collect()
+                String::from_utf8_lossy(&content[form_start..next_pos])
+                    .chars()
+                    .take(160)
+                    .collect()
             });
             tracing::debug!(
                 "{} FORM[{}/streaming]: {}",
@@ -1818,7 +1821,10 @@ fn streaming_readevalloop(
             && should_log_load_form_error(eval, e)
         {
             let preview = load_form_log_preview(path, || {
-                content[form_start..next_pos].chars().take(120).collect()
+                String::from_utf8_lossy(&content[form_start..next_pos])
+                    .chars()
+                    .take(120)
+                    .collect()
             });
             log_streaming_load_form_error(eval, &file_name, form_idx, preview, e);
         }
@@ -2707,7 +2713,8 @@ fn load_file_body(
                 vec![Value::string(stale_message)],
             );
         }
-        let content = skip_elc_header(&raw_bytes);
+        let content_start = skip_elc_header(&raw_bytes);
+        let content = &raw_bytes[content_start..];
         let lexical_binding = elc_has_lexical_binding(&raw_bytes);
         with_load_context(eval, &hist_file_name, found, lexical_binding, |eval| {
             // GNU `Fload` reads a `.elc` from the file itself, so its reader
@@ -2715,7 +2722,7 @@ fn load_file_body(
             // `load-true-file-name` this context just bound.
             let source =
                 super::reader::ReadSourceObject::LoadFile(Value::heap_string(found.clone()));
-            streaming_readevalloop(eval, path, &hist_file_name, &content, source, None, None)
+            streaming_readevalloop(eval, path, &hist_file_name, content, source, None, None)
         })
     } else {
         // GNU `Fload` (`src/lread.c`) lets the coding system swallow a leading
@@ -2805,49 +2812,34 @@ pub(crate) fn eval_lisp_source_file_in_context(
 
 /// Skip the `;ELC` magic header in a byte-compiled Elisp file.
 /// Returns the remaining content as a string.
-fn skip_elc_header(raw_bytes: &[u8]) -> String {
-    // .elc files start with ";ELC" magic bytes (0x3B 0x45 0x4C 0x43)
-    // followed by version bytes (typically 0x1C 0x00 0x00 0x00 for Emacs 28+).
-    // Then comment lines starting with ";;".
-    //
-    // We need to skip all bytes up to the first non-comment line.
-    //
-    // GNU Emacs `.elc` files mix ASCII source (defvar, defun, etc.) with
-    // unibyte bytecode strings inside `#[...]` byte-code-function literals.
-    // The bytecode strings contain raw bytes 0x00-0xFF where bytes >= 0x80
-    // are NOT valid UTF-8 starts (e.g., 0xC0 0x87 = `constant 0; return`).
-    //
-    // We CANNOT use `decode_emacs_utf8` here because it replaces non-UTF-8
-    // bytes with U+FFFD or escapes, corrupting the bytecode.  Instead, use
-    // Latin-1 encoding: each raw byte 0-255 becomes the Unicode code point
-    // with the same value, encoded as UTF-8 in the resulting Rust String.
-    // This preserves all 256 byte values losslessly, and `string_value_to_bytes`
-    // (which truncates each char to u8) recovers the original bytes exactly.
-    let content: String = raw_bytes.iter().map(|&b| b as char).collect();
+/// The byte offset of the first form in a `.elc` file: past the `;ELC` magic,
+/// its version bytes and the header comment lines.
+///
+/// GNU reads a byte-compiled file straight from the file
+/// (`readbyte_from_file`).  This used to widen the whole file into a Latin-1
+/// `String` first -- one `char` per byte, so every byte >= 0x80 became two --
+/// purely to find this offset and to hand the reader a `&str`.
+fn skip_elc_header(raw_bytes: &[u8]) -> usize {
     let mut start = 0;
 
-    // Skip bytes until we find the first line that doesn't start with ';' or
-    // is not a special header byte. The magic is ";ELC" + 4 version bytes.
-    let bytes = content.as_bytes();
-
-    // First, skip the 8-byte magic header if present
-    if bytes.starts_with(b";ELC") && bytes.len() >= 8 {
+    // The magic is ";ELC" + 4 version bytes.
+    if raw_bytes.starts_with(b";ELC") && raw_bytes.len() >= 8 {
         start = 8;
         // Skip any additional non-printable/non-newline header bytes
-        while start < bytes.len() && bytes[start] != b'\n' && bytes[start] != b';' {
+        while start < raw_bytes.len() && raw_bytes[start] != b'\n' && raw_bytes[start] != b';' {
             start += 1;
         }
     }
 
     // Now skip comment lines
-    while start < bytes.len() {
-        if bytes[start] == b'\n' {
+    while start < raw_bytes.len() {
+        if raw_bytes[start] == b'\n' {
             start += 1;
             continue;
         }
-        if bytes[start] == b';' {
+        if raw_bytes[start] == b';' {
             // Skip to end of line
-            while start < bytes.len() && bytes[start] != b'\n' {
+            while start < raw_bytes.len() && raw_bytes[start] != b'\n' {
                 start += 1;
             }
             continue;
@@ -2855,7 +2847,7 @@ fn skip_elc_header(raw_bytes: &[u8]) -> String {
         break;
     }
 
-    content[start..].to_string()
+    start
 }
 
 /// Check if an .elc file has lexical-binding enabled in its header.
