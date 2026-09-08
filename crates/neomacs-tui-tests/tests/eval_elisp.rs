@@ -844,16 +844,19 @@ fn eval_expression() {
 
 #[test]
 fn visited_file_modtime_returns_cons_after_file_visit() {
+    // GNU fileio.c returns the visited file's actual recorded mtime. Two
+    // independently written HOME files need not have equal mtimes, even when
+    // their contents match. Both editors must visit the same immutable file.
+    let fixture = write_shared_temp_file("modtime-test.el", "(message \"hello\")\n");
+    std::fs::File::options()
+        .write(true)
+        .open(fixture.path())
+        .expect("open timestamp fixture")
+        .set_modified(std::time::UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_789))
+        .expect("set timestamp fixture's nanosecond mtime");
     let (mut gnu, mut neo) = boot_pair("");
 
-    // Visit a file with insert-file-contents :visit
-    open_home_file(
-        &mut gnu,
-        &mut neo,
-        "modtime-test.el",
-        "(message \"hello\")\n",
-        "C-x C-f",
-    );
+    open_shared_file(&mut gnu, &mut neo, fixture.path(), "C-x C-f");
 
     // Evaluate (visited-file-modtime) — should return a cons, not 0
     send_both(&mut gnu, &mut neo, "M-:");
@@ -867,13 +870,11 @@ fn visited_file_modtime_returns_cons_after_file_visit() {
     }
     send_both(&mut gnu, &mut neo, "RET");
 
-    // Result should show a cons like (12345 67890) in the echo area,
-    // not the integer 0
-    let ready = |grid: &[String]| {
-        grid.iter().rev().take(4).any(|row| {
-            row.contains('(') && row.chars().filter(|&c| c.is_ascii_digit()).count() >= 4
-        })
-    };
+    // GNU 31.1, visiting a file with the above filesystem timestamp, returns
+    // all four components, including the sub-microsecond tail. Do not mask or
+    // round the value to make the screen comparison pass.
+    let expected = "(25939 61696 123456 789000)";
+    let ready = |grid: &[String]| grid.last().is_some_and(|row| row.trim() == expected);
     gnu.read_until(Duration::from_secs(6), ready);
     neo.read_until(Duration::from_secs(8), ready);
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
@@ -882,9 +883,10 @@ fn visited_file_modtime_returns_cons_after_file_visit() {
         let grid = session.text_grid();
         let empty = String::new();
         let echo = grid.last().unwrap_or(&empty);
-        assert!(
-            !echo.contains(" 0 "),
-            "{label}: visited-file-modtime should return cons, not 0. Echo: {echo}"
+        assert_eq!(
+            echo.trim(),
+            expected,
+            "{label}: visited-file-modtime must preserve the exact filesystem timestamp"
         );
     }
     assert_pair_exact_display(
