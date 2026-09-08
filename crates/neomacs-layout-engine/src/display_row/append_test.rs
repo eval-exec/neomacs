@@ -8418,6 +8418,47 @@ fn buffer_text_window_finish_request_closes_window_and_returns_snapshot_artifact
 }
 
 #[test]
+fn string_only_display_rows_do_not_shrink_the_visible_viewport() {
+    let mut eval = Context::new();
+    let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
+    eval.buffer_manager_mut()
+        .get_mut(buffer_id)
+        .unwrap()
+        .insert("a\nb\n");
+    let buffer = eval.buffer_manager().get(buffer_id).unwrap();
+    let access = RustBufferAccess::new(buffer);
+    let mut string_row = emitted_row(0, 0, 16, 1, 1);
+    // An overlay before-string can own a complete display row without a
+    // buffer glyph. GNU still counts its height in try_scrolling's iterator.
+    string_row.start_buffer_pos = None;
+    string_row.end_buffer_pos = None;
+    let rows = [
+        string_row,
+        emitted_row(1, 16, 16, 1, 2),
+        emitted_row(2, 32, 16, 3, 5),
+    ];
+    let outcome = TextWindowVisibilityRetryRequest::new(
+        &rows,
+        0,
+        0,
+        4,
+        4,
+        4,
+        true,
+        0,
+        48,
+        ScrollPolicy::Unlimited,
+        0,
+        None,
+        &access,
+    )
+    .decide();
+    assert!(!outcome.point_beyond_visible_span());
+    assert_eq!(outcome.scroll_down_window_start(), None);
+    assert_eq!(outcome.retry_window_start(), None);
+}
+
+#[test]
 fn buffer_text_window_visibility_retry_request_scrolls_down_from_visible_rows() {
     let mut eval = Context::new();
     let buf_id = eval

@@ -19,7 +19,7 @@ use crate::display_row::special_glyphs::{
 use crate::display_row::walk_state::{
     DisplayRowSourceStart, next_window_start_for_partially_visible_point_row,
     next_window_start_for_point_line_continuation, next_window_start_from_visible_rows,
-    visible_rows_below,
+    scrollable_row_count,
 };
 use crate::display_status_line::ChromeRowRenderServices;
 use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
@@ -919,7 +919,11 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         point_beyond_visible_span: bool,
         byte_at_charpos: &impl Fn(i64) -> Option<u8>,
     ) -> Option<i64> {
-        let laid_out_rows = visible_rows_below(self.rows, self.window_start);
+        // GNU measures display height, including rows entirely produced by a
+        // string. Buffer anchors say where a later walk can resume; they do
+        // not say how many display rows are visible. Keep those two measures
+        // separate or a before-string at BOL spuriously shrinks the viewport.
+        let laid_out_rows = self.rows.len() as i64;
         let bottom_row = last_usable_row(laid_out_rows as usize, self.scroll_margin);
 
         // Which display row point landed on. Inside the laid-out rows this is
@@ -953,7 +957,8 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
             let start = next_window_start_from_visible_rows(self.rows, self.window_start, lines)?;
             // Rows below the window were never laid out; walk the remainder in
             // buffer lines. Under-shooting is safe — the retry runs again.
-            let unsatisfied = lines - laid_out_rows.min(lines);
+            let scrollable_rows = scrollable_row_count(self.rows, self.window_start);
+            let unsatisfied = lines - scrollable_rows.min(lines);
             Some(line_start_below(
                 start,
                 unsatisfied,

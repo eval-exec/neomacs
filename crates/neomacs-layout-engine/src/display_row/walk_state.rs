@@ -1253,10 +1253,13 @@ pub(crate) fn next_window_start_from_visible_rows(
     Some(chosen)
 }
 
-/// Rows the caller can still scroll through beyond `window_start_after`, i.e.
+/// Addressable buffer starts the caller can scroll through beyond `current_start`, i.e.
 /// how much of a requested scroll [`next_window_start_from_visible_rows`] could
 /// actually satisfy.
-pub(crate) fn visible_rows_below(rows: &[DisplayRowSnapshot], current_start: i64) -> i64 {
+///
+/// This is NOT the number of visible display rows: a string-only row can
+/// occupy screen space without offering a new buffer position to resume at.
+pub(crate) fn scrollable_row_count(rows: &[DisplayRowSnapshot], current_start: i64) -> i64 {
     rows.iter()
         .filter_map(row_next_window_start_charpos)
         .filter(|&pos| pos > current_start)
