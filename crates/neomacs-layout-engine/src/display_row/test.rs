@@ -276,7 +276,7 @@ fn display_row_render_item_preserves_media_as_one_row_item() {
         height: 11.0,
     });
     let source = DisplayItem::new(
-        SourceSpan::synthetic(1, 0, 1),
+        crate::display_item::SourceSpan::synthetic(1, 0, 1),
         RenderFaceRef::FaceId(FaceId::new(7)),
         DisplayItemKind::MediaReplacement(media),
     );
@@ -1284,11 +1284,17 @@ fn row_text_expanding_stretches(row: &GlyphRow) -> String {
         .filter(|glyph| !glyph.padding)
         .flat_map(|glyph| match &glyph.glyph_type {
             GlyphType::Char { ch } => std::iter::repeat_n(*ch, 1).collect::<Vec<_>>(),
-            GlyphType::Composite { text } => text.chars().collect::<Vec<_>>(),
+            GlyphType::Composite { text } | GlyphType::AutomaticComposite { text, .. } => {
+                text.chars().collect::<Vec<_>>()
+            }
             GlyphType::Stretch { width_cols } => {
                 std::iter::repeat_n(' ', usize::from(*width_cols)).collect::<Vec<_>>()
             }
-            _ => Vec::new(),
+            GlyphType::Glyphless { .. }
+            | GlyphType::Image { .. }
+            | GlyphType::Video { .. }
+            | GlyphType::Xwidget { .. }
+            | GlyphType::Surface { .. } => Vec::new(),
         })
         .collect()
 }
@@ -1351,6 +1357,21 @@ fn render_lisp_display_row(rendered: Value, role: GlyphRowRole) -> GlyphRow {
     render_lisp_display_row_with_symbols(rendered, role, std::collections::HashMap::new())
 }
 
+fn render_composed_lisp_display_row(
+    eval: &Context,
+    rendered: Value,
+    role: GlyphRowRole,
+) -> GlyphRow {
+    render_lisp_display_row_output_with_symbols_and_chrome_text_area_left(
+        rendered,
+        role,
+        std::collections::HashMap::new(),
+        0.0,
+        crate::neovm_bridge::current_string_composition_rules(eval),
+    )
+    .into_row()
+}
+
 fn render_lisp_display_row_with_symbols(
     rendered: Value,
     role: GlyphRowRole,
@@ -1373,6 +1394,7 @@ fn render_lisp_display_row_output_with_symbols(
         role,
         symbol_values,
         0.0,
+        None,
     )
 }
 
@@ -1381,6 +1403,7 @@ fn render_lisp_display_row_output_with_symbols_and_chrome_text_area_left(
     role: GlyphRowRole,
     symbol_values: std::collections::HashMap<String, Value>,
     chrome_text_area_left_px: f32,
+    automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
 ) -> RenderedDisplayRow {
     let mut font_metrics = None;
     let mut renderer =
@@ -1404,7 +1427,9 @@ fn render_lisp_display_row_output_with_symbols_and_chrome_text_area_left(
         symbol_values,
     )
     .with_chrome_text_area_left_px(chrome_text_area_left_px);
-    render_lisp_string_row(&mut renderer, request, rendered, &resolver, &mut face_ids)
+    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids)
+        .with_automatic_composition(automatic_composition);
+    render_lisp_string_row_with_context(&mut renderer, request, rendered, &mut context)
         .expect("display source row")
 }
 
@@ -1564,10 +1589,20 @@ fn render_display_item_source_row_accepts_buffer_text_source() {
     assert_eq!(row_text_expanding_stretches(&row), "A中👨‍👩");
     assert!(cjk.wide);
     assert!(glyphs.iter().any(|glyph| glyph.padding));
-    assert!(
-        glyphs.iter().any(
-            |glyph| matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.contains('\u{200d}'))
-        )
+    assert_eq!(
+        glyphs
+            .iter()
+            .filter(|glyph| !glyph.padding)
+            .map(|glyph| glyph.glyph_type.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            GlyphType::Char { ch: 'A' },
+            GlyphType::Char { ch: '中' },
+            GlyphType::Char { ch: '👨' },
+            GlyphType::Char { ch: '\u{200d}' },
+            GlyphType::Char { ch: '👩' }
+        ],
+        "a buffer without selected rules must not acquire Unicode fallback composition"
     );
 }
 
@@ -3257,6 +3292,7 @@ fn mode_line_pixel_align_to_adds_window_text_area_left_offset() {
         GlyphRowRole::ModeLine,
         std::collections::HashMap::new(),
         40.0,
+        None,
     )
     .into_row();
 
@@ -3635,24 +3671,26 @@ fn display_row_tab_line_wide_char_uses_shared_wide_glyph() {
 }
 
 #[test]
-fn display_row_tab_line_zwj_emoji_sequence_uses_shared_cluster() {
-    let _eval = Context::new();
-    let row = render_lisp_display_row(Value::string("👨‍👩"), GlyphRowRole::TabLine);
+fn display_row_tab_line_zwj_emoji_sequence_uses_selected_composition() {
+    let mut eval = Context::new();
+    crate::test_composition::install_rules(&mut eval);
+    let row = render_composed_lisp_display_row(&eval, Value::string("👩‍💻"), GlyphRowRole::TabLine);
     let glyphs = &row.glyphs[1];
 
     assert_eq!(row.role, GlyphRowRole::TabLine);
-    assert_eq!(row_text_expanding_stretches(&row), "👨‍👩");
+    assert_eq!(row_text_expanding_stretches(&row), "👩‍💻");
     assert!(
         glyphs
             .iter()
-            .any(|glyph| matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.contains('\u{200d}'))),
+            .any(|glyph| matches!(&glyph.glyph_type, GlyphType::AutomaticComposite { text, terminal } if text.as_ref() == "👩‍💻" && terminal.width_cols == 4)),
         "tab-line ZWJ emoji should use the shared cluster path: {glyphs:?}"
     );
 }
 
 #[test]
 fn display_row_lisp_chrome_roles_share_wide_and_cluster_builder() {
-    let _eval = Context::new();
+    let mut eval = Context::new();
+    crate::test_composition::install_rules(&mut eval);
 
     for role in [
         GlyphRowRole::ModeLine,
@@ -3660,7 +3698,7 @@ fn display_row_lisp_chrome_roles_share_wide_and_cluster_builder() {
         GlyphRowRole::TabLine,
         GlyphRowRole::TabBar,
     ] {
-        let row = render_lisp_display_row(Value::string("A中👨‍👩"), role);
+        let row = render_composed_lisp_display_row(&eval, Value::string("A中👩‍💻"), role);
         let glyphs = &row.glyphs[1];
         let cjk = glyphs
             .iter()
@@ -3668,7 +3706,7 @@ fn display_row_lisp_chrome_roles_share_wide_and_cluster_builder() {
             .expect("CJK glyph");
 
         assert_eq!(row.role, role);
-        assert_eq!(row_text_expanding_stretches(&row), "A中👨‍👩");
+        assert_eq!(row_text_expanding_stretches(&row), "A中👩‍💻");
         assert!(
             cjk.wide,
             "Lisp-string chrome role {role:?} should use the shared wide-glyph path: {glyphs:?}"
@@ -3680,10 +3718,38 @@ fn display_row_lisp_chrome_roles_share_wide_and_cluster_builder() {
         assert!(
             glyphs
                 .iter()
-                .any(|glyph| matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.contains('\u{200d}'))),
+                .any(|glyph| matches!(&glyph.glyph_type, GlyphType::AutomaticComposite { text, terminal } if text.as_ref() == "👩‍💻" && terminal.width_cols == 4)),
             "Lisp-string chrome role {role:?} should use the shared cluster path: {glyphs:?}"
         );
     }
+}
+
+#[test]
+fn display_row_unlisted_zwj_sequence_keeps_independent_glyphs() {
+    let mut eval = Context::new();
+    crate::test_composition::install_rules(&mut eval);
+    // GNU 31.1 find-composition returns nil for this incomplete sequence,
+    // and string-width is 4, not the 2 columns of a heuristic grapheme cluster.
+    let row = render_composed_lisp_display_row(&eval, Value::string("👨‍👩"), GlyphRowRole::TabLine);
+    let glyphs: Vec<_> = row.glyphs[1]
+        .iter()
+        .filter(|glyph| !glyph.padding)
+        .collect();
+    assert_eq!(
+        glyphs
+            .iter()
+            .map(|glyph| glyph.glyph_type.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            GlyphType::Char { ch: '👨' },
+            GlyphType::Char { ch: '\u{200d}' },
+            GlyphType::Char { ch: '👩' },
+        ]
+    );
+    assert_eq!(
+        glyphs.iter().map(|glyph| glyph.pixel_width).sum::<f32>(),
+        32.0
+    );
 }
 
 #[test]
@@ -3791,13 +3857,13 @@ fn display_row_renderer_can_render_source_fragment_into_existing_row() {
     let base_face_id = request.base_face_id();
     let mut row = GlyphRow::new(GlyphRowRole::Text);
     crate::glyph_row_writer::push_char_to_row(&mut row, 'e', base_face_id, 0, 8.0);
-    let mut source = crate::display_source::LispStringSourceCursor::new(
-        1,
-        Value::string("\u{301}"),
+    // Explicit synthetic fragments can continue a Unicode cluster. Distinct
+    // Lisp objects cannot acquire this policy implicitly from adjacency.
+    let mut source = crate::display_source::DisplayItemSegmentSource::new(DisplayItem::new(
+        SourceSpan::synthetic(1, 0, 1),
         RenderFaceRef::FaceId(base_face_id),
-        crate::display_source::LispStringSourceOrigin::Normal,
-    )
-    .expect("lisp string source");
+        DisplayItemKind::TextRun(crate::display_item::DisplayTextRun::new("\u{301}")),
+    ));
     let mut state = DisplayRowSourceState::frame_local();
 
     let result = request

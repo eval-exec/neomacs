@@ -68,3 +68,6 @@ pub mod window_output;
 
 pub use engine::*;
 pub use types::*;
+
+#[cfg(test)]
+mod test_composition;

@@ -1971,9 +1971,14 @@ fn glyphs_logical_text(glyphs: &[Glyph]) -> String {
         .filter(|glyph| !glyph.padding)
         .map(|glyph| match &glyph.glyph_type {
             GlyphType::Char { ch } | GlyphType::Glyphless { ch, .. } => ch.to_string(),
-            GlyphType::Composite { text } => text.to_string(),
+            GlyphType::Composite { text } | GlyphType::AutomaticComposite { text, .. } => {
+                text.to_string()
+            }
             GlyphType::Stretch { width_cols } => " ".repeat(usize::from(*width_cols)),
-            _ => String::new(),
+            GlyphType::Image { .. }
+            | GlyphType::Video { .. }
+            | GlyphType::Xwidget { .. }
+            | GlyphType::Surface { .. } => String::new(),
         })
         .collect::<Vec<_>>()
         .join("")
@@ -3104,7 +3109,51 @@ fn backend_layout_with_buffer_and_window_setup(
     setup: impl FnOnce(&mut neovm_core::buffer::Buffer, BufferId, &str),
     setup_window: impl FnOnce(&mut neovm_core::window::Window),
 ) -> (Context, LayoutEngine, neovm_core::window::FrameId) {
+    backend_layout_in_context(
+        Context::new(),
+        kind,
+        frame_name,
+        text,
+        frame_width,
+        frame_height,
+        setup,
+        setup_window,
+    )
+}
+
+fn backend_composition_layout_trace(
+    kind: BufferTextBackendKind,
+    frame_name: &str,
+    text: &str,
+    frame_width: u32,
+    frame_height: u32,
+    setup: impl FnOnce(&mut neovm_core::buffer::Buffer, BufferId, &str),
+) -> BackendLayoutTrace {
     let mut eval = Context::new();
+    crate::test_composition::install_rules(&mut eval);
+    let (eval, engine, frame_id) = backend_layout_in_context(
+        eval,
+        kind,
+        frame_name,
+        text,
+        frame_width,
+        frame_height,
+        setup,
+        |_| {},
+    );
+    selected_window_layout_trace(&eval, &engine, frame_id)
+}
+
+fn backend_layout_in_context(
+    mut eval: Context,
+    kind: BufferTextBackendKind,
+    frame_name: &str,
+    text: &str,
+    frame_width: u32,
+    frame_height: u32,
+    setup: impl FnOnce(&mut neovm_core::buffer::Buffer, BufferId, &str),
+    setup_window: impl FnOnce(&mut neovm_core::window::Window),
+) -> (Context, LayoutEngine, neovm_core::window::FrameId) {
     convert_current_buffer_text_backend(&mut eval, kind);
     let buf_id = eval
         .buffer_manager()
@@ -8544,8 +8593,8 @@ fn glyphless_backend_layout_trace(kind: BufferTextBackendKind) -> BackendLayoutT
 }
 
 fn composition_backend_layout_trace(kind: BufferTextBackendKind) -> BackendLayoutTrace {
-    let text = "e\u{0301} a\u{0300}\u{0301} 中\u{0300}\nplain\n";
-    backend_layout_trace_with_buffer_setup(
+    let text = "e\u{0301} a\u{0300}\u{0301} 中\u{0300} 1\u{fe0f}\u{20e3}\nplain\n";
+    backend_composition_layout_trace(
         kind,
         "layout-backend-composition",
         text,
@@ -8885,14 +8934,14 @@ fn trace_text_faces(trace: &BackendLayoutTrace) -> Vec<String> {
         .collect()
 }
 
-fn trace_composite_texts(trace: &BackendLayoutTrace) -> Vec<String> {
+fn trace_automatic_composite_texts(trace: &BackendLayoutTrace) -> Vec<String> {
     trace
         .matrix_rows
         .iter()
         .filter(|row| row.role == GlyphRowRole::Text)
         .flat_map(|row| row.glyph_areas[1].iter())
         .filter_map(|glyph| match &glyph.kind {
-            GlyphKindTrace::Composite(text) => Some(text.clone()),
+            GlyphKindTrace::AutomaticComposite(text, _) => Some(text.clone()),
             _ => None,
         })
         .collect()
@@ -9056,6 +9105,7 @@ fn minibuffer_echo_suppresses_line_numbers_enabled_in_its_buffer() {
 #[test]
 fn layout_frame_rust_preserves_propertized_echo_message_faces() {
     let mut eval = Context::new();
+    crate::test_composition::install_rules(&mut eval);
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -9065,7 +9115,7 @@ fn layout_frame_rust_preserves_propertized_echo_message_faces() {
         eval.frame_manager_mut()
             .create_frame("layout-propertized-echo", 320, 120, buf_id);
     let echo = Value::string_with_text_properties(
-        "A中👨‍👩",
+        "A中👩‍💻",
         vec![StringTextPropertyRun {
             start: 1,
             end: 2,
@@ -9108,7 +9158,7 @@ fn layout_frame_rust_preserves_propertized_echo_message_faces() {
         .glyphs[1]
         .clone();
 
-    assert_eq!(glyphs_logical_text(&echo_glyphs), "A中👨‍👩");
+    assert_eq!(glyphs_logical_text(&echo_glyphs), "A中👩‍💻");
     assert_ne!(
         echo_glyphs[0].face_id, echo_glyphs[1].face_id,
         "propertized echo character should receive its property face"
@@ -9123,7 +9173,7 @@ fn layout_frame_rust_preserves_propertized_echo_message_faces() {
     );
     assert!(
         echo_glyphs.iter().any(
-            |glyph| matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.as_ref() == "👨‍👩")
+            |glyph| matches!(&glyph.glyph_type, GlyphType::AutomaticComposite { text, terminal } if text.as_ref() == "👩‍💻" && terminal.width_cols == 4)
         ),
         "echo ZWJ emoji should be clustered by the shared builder: {echo_glyphs:?}"
     );
@@ -10628,9 +10678,9 @@ fn implemented_text_backends_match_layout_frame_bidi_row_output() {
 fn arabic_run_composes_into_one_glyph_in_layout() {
     // ا ل م (U+0627 U+0644 U+0645) — an Arabic run. The layout walk must grow
     // it into ONE composed glyph so the renderer joins it, rather than three
-    // isolated Char cells. (Structural: holds regardless of font availability,
-    // since grouping is driven by complex_script, not by shaping success.)
-    let trace = backend_layout_trace_with_buffer_setup(
+    // isolated Char cells. GNU selects the span through its Arabic rule,
+    // independently of the font used to lower the selected composition.
+    let trace = backend_composition_layout_trace(
         BufferTextBackendKind::GapBuffer,
         "layout-backend-arabic",
         "\u{0627}\u{0644}\u{0645}\n",
@@ -10638,7 +10688,7 @@ fn arabic_run_composes_into_one_glyph_in_layout() {
         140,
         |_buffer, _buf_id, _text| {},
     );
-    let composites = trace_composite_texts(&trace);
+    let composites = trace_automatic_composite_texts(&trace);
     assert!(
         composites
             .iter()
@@ -10666,7 +10716,7 @@ fn arabic_run_composes_into_one_glyph_in_layout() {
 /// → the TAB begins at col 16 and must stretch 8 cols to the tab stop at 24.
 #[test]
 fn tab_after_complex_script_run_fills_from_full_composite_width() {
-    let trace = backend_layout_trace_with_buffer_setup(
+    let trace = backend_composition_layout_trace(
         BufferTextBackendKind::GapBuffer,
         "layout-backend-complex-run-tab",
         "Arabic (\u{627}\u{644}\u{639}\u{631}\u{628}\u{64A}\u{651}\u{629})\tX\n",
@@ -10674,7 +10724,7 @@ fn tab_after_complex_script_run_fills_from_full_composite_width() {
         140,
         |_buffer, _buf_id, _text| {},
     );
-    let composites = trace_composite_texts(&trace);
+    let composites = trace_automatic_composite_texts(&trace);
     assert!(
         composites.iter().any(|t| t.contains('\u{627}')),
         "the Arabic word should compose into a Composite run, composites={composites:?}"
@@ -10685,7 +10735,7 @@ fn tab_after_complex_script_run_fills_from_full_composite_width() {
         .find(|row| {
             row.glyph_areas[1]
                 .iter()
-                .any(|glyph| matches!(&glyph.kind, GlyphKindTrace::Composite(_)))
+                .any(|glyph| matches!(&glyph.kind, GlyphKindTrace::AutomaticComposite(_, _)))
         })
         .expect("row containing the composed run");
     let stretch_cols: Vec<u16> = run_row.glyph_areas[1]
@@ -12042,7 +12092,7 @@ fn layout_frame_rust_renders_nobreak_chars_in_escape_mode_as_mapped_text() {
 #[test]
 fn implemented_text_backends_match_composite_glyph_output() {
     let baseline = composition_backend_layout_trace(BufferTextBackendKind::GapBuffer);
-    let composites = trace_composite_texts(&baseline);
+    let composites = trace_automatic_composite_texts(&baseline);
     assert!(
         composites.contains(&"e\u{0301}".to_string()),
         "baseline should merge Latin base plus acute mark into a composite glyph, composites={composites:?}"
@@ -12054,6 +12104,22 @@ fn implemented_text_backends_match_composite_glyph_output() {
     assert!(
         composites.contains(&"中\u{0300}".to_string()),
         "baseline should compose combining marks on multibyte base chars, composites={composites:?}"
+    );
+    assert!(composites.contains(&"1\u{fe0f}\u{20e3}".to_string()));
+    let widths: Vec<_> = baseline
+        .matrix_rows
+        .iter()
+        .filter(|row| row.role == GlyphRowRole::Text)
+        .flat_map(|row| row.glyph_areas[1].iter())
+        .filter_map(|glyph| match &glyph.kind {
+            GlyphKindTrace::AutomaticComposite(_, terminal) => Some(terminal.width_cols),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        widths,
+        vec![1, 1, 2, 1],
+        "GNU terminal widths of the four selected compositions"
     );
     assert!(
         baseline
@@ -20385,6 +20451,7 @@ fn margin_string_automatic_composition_uses_the_displayed_buffer_rules() {
 #[test]
 fn layout_frame_rust_tab_line_unicode_uses_shared_display_row_builder() {
     let mut eval = Context::new();
+    crate::test_composition::install_rules(&mut eval);
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -20393,7 +20460,7 @@ fn layout_frame_rust_tab_line_unicode_uses_shared_display_row_builder() {
     {
         let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buf.insert("body line\n");
-        buf.set_buffer_local("tab-line-format", Value::string("A中👨‍👩"));
+        buf.set_buffer_local("tab-line-format", Value::string("A中👩‍💻"));
     }
     let frame_id =
         eval.frame_manager_mut()
@@ -20430,13 +20497,13 @@ fn layout_frame_rust_tab_line_unicode_uses_shared_display_row_builder() {
 
     assert_eq!(
         glyphs_logical_text(glyphs),
-        format!("A中👨‍👩{}", " ".repeat(75)),
+        format!("A中👩‍💻{}", " ".repeat(73)),
         "GNU tab-line chrome fills the complete 80-column row"
     );
     let trailing_fill = glyphs.last().expect("tab-line trailing fill glyph");
     assert_eq!(
         trailing_fill.glyph_type,
-        GlyphType::Stretch { width_cols: 75 }
+        GlyphType::Stretch { width_cols: 73 }
     );
     assert_eq!(
         trailing_fill.legacy_charpos(),
@@ -20454,7 +20521,7 @@ fn layout_frame_rust_tab_line_unicode_uses_shared_display_row_builder() {
     assert!(
         glyphs
             .iter()
-            .any(|glyph| matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.contains('\u{200d}'))),
+            .any(|glyph| matches!(&glyph.glyph_type, GlyphType::AutomaticComposite { text, terminal } if text.as_ref() == "👩‍💻" && terminal.width_cols == 4)),
         "tab-line chrome row should compose ZWJ emoji through the shared builder: {glyphs:?}"
     );
 }
@@ -20462,6 +20529,7 @@ fn layout_frame_rust_tab_line_unicode_uses_shared_display_row_builder() {
 #[test]
 fn layout_frame_rust_baseline_buffer_text_uses_main_buffer_wide_and_cluster_glyphs() {
     let mut eval = Context::new();
+    crate::test_composition::install_rules(&mut eval);
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -20469,7 +20537,7 @@ fn layout_frame_rust_baseline_buffer_text_uses_main_buffer_wide_and_cluster_glyp
         .id();
     {
         let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
-        buf.insert("A中👨‍👩B\n");
+        buf.insert("A中👩‍💻B\n");
     }
     let frame_id =
         eval.frame_manager_mut()
@@ -20512,7 +20580,7 @@ fn layout_frame_rust_baseline_buffer_text_uses_main_buffer_wide_and_cluster_glyp
     );
     assert!(
         text_glyphs.iter().any(|glyph| {
-            matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.contains('\u{200d}'))
+            matches!(&glyph.glyph_type, GlyphType::AutomaticComposite { text, terminal } if text.as_ref() == "👩‍💻" && terminal.width_cols == 4)
         }),
         "main buffer path should compose the ZWJ emoji sequence: {text_glyphs:?}"
     );
@@ -23088,15 +23156,13 @@ fn plain_item_source_shadow_matches_elision_between_face_spans() {
 
 #[test]
 fn plain_route_refuses_zwj_emoji_row_and_pipeline_composes() {
-    // A ZWJ emoji sequence composes into ONE Composite glyph in the
-    // pipeline's shared writer (composition.rs continues_cluster); the
-    // classifier refuses the row on the same predicate, so flag-on and
-    // flag-off render identically through the pipeline (this test runs in
-    // both suite modes).
-    let text = "a\u{1F468}\u{200D}\u{1F469}b\n";
-    let (eval, buf_id, rows, char_width, _char_height) = layout_main_text_rows(text);
+    // A GNU-selected automatic composition must take the full pipeline;
+    // the plain item route cannot discard its selected span/terminal plan.
+    let text = "a👩‍💻b\n";
+    let (eval, buf_id, _, rows, char_width, _char_height) =
+        layout_main_text_rows_with(text, |eval, _| crate::test_composition::install_rules(eval));
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
-    let snapshot = LayoutBufferSnapshot::from_buffer(buffer);
+    let snapshot = LayoutBufferSnapshot::from_buffer_with_obarray(buffer, eval.obarray());
     assert_eq!(
         plain_route_classification(
             &snapshot,
@@ -23113,11 +23179,14 @@ fn plain_route_refuses_zwj_emoji_row_and_pipeline_composes() {
     let composite = rows[0].glyphs[1]
         .iter()
         .find_map(|glyph| match &glyph.glyph_type {
-            GlyphType::Composite { text } => Some((text.to_string(), glyph.legacy_charpos())),
+            GlyphType::AutomaticComposite { text, terminal } => {
+                assert_eq!(terminal.width_cols, 4);
+                Some((text.to_string(), glyph.legacy_charpos()))
+            }
             _ => None,
         })
         .expect("the pipeline must compose the ZWJ sequence into a Composite glyph");
-    assert_eq!(composite.0, "\u{1F468}\u{200D}\u{1F469}");
+    assert_eq!(composite.0, "👩‍💻");
     assert_eq!(
         composite.1, 1,
         "the Composite carries the cluster-start charpos"
@@ -23125,13 +23194,9 @@ fn plain_route_refuses_zwj_emoji_row_and_pipeline_composes() {
 }
 
 #[test]
-fn plain_item_source_shadow_matches_combining_mark_cluster_row() {
-    // Phase 2e rung 2: a zero-width combining mark on a simple 1-col base is
-    // the routed composite class. The shared writer merges the mark into the
-    // base Char glyph (Char -> Composite) identically on both paths; the
-    // shadow proves FULL glyph equality, and the explicit asserts pin the
-    // Composite payload, its non-wide no-padding shape, and the charpos
-    // coverage jump over the absorbed mark.
+fn plain_item_source_shadow_matches_uncomposed_combining_mark_row() {
+    // With no selected Lisp rule, GNU leaves the zero-width mark independent.
+    // Both routes must preserve its glyph, position and zero advance exactly.
     let text = "ae\u{0301}bc\n";
     let (eval, buf_id, rows, char_width, char_height) = layout_main_text_rows(text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -23147,22 +23212,28 @@ fn plain_item_source_shadow_matches_combining_mark_cluster_row() {
             text.chars().count() as i64
         ),
         crate::buffer_source::row_route::RowAcquisitionRoute::ItemRenderer,
-        "a combining-mark cluster row routes in rung 2"
+        "an uncomposed combining-mark row can use the plain item renderer"
     );
     let glyphs = &rows[0].glyphs[1];
-    let composite_at = glyphs
+    let base_index = glyphs
         .iter()
-        .position(|glyph| matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.as_ref() == "e\u{0301}"))
-        .expect("the pipeline must merge the mark into a Composite glyph");
-    assert_eq!(glyphs[composite_at].legacy_charpos(), 1);
+        .position(|glyph| matches!(glyph.glyph_type, GlyphType::Char { ch: 'e' }))
+        .expect("the base must remain its own character glyph");
+    assert_eq!(glyphs[base_index].legacy_charpos(), 1);
     assert!(
-        !glyphs[composite_at].wide && !glyphs[composite_at].padding,
-        "the composed cluster keeps its base's 1-col non-padding shape"
+        !glyphs[base_index].wide && !glyphs[base_index].padding,
+        "the uncomposed base keeps its 1-col non-padding shape"
     );
     assert_eq!(
-        glyphs[composite_at + 1].legacy_charpos(),
+        glyphs[base_index + 1].glyph_type,
+        GlyphType::Char { ch: '\u{301}' }
+    );
+    assert_eq!(glyphs[base_index + 1].legacy_charpos(), 2);
+    assert_eq!(glyphs[base_index + 1].pixel_width, 0.0);
+    assert_eq!(
+        glyphs[base_index + 2].legacy_charpos(),
         3,
-        "the glyph after the cluster jumps the absorbed mark's charpos"
+        "the glyph after the independent mark retains its own position"
     );
 
     let line_end = CharPos0::new(text.chars().count() - 1);
@@ -23181,9 +23252,9 @@ fn plain_item_source_shadow_matches_combining_mark_cluster_row() {
 }
 
 #[test]
-fn plain_item_source_shadow_matches_keycap_cluster_row() {
-    // VS16 + combining enclosing keycap on a digit base: two zero-width
-    // extenders merging into one Composite through the same writer seam.
+fn plain_item_source_shadow_matches_uncomposed_keycap_row() {
+    // Without a selected Lisp rule, VS16 and the keycap are independent
+    // zero-width source characters, not an implicit Unicode composition.
     let text = "1\u{FE0F}\u{20E3}x\n";
     let (eval, buf_id, rows, char_width, char_height) = layout_main_text_rows(text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -23200,13 +23271,13 @@ fn plain_item_source_shadow_matches_keycap_cluster_row() {
         ),
         crate::buffer_source::row_route::RowAcquisitionRoute::ItemRenderer
     );
-    assert!(
-        rows[0].glyphs[1].iter().any(|glyph| matches!(
-            &glyph.glyph_type,
-            GlyphType::Composite { text } if text.as_ref() == "1\u{FE0F}\u{20E3}"
-        )),
-        "the pipeline composes the keycap sequence into one Composite"
-    );
+    assert_eq!(rows[0].glyphs[1][0].glyph_type, GlyphType::Char { ch: '1' });
+    for (index, ch) in [(1, '\u{fe0f}'), (2, '\u{20e3}')] {
+        let glyph = &rows[0].glyphs[1][index];
+        assert_eq!(glyph.glyph_type, GlyphType::Char { ch });
+        assert_eq!(glyph.legacy_charpos(), index);
+        assert_eq!(glyph.pixel_width, 0.0);
+    }
     let line_end = CharPos0::new(text.chars().count() - 1);
     let shadow_row = render_buffer_plain_item_source_shadow_row(
         buf_id,
@@ -28482,7 +28553,7 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
           (select-frame layout-target-frame)
           (tab-bar-new-tab)
           (switch-to-buffer (get-buffer-create "*tb-2*"))
-          (tab-bar-rename-tab "T中👨‍👩")
+          (tab-bar-rename-tab "T中👩‍💻")
           (tab-bar-select-tab 1)
         "#,
     )
@@ -28666,7 +28737,7 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
         .unwrap_or_default();
 
     assert!(
-        tab_bar_text.contains("T中👨‍👩"),
+        tab_bar_text.contains("T中👩‍💻"),
         "expected tab-bar row to render tab captions from tab-bar keymap, got {tab_bar_text:?}; tabs={tabs_debug}; format={format_debug}; keymap={keymap_debug}"
     );
     let tab_bar_glyphs = engine
@@ -28702,7 +28773,7 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
     );
     assert!(
         tab_bar_glyphs.iter().any(
-            |glyph| matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.as_ref() == "👨‍👩")
+            |glyph| matches!(&glyph.glyph_type, GlyphType::AutomaticComposite { text, terminal } if text.as_ref() == "👩‍💻" && terminal.width_cols == 4)
         ),
         "tab-bar ZWJ emoji should be clustered by the shared builder: {tab_bar_glyphs:?}"
     );

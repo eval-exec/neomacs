@@ -5296,13 +5296,13 @@ fn render_natural_display_item_source_into_current_text_row_and_emit_uses_curren
     let mut base_face = face_resolver.default_face().clone();
     base_face.set_measured_char_width_px(8.0);
     base_face.font_ascent = 12.0;
-    let mut source = crate::display_source::LispStringSourceCursor::new(
-        101,
-        Value::string("\u{301}"),
+    // This seam appends a synthetic Unicode fragment to an existing cluster.
+    // A separate Lisp object would intentionally remain a separate glyph.
+    let mut source = crate::display_source::DisplayItemSegmentSource::new(DisplayItem::new(
+        crate::display_item::SourceSpan::synthetic(101, 0, 1),
         RenderFaceRef::FaceId(FaceId::new(7)),
-        crate::display_source::LispStringSourceOrigin::Normal,
-    )
-    .expect("lisp string source");
+        DisplayItemKind::TextRun(crate::display_item::DisplayTextRun::new("\u{301}")),
+    ));
     let mut source_state = DisplayRowSourceState::frame_local();
     let mut font_metrics = None;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(8);

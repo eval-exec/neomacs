@@ -1118,12 +1118,12 @@ fn lisp_string_source_cursor_uses_font_lock_face_when_face_is_absent() {
 
     assert_eq!(
         first.kind,
-        DisplayItemKind::TextRun(DisplayTextRun::new("x"))
+        DisplayItemKind::TextRun(DisplayTextRun::independent("x"))
     );
     assert_eq!(first.face, RenderFaceRef::FaceId(FaceId::new(9)));
     assert_eq!(
         second.kind,
-        DisplayItemKind::TextRun(DisplayTextRun::new("y"))
+        DisplayItemKind::TextRun(DisplayTextRun::independent("y"))
     );
     assert_eq!(second.face, RenderFaceRef::FaceId(FaceId::new(3)));
 }
