@@ -899,7 +899,36 @@ pub(crate) const FONT_OBJECT_TAG: &str = "font-object";
 
 type OpenedFontMetrics = FontObjectMetrics;
 
+/// GNU font_build_object publishes two different names for one opened font.
+struct OpenedFontNames {
+    opened: Value,
+    full: Value,
+}
+
 impl OpenedFontMetrics {
+    /// One public font-info schema for stored objects and newly opened entities.
+    fn info_vector(self, names: OpenedFontNames, file: Value, capability: Value) -> Value {
+        let fields: [Value; 14] = [
+            names.opened,
+            names.full,
+            Value::fixnum(self.pixel_size),
+            Value::fixnum(self.height),
+            // These are composition controls, not glyph metrics. GNU's
+            // ftfont_open initializes all three to zero independently of ascent.
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(self.max_width),
+            Value::fixnum(self.ascent),
+            Value::fixnum(self.descent),
+            Value::fixnum(self.space_width),
+            Value::fixnum(self.average_width),
+            file,
+            capability,
+        ];
+        Value::vector(fields.into())
+    }
+
     fn from_probe(probe: super::eval::FontPxProbeResult) -> Self {
         Self {
             pixel_size: i64::from(probe.pixel_size),
@@ -966,23 +995,14 @@ impl OpenedFont {
     }
 
     fn info_vector(self) -> Value {
-        let m = self.data.metrics;
-        Value::vector(vec![
-            self.property("name"),
-            self.property("full-name"),
-            Value::fixnum(m.pixel_size),
-            Value::fixnum(m.height),
-            Value::fixnum(0),
-            Value::fixnum(0),
-            Value::fixnum(m.ascent),
-            Value::fixnum(m.max_width),
-            Value::fixnum(m.ascent),
-            Value::fixnum(m.descent),
-            Value::fixnum(m.space_width),
-            Value::fixnum(m.average_width),
+        self.data.metrics.info_vector(
+            OpenedFontNames {
+                opened: self.property("name"),
+                full: self.property("full-name"),
+            },
             self.property("file"),
             self.data.capability,
-        ])
+        )
     }
 }
 
@@ -2775,10 +2795,14 @@ fn finish_opened_font(
     xlfd_fields[0] = Value::keyword(FONT_ENTITY_TAG);
     let xlfd_source = Value::vector(xlfd_fields);
     let name = font_xlfd_name(vec![xlfd_source]).unwrap_or(Value::NIL);
+    let full_name = full_name
+        .cloned()
+        .map(Value::heap_string)
+        .unwrap_or_else(|| Value::string(font_full_name(&fields, metrics.pixel_size)));
     fields.push(Value::keyword("name"));
     fields.push(name);
     fields.push(Value::keyword("full-name"));
-    fields.push(full_name.cloned().map(Value::heap_string).unwrap_or(name));
+    fields.push(full_name);
     fields.push(Value::keyword("file"));
     fields.push(file.cloned().map(Value::heap_string).unwrap_or(Value::NIL));
     Value::make_font(FontObjectData {
@@ -3142,16 +3166,36 @@ fn font_info_vector_for_entity(
         registry
     );
 
-    // font_unparse_fcname: family:pixelsize=N[:foundry=F][:weight=W]
+    Some(OpenedFontMetrics::from_probe(probe).info_vector(
+        OpenedFontNames {
+            opened: Value::string(opened_name),
+            full: Value::string(font_full_name(&elems, i64::from(probe.pixel_size))),
+        },
+        file_value,
+        capability,
+    ))
+}
+
+/// GNU font_unparse_fcname, shared by stored objects and entity probes.
+/// A backend-provided native full name takes precedence at object creation.
+fn font_full_name(fields: &[Value], pixel_size: i64) -> String {
+    let text_field = |key| {
+        font_vector_get_flexible(fields, key)
+            .map(|value| font_spec_field_to_string(&value))
+            .unwrap_or_else(|| "*".to_string())
+    };
+    let foundry = text_field("foundry");
+    let family = text_field("family");
+    // family:pixelsize=N[:foundry=F][:weight=W]
     // [:slant=S][:width=W][:spacing=N]:scalable=true (avgwidth 0).
     let mut full_name = String::new();
     full_name.push_str(&family);
-    full_name.push_str(&format!(":pixelsize={}", probe.pixel_size));
+    full_name.push_str(&format!(":pixelsize={pixel_size}"));
     if foundry != "*" {
         full_name.push_str(&format!(":foundry={foundry}"));
     }
     let style = |key: &str, table: &'static [&'static [&'static str]]| -> Option<&'static str> {
-        font_vector_get_flexible(&elems, key)
+        font_vector_get_flexible(fields, key)
             .and_then(|value| value.as_symbol_name())
             .and_then(|name| gnu_style_first_name(table, name.trim_start_matches(':')))
     };
@@ -3166,7 +3210,7 @@ fn font_info_vector_for_entity(
         style("width", GNU_WIDTH_TABLE).unwrap_or("normal")
     ));
     if let Some(spacing) =
-        font_vector_get_flexible(&elems, "spacing").and_then(|value| match value.kind() {
+        font_vector_get_flexible(fields, "spacing").and_then(|value| match value.kind() {
             ValueKind::Fixnum(n) => Some(n),
             _ => None,
         })
@@ -3175,22 +3219,7 @@ fn font_info_vector_for_entity(
     }
     full_name.push_str(":scalable=true");
 
-    Some(Value::vector(vec![
-        Value::string(opened_name),
-        Value::string(full_name),
-        Value::fixnum(probe.pixel_size as i64),
-        Value::fixnum(probe.height as i64),
-        Value::fixnum(0),
-        Value::fixnum(0),
-        Value::fixnum(0),
-        Value::fixnum(probe.max_width as i64),
-        Value::fixnum(probe.ascent as i64),
-        Value::fixnum(probe.descent as i64),
-        Value::fixnum(probe.space_width as i64),
-        Value::fixnum(probe.average_width as i64),
-        file_value,
-        capability,
-    ]))
+    full_name
 }
 
 /// `(opentype GSUB . GPOS)` for a font file, or nil when unavailable.

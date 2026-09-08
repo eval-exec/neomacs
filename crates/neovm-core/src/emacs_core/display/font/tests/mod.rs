@@ -1582,7 +1582,21 @@ fn font_info_eval_accepts_font_object_on_live_gui_frame() {
     };
     let values = info.as_vector_data().unwrap().clone();
     assert_eq!(values.len(), 14);
+    assert_eq!(
+        values[1].as_utf8_str(),
+        Some("Test Mono:pixelsize=18:weight=regular:slant=normal:width=normal:scalable=true")
+    );
     assert_eq!(values[3].as_int(), Some(18));
+    // GNU ftfont_open initializes these composition controls independently
+    // of the font's ascent. font-at objects must report them like entities.
+    assert_eq!(
+        values[4..7]
+            .iter()
+            .map(|value| value.as_int())
+            .collect::<Vec<_>>(),
+        vec![Some(0); 3]
+    );
+    assert_eq!(values[8].as_int(), Some(14));
     assert_eq!(values[10].as_int(), Some(9));
     assert_eq!(values[11].as_int(), Some(9));
 }
