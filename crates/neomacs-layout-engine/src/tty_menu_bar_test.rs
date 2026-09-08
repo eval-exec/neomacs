@@ -388,6 +388,14 @@ fn menu_bar_item_cache_rebuilds_only_at_the_redisplay_invalidation_boundary() {
     assert_eq!(labels(&eval), vec!["First".to_string()]);
 
     eval.eval_str("(force-mode-line-update)")
+        .expect("an undisplayed current buffer cannot request a local update");
+    assert_eq!(labels(&eval), vec!["First".to_string()]);
+
+    // GNU buffer.c gates the local request on buffer_window_count of the
+    // CURRENT buffer, not the selected window's buffer. Creating a frame via
+    // the Rust manager above does not switch the evaluator out of *scratch*.
+    eval.buffer_manager_mut().set_current(buffer_a);
+    eval.eval_str("(force-mode-line-update)")
         .expect("cross the GNU update-mode-lines boundary");
     assert_eq!(
         labels(&eval),
@@ -418,6 +426,7 @@ fn menu_bar_item_cache_rebuilds_only_at_the_redisplay_invalidation_boundary() {
         vec!["Second".to_string(), "First".to_string()]
     );
 
+    eval.buffer_manager_mut().set_current(buffer_b);
     eval.eval_str("(force-mode-line-update)")
         .expect("cross a later GNU update-mode-lines boundary");
     assert_eq!(labels(&eval), vec!["Other".to_string()]);
