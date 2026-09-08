@@ -3522,6 +3522,75 @@ fn cursor_only_move_preserves_gnu_box_cursor_glyph_foreground() {
     );
 }
 
+/// The cursor-only fast path re-decorates a retained row without walking it, so
+/// it must place the caret from the row's materialized glyph advances. Deriving
+/// the pixel x from `col * char_width` assumes every glyph is one frame cell
+/// wide; a row whose glyphs use another face font (here a doubled height) is
+/// wider than the cell grid, and the caret landed past the end of the text.
+#[test]
+fn cursor_only_fast_path_places_cursor_on_the_row_glyph_advances() {
+    let text = "abWWWWcd\n";
+    let (mut eval, frame_id, buf_id, _window) = incr_editing_frame(text, 800, 600);
+    realize_test_gui_frame(&mut eval, frame_id);
+    // A face twice the default height widens every glyph it covers, so the
+    // row's pen is not `col * char_width`.
+    eval.eval_str(
+        "(progn
+           (internal-set-lisp-face-attribute 'wide-cursor-test :height 200 (selected-frame))
+           (put-text-property 3 7 'face 'wide-cursor-test))",
+    )
+    .expect("realize the wide face and apply it to the W run");
+
+    // Line numbers materialize as leading Text-area marks, so the retained
+    // row's pen also has to include their advance.
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("buffer")
+        .set_buffer_local("display-line-numbers", Value::T);
+    let mut engine = LayoutEngine::new();
+    // Full walk with point just past the wide run: the reference placement.
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("buffer")
+        .goto_emacs_byte_pos(EmacsBytePos::new(6));
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let reference = engine
+        .last_frame_display_state
+        .as_ref()
+        .and_then(|state| state.phys_cursor.as_ref())
+        .expect("reference cursor")
+        .clone();
+
+    // Move away and back: both redisplays reuse the retained body rows.
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("buffer")
+        .goto_emacs_byte_pos(EmacsBytePos::new(0));
+    engine.layout_frame_rust(&mut eval, frame_id);
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("buffer")
+        .goto_emacs_byte_pos(EmacsBytePos::new(6));
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(
+        engine.last_layout_stats().cursor_only_windows,
+        1,
+        "precondition: the returned cursor must take the cursor-only fast path"
+    );
+    let replayed = engine
+        .last_frame_display_state
+        .as_ref()
+        .and_then(|state| state.phys_cursor.as_ref())
+        .expect("replayed cursor");
+
+    assert_eq!(
+        replayed.x, reference.x,
+        "cursor-only replay must reuse the full walk's measured pen, not col * char_width"
+    );
+    assert_eq!(replayed.col, reference.col);
+    assert_eq!(replayed.row, reference.row);
+}
+
 /// GNU `init_iterator` resolves the displayed buffer's remapped default face
 /// for every window redisplay, including the blank cells owned by that window.
 /// Reusing body rows must therefore retain the same background-fill contract as

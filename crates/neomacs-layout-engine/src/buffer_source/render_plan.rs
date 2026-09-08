@@ -273,12 +273,32 @@ impl FastPathCursorPlacement {
                 mut output_cursor,
                 char_width,
             } => {
-                let coordinates = CursorVisualColumnResolutionRequest::from_cursor(&output_cursor)
-                    .resolve_cursor_coordinates(output.builder().cursor_visual_column_context())
-                    .unwrap_or_else(|| ResolvedCursorCoordinatePair::same(output_cursor.slot_id));
-                coordinates.apply_display_to(&mut output_cursor);
-                output_cursor.x =
-                    text_area_left + f32::from(output_cursor.col) * char_width.max(1.0);
+                let coordinates = match output
+                    .builder()
+                    .resolve_cursor_placement_after_row_decoration(&output_cursor, char_width)
+                {
+                    Some(placement) => {
+                        let coordinates = placement.coordinates();
+                        placement.apply_to(&mut output_cursor);
+                        coordinates
+                    }
+                    // No retained row to measure (or the slot is outside the
+                    // materialized text): fall back to the nominal cell grid.
+                    None => {
+                        let coordinates =
+                            CursorVisualColumnResolutionRequest::from_cursor(&output_cursor)
+                                .resolve_cursor_coordinates(
+                                    output.builder().cursor_visual_column_context(),
+                                )
+                                .unwrap_or_else(|| {
+                                    ResolvedCursorCoordinatePair::same(output_cursor.slot_id)
+                                });
+                        coordinates.apply_display_to(&mut output_cursor);
+                        output_cursor.x = text_area_left
+                            + f32::from(output_cursor.col) * char_width.max(1.0);
+                        coordinates
+                    }
+                };
                 ResolvedFastPathCursorPlacement {
                     presented: output_cursor,
                     coordinates,
@@ -1225,12 +1245,11 @@ impl BufferSourceOutputSetup {
         } else {
             remaining_visibility_retries
         };
-        if !params.force_start {
-            if let Some(decision) = retry_plan.viewport_resolution(retry_budget) {
+        if !params.force_start
+            && let Some(decision) = retry_plan.viewport_resolution(retry_budget) {
                 output.restore_retry_checkpoint(retry_checkpoint);
                 return BufferSourceRenderAttemptOutcome::ResolveViewport { decision };
             }
-        }
         if let Some(window_start) = retry_plan.should_retry(retry_budget) {
             // GNU `w->force_start` (redisplay_window force_start branch): an
             // explicitly scrolled/set start is kept, and POINT moves into the

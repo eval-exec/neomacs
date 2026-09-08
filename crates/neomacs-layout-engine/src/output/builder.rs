@@ -8,6 +8,7 @@
 
 use crate::display_cursor::{
     CursorVisualColumnResolutionContext, CursorVisualColumnResolutionRequest,
+    ResolvedDecoratedCursorPlacement,
 };
 #[cfg(test)]
 use crate::display_row::face_state::resolved_display_row_face;
@@ -33,12 +34,11 @@ use crate::output::window_state::OutputWindowBuildState;
 use neomacs_display_protocol::face::Face;
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::CursorStyle;
+use neomacs_display_protocol::frame_glyphs::PhysCursor;
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::DisplaySlotId;
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
-#[cfg(test)]
-use neomacs_display_protocol::frame_glyphs::PhysCursor;
 use neomacs_display_protocol::frame_glyphs::{ContentTransitionHint, WindowInfo};
 use neomacs_display_protocol::glyph_matrix::*;
 use neomacs_display_protocol::types::FaceId;
@@ -185,12 +185,8 @@ impl DisplayOutputBuilder {
         let Some(mut cursor) = self.frame_state.phys_cursor().cloned() else {
             return;
         };
-        let Some(placement) = CursorVisualColumnResolutionRequest::from_cursor(&cursor)
-            .resolve_after_row_decoration(
-                self.cursor_visual_column_context(),
-                self.window_state.current_window_text_pixel_bounds(),
-                char_width,
-            )
+        let Some(placement) =
+            self.resolve_cursor_placement_after_row_decoration(&cursor, char_width)
         else {
             return;
         };
@@ -200,6 +196,27 @@ impl DisplayOutputBuilder {
         let style = cursor.style;
         self.install_output_frame_artifact(OutputFrameArtifactInstallRequest::phys_cursor(cursor));
         self.install_output_row_lifecycle(OutputRowLifecycleRequest::cursor(row, col, style));
+    }
+
+    /// Resolve a cursor's slot coordinates and pixel x from the retained row's
+    /// materialized glyph advances.
+    ///
+    /// The pixel x is the pen position the row's glyphs actually consume, not
+    /// `col * char_width`: a row can hold glyphs whose advance differs from the
+    /// frame's nominal cell width (a face with another font or size, a line
+    /// prefix, a stretch). The cursor-only and scroll fast paths reconstruct
+    /// their cursor from a row they did not walk, so they must read the same
+    /// advances the renderer uses instead of rebuilding them from the column.
+    pub(crate) fn resolve_cursor_placement_after_row_decoration(
+        &self,
+        cursor: &PhysCursor,
+        char_width: f32,
+    ) -> Option<ResolvedDecoratedCursorPlacement> {
+        CursorVisualColumnResolutionRequest::from_cursor(cursor).resolve_after_row_decoration(
+            self.cursor_visual_column_context(),
+            self.window_state.current_window_text_pixel_bounds(),
+            char_width,
+        )
     }
 
     /// Find the current window's buffer-text row containing `charpos` (Phase 2
