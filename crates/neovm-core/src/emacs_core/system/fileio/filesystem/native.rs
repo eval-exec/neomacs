@@ -86,14 +86,30 @@ impl EditorFileSystem for NativeFileSystem {
             };
             if matches!(mode, AccessMode::Existing(_)) {
                 // GNU openp uses effective IDs, not access(2)'s real IDs.
-                return unsafe {
-                    libc::faccessat(
-                        libc::AT_FDCWD,
-                        c_path.as_ptr(),
-                        native_mode,
-                        libc::AT_EACCESS,
-                    ) == 0
-                };
+                std::cfg_select! {
+                    target_os = "android" => {
+                        // Bionic has no AT_EACCESS. Like GNU euidaccess's
+                        // fallback, access is equivalent when both IDs match.
+                        // Android apps run this way; fail closed for a host
+                        // that changes credentials instead of checking the
+                        // wrong identity or changing process-wide IDs.
+                        return unsafe {
+                            libc::getuid() == libc::geteuid()
+                                && libc::getgid() == libc::getegid()
+                                && libc::access(c_path.as_ptr(), native_mode) == 0
+                        };
+                    }
+                    _ => {
+                        return unsafe {
+                            libc::faccessat(
+                                libc::AT_FDCWD,
+                                c_path.as_ptr(),
+                                native_mode,
+                                libc::AT_EACCESS,
+                            ) == 0
+                        };
+                    }
+                }
             }
             if unsafe { libc::access(c_path.as_ptr(), native_mode) } == 0 {
                 return true;
