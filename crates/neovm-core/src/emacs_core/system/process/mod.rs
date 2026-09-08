@@ -523,7 +523,7 @@ mod builtins;
 // argument and timer contracts remain covered without a browser build.
 #[cfg(test)]
 mod portable_wait;
-pub(crate) use builtins::*;
+pub use builtins::*;
 
 mod bootstrap;
 pub use bootstrap::register_bootstrap_vars;
