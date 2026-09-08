@@ -607,7 +607,9 @@ impl DmaBufPlane {
 /// destructor keeps the WPE `GObject` reference paired with the exported
 /// descriptors, while this type prevents callers from constructing an
 /// unleased browser frame.
-pub(crate) trait DmaBufLease: Send + 'static {}
+pub(crate) trait DmaBufLease: Send + 'static {
+    fn request_pixels(&self);
+}
 
 pub(crate) struct DmaBufFrameLease {
     _lease: Box<dyn DmaBufLease>,
@@ -647,6 +649,12 @@ pub struct DmaBufFrame {
 }
 
 impl DmaBufFrame {
+    /// Return a rejected frame to its native owner for pixel capture. This
+    /// consumes the GPU representation, so it cannot also be submitted later.
+    pub fn request_pixel_fallback(self) {
+        self._lease._lease.request_pixels();
+    }
+
     #[cfg(any(test, target_os = "linux"))]
     pub(crate) fn new(
         planes: Vec<DmaBufPlane>,
@@ -696,8 +704,8 @@ impl DmaBufFrame {
     /// Wait for WPE's producer fence before the GPU imports this frame.
     ///
     /// A missing fence means the producer declared the frame immediately
-    /// readable. `TimedOut` is distinct from an I/O error so import policy can
-    /// fall back to the already-captured pixel frame without guessing.
+    /// readable. `TimedOut` is distinct from an I/O error; neither result grants
+    /// the consumer permission to read pixels or submit the unfinished buffer.
     #[cfg(target_os = "linux")]
     pub fn wait_until_ready(&self, timeout: Duration) -> std::io::Result<DmaBufReadiness> {
         use std::os::fd::AsRawFd;
@@ -731,7 +739,7 @@ impl DmaBufFrame {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PixelFrame {
-    pixels: Vec<u8>,
+    pixels: Arc<[u8]>,
     width: u32,
     height: u32,
 }
@@ -740,7 +748,7 @@ impl PixelFrame {
     #[cfg(any(test, target_os = "linux"))]
     pub(crate) fn new(pixels: Vec<u8>, width: u32, height: u32) -> Self {
         Self {
-            pixels,
+            pixels: pixels.into(),
             width,
             height,
         }
@@ -844,6 +852,9 @@ fn configured_frame_transport() -> WebViewFrameTransport {
 pub struct WebViewSystemConfig {
     pub profile_root: Option<PathBuf>,
     pub frame_transport: WebViewFrameTransport,
+    /// Formats the receiving renderer can import on its current device.
+    /// Unknown support defaults to pixels; exporter support alone is insufficient.
+    pub dma_buf_import_formats: neomacs_display_protocol::DmaBufImportFormats,
 }
 
 impl Default for WebViewSystemConfig {
@@ -851,6 +862,7 @@ impl Default for WebViewSystemConfig {
         Self {
             profile_root: current_user_profile_root(),
             frame_transport: configured_frame_transport(),
+            dma_buf_import_formats: Default::default(),
         }
     }
 }
@@ -909,7 +921,37 @@ mod config_tests {
     struct TestDmaBufLease;
 
     #[cfg(target_os = "linux")]
-    impl super::DmaBufLease for TestDmaBufLease {}
+    impl super::DmaBufLease for TestDmaBufLease {
+        fn request_pixels(&self) {}
+    }
+
+    #[test]
+    fn rejected_frame_requests_pixels_before_releasing_its_native_lease() {
+        use std::sync::{Arc, Mutex};
+        struct Lease(Arc<Mutex<Vec<&'static str>>>);
+        impl super::DmaBufLease for Lease {
+            fn request_pixels(&self) {
+                self.0.lock().unwrap().push("pixels");
+            }
+        }
+        impl Drop for Lease {
+            fn drop(&mut self) {
+                self.0.lock().unwrap().push("release");
+            }
+        }
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frame = super::DmaBufFrame::new(
+            Vec::new(),
+            None,
+            0,
+            0,
+            1,
+            1,
+            super::DmaBufFrameLease::new(Lease(events.clone())),
+        );
+        frame.request_pixel_fallback();
+        assert_eq!(*events.lock().unwrap(), ["pixels", "release"]);
+    }
 
     #[test]
     fn explicit_profile_root_wins_over_platform_directories() {

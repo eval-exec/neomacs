@@ -102,16 +102,35 @@ fn real_gui_smoke_generates_surface_readback_png() {
 
 #[test]
 fn oversized_xwidget_keeps_its_intrinsic_page_visible_behind_the_window_clip() {
+    assert_oversized_xwidget_page_visible("oversized-xwidget", "oversized-xwidget.el");
+}
+
+#[test]
+fn static_xwidget_page_survives_renderer_device_replacement() {
+    if let Some(stdout) = assert_oversized_xwidget_page_visible(
+        "oversized-xwidget-device-reset",
+        "oversized-xwidget-device-reset.el",
+    ) {
+        assert!(
+            std::fs::read_to_string(stdout)
+                .expect("GUI stdout")
+                .contains("wgpu device lost"),
+            "fixture must actually replace the renderer device"
+        );
+    }
+}
+
+fn assert_oversized_xwidget_page_visible(name: &str, fixture: &str) -> Option<PathBuf> {
     if !cfg!(target_os = "linux") {
         eprintln!("skipping oversized xwidget composition regression; WPE is Linux-only");
-        return;
+        return None;
     }
     let Some(backend) = requested_backend() else {
         eprintln!(
             "skipping oversized xwidget composition regression; set \
              NEOMACS_GUI_TEST_BACKEND=wayland or x11 to run it"
         );
-        return;
+        return None;
     };
 
     let workspace_root = workspace_root();
@@ -126,8 +145,10 @@ fn oversized_xwidget_keeps_its_intrinsic_page_visible_behind_the_window_clip() {
         .start_session(&artifact_root)
         .expect("display session should start");
     let scenario = GuiScenario::new(
-        "oversized-xwidget",
-        workspace_root.join("crates/neomacs-gui-tests/fixtures/oversized-xwidget.el"),
+        name,
+        workspace_root
+            .join("crates/neomacs-gui-tests/fixtures")
+            .join(fixture),
     );
     let mut plan = GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario)
         .with_program(binary)
@@ -206,6 +227,7 @@ fn oversized_xwidget_keeps_its_intrinsic_page_visible_behind_the_window_clip() {
          was not visibly composed; found only {magenta_pixels} matching pixels in {}",
         result.artifacts.png.display()
     );
+    Some(result.artifacts.stdout)
 }
 
 fn xwidget_glyph(snapshot: &serde_json::Value) -> Option<(u64, &serde_json::Value)> {

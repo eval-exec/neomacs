@@ -14,8 +14,8 @@ use std::thread::JoinHandle;
 use super::engine::WpeBackend;
 use super::sys::platform as plat;
 use super::view::{
-    CapturedFrame, DmaBufData, NativeWpeBufferLease, WpeFrameTransport, WpeViewCreation,
-    WpeViewState, WpeWebView,
+    CapturedFrame, DmaBufData, NativeWpeBufferLease, RenderedWpeBuffer, WpeFrameTransport,
+    WpeViewCreation, WpeViewState, WpeWebView,
 };
 use super::{LinuxProfileKey, NetworkSession, file_navigation_uri};
 use crate::backend::{PlatformCreateRequest, PlatformUpdate};
@@ -26,10 +26,11 @@ use crate::{
     WebViewId, WebViewInput, WebViewSystemConfig, WebViewWake,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FrameLeaseId(u64);
 
 enum WpeCommand {
+    ImportFormats(neomacs_display_protocol::DmaBufImportFormats),
     Create(PlatformCreateRequest),
     Resize {
         id: WebViewId,
@@ -65,6 +66,7 @@ enum WpeCommand {
         generation: WebViewGeneration,
     },
     ReleaseFrame(FrameLeaseId),
+    RequestPixels(FrameLeaseId),
     Shutdown,
 }
 
@@ -129,7 +131,11 @@ struct RemoteWpeBufferLease {
     reactor: ReactorSender,
 }
 
-impl DmaBufLease for RemoteWpeBufferLease {}
+impl DmaBufLease for RemoteWpeBufferLease {
+    fn request_pixels(&self) {
+        let _ = self.reactor.send(WpeCommand::RequestPixels(self.id));
+    }
+}
 
 impl Drop for RemoteWpeBufferLease {
     fn drop(&mut self) {
@@ -172,6 +178,15 @@ struct ReactorMailbox {
 }
 
 impl ReactorMailbox {
+    fn publish_recovery(&self, id: WebViewId, generation: WebViewGeneration, frame: PixelFrame) {
+        // A newer queued browser frame wins over a recovered older frame.
+        let mut frames = self.frames.lock().expect("WPE reactor frames");
+        let pending = frames.entry((id, generation)).or_default();
+        if pending.is_empty() {
+            pending.publish(WebViewFrame::Pixels(frame));
+        }
+    }
+
     fn publish_event(&self, event: ReactorEvent) {
         self.events.lock().expect("WPE reactor events").push(event);
     }
@@ -222,6 +237,13 @@ pub(super) struct WpeReactorHandle {
 }
 
 impl WpeReactorHandle {
+    pub(super) fn set_dma_buf_import_formats(
+        &self,
+        formats: neomacs_display_protocol::DmaBufImportFormats,
+    ) -> Result<(), String> {
+        self.sender.send(WpeCommand::ImportFormats(formats))
+    }
+
     pub(super) fn spawn(config: WebViewSystemConfig, wake: WebViewWake) -> Self {
         let (commands, receiver) = mpsc::channel();
         let signal = Arc::new(ReactorSignal::default());
@@ -337,12 +359,68 @@ impl Drop for WpeReactorHandle {
     }
 }
 
+type ViewGeneration = (WebViewId, WebViewGeneration);
+
+struct LeasedFrame {
+    owner: ViewGeneration,
+    buffer: NativeWpeBufferLease,
+}
+
+enum RecoveryFrame {
+    Pixels(PixelFrame),
+    Native(RenderedWpeBuffer),
+}
+
+impl RecoveryFrame {
+    fn pixels(&self) -> Option<PixelFrame> {
+        match self {
+            Self::Pixels(frame) => Some(frame.clone()),
+            Self::Native(buffer) => buffer.copy_pixels(),
+        }
+    }
+}
+
+/// At most one completed frame per live view. Completion may arrive out of
+/// order when a queued DMA-BUF is dropped while an older GPU copy is in flight.
+#[derive(Default)]
+struct RecoveryFrames(HashMap<ViewGeneration, (FrameLeaseId, RecoveryFrame)>);
+
+impl RecoveryFrames {
+    fn remember(
+        &mut self,
+        owner: ViewGeneration,
+        sequence: FrameLeaseId,
+        frame: RecoveryFrame,
+    ) -> bool {
+        if self
+            .0
+            .get(&owner)
+            .is_none_or(|(previous, _)| sequence > *previous)
+        {
+            self.0.insert(owner, (sequence, frame));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn replay(&self, mailbox: &ReactorMailbox) {
+        for (&(id, generation), (_, frame)) in &self.0 {
+            if let Some(pixels) = frame.pixels() {
+                mailbox.publish_recovery(id, generation, pixels);
+            }
+        }
+    }
+}
+
 struct WpeRuntime {
     profile_root: Option<std::path::PathBuf>,
+    transport_preference: crate::WebViewFrameTransport,
     frame_transport: WpeFrameTransport,
     profiles: HashMap<LinuxProfileKey, NetworkSession>,
     views: HashMap<WebViewId, WpeWebView>,
-    frame_leases: HashMap<FrameLeaseId, NativeWpeBufferLease>,
+    frame_leases: HashMap<FrameLeaseId, LeasedFrame>,
+    recovery_frames: RecoveryFrames,
     next_frame_lease: AtomicU64,
     sender: ReactorSender,
     mailbox: Arc<ReactorMailbox>,
@@ -468,13 +546,16 @@ impl WpeRuntime {
             }
         }
         .map_err(|error| error.to_string())?;
-        let frame_transport = WpeFrameTransport::resolve(config.frame_transport);
+        let frame_transport =
+            WpeFrameTransport::resolve(config.frame_transport, config.dma_buf_import_formats);
         Ok(Self {
             profile_root: config.profile_root,
+            transport_preference: config.frame_transport,
             frame_transport,
             profiles: HashMap::new(),
             views: HashMap::new(),
             frame_leases: HashMap::new(),
+            recovery_frames: RecoveryFrames::default(),
             next_frame_lease: AtomicU64::new(1),
             sender,
             mailbox,
@@ -533,7 +614,7 @@ impl WpeRuntime {
             related_view,
             size: request.size(),
             policy: request.policy(),
-            frame_transport: self.frame_transport,
+            frame_transport: self.frame_transport.clone(),
             wake: WebViewWake::noop(),
         })
         .map_err(|error| error.to_string())?;
@@ -665,10 +746,53 @@ impl WpeRuntime {
                 {
                     self.views.remove(&id);
                     self.mailbox.discard_view(id, generation);
+                    self.recovery_frames.0.remove(&(id, generation));
                 }
             }
+            WpeCommand::ImportFormats(formats) => {
+                self.frame_transport =
+                    WpeFrameTransport::resolve(self.transport_preference, formats);
+                for view in self.views.values_mut() {
+                    view.set_frame_transport(self.frame_transport.clone());
+                }
+                // The replacement renderer has an empty texture cache. Replay
+                // idle pages without navigation or waiting for new DOM damage.
+                // Its own capability check protects already-queued DMA-BUFs.
+                self.recovery_frames.replay(&self.mailbox);
+                self.wake.notify();
+            }
             WpeCommand::ReleaseFrame(id) => {
-                self.frame_leases.remove(&id);
+                if let Some(frame) = self.frame_leases.remove(&id)
+                    && self
+                        .views
+                        .get(&frame.owner.0)
+                        .is_some_and(|view| view.generation() == frame.owner.1)
+                {
+                    self.recovery_frames.remember(
+                        frame.owner,
+                        id,
+                        RecoveryFrame::Native(frame.buffer.into_rendered()),
+                    );
+                }
+            }
+            WpeCommand::RequestPixels(id) => {
+                if let Some(frame) = self.frame_leases.remove(&id)
+                    && let Some(view) = self.views.get_mut(&frame.owner.0)
+                    && view.generation() == frame.owner.1
+                {
+                    view.set_frame_transport(WpeFrameTransport::SoftwarePixels);
+                    let buffer = frame.buffer.into_rendered();
+                    let pixels = buffer.copy_pixels();
+                    if self
+                        .recovery_frames
+                        .remember(frame.owner, id, RecoveryFrame::Native(buffer))
+                        && let Some(pixels) = pixels
+                    {
+                        self.mailbox
+                            .publish_recovery(frame.owner.0, frame.owner.1, pixels);
+                        self.wake.notify();
+                    }
+                }
             }
             WpeCommand::Shutdown => return false,
         }
@@ -753,12 +877,18 @@ impl WpeRuntime {
 
             if let Some(frame) = frame {
                 let frame = match frame {
-                    CapturedFrame::DmaBuf(frame) => self.export_dmabuf(frame),
-                    CapturedFrame::Pixels(frame) => WebViewFrame::Pixels(PixelFrame::new(
-                        frame.pixels,
-                        frame.width,
-                        frame.height,
-                    )),
+                    CapturedFrame::DmaBuf(frame) => self.export_dmabuf((id, generation), frame),
+                    CapturedFrame::Pixels(frame) => {
+                        let pixels = PixelFrame::new(frame.pixels, frame.width, frame.height);
+                        let sequence =
+                            FrameLeaseId(self.next_frame_lease.fetch_add(1, Ordering::Relaxed));
+                        self.recovery_frames.remember(
+                            (id, generation),
+                            sequence,
+                            RecoveryFrame::Pixels(pixels.clone()),
+                        );
+                        WebViewFrame::Pixels(pixels)
+                    }
                 };
                 self.mailbox.publish_frame(id, generation, frame);
                 published = true;
@@ -769,9 +899,15 @@ impl WpeRuntime {
         }
     }
 
-    fn export_dmabuf(&mut self, frame: DmaBufData) -> WebViewFrame {
+    fn export_dmabuf(&mut self, owner: ViewGeneration, frame: DmaBufData) -> WebViewFrame {
         let lease = FrameLeaseId(self.next_frame_lease.fetch_add(1, Ordering::Relaxed));
-        self.frame_leases.insert(lease, frame.lease);
+        self.frame_leases.insert(
+            lease,
+            LeasedFrame {
+                owner,
+                buffer: frame.lease,
+            },
+        );
         let planes = frame
             .planes
             .into_iter()
@@ -832,6 +968,7 @@ fn run_reactor(
 
     runtime.views.clear();
     runtime.frame_leases.clear();
+    runtime.recovery_frames.0.clear();
     signal.clear_context();
 }
 
@@ -859,7 +996,10 @@ fn run_failed_reactor(
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeWpeBufferLease, PendingFrames, pick_render_node};
+    use super::{
+        FrameLeaseId, NativeWpeBufferLease, PendingFrames, ReactorMailbox, RecoveryFrame,
+        RecoveryFrames, RenderedWpeBuffer, pick_render_node,
+    };
     use crate::{PixelFrame, WebViewFrame};
 
     #[test]
@@ -913,7 +1053,67 @@ mod tests {
     }
 
     #[test]
+    fn idle_page_replays_after_each_device_replacement_without_new_damage() {
+        let owner = (crate::WebViewId::new(1), crate::WebViewGeneration::new(1));
+        let mailbox = ReactorMailbox::default();
+        let mut recovery = RecoveryFrames::default();
+        recovery.remember(
+            owner,
+            FrameLeaseId(1),
+            RecoveryFrame::Pixels(PixelFrame::new(vec![255, 0, 255, 255], 1, 1)),
+        );
+        for _ in 0..2 {
+            recovery.replay(&mailbox);
+            let Some(WebViewFrame::Pixels(frame)) = mailbox.take_frame(owner.0, owner.1) else {
+                panic!("static page must be available after cache loss");
+            };
+            assert_eq!(frame.pixels(), [255, 0, 255, 255]);
+        }
+        recovery.0.remove(&owner);
+        recovery.replay(&mailbox);
+        assert!(
+            mailbox.take_frame(owner.0, owner.1).is_none(),
+            "closed views do not retain recovery frames"
+        );
+    }
+
+    #[test]
+    fn recovery_never_replaces_newer_completed_or_queued_browser_content() {
+        let owner = (crate::WebViewId::new(1), crate::WebViewGeneration::new(1));
+        let mailbox = ReactorMailbox::default();
+        let mut recovery = RecoveryFrames::default();
+        for sequence in [2, 1] {
+            let accepted = recovery.remember(
+                owner,
+                FrameLeaseId(sequence),
+                RecoveryFrame::Pixels(PixelFrame::new(vec![sequence as u8; 4], 1, 1)),
+            );
+            assert_eq!(accepted, sequence == 2);
+        }
+        recovery.replay(&mailbox);
+        let Some(WebViewFrame::Pixels(frame)) = mailbox.take_frame(owner.0, owner.1) else {
+            panic!("recovery frame");
+        };
+        assert_eq!(
+            frame.pixels(),
+            [2; 4],
+            "late retirement of frame 1 cannot replace frame 2"
+        );
+        mailbox.publish_frame(
+            owner.0,
+            owner.1,
+            WebViewFrame::Pixels(PixelFrame::new(vec![3; 4], 1, 1)),
+        );
+        recovery.replay(&mailbox);
+        let Some(WebViewFrame::Pixels(frame)) = mailbox.take_frame(owner.0, owner.1) else {
+            panic!("queued frame");
+        };
+        assert_eq!(frame.pixels(), [3; 4]);
+    }
+
+    #[test]
     fn native_wpe_acknowledgement_cannot_cross_threads() {
         static_assertions::assert_not_impl_any!(NativeWpeBufferLease: Send, Sync);
+        static_assertions::assert_not_impl_any!(RenderedWpeBuffer: Send, Sync);
     }
 }

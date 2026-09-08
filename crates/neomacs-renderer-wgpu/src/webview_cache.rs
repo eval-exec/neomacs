@@ -39,6 +39,7 @@ pub struct CachedWebView {
 /// the WebView close handler calls `remove` for every destroyed view, and
 /// dropping the renderer drops the cache wholesale.
 pub struct WgpuWebViewCache {
+    import_formats: neomacs_display_protocol::DmaBufImportFormats,
     /// Budget accounting events since the last drain (texture create/free).
     accounting: Vec<crate::media_budget::MediaAccounting>,
     views: HashMap<WebViewId, CachedWebView>,
@@ -82,12 +83,18 @@ impl WgpuWebViewCache {
         });
 
         Self {
+            import_formats: crate::vulkan_dmabuf::webview_import_formats(device),
             accounting: Vec::new(),
             views: HashMap::new(),
             bind_group_layout,
             sampler,
             retirement: SubmissionRetirementQueue::for_device(device.clone()),
         }
+    }
+
+    /// Immutable import support belonging to this cache's receiving device.
+    pub fn import_formats(&self) -> neomacs_display_protocol::DmaBufImportFormats {
+        self.import_formats.clone()
     }
 
     /// Get the bind group layout for texture rendering.
@@ -103,12 +110,23 @@ impl WgpuWebViewCache {
         retained_frame: R,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-    ) -> bool {
+    ) -> Result<(), R> {
+        // A frame can have been queued before the receiving device changed.
+        // Validate against this cache's device, not just the producer's copy.
+        if !self
+            .import_formats
+            .contains(neomacs_display_protocol::DmaBufFormat {
+                fourcc: buffer.fourcc,
+                modifier: buffer.modifier,
+            })
+        {
+            return Err(retained_frame);
+        }
         let source = match buffer.to_external_wgpu_texture(device, queue) {
             Some(t) => t,
             None => {
                 tracing::warn!("Failed to import DMA-BUF for view {}", view_id);
-                return false;
+                return Err(retained_frame);
             }
         };
 
@@ -186,7 +204,7 @@ impl WgpuWebViewCache {
             },
         );
 
-        true
+        Ok(())
     }
 
     /// Update or create a cached view from raw pixel data (fallback path).

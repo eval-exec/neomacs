@@ -736,17 +736,22 @@ impl WgpuRenderer {
     }
 
     /// Update a WebView in the cache from a DMA-BUF buffer.
-    /// Returns true if successful.
+    /// Returns the native frame on failure so its owner can capture pixels.
     #[cfg(all(feature = "webview", target_os = "linux"))]
     pub fn update_webview_dmabuf<R: Send + 'static>(
         &mut self,
         view_id: neomacs_display_protocol::WebViewId,
         buffer: super::super::external_buffer::DmaBufBuffer,
         retained_frame: R,
-    ) -> bool {
+    ) -> Result<(), R> {
         self.caches
             .webview
             .update_view(view_id, buffer, retained_frame, &self.device, &self.queue)
+    }
+
+    #[cfg(all(feature = "webview", target_os = "linux"))]
+    pub fn webview_import_formats(&self) -> neomacs_display_protocol::DmaBufImportFormats {
+        self.caches.webview.import_formats()
     }
 
     /// Update a WebView in the cache from pixel data.

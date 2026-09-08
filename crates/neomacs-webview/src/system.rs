@@ -102,6 +102,14 @@ pub struct WebViewSystem {
 }
 
 impl WebViewSystem {
+    /// Update transport support after the receiving GPU device is replaced.
+    pub fn set_dma_buf_import_formats(
+        &mut self,
+        formats: neomacs_display_protocol::DmaBufImportFormats,
+    ) -> Result<(), String> {
+        self.inner.platform.set_dma_buf_import_formats(formats)
+    }
+
     pub fn new(config: WebViewSystemConfig, wake: WebViewWake) -> Result<Self, WebViewInitError> {
         Ok(Self {
             inner: WebViewSystemImpl::new(CurrentPlatform::new(config, wake)),

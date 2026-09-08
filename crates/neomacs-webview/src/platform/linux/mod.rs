@@ -141,6 +141,13 @@ pub(crate) struct LinuxView {
 }
 
 impl Platform for LinuxPlatform {
+    fn set_dma_buf_import_formats(
+        &mut self,
+        formats: neomacs_display_protocol::DmaBufImportFormats,
+    ) -> Result<(), String> {
+        self.reactor.set_dma_buf_import_formats(formats)
+    }
+
     type Host = WebViewHost;
     type PendingCreate = ();
     type View = LinuxView;

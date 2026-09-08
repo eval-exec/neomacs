@@ -26,20 +26,25 @@ use crate::{
 
 /// Concrete Linux frame transport. Unlike the public preference, this enum
 /// has no `Auto` state, so capture code must select exactly one representation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum WpeFrameTransport {
     SoftwarePixels,
-    DmaBuf,
+    DmaBuf(neomacs_display_protocol::DmaBufImportFormats),
 }
 
 impl WpeFrameTransport {
-    pub(super) fn resolve(preference: WebViewFrameTransport) -> Self {
+    pub(super) fn resolve(
+        preference: WebViewFrameTransport,
+        formats: neomacs_display_protocol::DmaBufImportFormats,
+    ) -> Self {
         match preference {
-            // The renderer's DMA-BUF importer (webview_cache::update_view via
-            // vulkan_dmabuf) is complete, so the automatic choice prefers the
-            // zero-copy transport.  An unexportable buffer still falls back to
-            // pixels for that frame inside capture_render_buffer.
-            WebViewFrameTransport::Auto | WebViewFrameTransport::DmaBuf => Self::DmaBuf,
+            WebViewFrameTransport::Auto | WebViewFrameTransport::DmaBuf => {
+                if formats.is_empty() {
+                    Self::SoftwarePixels
+                } else {
+                    Self::DmaBuf(formats)
+                }
+            }
             WebViewFrameTransport::SoftwarePixels => Self::SoftwarePixels,
         }
     }
@@ -199,7 +204,7 @@ enum SoftwarePixelLayoutError {
     StrideTooShort { actual: usize, minimum: usize },
 }
 
-/// A WPE buffer borrowed from the native render callback.
+/// A WPE buffer borrowed from a native callback or a retained frame owner.
 ///
 /// This is a pointer token rather than `&WPEBuffer`: importing pixels may
 /// mutate WPE's internal cache, so representing the foreign object as a Rust
@@ -238,7 +243,7 @@ impl BorrowedWpeBuffer {
     }
 }
 
-/// Pixels borrowed from a WPE buffer for the duration of the render callback.
+/// Pixels borrowed for the duration of the native buffer borrow.
 ///
 /// `wpe_buffer_import_to_pixels` returns `(transfer none)`: the `GBytes` and
 /// its storage remain owned by `WPEBuffer`. Binding the resulting Rust slice
@@ -272,6 +277,12 @@ enum SoftwarePixelImportError {
 /// duplication, and cross-thread native-pointer transfer unrepresentable in
 /// the safe Rust layer.
 pub(super) struct NativeWpeBufferLease {
+    pending: Option<RenderedWpeBuffer>,
+}
+
+/// A completed frame still retained for recovery. WebKit may render its next
+/// frame, but cannot recycle this allocation until this value is dropped.
+pub(super) struct RenderedWpeBuffer {
     view: NonNull<plat::WPEView>,
     buffer: NonNull<plat::WPEBuffer>,
 }
@@ -281,18 +292,63 @@ impl NativeWpeBufferLease {
         plat::g_object_ref(view.cast());
         plat::g_object_ref(buffer.cast());
         Self {
-            view: NonNull::new_unchecked(view),
-            buffer: NonNull::new_unchecked(buffer),
+            pending: Some(RenderedWpeBuffer {
+                view: NonNull::new_unchecked(view),
+                buffer: NonNull::new_unchecked(buffer),
+            }),
         }
+    }
+
+    pub(super) fn into_rendered(mut self) -> RenderedWpeBuffer {
+        let buffer = self
+            .pending
+            .take()
+            .expect("one pending frame acknowledgement");
+        unsafe {
+            plat::wpe_view_buffer_rendered(buffer.view.as_ptr(), buffer.buffer.as_ptr());
+        }
+        buffer
     }
 }
 
 impl Drop for NativeWpeBufferLease {
     fn drop(&mut self) {
+        if let Some(buffer) = &self.pending {
+            unsafe {
+                plat::wpe_view_buffer_rendered(buffer.view.as_ptr(), buffer.buffer.as_ptr());
+            }
+        }
+        // Dropping the pending buffer also releases it. `into_rendered` moved
+        // that responsibility to the retained frame instead.
+    }
+}
+
+impl RenderedWpeBuffer {
+    pub(super) fn copy_pixels(&self) -> Option<crate::PixelFrame> {
+        // SAFETY: this reactor-local owner keeps both WPE references alive and
+        // has not released the native allocation for reuse by the producer.
         unsafe {
-            // These are the two acknowledgements required after our custom
-            // render_buffer vfunc accepted this exact buffer.
-            plat::wpe_view_buffer_rendered(self.view.as_ptr(), self.buffer.as_ptr());
+            let width = plat::wpe_buffer_get_width(self.buffer.as_ptr()) as u32;
+            let height = plat::wpe_buffer_get_height(self.buffer.as_ptr()) as u32;
+            let borrowed = BorrowedWpeBuffer(self.buffer);
+            match borrowed.import_pixels(width, height) {
+                Ok(pixels) => Some(crate::PixelFrame::new(
+                    pixels.into_bgra_opaque(),
+                    width,
+                    height,
+                )),
+                Err(error) => {
+                    tracing::warn!(%error, "failed to recover retained WebView pixels");
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl Drop for RenderedWpeBuffer {
+    fn drop(&mut self) {
+        unsafe {
             plat::wpe_view_buffer_released(self.view.as_ptr(), self.buffer.as_ptr());
             plat::g_object_unref(self.buffer.as_ptr().cast());
             plat::g_object_unref(self.view.as_ptr().cast());
@@ -732,6 +788,17 @@ impl WpeWebView {
         }
     }
 
+    /// Replace consumer capabilities without navigating or recreating the page.
+    pub(super) fn set_frame_transport(&mut self, transport: WpeFrameTransport) {
+        // SAFETY: the reactor alone owns and calls this view. The callback data
+        // stays live until its owner disconnects the callbacks in Drop.
+        unsafe {
+            if let Some(data) = self.callback_data.as_mut() {
+                data.frame_transport = transport;
+            }
+        }
+    }
+
     /// Take the one negotiated representation of the latest native frame.
     pub(super) fn take_latest_frame(&self) -> Option<CapturedFrame> {
         unsafe {
@@ -1137,15 +1204,15 @@ unsafe fn capture_render_buffer(
         return false;
     };
 
-    let captured = match callback_data.frame_transport {
+    let captured = match &callback_data.frame_transport {
         WpeFrameTransport::SoftwarePixels => capture_pixels(wpe_view, buffer, width, height),
-        WpeFrameTransport::DmaBuf => {
-            capture_dmabuf(wpe_view, buffer, width, height).or_else(|| {
+        WpeFrameTransport::DmaBuf(formats) => {
+            capture_dmabuf(wpe_view, buffer, width, height, formats).or_else(|| {
                 // This remains one representation for this frame. The fallback is
                 // local to an unexportable native buffer, not a second parallel
                 // capture stream.
-                tracing::warn!(
-                    "render_buffer_callback: DMA-BUF unavailable; using one software frame"
+                tracing::debug!(
+                    "render_buffer_callback: DMA-BUF unsupported by consumer or unavailable; using one software frame"
                 );
                 capture_pixels(wpe_view, buffer, width, height)
             })
@@ -1165,8 +1232,15 @@ unsafe fn capture_dmabuf(
     buffer: *mut plat::WPEBuffer,
     width: u32,
     height: u32,
+    formats: &neomacs_display_protocol::DmaBufImportFormats,
 ) -> Option<CapturedFrame> {
     let dmabuf_info = buffer_dmabuf_info(buffer)?;
+    if !formats.contains(neomacs_display_protocol::DmaBufFormat {
+        fourcc: dmabuf_info.fourcc,
+        modifier: dmabuf_info.modifier,
+    }) {
+        return None;
+    }
     tracing::debug!("render_buffer_callback: capturing DMA-BUF {width}x{height}");
 
     let mut planes = Vec::with_capacity(dmabuf_info.planes.len());
@@ -1443,6 +1517,45 @@ mod software_pixel_tests {
                 actual: 4,
                 minimum: 8,
             })
+        );
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::{WebViewFrameTransport, WpeFrameTransport};
+
+    #[test]
+    fn automatic_transport_without_consumer_capabilities_uses_pixels() {
+        assert_eq!(
+            WpeFrameTransport::resolve(WebViewFrameTransport::Auto, Default::default()),
+            WpeFrameTransport::SoftwarePixels,
+            "being able to export a DMA-BUF does not prove the renderer can import it"
+        );
+    }
+
+    #[test]
+    fn dma_buf_preference_cannot_override_missing_consumer_support() {
+        assert_eq!(
+            WpeFrameTransport::resolve(WebViewFrameTransport::DmaBuf, Default::default()),
+            WpeFrameTransport::SoftwarePixels
+        );
+    }
+
+    #[test]
+    fn automatic_transport_retains_exact_consumer_formats_and_honors_pixels() {
+        use neomacs_display_protocol::{DmaBufFormat, DmaBufImportFormats};
+        let formats = DmaBufImportFormats::new([DmaBufFormat {
+            fourcc: 0x34325258,
+            modifier: 0,
+        }]);
+        assert_eq!(
+            WpeFrameTransport::resolve(WebViewFrameTransport::Auto, formats.clone()),
+            WpeFrameTransport::DmaBuf(formats.clone())
+        );
+        assert_eq!(
+            WpeFrameTransport::resolve(WebViewFrameTransport::SoftwarePixels, formats),
+            WpeFrameTransport::SoftwarePixels
         );
     }
 }

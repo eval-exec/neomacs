@@ -97,6 +97,15 @@ pub struct DmaBufImportParams<'a> {
 // True Zero-Copy Implementation using wgpu_hal
 // ============================================================================
 
+/// Formats the active renderer device can import for a WebView cache copy.
+/// Query once per device generation; exporter EGL capabilities are not enough.
+#[cfg(all(target_os = "linux", feature = "webview"))]
+pub fn webview_import_formats(
+    device: &wgpu::Device,
+) -> neomacs_display_protocol::DmaBufImportFormats {
+    hal_import::import_formats(device)
+}
+
 #[cfg(target_os = "linux")]
 mod hal_import {
     #![allow(dead_code)]
@@ -169,16 +178,12 @@ mod hal_import {
         tiling_features: vk::FormatFeatureFlags,
     }
 
-    /// Query the Vulkan driver for properties of a specific DRM format modifier.
-    ///
-    /// Returns the required plane count and supported tiling features, or `None`
-    /// if the modifier is not supported for the given format.
-    unsafe fn query_modifier_properties(
+    /// Enumerate layouts for the exact Vulkan format used by the importer.
+    unsafe fn modifier_properties(
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
         vk_format: vk::Format,
-        modifier: u64,
-    ) -> Option<ModifierProperties> {
+    ) -> Vec<vk::DrmFormatModifierPropertiesEXT> {
         // First call: get the count of supported modifiers
         let mut modifier_list = vk::DrmFormatModifierPropertiesListEXT::default();
         let mut format_props = vk::FormatProperties2::default();
@@ -193,7 +198,7 @@ mod hal_import {
         let count = modifier_list.drm_format_modifier_count;
         if count == 0 {
             tracing::debug!("No DRM modifiers supported for format {:?}", vk_format);
-            return None;
+            return Vec::new();
         }
 
         // Second call: fill the modifier properties array
@@ -209,8 +214,18 @@ mod hal_import {
             vk_format,
             &mut format_props2,
         );
+        properties.truncate(modifier_list.drm_format_modifier_count as usize);
+        properties
+    }
 
-        // Find the entry matching our modifier
+    /// Query the Vulkan driver for a specific DRM format modifier.
+    unsafe fn query_modifier_properties(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        vk_format: vk::Format,
+        modifier: u64,
+    ) -> Option<ModifierProperties> {
+        let properties = modifier_properties(instance, physical_device, vk_format);
         for prop in &properties {
             if prop.drm_format_modifier == modifier {
                 tracing::info!(
@@ -229,10 +244,108 @@ mod hal_import {
         tracing::debug!(
             "Modifier {:#x} not in the {} modifiers supported for format {:?}",
             modifier,
-            count,
+            properties.len(),
             vk_format
         );
         None
+    }
+
+    #[cfg(feature = "webview")]
+    pub(super) fn import_formats(
+        device: &wgpu::Device,
+    ) -> neomacs_display_protocol::DmaBufImportFormats {
+        use neomacs_display_protocol::{DmaBufFormat, DmaBufImportFormats};
+        use wgpu::hal::api::Vulkan;
+
+        // SAFETY: inspect this device under its HAL guard, without storing any
+        // native handles in the immutable cross-thread capability value.
+        unsafe {
+            let Some(hal) = device.as_hal::<Vulkan>() else {
+                return Default::default();
+            };
+            if !crate::device_request::LINUX_DMA_BUF_EXTENSIONS
+                .iter()
+                .all(|extension| hal.enabled_device_extensions().contains(extension))
+            {
+                return Default::default();
+            }
+            let instance = hal.shared_instance().raw_instance();
+            let physical_device = hal.raw_physical_device();
+            let mut formats = Vec::new();
+            for fourcc in [
+                drm_fourcc::DRM_FORMAT_ARGB8888,
+                drm_fourcc::DRM_FORMAT_XRGB8888,
+                drm_fourcc::DRM_FORMAT_ABGR8888,
+                drm_fourcc::DRM_FORMAT_XBGR8888,
+                drm_fourcc::DRM_FORMAT_RGBA8888,
+                drm_fourcc::DRM_FORMAT_RGBX8888,
+                drm_fourcc::DRM_FORMAT_BGRA8888,
+                drm_fourcc::DRM_FORMAT_BGRX8888,
+            ] {
+                let format = drm_fourcc_to_vk_format(fourcc).expect("supported importer format");
+                for properties in modifier_properties(instance, physical_device, format) {
+                    if !(1..=MAX_PLANES as u32)
+                        .contains(&properties.drm_format_modifier_plane_count)
+                        || !properties.drm_format_modifier_tiling_features.contains(
+                            vk::FormatFeatureFlags::SAMPLED_IMAGE
+                                | vk::FormatFeatureFlags::TRANSFER_SRC,
+                        )
+                    {
+                        continue;
+                    }
+                    // Format enumeration alone is insufficient: require the
+                    // exact DMA-BUF handle type and usages of the cache copy.
+                    // Multiplane exports may share an allocation or use disjoint
+                    // FDs. Advertise only layouts accepted in both cases.
+                    let image_flags = [
+                        vk::ImageCreateFlags::empty(),
+                        vk::ImageCreateFlags::DISJOINT,
+                    ];
+                    let variant_count = if properties.drm_format_modifier_plane_count > 1 {
+                        2
+                    } else {
+                        1
+                    };
+                    let importable = image_flags[..variant_count].iter().all(|flags| {
+                        let mut modifier =
+                            vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+                                .drm_format_modifier(properties.drm_format_modifier)
+                                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                        let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default()
+                            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+                        let info = vk::PhysicalDeviceImageFormatInfo2::default()
+                            .flags(*flags)
+                            .format(format)
+                            .ty(vk::ImageType::TYPE_2D)
+                            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+                            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
+                            .push_next(&mut modifier)
+                            .push_next(&mut external);
+                        let mut external_properties = vk::ExternalImageFormatProperties::default();
+                        let mut result = vk::ImageFormatProperties2::default()
+                            .push_next(&mut external_properties);
+                        instance
+                            .get_physical_device_image_format_properties2(
+                                physical_device,
+                                &info,
+                                &mut result,
+                            )
+                            .is_ok()
+                            && external_properties
+                                .external_memory_properties
+                                .external_memory_features
+                                .contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+                    });
+                    if importable {
+                        formats.push(DmaBufFormat {
+                            fourcc,
+                            modifier: properties.drm_format_modifier,
+                        });
+                    }
+                }
+            }
+            DmaBufImportFormats::new(formats)
+        }
     }
 
     // ========================================================================

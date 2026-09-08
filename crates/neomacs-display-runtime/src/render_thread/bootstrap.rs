@@ -238,14 +238,24 @@ impl RenderApp {
         }
 
         #[cfg(feature = "webview")]
-        if self.webview_system.is_none() {
-            match neomacs_webview::WebViewSystem::new(
-                neomacs_webview::WebViewSystemConfig::default(),
-                self.webview_wake.clone(),
-            ) {
-                Ok(system) => self.webview_system = Some(system),
-                Err(error) => {
-                    tracing::warn!(?error, "failed to initialize the WebView system");
+        {
+            #[allow(unused_mut)]
+            let mut config = neomacs_webview::WebViewSystemConfig::default();
+            #[cfg(target_os = "linux")]
+            if let Some(renderer) = self.renderer.as_ref() {
+                config.dma_buf_import_formats = renderer.webview_import_formats();
+            }
+            if let Some(system) = self.webview_system.as_mut() {
+                if let Err(error) = system.set_dma_buf_import_formats(config.dma_buf_import_formats)
+                {
+                    tracing::warn!(%error, "failed to update WebView renderer capabilities");
+                }
+            } else {
+                match neomacs_webview::WebViewSystem::new(config, self.webview_wake.clone()) {
+                    Ok(system) => self.webview_system = Some(system),
+                    Err(error) => {
+                        tracing::warn!(?error, "failed to initialize the WebView system");
+                    }
                 }
             }
         }

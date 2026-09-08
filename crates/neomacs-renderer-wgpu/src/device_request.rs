@@ -1,5 +1,13 @@
 //! One renderer-device policy for every Neomacs GPU entry point.
 
+#[cfg(all(target_os = "linux", any(feature = "video", feature = "webview")))]
+pub(crate) const LINUX_DMA_BUF_EXTENSIONS: [&std::ffi::CStr; 4] = [
+    ash::khr::external_memory_fd::NAME,
+    ash::ext::external_memory_dma_buf::NAME,
+    ash::ext::image_drm_format_modifier::NAME,
+    ash::ext::queue_family_foreign::NAME,
+];
+
 fn requested_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     let mut requested = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
         | wgpu::Features::TEXTURE_FORMAT_NV12
@@ -31,18 +39,18 @@ pub async fn request_renderer_device(
     };
 
     std::cfg_select! {
-        all(target_os = "linux", feature = "video") => {
-            if linux::supports_native_video_extensions(adapter) {
-                match linux::request_native_video_device(adapter, &descriptor) {
+        all(target_os = "linux", any(feature = "video", feature = "webview")) => {
+            if linux::supports_dma_buf_extensions(adapter) {
+                match linux::request_dma_buf_device(adapter, &descriptor) {
                     Ok(device) => return Ok(device),
                     Err(error) => tracing::warn!(
                         %error,
-                        "failed to enable Linux native-video device extensions; falling back to a standard renderer device"
+                        "failed to enable Linux DMA-BUF device extensions; falling back to a standard renderer device"
                     ),
                 }
             } else {
                 tracing::info!(
-                    "Vulkan adapter does not expose the complete Linux native-video extension set"
+                    "Vulkan adapter does not expose the complete Linux DMA-BUF extension set"
                 );
             }
         }
@@ -55,31 +63,23 @@ pub async fn request_renderer_device(
         .map_err(|error| format!("failed to create renderer device: {error}"))
 }
 
-#[cfg(all(target_os = "linux", feature = "video"))]
+#[cfg(all(target_os = "linux", any(feature = "video", feature = "webview")))]
 mod linux {
-    use std::ffi::CStr;
-
+    use super::LINUX_DMA_BUF_EXTENSIONS;
     use wgpu::hal::api::Vulkan;
 
-    const NATIVE_VIDEO_EXTENSIONS: [&CStr; 4] = [
-        ash::khr::external_memory_fd::NAME,
-        ash::ext::external_memory_dma_buf::NAME,
-        ash::ext::image_drm_format_modifier::NAME,
-        ash::ext::queue_family_foreign::NAME,
-    ];
-
-    pub(super) fn supports_native_video_extensions(adapter: &wgpu::Adapter) -> bool {
+    pub(super) fn supports_dma_buf_extensions(adapter: &wgpu::Adapter) -> bool {
         // SAFETY: the guard is used only for immutable capability inspection
         // and is dropped before this function returns.
         unsafe { adapter.as_hal::<Vulkan>() }.is_some_and(|hal| {
-            NATIVE_VIDEO_EXTENSIONS.iter().all(|extension| {
+            LINUX_DMA_BUF_EXTENSIONS.iter().all(|extension| {
                 hal.physical_device_capabilities()
                     .supports_extension(extension)
             })
         })
     }
 
-    pub(super) fn request_native_video_device(
+    pub(super) fn request_dma_buf_device(
         adapter: &wgpu::Adapter,
         descriptor: &wgpu::DeviceDescriptor<'_>,
     ) -> Result<(wgpu::Device, wgpu::Queue), String> {
@@ -97,7 +97,7 @@ mod linux {
                     &descriptor.required_limits,
                     &descriptor.memory_hints,
                     Some(Box::new(|args| {
-                        for extension in NATIVE_VIDEO_EXTENSIONS {
+                        for extension in LINUX_DMA_BUF_EXTENSIONS {
                             if !args.extensions.contains(&extension) {
                                 args.extensions.push(extension);
                             }

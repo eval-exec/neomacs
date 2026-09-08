@@ -9,6 +9,7 @@
 pub mod clipboard;
 pub mod cursor;
 pub mod display_scale;
+pub mod dma_buf;
 pub mod effect_command;
 pub mod effect_config;
 pub mod face;
@@ -45,6 +46,7 @@ pub mod tty_capabilities;
 
 pub use clipboard::*;
 pub use display_scale::*;
+pub use dma_buf::*;
 pub use effect_command::*;
 pub use effect_config::*;
 pub use face::*;

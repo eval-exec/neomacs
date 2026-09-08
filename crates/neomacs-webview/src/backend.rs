@@ -259,6 +259,15 @@ pub(crate) trait Platform {
         false
     }
 
+    /// Native-overlay backends do not export DMA-BUFs. Composited backends
+    /// replace their receiving-device capabilities without recreating pages.
+    fn set_dma_buf_import_formats(
+        &mut self,
+        _formats: neomacs_display_protocol::DmaBufImportFormats,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     fn update(
         &mut self,
         _view: &mut Self::View,

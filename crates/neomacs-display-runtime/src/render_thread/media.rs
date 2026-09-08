@@ -384,7 +384,15 @@ impl RenderApp {
             // Ownership of the complete frame crosses into the renderer. Its
             // opaque WPE lease cannot be released until the exact GPU copy
             // submission retires on the renderer's retirement worker.
-            renderer.update_webview_dmabuf(view_id, buffer, dmabuf)
+            match renderer.update_webview_dmabuf(view_id, buffer, dmabuf) {
+                Ok(()) => true,
+                Err(frame) => {
+                    // Return the still-owned native frame, not a future repaint
+                    // request: static pages must recover even if WPE is idle.
+                    frame.request_pixel_fallback();
+                    false
+                }
+            }
         };
 
         for view_id in view_ids {
