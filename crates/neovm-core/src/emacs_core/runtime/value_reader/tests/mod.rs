@@ -1311,3 +1311,72 @@ fn bool_vector_literal_rejects_missing_decimal_size_like_gnu() {
 
     assert_eq!(err.message, "#&");
 }
+
+/// A string literal's representation is decided once, at the closing quote,
+/// from what its characters forced -- GNU's `read_string_literal` tail
+/// (`src/lread.c:3157-3168`).
+///
+/// Measured on the pinned GNU Emacs 31.1, `emacs -Q --batch`, via
+/// `(read-from-string FORM)`:
+///
+/// ```elisp
+/// "abc"          multibyte=nil len=3 chars=(61 62 63)
+/// "\xffZ"        multibyte=nil len=2 chars=(ff 5a)
+/// "\377\200"     multibyte=nil len=2 chars=(ff 80)
+/// "é"       multibyte=t   len=1 chars=(e9)
+/// "\xffé"   multibyte=t   len=2 chars=(3fffff e9)
+/// "\M-a"         multibyte=nil len=1 chars=(e1)
+/// ```
+///
+/// The last two are what a parallel unibyte buffer used to answer by
+/// construction and a flag has to answer by rule: a raw byte alongside a real
+/// multibyte character stays a raw-byte character in a multibyte string, and
+/// a meta escape below 0x100 stays unibyte.
+#[test]
+fn string_literal_representation_matches_gnu_at_the_closing_quote() {
+    crate::test_utils::init_test_tracing();
+
+    let plain = read1(r#""abc""#);
+    let plain = plain.as_lisp_string().expect("ascii literal");
+    assert!(!plain.is_multibyte(), "all-ASCII literal stays unibyte");
+    assert_eq!(plain.as_bytes(), b"abc");
+    assert_eq!(plain.schars(), 3);
+
+    for (form, bytes) in [
+        (r#""\xffZ""#, [0xFFu8, b'Z'].as_slice()),
+        (r#""\377\200""#, [0xFF, 0x80].as_slice()),
+        (r#""\M-a""#, [0xE1].as_slice()),
+    ] {
+        let value = read1(form);
+        let string = value.as_lisp_string().expect("raw-byte literal");
+        assert!(
+            !string.is_multibyte(),
+            "{form} holds only raw bytes, so GNU answers unibyte"
+        );
+        assert_eq!(string.as_bytes(), bytes, "{form}");
+        assert_eq!(string.schars(), bytes.len(), "{form}");
+    }
+
+    let unicode = read1(r#""é""#);
+    let unicode = unicode.as_lisp_string().expect("unicode literal");
+    assert!(
+        unicode.is_multibyte(),
+        "a non-ASCII character forces multibyte"
+    );
+    assert_eq!(unicode.as_bytes(), "é".as_bytes());
+    assert_eq!(unicode.schars(), 1);
+
+    // A raw byte's internal encoding uses lead 0xC0/0xC1 only -- GNU's
+    // `BYTE8_STRING` masks the high bits away (`src/character.h`), which is
+    // why `str_as_unibyte` can find raw bytes with `memchr2(0xC0, 0xC1)`.  So
+    // BYTE8 0xFF is C1 BF, and U+00E9 is C3 A9: two characters, four bytes,
+    // and the raw byte is still a raw byte (GNU prints it as 3fffff).
+    let mixed = read1(r#""\xffé""#);
+    let mixed = mixed.as_lisp_string().expect("mixed literal");
+    assert!(
+        mixed.is_multibyte(),
+        "a raw byte does not cancel a forced multibyte character"
+    );
+    assert_eq!(mixed.as_bytes(), &[0xC1, 0xBF, 0xC3, 0xA9]);
+    assert_eq!(mixed.schars(), 2);
+}
