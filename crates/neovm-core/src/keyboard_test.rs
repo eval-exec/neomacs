@@ -1582,6 +1582,23 @@ fn keysym_meta_shift_letter_consumes_shift_into_uppercase() {
 }
 
 #[test]
+fn keysym_meta_shift_punctuation_consumes_shift_into_the_shifted_character() {
+    crate::test_utils::init_test_tracing();
+    // The frontend reports the shifted character together with the Shift bit
+    // that produced it. GNU folds that Shift into the character for every
+    // ordinary chord, so `beginning-of-buffer` is reached by `M-<`, never by
+    // an `M-S-<` that no keymap binds.
+    let event = keysym_to_key_event('<' as u32, RENDER_META_MASK | RENDER_SHIFT_MASK).unwrap();
+    assert_eq!(event.key, Key::Char('<'));
+    assert!(event.modifiers.meta);
+    assert!(!event.modifiers.shift);
+    assert_eq!(event.to_description(), "M-<");
+
+    let event = keysym_to_key_event('>' as u32, RENDER_META_MASK | RENDER_SHIFT_MASK).unwrap();
+    assert_eq!(event.to_description(), "M->");
+}
+
+#[test]
 fn keysym_ctrl_uppercase_without_shift_treats_caps_lock_as_unshifted() {
     crate::test_utils::init_test_tracing();
     let event = keysym_to_key_event('F' as u32, RENDER_CTRL_MASK).unwrap();
