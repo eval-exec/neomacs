@@ -196,15 +196,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Ok(()),
     };
 
+    // The termcap/terminfo entry points (tgetent, tigetstr, tparm, ...) are in
+    // libtinfo(w) rather than libncurses(w) wherever ncurses is configured
+    // --with-termlib, and no linker resolves them through ncurses' transitive
+    // DT_NEEDED. pkg-config knows which layout this system has, so replay its
+    // whole answer instead of guessing a library name.
+    //
+    // These go out as `rustc-link-arg`, not `rustc-link-lib`: Cargo applies
+    // link-lib to this package's library target, but the caller
+    // (`terminal_capabilities`) is a module of the `neomacs` binary.
     for name in candidates {
-        if let Ok(library) = pkg_config::Config::new().probe(name) {
-            for path in library.link_paths {
-                println!("cargo:rustc-link-arg=-Wl,-rpath,{}", path.display());
-            }
-            return Ok(());
+        let Ok(library) = pkg_config::Config::new().probe(name) else {
+            continue;
+        };
+        for path in &library.link_paths {
+            println!("cargo:rustc-link-arg=-L{}", path.display());
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", path.display());
         }
+        for lib in &library.libs {
+            println!("cargo:rustc-link-arg=-l{lib}");
+        }
+        return Ok(());
     }
 
+    // No pkg-config: link the bare ncurses name and warn, since the split
+    // cannot be detected and guessing wrong fails at the final link.
     println!("cargo:rustc-link-lib={}", candidates[0]);
+    println!("cargo:rustc-link-arg=-l{}", candidates[0]);
+    println!(
+        "cargo:warning=pkg-config could not describe ncurses (tried: {}); \
+         linking -l{} and assuming the terminfo entry points live there. \
+         If the link fails with undefined tgetent/tigetstr/tparm, install \
+         ncurses development files and pkg-config.",
+        candidates.join(", "),
+        candidates[0]
+    );
     Ok(())
 }

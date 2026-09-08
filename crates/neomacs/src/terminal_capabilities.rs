@@ -23,9 +23,9 @@ use neomacs_display_protocol::tty_capabilities::{
     TtyColorDepth, TtyColorSource, TtyDirectColorRoute, TtyNoColorVideo, TtyStyledUnderline,
 };
 
+// Deliberately no `#[link]`: which library defines these varies by system, so
+// `build.rs` resolves it with pkg-config and emits the link arguments.
 #[cfg(not(windows))]
-#[cfg_attr(target_os = "linux", link(name = "ncursesw"))]
-#[cfg_attr(target_os = "macos", link(name = "ncurses"))]
 unsafe extern "C" {
     fn tgetent(buffer: *mut c_char, term: *const c_char) -> c_int;
     fn tgetstr(capability: *const c_char, area: *mut *mut c_char) -> *mut c_char;
