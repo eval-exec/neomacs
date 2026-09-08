@@ -19994,7 +19994,8 @@ fn layout_frame_rust_applies_buffer_glyphless_table_to_header_line_strings() {
     }
     assert!(eval.frame_manager_mut().select_frame(frame_id));
     let results = eval.eval_str_each(
-        "(internal-set-lisp-face-attribute 'glyphless-char :foreground \"#123456\" (selected-frame))",
+        "(internal-set-lisp-face-attribute 'glyphless-char :foreground \"#123456\" (selected-frame))
+         (internal-set-lisp-face-attribute 'header-line :inverse-video nil (selected-frame))",
     );
     assert!(
         results.iter().all(Result::is_ok),
@@ -33517,8 +33518,16 @@ fn buffer_owned_mode_line_string_remaps_its_named_face() {
         );
     }
     assert!(eval.frame_manager_mut().select_frame(frame_id));
+    // The mode-line is inverse-video on a display the face machinery does not
+    // classify as color (the `(t :inverse-video t)` branch of `mode-line`).
+    // GNU realizes a mode-line string by copying the base face's lface and
+    // merging the string's faces before `lookup_face`
+    // (`face_at_string_position`, xfaces.c:7105), so under inverse video the
+    // remapped foreground would land in the background.  This test is about
+    // the remapping, not about inverse video, so pin the base face flat.
     let face_results = eval.eval_str_each(
-        "(internal-make-lisp-face 'mode-line-remap-probe)
+        "(internal-set-lisp-face-attribute 'mode-line :inverse-video nil (selected-frame))
+         (internal-make-lisp-face 'mode-line-remap-probe)
          (internal-set-lisp-face-attribute
           'mode-line-remap-probe :foreground \"#00ff00\" (selected-frame))",
     );

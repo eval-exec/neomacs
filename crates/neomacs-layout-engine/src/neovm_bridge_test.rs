@@ -3242,6 +3242,45 @@ fn face_resolver_applies_inverse_video_after_text_and_overlay_faces_are_merged()
     assert_eq!(resolved.bg, 0x00b0e2ff);
 }
 
+/// A row base face with `:inverse-video` (the `header-line` face in themes like
+/// tsdh-dark) must swap only after the row string's text-property faces have
+/// merged.  GNU accumulates one lface vector and swaps once in
+/// `load_face_colors` (src/xfaces.c:1389-1400), so a foreground-only face
+/// merged on top renders as a *background* pill.
+#[test]
+fn face_resolver_realizes_base_face_inverse_video_after_merging_text_property_face() {
+    let _evaluator = neovm_core::emacs_core::Context::new();
+    let mut table = FaceTable::new();
+
+    let mut default = NeoFace::new("default");
+    default.foreground = Some(NeoColor::rgb(0xF5, 0xF5, 0xF5)); // white smoke
+    default.background = Some(NeoColor::rgb(0x33, 0x33, 0x33)); // gray20
+    table.define("default", default);
+
+    let mut header_line = NeoFace::new("header-line");
+    header_line.inverse_video = Some(true);
+    table.define("header-line", header_line);
+
+    let mut model_name = NeoFace::new("model-name");
+    model_name.foreground = Some(NeoColor::rgb(0x93, 0x70, 0xDB)); // medium purple
+    table.define("model-name", model_name);
+
+    let resolver = FaceResolver::new(&table, 0x00F5F5F5, 0x00333333, 14.0, Some("neo".into()));
+    let base = resolver.resolve_named_face("header-line");
+    assert_eq!(base.fg, 0x00333333);
+    assert_eq!(base.bg, 0x00F5F5F5);
+
+    let resolved = resolver
+        .resolve_face_value_over(&base, &Value::symbol("model-name"))
+        .expect("model-name resolves over header-line");
+
+    assert_eq!(
+        resolved.fg, 0x00333333,
+        "the merged foreground becomes the background under the base face's inverse-video"
+    );
+    assert_eq!(resolved.bg, 0x009370DB);
+}
+
 #[test]
 fn test_face_resolver_can_ignore_inverse_video_for_gui_menu_bar() {
     let mut table = FaceTable::new();
