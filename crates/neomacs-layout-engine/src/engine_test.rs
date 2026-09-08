@@ -11057,6 +11057,79 @@ fn layout_frame_rust_control_char_caret_uses_escape_glyph_foreground() {
     );
 }
 
+/// An inverse-video base face moves a merged semantic face's foreground into
+/// the background (`load_face_colors`, src/xfaces.c:1389-1400).  The
+/// escape/nobreak no-op rule must compare the background too, or the merge is
+/// discarded and the glyph keeps the base face's colours.
+#[test]
+fn layout_frame_rust_escape_glyph_lands_in_background_over_inverse_base() {
+    use neomacs_display_protocol::types::Color;
+
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("a\u{0001}b\n");
+    }
+    let escape_fg = Color::from_pixel((0x46u32 << 16) | (0xD9u32 << 8) | 0xFFu32);
+
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("layout-escape-glyph-inverse-base", 640, 160, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let results = eval.eval_str_each(
+        "(internal-set-lisp-face-attribute 'escape-glyph :foreground \"#46D9FF\" (selected-frame))
+         (put-text-property 2 3 'face '(:inverse-video t))",
+    );
+    assert!(
+        results.iter().all(Result::is_ok),
+        "setup failed: {results:?}"
+    );
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("selected window matrix");
+    let text_row = entry
+        .matrix
+        .rows
+        .iter()
+        .find(|row| row.enabled && row.role == GlyphRowRole::Text && row.displays_text)
+        .expect("text row");
+    let caret = text_row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find(|g| matches!(g.glyph_type, GlyphType::Char { ch: '^' }))
+        .expect("caret '^' glyph");
+    let caret_face = state
+        .faces
+        .get(&caret.face_id)
+        .expect("escape-glyph face registered in the frame face table");
+    assert_eq!(
+        caret_face.background, escape_fg,
+        "over an inverse-video base the escape-glyph foreground must become the background"
+    );
+}
+
 /// Sibling guard: ordinary (non-control) text glyphs keep the surrounding base
 /// face -- the escape-glyph merge must NOT leak onto normal characters.
 #[test]

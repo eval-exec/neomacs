@@ -443,8 +443,13 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
         resolved_active_face
     }
 
-    /// Realize the legacy escape/nobreak face merge. Its foreground-only
-    /// no-op rule is intentional and keeps those paths unchanged.
+    /// Realize the legacy escape/nobreak face merge.
+    ///
+    /// The no-op rule compares both colour slots.  GNU swaps a merged
+    /// foreground into the background when the base face is `:inverse-video`
+    /// (`load_face_colors`, src/xfaces.c:1389-1400), and `nobreak-space` can
+    /// set `:background` outright (its `min-colors 8` branch), so a
+    /// foreground-only comparison would discard a real colour change.
     fn merge_named_active_face(
         &self,
         source_render: &mut TextRowSourceRenderState<'_>,
@@ -456,7 +461,11 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
     ) -> Option<DisplayRowActiveFaceState> {
         let base = active_face_state.resolved_face();
         let merged = source_render.merge_named_face_over(base, face_name);
-        if merged.fg == base.fg && merged.use_default_foreground == base.use_default_foreground {
+        if merged.fg == base.fg
+            && merged.bg == base.bg
+            && merged.use_default_foreground == base.use_default_foreground
+            && merged.use_default_background == base.use_default_background
+        {
             return None;
         }
         Some(self.install_merged_active_face(source_render, face_ids, row_geometry, item, merged))
