@@ -23,9 +23,9 @@ use super::command_observation::{
 use super::custom::CustomManager;
 use super::debug_on_call::DebugOnCallCode;
 pub use super::display_host::{
-    DisplayHost, FrameFontRequest, FrameFontSize, GraphicalFaceAttribute, TerminalCreateRequest,
-    TerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize, TerminalId,
-    XwidgetScriptRequestId,
+    DisplayHost, FontOpeningSize, FrameFontRequest, FrameFontSize, GraphicalFaceAttribute,
+    TerminalCreateRequest, TerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize,
+    TerminalId, XwidgetScriptRequestId,
 };
 use super::error::*;
 use super::interactive::InteractiveRegistry;
@@ -2179,6 +2179,7 @@ pub struct GuiFrameHostSize {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontSpecResolveRequest {
+    pub selection: FontSpecSelection,
     pub frame_id: crate::window::FrameId,
     pub family: Option<crate::heap_types::LispString>,
     pub registry: Option<crate::heap_types::LispString>,
@@ -2186,6 +2187,16 @@ pub struct FontSpecResolveRequest {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
+}
+
+/// GNU separates entity listing/selection from the font driver's `match`
+/// operation. A driver match is authoritative, not another style-filtered
+/// list (notably, ftfont_match deliberately omits Fontconfig style fields).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FontSpecSelection {
+    #[default]
+    Enumerate,
+    DriverMatch,
 }
 
 /// One exact opened font shared by layout, frame geometry, and Lisp font
@@ -2391,7 +2402,7 @@ pub struct FontPxProbeResult {
 /// A native entity is not necessarily file-backed: CoreText can identify an
 /// exact face by PostScript name and provide its metrics without exposing a
 /// path that a portable parser can reopen.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FontEntityMetricsRequest {
     pub frame_id: crate::window::FrameId,
     pub family: Option<crate::heap_types::LispString>,
@@ -2401,7 +2412,7 @@ pub struct FontEntityMetricsRequest {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
-    pub pixel_size: u32,
+    pub size: FontOpeningSize,
 }
 
 /// Complete native answer for `font-info` on a font entity.

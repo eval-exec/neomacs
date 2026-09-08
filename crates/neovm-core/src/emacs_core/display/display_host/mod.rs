@@ -197,6 +197,27 @@ impl FrameFontSize {
     }
 }
 
+/// Size used to open a font for a Lisp query, not to resize a frame.
+///
+/// GNU opens an unsized scalable entity at the smallest usable size, whereas
+/// a named font can request pixels or points. Point conversion belongs to the
+/// display host; neither the selected frame's font nor backing scale supplies
+/// substitute metrics. An explicit font-spec DPI overrides the display DPI.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FontOpeningSize {
+    SmallestUsable,
+    Pixels(NonZeroU32),
+    /// An unsized name uses GNU's moderate default, except on Cocoa where
+    /// the native frame's `fontsize` parameter supplies the default points.
+    NamedDefault {
+        frame_fontsize: Option<PositiveFontScalar>,
+    },
+    Points {
+        size: PositiveFontScalar,
+        dpi: Option<NonZeroU32>,
+    },
+}
+
 /// Typed request crossing from frame-local face state into native font
 /// selection. The embedded face carries style; `size` is its sole sizing
 /// authority and therefore cannot disagree with `Face::height`.
@@ -388,7 +409,16 @@ pub trait DisplayHost {
             return Ok(None);
         };
         let weight = request.weight.map(|weight| f32::from(weight.css_weight()));
-        let metrics = self.probe_font_px_metrics(file, 0, request.pixel_size, weight)?;
+        let pixel_size = match request.size {
+            FontOpeningSize::SmallestUsable => 0,
+            FontOpeningSize::Pixels(size) => size.get(),
+            // A file-only adapter has no display resolution. Native hosts
+            // must resolve point requests using their own font-sizing policy.
+            FontOpeningSize::Points { .. } | FontOpeningSize::NamedDefault { .. } => {
+                return Ok(None);
+            }
+        };
+        let metrics = self.probe_font_px_metrics(file, 0, pixel_size, weight)?;
         Ok(metrics.map(|metrics| ResolvedFontEntityMetrics {
             metrics,
             file: request.file,

@@ -93,6 +93,25 @@ pub struct FontconfigBackend {
 }
 
 impl FontBackend for FontconfigBackend {
+    fn match_font_spec(&self, query: &FontCandidateQuery) -> super::FontDriverMatch {
+        let matched = crate::font::fontconfig::fc_match_candidate(
+            query.scope.queried_family(),
+            &query.charset_ranges,
+            &query.languages,
+        )
+        .and_then(|candidate| {
+            Some(FontCandidate {
+                matched: PlatformFontCandidate::from_fontconfig(
+                    candidate.matched,
+                    candidate.foundry,
+                    candidate.width,
+                    candidate.spacing,
+                )?,
+            })
+        });
+        super::FontDriverMatch::Native(matched)
+    }
+
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::Fontconfig
     }

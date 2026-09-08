@@ -1,10 +1,11 @@
 //! Shared GNU-compatible font selection policy.
 //!
 //! GNU Emacs keeps fontset lookup and entity scoring in `fontset.c`/`font.c`;
-//! platform drivers only list/open entities and answer coverage questions.
-//! [`FontResolver`] preserves that split.  A [`FontBackend`] may use
-//! Fontconfig, CoreText, or DirectWrite to discover candidates, but it never
-//! decides which fontset entry or style wins.
+//! platform drivers list/open entities and answer coverage questions.
+//! [`FontResolver`] owns fontset and enumerated-candidate selection across
+//! Fontconfig, CoreText, and DirectWrite. GNU's separate driver `match`
+//! operation is explicit: its native winner bypasses enumeration's style
+//! filters without changing shared fontset selection.
 
 use crate::font::policy::GnuFontPolicy;
 use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
@@ -14,6 +15,7 @@ use crate::font_backend::{
     RequiredFontCoverage, TextDirection,
 };
 use neomacs_display_protocol::font::{FontBackendKind, ResolvedFontIdentity};
+use neovm_core::emacs_core::eval::FontSpecSelection;
 use neovm_core::emacs_core::font::alternative_font_families;
 use neovm_core::emacs_core::fontset::{
     FontSpecEntry, StoredFontSpec, fontset_generation, matching_entries_for_char,
@@ -23,11 +25,12 @@ use neovm_core::face::{FontSlant, FontWeight, FontWidth};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::sync::Mutex;
 
-/// Platform-neutral request for GNU `list-fonts` / `find-font` entity
-/// discovery.  Optional fields remain optional all the way to the native
-/// adapter; no platform is selected by the caller.
+/// Platform-neutral request for GNU entity enumeration or driver matching.
+/// Optional fields remain optional all the way to the native adapter; no
+/// platform is selected by the caller.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FontEntityQuery {
+    selection: FontSpecSelection,
     family: Option<FontFamilyName>,
     registry: Option<String>,
     language: Option<String>,
@@ -38,6 +41,11 @@ pub struct FontEntityQuery {
 }
 
 impl FontEntityQuery {
+    pub fn with_selection(mut self, selection: FontSpecSelection) -> Self {
+        self.selection = selection;
+        self
+    }
+
     pub fn new(family: Option<FontFamilyName>) -> Self {
         Self {
             family,
@@ -241,9 +249,21 @@ impl FontResolver {
             requested_width: query.width.unwrap_or(FontWidth::Normal),
             direction: TextDirection::for_char(representative),
         };
-        let selected = self
-            .backend
-            .list_candidates(&candidate_query)
+        let candidates = match query.selection {
+            FontSpecSelection::Enumerate => self.backend.list_candidates(&candidate_query),
+            FontSpecSelection::DriverMatch => {
+                match self.backend.match_font_spec(&candidate_query) {
+                    crate::font_backend::FontDriverMatch::Native(candidate) => {
+                        return Some(ResolvedFontEntity {
+                            matched: self.backend.finalize_match(candidate?.matched)?,
+                            registry: Some("iso10646-1".to_owned()),
+                        });
+                    }
+                    crate::font_backend::FontDriverMatch::Enumerated(candidates) => candidates,
+                }
+            }
+        };
+        let selected = candidates
             .into_iter()
             .enumerate()
             .filter(|(_, candidate)| {

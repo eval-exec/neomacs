@@ -31,7 +31,7 @@ use super::xfaces::{
     runtime_face_table_from_frame_lisp_faces, set_lisp_face_vector_attr,
 };
 
-use super::display_host::{FrameFontRequest, FrameFontSize};
+use super::display_host::{FontOpeningSize, FrameFontRequest, FrameFontSize, PositiveFontScalar};
 use super::intern::{intern, resolve_sym};
 use super::value::*;
 use crate::buffer::{Buffer, CharPos0, EmacsBytePos, LispCharPos1};
@@ -2229,6 +2229,7 @@ fn font_spec_resolve_request(
     });
 
     Ok(super::eval::FontSpecResolveRequest {
+        selection: super::eval::FontSpecSelection::Enumerate,
         frame_id: find_font_frame_id(eval, frame)?,
         family,
         registry,
@@ -2253,6 +2254,13 @@ pub(crate) fn find_font(eval: &mut super::eval::Context, args: Vec<Value>) -> Ev
     }
 
     let request = font_spec_resolve_request(eval, &args[0], args.get(1))?;
+    match_font_spec_request(eval, request)
+}
+
+fn match_font_spec_request(
+    eval: &mut super::eval::Context,
+    request: super::eval::FontSpecResolveRequest,
+) -> EvalResult {
     let Some(host) = eval.display_host.as_mut() else {
         return Ok(Value::NIL);
     };
@@ -3047,24 +3055,24 @@ fn gnu_style_first_name(
         .map(|row| row[0])
 }
 
-/// `font-info` for a font ENTITY, following GNU font.c `Ffont_info`: open
-/// the entity via `font_open_entity` (a scalable entity's size 0 probes
-/// upward from 1px until the font is "manageable") and report the OPENED
-/// font's metrics — the tiny pixelsize=1 numbers — not the frame's realized
-/// font. Names: element 0 is the entity XLFD with the probed pixel size,
-/// element 1 the fontconfig-style name `font_unparse_fcname` builds.
+/// Open an entity at the requested size and report the actual metrics,
+/// following GNU font.c `font_open_entity`. A fixed-size entity takes
+/// precedence over the request; SmallestUsable probes upward from 1px.
+/// The returned names describe that opened font, never the frame font.
 fn font_info_vector_for_entity(
     eval: &mut super::eval::Context,
     frame_id: crate::window::FrameId,
     entity: &Value,
+    requested_size: FontOpeningSize,
 ) -> Option<Value> {
     let elems = entity.as_vector_data()?.clone();
-    let px = font_vector_get_flexible(&elems, "size")
+    let size = font_vector_get_flexible(&elems, "size")
         .and_then(|value| match value.kind() {
-            ValueKind::Fixnum(n) if n > 0 => Some(n as u32),
+            ValueKind::Fixnum(n) => u32::try_from(n).ok().and_then(std::num::NonZeroU32::new),
             _ => None,
         })
-        .unwrap_or(0);
+        .map(FontOpeningSize::Pixels)
+        .unwrap_or(requested_size);
     let text_field = |name| {
         font_vector_get_flexible(&elems, name).and_then(|value| font_value_text_lisp_string(&value))
     };
@@ -3082,7 +3090,7 @@ fn font_info_vector_for_entity(
                 slant: font_vector_get_flexible(&elems, "slant").and_then(font_slant_from_value),
                 width: font_vector_get_flexible(&elems, "width")
                     .and_then(|value| value.as_symbol_name().and_then(FontWidth::from_symbol)),
-                pixel_size: px,
+                size,
             })
             .ok()
         })
@@ -3203,18 +3211,6 @@ fn otf_capability_to_lisp(caps: &super::eval::FontOtfCapability) -> Value {
     )
 }
 
-/// Capability for any font VALUE carrying a `:file`, else nil.
-fn font_value_otf_capability(eval: &mut super::eval::Context, font_like: &Value) -> Value {
-    let Some(file) = font_value_fields(font_like)
-        .and_then(|fields| font_vector_get_flexible(fields, "file"))
-        .filter(|value| value.is_string())
-        .and_then(|value| value.as_utf8_str().map(|s| s.to_owned()))
-    else {
-        return Value::NIL;
-    };
-    otf_capability_lisp(eval, &file)
-}
-
 /// Lisp form of one GSUB/GPOS side: list of `(SCRIPT (LANGSYS FEATURES...)
 /// ...)`, default langsys printed as `nil`; `nil` for an empty side —
 /// mirroring GNU `hbfont_otf_features`.
@@ -3244,49 +3240,6 @@ fn otf_side_to_lisp(side: &super::eval::OtfSideCapability) -> Value {
         })
         .collect();
     Value::list(scripts)
-}
-
-fn font_info_vector_for_runtime_font(
-    font_like: &Value,
-    frame: &crate::window::Frame,
-    capability: Value,
-) -> Value {
-    let opened_name = font_name_value(font_like).unwrap_or_else(|| Value::string(""));
-    let full_name = opened_name;
-    let file = match font_like.kind() {
-        ValueKind::Veclike(VecLikeType::Vector | VecLikeType::Font) if is_font(font_like) => {
-            font_value_fields(font_like)
-                .and_then(|elems| font_vector_get_flexible(elems, "file"))
-                .filter(|value| value.is_string())
-                .unwrap_or(Value::NIL)
-        }
-        _ => Value::NIL,
-    };
-    let size = frame.font_pixel_size.max(1.0).round() as i64;
-    let height = frame.char_height.max(1.0).round() as i64;
-    let average_width = frame.char_width.max(1.0).round() as i64;
-    let space_width = average_width;
-    let max_width = average_width;
-    let ascent = ((height as f32) * 0.75).round() as i64;
-    let descent = (height - ascent).max(0);
-    let default_ascent = ascent;
-
-    Value::vector(vec![
-        opened_name,
-        full_name,
-        Value::fixnum(size),
-        Value::fixnum(height),
-        Value::fixnum(0),
-        Value::fixnum(0),
-        Value::fixnum(default_ascent),
-        Value::fixnum(max_width),
-        Value::fixnum(ascent),
-        Value::fixnum(descent),
-        Value::fixnum(space_width),
-        Value::fixnum(average_width),
-        file,
-        capability,
-    ])
 }
 
 pub(crate) fn resolve_font_match(
@@ -3578,20 +3531,71 @@ pub(crate) fn internal_char_font(eval: &mut super::eval::Context, args: Vec<Valu
     ))
 }
 
+/// GNU Ffont_info has distinct opening semantics for these four inputs.
+/// In particular, a named font honors its requested size, but a scalable
+/// entity (including one matched from a spec) is opened at its smallest size.
+enum FontInfoTarget {
+    Named(Value),
+    Spec(Value),
+    Entity(Value),
+    Opened(OpenedFont),
+}
+
+impl FontInfoTarget {
+    fn decode(value: Value) -> Option<Self> {
+        if value.is_string() {
+            Some(Self::Named(value))
+        } else if is_font_spec(&value) {
+            Some(Self::Spec(value))
+        } else if is_font_entity(&value) {
+            Some(Self::Entity(value))
+        } else {
+            OpenedFont::decode(value).map(Self::Opened)
+        }
+    }
+}
+
+fn named_font_opening_size(spec: Value, frame: &crate::window::Frame) -> FontOpeningSize {
+    let fields = font_value_fields(&spec).expect("parsed font spec");
+    let dpi = font_vector_get_flexible(fields, "dpi")
+        .and_then(|value| value.as_int())
+        .and_then(|value| u32::try_from(value).ok())
+        .and_then(std::num::NonZeroU32::new);
+    match font_vector_get_flexible(fields, "size") {
+        Some(value) if value.is_fixnum() => value
+            .as_int()
+            .and_then(|value| u32::try_from(value).ok())
+            .and_then(std::num::NonZeroU32::new)
+            .map(FontOpeningSize::Pixels)
+            .unwrap_or(FontOpeningSize::SmallestUsable),
+        Some(value) if value.is_float() => PositiveFontScalar::new(value.xfloat())
+            .map(|size| FontOpeningSize::Points { size, dpi })
+            .unwrap_or(FontOpeningSize::SmallestUsable),
+        // Keep the default distinct from an explicit point size: GNU uses
+        // different DPI conversion and NS frame policy for unsized names.
+        _ => FontOpeningSize::NamedDefault {
+            frame_fontsize: frame.parameter("fontsize").and_then(|value| {
+                let points = match value.kind() {
+                    ValueKind::Fixnum(points) => points as f64,
+                    ValueKind::Float => value.xfloat(),
+                    _ => return None,
+                };
+                PositiveFontScalar::new(points)
+            }),
+        },
+    }
+}
+
 pub(crate) fn font_info(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("font-info", &args, 1)?;
     expect_max_args("font-info", &args, 2)?;
 
-    if !(args[0].is_string()
-        || is_font(&args[0])
-        || is_font_entity(&args[0])
-        || is_font_object(&args[0]))
-    {
-        return Err(signal(
+    let target = FontInfoTarget::decode(args[0]).ok_or_else(|| {
+        signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("stringp"), args[0]],
-        ));
-    }
+        )
+    })?;
 
     let frame_id = match args.get(1) {
         None => super::window_cmds::ensure_selected_frame_id(eval),
@@ -3617,33 +3621,46 @@ pub(crate) fn font_info(eval: &mut super::eval::Context, args: Vec<Value>) -> Ev
         return Ok(Value::NIL);
     }
 
-    if let Some(opened) = OpenedFont::decode(args[0]) {
-        return Ok(opened.info_vector());
-    }
-    if is_font_entity(&args[0]) {
-        // GNU opens the font itself (font_open_entity for entities; a
-        // font-at object is already opened at its pixel size) and reports
-        // the OPENED font's metrics; only fall back to the frame font when
-        // the value can't be probed (no file, unreadable, ...).
-        if let Some(info) = font_info_vector_for_entity(eval, frame_id, &args[0]) {
-            return Ok(info);
+    let (entity, size) = match target {
+        FontInfoTarget::Opened(opened) => return Ok(opened.info_vector()),
+        FontInfoTarget::Entity(entity) => (entity, FontOpeningSize::SmallestUsable),
+        FontInfoTarget::Spec(spec) => {
+            // GNU font_matching_entity replaces all three style slots with
+            // this frame's default-face attributes, even explicit spec
+            // styles. It does not inherit the frame's font family.
+            let defaults =
+                runtime_face_table_from_frame_lisp_faces(eval, frame_id, false).resolve("default");
+            let mut request =
+                font_spec_resolve_request(eval, &spec, Some(&Value::make_frame(frame_id.0)))?;
+            request.weight = Some(defaults.weight.unwrap_or(FontWeight::NORMAL));
+            request.selection = super::eval::FontSpecSelection::DriverMatch;
+            request.slant = Some(defaults.slant.unwrap_or(FontSlant::Normal));
+            request.width = Some(defaults.width.unwrap_or(FontWidth::Normal));
+            (
+                match_font_spec_request(eval, request)?,
+                FontOpeningSize::SmallestUsable,
+            )
         }
-    }
-    // GNU attaches (opentype . caps) to font-info for OPENED fonts too
-    // (font-at objects); compute it from the font's file before borrowing
-    // the frame.
-    let capability = font_value_otf_capability(eval, &args[0]);
-    let frame = eval
-        .frames
-        .get(frame_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
-    if args[0].is_string() || is_font(&args[0]) {
-        Ok(font_info_vector_for_runtime_font(
-            &args[0], frame, capability,
-        ))
-    } else {
-        Ok(Value::NIL)
-    }
+        FontInfoTarget::Named(name) => {
+            // Share the GNU font-name parser with font-spec, including
+            // fontconfig/Pango names and XLFD pixel/point units.
+            let text = font_string_text(&name).expect("validated font name");
+            let spec = font_spec_from_name(&text)
+                .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), name]))?;
+            let size =
+                named_font_opening_size(spec, eval.frames.get(frame_id).expect("validated frame"));
+            // GNU font_open_by_spec prefers normal styles, independent of
+            // the frame face, but preserves the name's explicit styles.
+            let mut request =
+                font_spec_resolve_request(eval, &spec, Some(&Value::make_frame(frame_id.0)))?;
+            request.weight.get_or_insert(FontWeight::NORMAL);
+            request.slant.get_or_insert(FontSlant::Normal);
+            request.width.get_or_insert(FontWidth::Normal);
+            let entity = match_font_spec_request(eval, request)?;
+            (entity, size)
+        }
+    };
+    Ok(font_info_vector_for_entity(eval, frame_id, &entity, size).unwrap_or(Value::NIL))
 }
 
 pub(crate) fn query_font(_eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {

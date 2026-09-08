@@ -511,7 +511,19 @@ pub struct FontCandidate {
     pub matched: PlatformFontCandidate,
 }
 
+/// A driver-selected entity must not pass through the list operation's
+/// style filters again. Backends using shared selection provide candidates
+/// instead, preserving their platform-specific enumeration policy.
+pub enum FontDriverMatch {
+    Native(Option<FontCandidate>),
+    Enumerated(Vec<FontCandidate>),
+}
+
 pub trait FontBackend: Send {
+    fn match_font_spec(&self, query: &FontCandidateQuery) -> FontDriverMatch {
+        FontDriverMatch::Enumerated(self.list_candidates(query))
+    }
+
     /// Native platform implementation represented by this adapter.
     fn kind(&self) -> FontBackendKind;
 
