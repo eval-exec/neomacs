@@ -1553,6 +1553,11 @@ fn buffer_mouse_face_is_resolved_over_the_effective_display_face() {
 #[test]
 fn typed_display_replacement_keeps_underlying_buffer_mouse_face() {
     let mut eval = Context::new();
+    // GNU valid_image_p requires a supported type and a valid source; bare
+    // (image) is ignored before replacement/pointer inheritance is reached.
+    let image = eval
+        .eval_str(r##"'(image :type pbm :data "P1\n1 1\n0\n")"##)
+        .expect("read valid one-pixel image");
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1562,11 +1567,7 @@ fn typed_display_replacement_keeps_underlying_buffer_mouse_face() {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
         buffer.insert("x");
         let range = EmacsByteRange::new(EmacsBytePos::new(0), EmacsBytePos::new(1));
-        buffer.text_props_put_property_in_emacs_byte_range(
-            range,
-            Value::symbol("display"),
-            Value::list(vec![Value::symbol("image")]),
-        );
+        buffer.text_props_put_property_in_emacs_byte_range(range, Value::symbol("display"), image);
         buffer.text_props_put_property_in_emacs_byte_range(
             range,
             Value::symbol("mouse-face"),
