@@ -1119,6 +1119,50 @@ pub(crate) fn fc_list_candidates(
     required_char: Option<u32>,
     langs: &[String],
 ) -> Vec<ListedFont> {
+    fc_query_candidates(
+        family,
+        query_charset_ranges,
+        required_char,
+        langs,
+        FcQueryKind::List,
+    )
+}
+
+#[cfg(unix)]
+pub(crate) fn fc_match_candidate(
+    family: Option<&str>,
+    query_charset_ranges: &[(u32, u32)],
+    langs: &[String],
+) -> Option<ListedFont> {
+    fc_query_candidates(
+        family,
+        query_charset_ranges,
+        None,
+        langs,
+        FcQueryKind::Match,
+    )
+    .into_iter()
+    // Like GNU ftfont_match, do not silently substitute a missing family.
+    .find(|candidate| {
+        family.is_none_or(|family| candidate.matched.family.eq_ignore_ascii_case(family))
+    })
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum FcQueryKind {
+    List,
+    Match,
+}
+
+#[cfg(unix)]
+fn fc_query_candidates(
+    family: Option<&str>,
+    query_charset_ranges: &[(u32, u32)],
+    required_char: Option<u32>,
+    langs: &[String],
+    kind: FcQueryKind,
+) -> Vec<ListedFont> {
     if fontconfig_handle().is_none() {
         return Vec::new();
     }
@@ -1220,6 +1264,30 @@ pub(crate) fn fc_list_candidates(
         };
         let _keep_charset_alive = query_charset;
         let _keep_langset_alive = query_langset;
+        if matches!(kind, FcQueryKind::Match) {
+            // GNU ftfont_match uses this pattern without weight/slant/width
+            // fields; Fontconfig supplies its native defaults. Enumeration
+            // below deliberately keeps the unsubstituted FcFontList path.
+            if unsafe {
+                fontconfig_sys::FcConfigSubstitute(
+                    ptr::null_mut(),
+                    pattern.0,
+                    fontconfig_sys::FcMatchPattern,
+                )
+            } == 0
+            {
+                continue;
+            }
+            unsafe { fontconfig_sys::FcDefaultSubstitute(pattern.0) };
+            let mut result = fontconfig_sys::FcResultNoMatch;
+            let matched = FcPatternGuard(unsafe {
+                fontconfig_sys::FcFontMatch(ptr::null_mut(), pattern.0, &mut result)
+            });
+            if let Some(candidate) = listed_font_from_raw_pattern(matched.0) {
+                candidates.push(candidate);
+            }
+            continue;
+        }
         let projection = if required_char.is_some() && query_charset_ranges.is_empty() {
             GnuEntityProjection::MetadataAndCharset
         } else {

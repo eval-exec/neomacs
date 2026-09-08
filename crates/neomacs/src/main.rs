@@ -1948,7 +1948,8 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .as_ref()
             .and_then(LispString::as_utf8_str)
             .and_then(neomacs_layout_engine::font_backend::FontFamilyName::new);
-        let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family);
+        let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family)
+            .with_selection(request.selection);
         if let Some(registry) = request.registry.as_ref().and_then(LispString::as_utf8_str) {
             query = query.with_registry(registry);
         }
@@ -2013,7 +2014,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         &mut self,
         request: FontEntityMetricsRequest,
     ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
-        let pixel_size = request.pixel_size.max(1);
+        let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
         let family = request
             .family
             .as_ref()

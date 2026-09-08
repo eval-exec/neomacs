@@ -205,6 +205,10 @@ fn windows_entity_policy_keeps_gnus_relaxed_weight_match() {
 }
 
 impl FontBackend for CandidateBackend {
+    fn match_font_spec(&self, _query: &FontCandidateQuery) -> crate::font_backend::FontDriverMatch {
+        crate::font_backend::FontDriverMatch::Native(self.candidates.first().cloned())
+    }
+
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::Fontconfig
     }
@@ -230,6 +234,29 @@ impl FontBackend for CandidateBackend {
     fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
         crate::font::catalog::FontCatalogChange::Unchanged
     }
+}
+
+#[test]
+fn native_driver_match_is_not_rejected_by_enumeration_style_filters() {
+    let resolver = FontResolver::new(Box::new(CandidateBackend {
+        candidates: vec![
+            candidate("Fixture Sans", 400, FontSlant::Normal, 0),
+            candidate("Fixture Sans", 700, FontSlant::Italic, 0),
+        ],
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("Fixture Sans"))
+        .with_weight(700)
+        .with_slant(FontSlant::Italic)
+        .with_selection(FontSpecSelection::DriverMatch);
+    let entity = resolver
+        .resolve_entity(&query)
+        .expect("native driver winner");
+    assert_eq!(entity.matched.weight(), Some(400));
+    assert_eq!(entity.matched.slant(), FontSlant::Normal);
+    assert_eq!(
+        entity.matched.file_path(),
+        Some("/fixture/Fixture Sans-400.ttf")
+    );
 }
 
 fn candidate(family: &str, weight: u16, slant: FontSlant, spacing: i32) -> FontCandidate {

@@ -6,7 +6,7 @@
 //! into the CoreText and DirectWrite catalogs.
 
 use neomacs_display_protocol::{DisplayObservation, Dpi, XServerKind};
-use neovm_core::emacs_core::display_host::FrameFontSize;
+use neovm_core::emacs_core::display_host::{FontOpeningSize, FrameFontSize};
 use neovm_core::face::{Face, FaceHeight};
 
 pub use super::frame_metrics::GraphicFontSizePx;
@@ -241,6 +241,32 @@ impl FontSizing {
             }
         };
         GraphicFontSizePx::new(pixels)
+    }
+
+    /// Resolve a query's opening size without consulting the frame font or
+    /// applying backing scale (GNU font.c font_pixel_size/font_open_entity).
+    pub fn font_opening_size_px(self, size: FontOpeningSize) -> std::num::NonZeroU32 {
+        let pixels = match size {
+            FontOpeningSize::SmallestUsable => 1,
+            FontOpeningSize::Pixels(pixels) => return pixels,
+            FontOpeningSize::NamedDefault { frame_fontsize } => {
+                let points = match self.scale {
+                    LogicalFontScale::GnuCocoaPoint => {
+                        frame_fontsize.map(|size| size.get() as f32).unwrap_or(0.0)
+                    }
+                    _ => 12.0,
+                };
+                // font_open_for_lface keeps the frame's fractional DPI.
+                points_to_layout_pixels(points, self.layout_dpi()) as u32
+            }
+            FontOpeningSize::Points { size, dpi } => points_to_layout_pixels(
+                size.get() as f32,
+                // font_pixel_size stores FRAME_RES in an integer first.
+                dpi.map(|dpi| dpi.get() as f32)
+                    .unwrap_or_else(|| self.layout_dpi().trunc()),
+            ) as u32,
+        };
+        std::num::NonZeroU32::new(pixels).unwrap_or(std::num::NonZeroU32::MIN)
     }
 
     /// GNU `PIXEL_TO_POINT(pixel_size * 10, FRAME_RES(frame))` for one

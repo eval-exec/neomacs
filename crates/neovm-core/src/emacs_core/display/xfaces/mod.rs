@@ -343,13 +343,13 @@ use strum::{EnumIter, EnumString, IntoEnumIterator, IntoStaticStr};
 use super::error::{Flow, LispCondition, signal};
 use super::font::{
     FrameFontRealization, alternative_font_family_alist, alternative_font_registry_alist,
-    default_face_font_attr_affects_frame_font, face_remapping_for_current_buffer,
-    font_name_for_face, font_name_value, font_string_text, font_value_fields, font_value_text,
-    font_vector_get_flexible, frame_device_designator_p, frame_id_from_designator,
-    frame_parameter_for_face_attribute, is_font, is_font_entity, is_font_spec,
-    live_frame_designator_in_state, live_frame_font_attribute_fallback,
-    opened_font_from_resolved_match, publish_face_attribute_to_frame_parameter, resolve_font_match,
-    resolve_live_frame_font_request, sync_live_default_face_font_state, sync_live_frame_font_state,
+    default_face_font_attr_affects_frame_font, face_remapping_for_current_buffer, font_name_value,
+    font_string_text, font_value_fields, font_value_text, font_vector_get_flexible,
+    frame_device_designator_p, frame_id_from_designator, frame_parameter_for_face_attribute,
+    is_font, is_font_entity, is_font_spec, live_frame_designator_in_state,
+    live_frame_font_attribute_fallback, opened_font_from_resolved_match,
+    publish_face_attribute_to_frame_parameter, resolve_font_match, resolve_live_frame_font_request,
+    sync_live_default_face_font_state, sync_live_frame_font_state,
 };
 
 use super::intern::intern;
@@ -4442,27 +4442,30 @@ pub(crate) fn builtin_face_font(eval: &mut super::eval::Context, args: Vec<Value
 
     let face_name = resolve_face_name_for_domain(eval, &args[0], false)?;
     let remapping = face_remapping_for_current_buffer(eval);
+    let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, false);
     let face = if remapping.is_empty() {
-        eval.face_table.resolve(&face_name)
+        face_table.resolve(&face_name)
     } else {
-        eval.face_table
-            .resolve_with_remapping(&face_name, &remapping)
+        face_table.resolve_with_remapping(&face_name, &remapping)
     };
-    if let Some(character) = args.get(2).filter(|value| !value.is_nil()) {
+    let character = if let Some(character) = args.get(2).filter(|value| !value.is_nil()) {
         let code = super::builtins::expect_character_code(character)? as u32;
         let Some(ch) = crate::emacs_core::emacs_char::EmacsChar::from_code(code) else {
-            return Ok(font_name_for_face(&face));
+            return Ok(Value::NIL);
         };
-        let fontset_base_face = eval.face_table.resolve("default");
-        if let Some(matched) = resolve_font_match(eval, frame_id, ch, &face, &fontset_base_face) {
-            return Ok(
-                font_name_value(&opened_font_from_resolved_match(&face, &matched))
-                    .unwrap_or(Value::NIL),
-            );
-        }
-    }
-
-    Ok(font_name_for_face(&face))
+        ch
+    } else {
+        // GNU Fface_font reports the realized ASCII font when CHARACTER is
+        // omitted. An unresolved face's height is in tenths of points, not
+        // an XLFD pixel size; fabricating a name corrupts window-font-*.
+        crate::emacs_core::emacs_char::EmacsChar::from_char('M')
+    };
+    let fontset_base_face = face_table.resolve("default");
+    Ok(
+        resolve_font_match(eval, frame_id, character, &face, &fontset_base_face)
+            .and_then(|matched| font_name_value(&opened_font_from_resolved_match(&face, &matched)))
+            .unwrap_or(Value::NIL),
+    )
 }
 
 /// `(internal-face-x-get-resource RESOURCE CLASS FRAME)` -- validate arguments and

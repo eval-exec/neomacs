@@ -5,7 +5,98 @@ use super::{
 use neomacs_display_protocol::{
     DisplayHeightGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
 };
-use neovm_core::emacs_core::display_host::FrameFontSize;
+use neovm_core::emacs_core::display_host::{FontOpeningSize, FrameFontSize, PositiveFontScalar};
+
+#[test]
+fn font_info_point_size_uses_gnu_integer_dpi_but_unsized_names_do_not() {
+    // GNU font.c font_pixel_size truncates FRAME_RES to int before the
+    // POINT_TO_PIXEL conversion; font_open_for_lface's default does not.
+    let sizing = FontSizing::for_layout_dpi(99.9);
+    assert_eq!(
+        sizing
+            .font_opening_size_px(FontOpeningSize::Points {
+                size: PositiveFontScalar::new(12.0).unwrap(),
+                dpi: None,
+            })
+            .get(),
+        16,
+    );
+    assert_eq!(
+        sizing
+            .font_opening_size_px(FontOpeningSize::NamedDefault {
+                frame_fontsize: None
+            })
+            .get(),
+        17,
+    );
+    assert_eq!(
+        FontSizing::for_layout_dpi(95.9)
+            .font_opening_size_px(FontOpeningSize::Points {
+                size: PositiveFontScalar::new(20.0).unwrap(),
+                dpi: None,
+            })
+            .get(),
+        26,
+    );
+}
+
+#[test]
+fn font_info_explicit_dpi_and_pixels_override_display_dpi() {
+    for sizing in [FontSizing::gnu_cocoa(), FontSizing::for_layout_dpi(99.9)] {
+        assert_eq!(
+            sizing
+                .font_opening_size_px(FontOpeningSize::Points {
+                    size: PositiveFontScalar::new(7.0).unwrap(),
+                    dpi: std::num::NonZeroU32::new(144),
+                })
+                .get(),
+            14,
+        );
+        assert_eq!(
+            sizing
+                .font_opening_size_px(FontOpeningSize::Pixels(
+                    std::num::NonZeroU32::new(9).unwrap()
+                ))
+                .get(),
+            9,
+        );
+        assert_eq!(
+            sizing
+                .font_opening_size_px(FontOpeningSize::SmallestUsable)
+                .get(),
+            1
+        );
+    }
+}
+
+#[test]
+fn font_info_unsized_name_uses_native_default_policy() {
+    let request = FontOpeningSize::NamedDefault {
+        frame_fontsize: PositiveFontScalar::new(14.0),
+    };
+    assert_eq!(
+        FontSizing::gnu_cocoa().font_opening_size_px(request).get(),
+        14
+    );
+    assert_eq!(
+        FontSizing::windows_dip()
+            .font_opening_size_px(request)
+            .get(),
+        16
+    );
+    assert_eq!(
+        FontSizing::wayland().font_opening_size_px(request).get(),
+        16
+    );
+    assert_eq!(
+        FontSizing::gnu_cocoa()
+            .font_opening_size_px(FontOpeningSize::NamedDefault {
+                frame_fontsize: None
+            })
+            .get(),
+        1,
+    );
+}
 
 fn x11_observation(
     server: XServerKind,

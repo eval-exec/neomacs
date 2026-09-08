@@ -440,6 +440,31 @@ impl DisplayHost for CapturingFindFontDisplayHost {
         *self.last_request.borrow_mut() = Some(request);
         Ok(self.matched.clone())
     }
+
+    fn probe_font_entity_metrics(
+        &mut self,
+        _request: FontEntityMetricsRequest,
+    ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
+        // This host advertises a synthetic native entity, not a real file.
+        // Supply its opening capability explicitly: font-info must never
+        // fabricate frame metrics when a backend cannot open an entity.
+        Ok(self
+            .matched
+            .as_ref()
+            .map(|matched| ResolvedFontEntityMetrics {
+                metrics: FontPxProbeResult {
+                    pixel_size: 1,
+                    height: 2,
+                    ascent: 1,
+                    descent: 1,
+                    max_width: 1,
+                    space_width: 1,
+                    average_width: 1,
+                },
+                file: matched.file.clone(),
+                capability: None,
+            }))
+    }
 }
 
 impl DisplayHost for NativeFontEntityDisplayHost {
@@ -599,6 +624,8 @@ fn find_font_eval_requests_exact_registry_match_from_display_host() {
     );
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
+    assert_eq!(values[2].as_int(), Some(1));
+    assert_eq!(values[3].as_int(), Some(2));
     assert_eq!(
         values[12].as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")

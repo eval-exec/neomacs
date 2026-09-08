@@ -1605,9 +1605,37 @@ fn face_font_eval_returns_font_name_on_live_gui_frame() {
     frame.char_width = 8.0;
     frame.char_height = 16.0;
 
+    // A GUI frame alone cannot supply a realized font. Its host opens a
+    // distinct 14px face here, so fabricated 16px frame metrics cannot pass.
+    install_font_at_display_host(&mut eval, "Test Mono");
     let result = builtin_face_font(&mut eval, vec![Value::symbol("default")]).unwrap();
     assert!(result.is_string());
     assert!(result.as_utf8_str().is_some_and(|name| !name.is_empty()));
+    let spec = font_spec(vec![Value::keyword("name"), result]).unwrap();
+    assert_eq!(
+        font_get(vec![spec, Value::keyword("size")])
+            .unwrap()
+            .as_int(),
+        Some(14)
+    );
+    assert_eq!(
+        font_get(vec![spec, Value::keyword("family")])
+            .unwrap()
+            .as_symbol_name(),
+        Some("Test Mono")
+    );
+}
+
+#[test]
+fn face_font_returns_nil_when_the_host_cannot_realize_the_face() {
+    let mut eval = Context::new();
+    ensure_selected_gui_frame(&mut eval);
+    eval.set_display_host(Box::new(LiveFrameFontDisplayHost { realized: None }));
+    assert!(
+        builtin_face_font(&mut eval, vec![Value::symbol("default")])
+            .unwrap()
+            .is_nil()
+    );
 }
 
 #[test]
