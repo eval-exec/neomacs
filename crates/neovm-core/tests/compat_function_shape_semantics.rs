@@ -25,7 +25,11 @@ fn compat_function_shape_semantics_matches_gnu_emacs() {
      (let ((fn (symbol-function sym)))
        (list sym
              (functionp fn)
-             (if (subrp fn) 'subr 'elisp)
+             ;; "Implemented in C", not "is a subr object": a GNU build with
+             ;; native compilation answers `subrp' t for preloaded Lisp too,
+             ;; and `subr-native-elisp-p' is the predicate that separates the
+             ;; two.  neomacs has no native compilation, so it answers nil.
+             (if (and (subrp fn) (not (subr-native-elisp-p fn))) 'subr 'elisp)
              (autoloadp fn))))
    symbols))"#;
 
@@ -186,7 +190,10 @@ fn compat_loaddefs_runtime_helper_surface_matches_gnu_emacs() {
              (macrop sym)
              (special-form-p sym)
              (functionp fn)
-             (subrp fn)
+             ;; See the note in the function-shape audit: under a
+             ;; native-compiling GNU build `subrp' is t for preloaded Lisp,
+             ;; so ask whether the function is implemented in C.
+             (and (subrp fn) (not (subr-native-elisp-p fn)))
              (autoloadp fn)
              (car-safe fn)
              (car-safe (cdr-safe fn)))))
