@@ -4767,7 +4767,12 @@ fn find_file_ascii_elisp_with_newline_publishes_prefer_utf8_unix_coding() {
         .eval_str(&format!(
             r##"(progn
                    (set-language-environment "UTF-8")
-                   (let ((buffer (find-file-noselect "{path_lisp}")))
+                   ;; This checks the file decoder, not subsequent VC I/O.
+                   ;; A repository-local TMPDIR enables vc-refresh-state's
+                   ;; Git subprocesses; GNU callproc.c publishes their coding
+                   ;; as last-coding-system-used after the file was decoded.
+                   (let* ((vc-handled-backends nil)
+                          (buffer (find-file-noselect "{path_lisp}")))
                      (with-current-buffer buffer
                        (list last-coding-system-used
                              buffer-file-coding-system))))"##
