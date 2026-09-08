@@ -169,3 +169,44 @@ fn list_from_slice_builds_a_proper_list_in_order() {
     assert!(empty.is_nil());
     assert_eq!(heap.cons_live_count, before + elements.len());
 }
+
+/// The lifetime allocation total is derived, not counted, so it must survive
+/// the resets that clear the allocation budget it is derived from.
+///
+/// GNU charges an allocation to one counter on this path; charging a third
+/// one purely to keep a lifetime total cost every cons in the engine an extra
+/// saturating add.  The total is now `bytes_since_gc` plus what the resets
+/// have banked, which is only exact while every reset goes through
+/// `reset_bytes_since_gc`.
+#[test]
+fn the_lifetime_allocation_total_survives_a_budget_reset() {
+    let mut heap = TaggedHeap::new();
+    let start = heap.total_allocated_bytes();
+
+    for _ in 0..64 {
+        heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
+    }
+    let after_first = heap.total_allocated_bytes();
+    assert_eq!(
+        after_first,
+        start + 64 * size_of::<ConsCell>() as u64,
+        "the total must count every cons allocated"
+    );
+
+    heap.reset_bytes_since_gc();
+    assert_eq!(heap.bytes_since_gc(), 0, "the budget is spent");
+    assert_eq!(
+        heap.total_allocated_bytes(),
+        after_first,
+        "a reset spends the budget, it does not un-allocate what was allocated"
+    );
+
+    for _ in 0..8 {
+        heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
+    }
+    assert_eq!(
+        heap.total_allocated_bytes(),
+        after_first + 8 * size_of::<ConsCell>() as u64,
+        "allocation after a reset resumes from the banked total"
+    );
+}

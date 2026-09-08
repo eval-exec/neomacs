@@ -354,7 +354,9 @@ pub struct TaggedHeap {
     /// Approximate Lisp heap bytes allocated since the last full collection.
     bytes_since_gc: usize,
     /// Monotonic managed allocation bytes used by the Lisp memory profiler.
-    total_allocated_bytes: u64,
+    /// Bytes allocated before the most recent `bytes_since_gc` reset; see
+    /// [`TaggedHeap::total_allocated_bytes`].
+    bytes_banked_at_resets: u64,
     /// Approximate bytes retained by the live heap after the last sweep.
     live_bytes: usize,
 
@@ -846,7 +848,7 @@ impl TaggedHeap {
             gc_threshold: 1_000_000 * size_of::<usize>(),
             gc_threshold_overridden: false,
             bytes_since_gc: 0,
-            total_allocated_bytes: 0,
+            bytes_banked_at_resets: 0,
             live_bytes: 0,
             must_finish_count: 0,
             forced_termination_pending: false,
@@ -1139,7 +1141,15 @@ impl TaggedHeap {
         self.bytes_since_gc
     }
 
+    /// The one place `bytes_since_gc` returns to zero.
+    ///
+    /// It banks what is being cleared, so that [`Self::total_allocated_bytes`]
+    /// stays exact without the allocation path counting it a second time.
+    /// Every collector site resets through here for that reason.
     pub(crate) fn reset_bytes_since_gc(&mut self) {
+        self.bytes_banked_at_resets = self
+            .bytes_banked_at_resets
+            .saturating_add(self.bytes_since_gc as u64);
         self.bytes_since_gc = 0;
     }
 
@@ -1426,13 +1436,24 @@ impl TaggedHeap {
     }
 
     fn note_allocation_bytes(&mut self, bytes: usize) {
+        // GNU charges an allocation to ONE counter here (`consing_until_gc`,
+        // `src/alloc.c`) and totals the rest at collection time.  This charged
+        // three, and the third carried no information the other two do not:
+        // the lifetime total is what has been banked at the resets plus what
+        // has accumulated since.  Every cons in the engine paid for that
+        // extra saturating add.
         self.bytes_since_gc = self.bytes_since_gc.saturating_add(bytes);
-        self.total_allocated_bytes = self.total_allocated_bytes.saturating_add(bytes as u64);
         self.live_bytes = self.live_bytes.saturating_add(bytes);
     }
 
+    /// Every byte this heap has ever allocated.
+    ///
+    /// Derived rather than counted: `bytes_banked_at_resets` is advanced by
+    /// [`Self::reset_bytes_since_gc`], the one place `bytes_since_gc` returns
+    /// to zero, so the sum is exact by construction.
     pub(crate) fn total_allocated_bytes(&self) -> u64 {
-        self.total_allocated_bytes
+        self.bytes_banked_at_resets
+            .saturating_add(self.bytes_since_gc as u64)
     }
 
     fn vector_storage_bytes<T>(values: &Vec<T>) -> usize {

@@ -1580,7 +1580,7 @@ impl TaggedHeap {
             .saturating_add(object_live_bytes)
             .saturating_add(page_live_bytes)
             .saturating_add(mapped_object_live_bytes);
-        self.bytes_since_gc = 0;
+        self.reset_bytes_since_gc();
         // Pacer: a stop-the-world cycle has no concurrent mark window; drop
         // any stale stamp so the next concurrent cycle measures cleanly.
         self.pace_mark_start = None;

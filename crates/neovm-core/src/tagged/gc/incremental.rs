@@ -144,7 +144,7 @@ impl TaggedHeap {
         }
         // The triggering allocation budget is spent; the next mark fires once a
         // fresh threshold's worth has been allocated.
-        self.bytes_since_gc = 0;
+        self.reset_bytes_since_gc();
 
         // Marking is done; drop the marking barrier. The dump remembered set is
         // still maintained unconditionally in `record_heap_write`.
