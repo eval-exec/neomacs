@@ -1092,6 +1092,21 @@ impl Context {
             match top {
                 SpecBinding::Let { sym_id, old_value } => {
                     let (sym_id, old_value) = (*sym_id, *old_value);
+                    // GNU `do_one_unbind`'s SPECPDL_LET arm: decide and store
+                    // on one slot.  The entry owns nothing (const-asserted
+                    // beside `trivial_spec_binding_pop`), so retiring it is
+                    // GNU's `--specpdl_ptr`, not a 32-byte move plus drop
+                    // glue.  The old value reaches the cell before the entry
+                    // stops rooting it, and nothing between can collect.
+                    if self
+                        .obarray
+                        .swap_plain_untrapped_value_id(sym_id, old_value.as_plain())
+                        .is_some()
+                    {
+                        // SAFETY: the top entry is this `Let`; see above.
+                        unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                        continue;
+                    }
                     let Some(sym) = self.obarray.get_by_id(sym_id) else {
                         break;
                     };

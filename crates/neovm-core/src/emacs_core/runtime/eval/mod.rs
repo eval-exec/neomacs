@@ -1361,6 +1361,12 @@ fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingP
 
 const _: () = assert!(!std::mem::needs_drop::<TrivialSpecBindingPop>());
 
+/// `pop_simple_specpdl_suffix` retires a `SpecBinding::Let` with `set_len`
+/// (GNU's `--specpdl_ptr`); that is only sound while the variant's payload
+/// owns nothing.
+const _: () =
+    assert!(!std::mem::needs_drop::<SymId>() && !std::mem::needs_drop::<SavedBindingValue>());
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct VmRootFrame {
     pub(crate) roots: LispArgVec,
@@ -1832,6 +1838,26 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
     let noninteractive_symbol = intern("noninteractive");
     let symbols_with_pos_enabled_symbol = intern("symbols-with-pos-enabled");
     let print_symbols_bare_symbol = intern("print-symbols-bare");
+
+    // Every symbol whose value cell this `Context` mirrors: the bind/unbind
+    // fast tiers refuse them on `SymbolFlags::runtime_projected`, so a `let`
+    // of one still republishes the cached copy (and `buffer-undo-list` still
+    // reaches its shared undo state).  A dump image decomposes the flags byte
+    // into named fields and does not carry this bit, so it is re-armed here,
+    // on both the fresh and the image construction paths.
+    for projected in [
+        quit_flag_symbol,
+        inhibit_quit_symbol,
+        throw_on_input_symbol,
+        compiler_function_overrides_symbol,
+        noninteractive_symbol,
+        symbols_with_pos_enabled_symbol,
+        print_symbols_bare_symbol,
+        max_lisp_eval_depth_symbol(),
+        buffer_undo_list_symbol(),
+    ] {
+        obarray.mark_runtime_projected_id(projected);
+    }
 
     CoreEvalSymbols {
         internal_interpreter_environment_symbol,
@@ -4103,6 +4129,7 @@ impl Context {
     pub(crate) fn runtime_binding_has_projection(&self, resolved: SymId) -> bool {
         resolved == self.quit_flag_symbol
             || resolved == self.inhibit_quit_symbol
+            || resolved == self.throw_on_input_symbol
             || resolved == self.compiler_function_overrides_symbol
             || resolved == self.noninteractive_symbol
             || resolved == self.symbols_with_pos_enabled_symbol

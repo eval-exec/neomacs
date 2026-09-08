@@ -24274,6 +24274,171 @@ fn compact_saved_binding_options_round_trip_none_and_live_values() {
 /// GNU's `union specbinding` is 32 bytes on the supported 64-bit Unix build.
 /// A bytecode call pushes one of these entries and Breturn immediately pops
 /// it, so matching GNU's four-word stride is part of the hot call protocol.
+/// Every variable whose value this `Context` mirrors must answer true to the
+/// projection gate, or a write that consults the gate leaves the mirror
+/// stale -- and every mirrored `Value` must be a GC root, or the stale copy
+/// can outlive the cell that kept it alive.
+#[test]
+fn every_mirrored_runtime_variable_is_gated_and_rooted() {
+    crate::test_utils::init_test_tracing();
+    let ev = Context::new();
+    for name in [
+        "quit-flag",
+        "inhibit-quit",
+        "throw-on-input",
+        "internal--compiler-function-overrides",
+        "noninteractive",
+        "symbols-with-pos-enabled",
+        "print-symbols-bare",
+        "max-lisp-eval-depth",
+    ] {
+        assert!(
+            ev.runtime_binding_has_projection(intern(name)),
+            "{name} is mirrored by sync_cached_runtime_binding_by_id, so a write must republish it"
+        );
+    }
+
+    // End-to-end `set-default` behaviour needs the forwarded object
+    // variables a full session installs, which a bare test Context does not
+    // have; the real binary answers `(neo-tag neo-tag)` there, byte-identical
+    // to GNU.  What this test pins is the gate itself.
+}
+
+/// Every symbol whose value cell the `Context` mirrors must carry the
+/// projection bit, or a `let` of it would store through the fast tier and
+/// leave the cached copy stale.
+#[test]
+fn context_cached_symbols_are_marked_runtime_projected() {
+    crate::test_utils::init_test_tracing();
+    let ev = Context::new();
+    for name in [
+        "quit-flag",
+        "inhibit-quit",
+        "throw-on-input",
+        "internal--compiler-function-overrides",
+        "noninteractive",
+        "symbols-with-pos-enabled",
+        "print-symbols-bare",
+        "max-lisp-eval-depth",
+        "buffer-undo-list",
+    ] {
+        let sym = ev
+            .obarray
+            .get_by_id(intern(name))
+            .unwrap_or_else(|| panic!("{name} should have a slot"));
+        assert!(
+            sym.flags.runtime_projected(),
+            "{name} is mirrored by the Context and must refuse the bind/unbind fast tier"
+        );
+    }
+    assert!(
+        ev.obarray
+            .get_by_id(intern("most-positive-fixnum"))
+            .is_some_and(|s| !s.flags.runtime_projected()),
+        "an ordinary variable must stay on the fast tier"
+    );
+}
+
+/// A `let` of a projected variable still republishes the cached copy in
+/// the interpreter; the compiled varbind and unbind paths are covered by the
+/// VM and JIT suites.
+#[test]
+fn let_of_a_projected_symbol_keeps_the_context_cache_in_sync() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_all(
+        "(setq neo-depth-outer max-lisp-eval-depth)
+         (let ((max-lisp-eval-depth 3000)) max-lisp-eval-depth)
+         (equal max-lisp-eval-depth neo-depth-outer)
+         (let ((throw-on-input 'neo-tag)) throw-on-input)
+         throw-on-input
+         (setq neo-ni-outer noninteractive)
+         (let ((noninteractive nil)) noninteractive)
+         (equal noninteractive neo-ni-outer)",
+    );
+    assert_eq!(results[1], "OK 3000");
+    assert_eq!(results[2], "OK t", "the pop restored the projected cell");
+    assert_eq!(results[3], "OK neo-tag");
+    assert_eq!(
+        results[4], "OK nil",
+        "the throw-on-input mirror is restored"
+    );
+    // `noninteractive` is a boolean forward, so the bound value reads back as
+    // its truth value; the point is that the pop restores it.
+    assert_eq!(results[6], "OK nil");
+    assert_eq!(results[7], "OK t", "the noninteractive mirror is restored");
+}
+
+/// GNU restores an unbound plain cell to unbound: the fast tier carries
+/// `Qunbound` through the swap in both directions.
+#[test]
+fn let_pop_restores_an_unbound_plain_cell() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_all(
+        "(defvar neo-never-set)
+         (boundp 'neo-never-set)
+         (let ((neo-never-set 1)) neo-never-set)
+         (boundp 'neo-never-set)
+         (let ((neo-never-set 2)) (setq neo-never-set 3) neo-never-set)
+         (boundp 'neo-never-set)",
+    );
+    assert_eq!(results[1], "OK nil");
+    assert_eq!(results[2], "OK 1");
+    assert_eq!(results[3], "OK nil");
+    assert_eq!(
+        results[4], "OK 3",
+        "a setq inside the let is discarded by the pop"
+    );
+    assert_eq!(results[5], "OK nil");
+}
+
+/// A watched variable keeps GNU's two callbacks in order (the watcher runs
+/// BEFORE the store, as in `set_internal`), and dropping the watcher returns
+/// the symbol to the one-visit fast tier.
+#[test]
+fn plain_let_takes_one_obarray_visit_per_bind_and_pop() {
+    use crate::emacs_core::symbol::{plain_value_slot_visits, reset_plain_value_slot_visits};
+    crate::test_utils::init_test_tracing();
+    let results = eval_all(
+        "(setq vm-diet-events nil)
+         (defvar vm-diet-var 9)
+         (defalias 'vm-diet-rec #'(lambda (sym new op where)
+           (setq vm-diet-events (cons (list op new) vm-diet-events))))
+         (add-variable-watcher 'vm-diet-var 'vm-diet-rec)
+         (let ((vm-diet-var 1)) vm-diet-var)
+         vm-diet-events
+         (remove-variable-watcher 'vm-diet-var 'vm-diet-rec)
+         (let ((vm-diet-var 2)) vm-diet-var)
+         vm-diet-var",
+    );
+    assert_eq!(results[4], "OK 1");
+    assert_eq!(results[5], "OK ((unlet 9) (let 1))");
+    assert_eq!(results[7], "OK 2");
+    assert_eq!(results[8], "OK 9");
+
+    // The counter is the claim: one obarray slot visit for the bind, one for
+    // the pop, on a plain unwatched variable.
+    let mut ev = Context::new();
+    let form = crate::emacs_core::value_reader::read_all("(defvar neo-visit-var 1)", &test_ob())
+        .expect("parse")
+        .into_iter()
+        .next()
+        .expect("one form");
+    ev.eval_form(form).expect("defvar");
+    let sym = intern("neo-visit-var");
+    let base = ev.specpdl.len();
+    reset_plain_value_slot_visits();
+    ev.try_specbind(sym, Value::fixnum(2)).expect("bind");
+    assert_eq!(plain_value_slot_visits(), 1, "one visit for the bind");
+    reset_plain_value_slot_visits();
+    ev.unbind_to_with_result(base, Ok(Value::NIL)).expect("pop");
+    assert_eq!(plain_value_slot_visits(), 1, "one visit for the pop");
+    assert_eq!(
+        ev.obarray.symbol_value_id(sym).map(|v| v.bits()),
+        Some(Value::fixnum(1).bits()),
+        "the pop restored the old value"
+    );
+}
+
 #[test]
 fn specpdl_entry_stays_compact_for_hot_backtrace_pushes() {
     let entry_size = std::mem::size_of::<SpecBinding>();

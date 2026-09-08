@@ -158,6 +158,7 @@ impl Context {
         visit(self.lexenv);
         visit(self.quit_flag);
         visit(self.inhibit_quit);
+        visit(self.throw_on_input);
         if self.cached_system_name.is_heap_object() {
             visit(self.cached_system_name);
         }

@@ -387,6 +387,138 @@ fn symbol_flags_pack_into_one_byte() {
     assert_eq!(std::mem::size_of::<SymbolFlags>(), 1);
 }
 
+/// Bit 7 (this port's `runtime_projected`) round-trips without disturbing
+/// GNU's four fields, and the one-byte plain-untrapped test is true for
+/// exactly the (Plainval, Untrapped, unprojected) shape.
+#[test]
+fn runtime_projected_bit_is_independent_of_gnu_symbol_fields() {
+    use crate::emacs_core::symbol::{SymbolInterned, SymbolRedirect, SymbolTrappedWrite};
+    crate::test_utils::init_test_tracing();
+    let mut flags = SymbolFlags::default();
+    flags.set_redirect(SymbolRedirect::Localized);
+    flags.set_trapped_write(SymbolTrappedWrite::Trapped);
+    flags.set_interned(SymbolInterned::InternedInInitial);
+    flags.set_declared_special(true);
+    flags.set_runtime_projected(true);
+    assert_eq!(flags.redirect(), SymbolRedirect::Localized);
+    assert_eq!(flags.trapped_write(), SymbolTrappedWrite::Trapped);
+    assert_eq!(flags.interned(), SymbolInterned::InternedInInitial);
+    assert!(flags.declared_special());
+    assert!(flags.runtime_projected());
+    flags.set_runtime_projected(false);
+    assert!(!flags.runtime_projected());
+    assert_eq!(flags.redirect(), SymbolRedirect::Localized);
+    assert!(flags.declared_special());
+
+    for redirect in [
+        SymbolRedirect::Plainval,
+        SymbolRedirect::Varalias,
+        SymbolRedirect::Localized,
+        SymbolRedirect::Forwarded,
+    ] {
+        for trapped in [
+            SymbolTrappedWrite::Untrapped,
+            SymbolTrappedWrite::NoWrite,
+            SymbolTrappedWrite::Trapped,
+        ] {
+            for projected in [false, true] {
+                let mut f = SymbolFlags::default();
+                f.set_redirect(redirect);
+                f.set_trapped_write(trapped);
+                f.set_runtime_projected(projected);
+                f.set_declared_special(true);
+                let want = redirect == SymbolRedirect::Plainval
+                    && trapped == SymbolTrappedWrite::Untrapped
+                    && !projected;
+                assert_eq!(
+                    f.is_plain_untrapped_unprojected(),
+                    want,
+                    "{redirect:?} {trapped:?} projected={projected}"
+                );
+            }
+        }
+    }
+}
+
+/// The bind/unbind fast tier stores only into an interned, plain, untrapped,
+/// unprojected cell -- GNU's `do_one_unbind` SPECPDL_LET arm -- and leaves
+/// every other shape to the general paths, untouched.
+#[test]
+fn swap_plain_untrapped_value_refuses_every_slow_shape() {
+    use crate::emacs_core::symbol::SymbolTrappedWrite;
+    crate::test_utils::init_test_tracing();
+    let mut ob = Obarray::new();
+
+    let plain = intern("swap-plain");
+    ob.set_symbol_value_id(plain, Value::fixnum(1));
+    assert_eq!(
+        ob.swap_plain_untrapped_value_id(plain, Value::fixnum(2))
+            .map(|v| v.bits()),
+        Some(Value::fixnum(1).bits()),
+        "a plain cell swaps and reports the old value"
+    );
+    assert_eq!(
+        ob.symbol_value_id(plain).map(|v| v.bits()),
+        Some(Value::fixnum(2).bits())
+    );
+
+    // An unbound plain cell reports UNBOUND, which is what makunbound leaves.
+    let unbound = intern("swap-unbound");
+    ob.set_symbol_value_id(unbound, Value::fixnum(7));
+    ob.set_symbol_value_id(unbound, Value::UNBOUND);
+    let old = ob
+        .swap_plain_untrapped_value_id(unbound, Value::fixnum(9))
+        .expect("plain cell");
+    assert!(old.is_unbound());
+    assert_eq!(
+        ob.symbol_value_id(unbound).map(|v| v.bits()),
+        Some(Value::fixnum(9).bits())
+    );
+
+    // Watched (GNU SYMBOL_TRAPPED_WRITE): refused, cell untouched.
+    let watched = intern("swap-watched");
+    ob.set_symbol_value_id(watched, Value::fixnum(3));
+    if let Some(sym) = ob.get_mut_by_id(watched) {
+        sym.flags.set_trapped_write(SymbolTrappedWrite::Trapped);
+    }
+    assert!(
+        ob.swap_plain_untrapped_value_id(watched, Value::fixnum(4))
+            .is_none()
+    );
+    assert_eq!(
+        ob.symbol_value_id(watched).map(|v| v.bits()),
+        Some(Value::fixnum(3).bits())
+    );
+
+    // Host-projected: refused, cell untouched.
+    let projected = intern("swap-projected");
+    ob.set_symbol_value_id(projected, Value::fixnum(5));
+    ob.mark_runtime_projected_id(projected);
+    assert!(
+        ob.swap_plain_untrapped_value_id(projected, Value::fixnum(6))
+            .is_none()
+    );
+    assert_eq!(
+        ob.symbol_value_id(projected).map(|v| v.bits()),
+        Some(Value::fixnum(5).bits())
+    );
+
+    // An alias and a symbol with no slot at all: refused.
+    let alias = intern("swap-alias");
+    let base = intern("swap-alias-base");
+    ob.set_symbol_value_id(base, Value::fixnum(8));
+    ob.ensure_symbol_id(alias);
+    ob.make_alias(alias, base);
+    assert!(
+        ob.swap_plain_untrapped_value_id(alias, Value::fixnum(9))
+            .is_none()
+    );
+    assert!(
+        ob.swap_plain_untrapped_value_id(intern("swap-never-interned"), Value::fixnum(1))
+            .is_none()
+    );
+}
+
 // Phase 3 — VARALIAS via the new redirect tag.
 
 /// `indirect_variable_id` walks a single-hop alias chain to its

@@ -44,6 +44,17 @@ impl Context {
         // — alias, forwarded, buffer-local, the undo list — takes the full
         // path below.  The plain tail of that path is reproduced exactly: the
         // constant check already ran in `sf_let`, and watchers still fire.
+        // GNU `specbind`'s PLAINVAL arm with `do_specbind`'s untrapped store,
+        // as one obarray visit: the swap refuses a watched, constant,
+        // aliased, buffer-local, forwarded, uninterned or host-projected
+        // symbol, and each of those keeps the tiers below unchanged.
+        if let Some(old) = self.obarray.swap_plain_untrapped_value_id(sym_id, value) {
+            self.specpdl.push(SpecBinding::Let {
+                sym_id,
+                old_value: SavedBindingValue::from_plain(old),
+            });
+            return Ok(());
+        }
         if sym_id != buffer_undo_list_symbol()
             && let Some(sym) = self.obarray.get_by_id(sym_id)
             && sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval

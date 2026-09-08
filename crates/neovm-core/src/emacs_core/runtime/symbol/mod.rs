@@ -45,11 +45,29 @@ use std::sync::atomic::{AtomicU32, Ordering};
 #[cfg(test)]
 thread_local! {
     static FUNCTION_CELL_LOOKUP_COUNT: Cell<usize> = const { Cell::new(0) };
+    /// Slot visits made by the plain-value store paths, so a test can pin
+    /// "one obarray visit per bind and per pop".
+    static PLAIN_VALUE_SLOT_VISITS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(crate) fn reset_function_cell_lookup_count() {
     FUNCTION_CELL_LOOKUP_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn reset_plain_value_slot_visits() {
+    PLAIN_VALUE_SLOT_VISITS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn plain_value_slot_visits() -> usize {
+    PLAIN_VALUE_SLOT_VISITS.with(Cell::get)
+}
+
+#[cfg(test)]
+fn note_plain_value_slot_visit() {
+    PLAIN_VALUE_SLOT_VISITS.with(|count| count.set(count.get() + 1));
 }
 
 #[cfg(test)]
@@ -244,11 +262,17 @@ impl SymbolInterned {
 ///   bits 2..4 : SymbolTrappedWrite
 ///   bits 4..6 : SymbolInterned
 ///   bit  6    : declared_special
-///   bit  7    : reserved
+///   bit  7    : runtime_projected (this port's own; see below)
 /// ```
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct SymbolFlags(u8);
+
+/// `SymbolFlags::is_plain_untrapped_unprojected` reads the redirect and
+/// trapped-write fields as raw zero bits; that is only the (Plainval,
+/// Untrapped) pair while both encodings are GNU's zero.
+const _: () =
+    assert!(SymbolRedirect::Plainval as u8 == 0 && SymbolTrappedWrite::Untrapped as u8 == 0);
 
 impl SymbolFlags {
     const REDIRECT_MASK: u8 = 0b0000_0011;
@@ -257,6 +281,12 @@ impl SymbolFlags {
     const INTERNED_SHIFT: u8 = 4;
     const INTERNED_MASK: u8 = 0b0011_0000;
     const DECLARED_SPECIAL_BIT: u8 = 0b0100_0000;
+    /// Not a GNU field: the value cell of this symbol is mirrored by a host
+    /// projection (`Context`'s cached `quit-flag`, `inhibit-quit`, … or
+    /// `buffer-undo-list`'s shared undo state), so a write must go through
+    /// the `Context` path that republishes it.  The bind/unbind fast tiers
+    /// refuse such a symbol on this one bit.
+    const RUNTIME_PROJECTED_BIT: u8 = 0b1000_0000;
 
     #[inline(always)]
     pub fn redirect(self) -> SymbolRedirect {
@@ -293,6 +323,31 @@ impl SymbolFlags {
     #[inline]
     pub fn set_interned(&mut self, i: SymbolInterned) {
         self.store_byte((self.0 & !Self::INTERNED_MASK) | (i.gnu_code() << Self::INTERNED_SHIFT));
+    }
+
+    #[inline]
+    pub fn runtime_projected(self) -> bool {
+        self.0 & Self::RUNTIME_PROJECTED_BIT != 0
+    }
+
+    #[inline]
+    pub fn set_runtime_projected(&mut self, v: bool) {
+        let byte = if v {
+            self.0 | Self::RUNTIME_PROJECTED_BIT
+        } else {
+            self.0 & !Self::RUNTIME_PROJECTED_BIT
+        };
+        self.store_byte(byte);
+    }
+
+    /// The shape GNU's `do_one_unbind` restores with a bare `SET_SYMBOL_VAL`
+    /// and `do_specbind` binds without `set_internal`: a plain value cell
+    /// with no watcher and no constant refusal — plus, here, no host
+    /// projection.  One byte test, since `Plainval` and `Untrapped` are both
+    /// the zero encoding.
+    #[inline(always)]
+    pub fn is_plain_untrapped_unprojected(self) -> bool {
+        self.0 & (Self::REDIRECT_MASK | Self::TRAPPED_WRITE_MASK | Self::RUNTIME_PROJECTED_BIT) == 0
     }
 
     #[inline]
@@ -2141,9 +2196,55 @@ impl Obarray {
     /// note stay; the alias walk, slot growth and redirect re-arming of the
     /// general store do not apply.  `Value::UNBOUND` stores "unbound", exactly
     /// as `makunbound_id` leaves a plain cell.
+    /// GNU `do_one_unbind`'s SPECPDL_LET arm and `do_specbind`'s untrapped
+    /// case, as one obarray visit: refuse anything that is not an interned,
+    /// plain, untrapped, unprojected cell (those keep the general paths), else
+    /// store VALUE and return the value the cell held (`Value::UNBOUND` when
+    /// it was unbound, which is what `makunbound` leaves).
+    ///
+    /// The caller holds no Lisp-visible state between the swap and its
+    /// specpdl push/pop: nothing here runs Lisp or reaches a safe point, and
+    /// the SATB pre-image note below keeps a concurrent mark exact.
+    #[inline]
+    pub(crate) fn swap_plain_untrapped_value_id(
+        &mut self,
+        id: SymId,
+        value: Value,
+    ) -> Option<Value> {
+        let idx = Self::slot_index(id);
+        // One read of the concurrent-mark gate for both the seqlock bracket
+        // and the SATB pre-image note, computed before the `&mut` borrow.
+        let marking = crate::tagged::gc::concurrent_mark_active();
+        let seq = if marking {
+            self.symbols.chunk_seq_ptr(idx)
+        } else {
+            None
+        };
+        let _seq_guard = SeqlockWriteGuard::new(seq);
+        let sym = self.symbols.get_mut(idx)?;
+        if !sym.flags.is_plain_untrapped_unprojected() || !sym.interned_global {
+            return None;
+        }
+        #[cfg(test)]
+        note_plain_value_slot_visit();
+        // SAFETY: the redirect is `Plainval`, so `val.plain` is the live arm.
+        let old = unsafe { sym.val.plain };
+        if marking {
+            crate::tagged::gc::note_root_overwrite_while_marking(old);
+        }
+        store_value_atomic(unsafe { &mut sym.val.plain }, value);
+        Some(old)
+    }
+
+    /// Mark `id` as carrying a host projection (see
+    /// `SymbolFlags::RUNTIME_PROJECTED_BIT`).  Armed at `Context`
+    /// construction, not carried by a dump image.
+    pub(crate) fn mark_runtime_projected_id(&mut self, id: SymId) {
+        self.ensure_slot(id).flags.set_runtime_projected(true);
+    }
+
     #[inline]
     pub(crate) fn store_plain_value_id(&mut self, id: SymId, value: Value) {
-        self.ensure_global_member_if_canonical(id);
         // One read of the concurrent-mark gate serves both the seqlock
         // bracket and the SATB pre-image note; each used to read it.
         let marking = crate::tagged::gc::concurrent_mark_active();
@@ -2156,7 +2257,39 @@ impl Obarray {
         let Some(sym) = self.slot_mut(id) else {
             return self.set_symbol_value_id_inner(id, value);
         };
+        if !sym.interned_global {
+            // Membership is marked before the store, for canonical ids only —
+            // the old `ensure_global_member_if_canonical` prologue, now paid
+            // only by the symbols that are not members yet.
+            return self.store_plain_value_id_nonmember(id, value);
+        }
+        #[cfg(test)]
+        note_plain_value_slot_visit();
         debug_assert_eq!(sym.flags.redirect(), SymbolRedirect::Plainval);
+        if marking {
+            crate::tagged::gc::note_root_overwrite_while_marking(unsafe { sym.val.plain });
+        }
+        store_value_atomic(unsafe { &mut sym.val.plain }, value);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn store_plain_value_id_nonmember(&mut self, id: SymId, value: Value) {
+        if Self::is_canonical_symbol_id(id) {
+            self.mark_global_member(id);
+        }
+        let marking = crate::tagged::gc::concurrent_mark_active();
+        let seq = if marking {
+            self.symbols.chunk_seq_ptr(Self::slot_index(id))
+        } else {
+            None
+        };
+        let _seq_guard = SeqlockWriteGuard::new(seq);
+        let Some(sym) = self.slot_mut(id) else {
+            return self.set_symbol_value_id_inner(id, value);
+        };
+        #[cfg(test)]
+        note_plain_value_slot_visit();
         if marking {
             crate::tagged::gc::note_root_overwrite_while_marking(unsafe { sym.val.plain });
         }
