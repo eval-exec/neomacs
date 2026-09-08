@@ -1006,10 +1006,12 @@ impl<'a> Reader<'a> {
         // GNU `lread.c:3043-3142` keeps ASCII-only and raw-byte string literals
         // unibyte unless a real multibyte character is forced while reading.
         let mut unibyte_buf = Some(Vec::new());
+        // The source is fixed for the whole literal; only `pos` moves.
+        let byte_source = self.byte_backed_source();
         loop {
             // The ASCII run up to the next quote, backslash or non-ASCII
             // character in one copy.
-            if let Some(src) = self.byte_backed_source() {
+            if let Some(src) = byte_source {
                 let start = self.pos;
                 let mut p = start;
                 while p < src.len() {
@@ -2465,10 +2467,11 @@ impl<'a> Reader<'a> {
     fn read_symbol_token(&mut self) -> ReaderToken {
         let mut bytes = ReaderTokenBytes::new();
         let mut had_escape = false;
+        let byte_source = self.byte_backed_source();
         loop {
             // The ASCII run of the token in one copy; an escape, a non-ASCII
             // character or the delimiter is left to the per-character step.
-            if let Some(src) = self.byte_backed_source() {
+            if let Some(src) = byte_source {
                 let start = self.pos;
                 let mut p = start;
                 while p < src.len() {
