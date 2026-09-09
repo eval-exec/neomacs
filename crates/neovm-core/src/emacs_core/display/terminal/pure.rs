@@ -60,24 +60,7 @@ impl TerminalRuntime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TerminalRuntimeConfig {
-    pub name: Option<String>,
-    /// What kind of display this terminal drives -- GNU's argument to
-    /// `create_terminal`.  There is no default: every construction site picks a
-    /// constructor ([`TerminalRuntimeConfig::inactive`],
-    /// [`TerminalRuntimeConfig::interactive`],
-    /// [`TerminalRuntimeConfig::window_system`]) and thereby answers it.
-    pub output_method: TerminalOutputMethod,
-    pub tty_type: Option<String>,
-    pub controlling_tty: bool,
-    /// See [`TerminalRuntime::attribute_capabilities`]. Defaults to
-    /// [`TtyAttributeCapabilities::none`] -- GNU learns these from terminfo when
-    /// a terminal is initialized, and knows none before that -- so a caller that
-    /// has read terminfo must pass them with
-    /// [`TerminalRuntimeConfig::with_attribute_capabilities`].
-    pub attribute_capabilities: TtyAttributeCapabilities,
-}
+pub use super::config::{TerminalRuntimeConfig, TtyTerminalConfig};
 
 pub trait TerminalHost {
     fn suspend_tty(&mut self) -> Result<(), String>;
@@ -230,8 +213,8 @@ impl DeleteTerminalMode {
 /// * not from the id -- GNU's tty terminal is `#<terminal 1 on /dev/tty>` and
 ///   ours is `#<terminal 0 on /dev/tty>`, because ours is the same record the
 ///   bootstrap started with;
-/// * not from the name -- a window-system terminal keeps `"initial_terminal"`
-///   when its display connection has no name to adopt;
+/// * not from the name -- terminal names are connection labels, not a
+///   discriminator for the terminal's output method;
 /// * not from liveness or activity -- `terminal-live-p` deliberately reports
 ///   `output_initial` and `output_termcap` alike as `t` (src/terminal.c:456-459),
 ///   which is exactly why `turn-on-xterm-mouse-tracking-on-terminal`
@@ -406,118 +389,66 @@ impl TerminalManager {
     }
 }
 
-impl TerminalRuntimeConfig {
-    /// GNU `init_initial_terminal`: the display-less bootstrap terminal.  Also
-    /// the terminal the GUI startup keeps for the hidden initial frame, which
-    /// is the same thing GNU keeps it for.
-    pub fn inactive() -> Self {
-        Self {
-            name: None,
-            output_method: TerminalOutputMethod::Initial,
-            tty_type: None,
-            controlling_tty: false,
-            attribute_capabilities: TtyAttributeCapabilities::none(),
-        }
-    }
-
-    /// GNU `init_tty` (src/term.c): a text terminal on a tty device.
-    ///
-    /// The colour-cell count is NOT a separate parameter, and that is ledger
-    /// 193's item 2 in one signature: it is `TN_max_colors`, which GNU
-    /// computes once inside `init_tty`'s `op` gate and stores on the same
-    /// `struct tty_display_info` as `TS_set_foreground`.  Taking it beside the
-    /// capability record is what let this port answer it twice.
-    pub fn interactive(
-        tty_type: Option<String>,
-        attribute_capabilities: TtyAttributeCapabilities,
-    ) -> Self {
-        Self {
-            name: None,
-            output_method: TerminalOutputMethod::Termcap,
-            tty_type,
-            controlling_tty: true,
-            attribute_capabilities,
-        }
-    }
-
-    /// GNU `x_term_init` / `pgtk_term_init`: a window-system display
-    /// connection.  It carries no tty capabilities and no colour-cell count --
-    /// those are terminfo facts about a text terminal -- but it is emphatically
-    /// not the initial terminal, whether or not the display had a name to
-    /// adopt.
-    pub fn window_system() -> Self {
-        Self {
-            name: None,
-            output_method: TerminalOutputMethod::WindowSystem,
-            tty_type: None,
-            controlling_tty: false,
-            attribute_capabilities: TtyAttributeCapabilities::none(),
-        }
-    }
-
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Record what this terminal can render (its terminfo capabilities).
-    pub fn with_attribute_capabilities(mut self, caps: TtyAttributeCapabilities) -> Self {
-        self.attribute_capabilities = caps;
-        self
-    }
-}
-
-/// Re-describe the primary terminal as the display CONFIG names -- GNU's
-/// `create_terminal (type, …)` plus the name that display init gives it.
-///
-/// A window-system terminal takes its name from its display connection (`":0"`,
-/// `"wayland-0"`), not from the bootstrap `"initial_terminal"`: Elisp uses
-/// `(terminal-name)` to tell a real display from the display-less initial one --
-/// e.g. indent-bars' `indent-bars-reset-styles` skips recomputing bar colors on
-/// a theme change while the terminal is still `"initial_terminal"`.  A config
-/// with no name leaves the existing one alone, so a display that has no name to
-/// give still gets its output method re-described.
-pub fn configure_terminal_runtime(config: TerminalRuntimeConfig) {
+/// Install all primary-terminal facts together; graphical configuration always
+/// replaces the bootstrap name along with the output method.
+pub fn configure_terminal_runtime(config: impl Into<TerminalRuntimeConfig>) {
+    let (name, output_method, runtime) = terminal_configuration_parts(config.into());
     TERMINAL_MANAGER.with(|slot| {
         let mut manager = slot.borrow_mut();
         let terminal = manager.ensure_initial_terminal();
-        if let Some(name) = config.name {
-            terminal.name = name;
-        }
-        terminal.output_method = config.output_method;
-        terminal.runtime = TerminalRuntime {
-            active: config.controlling_tty
-                || config.tty_type.is_some()
-                || config.attribute_capabilities.color_cells() > 0,
-            tty_type: config.tty_type,
-            color_cells: config.attribute_capabilities.color_cells().max(0),
-            controlling_tty: config.controlling_tty,
-            suspended: false,
-            attribute_capabilities: config.attribute_capabilities,
-        };
+        terminal.name = name;
+        terminal.output_method = output_method;
+        terminal.runtime = runtime;
     });
+}
+
+fn terminal_configuration_parts(
+    config: TerminalRuntimeConfig,
+) -> (String, TerminalOutputMethod, TerminalRuntime) {
+    match config {
+        TerminalRuntimeConfig::Bootstrap => (
+            TERMINAL_NAME.into(),
+            TerminalOutputMethod::Initial,
+            TerminalRuntime::inactive(),
+        ),
+        TerminalRuntimeConfig::Graphical(identity) => (
+            identity.terminal_name().into(),
+            TerminalOutputMethod::WindowSystem,
+            TerminalRuntime::inactive(),
+        ),
+        TerminalRuntimeConfig::Tty(config) => {
+            let runtime = TerminalRuntime {
+                active: true,
+                tty_type: config.tty_type,
+                color_cells: config.attribute_capabilities.color_cells().max(0),
+                controlling_tty: true,
+                suspended: false,
+                attribute_capabilities: config.attribute_capabilities,
+            };
+            (
+                config.name.unwrap_or_else(|| "/dev/tty".into()),
+                TerminalOutputMethod::Termcap,
+                runtime,
+            )
+        }
+    }
 }
 
 pub fn ensure_terminal_runtime_owner(
     id: u64,
     name: impl Into<String>,
-    config: TerminalRuntimeConfig,
+    config: impl Into<TerminalRuntimeConfig>,
 ) -> Value {
+    let (configured_name, output_method, runtime) = terminal_configuration_parts(config.into());
+    // Explicit owner names describe bootstrap/TTY records. A graphical owner
+    // takes its validated connection identity, never an independent override.
+    let name = match output_method {
+        TerminalOutputMethod::WindowSystem => configured_name,
+        TerminalOutputMethod::Initial | TerminalOutputMethod::Termcap => name.into(),
+    };
     TERMINAL_MANAGER.with(|slot| {
-        let mut manager = slot.borrow_mut();
-        let output_method = config.output_method;
-        let runtime = TerminalRuntime {
-            active: config.controlling_tty
-                || config.tty_type.is_some()
-                || config.attribute_capabilities.color_cells() > 0,
-            tty_type: config.tty_type,
-            color_cells: config.attribute_capabilities.color_cells().max(0),
-            controlling_tty: config.controlling_tty,
-            suspended: false,
-            attribute_capabilities: config.attribute_capabilities,
-        };
-        manager
-            .ensure_terminal(id, name.into(), runtime, output_method)
+        slot.borrow_mut()
+            .ensure_terminal(id, name, runtime, output_method)
             .handle
     })
 }

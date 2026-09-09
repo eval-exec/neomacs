@@ -3152,37 +3152,8 @@ impl WindowPresentationSnapshot {
 // Frame
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum FrameDisplayIdentity {
-    #[default]
-    None,
-    Wayland(String),
-    X11(String),
-}
-
-impl FrameDisplayIdentity {
-    pub fn wayland(display: impl Into<String>) -> Self {
-        Self::Wayland(display.into())
-    }
-
-    pub fn x11(display: impl Into<String>) -> Self {
-        Self::X11(display.into())
-    }
-
-    pub fn native_display(&self) -> Option<&str> {
-        match self {
-            Self::None => None,
-            Self::Wayland(display) | Self::X11(display) => Some(display),
-        }
-    }
-
-    pub fn x_display(&self) -> Option<&str> {
-        match self {
-            Self::X11(display) => Some(display),
-            Self::None | Self::Wayland(_) => None,
-        }
-    }
-}
+mod display_identity;
+pub use display_identity::FrameDisplayIdentity;
 
 /// A frame divider whose requested parameter may become effective geometry.
 ///

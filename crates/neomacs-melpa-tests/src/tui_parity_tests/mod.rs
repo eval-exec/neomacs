@@ -1,5 +1,7 @@
 //! Interactive package parity through the shared PTY/grid adapter.
 
+mod ace_window_test;
+
 mod beacon_test;
 mod corfu_test;
 mod gruvbox_theme_test;

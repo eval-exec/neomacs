@@ -330,7 +330,7 @@ impl Interactivity {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct BootstrapDisplayConfig {
     kind: BootstrapDisplayKind,
     color_cells: i64,
@@ -340,12 +340,13 @@ struct BootstrapDisplayConfig {
 
 /// Display kind and its scale facts available before a native window exists.
 ///
-/// GUI startup retains only the resolved logical font rule. Device scale is
-/// deliberately absent until winit realizes each particular window.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// GUI startup retains the opened connection identity and resolved logical font
+/// rule. Device scale is absent until winit realizes each particular window.
+#[derive(Debug, Clone, PartialEq)]
 enum BootstrapDisplayKind {
     Gui {
         frame_font_scale: ResolvedFrameFontScale,
+        identity: neomacs_display_protocol::GraphicalDisplayIdentity,
     },
     Tty {
         font_sizing: FontSizing,
@@ -353,46 +354,31 @@ enum BootstrapDisplayKind {
 }
 
 impl BootstrapDisplayConfig {
-    fn frontend(self) -> FrontendKind {
-        match self.kind {
+    fn frontend(&self) -> FrontendKind {
+        match &self.kind {
             BootstrapDisplayKind::Gui { .. } => FrontendKind::Gui,
             BootstrapDisplayKind::Tty { .. } => FrontendKind::Tty,
         }
     }
 
-    fn font_sizing(self) -> FontSizing {
-        match self.kind {
-            BootstrapDisplayKind::Gui { frame_font_scale } => frame_font_scale.font_sizing(),
-            BootstrapDisplayKind::Tty { font_sizing } => font_sizing,
+    fn font_sizing(&self) -> FontSizing {
+        match &self.kind {
+            BootstrapDisplayKind::Gui {
+                frame_font_scale, ..
+            } => frame_font_scale.font_sizing(),
+            BootstrapDisplayKind::Tty { font_sizing } => *font_sizing,
         }
     }
 
     #[cfg(test)]
-    fn frame_font_scale(self) -> Option<ResolvedFrameFontScale> {
-        match self.kind {
-            BootstrapDisplayKind::Gui { frame_font_scale } => Some(frame_font_scale),
+    fn frame_font_scale(&self) -> Option<ResolvedFrameFontScale> {
+        match &self.kind {
+            BootstrapDisplayKind::Gui {
+                frame_font_scale, ..
+            } => Some(*frame_font_scale),
             BootstrapDisplayKind::Tty { .. } => None,
         }
     }
-}
-
-fn gui_display_identity(
-    wayland_display: Option<&str>,
-    x_display: Option<&str>,
-) -> FrameDisplayIdentity {
-    let wayland_display = wayland_display
-        .filter(|display| !display.is_empty())
-        .map(FrameDisplayIdentity::wayland);
-    let x_display = x_display
-        .filter(|display| !display.is_empty())
-        .map(FrameDisplayIdentity::x11);
-    wayland_display.or(x_display).unwrap_or_default()
-}
-
-fn host_gui_display_identity() -> FrameDisplayIdentity {
-    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
-    let x_display = std::env::var("DISPLAY").ok();
-    gui_display_identity(wayland_display.as_deref(), x_display.as_deref())
 }
 
 const EARLY_HELP_BODY: &str = concat!(
@@ -909,9 +895,13 @@ fn bootstrap_tty_display_config(interactivity: Interactivity) -> BootstrapDispla
 fn bootstrap_gui_display_config(
     interactivity: Interactivity,
     frame_font_scale: ResolvedFrameFontScale,
+    identity: neomacs_display_protocol::GraphicalDisplayIdentity,
 ) -> BootstrapDisplayConfig {
     BootstrapDisplayConfig {
-        kind: BootstrapDisplayKind::Gui { frame_font_scale },
+        kind: BootstrapDisplayKind::Gui {
+            frame_font_scale,
+            identity,
+        },
         color_cells: 16777216,
         // GNU `frame--current-background-mode` defaults GUI frames to
         // `light` unless a real background color or terminal default says
@@ -922,14 +912,14 @@ fn bootstrap_gui_display_config(
 }
 
 impl BootstrapDisplayConfig {
-    fn window_system_symbol(self) -> Option<&'static str> {
+    fn window_system_symbol(&self) -> Option<&'static str> {
         match self.frontend() {
             FrontendKind::Gui => Some(gui_window_system_symbol()),
             FrontendKind::Tty => None,
         }
     }
 
-    fn display_type_symbol(self) -> &'static str {
+    fn display_type_symbol(&self) -> &'static str {
         if self.color_cells > 0 {
             "color"
         } else {
@@ -3538,11 +3528,10 @@ fn run_gui_evaluator_worker(
     // guard — needs the name, and `frame-initial-p` needs the terminal to say it
     // is not the initial one even on a display with no name to adopt. Read the
     // display the same way the frame's `display` parameter does.
-    let mut display_terminal = TerminalRuntimeConfig::window_system();
-    if let Some(display_name) = host_gui_display_identity().native_display() {
-        display_terminal = display_terminal.with_name(display_name);
-    }
-    configure_terminal_runtime(display_terminal);
+    let BootstrapDisplayKind::Gui { identity, .. } = &bootstrap_display.kind else {
+        unreachable!("GUI evaluator requires graphical bootstrap configuration");
+    };
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(identity.clone()));
     evaluator.set_variable("dump-mode", Value::NIL);
     // GNU's window-system terminal inits do not measure a line speed, they
     // assert one: `baud_rate = 19200' in `x_term_init' (src/xterm.c:32279) and
@@ -3551,7 +3540,7 @@ fn run_gui_evaluator_worker(
     load_neomacs_gui_term_layer(&mut evaluator);
     tracing::info!("GUI evaluator context initialized");
 
-    let _bootstrap = bootstrap_buffers(&mut evaluator, width, height, bootstrap_display);
+    let _bootstrap = bootstrap_buffers(&mut evaluator, width, height, bootstrap_display.clone());
     let frame_id = evaluator
         .frame_manager()
         .selected_frame()
@@ -4058,6 +4047,8 @@ pub fn run(mode: RuntimeMode) {
     // Winit can fall back from the environment's preferred Linux backend.
     // Construct it before font metrics so the bootstrap frame follows the
     // backend that was actually selected, not a DISPLAY/WAYLAND_DISPLAY guess.
+    let display_identity_resolver =
+        neomacs_display_runtime::display_identity::DisplayIdentityResolver::capture_environment();
     let gui_event_loop = if startup.frontend == FrontendKind::Gui {
         Some(build_render_event_loop().unwrap_or_else(|err| {
             eprintln!("neomacs: failed to build GUI event loop: {err}");
@@ -4069,9 +4060,19 @@ pub fn run(mode: RuntimeMode) {
     let interactivity = Interactivity::from_noninteractive(startup.noninteractive);
     let bootstrap_display = if let Some(event_loop) = gui_event_loop.as_ref() {
         let observation = observe_event_loop_display(event_loop);
+        let system_name: String = hostname::get()
+            .map(|name| name.to_string_lossy().replace([' ', '\t'], "-"))
+            .unwrap_or_else(|_| "localhost".into());
+        let identity = display_identity_resolver
+            .resolve(event_loop, &system_name)
+            .unwrap_or_else(|error| {
+                eprintln!("neomacs: failed to resolve graphical display identity: {error:?}");
+                std::process::exit(1);
+            });
         bootstrap_gui_display_config(
             interactivity,
             gui_frame_font_scale_from_observation(observation),
+            identity,
         )
     } else {
         debug_assert_eq!(startup.frontend, FrontendKind::Tty);
@@ -4082,7 +4083,7 @@ pub fn run(mode: RuntimeMode) {
     // This avoids ~500ms of FontMetricsService initialization at
     // startup. GUI mode computes real pixel dimensions from font
     // metrics via bootstrap_frame_metrics().
-    let frame_metrics = bootstrap_frame_metrics_for_display(bootstrap_display);
+    let frame_metrics = bootstrap_frame_metrics_for_display(&bootstrap_display);
     let (width, height) =
         startup_dimensions(startup.frontend, frame_metrics, startup.noninteractive);
 
@@ -4596,7 +4597,7 @@ fn bootstrap_frame_metrics_for_frontend(frontend: FrontendKind) -> BootstrapFram
     }
 }
 
-fn bootstrap_frame_metrics_for_display(display: BootstrapDisplayConfig) -> BootstrapFrameMetrics {
+fn bootstrap_frame_metrics_for_display(display: &BootstrapDisplayConfig) -> BootstrapFrameMetrics {
     if display.frontend() == FrontendKind::Tty {
         bootstrap_frame_metrics_for_frontend(FrontendKind::Tty)
     } else {
@@ -4610,9 +4611,7 @@ fn bootstrap_buffers(
     height: u32,
     display: BootstrapDisplayConfig,
 ) -> BootstrapResult {
-    let frame_metrics = bootstrap_frame_metrics_for_display(display);
-    let gui_display_identity =
-        (display.frontend() == FrontendKind::Gui).then(host_gui_display_identity);
+    let frame_metrics = bootstrap_frame_metrics_for_display(&display);
     let find_or_create_buffer = |eval: &mut Context, name: &str| {
         eval.buffer_manager()
             .find_buffer_by_name(name)
@@ -4778,8 +4777,8 @@ fn bootstrap_buffers(
         } else {
             frame.set_window_system(None);
         }
-        if display.frontend() == FrontendKind::Gui {
-            frame.set_display_identity(gui_display_identity.clone().unwrap_or_default());
+        if let BootstrapDisplayKind::Gui { identity, .. } = &display.kind {
+            frame.set_display_identity(FrameDisplayIdentity::Graphical(identity.clone()));
             frame.set_parameter(
                 Value::symbol("display-type"),
                 Value::symbol(display.display_type_symbol()),

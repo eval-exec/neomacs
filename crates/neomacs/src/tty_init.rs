@@ -24,6 +24,7 @@ use super::{FrontendKind, StartupOptions};
 pub fn detect_tty_runtime(startup: &StartupOptions) -> TerminalRuntimeConfig {
     TerminalRuntimeConfig::interactive(detect_tty_type(), detect_tty_attribute_capabilities())
         .with_name(detect_tty_name(startup))
+        .into()
 }
 
 /// What this terminal can render, from its terminfo entry -- the capabilities GNU

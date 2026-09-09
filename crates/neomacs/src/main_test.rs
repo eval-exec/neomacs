@@ -14,8 +14,8 @@ use super::{
     bootstrap_default_font_name, bootstrap_frame_metrics, bootstrap_frame_metrics_for_font_sizing,
     bootstrap_frame_metrics_for_frontend, bootstrap_gui_display_config,
     bootstrap_tty_display_config, classify_early_cli_action, configure_gnu_startup_state,
-    gui_display_identity, gui_frame_font_scale_from_observation, load_neomacs_gui_term_layer,
-    parse_startup_options, publish_gui_frame, raw_dump_loadup_invocation, raw_loadup_command_line,
+    gui_frame_font_scale_from_observation, load_neomacs_gui_term_layer, parse_startup_options,
+    publish_gui_frame, raw_dump_loadup_invocation, raw_loadup_command_line,
     render_fingerprint_text, render_help_text, render_startup_image_error, render_version_text,
     run_gnu_startup, runtime_mode_from_program_name, source_bootstrap_loadup_invocation,
     startup_dimensions, sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
@@ -91,6 +91,11 @@ fn gui_display() -> BootstrapDisplayConfig {
     bootstrap_gui_display_config(
         Interactivity::Interactive,
         gui_frame_font_scale_from_observation(observation),
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":42",
+        )
+        .unwrap(),
     )
 }
 
@@ -99,17 +104,6 @@ fn test_image_load(image: u32, attempt: u64) -> ImageLoadToken {
         ImageId::new(image),
         ImageLoadAttempt::new(attempt).expect("non-zero test image load attempt"),
     )
-}
-
-#[test]
-fn gui_display_identity_records_the_native_backend() {
-    let wayland = gui_display_identity(Some("wayland-7"), Some(":42"));
-    assert_eq!(wayland.native_display(), Some("wayland-7"));
-    assert_eq!(wayland.x_display(), None);
-
-    let x11 = gui_display_identity(None, Some(":42"));
-    assert_eq!(x11.native_display(), Some(":42"));
-    assert_eq!(x11.x_display(), Some(":42"));
 }
 
 fn shared_primary_window_size(width: u32, height: u32) -> Arc<Mutex<PrimaryWindowSize>> {
@@ -4731,7 +4725,13 @@ fn gui_font_policy_uses_the_observed_xwayland_backend() {
 fn bootstrap_display_keeps_the_resolved_gui_font_scale() {
     let observation = neomacs_display_protocol::DisplayObservation::Wayland;
     let resolved = gui_frame_font_scale_from_observation(observation);
-    let display = bootstrap_gui_display_config(Interactivity::Interactive, resolved);
+    let display = bootstrap_gui_display_config(
+        Interactivity::Interactive,
+        resolved,
+        neomacs_display_protocol::GraphicalDisplayIdentity::anonymous_connection(
+            neomacs_display_protocol::GraphicalBackend::Wayland,
+        ),
+    );
 
     assert_eq!(display.frame_font_scale(), Some(resolved));
     assert_eq!(display.font_sizing(), resolved.font_sizing());

@@ -258,29 +258,46 @@ fn graphical_terminal_adopts_its_display_name() {
         builtin_terminal_name(&mut eval, vec![]).unwrap(),
         Value::string("initial_terminal")
     );
-    configure_terminal_runtime(TerminalRuntimeConfig::window_system().with_name(":0"));
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .unwrap(),
+    ));
     assert_eq!(
         builtin_terminal_name(&mut eval, vec![]).unwrap(),
         Value::string(":0")
     );
 }
 
-/// A display connection with no name to adopt keeps `"initial_terminal"` as its
-/// name -- and still must not be mistaken for the initial terminal, because the
-/// name was never the thing GNU asks about.
+/// An inherited connection has no socket pathname to adopt, but is still a
+/// named graphical terminal to both GNU's kind predicate and Lisp packages.
 #[test]
-fn nameless_graphical_terminal_is_still_not_the_initial_terminal() {
+fn anonymous_graphical_terminals_are_not_the_initial_terminal() {
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
     crate::test_utils::init_test_tracing();
-    reset_terminal_thread_locals();
-    reset_terminal_runtime();
-    configure_terminal_runtime(TerminalRuntimeConfig::window_system());
-    let mut eval = Context::new();
-    assert_eq!(
-        builtin_terminal_name(&mut eval, vec![]).unwrap(),
-        Value::string("initial_terminal")
-    );
-    let terminal = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
-    assert_eq!(frame_initial_p(&mut eval, terminal), Ok(Value::NIL));
+    for (backend, label) in [
+        (GraphicalBackend::Wayland, "wayland"),
+        (GraphicalBackend::X11, "x11"),
+        (GraphicalBackend::Cocoa, "ns"),
+        (GraphicalBackend::Windows, "w32"),
+        (GraphicalBackend::Android, "android"),
+        (GraphicalBackend::Web, "web"),
+    ] {
+        reset_terminal_thread_locals();
+        reset_terminal_runtime();
+        configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+            GraphicalDisplayIdentity::anonymous_connection(backend),
+        ));
+        let mut eval = Context::new();
+        assert_eq!(
+            builtin_terminal_name(&mut eval, vec![]).unwrap(),
+            Value::string(label)
+        );
+        let terminal = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
+        assert_eq!(frame_initial_p(&mut eval, terminal), Ok(Value::NIL));
+    }
 }
 
 /// The GUI startup keeps a SECOND, display-less terminal for the hidden
@@ -292,7 +309,13 @@ fn nameless_graphical_terminal_is_still_not_the_initial_terminal() {
 fn frame_initial_p_separates_the_display_terminal_from_the_startup_terminal() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    configure_terminal_runtime(TerminalRuntimeConfig::window_system().with_name(":0"));
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .unwrap(),
+    ));
     let mut eval = Context::new();
     // After the Context, which re-mints terminal handles.
     let startup_terminal =
@@ -685,7 +708,13 @@ fn make_terminal_frame_is_eval_backed_frame_creation() {
 fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    configure_terminal_runtime(TerminalRuntimeConfig::window_system().with_name(":0"));
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .unwrap(),
+    ));
     let mut eval = Context::new();
     eval.set_variable("noninteractive", Value::NIL);
     let scratch = eval.buffers.create_buffer("*scratch*");
@@ -751,7 +780,13 @@ fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
 fn make_terminal_frame_without_a_device_reuses_the_selected_secondary_terminal() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    configure_terminal_runtime(TerminalRuntimeConfig::window_system().with_name(":0"));
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .unwrap(),
+    ));
     let mut eval = Context::new();
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
@@ -786,7 +821,13 @@ fn make_terminal_frame_without_a_device_reuses_the_selected_secondary_terminal()
 fn make_terminal_frame_reuses_an_active_tty_already_open_on_the_named_device() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    configure_terminal_runtime(TerminalRuntimeConfig::window_system().with_name(":0"));
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .unwrap(),
+    ));
     let mut eval = Context::new();
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
@@ -826,7 +867,13 @@ fn make_terminal_frame_reuses_an_active_tty_already_open_on_the_named_device() {
 fn make_terminal_frame_rolls_back_the_provisional_frame_when_tty_open_fails() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    configure_terminal_runtime(TerminalRuntimeConfig::window_system().with_name(":0"));
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .unwrap(),
+    ));
     let mut eval = Context::new();
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);

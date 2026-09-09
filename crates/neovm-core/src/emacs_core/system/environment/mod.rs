@@ -171,8 +171,9 @@ fn process_environment_prefix(environment: Value) -> Vec<(OsString, Option<OsStr
 
 fn frame_x_display_value(frame: &crate::window::Frame) -> Option<Value> {
     match frame.display_identity() {
-        crate::window::FrameDisplayIdentity::X11(display) => Some(Value::string(display)),
-        crate::window::FrameDisplayIdentity::Wayland(_) => None,
+        crate::window::FrameDisplayIdentity::Graphical(identity) => {
+            identity.x_display().map(Value::string)
+        }
         crate::window::FrameDisplayIdentity::None => frame
             .parameter("display")
             .filter(|value| value.as_lisp_string().is_some()),
