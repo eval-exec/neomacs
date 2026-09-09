@@ -207,7 +207,7 @@ fn correct_apple_speed(native: i32, device: Option<u32>) -> io::Result<i32> {
         })?;
     // SAFETY: the native mutex is held and setupterm selected our temporary
     // terminal. ospeed is the documented short termcap global on macOS. The
-    // context guard restores the previous terminal and its speed on every exit.
+    // context guard restores the previous terminal and, when one exists, its speed.
     unsafe {
         ospeed = code as std::ffi::c_short;
     }
