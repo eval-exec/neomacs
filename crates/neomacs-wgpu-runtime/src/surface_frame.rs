@@ -68,6 +68,7 @@ pub struct SurfaceFrameRenderer {
     renderer: WgpuRenderer,
     glyph_atlas: WgpuGlyphAtlas,
     device_scale: DeviceScale,
+    preedit: String,
 }
 
 impl SurfaceFrameRenderer {
@@ -98,6 +99,7 @@ impl SurfaceFrameRenderer {
         }
 
         Ok(Self {
+            preedit: String::new(),
             cursor: neomacs_renderer_wgpu::cursor::CursorState::new(
                 neomacs_display_protocol::frame_time::observe_platform_now(),
             ),
@@ -111,6 +113,11 @@ impl SurfaceFrameRenderer {
     /// Current physical drawable state.
     pub const fn extent(&self) -> SurfaceExtent {
         self.surface.extent()
+    }
+
+    /// Replace the transient IME run without modifying evaluator-owned text.
+    pub fn set_preedit(&mut self, text: String) {
+        self.preedit = text;
     }
 
     /// The same physical-to-frame mapping used for drawing this frame.
@@ -189,10 +196,12 @@ impl SurfaceFrameRenderer {
             self.cursor.clear_target();
         }
         let animated_cursor = self.cursor.animated_cursor();
+        let dimensions = self.surface.extent().dimensions();
         let Self {
             surface,
             renderer,
             glyph_atlas,
+            preedit,
             ..
         } = self;
         surface
@@ -209,6 +218,21 @@ impl SurfaceFrameRenderer {
                     None,
                     None,
                 );
+                if cursor_visibility.is_visible()
+                    && let Some(cursor) = frame.active_cursor()
+                    && let Some((width, height)) = dimensions
+                {
+                    renderer.render_ime_preedit(
+                        view,
+                        preedit,
+                        cursor.x,
+                        cursor.y,
+                        cursor.height,
+                        glyph_atlas,
+                        width,
+                        height,
+                    );
+                }
             })
             .map_err(Into::into)
     }
