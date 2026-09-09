@@ -4996,8 +4996,8 @@ impl crate::emacs_core::eval::Context {
         match event {
             InputEvent::Ime { session, operation, emacs_frame_id } => {
                 self.route_keyboard_input_to_frame(emacs_frame_id);
-                self.handle_ime_operation(session, operation)?;
-                Ok(None)
+                let event = self.handle_ime_operation(session, operation)?;
+                Ok((!event.is_nil()).then_some(event))
             },
             InputEvent::RawTtyBytes { bytes, target } => {
                 self.route_tty_keyboard_input(target);
