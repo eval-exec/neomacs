@@ -80,3 +80,14 @@ clump and implicit binding documentation findings were addressed. Host access
 encapsulation remains a follow-up above. Spec review found the popup-text
 coverage gap, now covered by the separate-atlas regression, and confirmed the
 larger migration is partial rather than complete.
+
+Release verification also passed: `cargo xtask fresh-build --profile release
+--no-byte-compile` rebuilt the executable and matching pdump; batch startup
+printed `target-local-pdump-ok` and exited 0. A timed release GUI launch opened
+a keymap-backed `x-popup-menu`, created/configured/destroyed an `xdg_popup`, and
+exited cleanly. This programmatic check does not establish interactive hover,
+input-grab, or focus behavior. Logs:
+
+- `/tmp/neomacs-target-local-release.log`
+- `/tmp/neomacs-target-local-release-startup.log`
+- `/tmp/neomacs-target-local-release-gui.log`
