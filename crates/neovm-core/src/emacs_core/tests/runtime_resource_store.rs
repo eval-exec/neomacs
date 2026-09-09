@@ -215,6 +215,39 @@ fn insert_file_contents_reads_mounted_data_files() {
 }
 
 #[test]
+fn charset_maps_follow_the_active_evaluators_native_data_directory() {
+    let workspace_tmp = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    std::fs::create_dir_all(&workspace_tmp).unwrap();
+    let directory = tempfile::tempdir_in(&workspace_tmp).unwrap();
+    let mut evaluator = Context::new();
+    let mut args = vec![Value::NIL; 17];
+    args[0] = Value::symbol("native-runtime-map-test");
+    args[1] = Value::fixnum(1);
+    args[2] = Value::vector(vec![Value::fixnum(0), Value::fixnum(255)]);
+    args[12] = Value::string("native-runtime-test");
+    builtin_define_charset_internal(args).unwrap();
+    for (name, contents, expected) in [
+        ("first", b"21 2603\n".as_slice(), 0x2603),
+        ("second", b"21 2602\n".as_slice(), 0x2602),
+    ] {
+        let data = directory.path().join(name);
+        std::fs::create_dir_all(data.join("charsets")).unwrap();
+        std::fs::write(data.join("charsets/native-runtime-test.map"), contents).unwrap();
+        evaluator.set_variable("data-directory", Value::string(data.to_str().unwrap()));
+        evaluator.setup_thread_locals();
+        assert_eq!(
+            builtin_decode_char(vec![
+                Value::symbol("native-runtime-map-test"),
+                Value::fixnum(0x21),
+            ])
+            .unwrap(),
+            Value::fixnum(expected),
+            "lazy native charset maps must use the active evaluator's data directory"
+        );
+    }
+}
+
+#[test]
 fn charset_maps_are_read_from_the_context_runtime_mount() {
     reset_charset_registry();
     let mut evaluator = evaluator_with_files([(

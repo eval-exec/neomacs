@@ -5622,6 +5622,10 @@ fn finalize_cached_bootstrap_eval(
     // are re-applied.  See emacs_core::post_image_init for the table and the
     // GNU citation behind every row.
     super::post_image_init::apply_post_image_init(eval);
+    // Lazy charset loading must retain this evaluator's selected installation,
+    // including app-private Android trees, rather than rediscovering a desktop
+    // root. Browser mounts remain authoritative over native data-directory.
+    eval.sync_charset_runtime_resources();
 
     restore_gnu_stale_preloaded_face_doc_refs(eval);
     // Some GNU C-level variables, notably `data-directory`, become bound only
