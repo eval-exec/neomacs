@@ -241,9 +241,9 @@ malachite = "0.9"
 itoa = "1.0"
 
 # GPU / windowing
-# Fork integration includes Wayland popup/size fixes and coordinated X11 event delivery.
-# Select master by name; Cargo.lock pins the tested commit for reproducible builds.
-winit = { git = "https://github.com/eval-exec/winit", branch = "master", default-features = false }
+# Pin the fork's master integration: Wayland popup lifetime and Android key fixes.
+# Keep builds reproducible by revision; see the fork's NEOMACS_FORK.md.
+winit = { git = "https://github.com/eval-exec/winit", rev = "bd59f947206590b97e6595baf383e9a56333ee02", default-features = false }
 wgpu = "30"
 # Keep this on the same major version as wgpu: the DMA-BUF importer passes
 # wgpu-hal types through wgpu's public HAL interop API.
