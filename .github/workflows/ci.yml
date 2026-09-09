@@ -8,6 +8,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      terminal_only:
+        description: Run only native terminal compatibility tests
+        type: boolean
+        default: false
   schedule:
     - cron: "17 5 * * 0"
 
@@ -21,7 +26,7 @@ permissions:
 jobs:
   workflow-lint:
     name: GitHub Actions workflow lint
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -96,7 +101,7 @@ jobs:
 
   fmt:
     name: cargo fmt (${{ matrix.label }})
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
@@ -130,7 +135,7 @@ jobs:
 
   cargo-deny:
     name: cargo deny
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -145,7 +150,7 @@ jobs:
 
   check:
     name: cargo check workspace (${{ matrix.label }})
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -206,19 +211,6 @@ jobs:
           cargo nextest run -p neomacs-layout-engine
           font_backend::windows::tests
 
-      - name: Test Windows terminal output in an owned console
-        if: matrix.label == 'windows-msvc-x86_64'
-        shell: python
-        run: |
-          import subprocess
-          subprocess.run(
-              ["cargo", "nextest", "run", "-p", "neomacs", "--lib",
-               "--no-default-features", "--features", "neo-term",
-               "-E", "test(tty_output::windows::tests)", "--run-ignored", "all"],
-              creationflags=subprocess.CREATE_NEW_CONSOLE,
-              check=True,
-          )
-
       - name: cargo check minimal capability build
         if: matrix.label == 'linux-x86_64'
         run: cargo check -p neomacs --no-default-features
@@ -275,13 +267,68 @@ jobs:
       - name: Compare native expansion and test snapshots
         run: cargo nextest run -p neomacs-terminfo --locked
 
+  native-terminal-output:
+    name: native terminal output (${{ matrix.label }})
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            label: macos-aarch64
+          - runner: windows-latest
+            label: windows-msvc-x86_64
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - *checkout
+
+      - name: Select Apple ncurses
+        if: runner.os == 'macOS'
+        run: |
+          brew install pkg-config
+          echo "NCURSES_NO_PKG_CONFIG=1" >> "$GITHUB_ENV"
+          echo "NCURSESW_NO_PKG_CONFIG=1" >> "$GITHUB_ENV"
+          echo "/usr/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-terminal-output-${{ matrix.label }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: "true"
+
+      - name: Test macOS terminal output and capability policy
+        if: runner.os == 'macOS'
+        run: >-
+          cargo nextest run -p neomacs --lib --locked
+          --no-default-features --features neo-term
+          -E 'test(tty_output::) | test(tty_init::) | test(terminal_capabilities::)'
+
+      - name: Test Windows terminal output in an owned console
+        if: runner.os == 'Windows'
+        shell: python
+        run: |
+          import subprocess
+          subprocess.run(
+              ["cargo", "nextest", "run", "-p", "neomacs", "--lib", "--locked",
+               "--no-default-features", "--features", "neo-term",
+               "-E", "test(tty_output::windows::tests)", "--run-ignored", "all",
+               "--test-threads", "1"],
+              creationflags=subprocess.CREATE_NEW_CONSOLE,
+              check=True,
+          )
+
   # Cross-compilation cannot exercise inotify, kqueue, or
   # ReadDirectoryChangesW.  Keep this independent from the workspace check so
   # an unrelated platform-only crate failure cannot skip the native runtime
   # contract, and build only neovm-core's library test binary.
   native-file-notify:
     name: native file notifications (${{ matrix.label }})
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -326,7 +373,7 @@ jobs:
   # native products here instead of paying for a second Linux release link.
   file-notify-public-ert:
     name: GNU file notification ERT (${{ matrix.label }})
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     strategy:
@@ -393,6 +440,7 @@ jobs:
             -f ert-run-tests-batch-and-exit
 
   neomacs-workspace-test-archive:
+    if: ${{ !inputs.terminal_only }}
     name: workspace test archive (linux x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -445,7 +493,7 @@ jobs:
 
   neomacs-melpa-direct-windows-tests:
     name: MELPA direct adapter Job Object contracts (windows x86_64)
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -479,13 +527,14 @@ jobs:
           --no-fail-fast
 
   neovm-core-tests:
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
     uses: ./.github/workflows/nextest-shards.yml
     with:
       suite: core
 
   neomacs-test-runtime:
+    if: ${{ !inputs.terminal_only }}
     name: Packaged Neomacs Runtime (linux x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 150
@@ -634,14 +683,14 @@ jobs:
           retention-days: 1
 
   neovm-oracle-tests:
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
     uses: ./.github/workflows/nextest-shards.yml
     with:
       suite: oracle
 
   neomacs-tui-tests:
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
     uses: ./.github/workflows/nextest-shards.yml
     with:
@@ -649,7 +698,7 @@ jobs:
 
   neomacs-melpa-tests:
     name: MELPA ${{ matrix.suite }} compatibility and GNU parity (linux x86_64)
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -741,7 +790,7 @@ jobs:
 
   neomacs-display-tests:
     name: display stack tests (linux x86_64)
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     needs: neomacs-workspace-test-archive
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -779,7 +828,7 @@ jobs:
 
   neomacs-prefix-face-tui-parity:
     name: GNU prefix face TUI parity (linux x86_64)
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -826,7 +875,7 @@ jobs:
 
   neomacs-gui-tests:
     name: real GUI tests (linux x86_64, X11)
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -880,7 +929,7 @@ jobs:
 
   neomacs-melpa-live-canary:
     name: MELPA live ecosystem canary (linux x86_64)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: ${{ !inputs.terminal_only && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -927,7 +976,7 @@ jobs:
 
   doom-install-compatibility:
     name: doom install compatibility (linux x86_64)
-    if: github.event_name != 'schedule'
+    if: ${{ !inputs.terminal_only && (github.event_name != 'schedule') }}
     needs: neomacs-test-runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -947,7 +996,7 @@ jobs:
 
   regex-fuzz:
     name: regex differential fuzzing (linux x86_64)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: ${{ !inputs.terminal_only && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:

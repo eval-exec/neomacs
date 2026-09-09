@@ -310,6 +310,35 @@ mod tests {
 
     #[test]
     #[ignore = "requires a native Windows console; CI runs in CREATE_NEW_CONSOLE"]
+    fn native_vt_console_negotiates_renders_and_restores_output_mode() {
+        let original = ScreenBuffer::current().unwrap();
+        let original_mode = ConsoleMode::from(original.handle().clone()).mode().unwrap();
+        let mut session = Session::new().unwrap();
+        assert!(session.vt, "modern Windows CI must support the VT path");
+        assert_eq!(
+            ConsoleMode::from(original.handle().clone()).mode().unwrap(),
+            original_mode
+        );
+        session.enter().unwrap();
+        let mode = ConsoleMode::from(original.handle().clone()).mode().unwrap();
+        assert_ne!(mode & VIRTUAL_TERMINAL_PROCESSING, 0);
+        session
+            .console()
+            .write_char_buffer(b"\x1b[2;3H\x1b[38;2;1;2;3mA\x1b[0m")
+            .unwrap();
+        let active = ScreenBuffer::current().unwrap();
+        let info = active.info().unwrap();
+        assert_eq!(info.cursor_pos().x, info.terminal_window().left + 3);
+        assert_eq!(info.cursor_pos().y, info.terminal_window().top + 1);
+        session.leave().unwrap();
+        assert_eq!(
+            ConsoleMode::from(original.handle().clone()).mode().unwrap(),
+            original_mode
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a native Windows console; CI runs in CREATE_NEW_CONSOLE"]
     fn native_legacy_console_restores_the_original_screen_and_mode() {
         let mut session = Session::new().unwrap();
         let original = session.original.info().unwrap();
