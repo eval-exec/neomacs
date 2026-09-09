@@ -16,7 +16,7 @@ use neovm_core::window::GuiFrameGeometryHints;
 use std::sync::{Arc, Mutex};
 use winit::keyboard::{Key, NamedKey};
 
-fn make_test_app() -> RenderApp {
+pub(super) fn make_test_app() -> RenderApp {
     let comms = ThreadComms::new();
     let (_emacs, render) = comms.split();
     RenderApp::new(

@@ -220,10 +220,16 @@ fn inject_root_face_color<'a>(
     // The rect goes in first: the attribute splice below shifts later
     // indices, while this position (just past the root's `>`) stays put
     // relative to the tag itself.
-    if painted.get(geometry.start_tag_insert_pos) == Some(&b'>') {
+    let background = match colors.background_policy() {
+        neomacs_display_protocol::ImageBackgroundPolicy::FaceColor => Some(colors.background()),
+        neomacs_display_protocol::ImageBackgroundPolicy::Transparent => None,
+    };
+    if let Some(background) = background
+        && painted.get(geometry.start_tag_insert_pos) == Some(&b'>')
+    {
         let rect = format!(
             "<rect width=\"100%\" height=\"100%\" fill=\"#{:06x}\"/>",
-            colors.background().rgb24()
+            background.rgb24()
         );
         painted.splice(
             geometry.start_tag_insert_pos + 1..geometry.start_tag_insert_pos + 1,

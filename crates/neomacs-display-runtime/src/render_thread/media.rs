@@ -566,10 +566,22 @@ impl RenderApp {
         // size, never the previous presentation's snapshot.
         self.publish_image_cache_usage();
         for event in events {
-            let event = publish_image_cache_event(&self.image_metadata, event);
-            self.comms
-                .send_input(crate::thread_comm::InputEvent::ImageStateChanged { event });
+            self.handle_image_event(event);
         }
+    }
+
+    pub(super) fn handle_image_event(&mut self, event: neomacs_renderer_wgpu::ImageCacheEvent) {
+        let event = publish_image_cache_event(&self.image_metadata, event);
+        if self
+            .toolbar
+            .textures()
+            .values()
+            .any(|image| *image == event.image())
+        {
+            self.frame_windows.mark_top_level_dirty();
+        }
+        self.comms
+            .send_input(crate::thread_comm::InputEvent::ImageStateChanged { event });
     }
 
     /// Publish the complete set of image identities which can still be drawn.
@@ -580,7 +592,7 @@ impl RenderApp {
         for pending in self.pending_child_frames.values() {
             retained.extend(pending.referenced_images().iter());
         }
-        retained.extend(self.toolbar.icon_textures.values().copied());
+        retained.extend(self.toolbar.textures().values().copied());
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.synchronize_retained_images(retained);
         }

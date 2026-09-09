@@ -315,6 +315,10 @@ pub struct ToolBarContent {
 }
 
 impl ToolBarContent {
+    pub fn icon_style(&self) -> crate::ToolBarIconStyle {
+        crate::ToolBarIconStyle::from_chrome_face(self.icon_size, self.foreground, self.background)
+    }
+
     pub fn new(
         items: Vec<PositionedChromeItem<ToolBarItem>>,
         foreground: Color,
@@ -369,6 +373,14 @@ pub struct CompactBarContent {
 }
 
 impl CompactBarContent {
+    pub fn icon_style(&self) -> crate::ToolBarIconStyle {
+        crate::ToolBarIconStyle::from_chrome_face(
+            self.icon_size,
+            self.tool_foreground,
+            self.tool_background,
+        )
+    }
+
     pub fn new(
         menu_items: Vec<PositionedChromeItem<MenuBarItem>>,
         tool_items: Vec<PositionedChromeItem<ToolBarItem>>,

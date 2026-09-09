@@ -353,6 +353,7 @@ impl RenderApp {
         }
 
         self.poll_frame();
+        self.synchronize_toolbar_resources();
         #[cfg(feature = "webview")]
         self.synchronize_webview_presentations();
 

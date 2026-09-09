@@ -294,6 +294,180 @@ fn px(buf: &[u8], x: u32, y: u32) -> [u8; 4] {
 }
 
 #[test]
+fn compact_toolbar_paints_its_own_face_background() {
+    use neomacs_display_protocol::{
+        BandRect, ChromeAction, CompactBarContent, PositionedChromeItem, ToolBarItem,
+        ToolBarItemType,
+    };
+    let Some(mut h) = try_harness() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+    let item = ToolBarItem {
+        index: 0,
+        key: "open".into(),
+        image: None,
+        label: String::new(),
+        help: String::new(),
+        enabled: true,
+        selected: false,
+        item_type: ToolBarItemType::Button,
+        wrap: false,
+    };
+    let content = CompactBarContent::new(
+        vec![],
+        vec![PositionedChromeItem::new(
+            BandRect::new(32.0, 0.0, 24.0, 32.0).unwrap(),
+            item,
+            ChromeAction::InvokeToolBarItem { index: 0 },
+        )],
+        Color::WHITE,
+        Color::RED,
+        Color::WHITE,
+        Color::GREEN,
+        16,
+        4,
+    );
+    h.renderer.render_compact_bar(
+        &h.view,
+        &content,
+        FrameRect::new(0.0, 0.0, W as f32, 32.0).unwrap(),
+        &Default::default(),
+        None,
+        None,
+        None,
+        None,
+        &mut h.atlas,
+        W,
+        H,
+    );
+    let pixels = read_back(&h);
+    assert_eq!(px(&pixels, 8, 8), [255, 0, 0, 255]);
+    assert_eq!(px(&pixels, 80, 8), [0, 255, 0, 255]);
+}
+
+#[test]
+fn toolbar_icon_load_and_draw_share_face_alpha_and_fractional_scale() {
+    use neomacs_display_protocol::{
+        BandRect, ChromeAction, PositionedChromeItem, ToolBarContent, ToolBarImageSource,
+        ToolBarItem, ToolBarItemType,
+    };
+    let Some(mut h) = try_harness() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+    let source = ToolBarImageSource::File {
+        path: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/toolbar-symbolic.svg"
+        )
+        .into(),
+    };
+    let item = ToolBarItem {
+        index: 0,
+        key: "open".into(),
+        image: Some(source.clone()),
+        label: String::new(),
+        help: String::new(),
+        enabled: true,
+        selected: false,
+        item_type: ToolBarItemType::Button,
+        wrap: false,
+    };
+    let content = ToolBarContent::new(
+        vec![PositionedChromeItem::new(
+            BandRect::new(0.0, 0.0, 32.0, 32.0).unwrap(),
+            item,
+            ChromeAction::InvokeToolBarItem { index: 0 },
+        )],
+        Color::RED,
+        Color::GREEN,
+        24,
+        4,
+    );
+    let key = content
+        .icon_style()
+        .realize(source, DeviceScale::new(1.5).unwrap());
+    // Loading must not depend on whichever window the renderer drew last.
+    h.renderer.set_scale_factor(2.0);
+    let bytes_before = h.renderer.image_cache_usage().texture_bytes();
+    let image = h.renderer.load_toolbar_icon(&key);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !h.renderer.is_image_ready(image) && std::time::Instant::now() < deadline {
+        h.renderer.process_pending_images();
+        std::thread::yield_now();
+    }
+    assert!(h.renderer.is_image_ready(image));
+    assert_eq!(
+        h.renderer.get_image_size(image),
+        Some((24, 24)),
+        "logical layout stays fixed"
+    );
+    assert_eq!(
+        h.renderer.image_cache_usage().texture_bytes() - bytes_before,
+        36 * 36 * 4,
+        "the GPU texture uses the requested 1.5x scale, not the ambient 2x scale"
+    );
+    let textures = std::collections::HashMap::from([(key, image)]);
+    h.renderer.set_scale_factor(1.5);
+    h.renderer.render_toolbar(
+        &h.view,
+        &content,
+        FrameRect::new(0.0, 0.0, 64.0, 32.0).unwrap(),
+        &textures,
+        None,
+        None,
+        W,
+        H,
+    );
+    let pixels = read_back(&h);
+    assert_eq!(
+        px(&pixels, 12, 24),
+        [255, 0, 0, 255],
+        "symbolic face foreground"
+    );
+    assert_eq!(
+        px(&pixels, 24, 24),
+        [0, 0, 255, 255],
+        "intrinsic artwork color"
+    );
+    assert_eq!(
+        px(&pixels, 36, 24),
+        [0, 255, 0, 255],
+        "toolbar through transparent icon"
+    );
+
+    // Compact chrome must look up the tool face, not its distinct menu face.
+    let compact = neomacs_display_protocol::CompactBarContent::new(
+        vec![],
+        content.items().to_vec(),
+        Color::WHITE,
+        Color::BLACK,
+        Color::RED,
+        Color::GREEN,
+        24,
+        4,
+    );
+    h.renderer.render_compact_bar(
+        &h.view,
+        &compact,
+        FrameRect::new(0.0, 0.0, 64.0, 32.0).unwrap(),
+        &textures,
+        None,
+        None,
+        None,
+        None,
+        &mut h.atlas,
+        W,
+        H,
+    );
+    let compact_pixels = read_back(&h);
+    for x in [12, 24, 36] {
+        assert_eq!(px(&compact_pixels, x, 24), px(&pixels, x, 24));
+    }
+}
+
+#[test]
 fn offscreen_frame_renders_background_and_cursor() {
     let Some(mut h) = try_harness() else {
         eprintln!("SKIP: no GPU adapter");

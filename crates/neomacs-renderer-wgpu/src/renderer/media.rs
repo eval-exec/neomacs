@@ -76,6 +76,21 @@ impl WgpuRenderer {
             .load_file(path, size, rotation, colors, raster_scale)
     }
 
+    /// Realize chrome using its owning window's scale, not the last drawn window.
+    pub fn load_toolbar_icon(&mut self, key: &neomacs_display_protocol::ToolBarIconKey) -> ImageId {
+        match key.source() {
+            neomacs_display_protocol::ToolBarImageSource::File { path } => {
+                self.caches.image.load_file(
+                    path,
+                    key.size_spec(),
+                    ImageRotation::None,
+                    key.colors(),
+                    key.realization().device_scale(),
+                )
+            }
+        }
+    }
+
     /// Load image from file path with a pre-allocated ID (for threaded mode)
     pub fn load_image_file_with_id(
         &mut self,

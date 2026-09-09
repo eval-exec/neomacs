@@ -226,14 +226,7 @@ impl RenderApp {
             .populate_glyph_atlas(&device, pending_scale_factor);
         self.install_backend_profile(backend_profile);
 
-        let pending_frame_chrome = self
-            .frame_windows
-            .primary_window()
-            .and_then(|ws| ws.render.compositor.current_frame.as_ref())
-            .map(|frame| frame.frame_chrome.clone());
-        if let Some(frame_chrome) = pending_frame_chrome.as_ref() {
-            self.sync_frame_chrome_assets(frame_chrome);
-        }
+        self.synchronize_toolbar_resources();
 
         #[cfg(feature = "webview")]
         {
@@ -300,9 +293,9 @@ impl RenderApp {
         self.frame_windows.clear_gpu_resident_state();
 
         // Toolbar icon ids point into the dropped renderer's image cache;
-        // clear them so sync_frame_chrome_assets (run by init_wgpu below)
+        // clear them so synchronize_toolbar_resources (run by init_wgpu below)
         // re-uploads the icons into the new renderer.
-        self.toolbar.icon_textures.clear();
+        self.toolbar.forget_after_device_loss();
 
         // Old instance/adapter/device/queue handles. The old per-window
         // surfaces still hold internal references; they die as they are

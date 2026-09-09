@@ -37,6 +37,7 @@ mod thread_handle;
 #[cfg(test)]
 #[path = "time_discipline_test.rs"]
 mod time_discipline_test;
+mod toolbar;
 mod transitions;
 mod ui_commands;
 mod window_commands;

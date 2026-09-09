@@ -1,44 +1,9 @@
 //! UI overlay, animation, and effect render commands.
 
 use super::RenderApp;
-use crate::thread_comm::{ConfigCommand, ToolBarItem, UiCommand};
-use neomacs_display_protocol::ToolBarImageSource;
-use neomacs_display_protocol::{AxisSize, ImageColorContext, ImageRotation, ImageSizeSpec};
+use crate::thread_comm::{ConfigCommand, UiCommand};
 
 impl RenderApp {
-    pub(super) fn ensure_toolbar_icon_textures(&mut self, items: &[ToolBarItem], icon_size: u32) {
-        for item in items {
-            if item.is_separator() {
-                continue;
-            }
-            let Some(image) = item.image.as_ref() else {
-                continue;
-            };
-            let key = (image.clone(), icon_size);
-            if self.toolbar.icon_textures.contains_key(&key) {
-                continue;
-            }
-            let Some(renderer) = self.renderer.as_mut() else {
-                continue;
-            };
-
-            let id = match image {
-                ToolBarImageSource::File { path } => renderer.load_image_file(
-                    path,
-                    ImageSizeSpec::new(AxisSize::AtMost(icon_size), AxisSize::AtMost(icon_size)),
-                    ImageRotation::None,
-                    ImageColorContext::default(),
-                ),
-            };
-            self.toolbar.icon_textures.insert(key, id);
-            tracing::debug!(
-                "Loaded toolbar image '{}' as image_id={}",
-                image.cache_key(),
-                id
-            );
-        }
-    }
-
     pub(super) fn handle_ui(&mut self, cmd: UiCommand) {
         match cmd {
             UiCommand::ShowPopupMenu {

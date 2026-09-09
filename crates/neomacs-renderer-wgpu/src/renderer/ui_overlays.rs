@@ -12,7 +12,10 @@ use neomacs_display_protocol::font::GlyphSampling;
 use neomacs_display_protocol::frame_chrome::{BandRect, FrameRect, PositionedChromeItem};
 use neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer;
 use neomacs_display_protocol::types::{Color, FaceId, ImageId};
-use neomacs_display_protocol::{MenuBarItem, ToolBarImageSource, ToolBarItem};
+use neomacs_display_protocol::{
+    CompactBarContent, DeviceScale, MenuBarItem, ToolBarContent, ToolBarIconKey, ToolBarIconStyle,
+    ToolBarImageSource,
+};
 use std::collections::HashMap;
 
 pub(super) fn placed_chrome_item_bounds(
@@ -25,11 +28,14 @@ pub(super) fn placed_chrome_item_bounds(
 }
 
 pub(super) fn toolbar_texture_id(
-    icon_textures: &HashMap<(ToolBarImageSource, u32), ImageId>,
+    icon_textures: &HashMap<ToolBarIconKey, ImageId>,
     image: &ToolBarImageSource,
-    icon_size: u32,
+    style: ToolBarIconStyle,
+    scale: DeviceScale,
 ) -> Option<ImageId> {
-    icon_textures.get(&(image.clone(), icon_size)).copied()
+    icon_textures
+        .get(&style.realize(image.clone(), scale))
+        .copied()
 }
 
 impl WgpuRenderer {
@@ -1823,24 +1829,27 @@ impl WgpuRenderer {
     pub fn render_compact_bar(
         &mut self,
         view: &wgpu::TextureView,
-        menu_items: &[PositionedChromeItem<MenuBarItem>],
-        tool_items: &[PositionedChromeItem<ToolBarItem>],
+        content: &CompactBarContent,
         band: FrameRect,
-        menu_fg: (f32, f32, f32),
-        menu_bg: (f32, f32, f32),
-        tool_fg: (f32, f32, f32),
-        _tool_bg: (f32, f32, f32),
-        icon_textures: &HashMap<(ToolBarImageSource, u32), ImageId>,
+        icon_textures: &HashMap<ToolBarIconKey, ImageId>,
         menu_hovered: Option<u32>,
         menu_active: Option<u32>,
         tool_hovered: Option<u32>,
         tool_pressed: Option<u32>,
-        icon_size: u32,
-        padding: u32,
         glyph_atlas: &mut WgpuGlyphAtlas,
         surface_width: u32,
         surface_height: u32,
     ) {
+        let menu_items = content.menu_items();
+        let tool_items = content.tool_items();
+        let rgb = |color: Color| (color.r, color.g, color.b);
+        let menu_fg = rgb(content.menu_foreground());
+        let menu_bg = rgb(content.menu_background());
+        let tool_fg = rgb(content.tool_foreground());
+        let icon_size = content.icon_size();
+        let padding = content.padding();
+        let icon_style = content.icon_style();
+        let device_scale = DeviceScale::new(self.scale_factor).expect("validated renderer scale");
         self.arenas.image.begin_frame();
         let logical_w = surface_width as f32 / self.scale_factor;
         let logical_h = surface_height as f32 / self.scale_factor;
@@ -1868,6 +1877,20 @@ impl WgpuRenderer {
             band.height(),
             &bg_color,
         );
+
+        // The shared band still has two faces. The tool segment starts at its
+        // first published item and owns the remaining trailing background.
+        if let Some(first_tool) = tool_items.first() {
+            let bounds = placed_chrome_item_bounds(band, first_tool.local_bounds());
+            self.add_rect(
+                &mut rect_verts,
+                bounds.x,
+                band.y(),
+                (band.x() + band.width() - bounds.x).max(0.0),
+                band.height(),
+                &content.tool_background().srgb_to_linear(),
+            );
+        }
 
         for positioned in menu_items {
             let item = positioned.item();
@@ -2030,7 +2053,8 @@ impl WgpuRenderer {
                 let alpha = if item.enabled { 1.0 } else { 0.4 };
                 let tint = [1.0, 1.0, 1.0, alpha];
                 if let Some(image) = item.image.as_ref()
-                    && let Some(image_id) = toolbar_texture_id(icon_textures, image, icon_size)
+                    && let Some(image_id) =
+                        toolbar_texture_id(icon_textures, image, icon_style, device_scale)
                     && let Some(cached) = self.caches.image.get(image_id)
                 {
                     let bg = cached.bind_group.clone();
@@ -2130,18 +2154,22 @@ impl WgpuRenderer {
     pub fn render_toolbar(
         &mut self,
         view: &wgpu::TextureView,
-        items: &[PositionedChromeItem<ToolBarItem>],
+        content: &ToolBarContent,
         band: FrameRect,
-        fg: (f32, f32, f32),
-        bg: (f32, f32, f32),
-        icon_textures: &HashMap<(ToolBarImageSource, u32), ImageId>,
+        icon_textures: &HashMap<ToolBarIconKey, ImageId>,
         hovered: Option<u32>,
         pressed: Option<u32>,
-        icon_size: u32,
-        padding: u32,
         surface_width: u32,
         surface_height: u32,
     ) {
+        let items = content.items();
+        let rgb = |color: Color| (color.r, color.g, color.b);
+        let fg = rgb(content.foreground());
+        let bg = rgb(content.background());
+        let icon_size = content.icon_size();
+        let padding = content.padding();
+        let icon_style = content.icon_style();
+        let device_scale = DeviceScale::new(self.scale_factor).expect("validated renderer scale");
         self.arenas.image.begin_frame();
         let logical_w = surface_width as f32 / self.scale_factor;
         let logical_h = surface_height as f32 / self.scale_factor;
@@ -2282,7 +2310,8 @@ impl WgpuRenderer {
                 let alpha = if item.enabled { 1.0 } else { 0.4 };
                 let tint = [1.0, 1.0, 1.0, alpha];
                 if let Some(image) = item.image.as_ref()
-                    && let Some(image_id) = toolbar_texture_id(icon_textures, image, icon_size)
+                    && let Some(image_id) =
+                        toolbar_texture_id(icon_textures, image, icon_style, device_scale)
                     && let Some(cached) = self.caches.image.get(image_id)
                 {
                     let bg = cached.bind_group.clone();

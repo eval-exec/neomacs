@@ -776,7 +776,7 @@ impl ImageCache {
         }
         // Fallback: try XBM
         let fg = colors.foreground().rgba8();
-        let bg = colors.background().rgba8();
+        let bg = colors.background_rgba8();
         if let Some(result) = crate::xbm::decode_xbm_file(Path::new(path), fg, bg) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
@@ -828,7 +828,7 @@ impl ImageCache {
         }
         // Fallback: try XBM
         let fg = colors.foreground().rgba8();
-        let bg = colors.background().rgba8();
+        let bg = colors.background_rgba8();
         if let Some(result) = crate::xbm::decode_xbm_data(data, fg, bg) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,

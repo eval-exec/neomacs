@@ -289,6 +289,28 @@ impl ImageRgb {
 pub struct ImageColorContext {
     foreground: ImageRgb,
     background: ImageRgb,
+    #[serde(default)]
+    background_policy: ImageBackgroundPolicy,
+}
+
+/// Editor images use GNU's face-colored wrapper; chrome icons preserve alpha
+/// so the toolbar and hover/pressed backgrounds remain visible behind them.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::EnumIter,
+)]
+pub enum ImageBackgroundPolicy {
+    #[default]
+    FaceColor,
+    Transparent,
 }
 
 impl ImageColorContext {
@@ -297,6 +319,7 @@ impl ImageColorContext {
         Self {
             foreground: ImageRgb::from_pixel(foreground),
             background: ImageRgb::from_pixel(background),
+            background_policy: ImageBackgroundPolicy::FaceColor,
         }
     }
 
@@ -309,12 +332,29 @@ impl ImageColorContext {
     pub const fn background(self) -> ImageRgb {
         self.background
     }
+
+    #[must_use]
+    pub const fn with_background_policy(mut self, policy: ImageBackgroundPolicy) -> Self {
+        self.background_policy = policy;
+        self
+    }
+
+    pub const fn background_policy(self) -> ImageBackgroundPolicy {
+        self.background_policy
+    }
+
+    pub const fn background_rgba8(self) -> [u8; 4] {
+        match self.background_policy {
+            ImageBackgroundPolicy::FaceColor => self.background.rgba8(),
+            ImageBackgroundPolicy::Transparent => [0; 4],
+        }
+    }
 }
 
 impl Default for ImageColorContext {
     /// Preserve the renderer's historical visible fallback for callers that
-    /// have no Emacs face, such as raw pixels and native toolbar resources.
-    /// Redisplay image requests carry their resolved face colors explicitly.
+    /// have no Emacs face, such as raw pixels. Redisplay and toolbar image
+    /// requests carry their resolved face colors explicitly.
     fn default() -> Self {
         Self::from_pixels(0x00ff_ffff, 0x0000_0000)
     }

@@ -1,7 +1,7 @@
 use super::ui_overlays::{placed_chrome_item_bounds, toolbar_texture_id};
-use neomacs_display_protocol::ToolBarImageSource;
 use neomacs_display_protocol::frame_chrome::{BandRect, FrameRect};
 use neomacs_display_protocol::types::{ImageId, Rect};
+use neomacs_display_protocol::{Color, DeviceScale, ToolBarIconStyle, ToolBarImageSource};
 use std::collections::HashMap;
 
 #[test]
@@ -21,17 +21,70 @@ fn toolbar_texture_lookup_is_scoped_by_icon_size() {
         path: "open.xpm".to_string(),
     };
     let textures = HashMap::from([
-        ((image.clone(), 24), ImageId::new(7)),
-        ((image.clone(), 48), ImageId::new(9)),
+        (
+            ToolBarIconStyle::from_chrome_face(24, Color::WHITE, Color::BLACK)
+                .realize(image.clone(), DeviceScale::ONE),
+            ImageId::new(7),
+        ),
+        (
+            ToolBarIconStyle::from_chrome_face(48, Color::WHITE, Color::BLACK)
+                .realize(image.clone(), DeviceScale::ONE),
+            ImageId::new(9),
+        ),
     ]);
 
     assert_eq!(
-        toolbar_texture_id(&textures, &image, 24),
+        toolbar_texture_id(
+            &textures,
+            &image,
+            ToolBarIconStyle::from_chrome_face(24, Color::WHITE, Color::BLACK),
+            DeviceScale::ONE
+        ),
         Some(ImageId::new(7))
     );
     assert_eq!(
-        toolbar_texture_id(&textures, &image, 48),
+        toolbar_texture_id(
+            &textures,
+            &image,
+            ToolBarIconStyle::from_chrome_face(48, Color::WHITE, Color::BLACK),
+            DeviceScale::ONE
+        ),
         Some(ImageId::new(9))
     );
-    assert_eq!(toolbar_texture_id(&textures, &image, 32), None);
+    assert_eq!(
+        toolbar_texture_id(
+            &textures,
+            &image,
+            ToolBarIconStyle::from_chrome_face(32, Color::WHITE, Color::BLACK),
+            DeviceScale::ONE
+        ),
+        None
+    );
+    assert_eq!(
+        toolbar_texture_id(
+            &textures,
+            &image,
+            ToolBarIconStyle::from_chrome_face(24, Color::BLACK, Color::BLACK),
+            DeviceScale::ONE
+        ),
+        None
+    );
+    assert_eq!(
+        toolbar_texture_id(
+            &textures,
+            &image,
+            ToolBarIconStyle::from_chrome_face(24, Color::WHITE, Color::WHITE),
+            DeviceScale::ONE
+        ),
+        None
+    );
+    assert_eq!(
+        toolbar_texture_id(
+            &textures,
+            &image,
+            ToolBarIconStyle::from_chrome_face(24, Color::WHITE, Color::BLACK),
+            DeviceScale::new(1.5).unwrap()
+        ),
+        None
+    );
 }

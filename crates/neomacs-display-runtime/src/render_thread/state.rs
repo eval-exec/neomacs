@@ -15,7 +15,7 @@ pub(super) use neomacs_display_protocol::PointerAppearancePhase;
 use neomacs_display_protocol::{
     EffectsConfig, FrameGlyphBuffer, FrameRect, ImageCacheUsage, ImageId, ImageLoadToken,
     InteractionId, PointerAppearanceId, PointerAppearanceSelection, PresentationId,
-    PresentedResizeAxis, ToolBarImageSource, TransitionPolicy, VisualConfig,
+    PresentedResizeAxis, TransitionPolicy, VisualConfig,
 };
 use neomacs_renderer_wgpu::WgpuRenderer;
 use neovm_core::emacs_core::image_catalog::ResolvedImageMetadata;
@@ -25,6 +25,7 @@ use super::frame_windows::{
     FrameLifecycle, GuiFrameRenderState, GuiFrameWindowManager, GuiFrameWindowState,
 };
 use super::render_quality::{RenderBackendProfile, RenderQualityPolicy};
+pub(super) use super::toolbar::ToolbarResources;
 
 /// Decoded image facts shared from the render thread to the evaluator.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -775,11 +776,6 @@ impl Default for ChildFrameStyle {
             shadow_opacity: 0.3,
         }
     }
-}
-
-#[derive(Default)]
-pub(super) struct ToolbarResources {
-    pub(super) icon_textures: HashMap<(ToolBarImageSource, u32), ImageId>,
 }
 
 pub(super) struct RenderGpuContext {

@@ -20,8 +20,10 @@
 
 use crate::render_thread::frame_windows::{GuiFrameNativeWindowState, GuiFrameRenderState};
 use crate::render_thread::state::{ToolbarResources, WindowChrome};
-use crate::thread_comm::{MenuBarItem, ToolBarItem};
-use neomacs_display_protocol::frame_chrome::{FrameChromeContent, FrameRect, PositionedChromeItem};
+use crate::thread_comm::MenuBarItem;
+use neomacs_display_protocol::frame_chrome::{
+    CompactBarContent, FrameChromeContent, FrameRect, PositionedChromeItem, ToolBarContent,
+};
 use neomacs_renderer_wgpu::WgpuRenderer;
 
 /// Flatten a protocol [`Color`] into the legacy `(r, g, b)` tuple the
@@ -51,26 +53,15 @@ struct GuiFrameMenuBarOverlay<'a> {
 }
 
 struct GuiFrameToolBarOverlay<'a> {
-    items: &'a [PositionedChromeItem<ToolBarItem>],
+    content: &'a ToolBarContent,
     bounds: FrameRect,
-    fg: (f32, f32, f32),
-    bg: (f32, f32, f32),
     toolbar: &'a ToolbarResources,
-    icon_size: u32,
-    padding: u32,
 }
 
 struct GuiFrameCompactBarOverlay<'a> {
-    menu_items: &'a [PositionedChromeItem<MenuBarItem>],
-    tool_items: &'a [PositionedChromeItem<ToolBarItem>],
+    content: &'a CompactBarContent,
     bounds: FrameRect,
-    menu_fg: (f32, f32, f32),
-    menu_bg: (f32, f32, f32),
-    tool_fg: (f32, f32, f32),
-    tool_bg: (f32, f32, f32),
     toolbar: &'a ToolbarResources,
-    icon_size: u32,
-    padding: u32,
 }
 
 /// Draw the titlebar and whichever bars this presentation declares, in the
@@ -114,25 +105,14 @@ pub(super) fn draw(
         bg: color_rgb_tuple(menu_bar.background()),
     });
     let tool_bar = tool_bar.map(|(bounds, tool_bar)| GuiFrameToolBarOverlay {
-        items: tool_bar.items(),
+        content: tool_bar,
         bounds,
-        fg: color_rgb_tuple(tool_bar.foreground()),
-        bg: color_rgb_tuple(tool_bar.background()),
         toolbar,
-        icon_size: tool_bar.icon_size(),
-        padding: tool_bar.padding(),
     });
     let compact_bar = compact_bar.map(|(bounds, compact_bar)| GuiFrameCompactBarOverlay {
-        menu_items: compact_bar.menu_items(),
-        tool_items: compact_bar.tool_items(),
+        content: compact_bar,
         bounds,
-        menu_fg: color_rgb_tuple(compact_bar.menu_foreground()),
-        menu_bg: color_rgb_tuple(compact_bar.menu_background()),
-        tool_fg: color_rgb_tuple(compact_bar.tool_foreground()),
-        tool_bg: color_rgb_tuple(compact_bar.tool_background()),
         toolbar,
-        icon_size: compact_bar.icon_size(),
-        padding: compact_bar.padding(),
     });
 
     let interaction = render.chrome.interaction;
@@ -172,15 +152,11 @@ pub(super) fn draw(
     if let Some(tool_bar) = tool_bar {
         renderer.render_toolbar(
             surface_view,
-            tool_bar.items,
+            tool_bar.content,
             tool_bar.bounds,
-            tool_bar.fg,
-            tool_bar.bg,
-            &tool_bar.toolbar.icon_textures,
+            tool_bar.toolbar.textures(),
             interaction.toolbar_hovered,
             interaction.toolbar_pressed,
-            tool_bar.icon_size,
-            tool_bar.padding,
             width,
             height,
         );
@@ -189,20 +165,13 @@ pub(super) fn draw(
     if let Some(compact_bar) = compact_bar {
         renderer.render_compact_bar(
             surface_view,
-            compact_bar.menu_items,
-            compact_bar.tool_items,
+            compact_bar.content,
             compact_bar.bounds,
-            compact_bar.menu_fg,
-            compact_bar.menu_bg,
-            compact_bar.tool_fg,
-            compact_bar.tool_bg,
-            &compact_bar.toolbar.icon_textures,
+            compact_bar.toolbar.textures(),
             interaction.compact_bar_menu_hovered,
             interaction.compact_bar_menu_active,
             interaction.compact_bar_tool_hovered,
             interaction.compact_bar_tool_pressed,
-            compact_bar.icon_size,
-            compact_bar.padding,
             glyph_atlas,
             width,
             height,

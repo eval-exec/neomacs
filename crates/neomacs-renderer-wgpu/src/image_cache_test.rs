@@ -6,6 +6,65 @@ use std::io::Cursor;
 use std::num::NonZeroUsize;
 
 #[test]
+fn toolbar_svg_keeps_alpha_and_symbolic_foreground_without_recoloring_artwork() {
+    let data = br##"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="1"><rect width="1" height="1" fill="currentColor"/><rect x="1" width="1" height="1" fill="#123456"/></svg>"##;
+    let pixels = decode_toolbar_pixels(data);
+    assert_eq!(&pixels[..4], &[255, 0, 0, 255]);
+    assert_eq!(&pixels[4..8], &[0x12, 0x34, 0x56, 255]);
+    assert_eq!(&pixels[8..12], &[0, 0, 0, 0]);
+}
+
+#[test]
+fn toolbar_xbm_set_bits_use_foreground_and_unset_bits_are_transparent() {
+    let data = b"#define icon_width 2\n#define icon_height 1\nstatic unsigned char icon_bits[] = { 0x01 };";
+    assert_eq!(decode_toolbar_pixels(data), [255, 0, 0, 255, 0, 0, 0, 0]);
+}
+
+#[test]
+fn toolbar_xpm_keeps_intrinsic_colors_and_transparency() {
+    let data = br##"/* XPM */
+static char *icon[] = {
+"2 1 2 1",
+". c #123456",
+"  c None",
+". "};"##;
+    assert_eq!(
+        decode_toolbar_pixels(data),
+        [0x12, 0x34, 0x56, 255, 0, 0, 0, 0]
+    );
+}
+
+#[test]
+fn toolbar_png_keeps_intrinsic_colors_and_alpha() {
+    let pixels = vec![0x12, 0x34, 0x56, 255, 0, 0, 255, 128, 0, 0, 0, 0];
+    let data = png_bytes(pixels.clone(), 3, 1);
+    assert_eq!(decode_toolbar_pixels(&data), pixels);
+}
+
+fn decode_toolbar_pixels(data: &[u8]) -> Vec<u8> {
+    let pixels = ImageCache::decode_data(
+        data,
+        ImageSizeSpec::default(),
+        ImageRotation::None,
+        ImageColorContext::from_pixels(0xff0000, 0xabcdef)
+            .with_background_policy(neomacs_display_protocol::ImageBackgroundPolicy::Transparent),
+        ImageRealization::with_device_scale(1.0, 1.0),
+        ImageMaskPolicy::Preserve,
+        ImageFrameIndex::default(),
+        crate::svg::SvgResourceContext::Isolated,
+        &ImageSequenceCache::new(),
+        ImageSequenceId::new(1).unwrap(),
+    )
+    .expect("decode toolbar SVG");
+    // Return the public decoder result's unpremultiplied RGBA payload.
+    ImageCache::decoded_image(
+        ImageLoadToken::new(ImageId::new(1), ImageLoadAttempt::new(1).unwrap()),
+        pixels,
+    )
+    .data
+}
+
+#[test]
 fn image_decoder_pool_is_nonempty_and_bounded_on_large_hosts() {
     let one = NonZeroUsize::new(1).unwrap();
     let large_host = NonZeroUsize::new(256).unwrap();

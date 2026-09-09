@@ -6,7 +6,6 @@ use super::frame_windows::{
 };
 use crate::core::types::DisplayFrameId;
 use crate::render_thread::cursor::{CursorConfigSnapshot, CursorTarget};
-use neomacs_display_protocol::frame_chrome::{FrameChrome, FrameChromeContent};
 
 #[cfg(feature = "webview")]
 fn collect_frame_webviews(
@@ -488,31 +487,6 @@ impl RenderApp {
         Self::update_frame_window_ime_cursor_area_if_needed(window_state, &cursor_sync.target);
     }
 
-    pub(super) fn sync_frame_chrome_assets(&mut self, frame_chrome: &FrameChrome) {
-        for band in frame_chrome.bands() {
-            let (icon_size, items) = match band.content() {
-                FrameChromeContent::ToolBar(content) => (
-                    content.icon_size(),
-                    content
-                        .items()
-                        .iter()
-                        .map(|item| item.item().clone())
-                        .collect::<Vec<_>>(),
-                ),
-                FrameChromeContent::CompactBar(content) => (
-                    content.icon_size(),
-                    content
-                        .tool_items()
-                        .iter()
-                        .map(|item| item.item().clone())
-                        .collect::<Vec<_>>(),
-                ),
-                _ => continue,
-            };
-            self.ensure_toolbar_icon_textures(&items, icon_size);
-        }
-    }
-
     /// Get latest frame from Emacs (non-blocking).
     pub(super) fn poll_frame(&mut self) {
         self.frame_windows.tick_top_level_child_frames();
@@ -546,7 +520,6 @@ impl RenderApp {
                     continue;
                 }
                 made_progress = true;
-                self.sync_frame_chrome_assets(&display_state.frame_chrome);
 
                 // Materialize FrameDisplayState → FrameGlyphBuffer for the
                 // existing rendering code.  The layout engine populates

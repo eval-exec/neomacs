@@ -340,6 +340,43 @@ fn tty_menu_bar_keeps_all_items_with_gnu_one_cell_gutter() {
 }
 
 #[test]
+fn toolbar_layout_publishes_face_and_font_derived_icon_geometry() {
+    use neomacs_display_protocol::{AxisSize, DeviceScale, ImageSizeSpec, ToolBarImageSource};
+    let fg = Color::rgb(0.2, 0.4, 0.6);
+    let bg = Color::rgb(0.6, 0.4, 0.2);
+    let normal = layout_gui_tool_bar_content(vec![], 200.0, 34.0, fg, bg);
+    let compact = layout_gui_compact_bar_content(
+        vec![],
+        vec![],
+        200.0,
+        34.0,
+        8.0,
+        Color::BLACK,
+        Color::WHITE,
+        fg,
+        bg,
+    );
+    assert_eq!(normal.icon_style(), compact.icon_style());
+    let source = ToolBarImageSource::File {
+        path: "open.svg".into(),
+    };
+    let original = normal
+        .icon_style()
+        .realize(source.clone(), DeviceScale::ONE);
+    assert_eq!(original.colors().foreground().rgb24(), 0x336699);
+    assert_eq!(original.colors().background().rgb24(), 0x996633);
+    assert_eq!(
+        original.size_spec(),
+        ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24))
+    );
+    let larger_font = layout_gui_tool_bar_content(vec![], 200.0, 50.0, fg, bg);
+    assert_ne!(
+        original,
+        larger_font.icon_style().realize(source, DeviceScale::ONE)
+    );
+}
+
+#[test]
 fn layout_gui_tool_bar_content_uses_one_height_policy() {
     let items = vec![
         ToolBarItem {
