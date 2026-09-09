@@ -922,6 +922,16 @@ impl<'a> TextRowSourceRenderState<'a> {
         }
     }
 
+    /// The concrete-font service, when this row measures with real font
+    /// geometry. `None` on terminal rows, where GNU's character width is one
+    /// cell and there is no font to re-measure.
+    pub(crate) fn concrete_font_metrics(&mut self) -> Option<&mut FontMetricsService> {
+        self.measurement_mode
+            .uses_concrete_font_geometry()
+            .then_some(self.font_metrics.as_mut())
+            .flatten()
+    }
+
     pub(crate) fn output_render(&mut self) -> TextRowOutputRenderState<'_> {
         self.output_render.reborrow()
     }

@@ -179,6 +179,7 @@ impl BufferSourceLoopRequestContext {
                 self.frame_background,
                 self.fill_column_indicator,
                 self.fill_column_indicator_char,
+                self.metrics.char_width(),
             ),
         )
     }

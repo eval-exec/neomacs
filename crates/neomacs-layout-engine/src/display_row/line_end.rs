@@ -253,6 +253,13 @@ pub(crate) struct LineEndFillGeometry {
     /// come from the extend face's own metrics, unlike the appended glyph's
     /// `LineEndContext::char_width`).
     pub(crate) fill_char_width: f32,
+    /// Character advance used to locate the fill-column indicator column.
+    /// GNU measures it from the DEFAULT face's font
+    /// (`fill_column_indicator_column` takes `default_face->font->average_width`,
+    /// src/xdisp.c:24540-24546), NOT from the face active at the line end, so a
+    /// line that ends in another font still puts the indicator at the same
+    /// column.
+    pub(crate) indicator_char_width: f32,
 }
 
 /// Face-resolution services the executor needs. The named-face lookups
@@ -386,7 +393,7 @@ fn resolve_indicator_fill<R: LineEndFaceResolver>(
     let indicator = ctx
         .indicator
         .expect("plan() emits IndicatorFill only with an indicator config");
-    let char_width = ctx.char_width;
+    let char_width = geometry.indicator_char_width.max(1.0);
     let indicator_px = geometry.content_x + indicator.col as f32 * char_width;
     // Positioning stays pixel-based: when the text ends exactly at the
     // indicator column, `from_x` may be a hair past `indicator_px`, so clamp

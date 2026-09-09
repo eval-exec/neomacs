@@ -137,3 +137,61 @@ fn extend_row_wraps_indicator_in_extend_stretches() {
     assert_eq!(glyphs[3].face_id, EXTEND_FACE, "tail keeps the highlight");
     assert_eq!(glyphs[3].pixel_width, 40.0);
 }
+
+struct TestFaces;
+
+impl super::LineEndFaceResolver for TestFaces {
+    fn trailing_whitespace_face_id(&mut self) -> FaceId {
+        unreachable!("no trailing-whitespace step in this test")
+    }
+
+    fn fill_column_indicator_face_id(
+        &mut self,
+        _extend_bg: Option<neomacs_display_protocol::types::Color>,
+    ) -> FaceId {
+        FCI_FACE
+    }
+}
+
+/// GNU locates the fill-column indicator column with the DEFAULT face's font
+/// width (`fill_column_indicator_column` is called with
+/// `default_face->font->average_width`, src/xdisp.c:24540-24546). A line that
+/// ends in another font -- a fixed-pitch `org-block` row, a `:height` run --
+/// must still put the indicator at the same column, so the position may not
+/// follow the face active at the line end.
+#[test]
+fn indicator_column_uses_the_default_face_advance_not_the_line_end_face() {
+    let ctx = super::LineEndContext {
+        newline_face_id: TEXT_FACE,
+        measurement_mode: crate::display_row::face_state::DisplayRowMeasurementMode::ConcreteFont,
+        pen_x: 8.0,
+        pen_col: 1,
+        right_edge_x: 400.0,
+        // The face active at the line end: 11px per cell.
+        char_width: 11.0,
+        indicator: Some(super::LineEndIndicator { col: 10, ch: '│' }),
+        extend: None,
+        frame_background: neomacs_display_protocol::types::Color::from_pixel(0x00FFFFFF),
+        trailing_whitespace_enabled: false,
+        box_vertical_edges: neomacs_display_protocol::face::BoxVerticalEdges::Neither,
+        box_run_membership: neomacs_display_protocol::face::BoxRunMembership::Unboxed,
+    };
+    let geometry = super::LineEndFillGeometry {
+        content_x: 8.0,
+        height_px: 16.0,
+        ascent_px: 12.0,
+        fill_char_width: 8.0,
+        // The default face: 8px per cell.
+        indicator_char_width: 8.0,
+    };
+
+    let fill = super::resolve_indicator_fill(&ctx, geometry, 8.0, &mut TestFaces);
+
+    // 8 (content_x) + 10 * 8 (default advance) - 8 (pen) = 80. Following the
+    // line-end face's 11px advance would give 110.
+    assert_eq!(
+        fill.gap_px, 80.0,
+        "the indicator column must be measured with the default face's advance"
+    );
+    assert_eq!(fill.char_width, 8.0);
+}

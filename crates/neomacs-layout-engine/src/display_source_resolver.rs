@@ -784,7 +784,10 @@ impl<'a> DisplaySourcePropertyResolver<'a> {
         }
 
         let source = self.state.resolved_face_for(face, face_basis.base_face());
-        let Some(resolved) = height_adjusted_face(&source, face_basis.height_basis(), factor)
+        // This resolver has no font service of its own; the installed active
+        // face is measured later, so only the stored `ResolvedFace` keeps the
+        // scaled-advance fallback here.
+        let Some(resolved) = height_adjusted_face(&source, face_basis.height_basis(), factor, None)
         else {
             return face;
         };
