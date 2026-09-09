@@ -216,6 +216,52 @@ jobs:
           cargo nextest run -p neovm-core --no-default-features
           -E 'test(disabled_build_exposes_only_gnu_capability_probes)'
 
+  native-terminfo:
+    name: native terminfo (${{ matrix.label }})
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            label: linux
+          - runner: macos-latest
+            label: macos-system
+          - runner: macos-latest
+            label: macos-homebrew
+    steps:
+      - *checkout
+
+      - name: Install Linux terminfo tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev ncurses-bin pkg-config
+
+      - name: Select Apple ncurses
+        if: matrix.label == 'macos-system'
+        run: |
+          echo "NCURSES_NO_PKG_CONFIG=1" >> "$GITHUB_ENV"
+          echo "NCURSESW_NO_PKG_CONFIG=1" >> "$GITHUB_ENV"
+          echo "/usr/bin" >> "$GITHUB_PATH"
+
+      - name: Select Homebrew ncurses
+        if: matrix.label == 'macos-homebrew'
+        run: |
+          brew install ncurses pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix ncurses)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "$(brew --prefix ncurses)/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-terminfo-${{ matrix.label }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: "true"
+
+      - name: Compare native expansion and test snapshots
+        run: cargo nextest run -p neomacs-terminfo --locked
+
   # Cross-compilation cannot exercise inotify, kqueue, or
   # ReadDirectoryChangesW.  Keep this independent from the workspace check so
   # an unrelated platform-only crate failure cannot skip the native runtime
