@@ -50,9 +50,10 @@ native frame ownership without moving evaluator/frame interaction logic into
 presentation. Do not create empty platform adapters or duplicate scene caches
 just to match a directory tree.
 
-Before expanding host use, replace mutable indexed surface access with focused
-resize/acquire/present operations, so callers cannot bypass parenting and
-configuration invariants. `RenderTarget` currently requires a full-size,
+The follow-up now replaces mutable indexed popup access with focused
+geometry/resize/draw operations. Acquisition, retry and presentation happen
+inside the host borrow; menu code cannot replace parent surfaces or retain an
+acquired image. `RenderTarget` currently requires a full-size,
 default-format, single-sample view; it does not validate arbitrary view
 descriptors. Raw frame layer passes inherit group 0 from their caller.
 
@@ -91,3 +92,50 @@ input-grab, or focus behavior. Logs:
 - `/tmp/neomacs-target-local-release.log`
 - `/tmp/neomacs-target-local-release-startup.log`
 - `/tmp/neomacs-target-local-release-gui.log`
+
+## Heading interaction follow-up
+
+The user confirmed the stretching fix, then reported jitter while moving over
+Help and Interactively. Their trace contained 177 menu-open receipts (33 Help,
+144 Interactively), with native popup creation often 20–30 ms apart.
+
+The old path stored the requested heading in frame chrome. After a hover switch
+cancelled the previous popup, its asynchronous HidePopupMenu could erase that
+new heading before the new ShowPopupMenu arrived. The next motion therefore
+cancelled/reopened the same menu. A runtime regression reproduced that erased
+heading; it now preserves the pending intent and repeated hover emits nothing.
+
+- `menus/menu_bar.rs` owns heading intent and pending/shown request identity.
+  Chrome projects that state; pointer and root keyboard switching share it.
+- `MenuBarRequestId` travels through keyboard input, the evaluator's pending
+  native anchor, and popup replies. A stale A response after A→B→A is rejected.
+  MenuToken remains the identity of the evaluator popup transaction/revision.
+- A separate real evaluator regression reproduced a newer heading click being
+  swallowed by the old modal popup loop when cancellation arrived later. That
+  loop now requeues the heading sequence for ordinary dispatch, preserving its
+  request identity and native anchor.
+- Cancellation keys work before contents arrive. A closing press retains its
+  release ownership; drag-to-select clears it without suppressing activation.
+- Native popup painting clears its own target. The presentation host retains
+  native lifetime, parent readiness and acquisition/presentation ownership.
+
+The primary-source comparison is in
+[`menu-interaction-ownership`](../research/2026-09-09-menu-interaction-ownership.md).
+Its GTK/Qt same-selection guards and Chromium active/pending controller informed
+this work. No debounce or pointer-navigation timeout was added; diagonal
+submenu intent/geometry policy is separate future work. This does not complete
+the broader per-scene renderer/native-frame ownership migration described above.
+
+Follow-up verification: 2,352 display/protocol/runtime/renderer tests passed
+(two skipped), 26 focused evaluator/bridge tests passed, and the explicitly
+enabled Wayland test passed with exactly two native popup identities despite
+repeated heading hover. The `video,webview` all-targets check passed. Standards
+review's pending Ctrl-G and drag-release findings were fixed; spec review's
+queued evaluator switch, pending cancellation, release capture, and keyboard
+ownership findings were addressed. Both rechecks reported no remaining blockers.
+
+Logs: `/tmp/neomacs-menu-owner-final-suite.log`,
+`/tmp/neomacs-menu-owner-final-protocol.log`,
+`/tmp/neomacs-menu-owner-final-wayland.log`, and
+`/tmp/neomacs-menu-owner-check.log`. These targeted results do not supersede the
+previously recorded unrelated whole-core test failures.

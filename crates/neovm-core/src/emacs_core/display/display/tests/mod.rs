@@ -4603,6 +4603,7 @@ fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
     let shown = Arc::clone(&host.shown);
     eval.set_display_host(Box::new(host));
     eval.pending_menu_bar_popup_anchor = Some(crate::emacs_core::MenuBarPopupAnchor {
+        request_id: Some(neomacs_display_protocol::menu::MenuBarRequestId(42)),
         frame_id,
         menu_key: Some("tools".to_string()),
         menu_x: 26,
@@ -4638,6 +4639,10 @@ fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
     assert!(result.is_nil());
     let shown = shown.lock().unwrap();
     assert_eq!(shown.len(), 1);
+    assert_eq!(
+        shown[0].request_id,
+        Some(neomacs_display_protocol::menu::MenuBarRequestId(42))
+    );
     assert_eq!(
         shown[0].placement,
         neomacs_display_protocol::PopupPlacement::new(
@@ -4706,6 +4711,61 @@ fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
     );
     assert_eq!(result.cons_car(), Value::fixnum(5));
     assert_eq!(result.cons_cdr(), Value::fixnum(0));
+}
+
+#[test]
+fn x_popup_menu_preserves_heading_click_queued_before_old_cancellation() {
+    let mut eval = Context::new();
+    let buffer = eval.buffers.create_buffer("*menu-switch*");
+    let frame = eval.frames.create_frame("menu-owner", 800, 600, buffer);
+    eval.frames.select_frame(frame);
+    eval.eval_str("(progn (setq global-map (make-sparse-keymap)) (use-global-map global-map) (define-key global-map [menu-bar mouse-1] 'ignore))").unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    eval.input_rx = Some(rx);
+    eval.set_display_host(Box::new(RecordingPopupHost::default()));
+    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
+    crate::emacs_core::keymap::list_keymap_define(
+        menu,
+        Value::symbol("entry"),
+        Value::cons(Value::string("Entry"), Value::T),
+    );
+    tx.send(crate::keyboard::InputEvent::MenuBarClick {
+        request_id: Some(neomacs_display_protocol::menu::MenuBarRequestId(42)),
+        index: 5,
+        key: "lisp-interaction".into(),
+        menu_x: 304.0,
+        menu_y: 0.0,
+        anchor_x: 304.0,
+        anchor_y: 0.0,
+        anchor_width: 144.0,
+        anchor_height: 18.0,
+        emacs_frame_id: frame.0,
+    })
+    .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: -1,
+        token: None,
+    })
+    .unwrap();
+    assert!(
+        super::builtin_x_popup_menu(&mut eval, vec![Value::T, menu])
+            .unwrap()
+            .is_nil()
+    );
+    let unread = eval.eval_str("unread-command-events").unwrap();
+    assert!(
+        !unread.is_nil(),
+        "old menu swallowed the newer heading request"
+    );
+    let (keys, _) = eval.read_key_sequence().unwrap();
+    assert_eq!(keys[0], Value::symbol("menu-bar"));
+    assert_eq!(
+        eval.pending_menu_bar_popup_anchor
+            .as_ref()
+            .unwrap()
+            .request_id,
+        Some(neomacs_display_protocol::menu::MenuBarRequestId(42))
+    );
 }
 
 // ---------------------------------------------------------------------------

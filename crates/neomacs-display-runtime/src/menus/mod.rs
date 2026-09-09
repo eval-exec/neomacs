@@ -3,6 +3,8 @@
 mod controller;
 mod interaction;
 mod layout;
+mod menu_bar;
+pub(crate) use menu_bar::{HeadingAction, MenuHeading};
 mod session;
 pub(crate) use controller::{MenuPresentation, MenuRequest};
 pub(crate) use session::MenuSession;

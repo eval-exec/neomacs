@@ -402,12 +402,14 @@ fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
             })
         }
         DisplayEvent::MenuBarClick {
+            request_id,
             index,
             key,
             menu_x,
             anchor,
             emacs_frame_id,
         } => Some(KbInputEvent::MenuBarClick {
+            request_id: *request_id,
             index: *index,
             key: key.clone(),
             menu_x: *menu_x,

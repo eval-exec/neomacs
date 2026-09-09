@@ -2442,6 +2442,7 @@ fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
         neovm_core::emacs_core::DisplayHost::show_popup_menu(
             &mut host,
             PopupMenuRequest {
+                request_id: None,
                 token: neomacs_display_protocol::menu::MenuToken::fresh(),
                 frame_id,
                 placement: neomacs_display_protocol::PopupPlacement::at(

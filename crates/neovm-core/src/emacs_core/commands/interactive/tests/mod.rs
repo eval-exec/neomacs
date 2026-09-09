@@ -2503,6 +2503,7 @@ fn menu_bar_menu_at_x_y_prefers_pending_native_click_key() {
         .create_frame("F1", 960, 640, crate::buffer::BufferId(1));
     ev.frames.select_frame(frame_id);
     ev.pending_menu_bar_popup_anchor = Some(crate::emacs_core::MenuBarPopupAnchor {
+        request_id: None,
         frame_id,
         menu_key: Some("help-menu".to_string()),
         menu_x: 49,

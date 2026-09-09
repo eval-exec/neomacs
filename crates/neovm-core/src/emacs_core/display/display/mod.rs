@@ -1618,12 +1618,14 @@ fn popup_menu_from_keymap(
 
 #[derive(Clone, Copy)]
 struct PopupMenuPosition {
+    request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     placement: neomacs_display_protocol::PopupPlacement,
 }
 
 impl PopupMenuPosition {
     fn at(x: f32, y: f32) -> Self {
         Self {
+            request_id: None,
             placement: neomacs_display_protocol::PopupPlacement::at(
                 neomacs_display_protocol::Point::new(x, y),
             ),
@@ -1724,10 +1726,12 @@ fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition 
             used_anchor: false,
             used_pending_anchor: false,
         };
+        let mut request_id = None;
         let placement = if menu_bar {
             let native_anchor = if let Some(anchor) = ctx.pending_menu_bar_popup_anchor.as_ref()
                 && posn_frame_id.is_none_or(|id| id == anchor.frame_id)
             {
+                request_id = anchor.request_id;
                 let anchor = neomacs_display_protocol::Rect::new(
                     anchor.x as f32,
                     anchor.y as f32,
@@ -1766,7 +1770,10 @@ fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition 
             final_y = y,
             "x-popup-menu position: resolved from event position"
         );
-        return PopupMenuPosition { placement };
+        return PopupMenuPosition {
+            placement,
+            request_id,
+        };
     }
     tracing::debug!(
         list_len = items.len(),
@@ -1965,6 +1972,7 @@ fn popup_dialog_position(ctx: &Context, position: Value) -> (FrameId, f32, f32) 
 /// ordinary redisplay stays inhibited while the host owns the glass, and all
 /// dynamic bindings are restored before the editor redraws the exposed frame.
 struct NativePopupSession {
+    request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     position: Value,
     entries: Vec<PopupMenuEntry>,
     events: Vec<Value>,
@@ -1998,6 +2006,7 @@ impl NativePopupSession {
         let mut token = neomacs_display_protocol::menu::MenuToken::fresh();
         let result = x_popup_menu_interactive_loop(
             ctx,
+            self.request_id,
             self.position,
             &self.entries,
             &self.events,
@@ -2077,6 +2086,7 @@ pub(crate) fn builtin_x_popup_dialog(ctx: &mut Context, args: Vec<Value>) -> Eva
 
     NativePopupSession {
         position: args[0],
+        request_id: None,
         entries,
         events: values,
         visible_rows,
@@ -2146,6 +2156,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         .unwrap_or(FrameId(0));
 
     NativePopupSession {
+        request_id: popup_position.request_id,
         position,
         entries,
         events,
@@ -2161,6 +2172,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
 #[allow(clippy::too_many_arguments)] // popup-loop inputs mirror the display-host boundary
 fn x_popup_menu_interactive_loop(
     ctx: &mut Context,
+    request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     position: Value,
     entries: &[PopupMenuEntry],
     events: &[Value],
@@ -2173,7 +2185,7 @@ fn x_popup_menu_interactive_loop(
 ) -> EvalResult {
     let mut help = TtyMenuHelpTracker::default();
     show_popup_menu_selection(
-        ctx, frame_id, placement, title, entries, *selected, &mut help, token,
+        ctx, request_id, frame_id, placement, title, entries, *selected, &mut help, token,
     )?;
 
     loop {
@@ -2181,6 +2193,25 @@ fn x_popup_menu_interactive_loop(
         // input clears the previous logical echo message even though the TTY
         // menu keeps ordinary redisplay inhibited while it owns the screen.
         let (keys, binding) = ctx.read_key_sequence()?;
+        if keys
+            .first()
+            .is_some_and(|key| key.as_symbol_name() == Some("menu-bar"))
+        {
+            // A newer native heading request can arrive before cancellation
+            // of this modal transaction. Hand it back to ordinary dispatch;
+            // swallowing it would leave the runtime waiting for contents that
+            // will never be requested. Keep its pending native anchor intact.
+            let mut unread = ctx
+                .obarray
+                .symbol_value("unread-command-events")
+                .copied()
+                .unwrap_or(Value::NIL);
+            for key in keys.iter().rev() {
+                unread = Value::cons(*key, unread);
+            }
+            ctx.assign("unread-command-events", unread);
+            return Ok(Value::NIL);
+        }
         if let Some(selection) = popup_menu_selection(&keys, *token) {
             match selection {
                 NativePopupSelection::Stale => continue,
@@ -2214,13 +2245,15 @@ fn x_popup_menu_interactive_loop(
             Some(TtyMenuNavigationCommand::TtyMenuNextItem) => {
                 *selected = (*selected + 1).min(visible_rows.saturating_sub(1));
                 show_popup_menu_selection(
-                    ctx, frame_id, placement, title, entries, *selected, &mut help, token,
+                    ctx, request_id, frame_id, placement, title, entries, *selected, &mut help,
+                    token,
                 )?;
             }
             Some(TtyMenuNavigationCommand::TtyMenuPrevItem) => {
                 *selected = (*selected).saturating_sub(1);
                 show_popup_menu_selection(
-                    ctx, frame_id, placement, title, entries, *selected, &mut help, token,
+                    ctx, request_id, frame_id, placement, title, entries, *selected, &mut help,
+                    token,
                 )?;
             }
             Some(TtyMenuNavigationCommand::TtyMenuNextMenu) => {
@@ -2256,6 +2289,7 @@ fn x_popup_menu_interactive_loop(
 
 fn show_popup_menu_selection(
     ctx: &mut Context,
+    request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     frame_id: FrameId,
     placement: neomacs_display_protocol::PopupPlacement,
     title: Option<&str>,
@@ -2270,6 +2304,7 @@ fn show_popup_menu_selection(
             return Ok(());
         };
         host.show_popup_menu(PopupMenuRequest {
+            request_id,
             token: *token,
             frame_id,
             placement,

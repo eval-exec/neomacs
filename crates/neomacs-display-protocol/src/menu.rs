@@ -1,5 +1,17 @@
 //! Plain menu presentation data shared by the runtime and painter.
 
+/// Correlates a native heading intent with the evaluator's menu response.
+/// Distinct from MenuToken: one intent can produce multiple menu revisions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuBarRequestId(pub u64);
+
+impl MenuBarRequestId {
+    pub fn fresh() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 /// Identifies one immutable revision of an evaluator-owned menu session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MenuToken {

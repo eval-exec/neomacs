@@ -246,6 +246,7 @@ pub enum InputEvent {
     /// `anchor` is the frame-local logical-pixel rectangle used by the native
     /// popup renderer.
     MenuBarClick {
+        request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
         index: i32,
         key: String,
         menu_x: f32,
@@ -586,6 +587,7 @@ pub enum TerminalCommand {
 pub enum UiCommand {
     /// Show a popup menu anchored in the owning frame's logical-pixel space.
     ShowPopupMenu {
+        request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
         token: neomacs_display_protocol::menu::MenuToken,
         /// Emacs frame_id of the owning top-level frame
         frame: FrameRef,

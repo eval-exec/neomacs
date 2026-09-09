@@ -3,4 +3,4 @@ mod host;
 mod platform;
 mod surface;
 pub(crate) use host::PopupHost;
-pub(crate) use surface::PopupSurface;
+use surface::PopupSurface;

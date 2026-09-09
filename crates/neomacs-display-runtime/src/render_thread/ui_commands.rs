@@ -42,6 +42,7 @@ impl RenderApp {
     pub(super) fn handle_ui(&mut self, cmd: UiCommand) {
         match cmd {
             UiCommand::ShowPopupMenu {
+                request_id,
                 token,
                 frame,
                 placement,
@@ -82,6 +83,7 @@ impl RenderApp {
                             fonts.clone_font_bindings_from(frame);
                         }
                         let accepted = self.menus.open(crate::menus::MenuRequest {
+                            request_id,
                             token,
                             frame_id: emacs_frame_id,
                             parent: parent.clone(),
@@ -111,11 +113,18 @@ impl RenderApp {
                             token: Some(token),
                         });
                 }
+                while let Some(result) = self.menus.take_result() {
+                    self.comms
+                        .send_input(crate::thread_comm::InputEvent::MenuSelection {
+                            index: result.index(),
+                            token: Some(result.token),
+                        });
+                }
+                self.sync_menu_heading();
             }
             UiCommand::HidePopupMenu { token } => {
-                if self.menus.hide(token) {
-                    self.frame_windows.hide_top_level_popup_menus();
-                }
+                self.menus.hide(token);
+                self.sync_menu_heading();
             }
             UiCommand::ShowTooltip {
                 frame,

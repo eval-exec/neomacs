@@ -4925,6 +4925,7 @@ fn read_key_sequence_dispatches_gui_menu_bar_click_with_frame_id() {
 
     ev.command_loop.keyboard.pending_input_events.push_back(
         crate::keyboard::InputEvent::MenuBarClick {
+            request_id: Some(neomacs_display_protocol::menu::MenuBarRequestId(42)),
             index: 2,
             key: "tools".to_string(),
             menu_x: 11.0,
@@ -4943,6 +4944,13 @@ fn read_key_sequence_dispatches_gui_menu_bar_click_with_frame_id() {
     let event = crate::emacs_core::value::list_to_vec(&keys[1]).expect("event list");
     let position = crate::emacs_core::value::list_to_vec(&event[1]).expect("position list");
 
+    assert_eq!(
+        ev.pending_menu_bar_popup_anchor
+            .as_ref()
+            .unwrap()
+            .request_id,
+        Some(neomacs_display_protocol::menu::MenuBarRequestId(42))
+    );
     assert_eq!(binding, Value::symbol("neomacs-menu-bar-click-command"));
     assert_eq!(keys[0], Value::symbol("menu-bar"));
     assert_eq!(event[0], Value::symbol("mouse-1"));

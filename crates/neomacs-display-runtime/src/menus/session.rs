@@ -11,6 +11,12 @@ pub(super) struct MenuLifetime {
 }
 
 impl MenuLifetime {
+    pub fn reject(&mut self, token: neomacs_display_protocol::menu::MenuToken) {
+        self.results
+            .push_back(neomacs_display_protocol::menu::MenuResult::from_index(
+                token, -1,
+            ));
+    }
     pub fn show(&mut self, token: neomacs_display_protocol::menu::MenuToken) -> bool {
         if self.latest.is_some_and(|previous| {
             (previous.session, previous.revision) >= (token.session, token.revision)

@@ -423,6 +423,7 @@ mod xwidget_test;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MenuBarPopupAnchor {
+    pub(crate) request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     pub(crate) frame_id: crate::window::FrameId,
     pub(crate) menu_key: Option<String>,
     pub(crate) menu_x: i64,

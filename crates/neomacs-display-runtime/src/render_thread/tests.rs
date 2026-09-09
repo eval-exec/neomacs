@@ -868,6 +868,7 @@ fn popup_without_native_owner_is_not_presented() {
     app.frame_windows.adopt_primary_frame_id(0x1000);
 
     app.handle_ui(UiCommand::ShowPopupMenu {
+        request_id: None,
         token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x1000),
         placement: neomacs_display_protocol::PopupPlacement::at(
@@ -990,6 +991,104 @@ fn hide_popup_menu_marks_primary_chrome_dirty_without_popup() {
 }
 
 #[test]
+fn old_popup_hide_must_not_erase_pending_heading_switch() {
+    let mut app = make_test_app();
+    let old = neomacs_display_protocol::menu::MenuToken::fresh();
+    // The native hover path has selected Interactively and sent its request.
+    // The evaluator then acknowledges closing the previous Help popup.
+    let window = app
+        .frame_windows
+        .primary_window_mut()
+        .expect("test primary");
+    window.render.chrome.interaction.menu_bar_active = Some(5);
+    app.menus.select_heading(
+        crate::menus::MenuHeading {
+            frame: window.render.emacs_frame_id,
+            parent: winit::window::WindowId::from_raw(1),
+            key: "lisp-interaction".into(),
+            index: 5,
+            compact: false,
+        },
+        false,
+    );
+    app.handle_ui(UiCommand::HidePopupMenu { token: old });
+    assert_eq!(
+        app.frame_windows
+            .primary_window()
+            .unwrap()
+            .render
+            .chrome
+            .interaction
+            .menu_bar_active,
+        Some(5),
+        "old popup cleanup erased the requested heading; the next hover reopens it"
+    );
+    let heading = app.menus.heading().unwrap().clone();
+    for _ in 0..100 {
+        assert_eq!(
+            app.menus.select_heading(heading.clone(), false),
+            crate::menus::HeadingAction::Keep
+        );
+    }
+}
+
+#[test]
+fn keyboard_heading_switch_uses_controller_identity_and_wraps() {
+    use neomacs_display_protocol::frame_chrome::*;
+    let mut app = make_test_app();
+    let items = ["help-menu", "lisp-interaction"]
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            PositionedChromeItem::new(
+                BandRect::new(index as f32 * 100.0, 0.0, 100.0, 18.0).unwrap(),
+                neomacs_display_protocol::MenuBarItem {
+                    index: index as u32,
+                    key: (*key).into(),
+                    label: (*key).into(),
+                },
+                ChromeAction::OpenMenu {
+                    index: index as u32,
+                    key: (*key).into(),
+                },
+            )
+        })
+        .collect();
+    let mut frame = FrameGlyphBuffer::with_size(800.0, 600.0);
+    frame.frame_chrome = FrameChrome::layout(
+        FrameSize::new(800.0, 600.0).unwrap(),
+        vec![ChromeBandRequest::new(
+            FrameChromeKind::MenuBar,
+            18.0,
+            FrameChromeContent::MenuBar(MenuBarContent::new(items, Color::WHITE, Color::BLACK)),
+        )],
+    )
+    .unwrap();
+    let window = app.frame_windows.primary_window_mut().unwrap();
+    let owner = window.render.emacs_frame_id;
+    window.render.compositor.current_frame = Some(frame);
+    app.menus.select_heading(
+        crate::menus::MenuHeading {
+            frame: owner,
+            parent: winit::window::WindowId::from_raw(1),
+            key: "help-menu".into(),
+            index: 0,
+            compact: false,
+        },
+        false,
+    );
+    assert!(app.switch_native_menu_heading(-1));
+    assert_eq!(app.menus.heading().unwrap().key, "lisp-interaction");
+    assert!(app.switch_native_menu_heading(1));
+    assert_eq!(app.menus.heading().unwrap().key, "help-menu");
+    let heading = app.menus.heading().unwrap().clone();
+    assert_eq!(
+        app.menus.select_heading(heading, false),
+        crate::menus::HeadingAction::Keep
+    );
+}
+
+#[test]
 fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
     let mut app = make_test_app();
     let Some(device) = make_test_device() else {
@@ -1009,6 +1108,7 @@ fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
     }
 
     app.handle_ui(UiCommand::ShowPopupMenu {
+        request_id: None,
         token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x2000),
         placement: neomacs_display_protocol::PopupPlacement::at(

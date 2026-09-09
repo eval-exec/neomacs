@@ -390,6 +390,7 @@ fn presented_pointer_reaches_keyboard_owner_without_losing_snapshot_or_phase() {
 #[test]
 fn menu_bar_click_reaches_keyboard_owner() {
     let display_event = DisplayEvent::MenuBarClick {
+        request_id: Some(neomacs_display_protocol::menu::MenuBarRequestId(42)),
         index: 1,
         key: "tools".to_string(),
         menu_x: 5.0,
@@ -400,6 +401,7 @@ fn menu_bar_click_reaches_keyboard_owner() {
 
     match event {
         Some(KbInputEvent::MenuBarClick {
+            request_id: Some(neomacs_display_protocol::menu::MenuBarRequestId(42)),
             index: 1,
             key,
             menu_x: 5.0,

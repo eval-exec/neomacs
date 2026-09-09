@@ -410,6 +410,7 @@ mod tests {
                 emacs_frame_id: 0,
             },
             InputEvent::MenuBarClick {
+                request_id: None,
                 index: 0,
                 key: "file".to_string(),
                 menu_x: 0.0,

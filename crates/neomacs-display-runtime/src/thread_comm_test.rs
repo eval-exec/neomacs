@@ -1070,6 +1070,7 @@ fn render_command_show_popup_menu() {
     ];
 
     let cmd = RenderCommand::Ui(UiCommand::ShowPopupMenu {
+        request_id: None,
         token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x1000),
         placement: neomacs_display_protocol::PopupPlacement::at(
@@ -1082,6 +1083,7 @@ fn render_command_show_popup_menu() {
     });
     match cmd {
         RenderCommand::Ui(UiCommand::ShowPopupMenu {
+            request_id: None,
             token: _,
             frame,
             placement,

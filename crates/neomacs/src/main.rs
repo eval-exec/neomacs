@@ -1667,6 +1667,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .collect();
         self.send_render_command(
             RenderCommand::Ui(UiCommand::ShowPopupMenu {
+                request_id: menu.request_id,
                 token: menu.token,
                 frame,
                 placement: menu.placement,

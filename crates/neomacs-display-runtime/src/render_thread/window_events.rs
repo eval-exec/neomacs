@@ -41,7 +41,9 @@ impl RenderApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if self.handle_native_menu_bar_event(window_id, &event) {
+        if self.handle_native_menu_bar_event(window_id, &event)
+            || self.handle_native_menu_bar_key(window_id, &event)
+        {
             return;
         }
         if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
@@ -65,6 +67,7 @@ impl RenderApp {
                         token: Some(index.token),
                     });
                 }
+                self.sync_menu_heading();
                 return;
             }
         }

@@ -1293,6 +1293,7 @@ pub enum InputEvent {
     /// x/y and anchor fields are geometry for legacy Lisp and native popup
     /// placement.
     MenuBarClick {
+        request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
         index: i32,
         key: String,
         menu_x: f32,
@@ -5322,6 +5323,7 @@ impl crate::emacs_core::eval::Context {
                 unreachable!("internal frontend events are serviced before read_char")
             }
             InputEvent::MenuBarClick {
+                request_id,
                 index,
                 key,
                 menu_x,
@@ -5342,6 +5344,7 @@ impl crate::emacs_core::eval::Context {
                     return Ok(None);
                 }
                 self.pending_menu_bar_popup_anchor = Some(crate::emacs_core::MenuBarPopupAnchor {
+                    request_id,
                     frame_id,
                     menu_key: Some(key.clone()),
                     menu_x: menu_x.round() as i64,

@@ -31,8 +31,8 @@ fn linux_wayland_native_menu_smoke() {
         })
         .expect("native popup event loop");
     assert!(
-        observed.lock().unwrap().len() >= 2,
-        "both native menu panels must receive redraws"
+        observed.lock().unwrap().len() == 2,
+        "repeated same-heading hover must preserve exactly two native menu surfaces"
     );
 }
 
@@ -167,6 +167,18 @@ impl ApplicationHandler for Smoke {
             return;
         }
         if !self.opened && elapsed > Duration::from_millis(300) {
+            let super::HeadingAction::Request(request_id) = self.menus.select_heading(
+                super::MenuHeading {
+                    frame: 1,
+                    parent: self.parent.as_ref().unwrap().id(),
+                    key: "help-menu".into(),
+                    index: 5,
+                    compact: false,
+                },
+                true,
+            ) else {
+                panic!("initial heading request")
+            };
             let mut root = neomacs_display_protocol::PopupMenuItem {
                 label: "Submenu wider than the parent window".into(),
                 shortcut: String::new(),
@@ -194,6 +206,7 @@ impl ApplicationHandler for Smoke {
             session.move_hover(1);
             assert!(session.open_submenu());
             self.menus.open(MenuRequest {
+                request_id: Some(request_id),
                 token: neomacs_display_protocol::menu::MenuToken::fresh(),
                 frame_id: 1,
                 parent: self.parent.as_ref().unwrap().clone(),
@@ -216,6 +229,13 @@ impl ApplicationHandler for Smoke {
                 )
                 .unwrap();
             self.opened = true;
+        }
+        if self.opened {
+            let heading = self.menus.heading().unwrap().clone();
+            assert_eq!(
+                self.menus.select_heading(heading, false),
+                super::HeadingAction::Keep
+            );
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(50),
