@@ -168,7 +168,7 @@ fn android_package_contract_accepts_the_expected_archive_and_native_surface() {
 package: name='org.neomacs' versionCode='1' versionName='0.0.16' compileSdkVersion='36'
 minSdkVersion:'24'
 targetSdkVersion:'36'
-launchable-activity: name='com.google.androidgamesdk.GameActivity'
+launchable-activity: name='org.neomacs.NeomacsActivity'
 native-code: 'arm64-v8a'
 ";
     android_package::validate_badging(badging).expect("valid Android manifest");

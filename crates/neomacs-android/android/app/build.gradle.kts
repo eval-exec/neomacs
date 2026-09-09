@@ -117,6 +117,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.0.16"
+        testInstrumentationRunner = "org.neomacs.ViewportProbe"
 
         ndk {
             abiFilters += "arm64-v8a"
