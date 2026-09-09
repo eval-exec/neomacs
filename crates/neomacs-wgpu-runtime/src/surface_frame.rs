@@ -113,6 +113,14 @@ impl SurfaceFrameRenderer {
         self.surface.extent()
     }
 
+    /// The same physical-to-frame mapping used for drawing this frame.
+    pub fn mapping_for_frame(
+        &self,
+        frame: &FrameGlyphBuffer,
+    ) -> Result<Option<PresentMapping>, GeometryError> {
+        frame_mapping(self.surface.extent(), self.device_scale, frame)
+    }
+
     /// Current drawable size in logical pixels, or `None` while suspended.
     pub fn logical_size(&self) -> Result<Option<GeometrySize<LogicalPixels>>, GeometryError> {
         Ok(drawable_surface(self.surface.extent(), self.device_scale)?
