@@ -68,8 +68,8 @@ impl SecondaryTtyRegistry {
                 &mut session.rif,
                 &root,
                 &children,
-                &mut session.device,
-                &session.capabilities,
+                &mut session.device.file,
+                &session.device.capabilities,
             );
         }
         true
@@ -203,8 +203,6 @@ impl TerminalHost for SecondaryTtyHost {
 
 struct SecondaryTtySession {
     #[cfg(unix)]
-    capabilities: super::tty_output::Capabilities,
-    #[cfg(unix)]
     device: TtyDevice,
     #[cfg(unix)]
     rif: neomacs_display_runtime::backend::tty::rif::TtyRif,
@@ -320,17 +318,6 @@ impl TtyDevice {
 }
 
 #[cfg(unix)]
-impl std::io::Write for TtyDevice {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        std::io::Write::write(&mut self.file, buffer)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        std::io::Write::flush(&mut self.file)
-    }
-}
-
-#[cfg(unix)]
 impl Drop for TtyDevice {
     fn drop(&mut self) {
         let _ = self.suspend();
@@ -356,7 +343,7 @@ impl SecondaryTtySession {
 
         super::terminal_capabilities::check_terminal_powerful_enough(request.terminal_type())?;
         let capabilities = super::tty_output::Capabilities::load(request.terminal_type())?;
-        let device = TtyDevice::open(request.device(), capabilities.clone())?;
+        let device = TtyDevice::open(request.device(), capabilities)?;
 
         let size = query_size(std::os::fd::AsRawFd::as_raw_fd(&device.file)).unwrap_or_else(|| {
             TtyFrameSize::new(80, 25).expect("fallback TTY dimensions are non-zero")
@@ -409,7 +396,6 @@ impl SecondaryTtySession {
         Ok((
             Self {
                 device,
-                capabilities,
                 rif,
                 stop,
                 paused,
