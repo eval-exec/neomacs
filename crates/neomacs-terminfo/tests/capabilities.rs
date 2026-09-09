@@ -217,3 +217,55 @@ fn native_snapshots() {
         }
     });
 }
+
+#[test]
+fn computed_division_cannot_hide_native_arithmetic_traps() {
+    let minimum = "%{0}%{2147483647}%-%{1}%-";
+    for operator in ["%/", "%m"] {
+        for format in [
+            // Unknown native variable state cannot prove a safe divisor.
+            format!("%p1%ga{operator}%d"),
+            format!("%p1%gA{operator}%d"),
+            // INT_MIN / -1 can be computed or passed through a local variable.
+            format!("{minimum}%{{0}}%{{1}}%-{operator}%d"),
+            format!("%{{0}}%{{1}}%-%Pa{minimum}%ga{operator}%d"),
+            // A branch that happens to be untaken must still be safe.
+            format!("%?%p1%t%{{4}}%Pa%e%{{0}}%{{1}}%-%Pa%;{minimum}%ga{operator}%d"),
+            format!("%?%p1%t%{{4}}%e%{{0}}%{{1}}%-%;{minimum}%Pa{operator}%d"),
+            // Checked constant propagation must forget native overflow.
+            format!("%p1%{{2147483647}}%{{2}}%*%{{1}}%+{operator}%d"),
+            // A shorter branch cannot inherit the longer branch's constant.
+            format!("{minimum}%?%p1%t%{{4}}%e%;{operator}%d"),
+        ] {
+            assert_eq!(
+                expand_numeric(format.as_bytes(), params(&[7])),
+                Err(Error::InvalidNumericFormat),
+                "{format}"
+            );
+        }
+    }
+}
+
+#[test]
+fn stack_bound_applies_to_depth_in_each_branch() {
+    // Both branches individually fit; their total push count is irrelevant.
+    let shallow = "%p1%d".repeat(40);
+    let format = format!("%?%p1%t{shallow}%e{shallow}%;%p1%{{2}}%/%d");
+    assert_eq!(
+        expand_numeric(format.as_bytes(), params(&[7])).unwrap(),
+        format!("{}3", "7".repeat(40)).as_bytes()
+    );
+
+    // Overflow in either branch can drop the intended divisor.
+    let deep = "%p1".repeat(20);
+    for format in [
+        format!("%?%p1%t{deep}%e%;%{{2}}%/%d"),
+        format!("%?%p1%t%e{deep}%;%{{2}}%/%d"),
+        format!("{}%{{2}}%/%d", "%{1}".repeat(20)),
+    ] {
+        assert_eq!(
+            expand_numeric(format.as_bytes(), params(&[7])),
+            Err(Error::InvalidNumericFormat)
+        );
+    }
+}

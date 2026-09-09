@@ -40,14 +40,16 @@ Checked-in fixtures cover extended/canceled capabilities, native error sentinels
 
 These focused Linux checks do not replace a native sanitizer audit or macOS runtime tests. Before adopting a Rust backend, compare database discovery, termcap normalization, and expansion against ncurses across the supported terminal corpus.
 
-Numeric division and remainder require an immediately preceding nonnegative
-literal divisor, such as `%{256}%/`. Computed divisors are rejected because
-native signed division can trap on INT_MIN / -1. Constants are validated on
-directive boundaries so escaped literal text is preserved.
+Numeric division and remainder use a bounded constant/stack analysis before
+native expansion. This accepts literal and character divisors, computed
+constants, and variables assigned within the program. Both conditional paths
+must prove safe: inherited variables and parameters remain unknown, and
+arithmetic overflow discards a constant fact. A divisor that could trigger
+native INT_MIN / -1 (or remainder) is rejected. ncurses still produces all
+output and owns variable state. See [follow-up](terminfo-numeric-followup.md).
 
-For formats containing division, the validator also bounds all possible stack
-pushes to 19 with explicit parameters or 10 with implicit parameters. This
-reserves space in ncurses' 20-slot stack, including up to nine implicit values;
-an overflowing push must not drop the checked divisor. See
+For formats containing division, the validator bounds live stack depth on every
+path to ncurses' 20 slots, reserving up to nine unknown implicit values.
+An overflowing push must not drop a checked divisor. See
 [ncurses stack definition](https://github.com/mirror/ncurses/blob/master/ncurses/term.priv.h)
 and [interpreter](https://github.com/mirror/ncurses/blob/master/ncurses/tinfo/lib_tparm.c).
