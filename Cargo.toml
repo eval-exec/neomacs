@@ -263,7 +263,7 @@ itoa = "1.0"
 
 # GPU / windowing
 # The fork revision and branch are documented in [patch.crates-io].
-winit = { version = "=0.31.0-beta.3", default-features = false, features = ["rwh_06"] }
+winit = { version = "=0.31.0-beta.3", default-features = false }
 wgpu = "30"
 # Keep this on the same major version as wgpu: the DMA-BUF importer passes
 # wgpu-hal types through wgpu's public HAL interop API.
