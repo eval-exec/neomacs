@@ -306,7 +306,7 @@ jobs:
         run: >-
           cargo nextest run -p neomacs --lib --locked
           --no-default-features --features neo-term
-          -E 'test(tty_output::) | test(tty_init::) | test(terminal_capabilities::)'
+          -E 'test(tty_output::) | test(tty_init::) | test(terminal_capabilities::) | test(secondary_tty::)'
 
       - name: Test Windows terminal output in an owned console
         if: runner.os == 'Windows'

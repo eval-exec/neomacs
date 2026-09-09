@@ -75,3 +75,9 @@ Homebrew ncurses, the macOS app, and Windows console tests.
 
 Validation results for this change are recorded after the runs finish; the older
 successful run in terminal-backend-followup.md predates this implementation.
+
+The independent Spec review found a duplicate secondary-session snapshot that
+lacked the device attachment. The session now renders from the device's sole
+capability snapshot. An open/render/suspend/resume pseudo-terminal regression
+covers this path and is included in native macOS CI. The Standards review found
+no actionable violations.

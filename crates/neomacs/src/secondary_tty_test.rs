@@ -82,3 +82,51 @@ fn terminal_modes(fd: std::os::fd::RawFd) -> libc::termios {
     assert_eq!(unsafe { libc::tcgetattr(fd, &mut modes) }, 0, "tcgetattr");
     modes
 }
+
+#[cfg(unix)]
+#[test]
+fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
+    if super::super::terminal_capabilities::tests::run_native_fixture_child() {
+        return;
+    }
+    use std::fs::File;
+    use std::sync::{Arc, atomic::AtomicBool};
+    let master = File::from(
+        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
+            .unwrap(),
+    );
+    rustix::pty::grantpt(&master).unwrap();
+    rustix::pty::unlockpt(&master).unwrap();
+    let slave = rustix::pty::ptsname(&master, Vec::new()).unwrap();
+    rustix::termios::tcsetwinsize(
+        &master,
+        rustix::termios::Winsize {
+            ws_row: 2,
+            ws_col: 8,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+    let request = neovm_core::emacs_core::terminal::pure::TtyFrameOpenRequest::new(
+        7,
+        neovm_core::window::FrameId(123),
+        slave.to_string_lossy().into_owned(),
+        "neo-app-padding".to_owned(),
+    )
+    .unwrap();
+    let (tx, _rx) = crossbeam_channel::bounded(8);
+    let (mut session, _, _) =
+        super::SecondaryTtySession::open(&request, tx, None, Arc::new(AtomicBool::new(false)))
+            .unwrap();
+    for _ in 0..2 {
+        super::super::tty_output::paint_to(
+            &mut session.rif,
+            &mut session.device.file,
+            &session.device.capabilities,
+        )
+        .expect("padded secondary render must use the attached device snapshot");
+        session.suspend().unwrap();
+        session.resume().unwrap();
+    }
+}
