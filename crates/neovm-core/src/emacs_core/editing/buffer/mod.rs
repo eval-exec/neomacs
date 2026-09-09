@@ -3140,7 +3140,7 @@ fn encode_char_code_for_buffer_bytes(code: u32, multibyte: bool) -> Option<Vec<u
     }
 }
 
-fn buffer_insert_lisp_string_from_lisp_string(
+pub(crate) fn buffer_insert_lisp_string_from_lisp_string(
     string: &crate::heap_types::LispString,
     target_multibyte: bool,
 ) -> crate::heap_types::LispString {
