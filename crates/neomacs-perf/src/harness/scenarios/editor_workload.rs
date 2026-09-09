@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use neomacs_melpa_test_support::{
-    EmacsRuntime, MelpaSandbox, PreparedPackageSet, locked_melpa_sources,
+    EmacsRuntime, LoadSuffixes, MelpaSandbox, PreparedPackageSet, locked_melpa_sources,
 };
 use serde::{Deserialize, Serialize};
 
@@ -80,7 +80,8 @@ pub(crate) fn prepare(
             .ok_or_else(|| "the MELPA source lock does not contain magit".to_string())?;
         let package = magit_source.package();
         let prepared =
-            PreparedPackageSet::from_locked_melpa(&EmacsRuntime::gnu_emacs(), package, "magit.el")?;
+            PreparedPackageSet::from_locked_melpa(&EmacsRuntime::gnu_emacs(), package, "magit.el")?
+                .with_load_suffixes(scenario_load_suffixes());
         startup = Some(prepared.write_startup_file(run_directory)?);
         package_provenance = Some(PackageProvenance {
             name: package.0,
@@ -556,4 +557,18 @@ pub(crate) fn valid_editor_workload_measurements(
         });
     }
     measurements
+}
+
+/// Which of a package's files the performance scenarios load.
+///
+/// The board's package scenarios have always forced `load-suffixes '(".el")`,
+/// inherited from the MELPA parity tests, so magit and org-journal ran their
+/// packages interpreted -- a configuration no user runs.  Setting
+/// `NEOMACS_PERF_LOAD_COMPILED=1` measures the byte-compiled files instead.
+/// The default is unchanged so the published series stays comparable.
+pub(crate) fn scenario_load_suffixes() -> LoadSuffixes {
+    match std::env::var("NEOMACS_PERF_LOAD_COMPILED").as_deref() {
+        Ok("1") => LoadSuffixes::EmacsDefault,
+        _ => LoadSuffixes::Source,
+    }
 }

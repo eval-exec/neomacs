@@ -24,7 +24,9 @@ mod tree_sitter_grammar;
 #[cfg(all(unix, feature = "tui"))]
 mod tui_scenario;
 
-pub use prepared_package_set::{PackageActivation, PreparedPackageSet, package_activation_elisp};
+pub use prepared_package_set::{
+    LoadSuffixes, PackageActivation, PreparedPackageSet, package_activation_elisp,
+};
 pub use source_lock::{
     LockedPackageSource, SHALLOW_GIT_FETCH_ARGS, SourceBuild, locked_melpa_install_plan,
     locked_melpa_source, locked_melpa_sources, preflight_locked_melpa_packages,

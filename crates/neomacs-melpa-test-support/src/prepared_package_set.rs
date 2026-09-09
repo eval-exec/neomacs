@@ -31,6 +31,22 @@ pub struct PreparedPackageSet {
     source_file: PathBuf,
     activation: PackageActivation,
     prelude: String,
+    load_suffixes: LoadSuffixes,
+}
+
+/// Which of a package's files the startup form makes `load` prefer.
+///
+/// The parity tests pin `Source` deliberately: reading the `.el` is what makes
+/// a MELPA package's behaviour comparable between engines without depending on
+/// either engine's byte-compiler.  Performance work wants the other one --
+/// a user loads the `.elc` -- and measuring the wrong one has cost this
+/// project real time, so the choice is named rather than implied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadSuffixes {
+    /// `load-suffixes '(".el")`: read the source, ignoring any byte-code.
+    Source,
+    /// Emacs' own default, which prefers `.elc` over `.el`.
+    EmacsDefault,
 }
 
 impl PreparedPackageSet {
@@ -77,7 +93,19 @@ impl PreparedPackageSet {
             source_file,
             activation: PackageActivation::SourceFile,
             prelude: String::new(),
+            // The parity default: read the package's source, so neither
+            // engine's byte-compiler is in the comparison.
+            load_suffixes: LoadSuffixes::Source,
         })
+    }
+
+    /// Choose which of the package's files `load` prefers.
+    ///
+    /// Performance measurement wants [`LoadSuffixes::EmacsDefault`], because
+    /// that is what a user's session does; the parity tests want the default.
+    pub fn with_load_suffixes(mut self, load_suffixes: LoadSuffixes) -> Self {
+        self.load_suffixes = load_suffixes;
+        self
     }
 
     pub fn package_name(&self) -> &str {
@@ -167,6 +195,10 @@ impl PreparedPackageSet {
             .collect::<Vec<_>>()
             .join(" ");
         let activation = package_activation_elisp(self.activation);
+        let load_suffixes_form = match self.load_suffixes {
+            LoadSuffixes::Source => "\n                         load-suffixes '(\".el\")",
+            LoadSuffixes::EmacsDefault => "",
+        };
         format!(
             r##";;; -*- lexical-binding: t; -*-
 (progn
@@ -176,8 +208,7 @@ impl PreparedPackageSet {
                          package-directory-list
                          (list {package_directory_list})
                          package-load-list
-                         (list 'all {package_load_list})
-                         load-suffixes '(".el"))
+                         (list 'all {package_load_list}){load_suffixes_form})
                    (package-initialize)
                    {}
                    {})"##,

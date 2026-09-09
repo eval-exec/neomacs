@@ -59,7 +59,8 @@ pub(crate) fn prepare(
     let git_gutter = locked_package("git-gutter")?;
     let gnu_emacs = EmacsRuntime::gnu_emacs();
     let mut packages =
-        PreparedPackageSet::from_locked_melpa(&gnu_emacs, org_journal.package(), "org-journal.el")?;
+        PreparedPackageSet::from_locked_melpa(&gnu_emacs, org_journal.package(), "org-journal.el")?
+            .with_load_suffixes(super::editor_workload::scenario_load_suffixes());
     for dependency in [org_superstar, git_gutter] {
         let directory = prepare_cached_locked_melpa_package(&gnu_emacs, dependency.package())?;
         packages = packages.with_prepared_dependency(dependency.package(), directory)?;
