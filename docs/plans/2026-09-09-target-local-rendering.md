@@ -139,3 +139,31 @@ Logs: `/tmp/neomacs-menu-owner-final-suite.log`,
 `/tmp/neomacs-menu-owner-final-wayland.log`, and
 `/tmp/neomacs-menu-owner-check.log`. These targeted results do not supersede the
 previously recorded unrelated whole-core test failures.
+
+Release follow-up: `cargo xtask fresh-build --profile release --no-byte-compile`
+completed successfully. The rebuilt executable loaded the final pdump, printed
+`menu-owner-pdump-ok`, and exited 0. A timed release GUI probe created an
+`xdg_popup` and exited cleanly. Logs are
+`/tmp/neomacs-menu-owner-release.log`,
+`/tmp/neomacs-menu-owner-release-startup.log`, and
+`/tmp/neomacs-menu-owner-release-gui.log`. Actual Help/Interactively hover
+confirmation is still user QA, not something the programmatic probe proves.
+
+### Standards
+
+Recheck: popup releases retire heading capture while continuing item activation,
+and new presses invalidate lost-release capture. `pointer_events.rs` now writes
+active-heading state only in the controller-to-chrome projection. No remaining
+hard findings from the focused recheck.
+
+### Spec
+
+Recheck: the evaluator preserves queued heading requests and their anchor
+identity; pending Ctrl-G/Escape cancellation works; closing presses retain
+release ownership; root keyboard navigation uses the shared heading-switch
+path. No remaining blockers found. Native verification remains Linux Wayland
+only.
+
+Review summary: zero remaining blocking findings on either axis. Broader
+renderer/frame ownership work and pointer-intent policy remain explicitly
+outside this completed interaction-state slice.
