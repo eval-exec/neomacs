@@ -19,6 +19,9 @@ use neomacs_display_protocol::tty_capabilities::{
 use neomacs_display_protocol::types::{DisplayWindowId, FaceId, Rect, ResolvedBidiDirection};
 use std::collections::HashMap;
 
+#[path = "painter.rs"]
+pub mod painter;
+
 // ---------------------------------------------------------------------------
 // Cell attributes
 // ---------------------------------------------------------------------------
@@ -824,7 +827,7 @@ pub struct TtyFrameStats {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TerminalCursorShape {
+pub enum TerminalCursorShape {
     Block,
     Underline,
     Bar,

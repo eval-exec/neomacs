@@ -79,3 +79,10 @@ Audit regression tests are retained at `crates/neomacs-terminfo/tests/gnu_numeri
 2. Implement and test Windows console/VT capability negotiation and output behavior.
 3. Restore GNU terminal capability postprocessing and address non-ANSI rendering support.
 4. Add native Linux/macOS/Windows coverage, including custom entries and failure paths, before declaring platform parity.
+
+## Follow-up status
+
+The [numeric continuation](terminfo-numeric-followup.md) and
+[terminal backend continuation](terminal-backend-followup.md) implement follow-ups
+on `fix/gnu-terminal-parity`. Findings above describe the audited baseline; the
+continuation records completed changes, validation, and remaining parity gaps.

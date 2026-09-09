@@ -192,8 +192,16 @@ pub fn run_tty_rif_redisplay(
     root: &SealedFramePresentation,
     children: &[SealedFramePresentation],
 ) {
-    let mut stdout = std::io::stdout();
-    run_tty_rif_redisplay_to(tty_rif, root, children, &mut stdout);
+    tty_rif.rasterize_presentations(root, children);
+    #[cfg(windows)]
+    let result = super::tty_output::windows::render(tty_rif);
+    #[cfg(not(windows))]
+    let result = super::tty_output::primary()
+        .map_err(std::io::Error::other)
+        .and_then(|caps| super::tty_output::render_to(tty_rif, &mut std::io::stdout(), caps));
+    if let Err(error) = result {
+        tracing::error!(%error, "TTY redisplay failed");
+    }
 }
 
 pub fn run_tty_rif_redisplay_to(
@@ -201,14 +209,11 @@ pub fn run_tty_rif_redisplay_to(
     root: &SealedFramePresentation,
     children: &[SealedFramePresentation],
     output: &mut impl std::io::Write,
+    capabilities: &super::tty_output::Capabilities,
 ) {
     tty_rif.rasterize_presentations(root, children);
-    tty_rif.diff_and_render();
-    let bytes = tty_rif.take_output();
-    tracing::debug!("tty_rif: output {} bytes", bytes.len());
-    if !bytes.is_empty() {
-        let _ = output.write_all(&bytes);
-        let _ = output.flush();
+    if let Err(error) = super::tty_output::paint_to(tty_rif, output, capabilities) {
+        tracing::error!(%error, "secondary TTY redisplay failed");
     }
 }
 

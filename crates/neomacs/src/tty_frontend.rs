@@ -68,13 +68,10 @@ impl DisplayHost for TtyPopupDisplayHost {
             .unwrap_or(menu.entries.len());
         for (idx, entry) in menu.entries.iter().take(visible_rows).enumerate() {
             let marker = if idx == menu.selected { ">" } else { " " };
-            write!(
-                stdout,
-                "\x1b[{};{}H\x1b[7m{} {}\x1b[0m",
-                row + idx,
-                col,
-                marker,
-                entry.label
+            super::tty_output::popup_line(
+                row + idx - 1,
+                col - 1,
+                &format!("{marker} {}", entry.label),
             )
             .map_err(|err| format!("failed to render TTY popup menu: {err}"))?;
         }

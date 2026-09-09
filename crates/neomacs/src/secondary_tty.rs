@@ -69,6 +69,7 @@ impl SecondaryTtyRegistry {
                 &root,
                 &children,
                 &mut session.device,
+                &session.capabilities,
             );
         }
         true
@@ -202,6 +203,8 @@ impl TerminalHost for SecondaryTtyHost {
 
 struct SecondaryTtySession {
     #[cfg(unix)]
+    capabilities: super::tty_output::Capabilities,
+    #[cfg(unix)]
     device: TtyDevice,
     #[cfg(unix)]
     rif: neomacs_display_runtime::backend::tty::rif::TtyRif,
@@ -221,11 +224,12 @@ struct TtyDevice {
     file: std::fs::File,
     original_termios: libc::termios,
     active: bool,
+    capabilities: super::tty_output::Capabilities,
 }
 
 #[cfg(unix)]
 impl TtyDevice {
-    fn open(path: &str) -> Result<Self, String> {
+    fn open(path: &str, capabilities: super::tty_output::Capabilities) -> Result<Self, String> {
         use std::io::Write;
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
@@ -251,10 +255,11 @@ impl TtyDevice {
             file,
             original_termios,
             active: true,
+            capabilities,
         };
         device
             .file
-            .write_all(super::tty_init::tty_enter_sequence())
+            .write_all(&device.capabilities.enter())
             .and_then(|()| device.file.flush())
             .map_err(|error| format!("cannot initialize {path}: {error}"))?;
         Ok(device)
@@ -273,7 +278,7 @@ impl TtyDevice {
         }
         let leave_result = self
             .file
-            .write_all(super::tty_init::tty_leave_sequence())
+            .write_all(&self.capabilities.leave())
             .and_then(|()| self.file.flush())
             .map_err(|error| format!("cannot suspend TTY renderer: {error}"));
         let restore_result = if unsafe {
@@ -302,7 +307,7 @@ impl TtyDevice {
         self.active = true;
         if let Err(error) = self
             .file
-            .write_all(super::tty_init::tty_enter_sequence())
+            .write_all(&self.capabilities.enter())
             .and_then(|()| self.file.flush())
         {
             let _ = self.suspend();
@@ -348,7 +353,8 @@ impl SecondaryTtySession {
         use std::os::unix::fs::OpenOptionsExt;
 
         super::terminal_capabilities::check_terminal_powerful_enough(request.terminal_type())?;
-        let device = TtyDevice::open(request.device())?;
+        let capabilities = super::tty_output::Capabilities::load(request.terminal_type())?;
+        let device = TtyDevice::open(request.device(), capabilities.clone())?;
 
         let size = query_size(std::os::fd::AsRawFd::as_raw_fd(&device.file)).unwrap_or_else(|| {
             TtyFrameSize::new(80, 25).expect("fallback TTY dimensions are non-zero")
@@ -401,6 +407,7 @@ impl SecondaryTtySession {
         Ok((
             Self {
                 device,
+                capabilities,
                 rif,
                 stop,
                 paused,

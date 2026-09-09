@@ -99,6 +99,10 @@ hostname.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemalloc-sys = { version = "0.7", optional = true, default-features = false }
 
+[target.'cfg(windows)'.dependencies]
+crossterm_winapi = "0.9.1"
+windows-version = "0.1.7"
+
 [dev-dependencies]
 tempfile.workspace = true
 stacker.workspace = true
