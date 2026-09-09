@@ -1,5 +1,5 @@
 //! Passive native tooltip lifetime. Callers own help selection and delay policy.
-use crate::presentation::{PopupHost, PopupRole};
+use crate::presentation::{PopupCommit, PopupHost, PopupRole};
 use neomacs_display_protocol::tooltip::TooltipRequest;
 use neomacs_display_protocol::{
     Point, PopupConstraintPolicy, PopupPlacement, PopupPreferredSide, Rect,
@@ -8,7 +8,6 @@ use neomacs_renderer_wgpu::{TooltipLayout, WgpuGlyphAtlas, WgpuRenderer};
 use std::{sync::Arc, time::Instant};
 use winit::{
     event::WindowEvent,
-    event_loop::ActiveEventLoop,
     window::{Window, WindowId},
 };
 
@@ -65,6 +64,7 @@ struct MappedTooltip {
     paint: TooltipLayout,
     atlas: WgpuGlyphAtlas,
     ready: ReadyTooltip,
+    reposition: Option<PopupPlacement>,
 }
 
 #[derive(Default)]
@@ -78,6 +78,7 @@ enum Presentation {
 #[derive(Default)]
 pub(crate) struct Tooltips {
     state: Presentation,
+    retired: crate::presentation::Retirements<Box<MappedTooltip>>,
 }
 
 impl Tooltips {
@@ -100,7 +101,7 @@ impl Tooltips {
                 if mapped.ready.owner.anchor != owner.anchor
                     || mapped.ready.request.offset != request.offset
                 {
-                    mapped.host.reposition(0, placement(&owner, &request));
+                    mapped.reposition = Some(placement(&owner, &request));
                 }
                 mapped.ready.owner = owner;
                 mapped.ready.request = request;
@@ -116,6 +117,7 @@ impl Tooltips {
                 return;
             }
         }
+        self.hide();
         self.state = Presentation::Ready(ReadyTooltip {
             owner,
             request,
@@ -126,8 +128,23 @@ impl Tooltips {
 
     pub fn hide(&mut self) -> bool {
         let visible = matches!(self.state, Presentation::Mapped(_));
-        self.state = Presentation::Hidden;
+        if let Presentation::Mapped(mapped) = std::mem::take(&mut self.state) {
+            if let TooltipSource::Lisp(ticket) = &mapped.ready.source {
+                ticket.cancel();
+            }
+            self.retired.push(mapped);
+        }
         visible
+    }
+
+    pub fn commit_retirements(&mut self, _commit: &PopupCommit<'_>) {
+        self.retired.commit();
+    }
+
+    /// Terminal teardown and device loss cannot wait for another event batch.
+    pub fn shutdown(&mut self) {
+        self.hide();
+        self.retired.commit();
     }
 
     fn ready(&self) -> Option<&ReadyTooltip> {
@@ -158,7 +175,7 @@ impl Tooltips {
     pub fn sync(
         &mut self,
         now: Instant,
-        event_loop: &dyn ActiveEventLoop,
+        commit: &PopupCommit<'_>,
         instance: &wgpu::Instance,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
@@ -171,12 +188,18 @@ impl Tooltips {
         if self.ready().is_some_and(|r| !r.source.is_current()) {
             self.hide();
         }
+        self.commit_retirements(commit);
         self.state = match std::mem::take(&mut self.state) {
             Presentation::Ready(ready) => Presentation::Mapped(Box::new(MappedTooltip::create(
-                ready, event_loop, instance, adapter, device, queue, format,
+                ready, commit, instance, adapter, device, queue, format,
             )?)),
             state @ (Presentation::Hidden | Presentation::Mapped(_)) => state,
         };
+        if let Presentation::Mapped(mapped) = &mut self.state
+            && let Some(placement) = mapped.reposition.take()
+        {
+            mapped.host.reposition(0, placement);
+        }
         Ok(())
     }
 
@@ -252,7 +275,7 @@ impl MappedTooltip {
 
     fn create(
         ready: ReadyTooltip,
-        event_loop: &dyn ActiveEventLoop,
+        commit: &PopupCommit<'_>,
         instance: &wgpu::Instance,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
@@ -287,7 +310,7 @@ impl MappedTooltip {
         let mut host = PopupHost::default();
         let geometry = host
             .open_with_role(
-                event_loop,
+                commit,
                 owner.parent.clone(),
                 placement,
                 (width, height),
@@ -304,6 +327,7 @@ impl MappedTooltip {
             paint,
             atlas,
             ready,
+            reposition: None,
         };
         mapped.remeasure(
             geometry.device_scale().get(),
@@ -313,5 +337,11 @@ impl MappedTooltip {
             queue,
         );
         Ok(mapped)
+    }
+}
+
+impl Drop for Tooltips {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }

@@ -228,7 +228,9 @@ malachite = "0.9"
 itoa = "1.0"
 
 # GPU / windowing
-winit = { git = "https://github.com/rust-windowing/winit", rev = "a98b2b217c901f8776a2bdb4ebc35ea7611998ce" }
+# Upstream a98b2b2 plus queued-event retirement for destroyed Wayland popups.
+# Keep immutable until upstream contains the fix; see the fork's NEOMACS_FORK.md.
+winit = { git = "https://github.com/eval-exec/winit", rev = "dc7af19d15de375f980687f650174989f4b668a8" }
 # "glsl" gates ShaderSource::Glsl, which the render thread needs to compile
 # composed Shadertoy-dialect surface shaders (shader_surface.rs).
 wgpu = { version = "30", features = ["glsl"] }

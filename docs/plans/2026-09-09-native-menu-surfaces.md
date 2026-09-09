@@ -60,11 +60,17 @@ TTY and synthetic-input compatibility. All native GUI results carry tokens.
 
 ## Windowing dependency and platform status
 
-The workspace pins winit commit
+The popup migration started at upstream winit commit
 `a98b2b217c901f8776a2bdb4ebc35ea7611998ce` (0.31.0-beta.3). This supplies native
 popup window roles and positioners that the previous 0.30 dependency lacked.
 The migration also updates pointer events, IME-compatible calls, drag-and-drop,
 monitor queries, and event-loop/window ownership.
+
+The current pin is `eval-exec/winit` commit
+`dc7af19d15de375f980687f650174989f4b668a8`, based on that upstream revision with
+the Wayland stale-window event retirement fix. See
+`2026-09-09-popup-lifetime-commit.md` for the complementary post-event native
+commit discipline and the diagnostic note for red/green regression evidence.
 
 Linux Wayland is the only runtime-verified platform. The smoke test created a
 344x58 root popup and a 201x638 submenu attached to a 200x100 parent; the protocol

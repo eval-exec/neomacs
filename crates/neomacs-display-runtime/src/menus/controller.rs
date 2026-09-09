@@ -1,7 +1,7 @@
 //! One menu session and its native popup chain.
 
 use super::session::MenuSession;
-use crate::presentation::PopupHost;
+use crate::presentation::{PopupCommit, PopupHost};
 use neomacs_display_protocol::{
     Point, PopupConstraintPolicy, PopupPlacement, PopupPreferredSide, Rect, menu::MenuPanelPaint,
 };
@@ -9,7 +9,6 @@ use neomacs_renderer_wgpu::WgpuRenderer;
 use std::sync::Arc;
 use winit::{
     event::{ElementState, MouseScrollDelta, WindowEvent},
-    event_loop::ActiveEventLoop,
     window::{Window, WindowId},
 };
 
@@ -85,7 +84,7 @@ impl MenuPresentation {
 
     fn sync_help(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        commit: &PopupCommit<'_>,
         instance: &wgpu::Instance,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
@@ -137,7 +136,7 @@ impl MenuPresentation {
             }
         }
         self.tooltip
-            .sync(now, event_loop, instance, adapter, device, queue, format)
+            .sync(now, commit, instance, adapter, device, queue, format)
     }
 
     pub fn heading(&self) -> Option<&super::MenuHeading> {
@@ -231,6 +230,18 @@ impl MenuPresentation {
         self.panels.truncate(len);
     }
 
+    pub fn commit_retirements(&mut self, commit: &PopupCommit<'_>) {
+        // Passive children must release their retained menu parents first.
+        self.tooltip.commit_retirements(commit);
+        self.host.commit_retirements(commit);
+    }
+
+    pub fn shutdown(&mut self) {
+        self.close();
+        self.tooltip.shutdown();
+        self.host.shutdown();
+    }
+
     pub fn owner(&self) -> Option<u64> {
         self.heading()
             .map(|h| h.frame)
@@ -269,13 +280,14 @@ impl MenuPresentation {
 
     pub fn sync(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        commit: &PopupCommit<'_>,
         instance: &wgpu::Instance,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Result<(), String> {
+        self.commit_retirements(commit);
         let Some(request) = self.request.as_ref() else {
             return Ok(());
         };
@@ -287,8 +299,10 @@ impl MenuPresentation {
             .take_while(|(popup, panel)| popup.items == panel.item_indices)
             .count();
         self.truncate(common);
+        self.commit_retirements(commit);
         for depth in common..wanted {
             self.dismiss_help();
+            self.commit_retirements(commit);
             let request = self.request.as_ref().unwrap();
             let panel = request.session.panel(depth).unwrap();
             let placement = if depth == 0 {
@@ -304,7 +318,7 @@ impl MenuPresentation {
                 )
             };
             let Some(geometry) = self.host.open(
-                event_loop,
+                commit,
                 request.parent.clone(),
                 placement,
                 (panel.bounds.2, panel.bounds.3),
@@ -329,7 +343,7 @@ impl MenuPresentation {
                 scroll: 0.0,
             });
         }
-        self.sync_help(event_loop, instance, adapter, device, queue, format)?;
+        self.sync_help(commit, instance, adapter, device, queue, format)?;
         Ok(())
     }
 
@@ -590,55 +604,10 @@ impl MenuPresentation {
 
 impl Drop for MenuPresentation {
     fn drop(&mut self) {
-        self.close();
+        self.shutdown();
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn pending_heading_cancels_with_control_g_and_escape() {
-        for key in [
-            winit::keyboard::Key::Character("g".into()),
-            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape),
-        ] {
-            let mut menus = MenuPresentation::default();
-            menus.select_heading(
-                crate::menus::MenuHeading {
-                    frame: 1,
-                    parent: WindowId::from_raw(1),
-                    key: "help-menu".into(),
-                    index: 5,
-                    compact: false,
-                },
-                false,
-            );
-            menus.modifiers = winit::keyboard::ModifiersState::CONTROL;
-            menus.navigate(&key);
-            assert!(menus.heading().is_none());
-        }
-    }
-
-    #[test]
-    fn heading_dismissal_retains_release_ownership() {
-        let mut menus = MenuPresentation::default();
-        let heading = crate::menus::MenuHeading {
-            frame: 1,
-            parent: WindowId::from_raw(1),
-            key: "help-menu".into(),
-            index: 5,
-            compact: false,
-        };
-        menus.select_heading(heading.clone(), true);
-        assert_eq!(
-            menus.select_heading(heading.clone(), true),
-            crate::menus::HeadingAction::Close
-        );
-        assert!(menus.heading().is_none());
-        assert_eq!(
-            menus.release_owner,
-            Some((heading.parent, winit::event::MouseButton::Left))
-        );
-    }
-}
+#[path = "controller_test.rs"]
+mod tests;

@@ -5,6 +5,7 @@ use super::PopupSurface;
 #[derive(Default)]
 pub(crate) struct PopupHost {
     surfaces: Vec<PopupSurface>,
+    retired: super::Retirements<PopupSurface>,
 }
 
 impl PopupHost {
@@ -15,7 +16,7 @@ impl PopupHost {
     }
     pub fn open(
         &mut self,
-        event_loop: &dyn winit::event_loop::ActiveEventLoop,
+        commit: &super::PopupCommit<'_>,
         root: std::sync::Arc<dyn winit::window::Window>,
         placement: neomacs_display_protocol::PopupPlacement,
         extent: (f32, f32),
@@ -25,7 +26,7 @@ impl PopupHost {
         format: wgpu::TextureFormat,
     ) -> Result<Option<neomacs_display_protocol::DrawableSurface>, String> {
         self.open_with_role(
-            event_loop,
+            commit,
             root,
             placement,
             extent,
@@ -39,7 +40,7 @@ impl PopupHost {
 
     pub fn open_with_role(
         &mut self,
-        event_loop: &dyn winit::event_loop::ActiveEventLoop,
+        commit: &super::PopupCommit<'_>,
         root: std::sync::Arc<dyn winit::window::Window>,
         placement: neomacs_display_protocol::PopupPlacement,
         extent: (f32, f32),
@@ -57,7 +58,15 @@ impl PopupHost {
             None => root,
         };
         let surface = PopupSurface::create(
-            event_loop, parent, placement, extent, instance, adapter, device, format, role,
+            commit.event_loop(),
+            parent,
+            placement,
+            extent,
+            instance,
+            adapter,
+            device,
+            format,
+            role,
         )?;
         let geometry = surface.geometry();
         self.surfaces.push(surface);
@@ -135,13 +144,24 @@ impl PopupHost {
     pub fn truncate(&mut self, depth: usize) {
         // Vec::truncate does not promise the child-before-parent native order.
         while self.surfaces.len() > depth {
-            self.surfaces.pop();
+            self.retired.push(self.surfaces.pop().unwrap());
         }
+    }
+
+    /// End-of-event-batch native teardown. Logical detachment happens earlier,
+    /// so events for the retired surfaces can no longer resolve to a panel.
+    pub fn commit_retirements(&mut self, _commit: &super::PopupCommit<'_>) {
+        self.retired.commit();
+    }
+
+    pub fn shutdown(&mut self) {
+        self.truncate(0);
+        self.retired.commit();
     }
 }
 
 impl Drop for PopupHost {
     fn drop(&mut self) {
-        self.truncate(0);
+        self.shutdown();
     }
 }

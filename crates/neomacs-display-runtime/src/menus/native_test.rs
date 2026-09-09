@@ -1,6 +1,7 @@
 //! Opt-in compositor test. Run with WAYLAND_DEBUG=1 to inspect xdg_popup roles.
 
 use super::{MenuPresentation, MenuRequest, MenuSession};
+use crate::presentation::PopupCommit;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -23,6 +24,99 @@ fn linux_wayland_native_menu_tooltip_smoke() {
     run_smoke(true);
 }
 
+#[test]
+#[ignore = "requires a live Linux Wayland compositor and GPU; creates temporary windows"]
+fn linux_wayland_native_menu_replacement_stress() {
+    run_replacement_stress(CommitPolicy::BackendStress);
+}
+
+#[test]
+#[ignore = "requires a live Linux Wayland compositor and GPU; creates temporary windows"]
+fn linux_wayland_deferred_menu_replacement_stress() {
+    run_replacement_stress(CommitPolicy::PostEvent);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommitPolicy {
+    PostEvent,
+    /// Intentionally reconcile inside callbacks to exercise the backend fix.
+    BackendStress,
+}
+
+fn run_replacement_stress(policy: CommitPolicy) {
+    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
+    use winit::platform::wayland::EventLoopBuilderExtWayland;
+    let mut builder = EventLoop::builder();
+    builder.with_wayland().with_any_thread(true);
+    let event_loop = builder.build().expect("Wayland event loop");
+    event_loop
+        .run_app(ReplacementStress {
+            smoke: Smoke {
+                policy,
+                menus: MenuPresentation::default(),
+                graphics: None,
+                parent: None,
+                start: Instant::now(),
+                opened: false,
+                painted: Arc::new(Mutex::new(HashSet::new())),
+                with_tooltips: false,
+                submenu: None,
+            },
+            pending: false,
+            replacements: 0,
+        })
+        .expect("replacement must not dispatch a scale update to a destroyed popup");
+}
+
+struct ReplacementStress {
+    smoke: Smoke,
+    pending: bool,
+    replacements: usize,
+}
+
+impl ApplicationHandler for ReplacementStress {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.smoke.can_create_surfaces(event_loop);
+    }
+
+    fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let replace = matches!(event, WindowEvent::SurfaceResized(_))
+            && self
+                .smoke
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.id() != id)
+            && self.smoke.start.elapsed() < Duration::from_secs(4);
+        self.smoke.window_event(event_loop, id, event);
+        if replace {
+            self.pending = true;
+            // Deliberately violate the application scheduling discipline to
+            // keep exercising the winit backend regression, independently of
+            // Neomacs's production post-event commit policy.
+            if self.smoke.policy == CommitPolicy::BackendStress {
+                self.about_to_wait(event_loop);
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.pending {
+            self.smoke.menus.close();
+            self.smoke.opened = false;
+            self.smoke.submenu = None;
+            self.pending = false;
+            self.replacements += 1;
+        }
+        if self.smoke.start.elapsed() > Duration::from_secs(5) {
+            assert!(
+                self.replacements >= 20,
+                "popup replacement was not exercised"
+            );
+        }
+        self.smoke.about_to_wait(event_loop);
+    }
+}
+
 fn run_smoke(with_tooltips: bool) {
     use winit::platform::wayland::EventLoopBuilderExtWayland;
     let mut builder = EventLoop::builder();
@@ -32,6 +126,7 @@ fn run_smoke(with_tooltips: bool) {
     let observed = painted.clone();
     event_loop
         .run_app(Smoke {
+            policy: CommitPolicy::PostEvent,
             menus: MenuPresentation::default(),
             graphics: None,
             parent: None,
@@ -59,6 +154,7 @@ struct Graphics {
 }
 
 struct Smoke {
+    policy: CommitPolicy,
     with_tooltips: bool,
     submenu: Option<WindowId>,
     menus: MenuPresentation,
@@ -138,16 +234,19 @@ impl ApplicationHandler for Smoke {
                     self.submenu = Some(id);
                 }
             }
-            self.menus
-                .sync(
-                    event_loop,
-                    &gpu.instance,
-                    &gpu.adapter,
-                    &gpu.device,
-                    &gpu.queue,
-                    gpu.renderer.surface_format(),
-                )
-                .unwrap();
+            if self.policy == CommitPolicy::BackendStress {
+                let commit = PopupCommit::for_native_test(event_loop);
+                self.menus
+                    .sync(
+                        &commit,
+                        &gpu.instance,
+                        &gpu.adapter,
+                        &gpu.device,
+                        &gpu.queue,
+                        gpu.renderer.surface_format(),
+                    )
+                    .unwrap();
+            }
             return;
         }
         if self.parent.as_ref().is_some_and(|p| p.id() == id)
@@ -181,13 +280,14 @@ impl ApplicationHandler for Smoke {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let commit = PopupCommit::for_native_test(event_loop);
         let elapsed = self.start.elapsed();
         if elapsed > Duration::from_secs(6) {
             event_loop.exit();
             return;
         }
         if elapsed > Duration::from_secs(5) {
-            self.menus.close();
+            self.menus.shutdown();
             event_loop
                 .set_control_flow(ControlFlow::WaitUntil(self.start + Duration::from_secs(6)));
             return;
@@ -261,7 +361,7 @@ impl ApplicationHandler for Smoke {
             let gpu = self.graphics.as_ref().unwrap();
             self.menus
                 .sync(
-                    event_loop,
+                    &commit,
                     &gpu.instance,
                     &gpu.adapter,
                     &gpu.device,
@@ -294,7 +394,7 @@ impl ApplicationHandler for Smoke {
                     );
                     self.menus
                         .sync(
-                            event_loop,
+                            &commit,
                             &gpu.instance,
                             &gpu.adapter,
                             &gpu.device,
@@ -305,6 +405,17 @@ impl ApplicationHandler for Smoke {
                 }
             }
         }
+        let gpu = self.graphics.as_ref().unwrap();
+        self.menus
+            .sync(
+                &commit,
+                &gpu.instance,
+                &gpu.adapter,
+                &gpu.device,
+                &gpu.queue,
+                gpu.renderer.surface_format(),
+            )
+            .unwrap();
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(50),
         ));
@@ -313,7 +424,7 @@ impl ApplicationHandler for Smoke {
 
 impl Drop for Smoke {
     fn drop(&mut self) {
-        self.menus.close();
+        self.menus.shutdown();
         self.graphics.take();
         self.parent.take();
     }

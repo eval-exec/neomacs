@@ -1790,6 +1790,10 @@ impl GuiFrameWindowManager {
         self.pending_destroys.push(emacs_frame_id);
     }
 
+    pub fn destroy_pending(&self, emacs_frame_id: u64) -> bool {
+        self.pending_destroys.contains(&emacs_frame_id)
+    }
+
     /// Process pending window creations. Must be called from the event loop
     /// (requires ActiveEventLoop for window creation).
     pub fn process_creates(

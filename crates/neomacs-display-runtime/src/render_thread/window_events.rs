@@ -82,17 +82,8 @@ impl RenderApp {
                 .menus
                 .event(window_id, &event, &gpu.device, &gpu.queue, renderer)
             {
-                if let Err(error) = self.menus.sync(
-                    event_loop,
-                    &gpu.instance,
-                    &gpu.adapter,
-                    &gpu.device,
-                    &gpu.queue,
-                    renderer.surface_format(),
-                ) {
-                    tracing::error!(%error, "native menu update failed");
-                    self.menus.cancel();
-                }
+                // Reconcile native hierarchy changes after this event batch,
+                // never while winit is dispatching a borrowed update batch.
                 while let Some(index) = self.menus.take_result() {
                     self.comms.send_input(InputEvent::MenuSelection {
                         index: index.index(),

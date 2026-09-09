@@ -46,6 +46,7 @@ mod x11_hints;
 #[cfg(feature = "neo-term")]
 pub use bootstrap::run_render_loop_current_thread_with_terminals;
 pub use bootstrap::{build_render_event_loop, run_render_loop, run_render_loop_current_thread};
+pub(crate) use lifecycle::PopupCommit;
 use state::{FpsCounter, ImeCursorArea, RenderApp};
 pub use state::{
     ImageDecodeTerminal, ImageRenderState, ImageTerminalProbe, ImageTerminalPublication,

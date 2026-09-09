@@ -22,8 +22,10 @@ impl ApplicationHandler for RenderApp {
         self.handle_about_to_wait(event_loop);
     }
 
-    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.handle_about_to_wait(event_loop);
+    fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        // Waking is enough: the real about_to_wait drains commands after all
+        // pending native events. Running that pass here creates/destroys popup
+        // surfaces in the middle of winit's dispatch iteration.
     }
 }
 

@@ -9,6 +9,24 @@ use neomacs_display_protocol::frame_time::EventTime;
 use std::sync::Arc;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 
+/// Native popup mutation capability. Only this lifecycle module can construct
+/// one in production; input handlers cannot turn an ActiveEventLoop into a
+/// popup commit. Shutdown/device loss use explicit terminal teardown instead.
+pub(crate) struct PopupCommit<'a> {
+    event_loop: &'a dyn ActiveEventLoop,
+}
+
+impl<'a> PopupCommit<'a> {
+    pub(crate) fn event_loop(&self) -> &'a dyn ActiveEventLoop {
+        self.event_loop
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_native_test(event_loop: &'a dyn ActiveEventLoop) -> Self {
+        Self { event_loop }
+    }
+}
+
 impl RenderApp {
     fn collect_monitor_snapshot(
         event_loop: &dyn ActiveEventLoop,
@@ -240,8 +258,9 @@ impl RenderApp {
         // with it.
         if self.device_lost.take() {
             self.comms.tooltip_context.invalidate();
-            self.tooltips.hide();
+            self.tooltips.shutdown();
             self.menus.cancel();
+            self.menus.shutdown();
             self.recover_from_device_loss(event_loop);
         }
         self.refresh_monitor_snapshot(event_loop, true);
@@ -251,11 +270,30 @@ impl RenderApp {
             return;
         }
 
+        let popup_commit = PopupCommit { event_loop };
+        // Close popup descendants before their owner frame's native/GPU state.
+        if self
+            .tooltips
+            .owner()
+            .is_some_and(|id| self.frame_windows.destroy_pending(id))
+        {
+            self.tooltips.hide();
+        }
+        if self
+            .menus
+            .owner()
+            .is_some_and(|id| self.frame_windows.destroy_pending(id))
+        {
+            self.menus.cancel();
+        }
+        self.tooltips.commit_retirements(&popup_commit);
+        self.menus.commit_retirements(&popup_commit);
+
         if let Some(gpu) = &self.gpu {
             if let Some(renderer) = &self.renderer {
                 if let Err(error) = self.tooltips.sync(
                     now.into_instant(),
-                    event_loop,
+                    &popup_commit,
                     &gpu.instance,
                     &gpu.adapter,
                     &gpu.device,
@@ -263,10 +301,10 @@ impl RenderApp {
                     renderer.surface_format(),
                 ) {
                     tracing::error!(%error, "native tooltip presentation failed");
-                    self.tooltips.hide();
+                    self.tooltips.shutdown();
                 }
                 if let Err(error) = self.menus.sync(
-                    event_loop,
+                    &popup_commit,
                     &gpu.instance,
                     &gpu.adapter,
                     &gpu.device,
@@ -275,6 +313,7 @@ impl RenderApp {
                 ) {
                     tracing::error!(%error, "native menu presentation failed");
                     self.menus.cancel();
+                    self.menus.commit_retirements(&popup_commit);
                 }
             }
             self.frame_windows.process_creates(
@@ -866,8 +905,8 @@ impl RenderApp {
     }
 
     pub(super) fn handle_exiting(&mut self) {
-        self.menus.close();
-        self.tooltips.hide();
+        self.menus.shutdown();
+        self.tooltips.shutdown();
         // Explicitly drop wgpu resources while the Wayland connection is still alive.
         // Without this, RenderApp's implicit drop happens AFTER the event loop's
         // Wayland display is torn down, causing SEGV in eglTerminate → dri2_teardown_wayland.
