@@ -40,6 +40,7 @@ fn create_evaluator(
     device_scale: FrontendScaleFactor,
     font_sizing: FontSizing,
 ) -> Result<neovm_core::emacs_core::eval::Context, String> {
+    let environment = crate::environment::AndroidSessionEnvironment::from_activity(&app)?;
     let app_data = app
         .internal_data_path()
         .ok_or_else(|| "Android did not provide an internal data directory".to_owned())?;
@@ -90,6 +91,7 @@ fn create_evaluator(
         .load_for_in_runtime_root(HostProfile::android(), runtime_root)
         .map_err(|error| format!("failed to restore Android runtime image: {error}"))?;
     evaluator.setup_thread_locals();
+    environment.install(&mut evaluator);
     evaluator.set_max_depth(1600);
 
     let font_pixel_size = font_sizing.face_height_to_layout_pixels(100);

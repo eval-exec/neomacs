@@ -3720,6 +3720,7 @@ dependencies = [
 name = "neomacs-android"
 version = "0.0.17"
 dependencies = [
+ "jni 0.22.4",
  "neomacs-app",
  "neomacs-display-protocol",
  "neomacs-layout-engine",
