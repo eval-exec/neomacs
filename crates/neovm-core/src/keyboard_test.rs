@@ -22,6 +22,21 @@ fn settled_point(
 use super::*;
 
 #[test]
+fn ime_session_reports_gnu_text_conversion_event_and_edit_list() {
+    use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
+    let mut eval = crate::Context::new();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin).unwrap();
+    let event = eval.handle_read_char_input_event(InputEvent::Ime {
+        session: ImeSessionId(1), emacs_frame_id: 0,
+        operation: ImeOperation::Replace { before_bytes: 0, after_bytes: 0, text: "你好".into() },
+    }, TtyInputDecoding::KeyboardCodingSystem).unwrap();
+    assert_eq!(event, Some(Value::symbol("text-conversion")));
+    assert_eq!(eval.eval_str("(nth 1 (car text-conversion-edits))").unwrap(), Value::fixnum(1));
+    assert_eq!(eval.eval_str("(nth 2 (car text-conversion-edits))").unwrap(), Value::fixnum(3));
+    assert_eq!(eval.eval_str("(nth 3 (car text-conversion-edits))").unwrap().as_utf8_str(), Some("你好"));
+}
+
+#[test]
 fn ime_session_rejects_edits_after_point_or_buffer_changes() {
     use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
     let mut eval = crate::Context::new();
