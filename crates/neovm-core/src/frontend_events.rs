@@ -200,7 +200,7 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         InputEvent::RawTtyBytes { .. }
         | InputEvent::TtyByte { .. }
         | InputEvent::TtyCharacter { .. } => command(),
-        InputEvent::KeyPress { .. } => command(),
+        InputEvent::KeyPress { .. } | InputEvent::ImeDeleteSurrounding { .. } => command(),
         InputEvent::MousePress { .. } => command(),
         InputEvent::MouseRelease { .. } => command(),
         InputEvent::MouseMove { .. } => special(PendingPolicy::TrackMouse, false, true),
