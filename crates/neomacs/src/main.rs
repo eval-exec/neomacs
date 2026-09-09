@@ -110,6 +110,7 @@ mod termcap_input;
 pub(crate) mod terminal_capabilities;
 pub(crate) mod tty_frontend;
 pub(crate) mod tty_init;
+pub(crate) mod tty_output;
 
 #[cfg(feature = "neo-term")]
 use std::cell::Cell;
@@ -4150,7 +4151,10 @@ pub fn run(mode: RuntimeMode) {
             eprintln!("{diagnostic}");
             std::process::exit(1);
         }
-        tty_init::tty_init_terminal();
+        if let Err(diagnostic) = tty_init::tty_init_terminal() {
+            eprintln!("{diagnostic}");
+            std::process::exit(1);
+        }
         let input_reader = tty_frontend::TtyInputReader::spawn(render_comms);
         tracing::info!("TTY frontend spawned (TtyRif single-thread redisplay)");
         FrontendHandle::TtyRifInput(input_reader)

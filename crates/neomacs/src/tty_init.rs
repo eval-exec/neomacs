@@ -4,10 +4,12 @@
 //! `tty_default_color_mode`) and the environment probing that normally lives in
 //! `init_display_interactive` (`src/dispnew.c`).
 //!
-//! All terminal I/O is cross-platform via crossterm.
+//! Raw input uses crossterm. Output uses native terminfo capabilities on Unix
+//! and negotiated VT or native screen buffers on Windows.
 
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use neovm_core::emacs_core::terminal::pure::TerminalRuntimeConfig;
+#[cfg(not(windows))]
 use std::io::Write;
 
 #[cfg(test)]
@@ -32,17 +34,22 @@ pub fn detect_tty_runtime(startup: &StartupOptions) -> TerminalRuntimeConfig {
 /// ONE resolution point: the answer goes both to the terminal runtime, where
 /// `display-supports-face-attributes-p` and `tty-display-color-cells` read it
 /// (GNU `tty_capable_p`, `Ftty_display_color_cells`), and to the renderer,
-/// which emits from it (GNU `turn_on_face`).  A terminfo entry that cannot be
-/// read is assumed fully capable rather than incapable -- neomacs' choice, so
-/// a missing terminfo database does not silently strip every highlight -- and
-/// that is the ONLY state whose colour count is not GNU's own, because GNU
-/// exits rather than run there.
+/// which emits from it (GNU `turn_on_face`). Unix live startup separately
+/// requires a readable terminal description. The pure resolver retains its
+/// fallback for callers that inspect capabilities before that check.
 pub fn detect_tty_attribute_capabilities() -> TtyAttributeCapabilities {
-    tty_attribute_capabilities(
-        &std::env::var("COLORTERM").unwrap_or_default(),
-        &std::env::var("TERM").unwrap_or_default(),
-        super::terminal_capabilities::open_terminal_capability_database,
-    )
+    #[cfg(windows)]
+    {
+        super::tty_output::windows::attributes()
+    }
+    #[cfg(not(windows))]
+    {
+        tty_attribute_capabilities(
+            &std::env::var("COLORTERM").unwrap_or_default(),
+            &std::env::var("TERM").unwrap_or_default(),
+            super::terminal_capabilities::open_terminal_capability_database,
+        )
+    }
 }
 
 /// The rule itself, over an injected terminal database, so it can be measured
@@ -62,9 +69,8 @@ pub(crate) fn tty_attribute_capabilities(
 ) -> TtyAttributeCapabilities {
     if term.is_empty() {
         // GNU refuses to start at all here: "Please set the environment
-        // variable TERM" (src/term.c:4874-4877).  This port keeps running, and
-        // answers "no colours" rather than claiming a depth for a terminal it
-        // cannot even name.
+        // variable TERM" (src/term.c:4874-4877). Live startup now does too;
+        // inspection before that check answers no colors.
         return TtyAttributeCapabilities::full_with_color_cells(0);
     }
     if let Some(mut database) = open(term) {
@@ -278,13 +284,18 @@ pub fn query_terminal_size_cells() -> Option<(u32, u32)> {
 /// print (and exit with) when it cannot; checked here, while stdout is
 /// still cooked and no alternate-screen byte has been written.
 pub fn tty_check_terminal_powerful_enough() -> Result<(), String> {
-    match detect_tty_type() {
-        Some(term) => super::terminal_capabilities::check_terminal_powerful_enough(&term),
-        None => Ok(()),
+    #[cfg(windows)]
+    {
+        super::tty_output::windows::check()
+    }
+    #[cfg(not(windows))]
+    {
+        super::tty_output::primary().map(|_| ())
     }
 }
 
 /// Bytes that enter the GNU-compatible interactive TTY state.
+#[cfg(any(windows, test))]
 pub(crate) fn tty_enter_sequence() -> &'static [u8] {
     // GNU's TTY startup enables the terminal modes its input decoder relies
     // on: application keypad, application cursor keys, and bracketed paste.
@@ -294,13 +305,14 @@ pub(crate) fn tty_enter_sequence() -> &'static [u8] {
 }
 
 /// Bytes that restore the terminal state owned by the invoking shell.
+#[cfg(any(windows, test))]
 pub(crate) fn tty_leave_sequence() -> &'static [u8] {
     b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1049l"
 }
 
 /// Set up the terminal for the TtyRif direct-rendering path:
 /// raw mode, alternate screen buffer, GNU input modes, hidden cursor.
-pub fn tty_init_terminal() {
+pub fn tty_init_terminal() -> Result<(), String> {
     // Register what this terminal can render, as GNU does in `init_tty`: the
     // terminfo attribute strings (`sitm`, `smul`, `Smulx`, `bold`, `dim`, `smxx`,
     // `ncv`) plus the color depth. The renderer then emits an attribute only when
@@ -315,25 +327,39 @@ pub fn tty_init_terminal() {
         detect_tty_attribute_capabilities(),
     );
 
-    if let Err(e) = crossterm::terminal::enable_raw_mode() {
-        tracing::error!("tty_init_terminal: enable_raw_mode failed: {}", e);
-        return;
+    crossterm::terminal::enable_raw_mode().map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    let result = super::tty_output::windows::enter();
+    #[cfg(not(windows))]
+    let result = super::tty_output::primary()
+        .map_err(std::io::Error::other)
+        .and_then(|caps| {
+            let mut stdout = std::io::stdout();
+            stdout
+                .write_all(&caps.enter())
+                .and_then(|()| stdout.flush())
+        });
+    if let Err(error) = result {
+        tty_shutdown_terminal();
+        return Err(format!("could not initialize TTY output: {error}"));
     }
-
-    // Enter alternate screen, configure input modes, hide cursor, clear.
-    let mut stdout = std::io::stdout();
-    let _ = stdout.write_all(tty_enter_sequence());
-    let _ = stdout.flush();
-    tracing::info!("TTY terminal initialized (raw mode + alt screen)");
+    tracing::info!("TTY terminal initialized");
+    Ok(())
 }
 
 /// Restore the terminal to its original state: show cursor, leave alt screen,
 /// reset SGR, disable raw mode.
 pub fn tty_shutdown_terminal() {
-    // Show cursor, restore input modes, reset SGR, leave alternate screen.
-    let mut stdout = std::io::stdout();
-    let _ = stdout.write_all(tty_leave_sequence());
-    let _ = stdout.flush();
+    #[cfg(windows)]
+    if let Err(error) = super::tty_output::windows::leave() {
+        tracing::warn!(%error, "could not restore console output");
+    }
+    #[cfg(not(windows))]
+    if let Ok(caps) = super::tty_output::primary() {
+        let mut stdout = std::io::stdout();
+        let _ = stdout.write_all(&caps.leave());
+        let _ = stdout.flush();
+    }
 
     // Restore raw mode
     if let Err(e) = crossterm::terminal::disable_raw_mode() {

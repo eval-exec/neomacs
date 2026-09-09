@@ -206,6 +206,19 @@ jobs:
           cargo nextest run -p neomacs-layout-engine
           font_backend::windows::tests
 
+      - name: Test Windows terminal output in an owned console
+        if: matrix.label == 'windows-msvc-x86_64'
+        shell: python
+        run: |
+          import subprocess
+          subprocess.run(
+              ["cargo", "nextest", "run", "-p", "neomacs", "--lib",
+               "--no-default-features", "--features", "neo-term",
+               "-E", "test(tty_output::windows::tests)", "--run-ignored", "all"],
+              creationflags=subprocess.CREATE_NEW_CONSOLE,
+              check=True,
+          )
+
       - name: cargo check minimal capability build
         if: matrix.label == 'linux-x86_64'
         run: cargo check -p neomacs --no-default-features

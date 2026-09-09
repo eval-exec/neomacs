@@ -57,7 +57,7 @@ pub(crate) fn open_terminal_capability_database(
     // The application chooses what it needs; the dependency snapshots these
     // queries together so later opens cannot change an existing database.
     let mut queries = vec![Query::TermcapNumber("Co"), Query::TermcapNumber("NC")];
-    for name in ["Su", "xn", "am", "in", "ut"] {
+    for name in ["Su", "xn", "am", "in", "ut", "bs", "bw"] {
         queries.push(Query::Flag(FlagCapability::Termcap(name)));
     }
     for name in [
@@ -72,6 +72,11 @@ pub(crate) fn open_terminal_capability_database(
     for name in ["Smulx", "smxx", "setf24", "setb24", "setrgbf", "setrgbb"] {
         queries.push(Query::String(Terminfo(name)));
     }
+    queries.extend(
+        super::tty_output::CONTROL_NAMES
+            .iter()
+            .map(|name| Query::String(Termcap(name))),
+    );
     let key_names = super::termcap_input::terminal_key_capabilities();
     queries.extend(key_names.iter().map(|name| Query::String(Termcap(name))));
     match neomacs_terminfo::Database::load(term, &queries) {
@@ -342,7 +347,7 @@ fn rendition_capability(
 /// normalization exists so the update planner can compare a terminfo spelling
 /// against its termcap translation, and it would corrupt a string that is
 /// emitted rather than compared.
-fn rendition_sequence(entry: &[u8]) -> Vec<u8> {
+pub(crate) fn rendition_sequence(entry: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(entry.len());
     let mut i = 0;
     while i < entry.len() {
@@ -397,7 +402,7 @@ fn canonical_cap(entry: &[u8]) -> Vec<u8> {
 /// erase-and-scroll capability, and all of those have two-letter termcap names.
 /// A capability with only a terminfo name goes through
 /// [`StringCapability::Terminfo`] instead.
-fn termcap_cap_is(
+pub(crate) fn termcap_cap_is(
     database: &mut dyn TerminalCapabilityDatabase,
     cap: &'static str,
     expected: &[u8],
@@ -491,23 +496,10 @@ pub(crate) fn term_caps_for_term(
 
 /// GNU's "powerful enough" check (term.c:4881): a terminal whose entry can
 /// be read but that cannot position the cursor cannot run a full-screen
-/// editor. neomacs additionally requires the ANSI form, because every byte
-/// the renderer emits hardcodes `CSI r;cH`. `Ok` when TERM is unset or the
-/// entry is unreadable (the conservative-caps fallback handles those).
+/// editor. Accept native absolute or sufficient relative cursor movement.
+/// Missing TERM and an unreadable entry are initialization errors.
 pub(crate) fn check_terminal_powerful_enough(term: &str) -> Result<(), String> {
-    let Some(mut database) = open_terminal_capability_database(term) else {
-        return Ok(());
-    };
-    if termcap_cap_is(database.as_mut(), "cm", b"\x1b[%i%d;%dH") {
-        return Ok(());
-    }
-    Err(format!(
-        "Terminal type \"{term}\" is not powerful enough to run Emacs.\n\
-It lacks the ability to position the cursor (ANSI cursor addressing).\n\
-If that is not the actual type of terminal you have,\n\
-use the Bourne shell command 'TERM=...; export TERM' (C-shell:\n\
-'setenv TERM ...') to specify the correct type."
-    ))
+    super::tty_output::Capabilities::load(term).map(|_| ())
 }
 
 impl TerminalCapabilityDatabase for neomacs_terminfo::Database {
