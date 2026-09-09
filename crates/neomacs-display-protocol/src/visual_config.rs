@@ -37,16 +37,18 @@ pub struct CursorMotionConfig {
     pub style: CursorAnimStyle,
     pub duration: Duration,
     pub trail_size: f32,
+    pub distance_length_adjust: bool,
 }
 
 impl Default for CursorMotionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            speed: 2.4,
-            style: CursorAnimStyle::CriticallyDampedSpring,
-            duration: Duration::from_millis(150),
+            speed: 1.0,
+            style: CursorAnimStyle::Neovide,
+            duration: Duration::from_millis(60),
             trail_size: 0.7,
+            distance_length_adjust: true,
         }
     }
 }
@@ -189,6 +191,7 @@ crate::effect_schema!(CursorMotionConfig {
     style: CursorAnimStyle,
     duration: Duration,
     trail_size: f32,
+    distance_length_adjust: bool,
 });
 crate::effect_schema!(CursorSizeTransitionConfig {
     enabled: bool,

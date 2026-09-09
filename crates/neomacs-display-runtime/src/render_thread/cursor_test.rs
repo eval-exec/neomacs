@@ -250,9 +250,105 @@ fn default_state_animation_enabled() {
     let state = CursorState::new(t0());
     assert!(state.anim_enabled);
     assert!(!state.animating);
-    assert_eq!(state.anim_speed, 2.4);
-    assert_eq!(state.anim_style, CursorAnimStyle::CriticallyDampedSpring);
-    assert_eq!(state.anim_duration, 0.15);
+    assert_eq!(state.anim_speed, 1.0);
+    assert_eq!(state.anim_style, CursorAnimStyle::Neovide);
+    assert_eq!(state.anim_duration, 0.06);
+    assert_eq!(state.trail_size, 0.7);
+}
+
+#[test]
+fn neovide_motion_matches_corner_easing_and_distance_timing() {
+    let at = t0();
+    let mut state = CursorState::new(at);
+    state.set_target(
+        make_target(0.0, 0.0, 10.0, 20.0, CursorStyle::FilledBox),
+        at,
+    );
+    state.set_target(
+        make_target(100.0, 0.0, 10.0, 20.0, CursorStyle::FilledBox),
+        at,
+    );
+    state.tick_animation(at.plus(Duration::from_millis(10)));
+    let corners = state.animated_cursor().unwrap().corners.unwrap();
+    // Neovide computes the clock using distance to the destination center,
+    // then eases each corner toward its own destination.
+    for (i, (start_x, start_y, sign_x, sign_y)) in [
+        (0.0_f32, 0.0_f32, -1.0, -1.0),
+        (10.0, 0.0, 1.0, -1.0),
+        (10.0, 20.0, 1.0, 1.0),
+        (0.0, 20.0, -1.0, 1.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dx = 105.0 - start_x;
+        let dy = 10.0 - start_y;
+        let distance = dx.hypot(dy);
+        let alignment = (dx * sign_x + dy * sign_y) / distance / 2.0_f32.sqrt();
+        let progress = 0.01 * (1.0 + 0.7 * alignment) / (0.06 * distance.log10());
+        let expected_x = start_x + 100.0 * (1.0 - 2.0_f32.powf(-10.0 * progress));
+        assert!((corners[i].0 - expected_x).abs() < 0.0001);
+        assert_eq!(corners[i].1, start_y);
+    }
+    assert!(
+        corners[1].0 - corners[0].0 > 10.0,
+        "leading corners must stretch the cursor"
+    );
+    state.tick_animation(at.plus(Duration::from_secs(2)));
+    assert!(!state.animating);
+    assert_eq!(state.current_x, 100.0);
+}
+
+#[test]
+fn neovide_retarget_is_continuous_and_zero_duration_snaps() {
+    let at = t0();
+    let mut state = CursorState::new(at);
+    state.set_target(
+        make_target(0.0, 0.0, 10.0, 20.0, CursorStyle::FilledBox),
+        at,
+    );
+    state.set_target(
+        make_target(100.0, 0.0, 10.0, 20.0, CursorStyle::FilledBox),
+        at,
+    );
+    let middle = at.plus(Duration::from_millis(10));
+    state.tick_animation(middle);
+    let before = state.animated_cursor().unwrap().corners;
+    state.set_target(
+        make_target(-50.0, 40.0, 10.0, 20.0, CursorStyle::FilledBox),
+        middle,
+    );
+    state.tick_animation(middle);
+    assert_eq!(state.animated_cursor().unwrap().corners, before);
+    state.anim_duration = 0.0;
+    state.tick_animation(middle.plus(Duration::from_millis(10)));
+    assert!(!state.animating);
+    assert_eq!((state.current_x, state.current_y), (-50.0, 40.0));
+}
+
+#[test]
+fn neovide_without_trail_or_distance_adjustment_is_a_rigid_timed_slide() {
+    let at = t0();
+    let mut state = CursorState::new(at);
+    let mut config = VisualConfig::default();
+    config.cursor_motion.trail_size = 0.0;
+    config.cursor_motion.distance_length_adjust = false;
+    state.apply_visual_config(&config);
+    state.set_target(
+        make_target(0.0, 0.0, 10.0, 20.0, CursorStyle::FilledBox),
+        at,
+    );
+    state.set_target(
+        make_target(1000.0, 0.0, 10.0, 20.0, CursorStyle::FilledBox),
+        at,
+    );
+    state.tick_animation(at.plus(Duration::from_millis(30)));
+    assert!((state.current_x - 968.75).abs() < 0.001);
+    assert!((state.current_w - 10.0).abs() < 0.001);
+    assert_eq!(state.current_h, 20.0);
+    state.tick_animation(at.plus(Duration::from_millis(60)));
+    assert!(!state.animating);
+    assert_eq!(state.current_x, 1000.0);
 }
 
 #[test]

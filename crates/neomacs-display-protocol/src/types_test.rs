@@ -461,11 +461,12 @@ fn test_cursor_anim_style_from_u8() {
     assert_eq!(CursorAnimStyle::from_u8(4), CursorAnimStyle::EaseOutExpo);
     assert_eq!(CursorAnimStyle::from_u8(5), CursorAnimStyle::EaseInOutCubic);
     assert_eq!(CursorAnimStyle::from_u8(6), CursorAnimStyle::Linear);
+    assert_eq!(CursorAnimStyle::from_u8(7), CursorAnimStyle::Neovide);
 }
 
 #[test]
 fn test_cursor_anim_style_unknown_defaults_to_exponential() {
-    assert_eq!(CursorAnimStyle::from_u8(7), CursorAnimStyle::Exponential);
+    assert_eq!(CursorAnimStyle::from_u8(8), CursorAnimStyle::Exponential);
     assert_eq!(CursorAnimStyle::from_u8(255), CursorAnimStyle::Exponential);
 }
 

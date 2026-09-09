@@ -729,9 +729,9 @@ pub struct AnimatedCursor {
 // value in a menu that is then refused.
 #[strum(serialize_all = "kebab-case")]
 pub enum CursorAnimStyle {
-    /// Exponential decay (current default). No fixed duration; `speed` controls rate.
+    /// Exponential decay. No fixed duration; `speed` controls rate.
     Exponential = 0,
-    /// Critically-damped spring (Neovide-style). Physics-based, natural feel.
+    /// Critically-damped spring. Physics-based, natural feel.
     CriticallyDampedSpring = 1,
     /// Ease-out quadratic: gentle deceleration.
     EaseOutQuad = 2,
@@ -743,6 +743,8 @@ pub enum CursorAnimStyle {
     EaseInOutCubic = 5,
     /// Linear: constant speed.
     Linear = 6,
+    /// Neovide's per-corner exponential easing with distance-adjusted timing.
+    Neovide = 7,
 }
 
 impl CursorAnimStyle {
@@ -754,6 +756,7 @@ impl CursorAnimStyle {
             4 => Self::EaseOutExpo,
             5 => Self::EaseInOutCubic,
             6 => Self::Linear,
+            7 => Self::Neovide,
             _ => Self::Exponential,
         }
     }

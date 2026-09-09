@@ -261,7 +261,7 @@ Mirrors `blink-cursor-interval'; see `neomacs-cursor-blink-enabled'."
          (set-default symbol value)
          (neomacs-effects--set 'cursor-blink :interval value)))
 
-(defcustom neomacs-cursor-motion-enabled nil
+(defcustom neomacs-cursor-motion-enabled t
   "Whether the cursor slides between positions instead of jumping.
 When nil the cursor is drawn at its new position on the next frame."
   :type 'boolean
@@ -280,14 +280,17 @@ its own duration uses `neomacs-cursor-motion-duration' instead."
          (set-default symbol value)
          (neomacs-effects--set 'cursor-motion :speed value)))
 
-(defcustom neomacs-cursor-motion-style 'exponential
+(defcustom neomacs-cursor-motion-style 'neovide
   "The curve the cursor follows between positions.
 
+`neovide' uses per-corner exponential easing, distance-adjusted timing,
+and `neomacs-cursor-motion-trail-size', matching Neovide's cursor motion.
 `exponential' eases toward the target without a fixed arrival time.
 `critically-damped-spring' arrives as fast as possible without overshooting.
 The remaining choices are fixed-duration curves and use
 `neomacs-cursor-motion-duration'."
-  :type '(choice (const exponential)
+  :type '(choice (const neovide)
+                 (const exponential)
                  (const critically-damped-spring)
                  (const linear)
                  (const ease-out-quad)
@@ -299,17 +302,18 @@ The remaining choices are fixed-duration curves and use
          (set-default symbol value)
          (neomacs-effects--set 'cursor-motion :style value)))
 
-(defcustom neomacs-cursor-motion-duration 0.08
+(defcustom neomacs-cursor-motion-duration 0.06
   "Seconds the cursor takes to reach its new position.
-Used by the fixed-duration `neomacs-cursor-motion-style' choices; ignored by
-`exponential' and `critically-damped-spring', which have no duration."
+For `neovide', this is the base duration, scaled by travel distance and
+corner alignment.  For `critically-damped-spring', it sets spring timing.
+Used directly by fixed-duration styles; ignored by `exponential'."
   :type 'number
   :group 'neomacs-cursor
   :set (lambda (symbol value)
          (set-default symbol value)
          (neomacs-effects--set 'cursor-motion :duration value)))
 
-(defcustom neomacs-cursor-motion-trail-size 0.0
+(defcustom neomacs-cursor-motion-trail-size 0.7
   "How much of a trail the moving cursor leaves, from 0.0 to 1.0.
 Zero draws no trail."
   :type 'number
@@ -317,6 +321,15 @@ Zero draws no trail."
   :set (lambda (symbol value)
          (set-default symbol value)
          (neomacs-effects--set 'cursor-motion :trail-size value)))
+
+(defcustom neomacs-cursor-motion-distance-length-adjust t
+  "Whether longer cursor jumps take longer in the `neovide' motion style.
+Scale the base duration by the logarithm of the travel distance."
+  :type 'boolean
+  :group 'neomacs-cursor
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (neomacs-effects--set 'cursor-motion :distance-length-adjust value)))
 
 (defcustom neomacs-cursor-size-transition-enabled nil
   "Whether the cursor animates when it changes shape or size.

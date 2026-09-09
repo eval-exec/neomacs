@@ -54,6 +54,34 @@ is rejected rather than silently coerced by the scheduler.
 
 ## Profiles
 
+### Default cursor motion
+
+Cursor motion defaults to the `neovide` style in both Lisp and the renderer:
+
+```elisp
+(setopt neomacs-cursor-motion-enabled t
+        neomacs-cursor-motion-style 'neovide
+        neomacs-cursor-motion-duration 0.06
+        neomacs-cursor-motion-trail-size 0.7
+        neomacs-cursor-motion-distance-length-adjust t)
+```
+
+This follows Neovide's cursor implementation at commit `2f922dd`: each corner
+uses exponential ease-out, with a base duration of 60 ms multiplied by the
+base-10 logarithm of its initial distance to the destination center in pixels.
+Leading corners advance faster than trailing corners, creating a stretching
+quadrilateral. Consequently, 60 ms is a base parameter, not a fixed arrival
+time. The speed multiplier is unused by this mode. Cursor particle effects
+remain disabled by default. Rendering and editor-specific cursor shapes still
+use Neomacs's renderer.
+
+Other motion styles remain available: `exponential`, `critically-damped-spring`,
+`linear`, `ease-out-quad`, `ease-out-cubic`, `ease-out-expo`, and
+`ease-in-out-cubic`. The plain `ease-out-expo` style moves one rectangle;
+`neovide` independently animates its corners.
+
+### Applying profiles
+
 `neomacs-effects-apply` replaces the complete profile, starting from the
 Rust-defined defaults and applying every entry before publishing anything:
 
