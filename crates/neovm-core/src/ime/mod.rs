@@ -39,7 +39,7 @@ impl crate::Context {
                 .map(|frame| frame.selected_window),
             point: buffer.point_emacs_byte_pos(),
             accessible: buffer.accessible_emacs_byte_region(),
-            revision: buffer.modified_tick(),
+            revision: buffer.chars_modified_tick(),
         })
     }
 
@@ -108,6 +108,8 @@ impl crate::Context {
             ));
         }
         let range = EmacsByteRange::new(start, active.anchor.point);
+        let start_char = buffer.emacs_byte_pos_to_lisp_char_pos(start).as_i64();
+        let removed = buffer.buffer_substring_bytes_range(range);
         textprop::verify_text_read_only_in_state(
             &self.obarray,
             &self.buffers,
@@ -151,6 +153,31 @@ impl crate::Context {
                 start: active.start,
             });
         }
-        Ok(Value::NIL)
+        let mut edits = Vec::new();
+        let buffer_value = Value::make_buffer(active.anchor.buffer);
+        if !text.is_empty() {
+            edits.push(Value::list(vec![
+                buffer_value,
+                Value::fixnum(start_char),
+                Value::fixnum(start_char + text.chars().count() as i64),
+                Value::string(text),
+            ]));
+        }
+        if !removed.is_empty() {
+            edits.push(Value::list(vec![
+                buffer_value,
+                Value::fixnum(start_char),
+                Value::fixnum(start_char),
+                Value::heap_string(crate::heap_types::LispString::from_emacs_bytes(removed)),
+            ]));
+        }
+        if edits.is_empty() {
+            return Ok(Value::NIL);
+        }
+        // GNU read_char returns this command event after conversion edits.
+        // Lisp's analyze-text-conversion owns post-self-insert hooks, mode
+        // integration, and undo amalgamation; do not duplicate those here.
+        self.assign("text-conversion-edits", Value::list(edits));
+        Ok(Value::symbol("text-conversion"))
     }
 }
