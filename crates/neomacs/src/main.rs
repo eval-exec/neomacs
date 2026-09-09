@@ -4812,14 +4812,11 @@ fn bootstrap_buffers_with_font(
     )
     .expect("validated startup frame geometry");
 
-    let spec = match display.frontend() {
-        FrontendKind::Gui => InitialEditorSurfaceSpec::gui(
+    let spec = match &display.kind {
+        BootstrapDisplayKind::Gui { identity, .. } => InitialEditorSurfaceSpec::gui(
             metrics,
             neomacs_app::frontend_event::FrontendScaleFactor::ONE,
-            match &display.kind {
-                BootstrapDisplayKind::Gui { identity, .. } => FrameDisplayIdentity::Graphical(identity.clone()),
-                _ => unreachable!("GUI display kind"),
-            },
+            FrameDisplayIdentity::Graphical(identity.clone()),
             if display.color_cells > 0 {
                 InitialDisplayType::Color
             } else {
@@ -4834,7 +4831,7 @@ fn bootstrap_buffers_with_font(
                 bootstrap_font_name,
             ),
         ),
-        FrontendKind::Tty => {
+        BootstrapDisplayKind::Tty { .. } => {
             InitialEditorSurfaceSpec::tty(metrics, display.interactivity.is_batch())
         }
     };
