@@ -264,6 +264,10 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: "true"
 
+      - name: Probe Apple padding ABI independently
+        if: matrix.label == 'macos-system'
+        run: python3 crates/neomacs-terminfo/tests/padding_probe.py
+
       - name: Compare native expansion and test snapshots
         run: cargo nextest run -p neomacs-terminfo --locked
 

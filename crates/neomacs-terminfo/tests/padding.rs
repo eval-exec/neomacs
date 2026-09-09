@@ -67,7 +67,7 @@ fn native_padding_uses_each_device_and_restores_state_after_failure() {
     assert_eq!(bytes, b"A..........B");
     bytes.clear();
     pads.write(&mut bytes, b"A$<10.5*>B", 3).unwrap();
-    assert_eq!(bytes, [b"A".as_slice(), &vec![b'.'; 33], b"B"].concat());
+    assert_eq!(bytes, [b"A".as_slice(), &[b'.'; 33], b"B"].concat());
     bytes.clear();
     flow.write(&mut bytes, b"A$<10>B", 1).unwrap();
     // Standalone ncurses tputs differs by version/build: its SP wrapper may
