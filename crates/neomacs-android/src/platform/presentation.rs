@@ -33,6 +33,9 @@ impl RetainedPresentation {
 }
 
 impl PresentedFrontend {
+    pub(super) fn set_preedit(&mut self, text: String) {
+        self.renderer.set_preedit(text);
+    }
     pub(super) fn restore(&mut self, retained: RetainedPresentation) {
         self.pending = Some((retained.0, retained.1));
     }
