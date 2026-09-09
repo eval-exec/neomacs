@@ -2574,8 +2574,20 @@ impl DecodeSink {
     /// taken through `invalid_code:`.
     fn push(&mut self, code: u32, charset: Option<SymId>) {
         self.runs.push(self.char_index, charset);
-        let len = crate::emacs_core::emacs_char::char_string(code, &mut self.buf);
-        self.out.extend_from_slice(&self.buf[..len]);
+        // ASCII is its own internal encoding -- `char_string` writes the byte
+        // and returns 1 -- and it is the overwhelming majority of everything
+        // decoded.  Staging it through the multibyte buffer and handing a
+        // one-byte slice to `extend_from_slice` turned each such character
+        // into a `memcpy` call: `decode_via_utf8` was the single largest
+        // source of them in the tree, 2,533,195 calls in ten magit-status
+        // operations, where GNU's `decode_coding_utf_8` takes a bulk ASCII
+        // path instead.
+        if code < 0x80 {
+            self.out.push(code as u8);
+        } else {
+            let len = crate::emacs_core::emacs_char::char_string(code, &mut self.buf);
+            self.out.extend_from_slice(&self.buf[..len]);
+        }
         self.char_index += 1;
         self.last_char = Some(code);
     }
