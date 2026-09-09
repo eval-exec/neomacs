@@ -5674,7 +5674,7 @@ impl Context {
             // 3.4M forms were evaluated.  Nothing between the two reads can
             // change the answer: `list_length` and a special form that
             // declines to dispatch both leave the cell and the registry alone.
-            let subr = subr_entry_from_value(func);
+            let subr = subr_call_entry_from_value(func);
             if let Some((target_sym_id, entry)) = subr
                 && entry.dispatch_kind == SubrDispatchKind::SpecialForm
                 && target_sym_id == sym_id
