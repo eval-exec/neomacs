@@ -14,7 +14,7 @@ use neomacs_app::session::{
 use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow, WinitFrontendInput};
 use presentation::PresentedFrontend;
 use winit::application::ApplicationHandler;
-use winit::event::{Ime, WindowEvent};
+use winit::event::{ButtonSource, ElementState, Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::platform::android::activity::AndroidApp;
@@ -113,6 +113,25 @@ impl AndroidFrontend {
         let viewport = FrontendViewport::new(logical_extent, window.scale_factor(), self.target)
             .expect("winit supplied an invalid Android scale factor");
         self.submit(FrontendEvent::ViewportChanged(viewport));
+    }
+
+    fn submit_pointer(
+        &mut self,
+        position: winit::dpi::PhysicalPosition<f64>,
+        action: neomacs_display_protocol::PointerAction,
+    ) {
+        let Some(pointer) = self.presented.as_ref().and_then(|presented| {
+            presented.pointer_input(position.x as f32, position.y as f32, action)
+        }) else {
+            return;
+        };
+        if self
+            .input
+            .as_ref()
+            .is_some_and(|input| input.submit_pointer(pointer).is_err())
+        {
+            self.input = None;
+        }
     }
 
     fn receive_latest_frame(&mut self) {
@@ -239,6 +258,32 @@ impl ApplicationHandler for AndroidFrontend {
         }
 
         match event {
+            WindowEvent::PointerButton {
+                primary: true,
+                position,
+                state,
+                button: ButtonSource::Touch { .. },
+                ..
+            } => {
+                self.submit_pointer(
+                    position,
+                    neomacs_display_protocol::PointerAction::Button {
+                        button: 1,
+                        pressed: state == ElementState::Pressed,
+                        modifiers: 0,
+                    },
+                );
+            }
+            WindowEvent::PointerMoved {
+                primary: true,
+                position,
+                ..
+            } => {
+                self.submit_pointer(
+                    position,
+                    neomacs_display_protocol::PointerAction::Move { modifiers: 0 },
+                );
+            }
             WindowEvent::CloseRequested => {
                 self.close_pending = true;
                 self.submit(FrontendEvent::CloseRequested {

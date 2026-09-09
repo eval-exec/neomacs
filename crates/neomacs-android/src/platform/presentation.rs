@@ -16,6 +16,8 @@ pub(super) struct PresentedFrontend {
     bootstrap: PortableBootstrapFrameBuilder,
     frame: Option<FrameGlyphBuffer>,
     active: Option<ActiveFrontendPresentation>,
+    pending: Option<(FrameGlyphBuffer, ActiveFrontendPresentation)>,
+    input_ready: bool,
 }
 
 impl PresentedFrontend {
@@ -25,6 +27,8 @@ impl PresentedFrontend {
             bootstrap: PortableBootstrapFrameBuilder::new(),
             frame: None,
             active: None,
+            pending: None,
+            input_ready: false,
         };
         this.refresh_bootstrap_frame();
         this
@@ -37,6 +41,7 @@ impl PresentedFrontend {
     }
 
     pub(super) fn resize_physical(&mut self, width: u32, height: u32) {
+        self.input_ready = false;
         self.renderer.resize_physical(width, height);
         if self.active.is_none() {
             self.refresh_bootstrap_frame();
@@ -53,30 +58,79 @@ impl PresentedFrontend {
     ) -> Result<FrontendFrameId, FrontendInputDisconnected> {
         let target = pending.target();
         let frame = pending.materialize();
-        let previous_frame = self.frame.replace(frame);
-        let active = match pending.activate() {
-            Ok(active) => active,
-            Err(error) => {
-                self.frame = previous_frame;
-                return Err(error);
-            }
-        };
-        self.active = Some(active);
+        let active = pending.activate()?;
+        self.pending = Some((frame, active));
         Ok(target)
     }
 
     pub(super) fn present(
         &mut self,
     ) -> Result<Option<PresentationOutcome>, SurfaceFramePresentError> {
-        let cursor_visibility = if self.active.is_some() {
+        let cursor_visibility = if self.active.is_some() || self.pending.is_some() {
             SurfaceCursorVisibility::Visible
         } else {
             SurfaceCursorVisibility::Hidden
         };
-        self.frame
+        let outcome = self
+            .pending
             .as_ref()
+            .map(|(frame, _)| frame)
+            .or(self.frame.as_ref())
             .map(|frame| self.renderer.present_frame(frame, cursor_visibility))
-            .transpose()
+            .transpose()?;
+        if outcome == Some(PresentationOutcome::Presented) {
+            if let Some((frame, active)) = self.pending.take() {
+                self.frame = Some(frame);
+                self.active = Some(active);
+            }
+            self.input_ready = self.active.is_some();
+        }
+        Ok(outcome)
+    }
+
+    pub(super) fn pointer_input(
+        &self,
+        x: f32,
+        y: f32,
+        action: neomacs_display_protocol::PointerAction,
+    ) -> Option<neomacs_display_protocol::PositionedPointerInput> {
+        use neomacs_display_protocol::present_mapping::DeviceSurfacePoint;
+        use neomacs_display_protocol::{
+            PointerPosition, PointerTarget, PositionedPointerInput, PresentedHitQuery,
+        };
+        if !self.input_ready {
+            return None;
+        }
+        let frame = self.frame.as_ref()?;
+        let mapping = self.renderer.mapping_for_frame(frame).ok()??;
+        let point = mapping.frame_from_device(DeviceSurfacePoint::from_px(x, y).ok()?)?;
+        let projected =
+            neomacs_display_protocol::interaction_projection::InteractionProjection::settled(
+                frame.presentation_id,
+            )
+            .map(
+                neomacs_display_protocol::GeometryPoint::<
+                    neomacs_display_protocol::geometry::RootSurfaceSpace,
+                    LogicalPixels,
+                >::from_px(point.x(), point.y())
+                .ok()?,
+            )?;
+        let hit = frame
+            .resolve_presented_hit(PresentedHitQuery::new(projected))
+            .ok()?
+            .and_then(|hit| hit.semantic());
+        Some(PositionedPointerInput {
+            position: PointerPosition {
+                x: point.x(),
+                y: point.y(),
+                target_frame_id: frame.frame_placement.frame().get(),
+            },
+            target: PointerTarget::Presented {
+                presentation: frame.presentation_id.get(),
+                hit,
+            },
+            action,
+        })
     }
 
     fn refresh_bootstrap_frame(&mut self) {
