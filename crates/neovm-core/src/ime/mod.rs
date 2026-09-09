@@ -108,6 +108,7 @@ impl crate::Context {
             ));
         }
         let range = EmacsByteRange::new(start, active.anchor.point);
+        let target_multibyte = buffer.get_multibyte();
         let start_char = buffer.emacs_byte_pos_to_lisp_char_pos(start).as_i64();
         let removed = buffer.buffer_substring_bytes_range(range);
         textprop::verify_text_read_only_in_state(
@@ -117,7 +118,10 @@ impl crate::Context {
             start.get(),
             active.anchor.point.get(),
         )?;
-        let replacement = crate::heap_types::LispString::from_utf8(&text);
+        let replacement = crate::emacs_core::buffer::buffer_insert_lisp_string_from_lisp_string(
+            &crate::heap_types::LispString::from_utf8(&text),
+            target_multibyte,
+        );
         let change = editfns::text_change_for_lisp_string_replacement_in_manager(
             &self.buffers,
             active.anchor.buffer,
@@ -159,8 +163,8 @@ impl crate::Context {
             edits.push(Value::list(vec![
                 buffer_value,
                 Value::fixnum(start_char),
-                Value::fixnum(start_char + text.chars().count() as i64),
-                Value::string(text),
+                Value::fixnum(start_char + replacement.schars() as i64),
+                Value::heap_string(replacement),
             ]));
         }
         if !removed.is_empty() {
@@ -168,7 +172,11 @@ impl crate::Context {
                 buffer_value,
                 Value::fixnum(start_char),
                 Value::fixnum(start_char),
-                Value::heap_string(crate::heap_types::LispString::from_emacs_bytes(removed)),
+                Value::heap_string(if target_multibyte {
+                    crate::heap_types::LispString::from_emacs_bytes(removed)
+                } else {
+                    crate::heap_types::LispString::from_unibyte(removed)
+                }),
             ]));
         }
         if edits.is_empty() {
