@@ -73,15 +73,39 @@ errors/panics. Windows native tests query actual cursor size and visibility and
 verify the original buffer after teardown. GitHub CI runs Linux, Apple ncurses,
 Homebrew ncurses, the macOS app, and Windows console tests.
 
-Validation results for this change are recorded after the runs finish; the older
-successful run in terminal-backend-followup.md predates this implementation.
+Local validation of this change:
+
+- 48 focused application terminal tests pass with nextest.
+- All 957 enabled display-runtime and 742 display-protocol library tests pass;
+  two display tests remain ignored.
+- All 20 enabled terminfo integration tests pass; the opt-in installed database
+  corpus scan remains ignored. Terminfo Clippy passes with warnings denied.
+- A full application library run in the same `--no-default-features --features
+  neo-term` configuration completed: 217 passed, 74 failed, one ignored. Of the
+  failures, 71 explicitly report Lisp-bootstrap `file-missing`; three require
+  native video support omitted by this configuration. This is not a passing full
+  application suite. The changed terminal tests all pass.
+- The workflow passes actionlint 1.7.12.
+
+Native [GitHub CI run 34346594990](https://github.com/eval-exec/neomacs/actions/runs/34346594990)
+passed all five jobs on revision `26688b5db237517d69a344534bb82f0dc248e2e9`:
+
+| Native configuration | Result |
+| --- | --- |
+| Linux system ncurses | 20 passed |
+| macOS Apple system ncurses | 20 passed |
+| macOS Homebrew ncurses | 20 passed |
+| macOS application terminal tests | 48 passed |
+| Windows MSVC x86_64 native console tests | 3 passed |
+
+The opt-in installed database corpus scan remains skipped in each terminfo job.
+The older run in terminal-backend-followup.md predates this implementation.
 
 The independent Spec review found a duplicate secondary-session snapshot that
 lacked the device attachment. The session now renders from the device's sole
 capability snapshot. An open/render/suspend/resume pseudo-terminal regression
 covers this path and is included in native macOS CI. The Standards review found
 no actionable violations.
-
 
 Apple's system ncurses 6.0 additionally fails to read baud rate without a SCREEN:
 its `_nc_get_tty_mode` rejects a null screen even though setupterm is supported.
@@ -93,3 +117,12 @@ mapping comes from [Apple's compatibility header](https://github.com/apple-oss-d
 not private ncurses functions or structure layouts. Unknown legacy rates return
 an explicit error; working native speed discovery is unchanged. Tests exercise
 9600 and 19200 baud on every native Unix job.
+
+The macOS application run also exposed two Linux-specific PTY fixture assumptions.
+The tests now open the slave before setting its size and keep a slave descriptor
+open across device initialization. The teardown test checks restored modes before
+closing the last slave, so a device reset cannot hide a restoration error. This
+accounts for [Apple ttyopen resetting the window size](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/tty.c).
+The restored-mode assertion allows Darwin's kernel-generated `PENDIN` state bit:
+XNU sets it when restoring canonical input; every configuration bit is still
+checked. Both corrected secondary-device tests pass locally with nextest.
