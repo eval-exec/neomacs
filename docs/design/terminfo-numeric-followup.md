@@ -3,66 +3,62 @@
 Base: merged PR #363, `1a16429025c80b221141b417b5c42a7702d2f1ae`.
 Branch: `fix/gnu-terminal-parity`.
 
-## Scope
-
-Fix the four introduced numeric rejections demonstrated in the
-[GNU parity audit](pr363-gnu-parity-audit.md). Retain native lookup and expansion,
-add no unsafe code or vendored interpreter, and use cargo nextest for tests.
-This is the first follow-up: Windows console negotiation/legacy output,
-non-ANSI rendering, initialization failures, and attribute postprocessing remain
-separate open backend work. This branch does not establish full GNU parity.
-
 ## Change
 
-The original validator required a literal immediately before division/remainder
-and counted every push in the entire program. This rejected computed constants,
-character constants, locally assigned variable divisors, and long programs whose
-stack stays shallow. The existing renderer treats rejected expansion as absent
-output, so these restrictions can suppress configured colors or underline styles.
+The original guard rejected computed constants, character divisors, locally
+assigned variables, and long programs with shallow stacks. The first follow-up
+accepted these through a constant analysis. The continuation accepts safe calls
+using actual parameters, inherited variables, wrapping arithmetic, and branches
+with differing divisors. It also models native stack overflow instead of rejecting
+all overflowing programs.
 
-The regex still validates every directive, including unreachable branches, to
-exclude pointer-consuming formats and malformed numeric tokens. Only programs
-containing division/remainder need the additional proof. It tracks known integer
-constants and maximum live stack depth through each forward control-flow path.
-Disagreeing branches, inherited variables, parameters, and overflowing arithmetic
-produce unknown values. Both paths must be safe, regardless of the actual input.
-The proof accepts character, computed, and locally assigned constant divisors.
-It rejects any divisor that could cause native INT_MIN / -1 or INT_MIN % -1.
-Zero divisors retain ncurses' result of zero. Stack overflow is rejected because
-ncurses drops pushes, which could otherwise discard a checked divisor.
+The regex checks every directive, including unreachable branches, to exclude
+pointer-consuming formats, embedded NULs, malformed constants and unsupported
+conversions. Only division/remainder programs need arithmetic preflight. Native
+ncurses remains responsible for output formatting and variable updates.
 
-The proof follows ncurses' byte-oriented conditional skipping and rejects jumps
-into the middle of a validated token. It does not produce output or read/write
-native variable state. ncurses continues to own formatting, termcap parameter
-inference, and variable lifetime. No changes to the unsafe module or linkage.
+Preflight runs under the native mutex. A generated numeric read-only probe obtains
+referenced native variables, then Rust evaluates the supplied parameters and
+executed conditional path before the real call. The lock spans all three steps;
+no other database load or expansion can change the context between them.
+Lowercase variables reset per call in newer ncurses and persist in Apple's older
+version; the probe observes the respective initial state without assigning it.
+Rejected expansions do not commit the program's variable assignments.
 
-## Tradeoff and remaining limits
+The safety check follows native byte-oriented conditional skipping and rejects
+jumps into validated tokens. It uses ncurses' 20-slot stack, drops overflowing
+pushes, supplies zero on underflow, and increments parameters only once for `%i`.
+Division by zero produces zero, as ncurses does. Actual `INT_MIN / -1` and
+`INT_MIN % -1` are rejected before entering C.
 
-This adds a small abstract stack analysis, so it is more code than the original
-blanket guard. The researched published Rust expanders are not drop-in GNU
-replacements: arithmetic, boolean handling, variable semantics, or padding differ.
-The newer native `tiparm_s` checks argument types but still performs the same
-potentially trapping signed division. Neither choice eliminates this boundary
-without additional compatibility work. See the [crate survey](rust-terminfo-project-precedents.md)
-and [native research](terminfo-native-research.md).
+## Remaining limits and assumptions
 
-The proof deliberately does not evaluate supplied parameters or inherited native
-variables. For example `%p1%p2%/%d` is still unsupported even when a particular
-call supplies a safe second parameter. It also rejects some safe programs whose
-branches establish different safe divisors, whose arithmetic overflows before a
-safe divisor, or whose implicit parameter reserve exceeds the stack bound.
-This repairs the demonstrated regressions; it is not complete numeric acceptance.
-Widths, precision, constants, and string-parameter restrictions remain unchanged.
+Explicit `%p` programs use the actual initial empty stack. For implicit termcap
+programs, preflight checks every possible initial argument count from zero to
+nine, because native versions infer that count differently. A call can still be
+rejected if an impossible count would trap. This is a conservative restriction,
+not complete numeric acceptance.
+
+Addition, subtraction, multiplication, and `%i` use 32-bit wrapping arithmetic,
+matching the supported native implementations observed in compatibility tests.
+Signed overflow is undefined in abstract C; this does not establish safety for
+arbitrary compilers or other tparm implementations. Width and precision remain
+bounded at 10000; numeric constants must fit a nonnegative i32. String parameters
+remain unsupported. Native variables belong to the current native terminal
+context, not individual capability snapshots.
+
+Published Rust expanders were evaluated in the [crate survey](rust-terminfo-project-precedents.md).
+Their arithmetic, boolean, formatting, or variable behavior differed from GNU's
+native interpreter. We retain published `regex` and ncurses, with no vendored
+interpreter and no additional unsafe blocks or FFI declarations.
 
 ## Validation
 
-The regression fixtures compile custom entries with `tic`, then compare output
-with `tput`, the ncurses interpreter GNU calls through `tparm`. Tests include
-computed/character/variable divisors, branch joins and nesting, signed and zero
-division, remainder, and long shallow programs. Safety tests reject native traps,
-unknown state, unsafe branch joins, and overflowing stacks.
-
-The host-database scan is opt-in because it depends on installed entries. Run:
+Fixtures compile custom entries with `tic` and compare output with `tput`, the
+ncurses interpreter used by GNU's terminfo build. Cases cover computed and
+character divisors, actual parameters, branch selection, native variable lifetime,
+zero division, wrapping arithmetic, dropped pushes, repeated `%i`, concurrency,
+and rejected traps without state mutation.
 
 ```sh
 cargo nextest run -p neomacs-terminfo --locked
@@ -70,14 +66,6 @@ cargo nextest run -p neomacs-terminfo --locked --run-ignored only
 cargo clippy -p neomacs-terminfo --all-targets --locked -- -D warnings
 ```
 
-CI adds native fixture tests on Linux, Apple system ncurses, and Homebrew ncurses.
-macOS jobs are added but have not been executed locally. Windows still uses the
-unsupported-platform boundary; this change does not add a Windows backend.
-
-Local Linux results: 15 focused tests passed in debug and release profiles; the opt-in host scan accepted 3533
-capability values covering 86 distinct programs (six unavailable enumeration
-records reported separately). Clippy passed with warnings denied. All four
-split/unsplit shared/static linkage fixtures passed. The CI workflow passed
-actionlint. These results cover the changed crate, not a full editor test run.
-
-Independent standards and spec reviews found no actionable findings.
+The host-database scan is opt-in because it depends on installed entries. CI covers
+Linux, Apple system ncurses, and Homebrew ncurses. Latest platform checks and
+remaining GNU compatibility work are recorded in the [backend continuation](terminal-backend-followup.md).

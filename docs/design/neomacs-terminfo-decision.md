@@ -34,15 +34,16 @@ Use `cargo nextest run -p neomacs-terminfo --locked` for fixture, expansion, fai
 
 Linux runtime validation does not establish macOS runtime compatibility, and these checks are not a sanitizer audit. A future Rust backend needs lookup and expansion comparisons against ncurses before adoption.
 
-Numeric division and remainder use a bounded constant/stack analysis before
-native expansion. This accepts literal and character divisors, computed
-constants, and variables assigned within the program. Both conditional paths
-must prove safe: inherited variables and parameters remain unknown, and
-arithmetic overflow discards a constant fact. A divisor that could trigger
-native INT_MIN / -1 (or remainder) is rejected. ncurses still produces all
-output and owns variable state. See [follow-up](terminfo-numeric-followup.md).
+Numeric division and remainder are preflighted using the actual parameters and
+native variable values under the same mutex as expansion. The executed branch,
+32-bit arithmetic, zero division, and ncurses' dropped stack pushes determine
+whether a signed division can trap. ncurses still produces all output and owns
+variable updates. See [follow-up](terminfo-numeric-followup.md).
 
-## Recorded validation
+## Recorded PR #363 validation
+
+These are historical results. See the [continuation](terminal-backend-followup.md)
+for the rebased branch and subsequent platform checks.
 
 On Linux, the final focused nextest runs passed 38 application terminal tests
 and all six new crate tests. The four linkage fixture configurations passed.

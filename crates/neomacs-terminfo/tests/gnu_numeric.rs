@@ -76,6 +76,22 @@ fn branch_constants_and_remainder() {
 }
 
 #[test]
+fn parameter_dependent_and_wrapping_divisors() {
+    for format in [
+        "%p1%p1%/%d",
+        "%p1%{2147483647}%{2}%*%{1}%+%/%d",
+        "%p1%?%p1%{8}%<%t%{2}%e%{4}%;%/%d",
+        "%i%p1%p1%/%d",
+        "%i%i%p1%p1%/%d",
+        "%p1%{2}%Pa%ga%/%d",
+        "%?%p1%t%{7}%e%{0}%{2147483647}%-%{1}%-%{0}%{1}%-%/%;%d%p1%{2}%/%d",
+    ] {
+        compare(format);
+    }
+    compare(&format!("{}%{{2}}%/%d", "%p1".repeat(20)));
+}
+
+#[test]
 fn gnu_unmatched_terminator_control() {
     compare("%p1%d%;");
 }
