@@ -24,7 +24,7 @@ fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
         .open(&slave_name)
         .expect("open slave");
     rustix::termios::tcsetwinsize(
-        &master,
+        &slave,
         rustix::termios::Winsize {
             ws_row: 37,
             ws_col: 119,
@@ -34,7 +34,7 @@ fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
     )
     .expect("set PTY size");
     let original_modes = terminal_modes(slave.as_raw_fd());
-    drop(slave);
+    // Keep a slave descriptor open: macOS resets PTY state when the last one closes.
 
     let request = neovm_core::emacs_core::terminal::pure::TtyFrameOpenRequest::new(
         7,
@@ -63,12 +63,8 @@ fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
     ));
 
     drop(session);
-    let restored_slave = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&slave_name)
-        .expect("reopen restored PTY slave");
-    let restored_modes = terminal_modes(restored_slave.as_raw_fd());
+    // Observe restoration before closing the last slave resets the PTY.
+    let restored_modes = terminal_modes(slave.as_raw_fd());
     assert_eq!(restored_modes.c_iflag, original_modes.c_iflag);
     assert_eq!(restored_modes.c_oflag, original_modes.c_oflag);
     assert_eq!(restored_modes.c_cflag, original_modes.c_cflag);
@@ -97,9 +93,15 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
     );
     rustix::pty::grantpt(&master).unwrap();
     rustix::pty::unlockpt(&master).unwrap();
-    let slave = rustix::pty::ptsname(&master, Vec::new()).unwrap();
+    let slave_name = rustix::pty::ptsname(&master, Vec::new()).unwrap();
+    // macOS requires an open slave for PTY ioctls and retaining device state.
+    let slave = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(std::path::Path::new(slave_name.to_str().unwrap()))
+        .unwrap();
     rustix::termios::tcsetwinsize(
-        &master,
+        &slave,
         rustix::termios::Winsize {
             ws_row: 2,
             ws_col: 8,
@@ -111,7 +113,7 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
     let request = neovm_core::emacs_core::terminal::pure::TtyFrameOpenRequest::new(
         7,
         neovm_core::window::FrameId(123),
-        slave.to_string_lossy().into_owned(),
+        slave_name.to_string_lossy().into_owned(),
         "neo-app-padding".to_owned(),
     )
     .unwrap();
@@ -119,6 +121,7 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
     let (mut session, _, _) =
         super::SecondaryTtySession::open(&request, tx, None, Arc::new(AtomicBool::new(false)))
             .unwrap();
+    drop(slave);
     for _ in 0..2 {
         super::super::tty_output::paint_to(
             &mut session.rif,
