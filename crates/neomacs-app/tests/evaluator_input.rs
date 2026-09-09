@@ -14,6 +14,33 @@ fn one(event: &FrontendEvent) -> Option<InputEvent> {
 }
 
 #[test]
+fn ime_replacement_remains_one_context_qualified_edit_not_key_events() {
+    use neomacs_app::frontend_event::{ImeOperation, ImeSessionId};
+    let operation = ImeOperation::Replace {
+        before_bytes: 3,
+        after_bytes: 0,
+        text: "你好".into(),
+    };
+    let event = FrontendEvent::Ime {
+        session: ImeSessionId(7),
+        operation: operation.clone(),
+        target: FrontendFrameId::new(42),
+    };
+    match one(&event) {
+        Some(InputEvent::Ime {
+            session,
+            operation: actual,
+            emacs_frame_id,
+        }) => {
+            assert_eq!(session, ImeSessionId(7));
+            assert_eq!(actual, operation);
+            assert_eq!(emacs_frame_id, 42);
+        }
+        actual => panic!("expected one IME replacement, got {actual:?}"),
+    }
+}
+
+#[test]
 fn key_release_is_dropped_but_nul_press_is_preserved() {
     let released = FrontendEvent::Key(FrontendKeyEvent::new(
         FrontendKeySymbol::new(keyboard::XK_RETURN),

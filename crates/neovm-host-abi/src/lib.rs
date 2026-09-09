@@ -29,6 +29,7 @@ use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
 pub mod frontend_event;
+pub mod ime;
 mod host;
 
 pub use host::{

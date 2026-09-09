@@ -1212,8 +1212,12 @@ impl TtyInputTarget {
 /// Input events from the display layer.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
-    /// IME-originated deletion, interpreted only on the evaluator thread.
-    ImeDeleteSurrounding { before_bytes: usize, after_bytes: usize, emacs_frame_id: u64 },
+    /// Ordered, context-qualified text conversion on the VM thread.
+    Ime {
+        session: neovm_host_abi::ime::ImeSessionId,
+        operation: neovm_host_abi::ime::ImeOperation,
+        emacs_frame_id: u64,
+    },
     /// Uninterpreted bytes from a Unix TTY.
     ///
     /// The evaluator expands this transport batch into ordered
@@ -4990,9 +4994,9 @@ impl crate::emacs_core::eval::Context {
         }
 
         match event {
-            InputEvent::ImeDeleteSurrounding { before_bytes, after_bytes, emacs_frame_id } => {
+            InputEvent::Ime { session, operation, emacs_frame_id } => {
                 self.route_keyboard_input_to_frame(emacs_frame_id);
-                self.delete_ime_surrounding(before_bytes, after_bytes)?;
+                self.handle_ime_operation(session, operation)?;
                 Ok(None)
             },
             InputEvent::RawTtyBytes { bytes, target } => {

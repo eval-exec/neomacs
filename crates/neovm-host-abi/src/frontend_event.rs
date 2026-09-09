@@ -1,5 +1,7 @@
 //! Typed events crossing from a presentation host into the editor session.
 
+pub use crate::ime::{ImeOperation, ImeSessionId};
+
 /// Stable editor-frame identity attached to host observations.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct FrontendFrameId(u64);
@@ -380,13 +382,13 @@ impl FrontendViewport {
 /// Host observation consumed by the editor session.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrontendEvent {
-    /// An IME edit measured in UTF-8 bytes around the current insertion point.
-    ImeDeleteSurrounding {
-        /// UTF-8 bytes preceding point; a partial character is never deleted.
-        before_bytes: usize,
-        /// UTF-8 bytes following point; a partial character is never deleted.
-        after_bytes: usize,
-        /// Editor frame receiving the text conversion.
+    /// Ordered edit tied to one host input-method session.
+    Ime {
+        /// Never-reused input connection identity.
+        session: ImeSessionId,
+        /// Operation validated and applied on the VM thread.
+        operation: ImeOperation,
+        /// Target editor frame.
         target: FrontendFrameId,
     },
     /// Logical keyboard input.
