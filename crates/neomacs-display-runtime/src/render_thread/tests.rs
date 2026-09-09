@@ -868,6 +868,7 @@ fn popup_without_native_owner_is_not_presented() {
     app.frame_windows.adopt_primary_frame_id(0x1000);
 
     app.handle_ui(UiCommand::ShowPopupMenu {
+        tooltips: None,
         request_id: None,
         token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x1000),
@@ -875,6 +876,7 @@ fn popup_without_native_owner_is_not_presented() {
             neomacs_display_protocol::Point::new(10.0, 20.0),
         ),
         items: vec![PopupMenuItem {
+            help: None,
             label: "Open".to_string(),
             shortcut: String::new(),
             enabled: true,
@@ -890,52 +892,6 @@ fn popup_without_native_owner_is_not_presented() {
     assert_eq!(app.menus.owner(), None);
     assert!(
         !app.frame_windows
-            .primary_window()
-            .is_some_and(|ws| ws.render.compositor.dirty)
-    );
-}
-
-#[test]
-fn primary_tooltip_command_marks_render_state_dirty() {
-    let mut app = make_test_app();
-    let Some(device) = make_test_device() else {
-        return;
-    };
-    let __render = super::frame_windows::GuiFrameRenderState::new(
-        0,
-        &device,
-        app.frame_windows
-            .primary_window()
-            .map_or(1.0, |ws| ws.scale_factor()),
-        app.frame_windows.fps_enabled,
-        neomacs_display_protocol::frame_time::observe_platform_now(),
-    );
-    if let Some(window_state) = app.frame_windows.primary_window_mut() {
-        window_state.render = __render;
-    }
-
-    app.handle_ui(UiCommand::ShowTooltip {
-        frame: FrameRef::Primary,
-        x: 10.0,
-        y: 20.0,
-        text: "tip".to_string(),
-        fg_r: 1.0,
-        fg_g: 1.0,
-        fg_b: 1.0,
-        bg_r: 0.0,
-        bg_g: 0.0,
-        bg_b: 0.0,
-    });
-
-    assert!(
-        app.frame_windows
-            .primary_window()
-            .map(|ws| &ws.render)
-            .and_then(|frame| frame.overlays.tooltip.as_ref())
-            .is_some()
-    );
-    assert!(
-        app.frame_windows
             .primary_window()
             .is_some_and(|ws| ws.render.compositor.dirty)
     );
@@ -1108,6 +1064,7 @@ fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
     }
 
     app.handle_ui(UiCommand::ShowPopupMenu {
+        tooltips: None,
         request_id: None,
         token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x2000),
@@ -1115,6 +1072,7 @@ fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
             neomacs_display_protocol::Point::new(10.0, 20.0),
         ),
         items: vec![PopupMenuItem {
+            help: None,
             label: "Open".to_string(),
             shortcut: String::new(),
             enabled: true,
@@ -1128,52 +1086,6 @@ fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
     });
 
     assert_eq!(app.menus.owner(), None);
-    assert!(
-        !app.frame_windows
-            .primary_window()
-            .is_some_and(|ws| ws.render.compositor.dirty)
-    );
-}
-
-#[test]
-fn tooltip_for_unknown_secondary_does_not_fall_back_to_primary() {
-    let mut app = make_test_app();
-    let Some(device) = make_test_device() else {
-        return;
-    };
-    let __render = super::frame_windows::GuiFrameRenderState::new(
-        0,
-        &device,
-        app.frame_windows
-            .primary_window()
-            .map_or(1.0, |ws| ws.scale_factor()),
-        app.frame_windows.fps_enabled,
-        neomacs_display_protocol::frame_time::observe_platform_now(),
-    );
-    if let Some(window_state) = app.frame_windows.primary_window_mut() {
-        window_state.render = __render;
-    }
-
-    app.handle_ui(UiCommand::ShowTooltip {
-        frame: FrameRef::Frame(0x2000),
-        x: 10.0,
-        y: 20.0,
-        text: "secondary".to_string(),
-        fg_r: 1.0,
-        fg_g: 1.0,
-        fg_b: 1.0,
-        bg_r: 0.0,
-        bg_g: 0.0,
-        bg_b: 0.0,
-    });
-
-    assert!(
-        app.frame_windows
-            .primary_window()
-            .map(|ws| &ws.render)
-            .and_then(|frame| frame.overlays.tooltip.as_ref())
-            .is_none()
-    );
     assert!(
         !app.frame_windows
             .primary_window()

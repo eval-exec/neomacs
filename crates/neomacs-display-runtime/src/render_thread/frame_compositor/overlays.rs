@@ -1,5 +1,5 @@
-//! Transient overlays owned by the compositor: tooltips, the
-//! visual bell, typing-speed and idle-dim state.
+//! Transient overlays owned by the compositor: visual bell,
+//! typing-speed and idle-dim state. Native tooltips live in `tooltips`.
 //!
 //! Paths here are absolute on purpose, matching the sibling submodules.
 
@@ -7,17 +7,11 @@ use neomacs_display_protocol::frame_time::EventTime;
 
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_display_protocol::effect_config::IdleDimConfig;
-use neomacs_renderer_wgpu::TooltipState;
 
 impl GuiFrameRenderState {
     pub(in crate::render_thread) fn menu_opened(&mut self) {
         self.update_presented_pointer_motion(None);
         self.mark_dirty();
-    }
-
-    pub(in crate::render_thread) fn set_tooltip(&mut self, tooltip: Option<TooltipState>) {
-        self.overlays.tooltip = tooltip;
-        self.compositor.dirty = true;
     }
 
     pub(in crate::render_thread) fn set_visual_bell_start(&mut self, start: Option<EventTime>) {

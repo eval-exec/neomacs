@@ -267,8 +267,7 @@ fn composite_filled_box_cursor_cells(
 /// alpha. Falling back to the full render whenever dimming is active keeps
 /// both correct.
 pub(super) fn window_has_active_overlays(render: &GuiFrameRenderState) -> bool {
-    render.overlays.tooltip.is_some()
-        || render.overlays.visual_bell_start.is_some()
+    render.overlays.visual_bell_start.is_some()
         || render.has_ime_preedit()
         || render.overlays.idle_dim.active
         // The FPS counter is redrawn from a live timer every frame; the

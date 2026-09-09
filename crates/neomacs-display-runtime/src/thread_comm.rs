@@ -585,8 +585,17 @@ pub enum TerminalCommand {
 /// UI overlay commands.
 #[derive(Debug)]
 pub enum UiCommand {
+    PresentTooltip {
+        ticket: neomacs_display_protocol::tooltip::TooltipTicket,
+        frame: FrameRef,
+        request: neomacs_display_protocol::tooltip::TooltipRequest,
+    },
+    DismissTooltip {
+        ticket: neomacs_display_protocol::tooltip::TooltipTicket,
+    },
     /// Show a popup menu anchored in the owning frame's logical-pixel space.
     ShowPopupMenu {
+        tooltips: Option<neomacs_display_protocol::tooltip::MenuTooltips>,
         request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
         token: neomacs_display_protocol::menu::MenuToken,
         /// Emacs frame_id of the owning top-level frame
@@ -602,22 +611,6 @@ pub enum UiCommand {
     HidePopupMenu {
         token: neomacs_display_protocol::menu::MenuToken,
     },
-    /// Show a tooltip at position (x, y)
-    ShowTooltip {
-        /// Emacs frame_id of the owning top-level frame
-        frame: FrameRef,
-        x: f32,
-        y: f32,
-        text: String,
-        fg_r: f32,
-        fg_g: f32,
-        fg_b: f32,
-        bg_r: f32,
-        bg_g: f32,
-        bg_b: f32,
-    },
-    /// Hide the active tooltip
-    HideTooltip,
     /// Trigger visual bell flash
     VisualBell {
         /// Emacs frame_id of the flashing top-level frame
@@ -948,6 +941,7 @@ pub struct ThreadComms {
     pub input_rx: Receiver<InputEvent>,
 
     pub capabilities: Arc<SharedRenderCapabilities>,
+    pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
 }
 
 impl ThreadComms {
@@ -965,12 +959,14 @@ impl ThreadComms {
             input_tx,
             input_rx,
             capabilities,
+            tooltip_context: Arc::default(),
         }
     }
 
     /// Split into Emacs-side and Render-side handles
     pub fn split(self) -> (EmacsComms, RenderComms) {
         let emacs = EmacsComms {
+            tooltip_context: self.tooltip_context.clone(),
             frame_tx: self.frame_tx,
             cmd_tx: self.cmd_tx,
             input_rx: self.input_rx,
@@ -978,6 +974,7 @@ impl ThreadComms {
         };
 
         let render = RenderComms {
+            tooltip_context: self.tooltip_context,
             frame_rx: self.frame_rx,
             cmd_rx: self.cmd_rx,
             input_tx: self.input_tx,
@@ -1000,6 +997,7 @@ pub struct EmacsComms {
     pub cmd_tx: Sender<RenderCommand>,
     pub input_rx: Receiver<InputEvent>,
     pub capabilities: Arc<SharedRenderCapabilities>,
+    pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
 }
 
 /// Render thread communication handle
@@ -1008,6 +1006,7 @@ pub struct RenderComms {
     pub cmd_rx: Receiver<RenderCommand>,
     pub input_tx: Sender<InputEvent>,
     pub capabilities: Arc<SharedRenderCapabilities>,
+    pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
 }
 
 impl RenderComms {

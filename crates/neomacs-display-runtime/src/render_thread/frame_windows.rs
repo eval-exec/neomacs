@@ -32,7 +32,7 @@ use neomacs_display_protocol::{
     PresentationFramePoint, PresentationId, PresentedHit, PresentedHitError, PresentedHitQuery,
     RetainedImageSet, SurfaceState,
 };
-use neomacs_renderer_wgpu::{TooltipState, WgpuGlyphAtlas, WgpuRenderer};
+use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer};
 use neovm_core::window::GuiFrameGeometryHints;
 
 use crate::thread_comm::WindowFullscreenMode;
@@ -215,7 +215,6 @@ pub(crate) struct ChromeState {
 
 /// Transient overlay state for a frame window.
 pub(crate) struct OverlayState {
-    pub tooltip: Option<TooltipState>,
     pub visual_bell_start: Option<neomacs_display_protocol::frame_time::EventTime>,
     pub(super) fps: FpsCounter,
     pub(super) typing_speed: TypingSpeedState,
@@ -382,7 +381,6 @@ impl GuiFrameRenderState {
             pointer_damage_appearance_lookups: 0,
             deferred_pointer_retirements: Vec::new(),
             overlays: OverlayState {
-                tooltip: None,
                 visual_bell_start: None,
                 fps: FpsCounter {
                     enabled: fps_enabled,
@@ -2195,15 +2193,6 @@ impl GuiFrameWindowManager {
     pub(super) fn hide_top_level_popup_menus(&mut self) {
         self.for_each_top_level_window_mut(|window_state| {
             window_state.render.dismiss_all_chrome_menus();
-        });
-    }
-
-    pub(super) fn hide_top_level_tooltips(&mut self) {
-        self.for_each_top_level_window_mut(|window_state| {
-            if window_state.render.overlays.tooltip.is_some() {
-                window_state.render.overlays.tooltip = None;
-                window_state.render.compositor.dirty = true;
-            }
         });
     }
 

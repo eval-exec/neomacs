@@ -1,6 +1,6 @@
 //! UI overlay, animation, and effect render commands.
 
-use super::{RenderApp, TooltipState};
+use super::RenderApp;
 use crate::thread_comm::{ConfigCommand, ToolBarItem, UiCommand};
 use neomacs_display_protocol::ToolBarImageSource;
 use neomacs_display_protocol::{AxisSize, ImageColorContext, ImageRotation, ImageSizeSpec};
@@ -42,6 +42,7 @@ impl RenderApp {
     pub(super) fn handle_ui(&mut self, cmd: UiCommand) {
         match cmd {
             UiCommand::ShowPopupMenu {
+                tooltips,
                 request_id,
                 token,
                 frame,
@@ -83,6 +84,7 @@ impl RenderApp {
                             fonts.clone_font_bindings_from(frame);
                         }
                         let accepted = self.menus.open(crate::menus::MenuRequest {
+                            tooltips,
                             request_id,
                             token,
                             frame_id: emacs_frame_id,
@@ -93,6 +95,8 @@ impl RenderApp {
                         });
                         if accepted && let Some(owner) = self.frame_windows.get_mut(emacs_frame_id)
                         {
+                            self.comms.tooltip_context.invalidate();
+                            self.tooltips.hide();
                             owner.render.menu_opened();
                         }
                     } else {
@@ -126,88 +130,49 @@ impl RenderApp {
                 self.menus.hide(token);
                 self.sync_menu_heading();
             }
-            UiCommand::ShowTooltip {
+            UiCommand::PresentTooltip {
                 frame,
-                x,
-                y,
-                text,
-                fg_r,
-                fg_g,
-                fg_b,
-                bg_r,
-                bg_g,
-                bg_b,
+                request,
+                ticket,
             } => {
-                let emacs_frame_id = frame.raw_id();
-                tracing::debug!("ShowTooltip frame=0x{:x} at ({}, {})", emacs_frame_id, x, y);
-                let (fs, lh, cw, screen_w, screen_h) = self
-                    .frame_windows
-                    .get(emacs_frame_id)
-                    .map(|window_state| {
-                        let (fs, lh, cw) = window_state.render.font_metrics();
-                        let (screen_w, screen_h) = window_state.native_size();
-                        let scale = window_state.scale_factor() as f32;
-                        (fs, lh, cw, screen_w as f32 / scale, screen_h as f32 / scale)
-                    })
-                    .or_else(|| {
-                        if !self.frame_windows.is_primary_frame_id(emacs_frame_id) {
-                            return None;
+                if !ticket.is_current() || self.menus.owner().is_some() {
+                    ticket.cancel();
+                    return;
+                }
+                let frame = frame.raw_id();
+                let owner = self.frame_windows.get(frame).or_else(|| {
+                    self.frame_windows
+                        .primary_window()
+                        .filter(|_| self.frame_windows.is_primary_frame_id(frame))
+                });
+                if let Some(owner) = owner {
+                    if let Some(parent) = owner.window() {
+                        let mut fonts =
+                            neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer::with_size(
+                                0.0, 0.0,
+                            );
+                        if let Some(frame) = owner.render.compositor.current_frame.as_ref() {
+                            fonts.clone_font_bindings_from(frame);
                         }
-                        let (fs, lh, cw) = self
-                            .frame_windows
-                            .primary_window()
-                            .map(|ws| &ws.render)
-                            .map(|primary_frame| primary_frame.font_metrics())
-                            .unwrap_or((13.0, 17.0, 13.0 * 0.6));
-                        let (screen_w, screen_h) =
-                            self.frame_windows
-                                .primary_window()
-                                .map_or((0.0, 0.0), |ws| {
-                                    let (w, h) = ws.native_size();
-                                    let s = ws.scale_factor() as f32;
-                                    (w as f32 / s, h as f32 / s)
-                                });
-                        Some((fs, lh, cw, screen_w, screen_h))
-                    })
-                    .unwrap_or_else(|| {
-                        let (screen_w, screen_h) =
-                            self.frame_windows
-                                .primary_window()
-                                .map_or((0.0, 0.0), |ws| {
-                                    let (w, h) = ws.native_size();
-                                    let s = ws.scale_factor() as f32;
-                                    (w as f32 / s, h as f32 / s)
-                                });
-                        (13.0, 17.0, 13.0 * 0.6, screen_w, screen_h)
-                    });
-                let tooltip = TooltipState::new(
-                    x,
-                    y,
-                    &text,
-                    (fg_r, fg_g, fg_b),
-                    (bg_r, bg_g, bg_b),
-                    screen_w,
-                    screen_h,
-                    fs,
-                    lh,
-                    cw,
-                );
-                if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
-                    window_state.render.set_tooltip(Some(tooltip));
-                } else if self.frame_windows.is_primary_frame_id(emacs_frame_id) {
-                    if let Some(ws) = self.frame_windows.primary_window_mut() {
-                        ws.render.set_tooltip(Some(tooltip))
-                    };
-                } else {
-                    tracing::warn!(
-                        "ShowTooltip requested for unknown frame_id=0x{:x}",
-                        emacs_frame_id
-                    );
+                        let (x, y) = owner.render.mouse_pos;
+                        self.tooltips.show(
+                            crate::tooltips::TooltipOwner {
+                                frame,
+                                parent: parent.clone(),
+                                anchor: neomacs_display_protocol::Rect::new(x, y, 1.0, 1.0),
+                                metrics: owner.render.font_metrics(),
+                                fonts,
+                            },
+                            request,
+                            crate::tooltips::TooltipSource::Lisp(ticket),
+                            neomacs_display_protocol::frame_time::observe_platform_now()
+                                .into_instant(),
+                        );
+                    }
                 }
             }
-            UiCommand::HideTooltip => {
-                tracing::debug!("HideTooltip");
-                self.frame_windows.hide_top_level_tooltips();
+            UiCommand::DismissTooltip { ticket } => {
+                self.tooltips.dismiss(&ticket);
             }
             UiCommand::VisualBell { frame } => {
                 let emacs_frame_id = frame.raw_id();

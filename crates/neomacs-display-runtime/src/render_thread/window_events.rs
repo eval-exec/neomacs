@@ -41,6 +41,37 @@ impl RenderApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+            if self
+                .tooltips
+                .event(window_id, &event, &gpu.device, &gpu.queue, renderer)
+            {
+                return;
+            }
+        }
+        let live_owner = self.frame_windows.get_by_winit(window_id).is_some();
+        let dismiss = match &event {
+            WindowEvent::PointerButton {
+                state: ElementState::Pressed,
+                ..
+            }
+            | WindowEvent::MouseWheel { .. } => live_owner,
+            WindowEvent::KeyboardInput { event, .. } => {
+                live_owner && event.state == ElementState::Pressed
+            }
+            WindowEvent::PointerLeft { .. } => {
+                self.tooltips.owns_parent(window_id)
+                    || (live_owner && self.tooltips.owner().is_none())
+            }
+            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                self.tooltips.owns_parent(window_id)
+            }
+            _ => false,
+        };
+        if dismiss {
+            self.comms.tooltip_context.invalidate();
+            self.tooltips.hide();
+        }
         if self.handle_native_menu_bar_event(window_id, &event)
             || self.handle_native_menu_bar_key(window_id, &event)
         {
@@ -56,6 +87,7 @@ impl RenderApp {
                     &gpu.instance,
                     &gpu.adapter,
                     &gpu.device,
+                    &gpu.queue,
                     renderer.surface_format(),
                 ) {
                     tracing::error!(%error, "native menu update failed");

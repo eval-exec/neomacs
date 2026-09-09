@@ -5872,6 +5872,12 @@ impl crate::emacs_core::eval::Context {
         object: Value,
         pos: Value,
     ) -> Result<(), crate::emacs_core::error::Flow> {
+        // User help callbacks may run while the GUI invalidates this intent.
+        // Preserve the starting context, not the callback-completion context.
+        let tooltip_generation = self
+            .display_host
+            .as_ref()
+            .and_then(|host| host.tooltip_generation());
         if !help.is_nil() && !help.is_string() {
             help = if self.function_value_is_callable(&help) {
                 self.funcall_general(help, vec![window, object, pos])?
@@ -5887,6 +5893,30 @@ impl crate::emacs_core::eval::Context {
 
         if help.is_string() {
             help = self.substitute_help_echo_command_keys(help)?;
+            // Carry the originating native input context through Lisp's timer,
+            // not the context that happens to be current when the timer fires.
+            if let Some(generation) = tooltip_generation {
+                let copied = Value::heap_string(help.as_lisp_string().unwrap().clone());
+                if let Some(properties) =
+                    crate::emacs_core::value::get_string_text_properties_for_value(help)
+                {
+                    crate::emacs_core::value::set_string_text_properties_for_value(
+                        copied, properties,
+                    );
+                }
+                let len = copied.as_lisp_string().unwrap().schars();
+                if len > 0 {
+                    crate::emacs_core::textprop::builtin_put_text_property_5(
+                        self,
+                        Value::fixnum(0),
+                        Value::fixnum(len as i64),
+                        Value::symbol("neomacs-tooltip-generation"),
+                        Value::fixnum(generation.raw() as i64),
+                        copied,
+                    )?;
+                }
+                help = copied;
+            }
         }
 
         let show_help_function = self

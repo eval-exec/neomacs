@@ -1,6 +1,7 @@
 //! Menu behavior and native presentation. No menu behavior lives in the renderer.
 
 mod controller;
+mod help;
 mod interaction;
 mod layout;
 mod menu_bar;

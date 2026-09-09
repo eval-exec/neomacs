@@ -55,8 +55,6 @@ pub use thread_handle::RenderThread;
 
 use winit::event_loop::EventLoopProxy;
 
-pub(crate) use neomacs_renderer_wgpu::TooltipState;
-
 pub type RenderEventLoopProxy = EventLoopProxy;
 pub type RenderEventLoop = winit::event_loop::EventLoop;
 

@@ -62,6 +62,8 @@ impl MenuResult {
 /// A single item in a popup menu.
 #[derive(Debug, Clone)]
 pub struct PopupMenuItem {
+    /// Help belongs to the item snapshot, including disabled items.
+    pub help: Option<String>,
     /// Display label for the item
     pub label: String,
     /// Keyboard shortcut text (e.g., "C-x C-s"), or empty

@@ -6,6 +6,7 @@ use super::*;
 
 fn item(label: &str, enabled: bool, depth: u32) -> PopupMenuItem {
     PopupMenuItem {
+        help: None,
         label: label.to_string(),
         shortcut: String::new(),
         enabled,
@@ -17,6 +18,7 @@ fn item(label: &str, enabled: bool, depth: u32) -> PopupMenuItem {
 
 fn separator(depth: u32) -> PopupMenuItem {
     PopupMenuItem {
+        help: None,
         label: String::new(),
         shortcut: String::new(),
         enabled: false,
@@ -28,6 +30,7 @@ fn separator(depth: u32) -> PopupMenuItem {
 
 fn submenu_item(label: &str, depth: u32) -> PopupMenuItem {
     PopupMenuItem {
+        help: None,
         label: label.to_string(),
         shortcut: String::new(),
         enabled: true,
@@ -39,6 +42,7 @@ fn submenu_item(label: &str, depth: u32) -> PopupMenuItem {
 
 fn item_with_shortcut(label: &str, shortcut: &str, depth: u32) -> PopupMenuItem {
     PopupMenuItem {
+        help: None,
         label: label.to_string(),
         shortcut: shortcut.to_string(),
         enabled: true,

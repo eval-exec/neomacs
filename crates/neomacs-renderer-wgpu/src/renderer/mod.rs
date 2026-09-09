@@ -57,6 +57,7 @@ pub use snapshot_pool::{
     SnapshotId, SnapshotLease, SnapshotPool, SnapshotResources, SnapshotSize, texture_bytes,
 };
 mod stats;
+mod tooltip;
 mod transitions;
 mod ui_overlays;
 #[cfg(test)]

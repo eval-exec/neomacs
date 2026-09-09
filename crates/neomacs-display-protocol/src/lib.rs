@@ -34,6 +34,7 @@ pub mod scroll_animation;
 pub mod sealed_frame_presentation;
 pub mod snapshot_text;
 pub mod terminal_color;
+pub mod tooltip;
 pub mod transition_policy;
 pub mod tty_palette;
 pub mod types;

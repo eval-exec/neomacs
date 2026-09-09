@@ -8027,7 +8027,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "x-hide-tip",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_hide_tip(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::display::builtin_x_hide_tip_eval(ctx, args)
+        }),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -8046,7 +8048,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "x-show-tip",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_show_tip(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::display::builtin_x_show_tip_eval(ctx, args)
+        }),
         SubrArity::new(1, Some(6)),
     ));
     ctx.register_subr(SubrSpec::new(

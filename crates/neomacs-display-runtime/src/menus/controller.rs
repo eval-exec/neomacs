@@ -14,6 +14,7 @@ use winit::{
 };
 
 pub(crate) struct MenuRequest {
+    pub tooltips: Option<neomacs_display_protocol::tooltip::MenuTooltips>,
     pub request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     pub token: neomacs_display_protocol::menu::MenuToken,
     pub frame_id: u64,
@@ -34,6 +35,8 @@ pub(crate) struct MenuPresentation {
     modifiers: winit::keyboard::ModifiersState,
     // A dismissing press still owns its matching release after the menu closes.
     release_owner: Option<(WindowId, winit::event::MouseButton)>,
+    tooltip: crate::tooltips::Tooltips,
+    help: super::help::HoverHelp,
 }
 
 struct PanelState {
@@ -43,6 +46,100 @@ struct PanelState {
 }
 
 impl MenuPresentation {
+    pub fn tooltip_deadline(&self) -> Option<std::time::Instant> {
+        self.help
+            .deadline()
+            .into_iter()
+            .chain(self.tooltip.deadline())
+            .min()
+    }
+
+    fn dismiss_help(&mut self) {
+        self.help
+            .cancel(self.tooltip.hide(), std::time::Instant::now());
+    }
+
+    fn select_help(&mut self, depth: usize) {
+        let target = self.request.as_ref().and_then(|r| {
+            let panel = r.session.panel(depth)?;
+            let row = usize::try_from(panel.hover_index).ok()?;
+            let item = *panel.item_indices.get(row)?;
+            r.tooltips.as_ref()?;
+            r.session.all_items.get(item)?.help.as_ref()?;
+            Some(super::help::HelpTarget {
+                panel: super::help::PanelId(depth),
+                item: neomacs_display_protocol::menu::MenuItemId(u32::try_from(item).ok()?),
+            })
+        });
+        if target == self.help.target() {
+            return;
+        }
+        self.dismiss_help();
+        if let Some(target) = target {
+            let policy = self.request.as_ref().unwrap().tooltips.as_ref().unwrap();
+            let now = std::time::Instant::now();
+            self.help
+                .select(target, now, policy.delay, policy.short_delay, policy.recent);
+        }
+    }
+
+    fn sync_help(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        instance: &wgpu::Instance,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> Result<(), String> {
+        let now = std::time::Instant::now();
+        if let Some(target) = self.help.take_due(now) {
+            let depth = target.panel.0;
+            let item = target.item.0 as usize;
+            // Never insert a passive sibling beneath an already-open submenu.
+            if depth + 1 == self.panels.len() {
+                if let (Some(parent), Some(request)) =
+                    (self.host.mapped_window(depth), self.request.as_ref())
+                {
+                    let policy = request.tooltips.as_ref().unwrap();
+                    let panel = request.session.panel(depth).unwrap();
+                    if let Some(row) = panel.item_indices.iter().position(|i| *i == item) {
+                        let mut appearance = policy.appearance.clone();
+                        appearance.text = request.session.all_items[item]
+                            .help
+                            .clone()
+                            .unwrap_or_default();
+                        let mut fonts =
+                            neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer::with_size(
+                                0.0, 0.0,
+                            );
+                        fonts.clone_font_bindings_from(&request.fonts);
+                        let (fs, lh) = request.session.metrics();
+                        self.tooltip.show(
+                            crate::tooltips::TooltipOwner {
+                                frame: request.frame_id,
+                                parent,
+                                anchor: Rect::new(
+                                    0.0,
+                                    panel.item_offsets[row] - self.panels[depth].scroll,
+                                    panel.bounds.2,
+                                    panel.item_height,
+                                ),
+                                metrics: (fs, lh, self.panels[depth].atlas.default_char_width()),
+                                fonts,
+                            },
+                            appearance,
+                            crate::tooltips::TooltipSource::NativeMenu,
+                            now,
+                        );
+                    }
+                }
+            }
+        }
+        self.tooltip
+            .sync(now, event_loop, instance, adapter, device, queue, format)
+    }
+
     pub fn heading(&self) -> Option<&super::MenuHeading> {
         self.menu_bar.heading()
     }
@@ -119,6 +216,7 @@ impl MenuPresentation {
     }
 
     pub fn close(&mut self) {
+        self.dismiss_help();
         self.menu_bar.clear();
         self.lifetime.close();
         self.truncate(0);
@@ -126,6 +224,9 @@ impl MenuPresentation {
     }
 
     fn truncate(&mut self, len: usize) {
+        if len < self.panels.len() {
+            self.dismiss_help();
+        }
         self.host.truncate(len);
         self.panels.truncate(len);
     }
@@ -172,6 +273,7 @@ impl MenuPresentation {
         instance: &wgpu::Instance,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Result<(), String> {
         let Some(request) = self.request.as_ref() else {
@@ -186,6 +288,7 @@ impl MenuPresentation {
             .count();
         self.truncate(common);
         for depth in common..wanted {
+            self.dismiss_help();
             let request = self.request.as_ref().unwrap();
             let panel = request.session.panel(depth).unwrap();
             let placement = if depth == 0 {
@@ -226,6 +329,7 @@ impl MenuPresentation {
                 scroll: 0.0,
             });
         }
+        self.sync_help(event_loop, instance, adapter, device, queue, format)?;
         Ok(())
     }
 
@@ -238,6 +342,20 @@ impl MenuPresentation {
         queue: &wgpu::Queue,
         renderer: &mut WgpuRenderer,
     ) -> bool {
+        if self.tooltip.event(id, event, device, queue, renderer) {
+            return true;
+        }
+        if (self.owns_parent(id) || self.host.depth(id).is_some())
+            && matches!(
+                event,
+                WindowEvent::PointerButton { .. }
+                    | WindowEvent::KeyboardInput { .. }
+                    | WindowEvent::PointerLeft { .. }
+                    | WindowEvent::MouseWheel { .. }
+            )
+        {
+            self.dismiss_help();
+        }
         if let WindowEvent::PointerButton { state, button, .. } = event {
             if *state == ElementState::Pressed {
                 // A new press supersedes capture whose release was lost.
@@ -336,6 +454,7 @@ impl MenuPresentation {
                     position.x as f32 / scale,
                     position.y as f32 / scale + self.panels[depth].scroll,
                 );
+                self.select_help(depth);
             }
             WindowEvent::PointerButton {
                 state,

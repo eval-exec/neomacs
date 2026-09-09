@@ -1124,6 +1124,7 @@ impl ResolvedSurfaceMemo {
 }
 
 struct PrimaryWindowDisplayHost {
+    tooltip_client: neomacs_display_protocol::tooltip::TooltipClient,
     cmd_tx: crossbeam_channel::Sender<RenderCommand>,
     render_waker: Option<GuiEventLoopWaker>,
     font_sizing: FontSizing,
@@ -1657,6 +1658,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .entries
             .into_iter()
             .map(|entry| neomacs_display_protocol::ui_types::PopupMenuItem {
+                help: entry.help,
                 label: entry.label,
                 shortcut: entry.shortcut,
                 enabled: entry.enabled,
@@ -1667,6 +1669,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .collect();
         self.send_render_command(
             RenderCommand::Ui(UiCommand::ShowPopupMenu {
+                tooltips: menu.tooltips,
                 request_id: menu.request_id,
                 token: menu.token,
                 frame,
@@ -1678,6 +1681,44 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             }),
             "failed to show popup menu",
         )
+    }
+    fn owns_native_menu_tooltips(&self) -> bool {
+        true
+    }
+
+    fn show_tooltip(
+        &mut self,
+        frame: neovm_core::window::FrameId,
+        request: neomacs_display_protocol::tooltip::TooltipRequest,
+    ) -> Result<(), String> {
+        let ticket = self.tooltip_client.present(request.generation);
+        self.send_render_command(
+            RenderCommand::Ui(UiCommand::PresentTooltip {
+                ticket,
+                frame: if self.primary_frame_id == Some(frame) {
+                    FrameRef::Primary
+                } else {
+                    FrameRef::Frame(frame.0)
+                },
+                request,
+            }),
+            "failed to show tooltip",
+        )
+    }
+
+    fn hide_tooltip(&mut self) -> Result<bool, String> {
+        let Some((ticket, visible)) = self.tooltip_client.dismiss() else {
+            return Ok(false);
+        };
+        self.send_render_command(
+            RenderCommand::Ui(UiCommand::DismissTooltip { ticket }),
+            "failed to hide tooltip",
+        )?;
+        Ok(visible)
+    }
+
+    fn tooltip_generation(&self) -> Option<neomacs_display_protocol::tooltip::TooltipGeneration> {
+        Some(self.tooltip_client.generation())
     }
 
     fn hide_popup_menu(
@@ -3520,6 +3561,9 @@ fn run_gui_evaluator_worker(
     maybe_install_startup_phase_trace(&mut evaluator);
 
     evaluator.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        tooltip_client: neomacs_display_protocol::tooltip::TooltipClient::new(
+            emacs_comms.tooltip_context.clone(),
+        ),
         cmd_tx: emacs_comms.cmd_tx.clone(),
         render_waker: Some(render_waker.clone()),
         font_sizing: bootstrap_display.font_sizing(),

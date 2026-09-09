@@ -1,5 +1,5 @@
-//! The overlays that exist because of something that just happened: the popup
-//! menu, the tooltip, the IME pre-edit box, the visual-bell flash, the FPS
+//! The overlays that exist because of something that just happened: the
+//! IME pre-edit box, the visual-bell flash, the FPS
 //! readout and the typing-speed readout.
 //!
 //! Owns: how each one is drawn, and the small pieces of state three of them
@@ -7,7 +7,7 @@
 //! frame time, the typing-speed window of keypress times.
 //!
 //! What makes an overlay transient: it is not part of the window's shape. It
-//! appears over the picture in response to a menu opening, a bell ringing, a
+//! appears over the picture in response to composition starting, a bell ringing, a
 //! key being pressed, and it goes away on its own. Three of them are still
 //! *animating* while they are drawn — the bell ramps down, the FPS number and
 //! the typing-speed number decay towards a target — so they report by setting
@@ -89,8 +89,7 @@ fn frame_ime_preedit_overlay<'a>(
     })
 }
 
-/// Draw the three panels that sit over the picture without animating: the
-/// popup menu, the tooltip, and the IME pre-edit box, in that order.
+/// Draw the IME pre-edit panel. Menus and tooltips use native surfaces.
 pub(super) fn draw_panels(
     renderer: &mut WgpuRenderer,
     render: &mut GuiFrameRenderState,
@@ -104,12 +103,7 @@ pub(super) fn draw_panels(
         render.emacs_frame_id,
         &render.compositor.child_frames,
     );
-    let tooltip = render.overlays.tooltip.as_ref();
     let glyph_atlas = render.compositor.glyph_atlas.as_mut().unwrap();
-
-    if let Some(tooltip) = tooltip {
-        renderer.render_tooltip(surface_view, tooltip, glyph_atlas, width, height);
-    }
 
     if let Some(preedit) = ime_preedit {
         renderer.render_ime_preedit(

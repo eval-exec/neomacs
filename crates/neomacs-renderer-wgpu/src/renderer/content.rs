@@ -56,15 +56,20 @@ pub(super) fn snap_glyph_origin(phys_x: f32, phys_y: f32) -> (i32, i32, Subpixel
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct DecorationRect {
+pub(super) struct DecorationRect {
+    pub(super) x: f32,
+    pub(super) y: f32,
+    pub(super) width: f32,
+    pub(super) height: f32,
+    pub(super) color: Color,
+}
+
+pub(super) fn stretch_decoration_rects(
+    face: &Face,
     x: f32,
     y: f32,
     width: f32,
-    height: f32,
-    color: Color,
-}
-
-fn stretch_decoration_rects(face: &Face, x: f32, y: f32, width: f32) -> Vec<DecorationRect> {
+) -> Vec<DecorationRect> {
     let mut rects = Vec::new();
     let fg = face.foreground;
     let baseline = y + face.font_ascent as f32;

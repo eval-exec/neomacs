@@ -8,6 +8,11 @@ pub(crate) struct PopupHost {
 }
 
 impl PopupHost {
+    pub fn reposition(&self, depth: usize, placement: neomacs_display_protocol::PopupPlacement) {
+        if let Some(surface) = self.surfaces.get(depth) {
+            surface.reposition(placement);
+        }
+    }
     pub fn open(
         &mut self,
         event_loop: &dyn winit::event_loop::ActiveEventLoop,
@@ -19,6 +24,31 @@ impl PopupHost {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
     ) -> Result<Option<neomacs_display_protocol::DrawableSurface>, String> {
+        self.open_with_role(
+            event_loop,
+            root,
+            placement,
+            extent,
+            instance,
+            adapter,
+            device,
+            format,
+            super::PopupRole::Menu,
+        )
+    }
+
+    pub fn open_with_role(
+        &mut self,
+        event_loop: &dyn winit::event_loop::ActiveEventLoop,
+        root: std::sync::Arc<dyn winit::window::Window>,
+        placement: neomacs_display_protocol::PopupPlacement,
+        extent: (f32, f32),
+        instance: &wgpu::Instance,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        role: super::PopupRole,
+    ) -> Result<Option<neomacs_display_protocol::DrawableSurface>, String> {
         let parent = match self.surfaces.last() {
             Some(parent) if parent.presented => parent.window.clone(),
             // A child can only be created after its parent maps. Defer until
@@ -27,7 +57,7 @@ impl PopupHost {
             None => root,
         };
         let surface = PopupSurface::create(
-            event_loop, parent, placement, extent, instance, adapter, device, format,
+            event_loop, parent, placement, extent, instance, adapter, device, format, role,
         )?;
         let geometry = surface.geometry();
         self.surfaces.push(surface);
@@ -40,6 +70,15 @@ impl PopupHost {
     }
     pub fn geometry(&self, depth: usize) -> Option<neomacs_display_protocol::DrawableSurface> {
         self.surfaces.get(depth).map(PopupSurface::geometry)
+    }
+
+    /// Borrowed native parent for another passive popup. The parent must map
+    /// before a child can be created; callers retain child-before-parent teardown.
+    pub fn mapped_window(&self, depth: usize) -> Option<std::sync::Arc<dyn winit::window::Window>> {
+        self.surfaces
+            .get(depth)
+            .filter(|s| s.presented)
+            .map(|s| s.window.clone())
     }
     pub fn request_redraw(&self) {
         for surface in &self.surfaces {

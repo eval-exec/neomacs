@@ -1044,6 +1044,7 @@ fn render_command_set_window_decorated() {
 fn render_command_show_popup_menu() {
     let items = vec![
         PopupMenuItem {
+            help: None,
             label: "Open".to_string(),
             shortcut: "C-x C-f".to_string(),
             enabled: true,
@@ -1052,6 +1053,7 @@ fn render_command_show_popup_menu() {
             depth: 0,
         },
         PopupMenuItem {
+            help: None,
             label: String::new(),
             shortcut: String::new(),
             enabled: false,
@@ -1060,6 +1062,7 @@ fn render_command_show_popup_menu() {
             depth: 0,
         },
         PopupMenuItem {
+            help: None,
             label: "Quit".to_string(),
             shortcut: "C-x C-c".to_string(),
             enabled: true,
@@ -1070,6 +1073,7 @@ fn render_command_show_popup_menu() {
     ];
 
     let cmd = RenderCommand::Ui(UiCommand::ShowPopupMenu {
+        tooltips: None,
         request_id: None,
         token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x1000),
@@ -1083,6 +1087,7 @@ fn render_command_show_popup_menu() {
     });
     match cmd {
         RenderCommand::Ui(UiCommand::ShowPopupMenu {
+            tooltips: None,
             request_id: None,
             token: _,
             frame,
@@ -1121,53 +1126,6 @@ fn render_command_hide_popup_menu() {
     match cmd {
         RenderCommand::Ui(UiCommand::HidePopupMenu { .. }) => {}
         other => panic!("Expected HidePopupMenu, got {:?}", other),
-    }
-}
-
-#[test]
-fn render_command_show_tooltip() {
-    let cmd = RenderCommand::Ui(UiCommand::ShowTooltip {
-        frame: FrameRef::Frame(0x2000),
-        x: 300.0,
-        y: 400.0,
-        text: "This is a tooltip".to_string(),
-        fg_r: 1.0,
-        fg_g: 1.0,
-        fg_b: 1.0,
-        bg_r: 0.0,
-        bg_g: 0.0,
-        bg_b: 0.0,
-    });
-    match cmd {
-        RenderCommand::Ui(UiCommand::ShowTooltip {
-            frame,
-            x,
-            y,
-            text,
-            fg_r,
-            fg_g: _,
-            fg_b: _,
-            bg_r,
-            bg_g: _,
-            bg_b: _,
-        }) => {
-            assert_eq!(frame.raw_id(), 0x2000);
-            assert_eq!(x, 300.0);
-            assert_eq!(y, 400.0);
-            assert_eq!(text, "This is a tooltip");
-            assert_eq!(fg_r, 1.0);
-            assert_eq!(bg_r, 0.0);
-        }
-        other => panic!("Expected ShowTooltip, got {:?}", other),
-    }
-}
-
-#[test]
-fn render_command_hide_tooltip() {
-    let cmd = RenderCommand::Ui(UiCommand::HideTooltip);
-    match cmd {
-        RenderCommand::Ui(UiCommand::HideTooltip) => {}
-        other => panic!("Expected HideTooltip, got {:?}", other),
     }
 }
 
@@ -1438,6 +1396,7 @@ fn render_command_debug() {
 #[test]
 fn popup_menu_item_construction() {
     let item = PopupMenuItem {
+        help: None,
         label: "Save".to_string(),
         shortcut: "C-x C-s".to_string(),
         enabled: true,
@@ -1456,6 +1415,7 @@ fn popup_menu_item_construction() {
 #[test]
 fn popup_menu_item_separator() {
     let sep = PopupMenuItem {
+        help: None,
         label: String::new(),
         shortcut: String::new(),
         enabled: false,
@@ -1470,6 +1430,7 @@ fn popup_menu_item_separator() {
 #[test]
 fn popup_menu_item_submenu() {
     let sub = PopupMenuItem {
+        help: None,
         label: "Recent Files".to_string(),
         shortcut: String::new(),
         enabled: true,
@@ -1484,6 +1445,7 @@ fn popup_menu_item_submenu() {
 #[test]
 fn popup_menu_item_clone() {
     let item = PopupMenuItem {
+        help: None,
         label: "Test".to_string(),
         shortcut: "M-x".to_string(),
         enabled: true,
@@ -1499,6 +1461,7 @@ fn popup_menu_item_clone() {
 #[test]
 fn popup_menu_item_debug() {
     let item = PopupMenuItem {
+        help: None,
         label: "Debug".to_string(),
         shortcut: String::new(),
         enabled: true,
@@ -1582,7 +1545,9 @@ fn channel_sends_multiple_commands_in_order() {
         .unwrap();
     comms
         .cmd_tx
-        .send(RenderCommand::Ui(UiCommand::HideTooltip))
+        .send(RenderCommand::Ui(UiCommand::DismissTooltip {
+            ticket: neomacs_display_protocol::tooltip::TooltipClient::default().present(None),
+        }))
         .unwrap();
 
     match comms.cmd_rx.try_recv().unwrap() {
@@ -1594,7 +1559,7 @@ fn channel_sends_multiple_commands_in_order() {
         other => panic!("Expected VisualBell, got {:?}", other),
     }
     match comms.cmd_rx.try_recv().unwrap() {
-        RenderCommand::Ui(UiCommand::HideTooltip) => {}
+        RenderCommand::Ui(UiCommand::DismissTooltip { .. }) => {}
         other => panic!("Expected HideTooltip, got {:?}", other),
     }
 

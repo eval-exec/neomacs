@@ -22,12 +22,11 @@ impl PopupSurface {
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
+        role: super::super::PopupRole,
     ) -> Result<Self, String> {
         if cfg!(any(target_os = "android", target_arch = "wasm32")) {
-            return Err("native menu presentation is not implemented on this platform".into());
+            return Err("native popup presentation is not implemented on this platform".into());
         }
-        let anchor = placement.anchor();
-        let offset = placement.offset();
         let scale = parent.scale_factor().max(f64::EPSILON) as f32;
         let gpu_limit = device.limits().max_texture_dimension_2d as f32 / scale;
         let screen_height = parent
@@ -40,55 +39,26 @@ impl PopupSurface {
             extent.0.min(gpu_limit).max(1.0),
             extent.1.min(screen_height).min(gpu_limit).max(1.0),
         );
-        let adjustment = match placement.constraint() {
-            PopupConstraintPolicy::None => WindowConstraintAdjustment::empty(),
-            PopupConstraintPolicy::Shift { .. } => {
-                WindowConstraintAdjustment::SLIDE_X
-                    | WindowConstraintAdjustment::SLIDE_Y
-                    | WindowConstraintAdjustment::RESIZE_Y
-            }
-            PopupConstraintPolicy::FlipAndShift { .. } => {
-                WindowConstraintAdjustment::SLIDE_X
-                    | WindowConstraintAdjustment::SLIDE_Y
-                    | WindowConstraintAdjustment::FLIP_X
-                    | WindowConstraintAdjustment::FLIP_Y
-                    | WindowConstraintAdjustment::RESIZE_Y
-            }
-        };
-        // Frame-viewport padding is not a global screen margin. Native popup
-        // constraints use the compositor's usable area; never apply the old
-        // editor-viewport inset here.
-        let (edge, gravity) = match placement.preferred_side() {
-            PopupPreferredSide::AtAnchor => (WindowAnchor::TopLeft, WindowGravity::BottomRight),
-            PopupPreferredSide::Below => (WindowAnchor::BottomLeft, WindowGravity::BottomRight),
-            PopupPreferredSide::Above => (WindowAnchor::TopLeft, WindowGravity::TopRight),
-            PopupPreferredSide::Right => (WindowAnchor::TopRight, WindowGravity::BottomRight),
-            PopupPreferredSide::Left => (WindowAnchor::TopLeft, WindowGravity::BottomLeft),
-        };
         let attrs = WindowAttributes::default()
-            .with_title("Neomacs menu")
+            .with_title(match role {
+                super::super::PopupRole::Menu => "Neomacs menu",
+                super::super::PopupRole::Tooltip => "Neomacs tooltip",
+            })
             .with_surface_size(LogicalSize::new(extent.0.max(1.0), extent.1.max(1.0)))
             .with_decorations(false)
-            .with_active(true)
+            .with_active(role == super::super::PopupRole::Menu)
             .with_window_type(WindowType::Popup)
-            .with_positioner(WindowPositioner::new(
-                edge,
-                (
-                    Position::Logical(LogicalPosition::new(anchor.x as f64, anchor.y as f64)),
-                    Size::Logical(LogicalSize::new(
-                        anchor.width.max(1.0) as f64,
-                        anchor.height.max(1.0) as f64,
-                    )),
-                ),
-                Position::Logical(LogicalPosition::new(offset.x as f64, offset.y as f64)),
-                gravity,
-                adjustment,
-            ));
+            .with_positioner(native_positioner(placement));
         let handle = parent.window_handle().map_err(|e| e.to_string())?.as_raw();
         // SAFETY: _parent retains the parent window until after this popup is dropped.
         let attrs = unsafe { attrs.with_parent_window(Some(handle)) };
         let window: Arc<dyn Window> =
             Arc::from(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        if role == super::super::PopupRole::Tooltip {
+            window
+                .set_cursor_hittest(false)
+                .map_err(|e| e.to_string())?;
+        }
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| e.to_string())?;
@@ -110,7 +80,7 @@ impl PopupSurface {
         };
         surface.configure(device, &config);
         window.request_redraw();
-        tracing::info!(window_id = ?window.id(), parent_id = ?parent.id(), "created native menu popup");
+        tracing::info!(window_id = ?window.id(), parent_id = ?parent.id(), ?role, "created native popup");
         Ok(Self {
             surface,
             window,
@@ -118,5 +88,54 @@ impl PopupSurface {
             config,
             presented: false,
         })
+    }
+}
+
+fn native_positioner(placement: PopupPlacement) -> WindowPositioner {
+    let anchor = placement.anchor();
+    let offset = placement.offset();
+    let adjustment = match placement.constraint() {
+        PopupConstraintPolicy::None => WindowConstraintAdjustment::empty(),
+        PopupConstraintPolicy::Shift { .. } => {
+            WindowConstraintAdjustment::SLIDE_X
+                | WindowConstraintAdjustment::SLIDE_Y
+                | WindowConstraintAdjustment::RESIZE_Y
+        }
+        PopupConstraintPolicy::FlipAndShift { .. } => {
+            WindowConstraintAdjustment::SLIDE_X
+                | WindowConstraintAdjustment::SLIDE_Y
+                | WindowConstraintAdjustment::FLIP_X
+                | WindowConstraintAdjustment::FLIP_Y
+                | WindowConstraintAdjustment::RESIZE_Y
+        }
+    };
+    // Frame-viewport padding is not a global screen margin. Native popup
+    // constraints use the compositor's usable area; never apply the old
+    // editor-viewport inset here.
+    let (edge, gravity) = match placement.preferred_side() {
+        PopupPreferredSide::AtAnchor => (WindowAnchor::TopLeft, WindowGravity::BottomRight),
+        PopupPreferredSide::Below => (WindowAnchor::BottomLeft, WindowGravity::BottomRight),
+        PopupPreferredSide::Above => (WindowAnchor::TopLeft, WindowGravity::TopRight),
+        PopupPreferredSide::Right => (WindowAnchor::TopRight, WindowGravity::BottomRight),
+        PopupPreferredSide::Left => (WindowAnchor::TopLeft, WindowGravity::BottomLeft),
+    };
+    WindowPositioner::new(
+        edge,
+        (
+            Position::Logical(LogicalPosition::new(anchor.x as f64, anchor.y as f64)),
+            Size::Logical(LogicalSize::new(
+                anchor.width.max(1.0) as f64,
+                anchor.height.max(1.0) as f64,
+            )),
+        ),
+        Position::Logical(LogicalPosition::new(offset.x as f64, offset.y as f64)),
+        gravity,
+        adjustment,
+    )
+}
+
+impl PopupSurface {
+    pub(in crate::presentation) fn reposition(&self, placement: PopupPlacement) {
+        self.window.set_positioner(native_positioner(placement));
     }
 }

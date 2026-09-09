@@ -2114,6 +2114,10 @@ impl FaceTable {
     ///   plus recursive resolution of its own `:inherit`
     /// - list with non-keyword head → list of face_refs, merged left-to-right
     ///   (first takes precedence, matching xfaces.c:3005-3014)
+    pub fn resolve_reference(&self, face_ref: Value) -> Face {
+        self.resolve_face_ref(face_ref, 0)
+    }
+
     fn resolve_face_ref(&self, face_ref: Value, depth: usize) -> Face {
         if depth > 40 {
             return Face::default();

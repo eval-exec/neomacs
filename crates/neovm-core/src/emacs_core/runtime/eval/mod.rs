@@ -2575,6 +2575,7 @@ pub struct PopupMenuEntry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopupMenuRequest {
+    pub tooltips: Option<neomacs_display_protocol::tooltip::MenuTooltips>,
     pub request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     pub token: neomacs_display_protocol::menu::MenuToken,
     pub frame_id: crate::window::FrameId,

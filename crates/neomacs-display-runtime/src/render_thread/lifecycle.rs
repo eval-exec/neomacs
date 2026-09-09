@@ -239,6 +239,8 @@ impl RenderApp {
         // command. Rebuild the whole GPU stack before doing anything else
         // with it.
         if self.device_lost.take() {
+            self.comms.tooltip_context.invalidate();
+            self.tooltips.hide();
             self.menus.cancel();
             self.recover_from_device_loss(event_loop);
         }
@@ -251,11 +253,24 @@ impl RenderApp {
 
         if let Some(gpu) = &self.gpu {
             if let Some(renderer) = &self.renderer {
+                if let Err(error) = self.tooltips.sync(
+                    now.into_instant(),
+                    event_loop,
+                    &gpu.instance,
+                    &gpu.adapter,
+                    &gpu.device,
+                    &gpu.queue,
+                    renderer.surface_format(),
+                ) {
+                    tracing::error!(%error, "native tooltip presentation failed");
+                    self.tooltips.hide();
+                }
                 if let Err(error) = self.menus.sync(
                     event_loop,
                     &gpu.instance,
                     &gpu.adapter,
                     &gpu.device,
+                    &gpu.queue,
                     renderer.surface_format(),
                 ) {
                     tracing::error!(%error, "native menu presentation failed");
@@ -271,6 +286,13 @@ impl RenderApp {
             );
         }
         let destroyed = self.frame_windows.process_destroys();
+        if self
+            .tooltips
+            .owner()
+            .is_some_and(|owner| destroyed.contains(&owner))
+        {
+            self.tooltips.hide();
+        }
         if self
             .menus
             .owner()
@@ -401,6 +423,12 @@ impl RenderApp {
             deadline = Some(deadline.map_or(image_poll, |d| d.min(image_poll)));
         }
 
+        if let Some(tooltip_deadline) = self.tooltips.deadline() {
+            deadline = Some(deadline.map_or(tooltip_deadline, |d| d.min(tooltip_deadline)));
+        }
+        if let Some(tooltip_deadline) = self.menus.tooltip_deadline() {
+            deadline = Some(deadline.map_or(tooltip_deadline, |d| d.min(tooltip_deadline)));
+        }
         match deadline {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
@@ -839,6 +867,7 @@ impl RenderApp {
 
     pub(super) fn handle_exiting(&mut self) {
         self.menus.close();
+        self.tooltips.hide();
         // Explicitly drop wgpu resources while the Wayland connection is still alive.
         // Without this, RenderApp's implicit drop happens AFTER the event loop's
         // Wayland display is torn down, causing SEGV in eglTerminate → dri2_teardown_wayland.

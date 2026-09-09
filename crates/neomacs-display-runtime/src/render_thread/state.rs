@@ -792,6 +792,7 @@ pub(super) struct RenderGpuContext {
 pub(super) struct RenderApp {
     pub(super) comms: RenderComms,
     pub(super) menus: crate::menus::MenuPresentation,
+    pub(super) tooltips: crate::tooltips::Tooltips,
 
     /// Display-lifetime owner for decoded application icon data and native
     /// Wayland toplevel-icon protocol state.
@@ -1002,6 +1003,7 @@ impl RenderApp {
             clipboard: Err("clipboard is unavailable before display initialization".to_owned()),
             gpu: None,
             menus: crate::menus::MenuPresentation::default(),
+            tooltips: crate::tooltips::Tooltips::default(),
             renderer: None,
             #[cfg(feature = "video")]
             video_wake: neomacs_video::VideoWake::noop(),

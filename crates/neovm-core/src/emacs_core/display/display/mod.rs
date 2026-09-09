@@ -17,6 +17,9 @@ pub(crate) use crate::emacs_core::error::{expect_args, expect_args_range, expect
 use crate::window::{FrameId, WindowId};
 use strum::{EnumString, IntoStaticStr};
 
+mod tooltip;
+pub(crate) use tooltip::{builtin_x_hide_tip_eval, builtin_x_show_tip_eval};
+
 /// Clear cached thread-local display values (must be called when heap changes).
 pub fn reset_display_thread_locals() {
     super::terminal::pure::reset_terminal_thread_locals();
@@ -1884,6 +1887,16 @@ impl TtyMenuHelpTracker {
 
 impl TtyMenuHelpUpdate {
     fn publish(self, ctx: &mut Context, selected: usize) -> Result<(), Flow> {
+        if ctx
+            .display_host
+            .as_ref()
+            .is_some_and(|host| host.owns_native_menu_tooltips())
+            && ctx
+                .visible_variable_value_or_nil("tooltip-mode")
+                .is_truthy()
+        {
+            return Ok(());
+        }
         let help = match self {
             Self::Unchanged => return Ok(()),
             Self::Show(help) => Value::string(help),
@@ -2299,11 +2312,13 @@ fn show_popup_menu_selection(
     token: &mut neomacs_display_protocol::menu::MenuToken,
 ) -> Result<(), Flow> {
     token.next_revision();
+    let tooltips = tooltip::menu_tooltips(ctx, frame_id);
     {
         let Some(host) = ctx.display_host.as_mut() else {
             return Ok(());
         };
         host.show_popup_menu(PopupMenuRequest {
+            tooltips,
             request_id,
             token: *token,
             frame_id,

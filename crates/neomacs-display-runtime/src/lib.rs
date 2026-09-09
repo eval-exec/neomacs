@@ -22,6 +22,7 @@ mod menus;
 mod presentation;
 pub mod redisplay;
 pub mod thread_comm;
+mod tooltips;
 pub mod tty_input;
 #[cfg(target_os = "linux")]
 mod wayland_toplevel_icon;

@@ -14,7 +14,6 @@ mod gpu_frame_timing;
 pub mod image_cache;
 mod image_sequence;
 pub mod media_budget;
-pub mod overlay_state;
 pub mod renderer;
 pub mod shader_surface;
 pub mod shader_surface_cache;
@@ -22,6 +21,7 @@ mod svg;
 #[cfg(test)]
 #[path = "texture_discipline_test.rs"]
 mod texture_discipline_test;
+pub mod tooltip_layout;
 pub use svg::SvgResourceContext;
 pub mod vertex;
 pub mod xbm;
@@ -51,7 +51,6 @@ pub use glyph_atlas::{
     allocator, pages, types,
 };
 pub use image_cache::{CachedImage, ImageCache, ImageCacheEvent, ImageMetadata, ImageState};
-pub use overlay_state::TooltipState;
 pub use renderer::{
     BudgetExceeded, CompositionRing, FrameRowDamage, FullFrameTexture, GpuBudget, GpuBudgetOwner,
     PaneBlit, PaneSource, RendererFrameEffects, RowDamageInfo, RowReuseStats, SnapshotId,
@@ -63,6 +62,7 @@ pub use shader_surface::{
     compose_surface_wgsl, validate_surface_wgsl,
 };
 pub use shader_surface_cache::{MAX_SURFACE_SIZE, ShaderSurfaceCache};
+pub use tooltip_layout::TooltipLayout;
 pub use vertex::{GlyphVertex, RectVertex, RoundedRectVertex, TextureVertex, Uniforms};
 #[cfg(feature = "video")]
 pub use video_cache::{CachedVideo, VideoCache, VideoRecoveryManifest, VideoState};

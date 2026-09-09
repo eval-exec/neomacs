@@ -1150,6 +1150,55 @@ fn make_tex_sized(
     let v = t.create_view(&wgpu::TextureViewDescriptor::default());
     (t, v)
 }
+#[test]
+fn native_tooltip_uses_target_scale_not_editor_scale() {
+    use neomacs_display_protocol::tooltip::TooltipRequest;
+    use neomacs_renderer_wgpu::TooltipLayout;
+    use neomacs_renderer_wgpu::renderer::RenderTarget;
+
+    let mut h = try_harness().expect("native tooltip probe requires a GPU adapter");
+    h.atlas.set_scale_factor(2.0);
+    let request = TooltipRequest {
+        text: "Tip".into(),
+        background: Some(0xffffff),
+        border_width: 0,
+        ..Default::default()
+    };
+    let mut layout = TooltipLayout::measure_with_atlas(
+        &request,
+        8.0,
+        16.0,
+        2.0,
+        &mut h.atlas,
+        h.renderer.device(),
+        h.renderer.queue(),
+    );
+    layout.fit_surface(W as f32 / 2.0, H as f32 / 2.0);
+    let SurfaceState::Drawable(surface) =
+        SurfaceState::from_device_size(W, H, DeviceScale::new(2.0).unwrap()).unwrap()
+    else {
+        unreachable!()
+    };
+    h.renderer.set_scale_factor(1.0);
+    h.renderer
+        .render_native_tooltip(RenderTarget::new(&h.view, surface), &layout, &mut h.atlas);
+    let first = read_tex(&h.renderer, &h.target);
+    assert!(
+        first
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] < 128 && pixel[3] == 255),
+        "tooltip must draw text, not just a background"
+    );
+    h.renderer.set_scale_factor(3.0);
+    h.renderer
+        .render_native_tooltip(RenderTarget::new(&h.view, surface), &layout, &mut h.atlas);
+    assert_eq!(
+        first,
+        read_tex(&h.renderer, &h.target),
+        "editor scale leaked into tooltip painting"
+    );
+}
+
 fn read_tex(r: &WgpuRenderer, t: &wgpu::Texture) -> Vec<u8> {
     let unpadded = W * 4;
     let padded =
@@ -1328,6 +1377,7 @@ fn popup_redraw_preserves_unchanged_main_frame_pixels() {
         item_height: 18.0,
     };
     let items = [PopupMenuItem {
+        help: None,
         label: "H".into(),
         shortcut: String::new(),
         enabled: true,

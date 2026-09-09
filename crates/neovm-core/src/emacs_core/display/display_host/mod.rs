@@ -358,6 +358,22 @@ pub trait DisplayHost {
     fn show_popup_menu(&mut self, _menu: PopupMenuRequest) -> Result<(), String> {
         Ok(())
     }
+    fn owns_native_menu_tooltips(&self) -> bool {
+        false
+    }
+    fn show_tooltip(
+        &mut self,
+        _frame: crate::window::FrameId,
+        _request: neomacs_display_protocol::tooltip::TooltipRequest,
+    ) -> Result<(), String> {
+        Err("native tooltips are not supported by this display host".into())
+    }
+    fn hide_tooltip(&mut self) -> Result<bool, String> {
+        Ok(false)
+    }
+    fn tooltip_generation(&self) -> Option<neomacs_display_protocol::tooltip::TooltipGeneration> {
+        None
+    }
     fn popup_menu_visible_rows(&self, _x: f32, _y: f32, _entry_count: usize) -> Option<usize> {
         None
     }

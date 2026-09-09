@@ -14,6 +14,16 @@ use winit::{
 #[test]
 #[ignore = "requires a live Linux Wayland compositor and GPU; creates temporary windows"]
 fn linux_wayland_native_menu_smoke() {
+    run_smoke(false);
+}
+
+#[test]
+#[ignore = "requires a live Linux Wayland compositor and GPU; creates temporary windows"]
+fn linux_wayland_native_menu_tooltip_smoke() {
+    run_smoke(true);
+}
+
+fn run_smoke(with_tooltips: bool) {
     use winit::platform::wayland::EventLoopBuilderExtWayland;
     let mut builder = EventLoop::builder();
     builder.with_wayland().with_any_thread(true);
@@ -28,11 +38,14 @@ fn linux_wayland_native_menu_smoke() {
             start: Instant::now(),
             opened: false,
             painted,
+            with_tooltips,
+            submenu: None,
         })
         .expect("native popup event loop");
-    assert!(
-        observed.lock().unwrap().len() == 2,
-        "repeated same-heading hover must preserve exactly two native menu surfaces"
+    assert_eq!(
+        observed.lock().unwrap().len(),
+        if with_tooltips { 3 } else { 2 },
+        "same-target hover must preserve menu surfaces and a single native tooltip"
     );
 }
 
@@ -46,6 +59,8 @@ struct Graphics {
 }
 
 struct Smoke {
+    with_tooltips: bool,
+    submenu: Option<WindowId>,
     menus: MenuPresentation,
     graphics: Option<Graphics>,
     parent: Option<Arc<dyn Window>>,
@@ -105,6 +120,7 @@ impl ApplicationHandler for Smoke {
         });
         parent.request_redraw();
         self.parent = Some(parent);
+        self.start = Instant::now();
     }
 
     fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -116,7 +132,11 @@ impl ApplicationHandler for Smoke {
             .event(id, &event, &gpu.device, &gpu.queue, &mut gpu.renderer)
         {
             if matches!(event, WindowEvent::RedrawRequested) {
-                self.painted.lock().unwrap().insert(id);
+                let mut painted = self.painted.lock().unwrap();
+                painted.insert(id);
+                if painted.len() == 2 && self.submenu.is_none() {
+                    self.submenu = Some(id);
+                }
             }
             self.menus
                 .sync(
@@ -124,6 +144,7 @@ impl ApplicationHandler for Smoke {
                     &gpu.instance,
                     &gpu.adapter,
                     &gpu.device,
+                    &gpu.queue,
                     gpu.renderer.surface_format(),
                 )
                 .unwrap();
@@ -161,9 +182,14 @@ impl ApplicationHandler for Smoke {
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         let elapsed = self.start.elapsed();
+        if elapsed > Duration::from_secs(6) {
+            event_loop.exit();
+            return;
+        }
         if elapsed > Duration::from_secs(5) {
             self.menus.close();
-            event_loop.exit();
+            event_loop
+                .set_control_flow(ControlFlow::WaitUntil(self.start + Duration::from_secs(6)));
             return;
         }
         if !self.opened && elapsed > Duration::from_millis(300) {
@@ -180,6 +206,9 @@ impl ApplicationHandler for Smoke {
                 panic!("initial heading request")
             };
             let mut root = neomacs_display_protocol::PopupMenuItem {
+                help: self
+                    .with_tooltips
+                    .then(|| "Native tooltip outside the small owner frame".into()),
                 label: "Submenu wider than the parent window".into(),
                 shortcut: String::new(),
                 enabled: true,
@@ -206,6 +235,17 @@ impl ApplicationHandler for Smoke {
             session.move_hover(1);
             assert!(session.open_submenu());
             self.menus.open(MenuRequest {
+                tooltips: self.with_tooltips.then(|| {
+                    neomacs_display_protocol::tooltip::MenuTooltips {
+                        appearance: neomacs_display_protocol::tooltip::TooltipRequest {
+                            offset: (5, 20),
+                            ..Default::default()
+                        },
+                        delay: Duration::from_millis(200),
+                        short_delay: Duration::from_millis(100),
+                        recent: Duration::from_secs(1),
+                    }
+                }),
                 request_id: Some(request_id),
                 token: neomacs_display_protocol::menu::MenuToken::fresh(),
                 frame_id: 1,
@@ -225,6 +265,7 @@ impl ApplicationHandler for Smoke {
                     &gpu.instance,
                     &gpu.adapter,
                     &gpu.device,
+                    &gpu.queue,
                     gpu.renderer.surface_format(),
                 )
                 .unwrap();
@@ -236,6 +277,33 @@ impl ApplicationHandler for Smoke {
                 self.menus.select_heading(heading, false),
                 super::HeadingAction::Keep
             );
+            if self.with_tooltips {
+                if let Some(id) = self.submenu {
+                    let gpu = self.graphics.as_mut().unwrap();
+                    self.menus.event(
+                        id,
+                        &WindowEvent::PointerMoved {
+                            device_id: None,
+                            position: winit::dpi::PhysicalPosition::new(10.0, 10.0),
+                            primary: true,
+                            source: winit::event::PointerSource::Mouse,
+                        },
+                        &gpu.device,
+                        &gpu.queue,
+                        &mut gpu.renderer,
+                    );
+                    self.menus
+                        .sync(
+                            event_loop,
+                            &gpu.instance,
+                            &gpu.adapter,
+                            &gpu.device,
+                            &gpu.queue,
+                            gpu.renderer.surface_format(),
+                        )
+                        .unwrap();
+                }
+            }
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(50),
