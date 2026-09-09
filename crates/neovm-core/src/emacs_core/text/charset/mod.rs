@@ -37,23 +37,28 @@ struct CharsetMapCacheKey {
 }
 
 enum CharsetMapSource {
+    /// Early bootstrap before an evaluator has selected its runtime paths.
     NativeInstallation,
+    /// The active evaluator's data-directory, including extracted APK assets.
+    NativeDataDirectory(std::path::PathBuf),
     MountedRuntimeResources(Rc<dyn super::fileio::RuntimeResourceStore>),
 }
 
 impl CharsetMapSource {
     fn from_runtime_resources(
         resources: Option<Rc<dyn super::fileio::RuntimeResourceStore>>,
+        data_directory: Option<std::path::PathBuf>,
     ) -> Self {
         match resources {
             Some(resources) => Self::MountedRuntimeResources(resources),
-            None => Self::NativeInstallation,
+            None => data_directory.map_or(Self::NativeInstallation, Self::NativeDataDirectory),
         }
     }
 
     fn is_same_source(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::NativeInstallation, Self::NativeInstallation) => true,
+            (Self::NativeDataDirectory(current), Self::NativeDataDirectory(other)) => current == other,
             (Self::MountedRuntimeResources(current), Self::MountedRuntimeResources(other)) => {
                 Rc::ptr_eq(current, other)
             }
@@ -66,6 +71,9 @@ impl CharsetMapSource {
             Self::NativeInstallation => {
                 std::fs::read(super::load::charset_map_directory().join(format!("{map_name}.map")))
                     .ok()
+            }
+            Self::NativeDataDirectory(directory) => {
+                std::fs::read(directory.join("charsets").join(format!("{map_name}.map"))).ok()
             }
             Self::MountedRuntimeResources(resources) => {
                 let path = resources
@@ -793,8 +801,9 @@ impl CharsetRegistry {
     fn install_runtime_resources(
         &mut self,
         resources: Option<Rc<dyn super::fileio::RuntimeResourceStore>>,
+        data_directory: Option<std::path::PathBuf>,
     ) {
-        let source = CharsetMapSource::from_runtime_resources(resources);
+        let source = CharsetMapSource::from_runtime_resources(resources, data_directory);
         if self.map_source.is_same_source(&source) {
             return;
         }
@@ -987,15 +996,19 @@ pub(crate) fn reset_charset_registry() {
     CHARSET_REGISTRY.with(|slot| *slot.borrow_mut() = CharsetRegistry::new());
 }
 
-/// Bind sandboxed product resources to the thread's GNU-style charset table.
+/// Bind the active evaluator's resource source to its GNU-style charset table.
 ///
 /// The charset registry is evaluator-thread local, just like GNU's process-wide
 /// charset table. Keeping the resource capability beside that registry makes
-/// lazy `.map` loading use the same immutable namespace as ordinary Lisp load.
+/// lazy `.map` loading use the selected native installation or browser mount,
+/// rather than rediscovering desktop paths in a sandboxed product.
 pub(crate) fn install_runtime_resource_store(
     resources: Option<Rc<dyn super::fileio::RuntimeResourceStore>>,
+    data_directory: Option<std::path::PathBuf>,
 ) {
-    CHARSET_REGISTRY.with(|slot| slot.borrow_mut().install_runtime_resources(resources));
+    CHARSET_REGISTRY.with(|slot| {
+        slot.borrow_mut().install_runtime_resources(resources, data_directory)
+    });
 }
 
 /// Collect GC roots from charset runtime state.

@@ -545,15 +545,16 @@ impl Context {
         store: Box<dyn crate::emacs_core::fileio::RuntimeResourceStore>,
     ) {
         let store = std::rc::Rc::<dyn crate::emacs_core::fileio::RuntimeResourceStore>::from(store);
-        crate::emacs_core::charset::install_runtime_resource_store(Some(std::rc::Rc::clone(
-            &store,
-        )));
         self.editor_file_system.install_runtime_resources(store);
+        self.sync_charset_runtime_resources();
     }
 
     pub(crate) fn sync_charset_runtime_resources(&self) {
         crate::emacs_core::charset::install_runtime_resource_store(
             self.editor_file_system.runtime_resources(),
+            self.visible_variable_value_or_nil("data-directory")
+                .as_utf8_str()
+                .map(std::path::PathBuf::from),
         );
     }
 
