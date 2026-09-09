@@ -23,7 +23,7 @@ impl WinitFrontendInput {
             state.shift_key(),
             state.control_key(),
             state.alt_key(),
-            state.super_key(),
+            state.meta_key(),
         );
     }
 
@@ -130,7 +130,6 @@ fn named_key_symbol(key: NamedKey) -> Option<u32> {
         NamedKey::ArrowUp => 0xff52,
         NamedKey::ArrowRight => 0xff53,
         NamedKey::ArrowDown => 0xff54,
-        NamedKey::Space => 0x20,
         NamedKey::PrintScreen => 0xff61,
         NamedKey::ScrollLock => 0xff14,
         NamedKey::Pause => 0xff13,
@@ -150,6 +149,39 @@ mod tests {
     use super::WinitFrontendInput;
 
     const TARGET: FrontendFrameId = FrontendFrameId::new(17);
+
+    #[test]
+    fn winit_meta_modifier_maps_to_editor_super() {
+        let mut input = WinitFrontendInput::default();
+        input.set_modifiers(ModifiersState::META);
+        let event = input
+            .translate_key(
+                &Key::Character("x".into()),
+                Some("x"),
+                ElementState::Pressed,
+                TARGET,
+            )
+            .expect("modified key");
+        let FrontendEvent::Key(key) = event else {
+            panic!("Super-x must remain a key event");
+        };
+        assert!(key.modifiers().super_());
+        assert!(!key.modifiers().meta());
+    }
+
+    #[test]
+    fn space_is_character_text_in_winit_031() {
+        let input = WinitFrontendInput::default();
+        assert_eq!(
+            input.translate_key(
+                &Key::Character(" ".into()),
+                Some(" "),
+                ElementState::Pressed,
+                TARGET
+            ),
+            Some(FrontendEvent::text_committed(" ", TARGET)),
+        );
+    }
 
     #[test]
     fn named_keys_preserve_gnu_gui_keysyms() {
