@@ -12,10 +12,10 @@ use neomacs_app::session::{
     NativeEditorWorkerEvent,
 };
 use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow, WinitFrontendInput};
-use presentation::PresentedFrontend;
+use presentation::{PresentedFrontend, RetainedPresentation};
 use winit::application::ApplicationHandler;
 use winit::event::{ButtonSource, ElementState, Ime, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::platform::android::activity::AndroidApp;
 use winit::window::{WindowAttributes, WindowId};
@@ -28,12 +28,15 @@ struct AndroidFrontend {
     lifecycle: FrontendLifecycle,
     window: Option<SurfaceWindow>,
     presented: Option<PresentedFrontend>,
+    retained: Option<RetainedPresentation>,
     worker: Option<NativeEditorWorker>,
     input: Option<FrontendInputPort>,
     frames: Option<FrontendFrameInbox>,
     input_translation: WinitFrontendInput,
     target: FrontendFrameId,
     close_pending: bool,
+    focused: bool,
+    animation_deadline: Option<std::time::Instant>,
 }
 
 impl AndroidFrontend {
@@ -47,12 +50,15 @@ impl AndroidFrontend {
             lifecycle: FrontendLifecycle::new(),
             window: None,
             presented: None,
+            retained: None,
             worker: None,
             input: None,
             frames: None,
             input_translation: WinitFrontendInput::default(),
             target: FrontendFrameId::PRIMARY,
             close_pending: false,
+            focused: true,
+            animation_deadline: None,
         }
     }
 
@@ -144,8 +150,11 @@ impl AndroidFrontend {
             FrontendFrameReceive::Disconnected => self.frames = None,
             FrontendFrameReceive::Frame(pending) => {
                 let Some(presented) = self.presented.as_mut() else {
-                    // Dropping the pending guard reports a discard. A viewport
-                    // event on resume asks the evaluator for a fresh revision.
+                    // Keep only the newest CPU scene while there is no drawable.
+                    match RetainedPresentation::from_pending(pending) {
+                        Ok(retained) => self.retained = Some(retained),
+                        Err(_) => self.input = None,
+                    }
                     return;
                 };
                 match presented.install(pending) {
@@ -195,20 +204,26 @@ impl ApplicationHandler for AndroidFrontend {
         .unwrap_or_else(|error| panic!("failed to initialize Android GPU presentation: {error}"));
 
         window.request_redraw();
+        self.focused = window.has_focus();
         self.window = Some(window);
-        self.presented = Some(PresentedFrontend::new(renderer));
+        let mut presented = PresentedFrontend::new(renderer);
+        if let Some(retained) = self.retained.take() {
+            presented.restore(retained);
+        }
+        self.presented = Some(presented);
         self.start_worker();
         self.submit_viewport();
     }
 
     fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        // The evaluator and transport survive Activity surface loss. Dropping
-        // presentation retires its active frame before the Android window is
-        // released; resume creates a new surface and requests a fresh frame.
+        // Keep the CPU scene and its lifetime guard, but release GPU/window
+        // resources. An unchanged viewport need not cause another VM layout.
         if self.lifecycle.transition(LifecycleEvent::Suspended) == LifecycleAction::DestroyFrontend
         {
+            self.retained = self.presented.as_mut().and_then(PresentedFrontend::retain);
             self.presented = None;
             self.window = None;
+            self.animation_deadline = None;
         }
     }
 
@@ -337,10 +352,17 @@ impl ApplicationHandler for AndroidFrontend {
                     self.submit(event);
                 }
             }
-            WindowEvent::Focused(focused) => self.submit(FrontendEvent::FocusChanged {
-                focused,
-                target: self.target,
-            }),
+            WindowEvent::Focused(focused) => {
+                self.focused = focused;
+                self.animation_deadline = None;
+                self.submit(FrontendEvent::FocusChanged {
+                    focused,
+                    target: self.target,
+                });
+                if focused && let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
             WindowEvent::RedrawRequested => {
                 let Some(presented) = self.presented.as_mut() else {
                     return;
@@ -348,6 +370,13 @@ impl ApplicationHandler for AndroidFrontend {
                 let outcome = presented
                     .present()
                     .unwrap_or_else(|error| panic!("Android GPU presentation failed: {error}"));
+                self.animation_deadline = if self.focused {
+                    presented
+                        .animation_interval()
+                        .map(|interval| std::time::Instant::now() + interval)
+                } else {
+                    None
+                };
                 if outcome.is_some_and(|outcome| outcome.should_request_redraw())
                     && let Some(window) = self.window.as_ref()
                 {
@@ -356,6 +385,22 @@ impl ApplicationHandler for AndroidFrontend {
             }
             _ => {}
         }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self
+            .animation_deadline
+            .is_some_and(|deadline| deadline <= std::time::Instant::now())
+        {
+            self.animation_deadline = None;
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+        }
+        event_loop.set_control_flow(
+            self.animation_deadline
+                .map_or(ControlFlow::Wait, ControlFlow::WaitUntil),
+        );
     }
 }
 
