@@ -1,8 +1,8 @@
 //! Cursor animation, blinking, and size transition state.
 
-use neomacs_display_protocol::CursorStyle;
 use neomacs_display_protocol::VisualConfig;
-use neomacs_display_protocol::{
+use neomacs_display_protocol::frame_glyphs::CursorStyle;
+use neomacs_display_protocol::types::{
     AnimatedCursor, CursorAnimStyle, DisplayFrameId, DisplayWindowId, ease_in_out_cubic,
     ease_linear, ease_out_cubic, ease_out_expo, ease_out_quad,
 };
@@ -24,13 +24,22 @@ pub struct CursorTarget {
 /// Each corner has its own position, velocity, and spring frequency.
 #[derive(Debug, Clone, Copy)]
 struct CornerSpring {
-    pub x: f32,
-    pub y: f32,
-    pub vx: f32,
-    pub vy: f32,
-    pub target_x: f32,
-    pub target_y: f32,
-    pub omega: f32,
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+    target_x: f32,
+    target_y: f32,
+    omega: f32,
+}
+
+/// Timing for Neovide's independently eased corners. Positions are shared
+/// with the spring mode so changing between corner modes stays continuous.
+#[derive(Clone, Copy, Default)]
+struct CornerEase {
+    start: (f32, f32),
+    progress: f32,
+    length_multiplier: f32,
 }
 
 /// Timing for Neovide's independently eased corners. Positions are shared
