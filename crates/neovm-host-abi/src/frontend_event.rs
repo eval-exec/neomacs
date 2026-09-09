@@ -380,6 +380,15 @@ impl FrontendViewport {
 /// Host observation consumed by the editor session.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrontendEvent {
+    /// An IME edit measured in UTF-8 bytes around the current insertion point.
+    ImeDeleteSurrounding {
+        /// UTF-8 bytes preceding point; a partial character is never deleted.
+        before_bytes: usize,
+        /// UTF-8 bytes following point; a partial character is never deleted.
+        after_bytes: usize,
+        /// Editor frame receiving the text conversion.
+        target: FrontendFrameId,
+    },
     /// Logical keyboard input.
     Key(FrontendKeyEvent),
     /// Text committed by an IME or other host text service.

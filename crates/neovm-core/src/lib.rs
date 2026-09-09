@@ -5,6 +5,7 @@ pub mod emacs_core;
 pub mod encoding;
 pub mod face;
 mod frontend_events;
+mod ime;
 #[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
 pub mod fuzz_support;
