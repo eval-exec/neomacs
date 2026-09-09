@@ -1058,10 +1058,57 @@ impl TaggedHeap {
     pub(super) fn sweep_cons(&mut self) -> usize {
         let old_live = self.cons_live_count;
         let mut new_live = 0;
+        let mut released = 0usize;
         self.cons_free_list = std::ptr::null_mut();
-        for block in &mut self.cons_blocks {
-            new_live += block.sweep(&mut self.cons_free_list);
+
+        // GNU's `sweep_conses` (`alloc.c`) decides each block's fate INSIDE
+        // this one pass: it remembers the free-list head, threads the block's
+        // dead cells onto it, and if the block turns out to have no survivors
+        // it restores the head -- un-threading exactly those cells -- and
+        // frees the block.
+        //
+        // Sweeping every block here and then sweeping them ALL a second time
+        // in `release_empty_cons_blocks` to drop the empty ones cost 30.8% of
+        // a full collection, and the second pass also rebuilt the whole
+        // base-address registry. That mattered little while batch runs
+        // collected zero times; it is on the critical path as soon as they do.
+        let Self {
+            cons_blocks,
+            cons_free_list,
+            ..
+        } = self;
+        cons_blocks.retain_mut(|block| {
+            let saved = *cons_free_list;
+            let live = block.sweep(cons_free_list);
+            if live == 0 {
+                // Back this block's cells out of the free list: its storage is
+                // about to be deallocated, and a freed cell must not stay
+                // reachable from the allocator.
+                *cons_free_list = saved;
+                released += 1;
+                false
+            } else {
+                new_live += live;
+                true
+            }
+        });
+
+        if released > 0 {
+            // Dropping blocks shifts every later index, so the base-address
+            // registry and the cached block index are rebuilt -- but only when
+            // something was actually released.
+            self.mark_cons_block_cache = None;
+            self.cons_blocks.shrink_to_fit();
+            self.cons_block_index_by_base =
+                FxHashMap::with_capacity_and_hasher(self.cons_blocks.len(), Default::default());
+            for (block_index, block) in self.cons_blocks.iter().enumerate() {
+                let previous = self
+                    .cons_block_index_by_base
+                    .insert(block.base_addr(), block_index);
+                debug_assert!(previous.is_none(), "cons block base registered twice");
+            }
         }
+
         self.cons_live_count = new_live;
         self.allocated_count = self
             .allocated_count

@@ -1573,7 +1573,8 @@ impl TaggedHeap {
             (0, self.symbol_with_pos_arena.pages.len()),
             (0, self.marker_arena.pages.len()),
         );
-        let _released_cons_blocks = self.release_empty_cons_blocks();
+        // `sweep_cons` above already released the blocks with no survivors,
+        // in its own pass, the way GNU's `sweep_conses` does.
         let _released_object_pages = self.release_empty_object_pages();
         let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
