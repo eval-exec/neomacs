@@ -313,14 +313,21 @@ jobs:
         shell: python
         run: |
           import subprocess
-          subprocess.run(
+          with subprocess.Popen(
               ["cargo", "nextest", "run", "-p", "neomacs", "--lib", "--locked",
                "--no-default-features", "--features", "neo-term",
                "-E", "test(tty_output::windows::tests)", "--run-ignored", "all",
                "--test-threads", "1"],
               creationflags=subprocess.CREATE_NEW_CONSOLE,
-              check=True,
-          )
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              text=True,
+              encoding="utf-8",
+              errors="replace",
+          ) as process:
+              for line in process.stdout:
+                  print(line, end="", flush=True)
+              raise SystemExit(process.wait())
 
   # Cross-compilation cannot exercise inotify, kqueue, or
   # ReadDirectoryChangesW.  Keep this independent from the workspace check so
