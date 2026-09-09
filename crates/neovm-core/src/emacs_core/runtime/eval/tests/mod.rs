@@ -25545,3 +25545,37 @@ fn a_cached_absence_from_the_lexical_environment_does_not_outlive_it() {
         vec!["OK ((outer inner outer) (1 2 1))"],
     );
 }
+
+/// Redefining a function must take effect on the very next interpreted call,
+/// through every route that can replace a function cell.
+///
+/// The interpreted dispatcher memoizes what a form's head symbol resolves to,
+/// keyed on the obarray's function epoch, because the same cons is evaluated
+/// 32.5 times on average (measured on magit-status; 61.4 on org-journal-open).
+/// That is only sound while every route that changes a function cell bumps the
+/// epoch, so this exercises `defun` twice, `defalias`, and advice — each
+/// called through an interpreted form that was already evaluated and therefore
+/// already cached.
+///
+/// Measured on the pinned GNU Emacs 31.1, `emacs -Q --batch`: `(1 2 3 30)`.
+#[test]
+fn redefining_a_function_is_visible_to_the_next_interpreted_call() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        crate::test_utils::runtime_startup_eval_all(
+            r#"
+(progn
+  (defun neo-memo-t () 1)
+  (let ((a (neo-memo-t)))
+    (defun neo-memo-t () 2)
+    (let ((b (neo-memo-t)))
+      (defalias 'neo-memo-t (lambda () 3))
+      (let ((c (neo-memo-t)))
+        (advice-add 'neo-memo-t :around (lambda (o) (* 10 (funcall o))))
+        (let ((d (neo-memo-t)))
+          (list a b c d))))))
+"#,
+        ),
+        vec!["OK (1 2 3 30)"],
+    );
+}

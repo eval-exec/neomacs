@@ -2241,6 +2241,7 @@ impl Context {
                 NAMED_CALL_CACHE_CAPACITY,
                 Default::default(),
             ),
+            form_head_cache: FormHeadCache::default(),
             lexenv_assq_cache: LexenvAssqCache::default(),
             lexenv_special_cache: LexenvSpecialCache::default(),
 

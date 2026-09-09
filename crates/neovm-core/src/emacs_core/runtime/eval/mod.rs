@@ -3276,6 +3276,9 @@ pub struct Context {
     /// `function_epoch` so that any `defalias` / `fset` / autoload
     /// installation immediately invalidates stale lookups.
     named_call_cache: FxHashMap<SymId, NamedCallCacheEntry>,
+    /// Hot cache for what an interpreted form's head symbol resolves to,
+    /// validated against the obarray's `function_epoch`.
+    form_head_cache: FormHeadCache,
     /// Small hot cache for GNU-shaped lexical env alist lookups.
     lexenv_assq_cache: LexenvAssqCache,
     /// Small hot cache for GNU-shaped lexical special declarations.
@@ -4342,6 +4345,10 @@ impl Context {
         // boundaries it can disagree with restored function cells while still
         // carrying a matching function epoch.
         self.named_call_cache.clear();
+        // Same reasoning: a resolution memoized before a pdump boundary can
+        // disagree with the restored function cells while still carrying a
+        // matching epoch.
+        self.form_head_cache.clear();
     }
 
     #[cfg(test)]
@@ -5623,16 +5630,55 @@ impl Context {
         // Resolve function (GNU eval.c:2600-2605)
         let sym_id = original_fun.as_symbol_id();
 
+        // Everything this head decides -- whether it is an evaluator-internal
+        // literal form, what its function cell holds, and whether that cell is
+        // a subr -- depends only on the symbol and the function epoch.  A form
+        // is evaluated 32.5 times on average here (measured on magit-status;
+        // 61.4 on org-journal-open), so re-deriving it per evaluation is
+        // almost entirely repeat work.  One probe answers all three.
+        //
+        // The cache is bypassed entirely while compiler function overrides are
+        // active, exactly as the direct resolution below was.
+        let overrides_active = self.compiler_function_overrides_active();
+        let head = match sym_id {
+            Some(sym_id) if !overrides_active => {
+                let epoch = self.obarray.function_epoch();
+                Some(match self.form_head_cache.find(sym_id, epoch) {
+                    Some(entry) => entry,
+                    None => {
+                        let func = self.obarray.symbol_function_id(sym_id);
+                        let entry = FormHeadCacheEntry {
+                            epoch,
+                            sym: sym_id,
+                            literal_head: sym_id == lambda_symbol()
+                                || sym_id == byte_code_literal_symbol()
+                                || sym_id == byte_code_symbol(),
+                            func,
+                            subr: func.and_then(subr_call_entry_from_value),
+                        };
+                        self.form_head_cache.push(entry);
+                        entry
+                    }
+                })
+            }
+            _ => None,
+        };
+
         // Keep only evaluator-internal literal forms on the pre-resolution
         // fast path. GNU decides public special-form dispatch from the
         // function cell's UNEVALLED subr, so user-visible special forms
         // should flow through the resolved subr surface below.
+        //
+        // With overrides active there is no cached head, so the three literal
+        // heads are still tested directly.
         if let Some(sym_id) = sym_id
-            && matches!(
-                sym_id,
-                id if id == lambda_symbol()
-                    || id == byte_code_literal_symbol()
-                    || id == byte_code_symbol()
+            && head.map_or_else(
+                || {
+                    sym_id == lambda_symbol()
+                        || sym_id == byte_code_literal_symbol()
+                        || sym_id == byte_code_symbol()
+                },
+                |head| head.literal_head,
             )
             && let Some(result) = self.try_special_form_value_id(sym_id, original_args)
         {
@@ -5646,23 +5692,11 @@ impl Context {
         // macros, overrides or callability -- the cell already IS a fixed-
         // arity builtin or a byte-code object -- so those probes stay on the
         // full resolution below, which every other cell shape still takes.
-        let prefetched_cell = match sym_id {
-            Some(sym_id) if !self.compiler_function_overrides_active() => {
-                self.obarray.symbol_function_id(sym_id)
-            }
-            _ => None,
-        };
+        let prefetched_cell = head.and_then(|head| head.func);
         if let Some(sym_id) = sym_id
             && let Some(func) = prefetched_cell
         {
-            // One look at the function cell decides both shapes below.  Asking
-            // twice meant two probes of the subr registry -- a thread-local
-            // borrow and a copy of the whole entry each time -- for every
-            // interpreted form, 4.7M probes across a magit-status run where
-            // 3.4M forms were evaluated.  Nothing between the two reads can
-            // change the answer: `list_length` and a special form that
-            // declines to dispatch both leave the cell and the registry alone.
-            let subr = subr_call_entry_from_value(func);
+            let subr = head.and_then(|head| head.subr);
             if let Some((target_sym_id, entry)) = subr
                 && entry.dispatch_kind == SubrDispatchKind::SpecialForm
                 && target_sym_id == sym_id
@@ -7835,6 +7869,8 @@ mod vm_shared;
 mod signal_dispatch;
 
 mod construct;
+mod form_head_cache;
+pub(crate) use form_head_cache::{FormHeadCache, FormHeadCacheEntry};
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]
