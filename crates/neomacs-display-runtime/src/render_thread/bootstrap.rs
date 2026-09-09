@@ -1,6 +1,4 @@
-use super::{
-    RenderApp, RenderUserEvent, SharedImageRenderState, SharedMonitorInfo, surface_readback,
-};
+use super::{RenderApp, SharedImageRenderState, SharedMonitorInfo, surface_readback};
 use crate::render_thread::frame_windows::{FrameLifecycle, GuiFrameNativeWindowState};
 use crate::render_thread::state::RenderGpuContext;
 use crate::thread_comm::{InputEvent, RenderComms};
@@ -16,7 +14,7 @@ use winit::window::Window;
 use x11_dl::xlib;
 
 impl RenderApp {
-    pub(super) fn init_wgpu(&mut self, event_loop: &ActiveEventLoop, window: Arc<Window>) {
+    pub(super) fn init_wgpu(&mut self, event_loop: &dyn ActiveEventLoop, window: Arc<dyn Window>) {
         tracing::info!("Initializing wgpu for render thread");
 
         let instance_descriptor =
@@ -92,7 +90,7 @@ impl RenderApp {
             lost_flag.store(true, std::sync::atomic::Ordering::SeqCst);
         });
 
-        let phys = window.inner_size();
+        let phys = window.surface_size();
         let raw_scale_factor = window.scale_factor();
         let effective_scale = super::state::effective_window_scale_factor(raw_scale_factor);
 
@@ -275,7 +273,7 @@ impl RenderApp {
     /// blank for a moment while the native video system reopens its retained
     /// GPU-independent recovery manifests; other media is re-resolved after
     /// `InputEvent::DisplayReset`.
-    pub(super) fn recover_from_device_loss(&mut self, event_loop: &ActiveEventLoop) {
+    pub(super) fn recover_from_device_loss(&mut self, event_loop: &dyn ActiveEventLoop) {
         tracing::error!(
             "wgpu device lost — rebuilding GPU state and asking the evaluator to re-resolve media"
         );
@@ -363,9 +361,7 @@ impl RenderApp {
     }
 }
 
-fn build_render_event_loop_impl(
-    allow_any_thread: bool,
-) -> Result<EventLoop<RenderUserEvent>, String> {
+fn build_render_event_loop_impl(allow_any_thread: bool) -> Result<EventLoop, String> {
     #[cfg(target_os = "linux")]
     {
         validate_linux_display_before_winit()?;
@@ -374,7 +370,7 @@ fn build_render_event_loop_impl(
             allow_any_thread,
             std::env::var("WAYLAND_DISPLAY").is_ok(),
         );
-        let mut builder = EventLoop::<RenderUserEvent>::with_user_event();
+        let mut builder = EventLoop::builder();
         // Try Wayland first, fall back to X11.
         if allow_any_thread {
             if std::env::var("WAYLAND_DISPLAY").is_ok() {
@@ -392,7 +388,7 @@ fn build_render_event_loop_impl(
 
     #[cfg(not(target_os = "linux"))]
     {
-        EventLoop::<RenderUserEvent>::with_user_event()
+        EventLoop::builder()
             .build()
             .map_err(|err| format!("Failed to create event loop: {err}"))
     }
@@ -444,18 +440,18 @@ fn x11_display_responds() -> bool {
 }
 
 /// Build a render event loop for the current OS thread.
-pub fn build_render_event_loop() -> Result<EventLoop<RenderUserEvent>, String> {
+pub fn build_render_event_loop() -> Result<EventLoop, String> {
     build_render_event_loop_impl(false)
 }
 
 /// Build a render event loop for the legacy render-thread helper.
-pub(crate) fn build_render_event_loop_any_thread() -> Result<EventLoop<RenderUserEvent>, String> {
+pub(crate) fn build_render_event_loop_any_thread() -> Result<EventLoop, String> {
     build_render_event_loop_impl(true)
 }
 
 /// Run the render loop with an already-created event loop.
 pub(crate) fn run_render_loop_with_event_loop(
-    event_loop: EventLoop<RenderUserEvent>,
+    event_loop: EventLoop,
     comms: RenderComms,
     width: u32,
     height: u32,
@@ -476,14 +472,14 @@ pub(crate) fn run_render_loop_with_event_loop(
     let video_wake = {
         let proxy = event_loop.create_proxy();
         neomacs_video::VideoWake::new(move || {
-            let _ = proxy.send_event(RenderUserEvent::Wake);
+            proxy.wake_up();
         })
     };
     #[cfg(feature = "webview")]
     let webview_wake = {
         let proxy = event_loop.create_proxy();
         neomacs_webview::WebViewWake::new(move || {
-            let _ = proxy.send_event(RenderUserEvent::Wake);
+            proxy.wake_up();
         })
     };
 
@@ -508,7 +504,8 @@ pub(crate) fn run_render_loop_with_event_loop(
     }
 
     tracing::info!("Render thread entering winit event loop");
-    let result = event_loop.run_app(&mut app);
+    let exit_input = app.comms.input_tx.clone();
+    let result = event_loop.run_app(app);
     if let Err(ref e) = result {
         tracing::error!("Event loop error: {:?}", e);
     }
@@ -517,8 +514,7 @@ pub(crate) fn run_render_loop_with_event_loop(
     // This handles cases like Wayland connection loss (ExitFailure(1)) where the
     // window disappears without an explicit close request.
     tracing::info!("Render thread exiting, sending WindowClose to Emacs");
-    app.comms
-        .send_input(InputEvent::WindowClose { emacs_frame_id: 0 });
+    let _ = exit_input.send(InputEvent::WindowClose { emacs_frame_id: 0 });
 
     result.map_err(|err| format!("Event loop error: {err}"))
 }
@@ -527,7 +523,7 @@ pub(crate) fn run_render_loop_with_event_loop(
 /// this path so winit/AppKit/Windows ownership stays on the process main
 /// thread; evaluator-to-render traffic must wake it via EventLoopProxy.
 pub fn run_render_loop_current_thread(
-    event_loop: EventLoop<RenderUserEvent>,
+    event_loop: EventLoop,
     comms: RenderComms,
     width: u32,
     height: u32,
@@ -568,7 +564,7 @@ pub fn run_render_loop_current_thread(
 /// PTYs and VT state.
 #[cfg(feature = "neo-term")]
 pub fn run_render_loop_current_thread_with_terminals(
-    event_loop: EventLoop<RenderUserEvent>,
+    event_loop: EventLoop,
     comms: RenderComms,
     width: u32,
     height: u32,

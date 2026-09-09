@@ -1,5 +1,4 @@
 use super::RenderApp;
-use super::frame_windows::GuiFrameRenderState;
 use super::state::{effective_window_scale_factor, emacs_pixels_from_window_size};
 use crate::backend::wgpu::{
     NEOMACS_CTRL_MASK, NEOMACS_META_MASK, NEOMACS_SHIFT_MASK, NEOMACS_SUPER_MASK,
@@ -7,90 +6,9 @@ use crate::backend::wgpu::{
 use crate::thread_comm::InputEvent;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
 impl RenderApp {
-    fn handle_render_popup_key(
-        render: &mut GuiFrameRenderState,
-        logical_key: &Key,
-    ) -> Option<InputEvent> {
-        match logical_key.as_ref() {
-            Key::Named(NamedKey::Escape) => {
-                render.dismiss_all_chrome_menus();
-                Some(InputEvent::MenuSelection { index: -1 })
-            }
-            Key::Named(NamedKey::ArrowDown) => {
-                let menu = render.overlays.popup_menu.as_mut()?;
-                if menu.move_hover(1) {
-                    render.mark_dirty();
-                }
-                None
-            }
-            Key::Named(NamedKey::ArrowUp) => {
-                let menu = render.overlays.popup_menu.as_mut()?;
-                if menu.move_hover(-1) {
-                    render.mark_dirty();
-                }
-                None
-            }
-            Key::Named(NamedKey::Enter) => {
-                let menu = render.overlays.popup_menu.as_mut()?;
-                let panel = menu.active_panel();
-                let hi = panel.hover_index;
-                if hi >= 0 && (hi as usize) < panel.item_indices.len() {
-                    let global_idx = panel.item_indices[hi as usize];
-                    if menu.all_items[global_idx].submenu {
-                        if menu.open_submenu() {
-                            render.mark_dirty();
-                        }
-                        None
-                    } else {
-                        render.dismiss_all_chrome_menus();
-                        Some(InputEvent::MenuSelection {
-                            index: global_idx as i32,
-                        })
-                    }
-                } else {
-                    render.dismiss_all_chrome_menus();
-                    Some(InputEvent::MenuSelection { index: -1 })
-                }
-            }
-            Key::Named(NamedKey::ArrowRight) => {
-                let menu = render.overlays.popup_menu.as_mut()?;
-                if menu.open_submenu() {
-                    render.mark_dirty();
-                }
-                None
-            }
-            Key::Named(NamedKey::ArrowLeft) => {
-                let menu = render.overlays.popup_menu.as_mut()?;
-                if menu.close_submenu() {
-                    render.mark_dirty();
-                }
-                None
-            }
-            Key::Named(NamedKey::Home) => {
-                let menu = render.overlays.popup_menu.as_mut()?;
-                menu.active_panel_mut().hover_index = -1;
-                if menu.move_hover(1) {
-                    render.mark_dirty();
-                }
-                None
-            }
-            Key::Named(NamedKey::End) => {
-                let menu = render.overlays.popup_menu.as_mut()?;
-                let len = menu.active_panel().item_indices.len() as i32;
-                menu.active_panel_mut().hover_index = len;
-                if menu.move_hover(-1) {
-                    render.mark_dirty();
-                }
-                None
-            }
-            _ => None,
-        }
-    }
-
     fn emacs_frame_for_window_event(&self, window_id: WindowId) -> u64 {
         self.frame_windows
             .event_frame_for_winit(window_id)
@@ -119,10 +37,41 @@ impl RenderApp {
 
     pub(super) fn handle_window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self.handle_native_menu_bar_event(window_id, &event) {
+            return;
+        }
+        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+            if self
+                .menus
+                .event(window_id, &event, &gpu.device, &gpu.queue, renderer)
+            {
+                if let Err(error) = self.menus.sync(
+                    event_loop,
+                    &gpu.instance,
+                    &gpu.adapter,
+                    &gpu.device,
+                    renderer.surface_format(),
+                ) {
+                    tracing::error!(%error, "native menu update failed");
+                    self.menus.cancel();
+                }
+                while let Some(index) = self.menus.take_result() {
+                    self.comms.send_input(InputEvent::MenuSelection {
+                        index: index.index(),
+                        token: Some(index.token),
+                    });
+                }
+                return;
+            }
+        }
+        // Ignore late events from destroyed native popups or frame windows.
+        if self.frame_windows.get_by_winit(window_id).is_none() {
+            return;
+        }
         if self.lifecycle_flags.shutdown_requested {
             tracing::debug!(
                 "Dropping window event after shutdown requested: {:?}",
@@ -141,6 +90,7 @@ impl RenderApp {
                 });
                 if is_primary {
                     self.lifecycle_flags.shutdown_requested = true;
+                    self.handle_exiting();
                     event_loop.exit();
                 } else {
                     self.frame_windows.request_destroy(emacs_fid);
@@ -158,14 +108,19 @@ impl RenderApp {
                 );
                 if is_primary {
                     self.lifecycle_flags.shutdown_requested = true;
+                    self.handle_exiting();
                     event_loop.exit();
                 } else {
                     self.frame_windows.request_destroy(emacs_fid);
                 }
             }
 
-            WindowEvent::Resized(size) => {
-                tracing::info!("WindowEvent::Resized: {}x{}", size.width, size.height);
+            WindowEvent::SurfaceResized(size) => {
+                tracing::info!(
+                    "WindowEvent::SurfaceResized: {}x{}",
+                    size.width,
+                    size.height
+                );
 
                 let emacs_fid = self.emacs_frame_for_window_event(window_id);
                 let is_primary = self.frame_windows.is_primary_winit(window_id);
@@ -209,9 +164,21 @@ impl RenderApp {
                 let retirements = if focused {
                     Vec::new()
                 } else {
+                    let menu_owns_focus = self.menus.owns_parent(window_id);
                     self.frame_windows
                         .get_by_winit_mut(window_id)
-                        .map(|window| window.render.cancel_pointer_interaction().1)
+                        .map(|window| {
+                            let active = window.render.chrome.interaction.menu_bar_active;
+                            let compact = window.render.chrome.interaction.compact_bar_menu_active;
+                            let retirements = window.render.cancel_pointer_interaction().1;
+                            if menu_owns_focus {
+                                // A native menu's keyboard grab must not erase
+                                // the heading used for hover/click switching.
+                                window.render.chrome.interaction.menu_bar_active = active;
+                                window.render.chrome.interaction.compact_bar_menu_active = compact;
+                            }
+                            retirements
+                        })
                         .unwrap_or_default()
                 };
                 self.comms.send_input(InputEvent::WindowFocus {
@@ -293,35 +260,7 @@ impl RenderApp {
                     },
                     |ws| ws.render.has_ime_preedit(),
                 );
-                let handled_managed_popup = state == ElementState::Pressed
-                    && self
-                        .frame_windows
-                        .get_by_winit(window_id)
-                        .is_some_and(|ws| ws.render.overlays.popup_menu.is_some());
-                if handled_managed_popup {
-                    let event = self
-                        .frame_windows
-                        .get_by_winit_mut(window_id)
-                        .and_then(|ws| Self::handle_render_popup_key(&mut ws.render, &logical_key));
-                    if let Some(event) = event {
-                        self.comms.send_input(event);
-                    }
-                } else if self
-                    .frame_windows
-                    .primary_window()
-                    .and_then(|ws| ws.render.overlays.popup_menu.as_ref())
-                    .is_some()
-                    && state == ElementState::Pressed
-                {
-                    let event = self
-                        .frame_windows
-                        .primary_window_mut()
-                        .map(|ws| &mut ws.render)
-                        .and_then(|render| Self::handle_render_popup_key(render, &logical_key));
-                    if let Some(event) = event {
-                        self.comms.send_input(event);
-                    }
-                } else if ime_preedit_active {
+                if ime_preedit_active {
                     tracing::debug!(
                         "IME preedit active, suppressing KeyboardInput: {:?}",
                         logical_key
@@ -433,15 +372,26 @@ impl RenderApp {
                 }
             }
 
-            WindowEvent::MouseInput { state, button, .. } => {
-                self.handle_mouse_input(window_id, state, button);
+            WindowEvent::PointerButton {
+                state,
+                button,
+                position,
+                primary,
+                ..
+            } => {
+                if primary {
+                    self.handle_cursor_moved(window_id, position);
+                    if let Some(button) = button.mouse_button() {
+                        self.handle_mouse_input(window_id, state, button);
+                    }
+                }
             }
 
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::PointerMoved { position, .. } => {
                 self.handle_cursor_moved(window_id, position);
             }
 
-            WindowEvent::CursorLeft { .. } => {
+            WindowEvent::PointerLeft { .. } => {
                 self.handle_cursor_left(window_id);
             }
 
@@ -544,7 +494,7 @@ impl RenderApp {
                 if state.alt_key() {
                     self.modifiers |= NEOMACS_META_MASK;
                 }
-                if state.super_key() {
+                if state.meta_key() {
                     self.modifiers |= NEOMACS_SUPER_MASK;
                 }
                 tracing::debug!(
@@ -554,7 +504,7 @@ impl RenderApp {
                     state.shift_key(),
                     state.control_key(),
                     state.alt_key(),
-                    state.super_key()
+                    state.meta_key()
                 );
                 if self.modifiers != old_modifiers {
                     self.record_idle_dim_activity(window_id);
@@ -562,6 +512,8 @@ impl RenderApp {
             }
 
             WindowEvent::Ime(ime_event) => match ime_event {
+                // Surrounding-text support is not advertised by our IME policy.
+                winit::event::Ime::DeleteSurrounding { .. } => {}
                 winit::event::Ime::Enabled => {
                     if let Some(window_state) = self.frame_windows.get_by_winit_mut(window_id) {
                         window_state.set_ime_enabled(true);
@@ -658,12 +610,34 @@ impl RenderApp {
                 }
             },
 
-            WindowEvent::DroppedFile(path) => {
-                if let Some(path_str) = path.to_str() {
-                    tracing::info!("File dropped: {}", path_str);
-                    self.comms.send_input(InputEvent::FileDrop {
-                        paths: vec![path_str.to_string()],
-                    });
+            WindowEvent::DragEntered { id, .. } => {
+                use winit::data_transfer::TypeHint;
+                use winit::event_loop::DndAction;
+                if event_loop
+                    .data_transfer(id)
+                    .is_ok_and(|data| data.has_type(&TypeHint::UriList))
+                {
+                    let _ = event_loop.set_valid_dnd_actions(id, &[DndAction::Copy]);
+                }
+            }
+            WindowEvent::DragDropped { id, .. } => {
+                if let Ok(serial) =
+                    event_loop.fetch_data_transfer(id, &winit::data_transfer::TypeHint::UriList)
+                {
+                    self.pending_file_drops.insert(serial);
+                }
+            }
+            WindowEvent::DataTransferReceived { serial, value, .. } => {
+                if self.pending_file_drops.remove(&serial) {
+                    if let Ok(paths) = value.try_as_file_paths() {
+                        let paths = paths
+                            .into_iter()
+                            .filter_map(|path| path.to_str().map(str::to_owned))
+                            .collect::<Vec<_>>();
+                        if !paths.is_empty() {
+                            self.comms.send_input(InputEvent::FileDrop { paths });
+                        }
+                    }
                 }
             }
 

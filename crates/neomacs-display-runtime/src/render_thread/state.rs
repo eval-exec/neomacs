@@ -330,15 +330,15 @@ impl PointerCursorIntent {
     }
 
     #[must_use]
-    pub(super) fn icon(self) -> winit::window::CursorIcon {
+    pub(super) fn icon(self) -> winit::cursor::CursorIcon {
         match self {
-            Self::Default => winit::window::CursorIcon::Default,
-            Self::ChromeAction => winit::window::CursorIcon::Pointer,
+            Self::Default => winit::cursor::CursorIcon::Default,
+            Self::ChromeAction => winit::cursor::CursorIcon::Pointer,
             Self::PresentedWindowResize(axis) => match axis {
-                PresentedResizeAxis::Horizontal => winit::window::CursorIcon::EwResize,
-                PresentedResizeAxis::Vertical => winit::window::CursorIcon::NsResize,
+                PresentedResizeAxis::Horizontal => winit::cursor::CursorIcon::EwResize,
+                PresentedResizeAxis::Vertical => winit::cursor::CursorIcon::NsResize,
             },
-            Self::NativeFrameResize(direction) => winit::window::CursorIcon::from(direction),
+            Self::NativeFrameResize(direction) => winit::cursor::CursorIcon::from(direction),
         }
     }
 }
@@ -791,6 +791,7 @@ pub(super) struct RenderGpuContext {
 
 pub(super) struct RenderApp {
     pub(super) comms: RenderComms,
+    pub(super) menus: crate::menus::MenuPresentation,
 
     /// Display-lifetime owner for decoded application icon data and native
     /// Wayland toplevel-icon protocol state.
@@ -834,6 +835,7 @@ pub(super) struct RenderApp {
     /// per-render rebuild entirely.
     pub(super) faces_signature: Vec<(u64, u64)>,
     pub(super) modifiers: u32,
+    pub(super) pending_file_drops: std::collections::HashSet<winit::event_loop::AsyncRequestSerial>,
 
     pub(super) image_metadata: SharedImageRenderState,
 
@@ -999,6 +1001,7 @@ impl RenderApp {
             window_icon: crate::window_icon::WindowIconService::new(),
             clipboard: Err("clipboard is unavailable before display initialization".to_owned()),
             gpu: None,
+            menus: crate::menus::MenuPresentation::default(),
             renderer: None,
             #[cfg(feature = "video")]
             video_wake: neomacs_video::VideoWake::noop(),
@@ -1014,6 +1017,7 @@ impl RenderApp {
             faces: HashMap::new(),
             faces_signature: Vec::new(),
             modifiers: 0,
+            pending_file_drops: Default::default(),
             image_metadata,
             cursor_defaults: CursorState::new(
                 neomacs_display_protocol::frame_time::observe_platform_now(),

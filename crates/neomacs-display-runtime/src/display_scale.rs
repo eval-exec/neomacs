@@ -111,7 +111,7 @@ fn observe_linux_backend(
 /// Observe the backend that winit actually selected, then gather native facts
 /// without choosing a font-DPI policy.
 #[must_use]
-pub fn observe_event_loop_display<T: 'static>(event_loop: &EventLoop<T>) -> DisplayObservation {
+pub fn observe_event_loop_display(event_loop: &EventLoop) -> DisplayObservation {
     #[cfg(target_os = "linux")]
     let observation = {
         let backend = if event_loop.is_wayland() {

@@ -2,8 +2,9 @@
 
 use super::RenderApp;
 use crate::thread_comm::{InputEvent, WindowCommand};
+use winit::cursor::CursorIcon;
 use winit::dpi::PhysicalPosition;
-use winit::window::{CursorIcon, UserAttentionType};
+use winit::window::UserAttentionType;
 
 impl RenderApp {
     fn remove_pending_child_subtree(&mut self, frame_id: u64) {
@@ -61,7 +62,7 @@ impl RenderApp {
                             11 => CursorIcon::NwseResize,
                             _ => CursorIcon::Default,
                         };
-                        window.set_cursor(icon);
+                        window.set_cursor(icon.into());
                     }
                 }
             }
@@ -72,7 +73,7 @@ impl RenderApp {
                     .and_then(|ws| ws.window())
                 {
                     let pos = PhysicalPosition::new(x as f64, y as f64);
-                    let _ = window.set_cursor_position(pos);
+                    let _ = window.set_cursor_position(pos.into());
                 }
             }
             WindowCommand::SetWindowTitle { title } => {
@@ -150,7 +151,7 @@ impl RenderApp {
                     .primary_window()
                     .and_then(|ws| ws.window())
                 {
-                    window.set_outer_position(PhysicalPosition::new(x, y));
+                    window.set_outer_position(PhysicalPosition::new(x, y).into());
                 }
             }
             WindowCommand::SetWindowSize { width, height } => {

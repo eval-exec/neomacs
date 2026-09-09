@@ -1062,16 +1062,16 @@ impl WebViewWake {
 /// window. Platform handles remain private inside the crate.
 #[derive(Clone)]
 pub struct WebViewHost {
-    window: Arc<winit::window::Window>,
+    window: Arc<dyn winit::window::Window>,
 }
 
 impl WebViewHost {
     #[must_use]
-    pub fn new(window: Arc<winit::window::Window>) -> Self {
+    pub fn new(window: Arc<dyn winit::window::Window>) -> Self {
         Self { window }
     }
 
-    pub(crate) fn window(&self) -> &Arc<winit::window::Window> {
+    pub(crate) fn window(&self) -> &Arc<dyn winit::window::Window> {
         &self.window
     }
 }

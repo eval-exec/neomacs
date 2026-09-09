@@ -8,18 +8,20 @@ use crate::thread_comm::InputEvent;
 use neomacs_display_protocol::frame_time::EventTime;
 use std::sync::Arc;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::window::Window;
 
 impl RenderApp {
     fn collect_monitor_snapshot(
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
     ) -> Vec<crate::thread_comm::MonitorInfo> {
         let mut monitors = Vec::new();
         for monitor in event_loop.available_monitors() {
-            let pos = monitor.position();
-            let size = monitor.size();
+            let pos = monitor.position().unwrap_or_default();
+            let Some(mode) = monitor.current_video_mode() else {
+                continue;
+            };
+            let size = mode.size();
             let scale = monitor.scale_factor();
-            let name = monitor.name();
+            let name = monitor.name().map(|name| name.into_owned());
             let width_mm = if scale > 0.0 {
                 (size.width as f64 * 25.4 / (96.0 * scale)) as i32
             } else {
@@ -44,7 +46,11 @@ impl RenderApp {
         monitors
     }
 
-    fn refresh_monitor_snapshot(&mut self, event_loop: &ActiveEventLoop, emit_change_event: bool) {
+    fn refresh_monitor_snapshot(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        emit_change_event: bool,
+    ) {
         let snapshot = Self::collect_monitor_snapshot(event_loop);
         let had_snapshot = self.monitors_populated;
         let changed = !had_snapshot || self.last_monitor_snapshot != snapshot;
@@ -84,7 +90,7 @@ impl RenderApp {
         }
     }
 
-    pub(super) fn handle_resumed(&mut self, event_loop: &ActiveEventLoop) {
+    pub(super) fn handle_resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
         if !self.lifecycle_flags.resumed_seen {
             tracing::info!(
                 "Render thread resumed: primary_window_exists={} size={}x{} title={:?}",
@@ -119,12 +125,12 @@ impl RenderApp {
                 let chrome = primary.lifecycle.chrome();
                 (w, h, chrome.title.clone(), chrome.decorations_enabled)
             };
-            let attrs = Window::default_attributes()
+            let attrs = winit::window::WindowAttributes::default()
                 .with_title(&title)
-                .with_inner_size(window_size_from_emacs_pixels(width, height))
+                .with_surface_size(window_size_from_emacs_pixels(width, height))
                 .with_decorations(decorations_enabled)
                 .with_transparent(true);
-            let attrs = crate::window_identity::apply_platform_window_identity(attrs);
+            let attrs = crate::window_identity::apply_platform_window_identity(attrs, event_loop);
 
             tracing::info!(
                 "Render thread creating primary window: emacs_pixels={}x{} title={:?}",
@@ -134,8 +140,8 @@ impl RenderApp {
             );
             match event_loop.create_window(attrs) {
                 Ok(window) => {
-                    let window = Arc::new(window);
-                    NativeTextInputPolicy::for_gui_frame().apply_to_window(&window);
+                    let window: Arc<dyn winit::window::Window> = Arc::from(window);
+                    NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
 
                     if self.clipboard.is_err() {
                         self.clipboard = crate::clipboard::ClipboardService::for_display(
@@ -161,7 +167,7 @@ impl RenderApp {
                         effective_scale
                     );
 
-                    let phys = window.inner_size();
+                    let phys = window.surface_size();
                     {
                         let primary = self.frame_windows.primary_window_mut().unwrap();
                         if let FrameLifecycle::Pending {
@@ -189,10 +195,10 @@ impl RenderApp {
                         .lifecycle
                         .geometry_hints()
                     {
-                        apply_window_geometry_hints(&window, geometry_hints);
+                        apply_window_geometry_hints(window.as_ref(), geometry_hints);
                     }
 
-                    self.window_icon.apply(&window);
+                    self.window_icon.apply(window.as_ref());
                 }
                 Err(e) => {
                     tracing::error!("Failed to create window: {:?}", e);
@@ -203,7 +209,7 @@ impl RenderApp {
         self.refresh_monitor_snapshot(event_loop, false);
     }
 
-    pub(super) fn handle_about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    pub(super) fn handle_about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         // One observation for the whole pass. Everything this pass ages,
         // schedules or services is dated to the same instant, so two windows
         // cannot disagree about what time it is and a deadline cannot be
@@ -223,6 +229,7 @@ impl RenderApp {
             self.lifecycle_flags.about_to_wait_seen = true;
         }
         if self.lifecycle_flags.shutdown_requested {
+            self.handle_exiting();
             event_loop.exit();
             return;
         }
@@ -232,15 +239,29 @@ impl RenderApp {
         // command. Rebuild the whole GPU stack before doing anything else
         // with it.
         if self.device_lost.take() {
+            self.menus.cancel();
             self.recover_from_device_loss(event_loop);
         }
         self.refresh_monitor_snapshot(event_loop, true);
         if self.process_commands() {
+            self.handle_exiting();
             event_loop.exit();
             return;
         }
 
         if let Some(gpu) = &self.gpu {
+            if let Some(renderer) = &self.renderer {
+                if let Err(error) = self.menus.sync(
+                    event_loop,
+                    &gpu.instance,
+                    &gpu.adapter,
+                    &gpu.device,
+                    renderer.surface_format(),
+                ) {
+                    tracing::error!(%error, "native menu presentation failed");
+                    self.menus.cancel();
+                }
+            }
             self.frame_windows.process_creates(
                 event_loop,
                 &mut self.window_icon,
@@ -250,6 +271,20 @@ impl RenderApp {
             );
         }
         let destroyed = self.frame_windows.process_destroys();
+        if self
+            .menus
+            .owner()
+            .is_some_and(|owner| destroyed.contains(&owner))
+        {
+            self.menus.cancel();
+        }
+        while let Some(index) = self.menus.take_result() {
+            self.comms
+                .send_input(crate::thread_comm::InputEvent::MenuSelection {
+                    index: index.index(),
+                    token: Some(index.token),
+                });
+        }
         if let Some(renderer) = self.renderer.as_mut() {
             for frame_id in destroyed {
                 renderer.forget_gpu_budget_frame_window(frame_id);
@@ -694,7 +729,8 @@ impl RenderApp {
         let reported_millihertz = window_state
             .window()
             .and_then(|window| window.current_monitor())
-            .and_then(|monitor| monitor.refresh_rate_millihertz());
+            .and_then(|monitor| monitor.current_video_mode())
+            .and_then(|mode| mode.refresh_rate_millihertz().map(|rate| rate.get()));
         Self::display_rate_limit(reported_millihertz)
     }
 
@@ -802,6 +838,7 @@ impl RenderApp {
     }
 
     pub(super) fn handle_exiting(&mut self) {
+        self.menus.close();
         // Explicitly drop wgpu resources while the Wayland connection is still alive.
         // Without this, RenderApp's implicit drop happens AFTER the event loop's
         // Wayland display is torn down, causing SEGV in eglTerminate → dri2_teardown_wayland.

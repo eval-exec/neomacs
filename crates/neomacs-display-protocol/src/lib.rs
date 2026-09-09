@@ -22,6 +22,7 @@ pub mod glyph_matrix;
 pub mod gradient;
 pub mod image;
 pub mod interaction_projection;
+pub mod menu;
 pub mod motion_spec;
 pub mod popup_placement;
 pub mod present_mapping;

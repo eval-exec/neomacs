@@ -392,7 +392,10 @@ mod tests {
                 modifiers: Modifiers::none(),
                 target_frame_id: 0,
             },
-            InputEvent::MenuSelection { index: 0 },
+            InputEvent::MenuSelection {
+                index: 0,
+                token: None,
+            },
             InputEvent::ToolBarClick {
                 index: 0,
                 emacs_frame_id: 0,

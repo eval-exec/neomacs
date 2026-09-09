@@ -1,34 +1,35 @@
-use super::{RenderApp, RenderUserEvent};
+use super::RenderApp;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-impl ApplicationHandler<RenderUserEvent> for RenderApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+impl ApplicationHandler for RenderApp {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.handle_resumed(event_loop);
     }
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
         self.handle_window_event(event_loop, window_id, event);
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.handle_about_to_wait(event_loop);
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: RenderUserEvent) {
-        match event {
-            RenderUserEvent::Wake => self.handle_about_to_wait(event_loop),
-        }
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.handle_about_to_wait(event_loop);
     }
+}
 
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+impl Drop for RenderApp {
+    fn drop(&mut self) {
+        self.menus.close();
         self.handle_exiting();
     }
 }

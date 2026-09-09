@@ -361,7 +361,10 @@ pub trait DisplayHost {
     fn popup_menu_visible_rows(&self, _x: f32, _y: f32, _entry_count: usize) -> Option<usize> {
         None
     }
-    fn hide_popup_menu(&mut self) -> Result<(), String> {
+    fn hide_popup_menu(
+        &mut self,
+        _token: neomacs_display_protocol::menu::MenuToken,
+    ) -> Result<(), String> {
         Ok(())
     }
     fn current_primary_window_size(&self) -> Option<GuiFrameHostSize> {

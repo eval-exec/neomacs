@@ -90,7 +90,10 @@ impl DisplayHost for TtyPopupDisplayHost {
         Some(visible.min(entry_count))
     }
 
-    fn hide_popup_menu(&mut self) -> Result<(), String> {
+    fn hide_popup_menu(
+        &mut self,
+        _token: neomacs_display_protocol::menu::MenuToken,
+    ) -> Result<(), String> {
         self.force_full_redraw
             .store(true, std::sync::atomic::Ordering::Release);
         Ok(())

@@ -1,4 +1,4 @@
-//! Transient overlays owned by the compositor: popup menus, tooltips, the
+//! Transient overlays owned by the compositor: tooltips, the
 //! visual bell, typing-speed and idle-dim state.
 //!
 //! Paths here are absolute on purpose, matching the sibling submodules.
@@ -7,15 +7,12 @@ use neomacs_display_protocol::frame_time::EventTime;
 
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_display_protocol::effect_config::IdleDimConfig;
-use neomacs_renderer_wgpu::{PopupMenuState, TooltipState};
+use neomacs_renderer_wgpu::TooltipState;
 
 impl GuiFrameRenderState {
-    pub(in crate::render_thread) fn set_popup_menu(&mut self, popup_menu: Option<PopupMenuState>) {
-        if popup_menu.is_some() {
-            self.update_presented_pointer_motion(None);
-        }
-        self.overlays.popup_menu = popup_menu;
-        self.compositor.dirty = true;
+    pub(in crate::render_thread) fn menu_opened(&mut self) {
+        self.update_presented_pointer_motion(None);
+        self.mark_dirty();
     }
 
     pub(in crate::render_thread) fn set_tooltip(&mut self, tooltip: Option<TooltipState>) {
@@ -38,17 +35,6 @@ impl GuiFrameRenderState {
     pub(in crate::render_thread) fn record_idle_activity(&mut self, now: EventTime) {
         self.overlays.idle_dim.last_activity_time = now;
         self.compositor.dirty = true;
-    }
-
-    pub(in crate::render_thread) fn update_popup_hover(&mut self, x: f32, y: f32) -> bool {
-        let Some(menu) = self.overlays.popup_menu.as_mut() else {
-            return false;
-        };
-        let dirty = menu.update_hover_at(x, y);
-        if dirty {
-            self.compositor.dirty = true;
-        }
-        dirty
     }
 
     pub(in crate::render_thread) fn trigger_visual_bell(

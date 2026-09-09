@@ -22,7 +22,7 @@ use winit::window::ResizeDirection;
 #[test]
 fn presented_window_resize_cursor_intent_maps_both_axes_and_has_typed_precedence() {
     use neomacs_display_protocol::{PresentedRegionKind, PresentedResizeAxis};
-    use winit::window::CursorIcon;
+    use winit::cursor::CursorIcon;
 
     assert_eq!(
         PresentedRegionKind::TextBody.resize_axis(),
@@ -217,7 +217,7 @@ fn set_test_frame_placement(
 #[test]
 fn wheel_input_atomically_carries_its_presented_region() {
     let (mut app, emacs) = make_test_app_with_input(200, 100, 1.0);
-    let window_id = winit::window::WindowId::dummy();
+    let window_id = winit::window::WindowId::from_raw(1);
     app.frame_windows.primary_winit_id = Some(window_id);
 
     let window = app.frame_windows.primary_window_mut().unwrap();
@@ -1571,15 +1571,7 @@ fn programmatic_popup_open_suppresses_underlying_hover_immediately() {
     render.pointer_appearance.press();
     render.set_dirty(false);
 
-    render.set_popup_menu(Some(neomacs_renderer_wgpu::PopupMenuState::new(
-        0.0,
-        0.0,
-        vec![],
-        None,
-        13.0,
-        17.0,
-        8.0,
-    )));
+    render.menu_opened();
 
     assert_eq!(render.pointer_appearance.active(), None);
     assert_eq!(render.pointer_appearance.pressed(), Some(key));
@@ -1678,33 +1670,6 @@ fn nested_child_ime_cursor_area_uses_presented_root_relative_placement() {
             width: 8,
             height: 16,
         }
-    );
-}
-
-#[test]
-fn popup_owns_pointer_above_underlying_presented_content() {
-    let mut app = make_test_app(800, 600, 1.0);
-    let render = ensure_primary_frame(&mut app).expect("primary render");
-    render.set_popup_menu(Some(neomacs_renderer_wgpu::PopupMenuState::new(
-        0.0,
-        0.0,
-        vec![],
-        None,
-        13.0,
-        17.0,
-        8.0,
-    )));
-    let window = app.frame_windows.primary_window().unwrap();
-
-    let owner = RenderApp::pointer_owner(window, 20.0, 56.0);
-    assert_eq!(owner, PointerOwner::Popup);
-    assert!(
-        owner.target().is_none(),
-        "popup suppresses underlying appearance"
-    );
-    assert!(
-        owner.permits_root_chrome(),
-        "popup branch retains explicit chrome delegation"
     );
 }
 
@@ -2023,7 +1988,7 @@ fn translate_key_arrow_keys() {
 
 #[test]
 fn translate_key_space() {
-    assert_eq!(RenderApp::translate_key(&Key::Named(NamedKey::Space)), 0x20);
+    assert_eq!(RenderApp::translate_key(&Key::Character(" ".into())), 0x20);
 }
 
 // ===================================================================

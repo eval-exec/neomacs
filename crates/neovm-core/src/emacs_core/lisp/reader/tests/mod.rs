@@ -30,7 +30,10 @@ impl DisplayHost for RecordingPopupHost {
         Ok(())
     }
 
-    fn hide_popup_menu(&mut self) -> Result<(), String> {
+    fn hide_popup_menu(
+        &mut self,
+        _token: neomacs_display_protocol::menu::MenuToken,
+    ) -> Result<(), String> {
         *self.hidden.lock().unwrap() += 1;
         Ok(())
     }
@@ -2760,8 +2763,11 @@ fn yes_or_no_p_uses_dialog_path_for_cons_last_input_event() {
     ev.obarray
         .set_symbol_value("last-nonmenu-event", Value::NIL);
     ev.obarray.set_symbol_value("use-dialog-box", Value::T);
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: 0 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: 0,
+        token: None,
+    })
+    .unwrap();
 
     let result = builtin_yes_or_no_p(&mut ev, vec![Value::string("Confirm? ")]).unwrap();
     assert_eq!(result, Value::T);
@@ -2811,8 +2817,11 @@ fn yes_or_no_p_uses_dialog_before_short_answers() {
         .set_symbol_value("last-nonmenu-event", Value::NIL);
     ev.obarray.set_symbol_value("use-dialog-box", Value::T);
     ev.obarray.set_symbol_value("use-short-answers", Value::T);
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: 1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: 1,
+        token: None,
+    })
+    .unwrap();
 
     let result = builtin_yes_or_no_p(&mut ev, vec![Value::string("Confirm? ")]).unwrap();
 

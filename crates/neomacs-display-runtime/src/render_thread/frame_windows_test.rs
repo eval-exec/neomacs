@@ -1475,7 +1475,7 @@ fn destroy_queue_refill_after_process() {
 // =======================================================================
 
 // Note: WindowState cannot be constructed in tests because it requires
-// Arc<Window>, wgpu::Surface, and wgpu::SurfaceConfiguration.
+// Arc<dyn Window>, wgpu::Surface, and wgpu::SurfaceConfiguration.
 // The following test just verifies the struct's field count and layout
 // by testing that the manager maps are properly typed.
 

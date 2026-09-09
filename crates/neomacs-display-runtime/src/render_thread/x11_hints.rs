@@ -2,18 +2,24 @@ use neovm_core::window::GuiFrameGeometryHints;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-pub(crate) fn apply_window_geometry_hints(window: &Window, geometry_hints: GuiFrameGeometryHints) {
-    window.set_resize_increments(Some(PhysicalSize::new(
-        geometry_hints.width_inc.max(1),
-        geometry_hints.height_inc.max(1),
-    )));
+pub(crate) fn apply_window_geometry_hints(
+    window: &dyn Window,
+    geometry_hints: GuiFrameGeometryHints,
+) {
+    window.set_surface_resize_increments(Some(
+        PhysicalSize::new(
+            geometry_hints.width_inc.max(1),
+            geometry_hints.height_inc.max(1),
+        )
+        .into(),
+    ));
 
     #[cfg(target_os = "linux")]
     apply_x11_geometry_hints(window, geometry_hints);
 }
 
 #[cfg(target_os = "linux")]
-fn apply_x11_geometry_hints(window: &Window, geometry_hints: GuiFrameGeometryHints) {
+fn apply_x11_geometry_hints(window: &dyn Window, geometry_hints: GuiFrameGeometryHints) {
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
     use std::ptr;
     use std::sync::OnceLock;

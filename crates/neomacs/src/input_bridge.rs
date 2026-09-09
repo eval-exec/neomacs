@@ -347,9 +347,10 @@ fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
             tracing::debug!("input_bridge: converted to {:?}", event);
             Some(event)
         }
-        DisplayEvent::MenuSelection { index } => {
-            Some(KbInputEvent::MenuSelection { index: *index })
-        }
+        DisplayEvent::MenuSelection { index, token } => Some(KbInputEvent::MenuSelection {
+            index: *index,
+            token: *token,
+        }),
         // The display runtime already reports drops, but the evaluator has no
         // corresponding input type yet. Keep that existing behavior explicit
         // so adding WebView events does not rely on a catch-all arm.

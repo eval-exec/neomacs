@@ -578,7 +578,7 @@ fn test_translate_key_named() {
         RenderApp::translate_key(&Key::Named(NamedKey::ArrowDown)),
         0xff54
     );
-    assert_eq!(RenderApp::translate_key(&Key::Named(NamedKey::Space)), 0x20);
+    assert_eq!(RenderApp::translate_key(&Key::Character(" ".into())), 0x20);
 }
 
 #[test]
@@ -848,7 +848,7 @@ fn adopt_primary_window_command_updates_existing_primary_render_state_identity()
 }
 
 #[test]
-fn adopted_primary_frame_id_targets_primary_popup_menu() {
+fn popup_without_native_owner_is_not_presented() {
     let mut app = make_test_app();
     let Some(device) = make_test_device() else {
         return;
@@ -868,6 +868,7 @@ fn adopted_primary_frame_id_targets_primary_popup_menu() {
     app.frame_windows.adopt_primary_frame_id(0x1000);
 
     app.handle_ui(UiCommand::ShowPopupMenu {
+        token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x1000),
         placement: neomacs_display_protocol::PopupPlacement::at(
             neomacs_display_protocol::Point::new(10.0, 20.0),
@@ -885,14 +886,9 @@ fn adopted_primary_frame_id_targets_primary_popup_menu() {
         bg: None,
     });
 
+    assert_eq!(app.menus.owner(), None);
     assert!(
-        app.frame_windows
-            .primary_window()
-            .and_then(|ws| ws.render.overlays.popup_menu.as_ref())
-            .is_some()
-    );
-    assert!(
-        app.frame_windows
+        !app.frame_windows
             .primary_window()
             .is_some_and(|ws| ws.render.compositor.dirty)
     );
@@ -972,7 +968,9 @@ fn hide_popup_menu_marks_primary_chrome_dirty_without_popup() {
         ws.render.compositor.dirty = false
     };
 
-    app.handle_ui(UiCommand::HidePopupMenu);
+    app.handle_ui(UiCommand::HidePopupMenu {
+        token: neomacs_display_protocol::menu::MenuToken::fresh(),
+    });
 
     assert_eq!(
         app.frame_windows
@@ -1011,6 +1009,7 @@ fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
     }
 
     app.handle_ui(UiCommand::ShowPopupMenu {
+        token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x2000),
         placement: neomacs_display_protocol::PopupPlacement::at(
             neomacs_display_protocol::Point::new(10.0, 20.0),
@@ -1028,12 +1027,7 @@ fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
         bg: None,
     });
 
-    assert!(
-        app.frame_windows
-            .primary_window()
-            .and_then(|ws| ws.render.overlays.popup_menu.as_ref())
-            .is_none()
-    );
+    assert_eq!(app.menus.owner(), None);
     assert!(
         !app.frame_windows
             .primary_window()

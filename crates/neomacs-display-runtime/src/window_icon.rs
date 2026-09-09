@@ -3,7 +3,8 @@
 //! Uses the project SVG icon (`assets/window-icon.svg`) and rasterizes it at
 //! runtime for platform window APIs that require RGBA pixel buffers.
 
-use winit::window::{Icon, Window};
+use winit::icon::Icon;
+use winit::window::Window;
 
 const WINDOW_ICON_SVG: &[u8] = include_bytes!("../assets/window-icon.svg");
 const WINDOW_ICON_SIZE: u32 = 256;
@@ -35,7 +36,9 @@ impl RasterizedWindowIcon {
                 px[2] = (px[2] as f32 / a).min(255.0) as u8;
             }
         }
-        Icon::from_rgba(rgba, self.width, self.height).ok()
+        winit::icon::RgbaIcon::new(rgba, self.width, self.height)
+            .ok()
+            .map(Into::into)
     }
 
     #[cfg(target_os = "linux")]
@@ -107,7 +110,7 @@ impl WindowIconService {
     }
 
     /// Apply the Neomacs window icon to a winit window.
-    pub(crate) fn apply(&mut self, window: &Window) {
+    pub(crate) fn apply(&mut self, window: &dyn Window) {
         let Some(icon) = self.icon.as_ref() else {
             return;
         };

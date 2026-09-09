@@ -104,13 +104,8 @@ pub(super) fn draw_panels(
         render.emacs_frame_id,
         &render.compositor.child_frames,
     );
-    let popup_menu = render.overlays.popup_menu.as_ref();
     let tooltip = render.overlays.tooltip.as_ref();
     let glyph_atlas = render.compositor.glyph_atlas.as_mut().unwrap();
-
-    if let Some(menu) = popup_menu {
-        renderer.render_popup_menu(surface_view, menu, glyph_atlas, width, height);
-    }
 
     if let Some(tooltip) = tooltip {
         renderer.render_tooltip(surface_view, tooltip, glyph_atlas, width, height);

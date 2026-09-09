@@ -589,15 +589,22 @@ fn input_event_image_terminal_state_changed_construction() {
 
 #[test]
 fn input_event_menu_selection_construction() {
-    let selected = InputEvent::MenuSelection { index: 3 };
+    let selected = InputEvent::MenuSelection {
+        index: 3,
+        token: None,
+    };
     match selected {
-        InputEvent::MenuSelection { index } => assert_eq!(index, 3),
+        InputEvent::MenuSelection { index, .. } => assert_eq!(index, 3),
         _ => panic!("Wrong variant"),
     }
 
-    let cancelled = InputEvent::MenuSelection { index: -1 };
+    let cancelled = InputEvent::MenuSelection {
+        index: -1,
+        token: None,
+    };
+    assert!(!RenderComms::is_lossy_input_event(&cancelled));
     match cancelled {
-        InputEvent::MenuSelection { index } => assert_eq!(index, -1),
+        InputEvent::MenuSelection { index, .. } => assert_eq!(index, -1),
         _ => panic!("Wrong variant"),
     }
 }
@@ -1063,6 +1070,7 @@ fn render_command_show_popup_menu() {
     ];
 
     let cmd = RenderCommand::Ui(UiCommand::ShowPopupMenu {
+        token: neomacs_display_protocol::menu::MenuToken::fresh(),
         frame: FrameRef::Frame(0x1000),
         placement: neomacs_display_protocol::PopupPlacement::at(
             neomacs_display_protocol::Point::new(100.0, 200.0),
@@ -1074,6 +1082,7 @@ fn render_command_show_popup_menu() {
     });
     match cmd {
         RenderCommand::Ui(UiCommand::ShowPopupMenu {
+            token: _,
             frame,
             placement,
             items: menu_items,
@@ -1104,9 +1113,11 @@ fn render_command_show_popup_menu() {
 
 #[test]
 fn render_command_hide_popup_menu() {
-    let cmd = RenderCommand::Ui(UiCommand::HidePopupMenu);
+    let cmd = RenderCommand::Ui(UiCommand::HidePopupMenu {
+        token: neomacs_display_protocol::menu::MenuToken::fresh(),
+    });
     match cmd {
-        RenderCommand::Ui(UiCommand::HidePopupMenu) => {}
+        RenderCommand::Ui(UiCommand::HidePopupMenu { .. }) => {}
         other => panic!("Expected HidePopupMenu, got {:?}", other),
     }
 }

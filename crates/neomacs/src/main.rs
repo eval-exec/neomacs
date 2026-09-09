@@ -129,8 +129,8 @@ use neomacs_display_runtime::render_thread::run_render_loop_current_thread;
 #[cfg(feature = "neo-term")]
 use neomacs_display_runtime::render_thread::run_render_loop_current_thread_with_terminals;
 use neomacs_display_runtime::render_thread::{
-    RenderEventLoop, RenderEventLoopProxy, RenderUserEvent, SharedImageRenderState,
-    SharedMonitorInfo, build_render_event_loop,
+    RenderEventLoop, RenderEventLoopProxy, SharedImageRenderState, SharedMonitorInfo,
+    build_render_event_loop,
 };
 use neomacs_display_runtime::shader_surface::{
     SurfaceChannelSource as RendererChannelSource, SurfaceContract,
@@ -1018,9 +1018,7 @@ impl GuiEventLoopWaker {
     }
 
     fn wake(&self) {
-        if let Err(err) = self.proxy.send_event(RenderUserEvent::Wake) {
-            tracing::debug!("GUI event loop wake dropped after loop closed: {err}");
-        }
+        self.proxy.wake_up();
     }
 }
 
@@ -1669,6 +1667,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .collect();
         self.send_render_command(
             RenderCommand::Ui(UiCommand::ShowPopupMenu {
+                token: menu.token,
                 frame,
                 placement: menu.placement,
                 items,
@@ -1680,9 +1679,12 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
-    fn hide_popup_menu(&mut self) -> Result<(), String> {
+    fn hide_popup_menu(
+        &mut self,
+        token: neomacs_display_protocol::menu::MenuToken,
+    ) -> Result<(), String> {
         self.send_render_command(
-            RenderCommand::Ui(UiCommand::HidePopupMenu),
+            RenderCommand::Ui(UiCommand::HidePopupMenu { token }),
             "failed to hide popup menu",
         )
     }

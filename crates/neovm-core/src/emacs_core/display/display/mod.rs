@@ -1995,6 +1995,7 @@ impl NativePopupSession {
         // not paint through the popup before teardown.
         ctx.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::T)?;
 
+        let mut token = neomacs_display_protocol::menu::MenuToken::fresh();
         let result = x_popup_menu_interactive_loop(
             ctx,
             self.position,
@@ -2005,11 +2006,15 @@ impl NativePopupSession {
             self.frame_id,
             self.title.as_deref(),
             &mut self.selected,
+            &mut token,
         );
 
         let result_root_scope = ctx.save_vm_roots();
         ctx.push_eval_result_roots(&result);
-        let _ = ctx.display_host.as_mut().map(|host| host.hide_popup_menu());
+        let _ = ctx
+            .display_host
+            .as_mut()
+            .map(|host| host.hide_popup_menu(token));
         let result = ctx.unbind_to_with_result(specpdl_count, result);
         ctx.redisplay_with_force(true);
         ctx.restore_vm_roots(result_root_scope);
@@ -2164,10 +2169,11 @@ fn x_popup_menu_interactive_loop(
     frame_id: FrameId,
     title: Option<&str>,
     selected: &mut usize,
+    token: &mut neomacs_display_protocol::menu::MenuToken,
 ) -> EvalResult {
     let mut help = TtyMenuHelpTracker::default();
     show_popup_menu_selection(
-        ctx, frame_id, placement, title, entries, *selected, &mut help,
+        ctx, frame_id, placement, title, entries, *selected, &mut help, token,
     )?;
 
     loop {
@@ -2175,8 +2181,9 @@ fn x_popup_menu_interactive_loop(
         // input clears the previous logical echo message even though the TTY
         // menu keeps ordinary redisplay inhibited while it owns the screen.
         let (keys, binding) = ctx.read_key_sequence()?;
-        if let Some(selection) = popup_menu_selection(&keys) {
+        if let Some(selection) = popup_menu_selection(&keys, *token) {
             match selection {
+                NativePopupSelection::Stale => continue,
                 NativePopupSelection::Cancelled => return Ok(Value::NIL),
                 NativePopupSelection::Entry(index) => {
                     let Some(event) = events.get(index).copied() else {
@@ -2207,13 +2214,13 @@ fn x_popup_menu_interactive_loop(
             Some(TtyMenuNavigationCommand::TtyMenuNextItem) => {
                 *selected = (*selected + 1).min(visible_rows.saturating_sub(1));
                 show_popup_menu_selection(
-                    ctx, frame_id, placement, title, entries, *selected, &mut help,
+                    ctx, frame_id, placement, title, entries, *selected, &mut help, token,
                 )?;
             }
             Some(TtyMenuNavigationCommand::TtyMenuPrevItem) => {
                 *selected = (*selected).saturating_sub(1);
                 show_popup_menu_selection(
-                    ctx, frame_id, placement, title, entries, *selected, &mut help,
+                    ctx, frame_id, placement, title, entries, *selected, &mut help, token,
                 )?;
             }
             Some(TtyMenuNavigationCommand::TtyMenuNextMenu) => {
@@ -2255,12 +2262,15 @@ fn show_popup_menu_selection(
     entries: &[PopupMenuEntry],
     selected: usize,
     help: &mut TtyMenuHelpTracker,
+    token: &mut neomacs_display_protocol::menu::MenuToken,
 ) -> Result<(), Flow> {
+    token.next_revision();
     {
         let Some(host) = ctx.display_host.as_mut() else {
             return Ok(());
         };
         host.show_popup_menu(PopupMenuRequest {
+            token: *token,
             frame_id,
             placement,
             title: title.map(str::to_owned),
@@ -2286,15 +2296,25 @@ fn popup_menu_entry_selectable(entries: &[PopupMenuEntry], index: usize) -> bool
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NativePopupSelection {
+    Stale,
     Cancelled,
     Entry(usize),
 }
 
-fn popup_menu_selection(keys: &[Value]) -> Option<NativePopupSelection> {
+fn popup_menu_selection(
+    keys: &[Value],
+    expected: neomacs_display_protocol::menu::MenuToken,
+) -> Option<NativePopupSelection> {
     let event = keys.first()?;
     let parts = list_to_vec(event)?;
-    if parts.len() != 2 || parts[0].as_symbol_name() != Some("menu-selection") {
+    if !matches!(parts.len(), 2 | 4) || parts[0].as_symbol_name() != Some("menu-selection") {
         return None;
+    }
+    if parts.len() == 4
+        && (parts[2].as_fixnum()? != expected.session as i64
+            || parts[3].as_fixnum()? != expected.revision as i64)
+    {
+        return Some(NativePopupSelection::Stale);
     }
     let index = parts[1].as_fixnum()?;
     Some(if index < 0 {

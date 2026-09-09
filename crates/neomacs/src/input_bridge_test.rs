@@ -328,11 +328,17 @@ fn mouse_button_preserves_target_frame_for_keyboard_owner() {
 
 #[test]
 fn popup_menu_selection_reaches_keyboard_owner() {
-    let display_event = DisplayEvent::MenuSelection { index: 2 };
+    let display_event = DisplayEvent::MenuSelection {
+        index: 2,
+        token: None,
+    };
     let event = convert_display_event(&display_event);
 
     match event {
-        Some(KbInputEvent::MenuSelection { index: 2 }) => {}
+        Some(KbInputEvent::MenuSelection {
+            index: 2,
+            token: None,
+        }) => {}
         other => panic!("unexpected event: {other:?}"),
     }
 }

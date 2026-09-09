@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Fullscreen, Window, WindowId};
+use winit::monitor::Fullscreen;
+use winit::window::{Window, WindowId};
 
 use super::cursor::{CursorState, CursorTarget};
 pub(crate) use super::frame_compositor::{FrameCompositor, RetainedCursorCell, RetainedStatic};
@@ -31,7 +32,7 @@ use neomacs_display_protocol::{
     PresentationFramePoint, PresentationId, PresentedHit, PresentedHitError, PresentedHitQuery,
     RetainedImageSet, SurfaceState,
 };
-use neomacs_renderer_wgpu::{PopupMenuState, TooltipState, WgpuGlyphAtlas, WgpuRenderer};
+use neomacs_renderer_wgpu::{TooltipState, WgpuGlyphAtlas, WgpuRenderer};
 use neovm_core::window::GuiFrameGeometryHints;
 
 use crate::thread_comm::WindowFullscreenMode;
@@ -41,7 +42,7 @@ const TITLEBAR_DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration:
 
 /// Native window/surface state for a top-level GUI frame.
 pub(crate) struct GuiFrameNativeWindowState {
-    pub window: Arc<Window>,
+    pub window: Arc<dyn Window>,
     pub surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
     pub width: u32,
@@ -77,18 +78,20 @@ impl NativeTextInputPolicy {
         }
     }
 
-    pub(super) fn apply_to_window(self, window: &Window) {
+    pub(super) fn apply_to_window(self, window: &dyn Window) {
         apply_option_key_policy(window, self.option_key_is_meta);
         window.set_ime_allowed(self.ime_allowed_on_create);
         window.set_ime_cursor_area(
             PhysicalPosition::new(
                 self.initial_cursor_area.x as f64,
                 self.initial_cursor_area.y as f64,
-            ),
+            )
+            .into(),
             PhysicalSize::new(
                 self.initial_cursor_area.width as f64,
                 self.initial_cursor_area.height as f64,
-            ),
+            )
+            .into(),
         );
     }
 }
@@ -114,7 +117,7 @@ impl NativeTextInputPolicy {
 /// a dead key (Option+E on the US layout) stops opening a preedit and starts
 /// arriving as a key event at all.
 #[cfg(target_os = "macos")]
-fn apply_option_key_policy(window: &Window, option_key_is_meta: bool) {
+fn apply_option_key_policy(window: &dyn Window, option_key_is_meta: bool) {
     use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
 
     window.set_option_as_alt(if option_key_is_meta {
@@ -127,7 +130,7 @@ fn apply_option_key_policy(window: &Window, option_key_is_meta: bool) {
 /// No other window system composes an Option/Alt chord into a different
 /// character, so Alt already reaches Emacs as a bare modifier there.
 #[cfg(not(target_os = "macos"))]
-fn apply_option_key_policy(_window: &Window, _option_key_is_meta: bool) {}
+fn apply_option_key_policy(_window: &dyn Window, _option_key_is_meta: bool) {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ActivePresentationTransition {
@@ -212,7 +215,6 @@ pub(crate) struct ChromeState {
 
 /// Transient overlay state for a frame window.
 pub(crate) struct OverlayState {
-    pub popup_menu: Option<PopupMenuState>,
     pub tooltip: Option<TooltipState>,
     pub visual_bell_start: Option<neomacs_display_protocol::frame_time::EventTime>,
     pub(super) fps: FpsCounter,
@@ -380,7 +382,6 @@ impl GuiFrameRenderState {
             pointer_damage_appearance_lookups: 0,
             deferred_pointer_retirements: Vec::new(),
             overlays: OverlayState {
-                popup_menu: None,
                 tooltip: None,
                 visual_bell_start: None,
                 fps: FpsCounter {
@@ -917,7 +918,6 @@ impl GuiFrameRenderState {
     }
 
     pub(super) fn dismiss_all_chrome_menus(&mut self) {
-        self.overlays.popup_menu = None;
         self.chrome.interaction.menu_bar_active = None;
         self.chrome.interaction.compact_bar_menu_active = None;
         self.mark_dirty();
@@ -1166,7 +1166,7 @@ impl FrameLifecycle {
         matches!(self, Self::Active { .. })
     }
 
-    pub fn window(&self) -> Option<&Arc<Window>> {
+    pub fn window(&self) -> Option<&Arc<dyn Window>> {
         self.native().map(|n| &n.window)
     }
 
@@ -1374,7 +1374,7 @@ impl GuiFrameWindowState {
         match &mut self.lifecycle {
             FrameLifecycle::Active { native, .. } => {
                 let size = window_size_from_emacs_pixels(width, height);
-                let _ = native.window.request_inner_size(size);
+                let _ = native.window.request_surface_size(size);
             }
             FrameLifecycle::Pending {
                 width: pw,
@@ -1390,7 +1390,7 @@ impl GuiFrameWindowState {
     pub(super) fn apply_geometry_hints(&mut self, geometry_hints: GuiFrameGeometryHints) {
         match &mut self.lifecycle {
             FrameLifecycle::Active { native, .. } => {
-                apply_window_geometry_hints(&native.window, geometry_hints);
+                apply_window_geometry_hints(native.window.as_ref(), geometry_hints);
             }
             FrameLifecycle::Pending {
                 geometry_hints: gh, ..
@@ -1435,8 +1435,8 @@ impl GuiFrameWindowState {
             } => {
                 *last_ime_cursor_area = None;
                 native.window.set_ime_cursor_area(
-                    PhysicalPosition::new(0.0, 0.0),
-                    PhysicalSize::new(1.0, 1.0),
+                    PhysicalPosition::new(0.0, 0.0).into(),
+                    PhysicalSize::new(1.0, 1.0).into(),
                 );
             }
             FrameLifecycle::Pending {
@@ -1459,8 +1459,8 @@ impl GuiFrameWindowState {
                     return;
                 }
                 native.window.set_ime_cursor_area(
-                    PhysicalPosition::new(area.x as f64, area.y as f64),
-                    PhysicalSize::new(area.width as f64, area.height as f64),
+                    PhysicalPosition::new(area.x as f64, area.y as f64).into(),
+                    PhysicalSize::new(area.width as f64, area.height as f64).into(),
                 );
                 *last_ime_cursor_area = Some(area);
             }
@@ -1578,7 +1578,7 @@ impl GuiFrameWindowState {
         self.lifecycle.is_active() && self.render.has_presentable_cursor_change()
     }
 
-    pub fn window(&self) -> Option<&Arc<Window>> {
+    pub fn window(&self) -> Option<&Arc<dyn Window>> {
         self.lifecycle.window()
     }
 }
@@ -1796,7 +1796,7 @@ impl GuiFrameWindowManager {
     /// (requires ActiveEventLoop for window creation).
     pub fn process_creates(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         window_icon: &mut crate::window_icon::WindowIconService,
         instance: &wgpu::Instance,
         device: &wgpu::Device,
@@ -1812,20 +1812,20 @@ impl GuiFrameWindowManager {
                 continue;
             }
 
-            let attrs = Window::default_attributes()
+            let attrs = winit::window::WindowAttributes::default()
                 .with_title(&req.title)
-                .with_inner_size(window_size_from_emacs_pixels(req.width, req.height))
+                .with_surface_size(window_size_from_emacs_pixels(req.width, req.height))
                 .with_transparent(true)
                 .with_decorations(self.chrome_defaults.decorations_enabled);
-            let attrs = crate::window_identity::apply_platform_window_identity(attrs);
+            let attrs = crate::window_identity::apply_platform_window_identity(attrs, event_loop);
 
             match event_loop.create_window(attrs) {
                 Ok(window) => {
-                    let window = Arc::new(window);
-                    window_icon.apply(&window);
+                    let window: Arc<dyn winit::window::Window> = Arc::from(window);
+                    window_icon.apply(window.as_ref());
                     let raw_scale_factor = window.scale_factor();
                     let scale_factor = effective_window_scale_factor(raw_scale_factor);
-                    let phys = window.inner_size();
+                    let phys = window.surface_size();
 
                     // Create surface for this window using the primary display-bound instance.
                     let surface = match instance.create_surface(window.clone()) {
@@ -1869,8 +1869,8 @@ impl GuiFrameWindowManager {
                     };
                     surface.configure(device, &config);
 
-                    NativeTextInputPolicy::for_gui_frame().apply_to_window(&window);
-                    apply_window_geometry_hints(&window, req.geometry_hints);
+                    NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
+                    apply_window_geometry_hints(window.as_ref(), req.geometry_hints);
 
                     let winit_id = window.id();
                     tracing::info!(
@@ -2194,10 +2194,7 @@ impl GuiFrameWindowManager {
 
     pub(super) fn hide_top_level_popup_menus(&mut self) {
         self.for_each_top_level_window_mut(|window_state| {
-            if window_state.render.overlays.popup_menu.is_some() {
-                window_state.render.overlays.popup_menu = None;
-                window_state.render.compositor.dirty = true;
-            }
+            window_state.render.dismiss_all_chrome_menus();
         });
     }
 

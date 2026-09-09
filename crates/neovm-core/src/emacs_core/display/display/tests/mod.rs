@@ -200,7 +200,10 @@ impl DisplayHost for RecordingPopupHost {
         Ok(())
     }
 
-    fn hide_popup_menu(&mut self) -> Result<(), String> {
+    fn hide_popup_menu(
+        &mut self,
+        _token: neomacs_display_protocol::menu::MenuToken,
+    ) -> Result<(), String> {
         *self.hidden.lock().unwrap() += 1;
         Ok(())
     }
@@ -4200,8 +4203,11 @@ fn x_popup_menu_publishes_selected_item_help_and_keeps_it_after_teardown() {
             Value::T,
         ]),
     );
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: 1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: 1,
+        token: None,
+    })
+    .unwrap();
 
     let result = super::builtin_x_popup_menu(
         &mut eval,
@@ -4265,8 +4271,11 @@ fn x_popup_dialog_interactive_returns_selected_value() {
         Value::cons(Value::string("Yes"), Value::T),
         Value::cons(Value::string("No"), Value::symbol("declined")),
     ]);
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: 1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: 1,
+        token: None,
+    })
+    .unwrap();
 
     let result =
         super::builtin_x_popup_dialog(&mut eval, vec![Value::T, contents, Value::NIL]).unwrap();
@@ -4330,8 +4339,11 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
         Value::symbol("line-wrapping"),
         Value::cons(Value::string("Line Wrapping in this Buffer"), submenu),
     );
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: -1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: -1,
+        token: None,
+    })
+    .unwrap();
 
     let result = super::builtin_x_popup_menu(
         &mut eval,
@@ -4379,8 +4391,11 @@ fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
         Value::symbol("line-wrapping"),
         Value::cons(Value::string("Line Wrapping in this Buffer"), submenu),
     );
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: 1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: 1,
+        token: None,
+    })
+    .unwrap();
 
     let result = super::builtin_x_popup_menu(
         &mut eval,
@@ -4427,8 +4442,11 @@ fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
         target_frame_id: 0,
     })
     .unwrap();
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: -1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: -1,
+        token: None,
+    })
+    .unwrap();
 
     let result = super::builtin_x_popup_menu(
         &mut eval,
@@ -4494,8 +4512,11 @@ fn x_popup_menu_interactive_cancel_returns_nil() {
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
     );
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: -1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: -1,
+        token: None,
+    })
+    .unwrap();
 
     assert!(
         super::builtin_x_popup_menu(
@@ -4529,8 +4550,11 @@ fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
     );
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: -1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: -1,
+        token: None,
+    })
+    .unwrap();
 
     let position = Value::list(vec![
         Value::symbol("file"),
@@ -4594,8 +4618,11 @@ fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
     );
-    tx.send(crate::keyboard::InputEvent::MenuSelection { index: -1 })
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::MenuSelection {
+        index: -1,
+        token: None,
+    })
+    .unwrap();
 
     let position = Value::list(vec![
         Value::symbol("tools"),
@@ -4796,4 +4823,32 @@ fn a_nil_message_prints_an_empty_line_in_batch_unless_the_cursor_is_in_the_echo_
     // echo area -- this is the arm that was missing entirely.
     assert!(stderr_message_ends_with_newline(false, false));
     assert!(!stderr_message_ends_with_newline(false, true));
+}
+#[test]
+fn native_menu_result_rejects_a_previous_session_or_revision() {
+    use neomacs_display_protocol::menu::MenuToken;
+    let expected = MenuToken {
+        session: 42,
+        revision: 3,
+    };
+    let keys = |session, revision| {
+        vec![Value::list(vec![
+            Value::symbol("menu-selection"),
+            Value::fixnum(1),
+            Value::fixnum(session),
+            Value::fixnum(revision),
+        ])]
+    };
+    assert!(matches!(
+        super::popup_menu_selection(&keys(41, 3), expected),
+        Some(super::NativePopupSelection::Stale)
+    ));
+    assert!(matches!(
+        super::popup_menu_selection(&keys(42, 2), expected),
+        Some(super::NativePopupSelection::Stale)
+    ));
+    assert!(matches!(
+        super::popup_menu_selection(&keys(42, 3), expected),
+        Some(super::NativePopupSelection::Entry(1))
+    ));
 }

@@ -2,22 +2,7 @@
 
 use strum::IntoStaticStr;
 
-/// A single item in a popup menu.
-#[derive(Debug, Clone)]
-pub struct PopupMenuItem {
-    /// Display label for the item
-    pub label: String,
-    /// Keyboard shortcut text (e.g., "C-x C-s"), or empty
-    pub shortcut: String,
-    /// Whether the item is enabled (selectable)
-    pub enabled: bool,
-    /// Whether this is a separator line
-    pub separator: bool,
-    /// Whether this is a submenu header (has children)
-    pub submenu: bool,
-    /// Nesting depth (0 = top-level, 1 = first submenu, etc.)
-    pub depth: u32,
-}
+pub use crate::menu::PopupMenuItem;
 
 /// A top-level menu bar item (e.g., "File", "Edit", "Tools").
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

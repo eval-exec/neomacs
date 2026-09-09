@@ -51,7 +51,7 @@ pub use glyph_atlas::{
     allocator, pages, types,
 };
 pub use image_cache::{CachedImage, ImageCache, ImageCacheEvent, ImageMetadata, ImageState};
-pub use overlay_state::{MenuPanel, PopupMenuState, TooltipState};
+pub use overlay_state::TooltipState;
 pub use renderer::{
     BudgetExceeded, CompositionRing, FrameRowDamage, FullFrameTexture, GpuBudget, GpuBudgetOwner,
     PaneBlit, PaneSource, RendererFrameEffects, RowDamageInfo, RowReuseStats, SnapshotId,

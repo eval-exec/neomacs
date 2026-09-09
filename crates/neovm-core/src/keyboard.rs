@@ -1260,7 +1260,10 @@ pub enum InputEvent {
     },
     /// Popup menu selection.  The display layer reports the selected
     /// zero-based item index; -1 means the menu was cancelled.
-    MenuSelection { index: i32 },
+    MenuSelection {
+        index: i32,
+        token: Option<neomacs_display_protocol::menu::MenuToken>,
+    },
     /// Tool-bar item click.  The display layer reports the zero-based
     /// index in the current rendered tool-bar item vector.
     ToolBarClick { index: i32, emacs_frame_id: u64 },
@@ -5205,16 +5208,18 @@ impl crate::emacs_core::eval::Context {
             InputEvent::LayoutInvalidated | InputEvent::ImageStateChanged { .. } => {
                 unreachable!("internal frontend events are serviced before read_char")
             }
-            InputEvent::MenuSelection { index } => {
+            InputEvent::MenuSelection { index, token } => {
                 // A native-menu selection is fresh user input, like the event
                 // returned by GNU Emacs's read_menu_command/read_char path.
                 // Clear only the logical echo-area message here; redisplay may
                 // remain inhibited by the modal native-menu session.
                 self.clear_current_message_for_keyboard_input();
-                let event = Value::list(vec![
-                    Value::symbol("menu-selection"),
-                    Value::fixnum(index as i64),
-                ]);
+                let mut parts = vec![Value::symbol("menu-selection"), Value::fixnum(index as i64)];
+                if let Some(token) = token {
+                    parts.push(Value::fixnum(token.session as i64));
+                    parts.push(Value::fixnum(token.revision as i64));
+                }
+                let event = Value::list(parts);
                 Ok(Some(event))
             }
             InputEvent::ToolBarClick {

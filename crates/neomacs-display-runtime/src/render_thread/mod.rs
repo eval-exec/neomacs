@@ -55,14 +55,9 @@ pub use thread_handle::RenderThread;
 
 use winit::event_loop::EventLoopProxy;
 
-pub(crate) use neomacs_renderer_wgpu::{PopupMenuState, TooltipState};
+pub(crate) use neomacs_renderer_wgpu::TooltipState;
 
-#[derive(Clone, Copy, Debug)]
-pub enum RenderUserEvent {
-    Wake,
-}
-
-pub type RenderEventLoopProxy = EventLoopProxy<RenderUserEvent>;
-pub type RenderEventLoop = winit::event_loop::EventLoop<RenderUserEvent>;
+pub type RenderEventLoopProxy = EventLoopProxy;
+pub type RenderEventLoop = winit::event_loop::EventLoop;
 
 // All GPU caches (image, video, webkit) are managed by WgpuRenderer

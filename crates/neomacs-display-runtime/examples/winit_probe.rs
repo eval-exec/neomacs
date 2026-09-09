@@ -11,26 +11,26 @@ use winit::window::Window;
 
 struct ProbeApp {
     started: Instant,
-    window: Option<Arc<Window>>,
+    window: Option<Arc<dyn Window>>,
 }
 
 impl ApplicationHandler for ProbeApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         tracing::info!("probe: resumed");
         if self.window.is_none() {
             tracing::info!("probe: creating window");
-            let attrs = Window::default_attributes()
+            let attrs = winit::window::WindowAttributes::default()
                 .with_title("Neomacs Winit Probe")
-                .with_inner_size(winit::dpi::LogicalSize::new(800.0, 500.0))
+                .with_surface_size(winit::dpi::LogicalSize::new(800.0, 500.0))
                 .with_transparent(true);
             match event_loop.create_window(attrs) {
                 Ok(window) => {
-                    let window = Arc::new(window);
+                    let window: Arc<dyn Window> = Arc::from(window);
                     tracing::info!(
                         "probe: window created id={:?} scale={} size={:?}",
                         window.id(),
                         window.scale_factor(),
-                        window.inner_size()
+                        window.surface_size()
                     );
                     self.window = Some(window);
                 }
@@ -44,7 +44,7 @@ impl ApplicationHandler for ProbeApp {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
@@ -54,7 +54,7 @@ impl ApplicationHandler for ProbeApp {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.started.elapsed() > Duration::from_secs(5) {
             tracing::info!("probe: timeout exit");
             event_loop.exit();
@@ -66,10 +66,6 @@ impl ApplicationHandler for ProbeApp {
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(16),
         ));
-    }
-
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        tracing::info!("probe: exiting");
     }
 }
 
@@ -100,10 +96,10 @@ fn main() {
     let event_loop = EventLoop::new().expect("failed to build event loop");
 
     tracing::info!("probe: entering run_app");
-    let mut app = ProbeApp {
+    let app = ProbeApp {
         started: Instant::now(),
         window: None,
     };
-    let result = event_loop.run_app(&mut app);
+    let result = event_loop.run_app(app);
     tracing::info!("probe: run_app returned: {:?}", result);
 }

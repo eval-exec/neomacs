@@ -195,6 +195,7 @@ pub enum InputEvent {
     /// Popup menu selection made (index into menu items, -1 = cancelled)
     MenuSelection {
         index: i32,
+        token: Option<neomacs_display_protocol::menu::MenuToken>,
     },
     /// File(s) dropped onto the window.
     ///
@@ -585,6 +586,7 @@ pub enum TerminalCommand {
 pub enum UiCommand {
     /// Show a popup menu anchored in the owning frame's logical-pixel space.
     ShowPopupMenu {
+        token: neomacs_display_protocol::menu::MenuToken,
         /// Emacs frame_id of the owning top-level frame
         frame: FrameRef,
         placement: neomacs_display_protocol::PopupPlacement,
@@ -595,7 +597,9 @@ pub enum UiCommand {
         bg: Option<(f32, f32, f32)>,
     },
     /// Hide the active popup menu
-    HidePopupMenu,
+    HidePopupMenu {
+        token: neomacs_display_protocol::menu::MenuToken,
+    },
     /// Show a tooltip at position (x, y)
     ShowTooltip {
         /// Emacs frame_id of the owning top-level frame
@@ -1011,7 +1015,7 @@ impl RenderComms {
             InputEvent::PositionedPointer(PositionedPointerInput {
                 action: PointerAction::Move { .. },
                 ..
-            }) | InputEvent::MenuSelection { index: -1 }
+            })
         ) || matches!(
             event,
             InputEvent::WebView(neomacs_webview::WebViewEvent::LoadProgressChanged { .. })

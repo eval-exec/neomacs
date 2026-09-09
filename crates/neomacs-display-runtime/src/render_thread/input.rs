@@ -72,8 +72,6 @@ impl RenderApp {
                 NamedKey::ArrowUp => 0xff52,
                 NamedKey::ArrowRight => 0xff53,
                 NamedKey::ArrowDown => 0xff54,
-                // Whitespace
-                NamedKey::Space => 0x20,
                 // Modifier keys are handled via ModifiersChanged, not as key events.
                 // They fall through to the default `_ => 0` which suppresses them.
                 // Other

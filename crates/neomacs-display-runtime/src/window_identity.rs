@@ -73,23 +73,39 @@ pub(crate) const NEOMACS_APPLICATION: ApplicationIdentity = ApplicationIdentity 
 };
 
 #[cfg(target_os = "linux")]
-pub(crate) fn apply_platform_window_identity(attrs: WindowAttributes) -> WindowAttributes {
-    winit::platform::wayland::WindowAttributesExtWayland::with_name(
-        attrs,
-        NEOMACS_APPLICATION.app_id().as_str(),
-        NEOMACS_APPLICATION.app_id().as_str(),
-    )
+pub(crate) fn apply_platform_window_identity(
+    attrs: WindowAttributes,
+    event_loop: &dyn winit::event_loop::ActiveEventLoop,
+) -> WindowAttributes {
+    use winit::platform::wayland::ActiveEventLoopExtWayland;
+    linux_window_identity(attrs, event_loop.is_wayland())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_identity(attrs: WindowAttributes, wayland: bool) -> WindowAttributes {
+    let name = NEOMACS_APPLICATION.app_id().as_str();
+    if wayland {
+        attrs.with_platform_attributes(Box::new(
+            winit::platform::wayland::WindowAttributesWayland::default().with_name(name, name),
+        ))
+    } else {
+        attrs.with_platform_attributes(Box::new(
+            winit::platform::x11::WindowAttributesX11::default().with_name(name, name),
+        ))
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn apply_platform_window_identity(attrs: WindowAttributes) -> WindowAttributes {
+pub(crate) fn apply_platform_window_identity(
+    attrs: WindowAttributes,
+    _event_loop: &dyn winit::event_loop::ActiveEventLoop,
+) -> WindowAttributes {
     attrs
 }
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use winit::window::Window;
 
     #[test]
     fn packaged_desktop_entry_matches_typed_runtime_identity() {
@@ -107,8 +123,9 @@ mod tests {
 
     #[test]
     fn linux_window_attributes_use_packaged_desktop_id() {
-        let attrs = apply_platform_window_identity(Window::default_attributes());
-
-        assert!(format!("{attrs:?}").contains(NEOMACS_APPLICATION.app_id().as_str()));
+        for wayland in [true, false] {
+            let attrs = linux_window_identity(WindowAttributes::default(), wayland);
+            assert!(format!("{attrs:?}").contains(NEOMACS_APPLICATION.app_id().as_str()));
+        }
     }
 }
