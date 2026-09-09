@@ -20,7 +20,34 @@ pub(super) struct PresentedFrontend {
     input_ready: bool,
 }
 
+/// CPU scene ownership survives Activity surface loss; no GPU or window handle.
+pub(super) struct RetainedPresentation(FrameGlyphBuffer, ActiveFrontendPresentation);
+
+impl RetainedPresentation {
+    pub(super) fn from_pending(
+        pending: PendingFrontendFrame,
+    ) -> Result<Self, FrontendInputDisconnected> {
+        let frame = pending.materialize();
+        Ok(Self(frame, pending.activate()?))
+    }
+}
+
 impl PresentedFrontend {
+    pub(super) fn restore(&mut self, retained: RetainedPresentation) {
+        self.pending = Some((retained.0, retained.1));
+    }
+
+    pub(super) fn retain(&mut self) -> Option<RetainedPresentation> {
+        self.input_ready = false;
+        if let Some((frame, active)) = self.pending.take() {
+            return Some(RetainedPresentation(frame, active));
+        }
+        self.active.take().and_then(|active| {
+            self.frame
+                .take()
+                .map(|frame| RetainedPresentation(frame, active))
+        })
+    }
     pub(super) fn new(renderer: SurfaceFrameRenderer) -> Self {
         let mut this = Self {
             renderer,
@@ -143,6 +170,14 @@ impl PresentedFrontend {
                 .build(size)
                 .unwrap_or_else(|error| panic!("failed to build Android initial frame: {error}"))
         });
+    }
+
+    pub(super) fn animation_interval(&self) -> Option<std::time::Duration> {
+        if !self.input_ready {
+            return None;
+        }
+        self.renderer
+            .animation_interval(self.frame.as_ref()?, SurfaceCursorVisibility::Visible)
     }
 }
 
