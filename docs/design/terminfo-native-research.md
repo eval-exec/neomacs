@@ -40,16 +40,16 @@ Checked-in fixtures cover extended/canceled capabilities, native error sentinels
 
 These focused Linux checks do not replace a native sanitizer audit or macOS runtime tests. Before adopting a Rust backend, compare database discovery, termcap normalization, and expansion against ncurses across the supported terminal corpus.
 
-Numeric division and remainder use a bounded constant/stack analysis before
-native expansion. This accepts literal and character divisors, computed
-constants, and variables assigned within the program. Both conditional paths
-must prove safe: inherited variables and parameters remain unknown, and
-arithmetic overflow discards a constant fact. A divisor that could trigger
-native INT_MIN / -1 (or remainder) is rejected. ncurses still produces all
-output and owns variable state. See [follow-up](terminfo-numeric-followup.md).
+Numeric division and remainder are preflighted using the actual parameters and
+native variable values under the same mutex as expansion. The executed branch,
+32-bit arithmetic, zero division, and ncurses' dropped stack pushes determine
+whether a signed division can trap. ncurses still produces all output and owns
+variable updates. See [follow-up](terminfo-numeric-followup.md).
 
-For formats containing division, the validator bounds live stack depth on every
-path to ncurses' 20 slots, reserving up to nine unknown implicit values.
-An overflowing push must not drop a checked divisor. See
-[ncurses stack definition](https://github.com/mirror/ncurses/blob/master/ncurses/term.priv.h)
-and [interpreter](https://github.com/mirror/ncurses/blob/master/ncurses/tinfo/lib_tparm.c).
+Preflight models the native 20-slot stack: an overflowing push is dropped and
+underflow supplies zero. Implicit termcap formats check every possible initial
+argument count, since inference differs across native versions. Addition,
+subtraction, multiplication, and `%i` assume the 32-bit wrapping behavior of the
+supported ncurses builds. Signed overflow is not portable in abstract C; these
+checks do not establish safety for an arbitrary compiler or native interpreter.
+See [ncurses interpreter](https://github.com/mirror/ncurses/blob/master/ncurses/tinfo/lib_tparm.c).

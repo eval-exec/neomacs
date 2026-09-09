@@ -50,8 +50,6 @@ fn numeric_formats_match_gnu_rendering_inputs() {
 fn malformed_and_string_formats_cannot_reach_native_varargs() {
     for format in [
         b"%p1%s".as_slice(),
-        b"%p1%p2%/%d",
-        b"%p1%p2%m%d",
         b"%{0}%{2147483647}%-%{1}%-%{0}%{1}%-%/%d",
         b"%?%{0}%t%p1%s%;",
         b"%{2147483648}%/%d",
@@ -73,13 +71,10 @@ fn malformed_and_string_formats_cannot_reach_native_varargs() {
 }
 
 #[test]
-fn division_requires_room_for_the_literal_divisor() {
+fn benign_dropped_divisors_follow_native_stack_behavior() {
     let mut format = b"%p1".repeat(20);
     format.extend_from_slice(b"%{256}%/%d");
-    assert_eq!(
-        expand_numeric(&format, [0; 9]),
-        Err(Error::InvalidNumericFormat)
-    );
+    assert_eq!(expand_numeric(&format, [0; 9]), Ok(b"0".to_vec()));
 }
 
 #[test]
@@ -219,53 +214,105 @@ fn native_snapshots() {
 }
 
 #[test]
-fn computed_division_cannot_hide_native_arithmetic_traps() {
-    let minimum = "%{0}%{2147483647}%-%{1}%-";
-    for operator in ["%/", "%m"] {
-        for format in [
-            // Unknown native variable state cannot prove a safe divisor.
-            format!("%p1%ga{operator}%d"),
-            format!("%p1%gA{operator}%d"),
-            // INT_MIN / -1 can be computed or passed through a local variable.
-            format!("{minimum}%{{0}}%{{1}}%-{operator}%d"),
-            format!("%{{0}}%{{1}}%-%Pa{minimum}%ga{operator}%d"),
-            // A branch that happens to be untaken must still be safe.
-            format!("%?%p1%t%{{4}}%Pa%e%{{0}}%{{1}}%-%Pa%;{minimum}%ga{operator}%d"),
-            format!("%?%p1%t%{{4}}%e%{{0}}%{{1}}%-%;{minimum}%Pa{operator}%d"),
-            // Checked constant propagation must forget native overflow.
-            format!("%p1%{{2147483647}}%{{2}}%*%{{1}}%+{operator}%d"),
-            // A shorter branch cannot inherit the longer branch's constant.
-            format!("{minimum}%?%p1%t%{{4}}%e%;{operator}%d"),
-        ] {
+fn actual_operands_and_native_variables_control_division_safety() {
+    for op in ["%/", "%m"] {
+        let format = format!("%p1%p2{op}%d");
+        for (left, right) in [(7, 2), (7, -1), (i32::MIN, 0), (i32::MIN, 2)] {
+            let expected = if right == 0 {
+                0
+            } else if op == "%/" {
+                left / right
+            } else {
+                left % right
+            };
             assert_eq!(
-                expand_numeric(format.as_bytes(), params(&[7])),
-                Err(Error::InvalidNumericFormat),
-                "{format}"
+                expand_numeric(format.as_bytes(), params(&[left, right])).unwrap(),
+                expected.to_string().as_bytes()
             );
         }
+        assert_eq!(
+            expand_numeric(format.as_bytes(), params(&[i32::MIN, -1])),
+            Err(Error::InvalidNumericFormat)
+        );
+
+        expand_numeric(b"%p1%PA", params(&[2])).unwrap();
+        let format = format!("%p1%gA{op}%d");
+        assert!(expand_numeric(format.as_bytes(), params(&[i32::MIN])).is_ok());
+        expand_numeric(b"%p1%PA", params(&[-1])).unwrap();
+        assert_eq!(
+            expand_numeric(format.as_bytes(), params(&[i32::MIN])),
+            Err(Error::InvalidNumericFormat)
+        );
+        // Rejected expansion leaves the native variable untouched.
+        assert_eq!(expand_numeric(b"%gA%d", [0; 9]).unwrap(), b"-1");
     }
 }
 
 #[test]
-fn stack_bound_applies_to_depth_in_each_branch() {
-    // Both branches individually fit; their total push count is irrelevant.
-    let shallow = "%p1%d".repeat(40);
-    let format = format!("%?%p1%t{shallow}%e{shallow}%;%p1%{{2}}%/%d");
-    assert_eq!(
-        expand_numeric(format.as_bytes(), params(&[7])).unwrap(),
-        format!("{}3", "7".repeat(40)).as_bytes()
-    );
-
-    // Overflow in either branch can drop the intended divisor.
-    let deep = "%p1".repeat(20);
-    for format in [
-        format!("%?%p1%t{deep}%e%;%{{2}}%/%d"),
-        format!("%?%p1%t%e{deep}%;%{{2}}%/%d"),
-        format!("{}%{{2}}%/%d", "%{1}".repeat(20)),
-    ] {
+fn preflight_tracks_executed_branches_overflow_and_increment() {
+    for op in ["%/", "%m"] {
+        let format = format!("%p1%?%p2%t%{{2}}%e%{{0}}%{{1}}%-%;{op}%d");
+        assert!(expand_numeric(format.as_bytes(), params(&[i32::MIN, 1])).is_ok());
         assert_eq!(
-            expand_numeric(format.as_bytes(), params(&[7])),
+            expand_numeric(format.as_bytes(), params(&[i32::MIN, 0])),
+            Err(Error::InvalidNumericFormat)
+        );
+        let format = format!("%p1%{{2147483647}}%{{2}}%*%{{1}}%+{op}%d");
+        assert!(expand_numeric(format.as_bytes(), params(&[7])).is_ok());
+        assert_eq!(
+            expand_numeric(format.as_bytes(), params(&[i32::MIN])),
+            Err(Error::InvalidNumericFormat)
+        );
+        // %i changes the divisor -2 to -1; a repeated %i is ignored by ncurses.
+        let format = format!("%i%i%p1%p2{op}%d");
+        assert_eq!(
+            expand_numeric(format.as_bytes(), params(&[i32::MAX, -2])),
             Err(Error::InvalidNumericFormat)
         );
     }
+}
+
+#[test]
+fn dropped_pushes_cannot_hide_native_division_traps() {
+    for op in ["%/", "%m"] {
+        let format = format!("{}%p1%p2%{{4}}{op}%d", "%{0}".repeat(18));
+        assert_eq!(
+            expand_numeric(format.as_bytes(), params(&[i32::MIN, -1])),
+            Err(Error::InvalidNumericFormat)
+        );
+        assert!(expand_numeric(format.as_bytes(), params(&[7, -1])).is_ok());
+    }
+}
+
+#[test]
+fn referenced_state_is_snapshotted_and_checked_under_the_native_lock() {
+    std::thread::scope(|scope| {
+        for number in 1..=8 {
+            scope.spawn(move || {
+                for _ in 0..200 {
+                    assert_eq!(
+                        expand_numeric(b"%p1%PA%p1%gA%/%d", params(&[number])).unwrap(),
+                        b"1"
+                    );
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn dynamic_variable_probe_matches_the_native_lifetime() {
+    expand_numeric(b"%p1%Pa", params(&[-1])).unwrap();
+    let inherited = expand_numeric(b"%ga%d", [0; 9]).unwrap();
+    // Older Apple ncurses preserves lowercase variables; newer ncurses resets
+    // them to zero per call. Test the native contract actually linked here.
+    let value: i32 = std::str::from_utf8(&inherited).unwrap().parse().unwrap();
+    assert!(value == 0 || value == -1);
+    let result = expand_numeric(b"%p1%ga%/%d", params(&[i32::MIN]));
+    if value == -1 {
+        assert_eq!(result, Err(Error::InvalidNumericFormat));
+    } else {
+        assert_eq!(result.unwrap(), b"0");
+    }
+    assert_eq!(expand_numeric(b"%ga%d", [0; 9]).unwrap(), inherited);
 }

@@ -1,7 +1,7 @@
 //! The complete unsafe surface. ncurses owns/caches the selected terminal;
 //! Rust owns only snapshots. See README.md for native contracts and validation.
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_void};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use crate::{Database, Error, FlagCapability, Query, StringCapability};
 
@@ -111,8 +111,45 @@ pub(super) fn load(term: &str, queries: &[Query<'_>]) -> Result<Database, Error>
 
 // Only numeric.rs calls this function, after checking every directive (including
 // branches that are not taken). It is not part of the crate's public interface.
-pub(super) fn expand(format: &CStr, parameters: [i32; 9]) -> Result<Vec<u8>, Error> {
-    let _guard = NATIVE.lock().map_err(|_| Error::NativeStatePoisoned)?;
+pub(super) fn expand(
+    format: &CStr,
+    parameters: [i32; 9],
+    program: Option<&crate::numeric::division::Program<'_>>,
+) -> Result<Vec<u8>, Error> {
+    let guard = NATIVE.lock().map_err(|_| Error::NativeStatePoisoned)?;
+    if let Some(program) = program {
+        let mut variables = [0; 52];
+        if !program.variables.is_empty() {
+            // Reading variables does not assign them. On native versions where
+            // lowercase variables reset per call, this observes their initial
+            // zero; on older versions it observes their preserved values.
+            let mut probe = Vec::new();
+            for name in &program.variables {
+                probe.extend_from_slice(&[b'%', b'g', *name, b'%', b'd', b';']);
+            }
+            let probe = CString::new(probe).expect("internally generated numeric probe");
+            let output = call_numeric(&guard, &probe, [0; 9])?;
+            let mut values = output.split(|byte| *byte == b';');
+            for name in &program.variables {
+                variables[crate::numeric::division::variable(*name)] = values
+                    .next()
+                    .and_then(|value| std::str::from_utf8(value).ok())
+                    .and_then(|value| value.parse().ok())
+                    .ok_or(Error::InvalidNumericFormat)?;
+            }
+        }
+        program.validate(parameters, variables)?;
+    }
+    call_numeric(&guard, format, parameters)
+}
+
+// Caller holds the process-wide lock and supplies a completely numeric format:
+// either validated user input or the fixed variable-reading probe above.
+fn call_numeric(
+    _guard: &MutexGuard<'_, ()>,
+    format: &CStr,
+    parameters: [i32; 9],
+) -> Result<Vec<u8>, Error> {
     let p = parameters.map(c_long::from);
     // SAFETY: the caller's complete numeric grammar excludes all conversions
     // and operations that consume strings. Thus ncurses' parameter analysis

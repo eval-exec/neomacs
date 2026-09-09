@@ -4,7 +4,7 @@ use regex::bytes::Regex;
 use std::ffi::CString;
 use std::sync::LazyLock;
 
-mod division;
+pub(crate) mod division;
 
 // Recognize complete directives, including printf flags, before calling C.
 // In particular %s, %:10.2s and %l must never make numeric slots into pointers.
@@ -27,12 +27,12 @@ static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
 /// Loading another entry selects ncurses' current terminal state. Each complete
 /// expansion and result copy is serialized with database loading.
 ///
-/// String-consuming directives and malformed/unsupported numeric syntax return
-/// an error before the native call. Division/remainder require a statically
-/// proven safe divisor, including constants computed on the stack or stored in
-/// variables within this program. Values inherited from native variables or
-/// supplied as parameters are unknown to the proof. This remains a conservative
-/// numeric subset, not a general string-parameter tparm interface.
+/// String-consuming directives and malformed numeric syntax return an error.
+/// Division/remainder are checked using the actual parameters and referenced
+/// native variables, under the same lock as expansion. Native signed division
+/// overflow is rejected; zero division follows ncurses. Implicit termcap
+/// argument counts differ between native versions, so all possible initial
+/// counts are checked. Formatting and variable updates remain native.
 pub fn expand_numeric(sequence: &[u8], parameters: [i32; 9]) -> Result<Vec<u8>, Error> {
     let mut end = 0;
     let mut tokens = Vec::new();
@@ -55,20 +55,18 @@ pub fn expand_numeric(sequence: &[u8], parameters: [i32; 9]) -> Result<Vec<u8>, 
     if end != sequence.len() {
         return Err(Error::InvalidNumericFormat);
     }
-    if tokens
+    let division = tokens
         .iter()
         .any(|range| matches!(&sequence[range.clone()], b"%/" | b"%m"))
-    {
-        division::validate(sequence, &tokens)?;
-    }
+        .then(|| division::Program::new(sequence, tokens));
     let format = CString::new(sequence).map_err(|_| Error::InvalidNumericFormat)?;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        crate::native::expand(&format, parameters)
+        crate::native::expand(&format, parameters, division.as_ref())
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (format, parameters);
+        let _ = (format, parameters, division);
         Err(Error::UnsupportedPlatform)
     }
 }
