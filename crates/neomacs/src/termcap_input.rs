@@ -97,6 +97,21 @@ const XTERM_FALLBACK_KEYS: &[(&[u8], &str)] = &[
     (b"\x1b[21~", "f10"),
 ];
 
+/// Names to snapshot before native terminal selection can change. Reuse the
+/// same key table and numbered-key generator as input-decode-map population.
+pub(crate) fn terminal_key_capabilities() -> Vec<String> {
+    FKEY_TABLE
+        .iter()
+        .map(|(cap, _)| (*cap).to_owned())
+        .chain(
+            ["k;", "k0", "kN", "kP", "kH"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .chain((11..64).filter_map(numbered_function_key_capability))
+        .collect()
+}
+
 pub(crate) fn seed_input_decode_map_from_terminal(eval: &mut Context) {
     let Some(term) = std::env::var("TERM")
         .ok()

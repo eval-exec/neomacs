@@ -157,7 +157,7 @@ pub enum TtyItalicRendition<'a> {
 /// terminfo library.
 ///
 /// Nothing in this crate can expand a terminfo format string: the expander IS
-/// ncurses' `tparm`, and only `neomacs-bin` links it.  A parameterized
+/// ncurses' `tparm`, linked and guarded by `neomacs-terminfo`.  A parameterized
 /// capability string is inert without one, which is why the two travel
 /// together and [`TtyColorCapabilities`] has no constructor that takes a
 /// string alone.  Re-implementing terminfo's stack language on the display

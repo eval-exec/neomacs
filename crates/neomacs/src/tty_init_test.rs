@@ -30,7 +30,7 @@ impl TerminalCapabilityDatabase for ColorBlockDatabase {
         (cap == "Co").then_some(self.colors).flatten()
     }
 
-    fn get_termcap_flag(&mut self, _cap: &str) -> bool {
+    fn get_flag(&mut self, _cap: super::super::terminal_capabilities::FlagCapability<'_>) -> bool {
         false
     }
 }

@@ -126,7 +126,10 @@ impl TerminalCapabilityDatabase for FakeCapabilityDatabase {
         self.numbers.get(cap).copied()
     }
 
-    fn get_termcap_flag(&mut self, cap: &str) -> bool {
+    fn get_flag(&mut self, cap: FlagCapability<'_>) -> bool {
+        let cap = match cap {
+            FlagCapability::Termcap(name) | FlagCapability::Terminfo(name) => name,
+        };
         self.flags.contains(cap)
     }
 }

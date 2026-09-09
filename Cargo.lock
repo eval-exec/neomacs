@@ -3736,10 +3736,10 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-display-runtime",
  "neomacs-layout-engine",
+ "neomacs-terminfo",
  "neomacs-video-model",
  "neomacs-webview",
  "neovm-core",
- "pkg-config",
  "rustix 1.1.4",
  "serde",
  "serde_json",
@@ -3978,6 +3978,15 @@ dependencies = [
  "tracing-test",
  "wgpu",
  "wgpu-hal",
+]
+
+[[package]]
+name = "neomacs-terminfo"
+version = "0.0.17"
+dependencies = [
+ "pkg-config",
+ "regex",
+ "tempfile",
 ]
 
 [[package]]
