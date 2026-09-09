@@ -36,12 +36,19 @@ impl Padding {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             use std::os::fd::AsRawFd;
+            #[cfg(target_os = "macos")]
+            let device_speed = rustix::termios::tcgetattr(&*self.file)
+                .ok()
+                .map(|attributes| attributes.output_speed());
+            #[cfg(not(target_os = "macos"))]
+            let device_speed = None;
             crate::native::write_padded(
                 &self.term,
                 self.file.as_raw_fd(),
                 output,
                 sequence,
                 affected_lines,
+                device_speed,
             )
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]

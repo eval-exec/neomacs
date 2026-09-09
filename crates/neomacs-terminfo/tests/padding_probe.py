@@ -32,5 +32,8 @@ with tempfile.TemporaryDirectory() as directory:
             data.append(byte & 255)
             return byte
         print("tputs", sequence, lib.tputs(sequence, 1, emit_type(emit)), bytes(data))
+    c.c_short.in_dll(lib, "ospeed").value = 13  # Apple's B9600 legacy code.
+    data = bytearray()
+    print("tputs after public ospeed correction", lib.tputs(b"A$<10/>B", 1, emit_type(emit)), bytes(data))
     os.close(slave)
     os.close(master)

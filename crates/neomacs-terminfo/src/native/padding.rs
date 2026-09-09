@@ -8,6 +8,8 @@ unsafe extern "C" {
     fn setupterm(term: *const c_char, fd: c_int, error: *mut c_int) -> c_int;
     fn del_curterm(term: *mut c_void) -> c_int;
     fn baudrate() -> c_int;
+    #[cfg(target_os = "macos")]
+    static mut ospeed: std::ffi::c_short;
     fn tputs(sequence: *const c_char, lines: c_int, emit: extern "C" fn(c_int) -> c_int) -> c_int;
 }
 
@@ -125,6 +127,7 @@ pub(crate) fn write_padded(
     output: &mut dyn Write,
     sequence: &[u8],
     lines: usize,
+    device_speed: Option<u32>,
 ) -> io::Result<()> {
     let term = name(term).map_err(io::Error::other)?;
     let sequence = CString::new(sequence).map_err(io::Error::other)?;
@@ -148,6 +151,10 @@ pub(crate) fn write_padded(
     }
     // SAFETY: setupterm established a current terminal under the lock.
     let baud = unsafe { baudrate() };
+    #[cfg(target_os = "macos")]
+    let baud = correct_apple_speed(baud, device_speed)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = device_speed;
     validate(sequence.as_bytes(), lines, baud)?;
     let mut sink = Sink {
         writer: output,
@@ -170,4 +177,39 @@ pub(crate) fn write_padded(
         return Err(io::Error::other("native tputs failed"));
     }
     Ok(())
+}
+
+/// Apple's ncurses 6.0 def_prog_mode fails without a SCREEN, leaving baudrate
+/// zero after setupterm. Supply the public termcap ospeed value from the device.
+/// These are Apple's sys/ttydev.h USE_OLD_TTY codes, also used by ncurses'
+/// NCURSES_OSPEED_COMPAT configuration (lib_baudrate.c). Do not use private
+/// _nc_ospeed or inspect ncurses' opaque TERMINAL layout.
+#[cfg(target_os = "macos")]
+fn correct_apple_speed(native: i32, device: Option<u32>) -> io::Result<i32> {
+    if native != 0 {
+        return Ok(native);
+    }
+    let Some(speed) = device.filter(|speed| *speed != 0) else {
+        return Ok(native);
+    };
+    const SPEEDS: [u32; 18] = [
+        0, 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800, 9600, 19200, 38400, 57600,
+        115200,
+    ];
+    let code = SPEEDS
+        .iter()
+        .position(|value| *value == speed)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "baud rate is not representable by Apple's legacy termcap ABI",
+            )
+        })?;
+    // SAFETY: the native mutex is held and setupterm selected our temporary
+    // terminal. ospeed is the documented short termcap global on macOS. The
+    // context guard restores the previous terminal and its speed on every exit.
+    unsafe {
+        ospeed = code as std::ffi::c_short;
+    }
+    Ok(speed as i32)
 }

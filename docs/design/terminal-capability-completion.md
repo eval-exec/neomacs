@@ -81,3 +81,15 @@ lacked the device attachment. The session now renders from the device's sole
 capability snapshot. An open/render/suspend/resume pseudo-terminal regression
 covers this path and is included in native macOS CI. The Standards review found
 no actionable violations.
+
+
+Apple's system ncurses 6.0 additionally fails to read baud rate without a SCREEN:
+its `_nc_get_tty_mode` rejects a null screen even though setupterm is supported.
+An independent Python/ctypes probe in native CI reproduced zero baud on a 9600
+baud PTY, with both optional and mandatory padding absent. On macOS only, when
+native baud discovery returns zero, Rustix reads the actual descriptor speed and
+we set ncurses' public `ospeed` using Apple's legacy termcap speed codes. The
+mapping comes from [Apple's compatibility header](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/ttydev.h),
+not private ncurses functions or structure layouts. Unknown legacy rates return
+an explicit error; working native speed discovery is unchanged. Tests exercise
+9600 and 19200 baud on every native Unix job.

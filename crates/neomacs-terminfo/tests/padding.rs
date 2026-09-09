@@ -65,6 +65,13 @@ fn native_padding_uses_each_device_and_restores_state_after_failure() {
     // ncurses uses nine bits per padding character (BAUDBYTE), hence ten
     // padding bytes at 9600 baud for 10ms.
     assert_eq!(bytes, b"A..........B");
+    termios.set_speed(19200).unwrap();
+    rustix::termios::tcsetattr(&slave, rustix::termios::OptionalActions::Now, &termios).unwrap();
+    bytes.clear();
+    pads.write(&mut bytes, b"A$<10/>B", 1).unwrap();
+    assert_eq!(bytes, b"A.....................B");
+    termios.set_speed(9600).unwrap();
+    rustix::termios::tcsetattr(&slave, rustix::termios::OptionalActions::Now, &termios).unwrap();
     bytes.clear();
     pads.write(&mut bytes, b"A$<10.5*>B", 3).unwrap();
     assert_eq!(bytes, [b"A".as_slice(), &[b'.'; 33], b"B"].concat());
