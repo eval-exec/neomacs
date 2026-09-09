@@ -715,7 +715,6 @@ impl WgpuRenderer {
                 .upload(&self.device, &self.queue, overlay_rect_vertices)
         {
             render_pass.set_pipeline(&self.pipelines.rect);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_vertex_buffer(0, upload.buffer_slice());
             render_pass.draw(0..overlay_rect_vertices.len() as u32, 0..1);
         }
@@ -757,7 +756,6 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &overlay_box_fill)
             {
                 render_pass.set_pipeline(&self.pipelines.rounded_rect);
-                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, upload.buffer_slice());
                 render_pass.draw(0..overlay_box_fill.len() as u32, 0..1);
             }

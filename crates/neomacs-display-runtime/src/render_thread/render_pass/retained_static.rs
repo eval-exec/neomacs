@@ -125,12 +125,12 @@ pub(super) fn draw(
         frame_stats::count(&frame_stats::RETAINED_STATIC_BUILDS);
     }
     if let Some(rs) = render.compositor.retained_static.as_ref() {
-        renderer.blit_texture_to_view(
-            &rs.bind_group,
-            composition_view,
-            native.width,
-            native.height,
-        );
+        renderer
+            .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+                composition_view,
+                inputs.present_mapping.surface(),
+            ))
+            .blit_retained(&rs.bind_group);
     }
     renderer.render_cursor_only(
         composition_view,

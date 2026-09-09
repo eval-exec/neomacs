@@ -10,19 +10,10 @@ use winit::window::{
     WindowPositioner, WindowType,
 };
 
-pub(in crate::menus) struct NativePopup {
-    // Drop the GPU surface before the window, and the child before its parent.
-    pub surface: wgpu::Surface<'static>,
-    pub window: Arc<dyn Window>,
-    _parent: Arc<dyn Window>,
-    pub config: wgpu::SurfaceConfiguration,
-    pub atlas: neomacs_renderer_wgpu::WgpuGlyphAtlas,
-    pub items: Vec<usize>,
-    pub presented: bool,
-}
+use super::super::surface::PopupSurface;
 
-impl NativePopup {
-    pub fn create(
+impl PopupSurface {
+    pub(in crate::presentation) fn create(
         event_loop: &dyn ActiveEventLoop,
         parent: Arc<dyn Window>,
         placement: PopupPlacement,
@@ -31,9 +22,6 @@ impl NativePopup {
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
-        metrics: (f32, f32),
-        items: Vec<usize>,
-        fonts: neomacs_display_protocol::font::FrameFontBindings<'_>,
     ) -> Result<Self, String> {
         if cfg!(any(target_os = "android", target_arch = "wasm32")) {
             return Err("native menu presentation is not implemented on this platform".into());
@@ -121,12 +109,6 @@ impl NativePopup {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(device, &config);
-        let mut atlas = neomacs_renderer_wgpu::WgpuGlyphAtlas::new_with_scale(
-            device,
-            window.scale_factor() as f32,
-        );
-        atlas.set_metrics(metrics.0, metrics.1);
-        atlas.set_current_frame_fonts(fonts);
         window.request_redraw();
         tracing::info!(window_id = ?window.id(), parent_id = ?parent.id(), "created native menu popup");
         Ok(Self {
@@ -134,18 +116,7 @@ impl NativePopup {
             window,
             _parent: parent,
             config,
-            atlas,
-            items,
             presented: false,
         })
-    }
-
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.config.width = width.max(1);
-        self.config.height = height.max(1);
-        self.surface.configure(device, &self.config);
-        self.atlas
-            .set_scale_factor(self.window.scale_factor() as f32);
-        self.window.request_redraw();
     }
 }

@@ -10,7 +10,7 @@ use neomacs_display_protocol::scene::{Scene, SceneCursorStyle};
 use neomacs_display_protocol::types::Color;
 
 use super::image_cache::ImageCache;
-use super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex, Uniforms};
+use super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex};
 #[cfg(feature = "video")]
 use super::video_cache::VideoCache;
 #[cfg(all(feature = "webview", target_os = "linux"))]
@@ -24,7 +24,12 @@ mod content;
 mod cursor_effects;
 mod cursor_presentation;
 mod deform;
+mod draw;
 mod dynamic_buffer;
+pub use draw::DrawContext;
+mod paint;
+mod target;
+pub use target::RenderTarget;
 mod effect_common;
 mod effects_state;
 mod frame_pass;
@@ -51,7 +56,6 @@ mod snapshot_pool;
 pub use snapshot_pool::{
     SnapshotId, SnapshotLease, SnapshotPool, SnapshotResources, SnapshotSize, texture_bytes,
 };
-mod menu;
 mod stats;
 mod transitions;
 mod ui_overlays;
@@ -167,8 +171,7 @@ pub struct WgpuRenderer {
     /// Stencil texture/view for child frame rounded-corner clipping
     pub(super) stencil: StencilTargets,
     pub(super) glyph_bind_group_layout: wgpu::BindGroupLayout,
-    pub(super) uniform_buffer: wgpu::Buffer,
-    pub(super) uniform_bind_group: wgpu::BindGroup,
+    draw_parameters: draw::DrawParameterCache,
     /// Texture/media caches
     pub(super) caches: RenderCaches,
     /// Bounded asynchronous timestamp queries for frame-content passes.
@@ -180,12 +183,6 @@ pub struct WgpuRenderer {
     pub(super) height: u32,
     /// Display scale factor (physical pixels / logical pixels)
     pub(super) scale_factor: f32,
-    /// Logical screen size last written into `uniform_buffer` by [`Self::resize`],
-    /// so a resize that changes nothing does not re-upload it. `None` until the
-    /// first resize. Recording the written value (rather than comparing inputs)
-    /// keeps this correct across `set_scale_factor`, which only stores the scale
-    /// — `resize` is what pushes it to the GPU.
-    pub(super) uniform_screen_size: Option<[f32; 2]>,
     /// User full-frame post shader (docs/display-engine/SHADER_SURFACES.md).
     pub(super) frame_post: Option<crate::frame_post::FramePost>,
     /// Unified media memory accounting + surface eviction (media_budget.rs).
@@ -319,20 +316,6 @@ impl WgpuRenderer {
         #[cfg(feature = "video")] video_generation: neomacs_video::GpuGeneration,
         #[cfg(feature = "video")] video_wake: neomacs_video::VideoWake,
     ) -> Self {
-        // Create uniform buffer with logical size so vertex positions from Emacs map correctly
-        let logical_w = width as f32 / scale_factor;
-        let logical_h = height as f32 / scale_factor;
-        let uniforms = Uniforms {
-            screen_size: [logical_w, logical_h],
-            time: 0.0,
-            _padding: 0.0,
-        };
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
         // Create bind group layout
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Uniform Bind Group Layout"),
@@ -345,16 +328,6 @@ impl WgpuRenderer {
                     min_binding_size: None,
                 },
                 count: None,
-            }],
-        });
-
-        // Create bind group
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
             }],
         });
 
@@ -1174,8 +1147,7 @@ impl WgpuRenderer {
             },
             stencil,
             glyph_bind_group_layout,
-            uniform_buffer,
-            uniform_bind_group,
+            draw_parameters: draw::DrawParameterCache::new(bind_group_layout),
             caches: RenderCaches {
                 image: image_cache,
                 #[cfg(feature = "video")]
@@ -1194,7 +1166,6 @@ impl WgpuRenderer {
             width,
             height,
             scale_factor,
-            uniform_screen_size: None,
             effects: crate::effect_config::EffectsConfig::default(),
             fx: EffectsState::default(),
             clocks: EffectClocks::default(),
@@ -1318,22 +1289,6 @@ impl WgpuRenderer {
             }
 
             self.install_stencil_targets(width, height);
-        }
-
-        // Update uniform buffer with logical size so vertex positions from Emacs map correctly
-        let screen_size = [
-            width as f32 / self.scale_factor,
-            height as f32 / self.scale_factor,
-        ];
-        if self.uniform_screen_size != Some(screen_size) {
-            self.uniform_screen_size = Some(screen_size);
-            let uniforms = Uniforms {
-                screen_size,
-                time: 0.0,
-                _padding: 0.0,
-            };
-            self.queue
-                .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
         }
     }
 
@@ -1584,7 +1539,7 @@ impl WgpuRenderer {
             });
 
             render_pass.set_pipeline(&self.pipelines.rect);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.draw(0..vertices.len() as u32, 0..1);
         }
@@ -2039,9 +1994,22 @@ impl WgpuRenderer {
         self.caches.image.sampler()
     }
 
-    /// Get the uniform bind group (needed for composite rendering)
-    pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {
-        &self.uniform_bind_group
+    fn parameters(&self, size: [f32; 2], time: f32) -> draw::DrawParameters {
+        self.draw_parameters.get(&self.device, size, time)
+    }
+
+    fn frame_parameters(&self) -> draw::DrawParameters {
+        let time = self
+            .frame_sample
+            .since_at_presentation(self.ambient.render_start_time)
+            .as_secs_f32();
+        self.parameters(
+            [
+                self.width as f32 / self.scale_factor,
+                self.height as f32 / self.scale_factor,
+            ],
+            time,
+        )
     }
 
     /// Get the image pipeline (needed for blit and scroll slide)
@@ -2128,92 +2096,6 @@ impl WgpuRenderer {
                 },
             ],
         })
-    }
-
-    /// Blit a texture to a target view (fullscreen quad)
-    pub fn blit_texture_to_view(
-        &mut self,
-        src_bind_group: &wgpu::BindGroup,
-        dst_view: &wgpu::TextureView,
-        width: u32,
-        height: u32,
-    ) {
-        // Use logical dimensions for vertex positions since screen_size uniform is logical
-        let w = width as f32 / self.scale_factor;
-        let h = height as f32 / self.scale_factor;
-
-        let vertices = [
-            GlyphVertex {
-                position: [0.0, 0.0],
-                tex_coords: [0.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-            },
-            GlyphVertex {
-                position: [w, 0.0],
-                tex_coords: [1.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-            },
-            GlyphVertex {
-                position: [w, h],
-                tex_coords: [1.0, 1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-            },
-            GlyphVertex {
-                position: [0.0, 0.0],
-                tex_coords: [0.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-            },
-            GlyphVertex {
-                position: [w, h],
-                tex_coords: [1.0, 1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-            },
-            GlyphVertex {
-                position: [0.0, h],
-                tex_coords: [0.0, 1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-            },
-        ];
-
-        let upload = self
-            .arenas
-            .image
-            .upload(&self.device, &self.queue, &vertices);
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Blit Encoder"),
-            });
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blit Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dst_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            if let Some(ref upload) = upload {
-                render_pass.set_pipeline(&self.pipelines.image);
-                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                render_pass.set_bind_group(1, src_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, upload.buffer_slice());
-                render_pass.draw(0..6, 0..1);
-            }
-        }
-
-        self.queue.submit(std::iter::once(encoder.finish()));
     }
 
     // ── Scroll Effect Implementations ─────────────────────────────────────

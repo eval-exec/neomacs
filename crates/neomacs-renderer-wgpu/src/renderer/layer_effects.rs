@@ -26,7 +26,6 @@ macro_rules! draw_effect {
             .upload(&$self.device, &$self.queue, &verts)
         {
             $rp.set_pipeline(&$self.pipelines.rect);
-            $rp.set_bind_group(0, &$self.uniform_bind_group, &[]);
             $rp.set_vertex_buffer(0, upload.buffer_slice());
             $rp.draw(0..verts.len() as u32, 0..1);
         }
@@ -43,7 +42,6 @@ macro_rules! draw_effect {
                 .upload(&$self.device, &$self.queue, &verts)
             {
                 $rp.set_pipeline(&$self.pipelines.rect);
-                $rp.set_bind_group(0, &$self.uniform_bind_group, &[]);
                 $rp.set_vertex_buffer(0, upload.buffer_slice());
                 $rp.draw(0..verts.len() as u32, 0..1);
             }
@@ -64,7 +62,6 @@ macro_rules! draw_stateful {
             .upload(&$self.device, &$self.queue, &verts)
         {
             $rp.set_pipeline(&$self.pipelines.rect);
-            $rp.set_bind_group(0, &$self.uniform_bind_group, &[]);
             $rp.set_vertex_buffer(0, upload.buffer_slice());
             $rp.draw(0..verts.len() as u32, 0..1);
         }
@@ -112,7 +109,6 @@ impl WgpuRenderer {
                 .upload(&self.device, &self.queue, &box_fill_vertices)
         {
             render_pass.set_pipeline(&self.pipelines.rounded_rect);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_vertex_buffer(0, upload.buffer_slice());
             render_pass.draw(0..box_fill_vertices.len() as u32, 0..1);
         }
@@ -375,7 +371,6 @@ impl WgpuRenderer {
             .upload(&self.device, &self.queue, &border_verts)
         {
             render_pass.set_pipeline(&self.pipelines.rounded_rect);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_vertex_buffer(0, upload.buffer_slice());
             render_pass.draw(0..border_verts.len() as u32, 0..1);
         }

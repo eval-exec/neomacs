@@ -607,7 +607,7 @@ impl WgpuRenderer {
             &self.device,
             &self.queue,
             &self.pipelines.bi_planar_video_copy,
-            &self.uniform_bind_group,
+            self.frame_parameters().binding(),
         );
         let mut external = std::collections::HashMap::new();
         for source in sources {

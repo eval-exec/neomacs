@@ -38,8 +38,9 @@ impl WgpuRenderer {
         view: &wgpu::TextureView,
         glyphs: &mut [(GlyphAtlasHandle, f32, f32, [f32; 4])],
         glyph_atlas: &WgpuGlyphAtlas,
+        draw: &super::draw::DrawParameters,
     ) {
-        self.render_overlay_glyphs_scaled(view, glyphs, glyph_atlas, self.scale_factor);
+        self.render_overlay_glyphs_scaled(view, glyphs, glyph_atlas, self.scale_factor, draw);
     }
 
     /// Render a batch of overlay glyphs in a single render pass.
@@ -53,6 +54,7 @@ impl WgpuRenderer {
         glyphs: &mut [(GlyphAtlasHandle, f32, f32, [f32; 4])],
         glyph_atlas: &WgpuGlyphAtlas,
         sf: f32,
+        draw: &super::draw::DrawParameters,
     ) {
         if glyphs.is_empty() {
             return;
@@ -144,7 +146,7 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.glyph);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, draw.binding(), &[]);
             pass.set_vertex_buffer(0, buffer.buffer_slice());
 
             let mut vert_idx = 0u32;
@@ -368,7 +370,7 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.glyph);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
             pass.set_vertex_buffer(0, buffer.buffer_slice());
 
             let mut vert_idx = 0u32;
@@ -419,8 +421,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let (tx, ty, tw, th) = tooltip.bounds;
 
@@ -495,7 +496,7 @@ impl WgpuRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.pipelines.rect);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
                 pass.draw(0..rect_vertices.len() as u32, 0..1);
             }
@@ -537,7 +538,7 @@ impl WgpuRenderer {
             }
         }
 
-        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas);
+        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
     }
 
     /// Render a custom title bar overlay for borderless/undecorated windows.
@@ -560,8 +561,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let tb_h = titlebar_height;
         let btn_w = 46.0_f32;
@@ -706,7 +706,7 @@ impl WgpuRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.pipelines.rect);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
                 pass.draw(0..rect_vertices.len() as u32, 0..1);
             }
@@ -827,7 +827,7 @@ impl WgpuRenderer {
             overlay_glyphs.push((handle, close_icon_x, btn_center_y, close_color));
         }
 
-        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas);
+        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
     }
 
     /// Render thin scroll position indicators on the right edge of each window.
@@ -845,8 +845,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let mut rect_vertices: Vec<RectVertex> = Vec::new();
         let indicator_width = 3.0_f32;
@@ -953,7 +952,7 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.rect);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, draw.binding(), &[]);
             pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
             pass.draw(0..rect_vertices.len() as u32, 0..1);
         }
@@ -983,8 +982,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let font_size_bits = 0.0_f32.to_bits();
         // A preedit update is one replaceable Unicode text run.  Shape it as
@@ -1061,7 +1059,7 @@ impl WgpuRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.pipelines.rect);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
                 pass.draw(0..rect_vertices.len() as u32, 0..1);
             }
@@ -1081,7 +1079,7 @@ impl WgpuRenderer {
                     .collect()
             })
             .unwrap_or_default();
-        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas);
+        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
     }
 
     /// Render a visual bell flash overlay (semi-transparent white rectangle fading out).
@@ -1103,8 +1101,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         // Filled rounded rect covering the whole frame with alpha=1 inside, 0 outside.
         // border_width=0 triggers filled mode in the shader.
@@ -1151,7 +1148,7 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.corner_mask);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, draw.binding(), &[]);
             pass.set_vertex_buffer(0, buffer.buffer_slice());
             pass.draw(0..vertices.len() as u32, 0..1);
         }
@@ -1198,6 +1195,7 @@ impl WgpuRenderer {
         frame_glyphs: &FrameGlyphBuffer,
         glyph_atlas: &mut WgpuGlyphAtlas,
     ) {
+        let draw = self.frame_parameters();
         if !self.effects.breadcrumb.enabled {
             return;
         }
@@ -1481,7 +1479,7 @@ impl WgpuRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.pipelines.rect);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
                 pass.draw(0..all_rect_vertices.len() as u32, 0..1);
             }
@@ -1490,7 +1488,7 @@ impl WgpuRenderer {
 
         // Draw text glyphs
         if !all_text_glyphs.is_empty() {
-            self.render_overlay_glyphs(view, &mut all_text_glyphs, glyph_atlas);
+            self.render_overlay_glyphs(view, &mut all_text_glyphs, glyph_atlas, &draw);
         }
     }
 
@@ -1502,6 +1500,7 @@ impl WgpuRenderer {
         glyph_atlas: &mut WgpuGlyphAtlas,
         wpm: f32,
     ) {
+        let draw = self.frame_parameters();
         // Find the selected window (non-minibuffer)
         let selected = frame_glyphs
             .window_infos
@@ -1594,7 +1593,7 @@ impl WgpuRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.pipelines.rect);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
                 pass.draw(0..rect_vertices.len() as u32, 0..1);
             }
@@ -1603,7 +1602,7 @@ impl WgpuRenderer {
 
         // Draw text
         if !text_glyphs.is_empty() {
-            self.render_overlay_glyphs(view, &mut text_glyphs, glyph_atlas);
+            self.render_overlay_glyphs(view, &mut text_glyphs, glyph_atlas, &draw);
         }
     }
 
@@ -1626,8 +1625,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let char_width = glyph_atlas.default_char_width();
         let line_height = glyph_atlas.default_line_height();
@@ -1680,7 +1678,7 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.rect);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, draw.binding(), &[]);
             pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
             pass.draw(0..rect_vertices.len() as u32, 0..1);
         }
@@ -1717,7 +1715,7 @@ impl WgpuRenderer {
                 }
             }
         }
-        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas);
+        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
     }
 
     pub fn render_visual_bell(
@@ -1734,8 +1732,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         // Semi-transparent white overlay in linear space
         let flash_color = Color::new(1.0, 1.0, 1.0, alpha).srgb_to_linear();
@@ -1781,7 +1778,7 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.rect);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, draw.binding(), &[]);
             pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
             pass.draw(0..rect_vertices.len() as u32, 0..1);
         }
@@ -1809,8 +1806,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let bg_color = Color::new(bg.0, bg.1, bg.2, 1.0).srgb_to_linear();
         let padding_x = 8.0_f32;
@@ -1901,7 +1897,7 @@ impl WgpuRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.pipelines.rect);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, buffer.buffer_slice());
                 pass.draw(0..rect_verts.len() as u32, 0..1);
             }
@@ -1952,7 +1948,7 @@ impl WgpuRenderer {
             overlay_glyphs.len(),
             text_y
         );
-        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas);
+        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
     }
 
     // Tab bar rendering has been moved to the layout engine's status-line
@@ -1989,8 +1985,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let bg_color = Color::new(menu_bg.0, menu_bg.1, menu_bg.2, 1.0).srgb_to_linear();
         let padding_x = 8.0_f32;
@@ -2113,7 +2108,7 @@ impl WgpuRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.pipelines.rect);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, buffer.buffer_slice());
                 pass.draw(0..rect_verts.len() as u32, 0..1);
             }
@@ -2155,7 +2150,7 @@ impl WgpuRenderer {
                 }
             }
         }
-        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas);
+        self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
 
         // --- Pass 3: Tool icons (batched) ---
         let mut icon_batches: Vec<(ImageId, wgpu::BindGroup, Vec<GlyphVertex>)> = Vec::new();
@@ -2255,7 +2250,7 @@ impl WgpuRenderer {
                         multiview_mask: None,
                     });
                     pass.set_pipeline(&self.pipelines.image);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(0, draw.binding(), &[]);
                     pass.set_vertex_buffer(0, self.arenas.image.slice(upload));
                     for (bg, range) in &batch_ranges {
                         pass.set_bind_group(1, bg, &[]);
@@ -2291,8 +2286,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let bg_color = Color::new(bg.0, bg.1, bg.2, 1.0).srgb_to_linear();
         let icon_sz = icon_size as f32;
@@ -2403,7 +2397,7 @@ impl WgpuRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.pipelines.rect);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, buffer.buffer_slice());
                 pass.draw(0..rect_verts.len() as u32, 0..1);
             }
@@ -2508,7 +2502,7 @@ impl WgpuRenderer {
                         multiview_mask: None,
                     });
                     pass.set_pipeline(&self.pipelines.image);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(0, draw.binding(), &[]);
                     pass.set_vertex_buffer(0, self.arenas.image.slice(upload));
                     for (bg, range) in &batch_ranges {
                         pass.set_bind_group(1, bg, &[]);

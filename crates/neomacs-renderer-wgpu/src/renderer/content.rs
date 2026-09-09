@@ -228,8 +228,8 @@ impl WgpuRenderer {
         view: &wgpu::TextureView,
         frame: &FrameGlyphBuffer,
         glyph_atlas: &mut WgpuGlyphAtlas,
-        _surface_width: u32,
-        _surface_height: u32,
+        surface_width: u32,
+        surface_height: u32,
         offset_x: f32,
         offset_y: f32,
         cursor_visible: bool,
@@ -238,6 +238,13 @@ impl WgpuRenderer {
         pointer_selection: Option<neomacs_display_protocol::PointerAppearanceSelection>,
         scissor: Option<(u32, u32, u32, u32)>,
     ) {
+        let draw = self.parameters(
+            [
+                surface_width as f32 / self.scale_factor,
+                surface_height as f32 / self.scale_factor,
+            ],
+            0.0,
+        );
         self.arenas.glyph.begin_frame();
         self.arenas.subpixel.begin_frame();
 
@@ -1341,7 +1348,7 @@ impl WgpuRenderer {
                 .upload(&self.device, &self.queue, &bg_vertices)
             {
                 pass.set_pipeline(rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..bg_vertices.len() as u32, 0..1);
             }
@@ -1354,7 +1361,7 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &fringe_vertices)
             {
                 pass.set_pipeline(rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..fringe_vertices.len() as u32, 0..1);
             }
@@ -1367,7 +1374,7 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &cursor_bg_vertices)
             {
                 pass.set_pipeline(rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..cursor_bg_vertices.len() as u32, 0..1);
             }
@@ -1379,7 +1386,7 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &rounded_fill_vertices)
             {
                 pass.set_pipeline(rounded_rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..rounded_fill_vertices.len() as u32, 0..1);
             }
@@ -1392,7 +1399,7 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &sharp_border_vertices)
             {
                 pass.set_pipeline(rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..sharp_border_vertices.len() as u32, 0..1);
             }
@@ -1402,7 +1409,7 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &rounded_border_vertices)
             {
                 pass.set_pipeline(rounded_rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..rounded_border_vertices.len() as u32, 0..1);
             }
@@ -1421,7 +1428,7 @@ impl WgpuRenderer {
                 stats.glyph_vertex_buffer_creations += 1;
 
                 pass.set_pipeline(glyph_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 if let Some(ref upload) = mask_upload {
                     pass.set_vertex_buffer(0, self.arenas.glyph.slice(upload));
                 }
@@ -1465,7 +1472,7 @@ impl WgpuRenderer {
                 stats.glyph_vertex_buffer_creations += 1;
 
                 pass.set_pipeline(subpixel_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 if let Some(ref upload) = subpixel_upload {
                     pass.set_vertex_buffer(0, self.arenas.subpixel.slice(upload));
                 }
@@ -1511,7 +1518,7 @@ impl WgpuRenderer {
                 stats.glyph_vertex_buffer_creations += 1;
 
                 pass.set_pipeline(image_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 if let Some(ref upload) = color_upload {
                     pass.set_vertex_buffer(0, self.arenas.glyph.slice(upload));
                 }
@@ -1548,14 +1555,14 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &decoration_vertices)
             {
                 pass.set_pipeline(rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..decoration_vertices.len() as u32, 0..1);
             }
 
             // --- Draw inline images ---
             pass.set_pipeline(image_pl);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, draw.binding(), &[]);
 
             let mut image_quads = Vec::new();
             let mut relief_vertices = Vec::new();
@@ -1650,13 +1657,13 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &relief_vertices)
             {
                 pass.set_pipeline(rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..relief_vertices.len() as u32, 0..1);
             }
             // Inline videos below inherit the image pipeline.
             pass.set_pipeline(image_pl);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, draw.binding(), &[]);
 
             // --- Draw inline videos (inherit the image pipeline set above) ---
             #[cfg(feature = "video")]
@@ -1731,7 +1738,7 @@ impl WgpuRenderer {
             #[cfg(all(feature = "webview", target_os = "linux"))]
             {
                 pass.set_pipeline(_opaque_image_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
 
                 let mut webkit_quads = Vec::new();
                 for glyph in &frame.glyphs {
@@ -1767,7 +1774,7 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &cursor_vertices)
             {
                 pass.set_pipeline(rect_pl);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..cursor_vertices.len() as u32, 0..1);
             }
@@ -1793,7 +1800,7 @@ impl WgpuRenderer {
                         .upload(&self.device, &self.queue, &rounded_verts)
                 {
                     pass.set_pipeline(rounded_rect_pl);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(0, draw.binding(), &[]);
                     pass.set_vertex_buffer(0, upload.buffer_slice());
                     pass.draw(0..rounded_verts.len() as u32, 0..1);
                 }

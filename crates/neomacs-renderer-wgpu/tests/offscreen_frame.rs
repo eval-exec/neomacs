@@ -1246,7 +1246,12 @@ fn composite_matches_full_render() {
     );
     let (tc, vc) = make_tex(&h.renderer, "composite");
     let bg = h.renderer.create_texture_bind_group(&vs);
-    h.renderer.blit_texture_to_view(&bg, &vc, W, H);
+    h.renderer
+        .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+            &vc,
+            mapping_for(&frame, W, H).surface(),
+        ))
+        .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vc, &frame, mapping_for(&frame, W, H), true, None, None);
     let comp = read_tex(&h.renderer, &tc);
@@ -1276,6 +1281,111 @@ fn composite_matches_full_render() {
     assert!(
         max_diff <= 2,
         "composite must match full render within sRGB round-trip tolerance, max_diff={max_diff}"
+    );
+}
+
+#[test]
+fn popup_redraw_preserves_unchanged_main_frame_pixels() {
+    use neomacs_display_protocol::menu::{MenuPanel, MenuPanelPaint, PopupMenuItem};
+    let mut h = try_harness().expect("popup isolation probe requires a GPU adapter");
+    let frame = boxed_one_cell_frame();
+    let (_retained, retained_view) = make_tex(&h.renderer, "main-retained-scene");
+    h.renderer.render_frame_glyphs(
+        &retained_view,
+        &frame,
+        &mut h.atlas,
+        mapping_for(&frame, W, H),
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let retained_bind_group = h.renderer.create_texture_bind_group(&retained_view);
+    let draw = |h: &mut Harness| {
+        let target = neomacs_renderer_wgpu::renderer::RenderTarget::new(
+            &h.view,
+            mapping_for(&frame, W, H).surface(),
+        );
+        h.renderer
+            .begin_draw(target)
+            .blit_retained(&retained_bind_group);
+        read_tex(&h.renderer, &h.target)
+    };
+    let before = draw(&mut h);
+    assert!(boxed_p_is_visible(&before));
+    let mut popup_atlas = WgpuGlyphAtlas::new_with_scale(h.renderer.device(), 1.0);
+    popup_atlas.set_current_frame_fonts(frame.font_bindings());
+    let (_popup, popup_view) = make_tex_sized(&h.renderer, "popup-isolation", 32, 24);
+    let panel = MenuPanel {
+        x: 0.0,
+        y: 0.0,
+        item_indices: vec![0],
+        hover_index: -1,
+        bounds: (0.0, 0.0, 32.0, 24.0),
+        item_offsets: vec![0.0],
+        item_height: 18.0,
+    };
+    let items = [PopupMenuItem {
+        label: "H".into(),
+        shortcut: String::new(),
+        enabled: true,
+        separator: false,
+        submenu: false,
+        depth: 0,
+    }];
+    let paint = MenuPanelPaint {
+        panel: &panel,
+        all_items: &items,
+        title: None,
+        face_fg: None,
+        face_bg: None,
+        font_face: None,
+    };
+    // Fractional scaling and cache eviction must not affect the destination
+    // of the next main-frame draw. No global resize/restore is performed.
+    for index in 0..80 {
+        let scale = 1.0 + index as f32 / 40.0;
+        popup_atlas.set_scale_factor(scale);
+        let SurfaceState::Drawable(surface) =
+            SurfaceState::from_device_size(32, 24, DeviceScale::new(scale).unwrap()).unwrap()
+        else {
+            unreachable!()
+        };
+        h.renderer
+            .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+                &popup_view,
+                surface,
+            ))
+            .paint_menu(&paint, &mut popup_atlas);
+    }
+    let after = draw(&mut h);
+    let changed = before
+        .chunks_exact(4)
+        .zip(after.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(
+        changed, 0,
+        "popup redraw changed pixels in the unchanged main frame"
+    );
+    h.renderer.render_frame_glyphs(
+        &h.view,
+        &frame,
+        &mut h.atlas,
+        mapping_for(&frame, W, H),
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(
+        before,
+        read_tex(&h.renderer, &h.target),
+        "popup text changed a subsequent editor glyph redraw"
     );
 }
 
@@ -1311,13 +1421,23 @@ fn retained_static_reused_across_cursor_colors() {
 
     // Composite the SAME retained scene with the red then blue cursor.
     let (tr, vr) = make_tex(&h.renderer, "comp-red");
-    h.renderer.blit_texture_to_view(&bg, &vr, W, H);
+    h.renderer
+        .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+            &vr,
+            mapping_for(&frame_a, W, H).surface(),
+        ))
+        .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vr, &frame_a, mapping_for(&frame_a, W, H), true, None, None);
     let red = read_tex(&h.renderer, &tr);
 
     let (tb, vb) = make_tex(&h.renderer, "comp-blue");
-    h.renderer.blit_texture_to_view(&bg, &vb, W, H);
+    h.renderer
+        .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+            &vb,
+            mapping_for(&frame_b, W, H).surface(),
+        ))
+        .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vb, &frame_b, mapping_for(&frame_b, W, H), true, None, None);
     let blue = read_tex(&h.renderer, &tb);
@@ -1438,7 +1558,12 @@ fn filled_box_composite_matches_full_render() {
     );
     let (tc, vc) = make_tex(&h.renderer, "fb-composite");
     let bg = h.renderer.create_texture_bind_group(&vs);
-    h.renderer.blit_texture_to_view(&bg, &vc, W, H);
+    h.renderer
+        .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+            &vc,
+            mapping_for(&frame, W, H).surface(),
+        ))
+        .blit_retained(&bg);
     // Match the runtime sequence exactly: render_cursor_only draws the box
     // (cursor_bg) unscissored, then the scissored cell redraw adds box + char.
     h.renderer

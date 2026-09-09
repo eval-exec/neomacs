@@ -1,38 +1,28 @@
 //! UI overlay rendering methods for WgpuRenderer.
 
-use super::super::glyph_atlas::{
+use super::super::{RenderTarget, WgpuRenderer, draw};
+use crate::glyph_atlas::{
     GlyphAtlasHandle, GlyphKey, SubpixelRequest, WgpuGlyphAtlas, glyph_font_identity,
 };
-use super::super::vertex::{RectVertex, Uniforms};
-use super::WgpuRenderer;
+use crate::vertex::RectVertex;
 use cosmic_text::SubpixelBin;
 use neomacs_display_protocol::types::{Color, FaceId};
 
 impl WgpuRenderer {
-    /// Paint one measured menu panel into its own drawing target.
-    pub fn render_menu_panel(
+    pub(in crate::renderer) fn paint_menu(
         &mut self,
-        view: &wgpu::TextureView,
+        target: RenderTarget<'_>,
+        draw: &draw::DrawParameters,
         menu: &neomacs_display_protocol::menu::MenuPanelPaint<'_>,
         glyph_atlas: &mut WgpuGlyphAtlas,
-        surface_width: u32,
-        surface_height: u32,
-        scale_factor: f32,
     ) {
+        let view = target.view;
+        let scale_factor = target.surface.device_scale().get();
         // Native menus are standalone frames. All preceding window work has
         // been submitted before this call; reset their uploads so repeated
         // hover redraws do not grow arenas while the editor is otherwise idle.
         self.arenas.rect.begin_frame();
         self.arenas.glyph.begin_frame();
-        let logical_w = surface_width as f32 / scale_factor;
-        let logical_h = surface_height as f32 / scale_factor;
-        let uniforms = Uniforms {
-            screen_size: [logical_w, logical_h],
-            time: 0.0,
-            _padding: 0.0,
-        };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         // Derive colors from face colors if provided, otherwise use defaults.
         let (fg_r, fg_g, fg_b) = menu.face_fg.unwrap_or((0.9, 0.9, 0.9));
@@ -205,7 +195,7 @@ impl WgpuRenderer {
                         multiview_mask: None,
                     });
                     pass.set_pipeline(&self.pipelines.rect);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(0, draw.binding(), &[]);
                     pass.set_vertex_buffer(0, rect_buffer.buffer_slice());
                     pass.draw(0..rect_vertices.len() as u32, 0..1);
                 }
@@ -334,7 +324,13 @@ impl WgpuRenderer {
                 }
             }
 
-            self.render_overlay_glyphs_scaled(view, &mut overlay_glyphs, glyph_atlas, scale_factor);
+            self.render_overlay_glyphs_scaled(
+                view,
+                &mut overlay_glyphs,
+                glyph_atlas,
+                scale_factor,
+                draw,
+            );
         }
     }
 }

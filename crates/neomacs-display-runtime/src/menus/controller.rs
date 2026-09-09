@@ -1,6 +1,7 @@
 //! One menu session and its native popup chain.
 
-use super::{platform::desktop::NativePopup, session::MenuSession};
+use super::session::MenuSession;
+use crate::presentation::PopupHost;
 use neomacs_display_protocol::{
     Point, PopupConstraintPolicy, PopupPlacement, PopupPreferredSide, Rect, menu::MenuPanelPaint,
 };
@@ -25,10 +26,16 @@ pub(crate) struct MenuRequest {
 #[derive(Default)]
 pub(crate) struct MenuPresentation {
     request: Option<MenuRequest>,
-    popups: Vec<NativePopup>,
-    scroll: Vec<f32>,
+    host: PopupHost,
+    panels: Vec<PanelState>,
     lifetime: super::session::MenuLifetime,
     modifiers: winit::keyboard::ModifiersState,
+}
+
+struct PanelState {
+    scroll: f32,
+    items: Vec<usize>,
+    atlas: neomacs_renderer_wgpu::WgpuGlyphAtlas,
 }
 
 impl MenuPresentation {
@@ -48,10 +55,8 @@ impl MenuPresentation {
     }
 
     fn truncate(&mut self, len: usize) {
-        while self.popups.len() > len {
-            self.popups.pop();
-            self.scroll.pop();
-        }
+        self.host.truncate(len);
+        self.panels.truncate(len);
     }
 
     pub fn owner(&self) -> Option<u64> {
@@ -96,7 +101,7 @@ impl MenuPresentation {
         };
         let wanted = request.session.submenu_panels.len() + 1;
         let common = self
-            .popups
+            .panels
             .iter()
             .zip(request.session.panels())
             .take_while(|(popup, panel)| popup.items == panel.item_indices)
@@ -104,41 +109,45 @@ impl MenuPresentation {
         self.truncate(common);
         for depth in common..wanted {
             // Wayland popup parents must be mapped before creating/grabbing a child.
-            if depth > 0 && !self.popups[depth - 1].presented {
+            if depth > 0 && !self.host[depth - 1].presented {
                 break;
             }
             let request = self.request.as_ref().unwrap();
             let panel = request.session.panel(depth).unwrap();
-            let (parent, placement) = if depth == 0 {
-                (request.parent.clone(), request.placement)
+            let placement = if depth == 0 {
+                request.placement
             } else {
                 let previous = request.session.panel(depth - 1).unwrap();
-                let y = panel.y - previous.y - self.scroll[depth - 1];
-                (
-                    self.popups[depth - 1].window.clone(),
-                    PopupPlacement::new(
-                        Rect::new(0.0, y, previous.bounds.2, previous.item_height),
-                        PopupPreferredSide::Right,
-                        Point::ZERO,
-                        PopupConstraintPolicy::FlipAndShift { padding: 0.0 },
-                    ),
+                let y = panel.y - previous.y - self.panels[depth - 1].scroll;
+                PopupPlacement::new(
+                    Rect::new(0.0, y, previous.bounds.2, previous.item_height),
+                    PopupPreferredSide::Right,
+                    Point::ZERO,
+                    PopupConstraintPolicy::FlipAndShift { padding: 0.0 },
                 )
             };
-            let popup = NativePopup::create(
+            let popup = self.host.open(
                 event_loop,
-                parent,
+                request.parent.clone(),
                 placement,
                 (panel.bounds.2, panel.bounds.3),
                 instance,
                 adapter,
                 device,
                 format,
-                request.session.metrics(),
-                panel.item_indices.clone(),
-                request.fonts.font_bindings(),
             )?;
-            self.popups.push(popup);
-            self.scroll.push(0.0);
+            let mut atlas = neomacs_renderer_wgpu::WgpuGlyphAtlas::new_with_scale(
+                device,
+                popup.window.scale_factor() as f32,
+            );
+            let metrics = request.session.metrics();
+            atlas.set_metrics(metrics.0, metrics.1);
+            atlas.set_current_frame_fonts(request.fonts.font_bindings());
+            self.panels.push(PanelState {
+                items: panel.item_indices.clone(),
+                atlas,
+                scroll: 0.0,
+            });
         }
         Ok(())
     }
@@ -155,7 +164,7 @@ impl MenuPresentation {
         if let WindowEvent::ModifiersChanged(modifiers) = event {
             self.modifiers = modifiers.state();
         }
-        let Some(depth) = self.popups.iter().position(|p| p.window.id() == id) else {
+        let Some(depth) = self.host.iter().position(|p| p.window.id() == id) else {
             // Some platforms retain keyboard focus on the owner window.
             if self.request.as_ref().is_some_and(|r| r.parent.id() == id) {
                 if matches!(
@@ -183,7 +192,7 @@ impl MenuPresentation {
                 if let WindowEvent::KeyboardInput { event, .. } = event {
                     if event.state == ElementState::Pressed {
                         self.navigate(&event.logical_key);
-                        for popup in &self.popups {
+                        for popup in self.host.iter() {
                             popup.window.request_redraw();
                         }
                     }
@@ -196,26 +205,32 @@ impl MenuPresentation {
             .request
             .as_ref()
             .and_then(|r| r.session.panel(depth))
-            .is_none_or(|panel| panel.item_indices != self.popups[depth].items)
+            .is_none_or(|panel| panel.item_indices != self.panels[depth].items)
         {
             return true;
         }
         match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => self.cancel(),
             WindowEvent::SurfaceResized(size) => {
-                self.popups[depth].resize(device, size.width, size.height)
+                self.host[depth].resize(device, size.width, size.height);
+                self.panels[depth]
+                    .atlas
+                    .set_scale_factor(self.host[depth].window.scale_factor() as f32);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                let size = self.popups[depth].window.surface_size();
-                self.popups[depth].resize(device, size.width, size.height);
+                let size = self.host[depth].window.surface_size();
+                self.host[depth].resize(device, size.width, size.height);
+                self.panels[depth]
+                    .atlas
+                    .set_scale_factor(self.host[depth].window.scale_factor() as f32);
             }
             WindowEvent::PointerMoved { position, .. }
             | WindowEvent::PointerEntered { position, .. } => {
-                let scale = self.popups[depth].window.scale_factor() as f32;
+                let scale = self.host[depth].window.scale_factor() as f32;
                 self.request.as_mut().unwrap().session.hover_panel(
                     depth,
                     position.x as f32 / scale,
-                    position.y as f32 / scale + self.scroll[depth],
+                    position.y as f32 / scale + self.panels[depth].scroll,
                 );
             }
             WindowEvent::PointerButton {
@@ -225,12 +240,12 @@ impl MenuPresentation {
                 button,
                 ..
             } if button.clone().mouse_button() == Some(winit::event::MouseButton::Left) => {
-                let scale = self.popups[depth].window.scale_factor() as f32;
+                let scale = self.host[depth].window.scale_factor() as f32;
                 let session = &mut self.request.as_mut().unwrap().session;
                 session.hover_panel(
                     depth,
                     position.x as f32 / scale,
-                    position.y as f32 / scale + self.scroll[depth],
+                    position.y as f32 / scale + self.panels[depth].scroll,
                 );
                 if *state == ElementState::Released
                     && let Some(index) = session.activate_panel(depth)
@@ -245,15 +260,15 @@ impl MenuPresentation {
                 let delta = match delta {
                     MouseScrollDelta::LineDelta(_, y) => *y * 30.0,
                     MouseScrollDelta::PixelDelta(p) => {
-                        p.y as f32 / self.popups[depth].window.scale_factor() as f32
+                        p.y as f32 / self.host[depth].window.scale_factor() as f32
                     }
                     _ => 0.0,
                 };
                 let panel = self.request.as_ref().unwrap().session.panel(depth).unwrap();
-                let visible = self.popups[depth].config.height as f32
-                    / self.popups[depth].window.scale_factor() as f32;
-                self.scroll[depth] =
-                    (self.scroll[depth] - delta).clamp(0.0, (panel.bounds.3 - visible).max(0.0));
+                let visible = self.host[depth].config.height as f32
+                    / self.host[depth].window.scale_factor() as f32;
+                self.panels[depth].scroll = (self.panels[depth].scroll - delta)
+                    .clamp(0.0, (panel.bounds.3 - visible).max(0.0));
                 self.request
                     .as_mut()
                     .unwrap()
@@ -267,7 +282,7 @@ impl MenuPresentation {
             }
             _ => {}
         }
-        for popup in &self.popups {
+        for popup in self.host.iter() {
             popup.window.request_redraw();
         }
         true
@@ -287,7 +302,7 @@ impl MenuPresentation {
     fn reveal_selection(&mut self) {
         let session = &self.request.as_ref().unwrap().session;
         let depth = session.submenu_panels.len();
-        let Some(popup) = self.popups.get(depth) else {
+        let Some(popup) = self.host.get(depth) else {
             return;
         };
         let panel = session.active_panel();
@@ -299,11 +314,11 @@ impl MenuPresentation {
             return;
         };
         let visible = popup.config.height as f32 / popup.window.scale_factor() as f32;
-        if y < self.scroll[depth] {
-            self.scroll[depth] = y;
+        if y < self.panels[depth].scroll {
+            self.panels[depth].scroll = y;
         }
-        if y + panel.item_height > self.scroll[depth] + visible {
-            self.scroll[depth] = (y + panel.item_height - visible).max(0.0);
+        if y + panel.item_height > self.panels[depth].scroll + visible {
+            self.panels[depth].scroll = (y + panel.item_height - visible).max(0.0);
         }
     }
 
@@ -320,7 +335,7 @@ impl MenuPresentation {
         let Some(panel) = request.session.panel(depth) else {
             return;
         };
-        let popup = &mut self.popups[depth];
+        let popup = &mut self.host[depth];
         let output = match popup.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(output)
             | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
@@ -362,32 +377,44 @@ impl MenuPresentation {
         queue.submit(Some(encoder.finish()));
         let mut local = panel.clone();
         local.x = 0.0;
-        local.y = -self.scroll[depth];
+        local.y = -self.panels[depth].scroll;
         local.bounds.0 = local.x;
         local.bounds.1 = local.y;
-        renderer.render_menu_panel(
-            &view,
-            &MenuPanelPaint {
-                panel: &local,
-                all_items: &request.session.all_items,
-                title: if depth == 0 {
-                    request.session.title.as_deref()
-                } else {
-                    None
+        let scale = neomacs_display_protocol::DeviceScale::new(popup.window.scale_factor() as f32)
+            .expect("native popup scale");
+        let neomacs_display_protocol::SurfaceState::Drawable(surface) =
+            neomacs_display_protocol::SurfaceState::from_device_size(
+                popup.config.width,
+                popup.config.height,
+                scale,
+            )
+            .expect("native popup geometry")
+        else {
+            return;
+        };
+        renderer
+            .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+                &view, surface,
+            ))
+            .paint_menu(
+                &MenuPanelPaint {
+                    panel: &local,
+                    all_items: &request.session.all_items,
+                    title: if depth == 0 {
+                        request.session.title.as_deref()
+                    } else {
+                        None
+                    },
+                    face_fg: request.session.face_fg,
+                    face_bg: request.session.face_bg,
+                    font_face: request
+                        .fonts
+                        .font_bindings()
+                        .faces
+                        .get(&neomacs_display_protocol::FaceId::new(0)),
                 },
-                face_fg: request.session.face_fg,
-                face_bg: request.session.face_bg,
-                font_face: request
-                    .fonts
-                    .font_bindings()
-                    .faces
-                    .get(&neomacs_display_protocol::FaceId::new(0)),
-            },
-            &mut popup.atlas,
-            popup.config.width,
-            popup.config.height,
-            popup.window.scale_factor() as f32,
-        );
+                &mut self.panels[depth].atlas,
+            );
         popup.window.pre_present_notify();
         queue.present(output);
         popup.presented = true;

@@ -62,8 +62,7 @@ impl WgpuRenderer {
             time: 0.0,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let bw = child.border_width;
         let frame_w = child.width;
@@ -135,7 +134,7 @@ impl WgpuRenderer {
                             .upload(&self.device, &self.queue, &shadow_verts)
                     {
                         pass.set_pipeline(&self.pipelines.rect);
-                        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        pass.set_bind_group(0, draw.binding(), &[]);
                         pass.set_vertex_buffer(0, upload.buffer_slice());
                         pass.draw(0..shadow_verts.len() as u32, 0..1);
                     }
@@ -185,7 +184,7 @@ impl WgpuRenderer {
                                 .upload(&self.device, &self.queue, &bg_verts)
                         {
                             pass.set_pipeline(&self.pipelines.rounded_rect);
-                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            pass.set_bind_group(0, draw.binding(), &[]);
                             pass.set_vertex_buffer(0, upload.buffer_slice());
                             pass.draw(0..bg_verts.len() as u32, 0..1);
                         }
@@ -216,7 +215,7 @@ impl WgpuRenderer {
                             .upload(&self.device, &self.queue, &bg_verts)
                     {
                         pass.set_pipeline(&self.pipelines.rect);
-                        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        pass.set_bind_group(0, draw.binding(), &[]);
                         pass.set_vertex_buffer(0, upload.buffer_slice());
                         pass.draw(0..bg_verts.len() as u32, 0..1);
                     }
@@ -265,7 +264,7 @@ impl WgpuRenderer {
                             .upload(&self.device, &self.queue, &border_verts)
                     {
                         pass.set_pipeline(&self.pipelines.rounded_rect);
-                        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        pass.set_bind_group(0, draw.binding(), &[]);
                         pass.set_vertex_buffer(0, upload.buffer_slice());
                         pass.draw(0..border_verts.len() as u32, 0..1);
                     }
@@ -326,7 +325,7 @@ impl WgpuRenderer {
                             .upload(&self.device, &self.queue, &stencil_verts)
                     {
                         pass.set_pipeline(&self.pipelines.stencil_write);
-                        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        pass.set_bind_group(0, draw.binding(), &[]);
                         pass.set_vertex_buffer(0, upload.buffer_slice());
                         pass.set_stencil_reference(1);
                         pass.draw(0..stencil_verts.len() as u32, 0..1);
@@ -419,7 +418,7 @@ impl WgpuRenderer {
                         .upload(&self.device, &self.queue, &outer_border_verts)
                 {
                     pass.set_pipeline(&self.pipelines.rect);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(0, draw.binding(), &[]);
                     pass.set_vertex_buffer(0, upload.buffer_slice());
                     pass.draw(0..outer_border_verts.len() as u32, 0..1);
                 }

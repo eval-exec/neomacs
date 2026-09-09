@@ -190,7 +190,7 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.image);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
             pass.set_bind_group(1, source, &[]);
             pass.set_vertex_buffer(0, upload.buffer_slice());
             pass.draw(0..destination_vertices, 0..1);

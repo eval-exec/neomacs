@@ -475,7 +475,6 @@ impl WgpuRenderer {
         // phase that follows inherits this pipeline state.
         let render_pass = &mut ctx.pass;
         render_pass.set_pipeline(&self.pipelines.image);
-        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         let Some(upload) = upload else {
             return;
         };
@@ -490,7 +489,6 @@ impl WgpuRenderer {
         // Feature-gated video rendering intentionally inherits the image
         // pipeline from this phase, so restore it after relief edges.
         ctx.pass.set_pipeline(&self.pipelines.image);
-        ctx.pass.set_bind_group(0, &self.uniform_bind_group, &[]);
     }
 
     /// Draw inline videos (inherits the image pipeline set by the inline
@@ -553,7 +551,6 @@ impl WgpuRenderer {
 
             let render_pass = &mut ctx.pass;
             render_pass.set_pipeline(&self.pipelines.opaque_image);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             let Some(upload) = upload else {
                 return;
             };
@@ -693,7 +690,6 @@ impl WgpuRenderer {
 
         let render_pass = &mut ctx.pass;
         render_pass.set_pipeline(&self.pipelines.image);
-        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         render_pass.set_vertex_buffer(0, upload.buffer_slice());
         for (i, quad) in quads.iter().enumerate() {
             if let Some(cached) = self.caches.surface.get(quad.id) {

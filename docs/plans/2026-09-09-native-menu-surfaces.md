@@ -18,11 +18,16 @@ neomacs-display-runtime/src/menus/
     session.rs                           hierarchy and transaction lifetime
     interaction.rs                       keyboard navigation
     layout.rs                            panel measurement
-    presentation.rs                      native panel chain, scrolling, events
-    platform/desktop.rs                  winit windows and wgpu drawing targets
+    controller.rs                        menu panels, scrolling, events
     session_test.rs                      platform-independent behavior
     native_test.rs                       opt-in Wayland compositor smoke test
-neomacs-renderer-wgpu/src/renderer/menu.rs one panel's painting
+neomacs-display-runtime/src/presentation/
+    host.rs                              native popup parenting and lifetime
+    surface.rs                           drawable ownership
+    platform/winit.rs                    native creation and constraints
+neomacs-renderer-wgpu/src/renderer/paint/menu.rs
+                                         one panel's painting
+neomacs-renderer-wgpu/src/renderer/draw/   explicit targets, immutable parameters
 ```
 
 `render_thread` routes events and commands. Frame chrome handles menu-bar heading

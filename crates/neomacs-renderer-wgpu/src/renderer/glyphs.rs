@@ -1592,7 +1592,7 @@ impl WgpuRenderer {
             );
         }
 
-        let (logical_w, logical_h) = self.prepare_frame_uniforms(mapping);
+        let (logical_w, logical_h, draw) = self.prepare_frame_uniforms(mapping);
         if trace_face_debug_enabled() {
             tracing::info!(
                 "face-debug call={} milestone=after_prepare_uniforms logical=({:.1},{:.1})",
@@ -1713,6 +1713,9 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            // Group 0 belongs to this pass's destination. Layer painters inherit
+            // it and must not replace it with a renderer-global projection.
+            render_pass.set_bind_group(0, draw.binding(), &[]);
             if let Some(scissor) = scissor {
                 // Clip every draw in this pass to the cell; combined with
                 // LoadOp::Load, only the cursor cell is overwritten.
@@ -1821,7 +1824,7 @@ impl WgpuRenderer {
         debug_assert_eq!(mapping.presentation(), frame_glyphs.presentation_id);
         debug_assert_eq!(mapping.content_logical_size().width(), frame_glyphs.width);
         debug_assert_eq!(mapping.content_logical_size().height(), frame_glyphs.height);
-        let (logical_w, logical_h) = self.prepare_frame_uniforms(mapping);
+        let (logical_w, logical_h, draw) = self.prepare_frame_uniforms(mapping);
         let params = FrameParams {
             frame_glyphs,
             pointer_override: super::pointer_override::PointerOverrideResolver::new(
@@ -1864,6 +1867,8 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            // As in the full frame pass, layers inherit the target's group 0.
+            render_pass.set_bind_group(0, draw.binding(), &[]);
             // Filled-box inverse-video parts (cursor_bg, behind-text trail) are
             // empty for clean cursors; drawing them is a harmless no-op there.
             self.draw_pre_text_cursor_layers(
@@ -1877,7 +1882,6 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &chrome.cursors)
             {
                 render_pass.set_pipeline(&self.pipelines.rect);
-                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, upload.buffer_slice());
                 render_pass.draw(0..chrome.cursors.len() as u32, 0..1);
             }
@@ -2021,7 +2025,7 @@ impl WgpuRenderer {
     fn prepare_frame_uniforms(
         &mut self,
         mapping: neomacs_display_protocol::PresentMapping,
-    ) -> (f32, f32) {
+    ) -> (f32, f32, super::draw::DrawParameters) {
         // The swapchain is the destination and the immutable glyph presentation
         // is the source. Their sizes deliberately advance on different clocks.
         // Projection therefore follows the resolved mapping's live-surface
@@ -2038,9 +2042,8 @@ impl WgpuRenderer {
             time: elapsed,
             _padding: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
-        (logical_w, logical_h)
+        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        (logical_w, logical_h, draw)
     }
 
     fn face_has_rounded_box(faces: &HashMap<FaceId, Face>, face_id: FaceId) -> bool {
@@ -2090,7 +2093,6 @@ impl WgpuRenderer {
             return;
         };
         render_pass.set_pipeline(&self.pipelines.rect);
-        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         render_pass.set_vertex_buffer(0, upload.buffer_slice());
         render_pass.draw(0..rect_vertices.len() as u32, 0..1);
     }

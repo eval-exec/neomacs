@@ -204,7 +204,6 @@ impl WgpuRenderer {
             .upload(&self.device, &self.queue, &chrome.cursors)
         {
             render_pass.set_pipeline(&self.pipelines.rect);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_vertex_buffer(0, upload.buffer_slice());
             render_pass.draw(0..cursor_vertices.len() as u32, 0..1);
         }

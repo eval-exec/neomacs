@@ -743,7 +743,6 @@ impl WgpuRenderer {
         // Batch consecutive glyphs sharing the same atlas page.
         if !mask_data.is_empty() {
             render_pass.set_pipeline(&self.pipelines.glyph);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
 
             let all_vertices: Vec<GlyphVertex> = mask_data
                 .iter()
@@ -832,7 +831,6 @@ impl WgpuRenderer {
 
         if !subpixel_data.is_empty() {
             render_pass.set_pipeline(&self.pipelines.subpixel_glyph);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
 
             let all_vertices: Vec<SubpixelGlyphVertex> = subpixel_data
                 .iter()
@@ -877,7 +875,6 @@ impl WgpuRenderer {
         // Draw color glyphs with image pipeline (direct RGBA, e.g. color emoji)
         if !color_data.is_empty() {
             render_pass.set_pipeline(&self.pipelines.image);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
 
             let all_vertices: Vec<GlyphVertex> = color_data
                 .iter()
@@ -1316,7 +1313,6 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &decoration_vertices)
             {
                 render_pass.set_pipeline(&self.pipelines.rect);
-                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, upload.buffer_slice());
                 render_pass.draw(0..decoration_vertices.len() as u32, 0..1);
             }
@@ -1375,7 +1371,6 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &sharp_border_vertices)
             {
                 render_pass.set_pipeline(&self.pipelines.rect);
-                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, upload.buffer_slice());
                 render_pass.draw(0..sharp_border_vertices.len() as u32, 0..1);
             }
@@ -1387,7 +1382,6 @@ impl WgpuRenderer {
                     .upload(&self.device, &self.queue, &rounded_border_vertices)
             {
                 render_pass.set_pipeline(&self.pipelines.rounded_rect);
-                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, upload.buffer_slice());
                 render_pass.draw(0..rounded_border_vertices.len() as u32, 0..1);
             }
