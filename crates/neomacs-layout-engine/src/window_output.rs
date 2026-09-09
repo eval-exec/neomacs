@@ -733,7 +733,10 @@ pub(crate) struct TextWindowCursor {
 /// slot until [`TextWindowCursor::resolve`] consults the completed row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum TextWindowCursorSlots {
-    Unresolved { output: DisplaySlotId },
+    Unresolved {
+        output: DisplaySlotId,
+        char_width: f32,
+    },
     Resolved(ResolvedCursorCoordinatePair),
 }
 
@@ -741,9 +744,13 @@ impl TextWindowCursorSlots {
     pub(crate) const fn from_capture(
         slot: DisplaySlotId,
         state: CursorSlotResolutionState,
+        char_width: f32,
     ) -> Self {
         match state {
-            CursorSlotResolutionState::Unresolved => Self::Unresolved { output: slot },
+            CursorSlotResolutionState::Unresolved => Self::Unresolved {
+                output: slot,
+                char_width,
+            },
             CursorSlotResolutionState::Resolved => {
                 Self::Resolved(ResolvedCursorCoordinatePair::same(slot))
             }
@@ -780,15 +787,16 @@ impl TextWindowCursorRole {
 /// A cursor whose semantic position has been mapped to the one materialized
 /// glyph slot used by every renderer-facing artifact.
 ///
-/// The captured cursor remains alongside that slot because the evaluator's live
-/// window snapshot has a different contract: its x/column stay in the window's
-/// output coordinate space. Horizontal truncation is the decisive case: the
-/// caret is at output column 0 while point's first surviving buffer glyph is at
-/// materialized slot 1. Naming both spaces prevents an implicit conversion.
+/// The evaluator's physical snapshot uses text-relative coordinates whereas
+/// renderer artifacts use frame coordinates and materialized slots. Logical
+/// iterator coordinates are published separately by the full walk. Captured
+/// paint, dimensions and integer-grid rounding remain alongside the finalized
+/// placement; an earlier logical x must not become a physical x after bidi.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ResolvedTextWindowCursor {
     captured: TextWindowCursor,
     coordinates: ResolvedCursorCoordinatePair,
+    display_x: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -813,24 +821,34 @@ pub(crate) struct TextWindowCursorEffects {
 
 impl TextWindowCursor {
     fn resolve(self, output_builder: &DisplayOutputBuilder) -> ResolvedTextWindowCursor {
+        let mut display_x = self.x;
         let coordinates = match self.slots {
             TextWindowCursorSlots::Resolved(coordinates) => coordinates,
-            TextWindowCursorSlots::Unresolved { output } => {
-                let display = CursorVisualColumnResolutionRequest::new(
+            TextWindowCursorSlots::Unresolved { output, char_width } => {
+                let request = CursorVisualColumnResolutionRequest::new(
                     self.window_id,
                     output.row as usize,
                     self.charpos,
-                )
-                .resolve_cursor_coordinates(output_builder.cursor_visual_column_context())
-                .map_or(output, ResolvedCursorCoordinatePair::display_slot_id);
-                ResolvedCursorCoordinatePair::from_slots(output, display)
-                    .unwrap_or_else(|| ResolvedCursorCoordinatePair::same(output))
+                );
+                if let Some(placement) =
+                    output_builder.resolve_finalized_cursor_placement(request, char_width)
+                {
+                    display_x = placement.x();
+                    placement.coordinates()
+                } else {
+                    let display = request
+                        .resolve_cursor_coordinates(output_builder.cursor_visual_column_context())
+                        .map_or(output, ResolvedCursorCoordinatePair::display_slot_id);
+                    ResolvedCursorCoordinatePair::from_slots(output, display)
+                        .unwrap_or_else(|| ResolvedCursorCoordinatePair::same(output))
+                }
             }
         };
 
         ResolvedTextWindowCursor {
             captured: self,
             coordinates,
+            display_x,
         }
     }
 }
@@ -850,7 +868,8 @@ impl ResolvedTextWindowCursor {
             x: self
                 .captured
                 .grid_x_override
-                .unwrap_or_else(|| (self.captured.x - self.captured.text_area_left).round() as i64),
+                .filter(|_| (self.display_x - self.captured.x).abs() <= f32::EPSILON)
+                .unwrap_or_else(|| (self.display_x - self.captured.text_area_left).round() as i64),
             y: (self.captured.y - self.captured.window_top).round() as i64,
             width: self.captured.width.round() as i64,
             height: self.captured.height.round() as i64,
@@ -867,7 +886,7 @@ impl ResolvedTextWindowCursor {
             row: self.row(),
             col: self.col(),
             slot_id: self.coordinates.display_slot_id(),
-            x: self.captured.x,
+            x: self.display_x,
             y: self.captured.y,
             width: self.captured.width,
             height: self.captured.height,
@@ -885,7 +904,7 @@ impl ResolvedTextWindowCursor {
                 charpos: self.captured.charpos,
             },
             slot_id: self.coordinates.display_slot_id(),
-            x: self.captured.x,
+            x: self.display_x,
             y: self.captured.y,
             width: self.captured.width,
             height: self.captured.height,

@@ -118,9 +118,11 @@ impl ProducedGlyphProvenance {
             Self::Buffer { charpos } => charpos,
             Self::Str { index, .. } => index,
             Self::Redisplay(RedisplayGlyphProvenance::EmptyLineNewline { charpos }) => charpos,
-            Self::Redisplay(RedisplayGlyphProvenance::LineEnd | RedisplayGlyphProvenance::Mark) => {
-                neomacs_display_protocol::glyph_matrix::NO_BUFFER_POSITION_CHARPOS
-            }
+            Self::Redisplay(
+                RedisplayGlyphProvenance::LineEnd
+                | RedisplayGlyphProvenance::Mark
+                | RedisplayGlyphProvenance::LeftTruncation,
+            ) => neomacs_display_protocol::glyph_matrix::NO_BUFFER_POSITION_CHARPOS,
         }
     }
 }

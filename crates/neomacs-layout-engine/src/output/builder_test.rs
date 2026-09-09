@@ -1285,6 +1285,34 @@ fn resolved_cursor_coordinates_keep_hscroll_output_and_display_columns_distinct(
 }
 
 #[test]
+fn finalized_cursor_geometry_distinguishes_hscroll_replacement_from_a_prefix() {
+    let mut builder = DisplayOutputBuilder::new();
+    builder.begin_window(1, 1, 80, Rect::new(0.0, 0.0, 640.0, 16.0), true);
+    builder.begin_row(0, GlyphRowRole::Text);
+    write_char_to_current_row(&mut builder, '$', FaceId::new(0), 3);
+    write_char_to_current_row(&mut builder, 'e', FaceId::new(0), 4);
+    write_char_to_current_row(&mut builder, 'f', FaceId::new(0), 5);
+    builder
+        .edit_current_row_for_test(|row| {
+            row.glyphs[GlyphArea::Text.index()][0].provenance = GlyphProvenance::LeftTruncation;
+            row.truncated_left = true;
+        })
+        .unwrap();
+    builder.end_row();
+    for (point, col) in [(1, 0), (4, 1), (6, 3)] {
+        let placement = builder
+            .resolve_finalized_cursor_placement(
+                CursorVisualColumnResolutionRequest::new(1, 0, point),
+                8.0,
+            )
+            .unwrap();
+        assert_eq!(placement.coordinates().output_col(), col, "point={point}");
+        assert_eq!(placement.coordinates().display_col(), col, "point={point}");
+        assert_eq!(placement.x(), f32::from(col) * 8.0, "point={point}");
+    }
+}
+
+#[test]
 fn cursor_does_not_treat_an_unmapped_string_index_as_a_buffer_position() {
     use neomacs_display_protocol::glyph_matrix::{GlyphStringId, GlyphStringSource};
 

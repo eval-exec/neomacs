@@ -787,7 +787,13 @@ impl<'a> DisplaySourcePropertyResolver<'a> {
         // This resolver has no font service of its own; the installed active
         // face is measured later, so only the stored `ResolvedFace` keeps the
         // scaled-advance fallback here.
-        let Some(resolved) = height_adjusted_face(&source, face_basis.height_basis(), factor, None)
+        let measurement = if face_basis.face_resolver().is_window_system() {
+            crate::display_face_layout::HeightFaceMeasurement::DeferredFont
+        } else {
+            crate::display_face_layout::HeightFaceMeasurement::LogicalCells
+        };
+        let Some(resolved) =
+            height_adjusted_face(&source, face_basis.height_basis(), factor, measurement)
         else {
             return face;
         };
@@ -1296,9 +1302,9 @@ pub(crate) fn same_resolved_face(lhs: &ResolvedFace, rhs: &ResolvedFace) -> bool
         && lhs.box_line_width == rhs.box_line_width
         && lhs.extend == rhs.extend
         && lhs.terminal_inverse_video == rhs.terminal_inverse_video
-        // `pending_inverse_video` decides how later sources merge over this
-        // face, so two faces that differ only in it must not share an id.
-        && lhs.pending_inverse_video == rhs.pending_inverse_video
+        // Identical paint can hide different original attributes. Later face
+        // merges must not lose those attributes through face-id reuse.
+        && lhs.has_same_color_source(rhs)
         // A face that differs from the base ONLY in its realized `:stipple`
         // bitmap (e.g. `indent-bars` faces, which inherit the default colors and
         // add just a stipple) must NOT be collapsed onto the base id — doing so

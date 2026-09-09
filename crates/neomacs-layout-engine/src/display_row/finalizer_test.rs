@@ -115,7 +115,10 @@ fn remaps_matching_phys_cursor_after_bidi_reorder() {
     assert_eq!(row.cursor_col, Some(1));
     assert_eq!(cursor.col, 1);
     assert_eq!(cursor.slot_id.col, 1);
-    assert_eq!(cursor.x, 12.0);
+    assert_eq!(
+        cursor.x, 76.0,
+        "window origin 4 + RTL origin 64 + glyph advance 8"
+    );
 }
 
 #[test]
@@ -161,4 +164,20 @@ fn remap_measures_cursor_from_row_glyph_advances() {
         "cursor x must be the row origin plus the preceding glyph's 20px advance, \
          not 4 + 1 * 8px nominal cell"
     );
+}
+
+#[test]
+fn remapped_cursor_includes_ltr_row_origin() {
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.pixel_x = 10.0;
+    crate::glyph_row_writer::push_char_to_row(&mut row, 'a', FaceId::new(0), 0, 20.0);
+    crate::glyph_row_writer::push_char_to_row(&mut row, 'b', FaceId::new(0), 1, 12.0);
+    row.cursor_col = Some(1);
+    let mut cursor = phys_cursor(1, 0, 1);
+    GlyphRowFinalizationContext::new(1, 0, Rect::new(4.0, 0.0, 80.0, 16.0)).finalize_row(
+        &mut row,
+        10,
+        Some(&mut cursor),
+    );
+    assert_eq!(cursor.x, 34.0, "window 4 + row origin 10 + advance 20");
 }

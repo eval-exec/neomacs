@@ -148,17 +148,33 @@ struct AppendGlyphAreaMutation {
 /// nor changes the source walk's body position.
 struct InstallLeadingHscrollMarkerFromTailMutation;
 
+struct InstallTrailingHscrollMarkerMutation;
+
+impl DisplayCurrentRowMutation for InstallTrailingHscrollMarkerMutation {
+    type Output = ();
+
+    fn apply(self, row: &mut GlyphRow) {
+        row.glyphs[GlyphArea::Text.index()]
+            .last_mut()
+            .expect("hscroll marker must be rendered before installation")
+            .provenance = GlyphProvenance::LeftTruncation;
+    }
+}
+
 impl DisplayCurrentRowMutation for InstallLeadingHscrollMarkerFromTailMutation {
     type Output = ();
 
     fn apply(self, row: &mut GlyphRow) -> Self::Output {
         let text = &mut row.glyphs[GlyphArea::Text.index()];
-        let marker = text
+        let mut marker = text
             .pop()
             .expect("hscroll marker must be materialized before installation");
         let first = text
             .first_mut()
             .expect("line-number prefix must precede its hscroll marker");
+        // Replacing a structural prefix preserves that role; replacing source
+        // text instead retains LeftTruncation and counts toward body columns.
+        marker.provenance = first.provenance;
         *first = marker;
     }
 }
@@ -922,14 +938,17 @@ impl<'a> TextRowSourceRenderState<'a> {
         }
     }
 
-    /// The concrete-font service, when this row measures with real font
-    /// geometry. `None` on terminal rows, where GNU's character width is one
-    /// cell and there is no font to re-measure.
-    pub(crate) fn concrete_font_metrics(&mut self) -> Option<&mut FontMetricsService> {
-        self.measurement_mode
-            .uses_concrete_font_geometry()
-            .then_some(self.font_metrics.as_mut())
-            .flatten()
+    pub(crate) fn height_face_measurement(
+        &mut self,
+    ) -> crate::display_face_layout::HeightFaceMeasurement<'_> {
+        use crate::display_face_layout::HeightFaceMeasurement;
+        match (self.measurement_mode, self.font_metrics.as_mut()) {
+            (DisplayRowMeasurementMode::LogicalCells, _) => HeightFaceMeasurement::LogicalCells,
+            (DisplayRowMeasurementMode::ConcreteFont, Some(service)) => {
+                HeightFaceMeasurement::ConcreteFont(service)
+            }
+            (DisplayRowMeasurementMode::ConcreteFont, None) => HeightFaceMeasurement::DeferredFont,
+        }
     }
 
     pub(crate) fn output_render(&mut self) -> TextRowOutputRenderState<'_> {
@@ -1391,6 +1410,10 @@ impl<'a> TextRowSourceRenderState<'a> {
     pub(crate) fn mark_current_text_row_truncated_left(&mut self) {
         self.output_render()
             .install_row_decoration(TextWindowRowDecorationRequest::MarkCurrentTruncatedLeft);
+        self.output_render
+            .current_row_output()
+            .apply_current_row_mutation(InstallTrailingHscrollMarkerMutation)
+            .expect("hscroll marker installation requires a current text row");
     }
 
     /// Move the just-rendered synthetic hscroll marker over the first glyph of

@@ -35460,3 +35460,96 @@ fn display_when_restores_point_after_an_error_in_another_window() {
         Value::fixnum(1)
     );
 }
+
+#[test]
+fn rtl_cursor_replay_matches_full_layout() {
+    let (mut eval, frame_id, buf_id, _) = incr_editing_frame("אבגד\n", 800, 600);
+    realize_test_gui_frame(&mut eval, frame_id);
+    let mut engine = LayoutEngine::new();
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .unwrap()
+        .goto_emacs_byte_pos(EmacsBytePos::new(2));
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let full = engine
+        .last_frame_display_state
+        .as_ref()
+        .unwrap()
+        .phys_cursor
+        .as_ref()
+        .unwrap()
+        .clone();
+    let full_trace = selected_window_layout_trace(&eval, &engine, frame_id);
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .unwrap()
+        .goto_emacs_byte_pos(EmacsBytePos::new(0));
+    engine.layout_frame_rust(&mut eval, frame_id);
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .unwrap()
+        .goto_emacs_byte_pos(EmacsBytePos::new(2));
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+    let replay = engine
+        .last_frame_display_state
+        .as_ref()
+        .unwrap()
+        .phys_cursor
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        replay.x, full.x,
+        "cursor replay must retain full-layout RTL position"
+    );
+    let replay_trace = selected_window_layout_trace(&eval, &engine, frame_id);
+    assert_eq!(
+        full_trace.phys_cursor, replay_trace.phys_cursor,
+        "the evaluator physical snapshot must also retain the finalized placement"
+    );
+}
+
+#[test]
+fn hscroll_cursor_publication_preserves_clipping_visible_text_and_eol() {
+    for (point, expected_col) in [(1, 0), (4, 1), (6, 3)] {
+        let (mut eval, mut engine, frame_id) = backend_layout_with_buffer_and_window_setup(
+            BufferTextBackendKind::GapBuffer,
+            "hscroll-cursor-replay",
+            "abcdef\n",
+            160,
+            120,
+            |buffer, _, _| {
+                buffer.set_buffer_local("truncate-lines", Value::T);
+                buffer.goto_emacs_byte_pos(EmacsBytePos::new(point));
+            },
+            |window| {
+                if let neovm_core::window::Window::Leaf { hscroll, .. } = window {
+                    *hscroll = 3;
+                }
+            },
+        );
+        let full = selected_window_layout_trace(&eval, &engine, frame_id)
+            .phys_cursor
+            .unwrap();
+        assert_eq!(
+            (full.x, full.col),
+            (expected_col * 8, expected_col),
+            "point={point}"
+        );
+        let buf_id = eval.buffer_manager().current_buffer().unwrap().id();
+        for moved_point in [if point == 4 { 6 } else { 4 }, point] {
+            eval.buffer_manager_mut()
+                .get_mut(buf_id)
+                .unwrap()
+                .goto_emacs_byte_pos(EmacsBytePos::new(moved_point));
+            engine.layout_frame_rust(&mut eval, frame_id);
+        }
+        // The incremental planner intentionally declines truncated rows.
+        // This remains a full-layout publication test, not a replay claim.
+        assert_eq!(engine.last_layout_stats().cursor_only_windows, 0);
+        let replay = selected_window_layout_trace(&eval, &engine, frame_id)
+            .phys_cursor
+            .unwrap();
+        assert_eq!(replay, full, "point={point}");
+    }
+}

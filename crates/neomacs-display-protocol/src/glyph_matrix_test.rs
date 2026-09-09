@@ -98,6 +98,10 @@ fn glyph_provenance_preserves_its_wire_format_and_full_width_positions() {
         (GlyphProvenance::line_end(), r##"{"Redisplay":"LineEnd"}"##),
         (GlyphProvenance::mark(), r##"{"Redisplay":"Mark"}"##),
         (
+            GlyphProvenance::LeftTruncation,
+            r##"{"Redisplay":"LeftTruncation"}"##,
+        ),
+        (
             GlyphProvenance::empty_line_newline(7),
             r##"{"Redisplay":{"EmptyLineNewline":{"charpos":7}}}"##,
         ),

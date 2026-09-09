@@ -5,6 +5,9 @@
 
 use std::cmp::Ordering;
 
+mod face_colors;
+use face_colors::{FaceColorAttributes, FaceColorState};
+
 use neovm_core::buffer::{
     Buffer, BufferTextSnapshot, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, EmacsByteRange,
     LispCharPos1,
@@ -3809,19 +3812,9 @@ pub struct ResolvedFace {
     pub overstrike: bool,
     /// Preserve terminal inverse-video when both colors are terminal defaults.
     pub terminal_inverse_video: bool,
-    /// GNU's merged `:inverse-video` attribute, still in effect for this face.
-    ///
-    /// [`Self::terminal_inverse_video`] records the realized *TTY* outcome; a
-    /// GUI frame cannot express it, because the swap is already materialized
-    /// into `fg`/`bg`.  But the swap is not final: GNU merges every source
-    /// (base face, text properties, overlays) into one lface vector and swaps
-    /// once, at realization (`load_face_colors`, src/xfaces.c:1389-1400).  A
-    /// base face carrying `:inverse-video` must therefore keep the attribute
-    /// visible to later merges — a foreground-only face merged on top has its
-    /// colour land in the *background*.  Recording it here lets
-    /// [`Self::apply_specified_face_over`] undo the base's realized swap, merge
-    /// the new source, and swap once at the end.
-    pub pending_inverse_video: bool,
+    /// Original color attributes retained across merges; paint colors are
+    /// intentionally not reversible (inverse defaults and distant colors).
+    color_state: FaceColorState,
     /// Per-face measured character advance width (from FontMetricsService, 0.0 = use default).
     font_char_width: f32,
     /// Per-face font ascent (from FontMetricsService, 0.0 = use default).
@@ -3869,7 +3862,7 @@ impl Default for ResolvedFace {
             extend: false,
             overstrike: false,
             terminal_inverse_video: false,
-            pending_inverse_video: false,
+            color_state: FaceColorState::Seed,
             font_char_width: 0.0,
             font_ascent: 0.0,
             font_line_height: 0.0,
@@ -3881,6 +3874,10 @@ impl Default for ResolvedFace {
 }
 
 impl ResolvedFace {
+    pub(crate) fn has_same_color_source(&self, other: &Self) -> bool {
+        FaceColorAttributes::from_base(self) == FaceColorAttributes::from_base(other)
+    }
+
     /// Typed view of this bridge-side face id. `ResolvedFace.face_id` stays a
     /// raw u32 (the neovm bridge boundary keeps raw reprs); this is THE
     /// conversion point where ids leave the bridge as [`FaceId`].
@@ -3907,14 +3904,14 @@ impl ResolvedFace {
     /// `map_tty_color` result (src/xfaces.c:6620-6694), so they are assigned
     /// together and never separately -- a site that set one and forgot the
     /// other would put the writer back to guessing an index from RGB.
-    pub(crate) fn set_foreground(&mut self, color: &NeoColor) {
+    fn set_foreground(&mut self, color: &NeoColor) {
         self.fg = color_to_pixel(color);
         self.terminal_fg = color.terminal;
         self.use_default_foreground = false;
     }
 
     /// Assign GNU's whole realized background from one realized colour.
-    pub(crate) fn set_background(&mut self, color: &NeoColor) {
+    fn set_background(&mut self, color: &NeoColor) {
         self.bg = color_to_pixel(color);
         self.terminal_bg = color.terminal;
         self.use_default_background = false;
@@ -3924,7 +3921,7 @@ impl ResolvedFace {
     /// none.  It never came from `tty-color-desc`, so it carries no terminal
     /// colour: GNU's `FACE_TTY_DEFAULT_FG_COLOR`, which `turn_on_face` emits
     /// no colour for at all.
-    pub(crate) fn set_frame_default_foreground(&mut self, pixel: u32) {
+    fn set_frame_default_foreground(&mut self, pixel: u32) {
         self.fg = pixel;
         self.terminal_fg = None;
         self.use_default_foreground = true;
@@ -3932,132 +3929,11 @@ impl ResolvedFace {
 
     /// The frame's fallback background; see
     /// [`Self::set_frame_default_foreground`].
-    pub(crate) fn set_frame_default_background(&mut self, pixel: u32) {
+    fn set_frame_default_background(&mut self, pixel: u32) {
         self.bg = pixel;
         self.terminal_bg = None;
         self.use_default_background = true;
     }
-}
-
-/// The terminal channel a default-color sentinel belongs to.
-///
-/// ANSI has distinct "default foreground" and "default background" values;
-/// a boolean attached to the destination slot cannot represent one after
-/// inverse-video moves it to the other slot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FaceColorSlot {
-    Foreground,
-    Background,
-}
-
-/// A face color before it is assigned to its post-inverse destination slot.
-///
-/// It carries the realized terminal index next to the pixel because inverse
-/// video MOVES a colour between slots: GNU `realize_tty_face` maps both source
-/// colours through `map_tty_color` and then swaps the results
-/// (src/xfaces.c:6800-6810), so whatever the writer emits for the foreground
-/// must be exactly what was realized for the background.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TerminalFaceColor {
-    Concrete {
-        pixel: u32,
-        terminal: Option<TerminalColor>,
-    },
-    TerminalDefault {
-        slot: FaceColorSlot,
-        fallback_pixel: u32,
-    },
-}
-
-impl TerminalFaceColor {
-    fn from_resolved_slot(
-        pixel: u32,
-        terminal: Option<TerminalColor>,
-        defaulted: bool,
-        slot: FaceColorSlot,
-    ) -> Self {
-        if defaulted {
-            Self::TerminalDefault {
-                slot,
-                fallback_pixel: pixel,
-            }
-        } else {
-            Self::Concrete { pixel, terminal }
-        }
-    }
-
-    fn materialize_in(self, destination: FaceColorSlot) -> (u32, Option<TerminalColor>, bool) {
-        match self {
-            Self::Concrete { pixel, terminal } => (pixel, terminal, false),
-            Self::TerminalDefault {
-                slot,
-                fallback_pixel,
-            } if slot == destination => (fallback_pixel, None, true),
-            // ANSI cannot select the terminal's default background as a
-            // foreground (or vice versa). GNU realizes the frame color first
-            // and swaps that concrete color, so use the carried fallback.
-            //
-            // That fallback is a frame pixel, not a `tty-color-desc` answer, so
-            // it carries no terminal colour: GNU's `FACE_TTY_DEFAULT_COLOR`,
-            // which `turn_on_face` emits nothing for.
-            Self::TerminalDefault { fallback_pixel, .. } => (fallback_pixel, None, false),
-        }
-    }
-
-    fn is_terminal_default(self) -> bool {
-        matches!(self, Self::TerminalDefault { .. })
-    }
-}
-
-/// Apply GNU TTY inverse-video realization to a fully merged face.
-///
-/// GNU `realize_tty_face` maps both source colors and then swaps them. When
-/// both are terminal defaults it can preserve that intent with reverse-video;
-/// otherwise a default color crossing channels must become its concrete frame
-/// fallback instead of changing into the other channel's default sentinel.
-fn apply_resolved_face_inverse_video(face: &mut ResolvedFace) {
-    let foreground = TerminalFaceColor::from_resolved_slot(
-        face.fg,
-        face.terminal_fg,
-        face.use_default_foreground,
-        FaceColorSlot::Foreground,
-    );
-    let background = TerminalFaceColor::from_resolved_slot(
-        face.bg,
-        face.terminal_bg,
-        face.use_default_background,
-        FaceColorSlot::Background,
-    );
-
-    if foreground.is_terminal_default() && background.is_terminal_default() {
-        face.terminal_inverse_video = true;
-        return;
-    }
-
-    (face.fg, face.terminal_fg, face.use_default_foreground) =
-        background.materialize_in(FaceColorSlot::Foreground);
-    (face.bg, face.terminal_bg, face.use_default_background) =
-        foreground.materialize_in(FaceColorSlot::Background);
-    face.terminal_inverse_video = false;
-}
-
-/// Undo [`apply_resolved_face_inverse_video`] so a later source can merge
-/// against GNU's pre-inverse colors and the swap can be re-applied once.
-///
-/// The realized swap is its own inverse whenever both colors are concrete
-/// (GUI, and TTY colors the palette resolved).  The both-terminal-default TTY
-/// case never swapped, so clearing the flag is the whole undo.
-fn unapply_resolved_face_inverse_video(face: &mut ResolvedFace) {
-    if face.terminal_inverse_video {
-        face.terminal_inverse_video = false;
-        return;
-    }
-    std::mem::swap(&mut face.fg, &mut face.bg);
-    std::mem::swap(&mut face.terminal_fg, &mut face.terminal_bg);
-    std::mem::swap(
-        &mut face.use_default_foreground,
-        &mut face.use_default_background,
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4345,6 +4221,11 @@ impl FaceResolver {
             df.box_line_width = BoxLineWidth::from_gnu(bb.width);
         }
 
+        FaceColorAttributes::from_base(&df)
+            .merge(&neo_default)
+            .realize()
+            .install(&mut df);
+
         Self {
             face_table: face_table.clone(),
             default_face: df,
@@ -4446,7 +4327,7 @@ impl FaceResolver {
     pub fn resolve_named_face_without_inverse_video(&self, name: &str) -> ResolvedFace {
         use neomacs_display_protocol::face::BasicFaceId;
         let mut face = self.face_table.resolve(name);
-        face.inverse_video = None;
+        face.inverse_video = Some(false);
         let mut resolved = self.realize_face(&face);
         resolved.lisp_name = Some(name.to_string());
         if let Some(basic) = BasicFaceId::from_name(name) {
@@ -4457,43 +4338,15 @@ impl FaceResolver {
             resolved.face_id = BasicFaceId::SENTINEL;
         }
         resolved.terminal_inverse_video = false;
-        resolved.pending_inverse_video = false;
         resolved
     }
 
     fn apply_specified_face_over(&self, base: &ResolvedFace, face: &NeoFace) -> ResolvedFace {
         let mut rf = base.clone();
-        // GNU swaps fg/bg for `:inverse-video` once, after every source has
-        // been merged (src/xfaces.c:1389-1400).  The base face's swap is
-        // already realized, so undo it, merge this source against the
-        // pre-inverse colors, then swap once below.
-        let base_inverse_video = rf.pending_inverse_video;
-        if base_inverse_video {
-            unapply_resolved_face_inverse_video(&mut rf);
-        }
-        if let Some(c) = &face.foreground {
-            rf.set_foreground(c);
-        }
-        if let Some(c) = &face.background {
-            rf.set_background(c);
-        }
-        match face.inverse_video {
-            Some(true) => {
-                apply_resolved_face_inverse_video(&mut rf);
-                rf.pending_inverse_video = true;
-            }
-            Some(false) => {
-                rf.terminal_inverse_video = false;
-                rf.pending_inverse_video = false;
-            }
-            // Inherited from the base face: keep it in effect for the rest of
-            // the merge chain.
-            None if base_inverse_video => {
-                apply_resolved_face_inverse_video(&mut rf);
-                rf.pending_inverse_video = true;
-            }
-            None => {}
-        }
+        FaceColorAttributes::from_base(base)
+            .merge(face)
+            .realize()
+            .install(&mut rf);
 
         if let Some(family) = face.family_runtime_string_owned() {
             rf.font_family = family;
@@ -4583,20 +4436,6 @@ impl FaceResolver {
         }
         if face.overstrike {
             rf.overstrike = true;
-        }
-
-        // Distant-foreground: GNU substitutes it when the realized foreground
-        // and background are too close.  With `:inverse-video` the substitution
-        // lands in the background, not the foreground (`load_face_colors`,
-        // src/xfaces.c:1417-1425).
-        if let Some(dfg) = &face.distant_foreground
-            && colors_close(rf.fg, rf.bg)
-        {
-            if rf.pending_inverse_video {
-                rf.set_background(dfg);
-            } else {
-                rf.set_foreground(dfg);
-            }
         }
 
         // Stipple: a face that specifies `:stipple` overrides the inherited
@@ -5426,26 +5265,10 @@ impl FaceResolver {
         // inherit its *name*. Named resolvers overwrite this after realizing.
         rf.lisp_name = None;
 
-        // Foreground
-        if let Some(c) = &face.foreground {
-            rf.set_foreground(c);
-        }
-        // Background
-        if let Some(c) = &face.background {
-            rf.set_background(c);
-        }
-        // Inverse video: swap fg and bg
-        match face.inverse_video {
-            Some(true) => {
-                apply_resolved_face_inverse_video(&mut rf);
-                rf.pending_inverse_video = true;
-            }
-            Some(false) => {
-                rf.terminal_inverse_video = false;
-                rf.pending_inverse_video = false;
-            }
-            None => {}
-        }
+        FaceColorAttributes::from_base(&self.default_face)
+            .merge(face)
+            .realize()
+            .install(&mut rf);
 
         // Font family
         if let Some(family) = face.family_runtime_string_owned() {
@@ -5541,20 +5364,6 @@ impl FaceResolver {
         // Overstrike
         if face.overstrike {
             rf.overstrike = true;
-        }
-
-        // Distant-foreground: GNU substitutes it when the realized foreground
-        // and background are too close.  With `:inverse-video` the substitution
-        // lands in the background, not the foreground (`load_face_colors`,
-        // src/xfaces.c:1417-1425).
-        if let Some(dfg) = &face.distant_foreground
-            && colors_close(rf.fg, rf.bg)
-        {
-            if rf.pending_inverse_video {
-                rf.set_background(dfg);
-            } else {
-                rf.set_foreground(dfg);
-            }
         }
 
         // Stipple: realize the `:stipple` spec to the XBM pattern the renderer

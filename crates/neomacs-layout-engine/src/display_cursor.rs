@@ -351,6 +351,9 @@ pub(crate) enum CursorSlotResolutionState {
 pub(crate) enum ResolvedCursorSlot {
     BufferGlyph(u16),
     ReplacementString(u16),
+    /// Point is left of the horizontally visible source range, not merely
+    /// hidden inside it. GNU clamps this cursor to the visible text edge.
+    HorizontallyClipped(u16),
     FollowingVisibleGlyph(u16),
     RowEnd(u16),
 }
@@ -381,6 +384,10 @@ pub(crate) struct ResolvedDecoratedCursorPlacement {
 }
 
 impl ResolvedDecoratedCursorPlacement {
+    pub(crate) const fn x(&self) -> f32 {
+        self.x
+    }
+
     pub(crate) const fn coordinates(&self) -> ResolvedCursorCoordinatePair {
         self.coordinates
     }
@@ -457,6 +464,7 @@ impl ResolvedCursorSlot {
         match self {
             Self::BufferGlyph(col)
             | Self::ReplacementString(col)
+            | Self::HorizontallyClipped(col)
             | Self::FollowingVisibleGlyph(col)
             | Self::RowEnd(col) => col,
         }
@@ -464,6 +472,10 @@ impl ResolvedCursorSlot {
 }
 
 impl CursorVisualColumnResolutionRequest {
+    pub(crate) fn row_index(self) -> usize {
+        self.row
+    }
+
     pub(crate) fn new(window_id: i64, row: usize, charpos: usize) -> Self {
         Self {
             window_id,
@@ -562,12 +574,15 @@ impl CursorVisualColumnResolutionRequest {
 
         let mut nearest_after: Option<(usize, u16)> = None;
         let mut replacement_candidate: Option<(usize, u16)> = None;
+        let text_start_col = col_acc;
+        let mut has_buffer_before_point = false;
         for glyph in &text_glyphs[..text_end] {
             if glyph.padding {
                 continue;
             }
             match glyph.provenance {
                 GlyphProvenance::Buffer { charpos } => {
+                    has_buffer_before_point |= charpos < self.charpos;
                     if charpos == self.charpos {
                         return Some(ResolvedCursorSlot::BufferGlyph(col_acc));
                     }
@@ -594,6 +609,7 @@ impl CursorVisualColumnResolutionRequest {
                 GlyphProvenance::Str { .. }
                 | GlyphProvenance::LineEnd
                 | GlyphProvenance::Mark
+                | GlyphProvenance::LeftTruncation
                 | GlyphProvenance::EmptyLineNewline { .. } => {}
             }
             col_acc = col_acc.saturating_add(glyph.materialized_slot_span());
@@ -609,7 +625,11 @@ impl CursorVisualColumnResolutionRequest {
         Some(if let Some((_, col)) = replacement_candidate {
             ResolvedCursorSlot::ReplacementString(col)
         } else if let Some((_, col)) = nearest_after {
-            ResolvedCursorSlot::FollowingVisibleGlyph(col)
+            if row.truncated_left && !has_buffer_before_point {
+                ResolvedCursorSlot::HorizontallyClipped(text_start_col)
+            } else {
+                ResolvedCursorSlot::FollowingVisibleGlyph(col)
+            }
         } else {
             ResolvedCursorSlot::RowEnd(col_acc)
         })
@@ -640,32 +660,22 @@ impl CursorVisualColumnResolutionRequest {
         // matrix slot but not the live row-output cursor captured from buffer
         // text.
         let mut leading_mark_cols = 0_u16;
-        let mut text_after_marks = row.glyphs[GlyphArea::Text.index()].iter();
-        let first_text_content = loop {
-            match text_after_marks.next() {
-                Some(glyph) if glyph.padding => continue,
-                Some(glyph) if matches!(glyph.provenance, GlyphProvenance::Mark) => {
+        for glyph in &row.glyphs[GlyphArea::Text.index()] {
+            match glyph {
+                glyph if glyph.padding => continue,
+                glyph if matches!(glyph.provenance, GlyphProvenance::Mark) => {
                     leading_mark_cols =
                         leading_mark_cols.saturating_add(glyph.materialized_slot_span());
                 }
-                other => break other,
+                _ => break,
             }
-        };
-        // GNU's left truncation marker replaces the first surviving text
-        // glyph for matrix placement, but does not advance the live output
-        // cursor. Our row marks that state explicitly; the marker is the first
-        // non-padding text glyph and can span more than one cell under a custom
-        // display representation.
-        let truncation_marker_cols = if row.truncated_left && leading_mark_cols == 0 {
-            first_text_content.map_or(0, Glyph::materialized_slot_span)
-        } else {
-            0
-        };
+        }
+        // A truncation marker replacing a buffer glyph keeps its column and
+        // advance: unlike structural Mark glyphs it is not an inserted prefix.
         let output_col = display_slot
             .col()
             .saturating_sub(left_margin_cols)
-            .saturating_sub(leading_mark_cols)
-            .saturating_sub(truncation_marker_cols);
+            .saturating_sub(leading_mark_cols);
         let row = u32::try_from(self.row).ok()?;
         Some(ResolvedCursorCoordinatePair {
             window_id: DisplayWindowId::new(self.window_id),
@@ -697,34 +707,15 @@ impl CursorVisualColumnResolutionRequest {
             return None;
         }
 
-        let char_width = char_width.max(1.0);
-        let text_glyphs = &row.glyphs[GlyphArea::Text.index()];
-        let used_text_width = text_glyphs
-            .iter()
-            .filter(|glyph| !glyph.padding)
-            .map(|glyph| glyph.materialized_pixel_advance(char_width))
-            .sum::<f32>();
-        let mut x = if row.reversed_p {
-            text_bounds.x + (text_bounds.width - used_text_width).max(0.0)
-        } else {
-            text_bounds.x + row.pixel_x.max(0.0)
-        };
-        let mut col = left_margin_cols;
-        for glyph in text_glyphs {
-            if glyph.padding {
-                continue;
-            }
-            if target_col <= col {
-                return Some(ResolvedDecoratedCursorPlacement { coordinates, x });
-            }
-            let next_col = col.saturating_add(glyph.materialized_slot_span());
-            if target_col < next_col {
-                return Some(ResolvedDecoratedCursorPlacement { coordinates, x });
-            }
-            x += glyph.materialized_pixel_advance(char_width);
-            col = next_col;
-        }
-        (target_col == col).then_some(ResolvedDecoratedCursorPlacement { coordinates, x })
+        let geometry = neomacs_display_protocol::glyph_matrix::TextRowGeometry::new(
+            row,
+            text_bounds,
+            char_width,
+        );
+        let x = geometry.x_at_slot(neomacs_display_protocol::glyph_matrix::TextSlotColumn::new(
+            target_col - left_margin_cols,
+        ))?;
+        Some(ResolvedDecoratedCursorPlacement { coordinates, x })
     }
 }
 
@@ -1470,6 +1461,7 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
                 slots: TextWindowCursorSlots::from_capture(
                     resolved_cursor.slot_id,
                     cursor.slot_state,
+                    self.char_w,
                 ),
                 x: resolved_cursor.x,
                 y: resolved_cursor.y,

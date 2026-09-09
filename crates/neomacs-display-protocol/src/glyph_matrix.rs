@@ -29,6 +29,9 @@ use super::{FrameSpace, GeometryPoint, GeometryRect, LogicalPixels};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 
+mod text_geometry;
+pub use text_geometry::{TextRowGeometry, TextSlotColumn, VisualTextGlyphIndex};
+
 /// One terminal cell produced by GNU's `compose-gstring-for-terminal`.
 ///
 /// The layout boundary resolves automatic-composition semantics while it has
@@ -524,6 +527,8 @@ pub enum GlyphProvenance {
     },
     LineEnd,
     Mark,
+    /// A redisplay marker replacing source text, not an inserted prefix.
+    LeftTruncation,
     EmptyLineNewline {
         charpos: usize,
     },
@@ -561,6 +566,9 @@ impl From<GlyphProvenance> for GlyphProvenanceWire {
             GlyphProvenance::Str { source, index } => Self::Str { source, index },
             GlyphProvenance::LineEnd => Self::Redisplay(RedisplayGlyphProvenance::LineEnd),
             GlyphProvenance::Mark => Self::Redisplay(RedisplayGlyphProvenance::Mark),
+            GlyphProvenance::LeftTruncation => {
+                Self::Redisplay(RedisplayGlyphProvenance::LeftTruncation)
+            }
             GlyphProvenance::EmptyLineNewline { charpos } => {
                 Self::Redisplay(RedisplayGlyphProvenance::EmptyLineNewline { charpos })
             }
@@ -572,6 +580,7 @@ impl From<GlyphProvenance> for GlyphProvenanceWire {
 pub enum RedisplayGlyphProvenance {
     LineEnd,
     Mark,
+    LeftTruncation,
     EmptyLineNewline { charpos: usize },
 }
 
@@ -600,6 +609,7 @@ impl GlyphProvenance {
         match provenance {
             RedisplayGlyphProvenance::LineEnd => Self::LineEnd,
             RedisplayGlyphProvenance::Mark => Self::Mark,
+            RedisplayGlyphProvenance::LeftTruncation => Self::LeftTruncation,
             RedisplayGlyphProvenance::EmptyLineNewline { charpos } => {
                 Self::EmptyLineNewline { charpos }
             }
@@ -609,16 +619,22 @@ impl GlyphProvenance {
     pub const fn buffer_charpos(self) -> Option<usize> {
         match self {
             Self::Buffer { charpos } => Some(charpos),
-            Self::Str { .. } | Self::LineEnd | Self::Mark | Self::EmptyLineNewline { .. } => None,
+            Self::Str { .. }
+            | Self::LineEnd
+            | Self::Mark
+            | Self::LeftTruncation
+            | Self::EmptyLineNewline { .. } => None,
         }
     }
 
     pub const fn string_index(self) -> Option<(GlyphStringSourceId, usize)> {
         match self {
             Self::Str { source, index } => Some((source, index)),
-            Self::Buffer { .. } | Self::LineEnd | Self::Mark | Self::EmptyLineNewline { .. } => {
-                None
-            }
+            Self::Buffer { .. }
+            | Self::LineEnd
+            | Self::Mark
+            | Self::LeftTruncation
+            | Self::EmptyLineNewline { .. } => None,
         }
     }
 
@@ -628,7 +644,7 @@ impl GlyphProvenance {
             Self::EmptyLineNewline { charpos } => {
                 Self::empty_line_newline(shifted_buffer_position(charpos, from, delta))
             }
-            Self::Str { .. } | Self::LineEnd | Self::Mark => self,
+            Self::Str { .. } | Self::LineEnd | Self::Mark | Self::LeftTruncation => self,
         }
     }
 
@@ -639,7 +655,9 @@ impl GlyphProvenance {
                 source,
                 index: index.saturating_add(char_offset),
             },
-            Self::LineEnd | Self::Mark | Self::EmptyLineNewline { .. } => self,
+            Self::LineEnd | Self::Mark | Self::LeftTruncation | Self::EmptyLineNewline { .. } => {
+                self
+            }
         }
     }
 
@@ -650,7 +668,7 @@ impl GlyphProvenance {
             Self::Buffer { charpos } => charpos,
             Self::Str { index, .. } => index,
             Self::EmptyLineNewline { charpos } => charpos,
-            Self::LineEnd | Self::Mark => NO_BUFFER_POSITION_CHARPOS,
+            Self::LineEnd | Self::Mark | Self::LeftTruncation => NO_BUFFER_POSITION_CHARPOS,
         }
     }
 }
@@ -1385,6 +1403,7 @@ impl GlyphRow {
                 .is_some_and(|source| source.covers_buffer_charpos(charpos)),
             GlyphProvenance::LineEnd
             | GlyphProvenance::Mark
+            | GlyphProvenance::LeftTruncation
             | GlyphProvenance::EmptyLineNewline { .. } => false,
         }
     }
@@ -3034,23 +3053,6 @@ impl FrameDisplayState {
             pixel_bounds,
             Rect::new(win_x, y, win_w, row_height),
         ));
-        let reversed_text_width = glyph_row.reversed_p.then(|| {
-            glyph_row.glyphs[GlyphArea::Text.index()]
-                .iter()
-                .filter(|glyph| !glyph.padding)
-                .map(|glyph| {
-                    if glyph.pixel_width > 0.0 {
-                        glyph.pixel_width
-                    } else {
-                        match &glyph.glyph_type {
-                            GlyphType::Stretch { width_cols } => *width_cols as f32 * char_w,
-                            _ if glyph.wide => char_w * 2.0,
-                            _ => char_w,
-                        }
-                    }
-                })
-                .sum::<f32>()
-        });
 
         for area in GlyphArea::ALL {
             if let GlyphAreaPlacement::Structural(geometry) = area_layout.placement(area) {
@@ -3058,12 +3060,9 @@ impl FrameDisplayState {
                 let bounds = geometry.bounds();
                 x_cursor = bounds.x;
                 if area == GlyphArea::Text {
-                    x_cursor += glyph_row.pixel_x.max(0.0);
                     // GNU's `reversed_p` applies only to TEXT_AREA. Marginal
                     // glyphs keep their own left-to-right structural origins.
-                    if let Some(used) = reversed_text_width {
-                        x_cursor = bounds.x + (bounds.width - used).max(0.0);
-                    }
+                    x_cursor = TextRowGeometry::new(glyph_row, bounds, char_w).origin_x();
                 }
             }
             let area_bounds = current_geometry.bounds();

@@ -254,6 +254,14 @@ impl OutputWindowBuildState {
         self.current_row_grid.as_ref()?.row(row)
     }
 
+    pub(crate) fn current_row_is_finalized(&self, row: usize) -> bool {
+        self.current_row_grid
+            .as_ref()
+            .and_then(|grid| grid.finalized_rows.get(row))
+            .copied()
+            .unwrap_or(false)
+    }
+
     fn begin_current_row(&mut self, begin: OutputRowBeginRequest) {
         self.current_row = begin.row;
         if let Some(grid) = self.current_row_grid.as_mut() {

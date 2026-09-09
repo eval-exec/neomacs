@@ -294,8 +294,8 @@ impl FastPathCursorPlacement {
                                     ResolvedCursorCoordinatePair::same(output_cursor.slot_id)
                                 });
                         coordinates.apply_display_to(&mut output_cursor);
-                        output_cursor.x = text_area_left
-                            + f32::from(output_cursor.col) * char_width.max(1.0);
+                        output_cursor.x =
+                            text_area_left + f32::from(output_cursor.col) * char_width.max(1.0);
                         coordinates
                     }
                 };
@@ -1246,10 +1246,11 @@ impl BufferSourceOutputSetup {
             remaining_visibility_retries
         };
         if !params.force_start
-            && let Some(decision) = retry_plan.viewport_resolution(retry_budget) {
-                output.restore_retry_checkpoint(retry_checkpoint);
-                return BufferSourceRenderAttemptOutcome::ResolveViewport { decision };
-            }
+            && let Some(decision) = retry_plan.viewport_resolution(retry_budget)
+        {
+            output.restore_retry_checkpoint(retry_checkpoint);
+            return BufferSourceRenderAttemptOutcome::ResolveViewport { decision };
+        }
         if let Some(window_start) = retry_plan.should_retry(retry_budget) {
             // GNU `w->force_start` (redisplay_window force_start branch): an
             // explicitly scrolled/set start is kept, and POINT moves into the

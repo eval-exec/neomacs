@@ -34,11 +34,11 @@ use crate::output::window_state::OutputWindowBuildState;
 use neomacs_display_protocol::face::Face;
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::CursorStyle;
-use neomacs_display_protocol::frame_glyphs::PhysCursor;
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::DisplaySlotId;
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
+use neomacs_display_protocol::frame_glyphs::PhysCursor;
 use neomacs_display_protocol::frame_glyphs::{ContentTransitionHint, WindowInfo};
 use neomacs_display_protocol::glyph_matrix::*;
 use neomacs_display_protocol::types::FaceId;
@@ -213,6 +213,24 @@ impl DisplayOutputBuilder {
         char_width: f32,
     ) -> Option<ResolvedDecoratedCursorPlacement> {
         CursorVisualColumnResolutionRequest::from_cursor(cursor).resolve_after_row_decoration(
+            self.cursor_visual_column_context(),
+            self.window_state.current_window_text_pixel_bounds(),
+            char_width,
+        )
+    }
+
+    pub(crate) fn resolve_finalized_cursor_placement(
+        &self,
+        request: CursorVisualColumnResolutionRequest,
+        char_width: f32,
+    ) -> Option<ResolvedDecoratedCursorPlacement> {
+        if !self
+            .window_state
+            .current_row_is_finalized(request.row_index())
+        {
+            return None;
+        }
+        request.resolve_after_row_decoration(
             self.cursor_visual_column_context(),
             self.window_state.current_window_text_pixel_bounds(),
             char_width,

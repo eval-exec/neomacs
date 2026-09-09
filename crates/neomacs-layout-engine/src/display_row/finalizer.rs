@@ -465,22 +465,18 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
             // glyph advances. `col * char_w` assumes every glyph is one frame
             // cell wide, so a bidi row holding another face's font, a wide
             // glyph, or a stretch put the caret off the glyph it decorates.
-            cursor.x = self.context.window_pixel_bounds.x
-                + text_glyph_index_pixel_x(row, col, char_w);
+            let geometry = neomacs_display_protocol::glyph_matrix::TextRowGeometry::new(
+                row,
+                self.context.window_pixel_bounds,
+                char_w,
+            );
+            if let Some(x) = geometry
+                .x_at_glyph(neomacs_display_protocol::glyph_matrix::VisualTextGlyphIndex::new(col))
+            {
+                cursor.x = x;
+            }
         }
     }
-}
-
-/// Pixel pen consumed by the text glyphs before `target_index`, where the
-/// index counts entries of the TEXT_AREA glyph array (padding cells included
-/// as zero-advance gaps, as `reorder_row_bidi` numbers them).
-fn text_glyph_index_pixel_x(row: &GlyphRow, target_index: u16, char_width: f32) -> f32 {
-    row.glyphs[GlyphArea::Text.index()]
-        .iter()
-        .take(target_index as usize)
-        .filter(|glyph| !glyph.padding)
-        .map(|glyph| glyph.materialized_pixel_advance(char_width))
-        .sum()
 }
 
 #[cfg(test)]

@@ -3836,3 +3836,91 @@ fn face_resolver_honors_overlay_window_property() {
     resolver.set_current_window_id(None);
     assert_eq!(bg_at(&resolver), HL_BG, "None window id is unrestricted");
 }
+
+#[test]
+fn inverse_merge_preserves_original_color_before_distant_substitution() {
+    let _eval = neovm_core::emacs_core::Context::new();
+    let mut table = FaceTable::new();
+    let mut base = NeoFace::new("inverse-base");
+    base.foreground = Some(NeoColor::rgb(0x33, 0x33, 0x33));
+    base.background = Some(NeoColor::rgb(0x33, 0x33, 0x34));
+    base.inverse_video = Some(true);
+    base.distant_foreground = Some(NeoColor::rgb(0xFF, 0, 0));
+    table.define("inverse-base", base);
+    let mut top = NeoFace::new("top-background");
+    top.background = Some(NeoColor::rgb(0xFF, 0xFF, 0xFF));
+    table.define("top-background", top);
+    let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0, 14.0, Some("neo".into()));
+    let base = resolver.resolve_named_face("inverse-base");
+    assert_eq!(
+        base.bg, 0x00FF0000,
+        "initial distant substitution is needed"
+    );
+    let merged = resolver
+        .resolve_face_value_over(&base, &Value::symbol("top-background"))
+        .unwrap();
+    assert_eq!(merged.fg, 0x00FFFFFF);
+    assert_eq!(
+        merged.bg, 0x00333333,
+        "merge original attributes before deciding whether distant foreground is needed"
+    );
+}
+
+#[test]
+fn inverse_merge_restores_terminal_default_channel_when_disabled() {
+    let _eval = neovm_core::emacs_core::Context::new();
+    let mut table = FaceTable::new();
+    let mut base = NeoFace::new("mixed-default-inverse");
+    base.foreground = Some(NeoColor::rgb(0xFF, 0, 0));
+    base.inverse_video = Some(true);
+    table.define("mixed-default-inverse", base);
+    let resolver = FaceResolver::new(&table, 0xFFFFFF, 0x123456, 14.0, None);
+    let base = resolver.resolve_named_face("mixed-default-inverse");
+    let plain = resolver
+        .resolve_face_value_over(
+            &base,
+            &Value::list(vec![Value::symbol(":inverse-video"), Value::NIL]),
+        )
+        .unwrap();
+    assert_eq!(plain.fg, 0xFF0000);
+    assert_eq!(plain.bg, 0x123456);
+    assert!(
+        plain.use_default_background,
+        "the original background was a terminal default"
+    );
+    assert!(!plain.use_default_foreground);
+    assert!(!plain.terminal_inverse_video);
+}
+
+#[test]
+fn distant_foreground_is_reconsidered_after_every_merge() {
+    let _eval = neovm_core::emacs_core::Context::new();
+    let mut table = FaceTable::new();
+    let mut base = NeoFace::new("distant-base");
+    base.foreground = Some(NeoColor::rgb(0x33, 0x33, 0x33));
+    base.background = Some(NeoColor::rgb(0xFF, 0xFF, 0xFF));
+    base.distant_foreground = Some(NeoColor::rgb(0xFF, 0, 0));
+    table.define("distant-base", base);
+    let resolver = FaceResolver::new(&table, 0xFFFFFF, 0, 14.0, Some("neo".into()));
+    let base = resolver.resolve_named_face("distant-base");
+    let close = resolver
+        .resolve_face_value_over(
+            &base,
+            &Value::list(vec![Value::symbol(":background"), Value::string("#333334")]),
+        )
+        .unwrap();
+    assert_eq!(
+        close.fg, 0xFF0000,
+        "inherit the unneeded distant color until it is needed"
+    );
+    let contrasted = resolver
+        .resolve_face_value_over(
+            &close,
+            &Value::list(vec![Value::symbol(":background"), Value::string("#ffffff")]),
+        )
+        .unwrap();
+    assert_eq!(
+        contrasted.fg, 0x333333,
+        "recover the source foreground, not substituted paint"
+    );
+}
