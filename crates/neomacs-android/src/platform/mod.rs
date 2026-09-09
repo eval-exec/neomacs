@@ -18,11 +18,13 @@ use winit::event::{Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::platform::android::activity::AndroidApp;
-use winit::window::{Window, WindowId};
+use winit::window::{WindowAttributes, WindowId};
 
 struct AndroidFrontend {
     app: AndroidApp,
-    worker_events: EventLoopProxy<NativeEditorWorkerEvent>,
+    worker_events: EventLoopProxy,
+    event_tx: std::sync::mpsc::Sender<NativeEditorWorkerEvent>,
+    event_rx: std::sync::mpsc::Receiver<NativeEditorWorkerEvent>,
     lifecycle: FrontendLifecycle,
     window: Option<SurfaceWindow>,
     presented: Option<PresentedFrontend>,
@@ -35,8 +37,11 @@ struct AndroidFrontend {
 }
 
 impl AndroidFrontend {
-    fn new(app: AndroidApp, worker_events: EventLoopProxy<NativeEditorWorkerEvent>) -> Self {
+    fn new(app: AndroidApp, worker_events: EventLoopProxy) -> Self {
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
         Self {
+            event_tx,
+            event_rx,
             app,
             worker_events,
             lifecycle: FrontendLifecycle::new(),
@@ -64,13 +69,16 @@ impl AndroidFrontend {
         let device_scale = FrontendScaleFactor::new(window.scale_factor())
             .expect("winit supplied an invalid Android scale factor");
         let proxy = self.worker_events.clone();
+        let events = self.event_tx.clone();
         self.worker = Some(
             evaluator::spawn(
                 self.app.clone(),
                 logical_extent,
                 device_scale,
                 move |event| {
-                    let _ = proxy.send_event(event);
+                    if events.send(event).is_ok() {
+                        proxy.wake_up();
+                    }
                 },
             )
             .unwrap_or_else(|error| panic!("failed to spawn Android evaluator: {error}")),
@@ -142,21 +150,21 @@ impl AndroidFrontend {
         }
     }
 
-    fn request_exit(&mut self, event_loop: &ActiveEventLoop) {
+    fn request_exit(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.lifecycle.transition(LifecycleEvent::ExitRequested) == LifecycleAction::Exit {
             event_loop.exit();
         }
     }
 }
 
-impl ApplicationHandler<NativeEditorWorkerEvent> for AndroidFrontend {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+impl ApplicationHandler for AndroidFrontend {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.lifecycle.transition(LifecycleEvent::Resumed) != LifecycleAction::CreateFrontend {
             return;
         }
 
-        let attributes = Window::default_attributes().with_title("Neomacs");
-        let window = SurfaceWindow::new(
+        let attributes = WindowAttributes::default().with_title("Neomacs");
+        let window = SurfaceWindow::from(
             event_loop
                 .create_window(attributes)
                 .unwrap_or_else(|error| panic!("failed to create the Android window: {error}")),
@@ -174,7 +182,7 @@ impl ApplicationHandler<NativeEditorWorkerEvent> for AndroidFrontend {
         self.submit_viewport();
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+    fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
         // The evaluator and transport survive Activity surface loss. Dropping
         // presentation retires its active frame before the Android window is
         // released; resume creates a new surface and requests a fresh frame.
@@ -185,38 +193,40 @@ impl ApplicationHandler<NativeEditorWorkerEvent> for AndroidFrontend {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: NativeEditorWorkerEvent) {
-        match event {
-            NativeEditorWorkerEvent::Started(frontend) => {
-                let (input, frames) = frontend.split();
-                self.input = Some(input);
-                self.frames = Some(frames);
-                self.submit_viewport();
-                if self.close_pending {
-                    self.submit(FrontendEvent::CloseRequested {
-                        target: self.target,
-                    });
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        while let Ok(event) = self.event_rx.try_recv() {
+            match event {
+                NativeEditorWorkerEvent::Started(frontend) => {
+                    let (input, frames) = frontend.split();
+                    self.input = Some(input);
+                    self.frames = Some(frames);
+                    self.submit_viewport();
+                    if self.close_pending {
+                        self.submit(FrontendEvent::CloseRequested {
+                            target: self.target,
+                        });
+                    }
                 }
-            }
-            NativeEditorWorkerEvent::FramesReady => self.receive_latest_frame(),
-            NativeEditorWorkerEvent::StartupFailed(error) => {
-                eprintln!("Neomacs Android startup failed: {error}");
-                self.finish_worker();
-                self.request_exit(event_loop);
-            }
-            NativeEditorWorkerEvent::Exited(exit) => {
-                if let Some(error) = exit.command_loop_error() {
-                    eprintln!("Neomacs Android command loop failed: {error}");
+                NativeEditorWorkerEvent::FramesReady => self.receive_latest_frame(),
+                NativeEditorWorkerEvent::StartupFailed(error) => {
+                    eprintln!("Neomacs Android startup failed: {error}");
+                    self.finish_worker();
+                    self.request_exit(event_loop);
                 }
-                self.finish_worker();
-                self.request_exit(event_loop);
+                NativeEditorWorkerEvent::Exited(exit) => {
+                    if let Some(error) = exit.command_loop_error() {
+                        eprintln!("Neomacs Android command loop failed: {error}");
+                    }
+                    self.finish_worker();
+                    self.request_exit(event_loop);
+                }
             }
         }
     }
 
     fn window_event(
         &mut self,
-        _event_loop: &ActiveEventLoop,
+        _event_loop: &dyn ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -235,7 +245,7 @@ impl ApplicationHandler<NativeEditorWorkerEvent> for AndroidFrontend {
                     target: self.target,
                 });
             }
-            WindowEvent::Resized(size) => {
+            WindowEvent::SurfaceResized(size) => {
                 if let Some(presented) = self.presented.as_mut() {
                     presented.resize_physical(size.width, size.height);
                 }
@@ -246,7 +256,11 @@ impl ApplicationHandler<NativeEditorWorkerEvent> for AndroidFrontend {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let size = self.window.as_ref().expect("validated window").inner_size();
+                let size = self
+                    .window
+                    .as_ref()
+                    .expect("validated window")
+                    .surface_size();
                 if let Some(presented) = self.presented.as_mut() {
                     presented
                         .set_scale_factor(scale_factor)
@@ -307,15 +321,15 @@ impl ApplicationHandler<NativeEditorWorkerEvent> for AndroidFrontend {
 /// Activity-owned state remains local to this call.
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
-    let mut builder = EventLoop::<NativeEditorWorkerEvent>::with_user_event();
+    let mut builder = EventLoop::builder();
     builder.with_android_app(app.clone());
     let event_loop = builder
         .build()
         .unwrap_or_else(|error| panic!("failed to create the Android event loop: {error}"));
     let worker_events = event_loop.create_proxy();
 
-    let mut frontend = AndroidFrontend::new(app, worker_events);
+    let frontend = AndroidFrontend::new(app, worker_events);
     event_loop
-        .run_app(&mut frontend)
+        .run_app(frontend)
         .unwrap_or_else(|error| panic!("Android event loop failed: {error}"));
 }
