@@ -190,21 +190,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let candidates: &[&str] = match target_os.as_str() {
-        "linux" => &["ncursesw", "ncurses"],
-        "macos" => &["ncurses", "ncursesw"],
-        _ => return Ok(()),
-    };
-
-    for name in candidates {
-        if let Ok(library) = pkg_config::Config::new().probe(name) {
-            for path in library.link_paths {
-                println!("cargo:rustc-link-arg=-Wl,-rpath,{}", path.display());
-            }
-            return Ok(());
+    // Native linkage belongs to neomacs-terminfo. Runtime lookup remains an
+    // executable packaging concern (not propagated from a dependency's rlib).
+    if let Some(paths) = env::var_os("DEP_NEOMACS_TERMINFO_RUNTIME_LIBDIRS") {
+        for path in env::split_paths(&paths) {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", path.display());
         }
     }
-
-    println!("cargo:rustc-link-lib={}", candidates[0]);
     Ok(())
 }

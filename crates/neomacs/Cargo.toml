@@ -73,6 +73,7 @@ path = "src/bin/cmdproxy/main.rs"
 
 
 [dependencies]
+neomacs-terminfo.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
 neomacs-display-runtime = { workspace = true, default-features = false }
@@ -104,7 +105,6 @@ stacker.workspace = true
 rustix = { workspace = true, features = ["pty", "termios"] }
 
 [build-dependencies]
-pkg-config.workspace = true
 vergen-gitcl.workspace = true
 
 [lints]

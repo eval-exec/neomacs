@@ -1,0 +1,21 @@
+[package]
+name = "neomacs-terminfo"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Owned terminal capability snapshots and numeric expansion"
+links = "neomacs_terminfo"
+
+[dependencies]
+regex.workspace = true
+
+[build-dependencies]
+pkg-config.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

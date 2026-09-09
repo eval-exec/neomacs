@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/neomacs",
+    "crates/neomacs-terminfo",
     "crates/neomacs-allocator",
     "crates/neomacs-diagnostics",
     "crates/neomacs-display-protocol",
@@ -85,6 +86,7 @@ unsafe_op_in_unsafe_fn = "warn"
 
 [workspace.dependencies]
 # Internal crates
+neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
 neovm-host-abi = { path = "crates/neovm-host-abi" }
@@ -322,6 +324,7 @@ static_assertions = "1.1"
 which = "7.0"
 bindgen = "0.72"
 pkg-config = "0.3"
+regex = "1.12"
 
 # OS pipe
 os_pipe = "1.2.3"

@@ -1,0 +1,12 @@
+# Deterministic ncurses entries for snapshot and namespace tests.
+neo-pr363-a|Neomacs terminfo fixture A,
+	am, bce, colors#256, ncv#3,
+	bold=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA,
+	smul=\E[4m, sgr0=\E[m^O, smacs=^N, rmacs=^O,
+	sgr=\E[0%?%p1%p6%|%t;1%;%?%p2%t;4%;%?%p1%p3%|%t;7%;%?%p4%t;5%;m%?%p9%t\016%e\017%;,
+	setaf=\E[38;5;%p1%dm,
+	Smulx=\E[4:%p1%dm, smxx=\E[9m,
+	RGB, Tc, Su,
+neo-pr363-b|Neomacs terminfo fixture B,
+	colors#8, bold=BBBB,
+	smul@, Smulx@,
