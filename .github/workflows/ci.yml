@@ -313,6 +313,8 @@ jobs:
         shell: python
         run: |
           import subprocess
+          import sys
+          sys.stdout.reconfigure(encoding="utf-8", errors="replace")
           with subprocess.Popen(
               ["cargo", "nextest", "run", "-p", "neomacs", "--lib", "--locked",
                "--no-default-features", "--features", "neo-term",
