@@ -2846,6 +2846,7 @@ pub struct Context {
     /// composed between a grab and its release is stamped as the drag's, and
     /// none after it is.
     pub(crate) window_edge_drag: crate::emacs_core::window_edge_drag::WindowEdgeDrag,
+    pub(crate) composition: crate::ime::CompositionState,
     /// The obarray — unified symbol table with value cells, function cells, plists.
     pub(crate) obarray: Obarray,
     /// Specpdl — special binding stack that writes directly to the obarray.
