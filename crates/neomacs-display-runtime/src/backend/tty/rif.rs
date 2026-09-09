@@ -3003,6 +3003,14 @@ fn face_appearance(attrs: &CellAttrs) -> TtyFaceAppearance {
 /// `aixterm`, `vt220`/`vt420`/`vt520`, `prism` and `scoansi` families.
 fn write_turn_off_face(buf: &mut Vec<u8>, attrs: &CellAttrs, caps: &TtyAttributeCapabilities) {
     let appearance = face_appearance(attrs);
+    // GNU tracks standout separately from face attributes. Our runs are
+    // self-contained, so close the paired mode before the following run.
+    if caps.exit_attribute_mode.is_none()
+        && attrs.inverse
+        && let Some(sequence) = &caps.exit_standout_mode
+    {
+        buf.extend_from_slice(sequence);
+    }
     match caps.attribute_exit(appearance) {
         TtyAttributeExit::ExitAttributeMode(sequence)
         | TtyAttributeExit::ExitUnderlineMode(sequence) => buf.extend_from_slice(sequence),

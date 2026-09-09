@@ -12,7 +12,8 @@ retry. Tests exercise failed flush, full retry, unchanged frames and dirty rows.
 Byte output resets known insert/rendition modes before painting so a partial
 write cannot leave the retry in insert mode or with stale highlighting. This
 cannot guarantee recovery from every terminal's partially received control code.
-The optimized ANSI renderer remains available for the primary ANSI terminal.
+The optimized ANSI renderer remains available for the primary ANSI terminal
+when its capabilities do not require padding.
 
 Unix non-ANSI and secondary terminals render with their own capability snapshot.
 Absolute cursor addressing is expanded by native tparm. Relative addressing uses
@@ -31,8 +32,8 @@ even when their cursor addressing is ANSI.
 
 ## Windows
 
-The backend uses published `crossterm` and `crossterm_winapi` APIs, adding no local
-unsafe code. `crossterm_winapi` was already a transitive dependency. Microsoft's
+The backend uses published `crossterm` and `crossterm_winapi` APIs. Cursor sizing
+uses a small `windows-sys` adapter; see the [completion](terminal-capability-completion.md). `crossterm_winapi` was already a transitive dependency. Microsoft's
 [windows-version](https://docs.rs/windows-version/0.1.7/windows_version/)
 provides the OS-version check without a handwritten native call. The
 [crate research](windows-terminal-renderer-research.md) explains why termwiz's
@@ -61,11 +62,9 @@ This branch does not establish full GNU terminal parity. Remaining work includes
 
 - Full editor screen comparisons on real terminals and a Windows input/modifier
   audit. The hosted smoke tests do not establish complete interactive parity.
-- Physical serial-terminal padding delays. Existing capability normalization
-  removes padding markers; the new byte painter retains that limitation.
-- GNU attribute postprocessing (`sg`/`ug`, underline-as-standout, `se`/`me`) and
-  unusual terminal quirks such as teleray. Cursor shape is preserved for ANSI
-  terminals, but native legacy Windows cursor-size control remains unimplemented.
+- Unusual terminal quirks such as teleray. The [five capability follow-ups](terminal-capability-completion.md)
+  implement cookie exclusions, highlighting fallbacks, native padding, and
+  legacy Windows cursor sizing. Physical serial hardware remains to be exercised.
 - Windows Lisp console APIs and `w32console.el` palette initialization. The output
   backend uses Neomacs' existing ANSI-order realized palette; it does not claim
   compatibility with every GNU-specific console primitive.
@@ -91,8 +90,8 @@ improvement or a different safe writer.
   bootstrap failure class, but is not a passing full application suite.
 
 Independent Standards and Spec reviews found no remaining actionable findings in
-the reviewed fixes. Legacy cursor size and the other documented parity gaps remain
-open; a clean review does not establish complete GNU compatibility.
+the reviewed fixes. The documented remaining parity gaps still apply; a clean review does not
+establish complete GNU compatibility.
 
 ## Native GitHub CI results
 

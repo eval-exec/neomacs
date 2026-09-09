@@ -1,4 +1,5 @@
-//! Windows output mode and screen-buffer ownership, using safe crossterm APIs.
+//! Windows output mode and screen-buffer ownership.
+//! Crossterm owns handles; the cursor adapter uses Microsoft windows-sys bindings.
 use crossterm::Command;
 use crossterm_winapi::{Console, ConsoleMode, ScreenBuffer};
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
@@ -61,6 +62,10 @@ impl Session {
             vt,
             active: false,
         })
+    }
+
+    fn screen(&self) -> &ScreenBuffer {
+        self.alternate.as_ref().unwrap_or(&self.original)
     }
 
     fn console(&self) -> Console {
@@ -199,7 +204,7 @@ struct LegacyPainter<'a> {
 }
 impl TtyPainter for LegacyPainter<'_> {
     fn begin(&mut self, _: usize, _: usize) -> io::Result<()> {
-        crossterm::cursor::Hide.execute_winapi()
+        cursor_info::set(self.session.screen(), 99, false)
     }
     fn row(&mut self, row: usize, cells: &[TtyCell]) -> io::Result<()> {
         self.session.move_to(row, 0)?;
@@ -230,9 +235,15 @@ impl TtyPainter for LegacyPainter<'_> {
         self.session
             .console()
             .set_text_attribute(self.session.original_attributes)?;
-        if let Some((row, col, _)) = cursor {
+        if let Some((row, col, shape)) = cursor {
             self.session.move_to(usize::from(row), usize::from(col))?;
-            crossterm::cursor::Show.execute_winapi()?;
+            // Legacy consoles specify horizontal cursor height, not a vertical
+            // bar. Use GNU's nearly full-cell block for that fallback.
+            let size = match shape {
+                TerminalCursorShape::Underline => 25,
+                TerminalCursorShape::Block | TerminalCursorShape::Bar => 99,
+            };
+            cursor_info::set(self.session.screen(), size, true)?;
         }
         Ok(())
     }
@@ -342,6 +353,7 @@ mod tests {
     fn native_legacy_console_restores_the_original_screen_and_mode() {
         let mut session = Session::new().unwrap();
         let original = session.original.info().unwrap();
+        let original_cursor = cursor_info::get(&session.original).unwrap();
         session.vt = false; // Exercise the fallback even on modern Windows.
         ConsoleMode::from(session.original.handle().clone())
             .set_mode(session.original_mode)
@@ -350,6 +362,7 @@ mod tests {
         assert!(session.alternate.is_some());
         let mut painter = LegacyPainter { session: &session };
         painter.begin(80, 24).unwrap();
+        assert!(!cursor_info::get(session.screen()).unwrap().1);
         painter
             .row(
                 0,
@@ -362,6 +375,20 @@ mod tests {
         painter
             .finish(Some((0, 1, TerminalCursorShape::Block)))
             .unwrap();
+        for (shape, expected) in [
+            (TerminalCursorShape::Block, 99),
+            (TerminalCursorShape::Underline, 25),
+            (TerminalCursorShape::Bar, 99),
+        ] {
+            painter.finish(Some((0, 1, shape))).unwrap();
+            assert_eq!(
+                cursor_info::get(session.screen()).unwrap(),
+                (expected, true)
+            );
+        }
+        painter.begin(80, 24).unwrap();
+        painter.finish(None).unwrap();
+        assert!(!cursor_info::get(session.screen()).unwrap().1);
         let window = session
             .alternate
             .as_ref()
@@ -380,11 +407,59 @@ mod tests {
         assert_eq!(position.y, window.top);
         session.leave().unwrap();
         let restored = ScreenBuffer::current().unwrap();
+        assert_eq!(cursor_info::get(&restored).unwrap(), original_cursor);
         assert_eq!(restored.info().unwrap().cursor_pos(), original.cursor_pos());
         assert_eq!(restored.info().unwrap().attributes(), original.attributes());
         assert_eq!(
             ConsoleMode::from(restored.handle().clone()).mode().unwrap(),
             session.original_mode
         );
+    }
+}
+
+// Keep the two missing crossterm operations together. No raw handle escapes
+// this adapter, and ScreenBuffer keeps it alive for each synchronous call.
+mod cursor_info {
+    use super::*;
+    use windows_sys::Win32::System::Console::{CONSOLE_CURSOR_INFO, SetConsoleCursorInfo};
+
+    pub(super) fn set(screen: &ScreenBuffer, size: u32, visible: bool) -> io::Result<()> {
+        if !(1..=100).contains(&size) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cursor height must be 1..=100",
+            ));
+        }
+        let info = CONSOLE_CURSOR_INFO {
+            dwSize: size,
+            bVisible: i32::from(visible),
+        };
+        // SAFETY: the borrowed screen owns a live console handle. `info` is
+        // initialized and lives through the call; Windows retains no pointer.
+        if unsafe { SetConsoleCursorInfo((*screen.handle()).cast(), &info) } == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn get(screen: &ScreenBuffer) -> io::Result<(u32, bool)> {
+        let mut info = CONSOLE_CURSOR_INFO {
+            dwSize: 0,
+            bVisible: 0,
+        };
+        // SAFETY: live borrowed handle and writable, correctly sized output.
+        if unsafe {
+            windows_sys::Win32::System::Console::GetConsoleCursorInfo(
+                (*screen.handle()).cast(),
+                &mut info,
+            )
+        } == 0
+        {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok((info.dwSize, info.bVisible != 0))
+        }
     }
 }

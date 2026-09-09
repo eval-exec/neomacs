@@ -102,6 +102,7 @@ tikv-jemalloc-sys = { version = "0.7", optional = true, default-features = false
 [target.'cfg(windows)'.dependencies]
 crossterm_winapi = "0.9.1"
 windows-version = "0.1.7"
+windows-sys.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

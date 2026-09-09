@@ -16,6 +16,7 @@ pkg-config.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+rustix = { workspace = true, features = ["pty", "termios"] }
 
 [lints]
 workspace = true

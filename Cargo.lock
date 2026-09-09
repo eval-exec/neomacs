@@ -3667,6 +3667,7 @@ dependencies = [
  "tikv-jemallocator",
  "tracing",
  "vergen-gitcl",
+ "windows-sys 0.61.2",
  "windows-version",
 ]
 
@@ -3905,6 +3906,7 @@ version = "0.0.17"
 dependencies = [
  "pkg-config",
  "regex",
+ "rustix 1.1.4",
  "tempfile",
 ]
 

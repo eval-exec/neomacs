@@ -7,15 +7,13 @@
 //! Raw input uses crossterm. Output uses native terminfo capabilities on Unix
 //! and negotiated VT or native screen buffers on Windows.
 
-use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
-use neovm_core::emacs_core::terminal::pure::TerminalRuntimeConfig;
 #[cfg(not(windows))]
-use std::io::Write;
-
 #[cfg(test)]
 use super::terminal_capabilities::StringCapability;
 use super::terminal_capabilities::TerminalCapabilityDatabase;
 use super::{FrontendKind, StartupOptions};
+use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
+use neovm_core::emacs_core::terminal::pure::TerminalRuntimeConfig;
 
 /// Return a TTY terminal runtime configuration for interactive sessions.
 ///
@@ -336,9 +334,8 @@ pub fn tty_init_terminal() -> Result<(), String> {
         .map_err(std::io::Error::other)
         .and_then(|caps| {
             let mut stdout = std::io::stdout();
-            stdout
-                .write_all(&caps.enter())
-                .and_then(|()| stdout.flush())
+            let (_, height) = query_terminal_size_cells().unwrap_or((80, 24));
+            caps.enter(height as usize).write_to(&mut stdout, caps)
         });
     if let Err(error) = result {
         tty_shutdown_terminal();
@@ -358,8 +355,7 @@ pub fn tty_shutdown_terminal() {
     #[cfg(not(windows))]
     if let Ok(caps) = super::tty_output::primary() {
         let mut stdout = std::io::stdout();
-        let _ = stdout.write_all(&caps.leave());
-        let _ = stdout.flush();
+        let _ = caps.leave().write_to(&mut stdout, caps);
     }
 
     // Restore raw mode

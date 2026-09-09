@@ -56,7 +56,7 @@ pub(crate) fn open_terminal_capability_database(
     use neomacs_terminfo::Query;
     // The application chooses what it needs; the dependency snapshots these
     // queries together so later opens cannot change an existing database.
-    let mut queries = vec![Query::TermcapNumber("Co"), Query::TermcapNumber("NC")];
+    let mut queries = ["Co", "NC", "sg", "ug"].map(Query::TermcapNumber).to_vec();
     for name in ["Su", "xn", "am", "in", "ut", "bs", "bw"] {
         queries.push(Query::Flag(FlagCapability::Termcap(name)));
     }
@@ -152,9 +152,44 @@ pub(crate) fn resolve_tty_attribute_capabilities(
                 .then(|| b"\x1b[4:%p1%dm".to_vec())
         });
 
+    // GNU init_tty: reject cookie modes before selecting the underline
+    // fallback, and never enable standout without a usable exit sequence.
+    let mut standout_sequence = sequence(database, Termcap("so"));
+    let mut exit_standout_mode = sequence(database, Termcap("se"));
+    let mut underline_sequence = sequence(database, Termcap("us"));
+    let mut exit_underline_mode = sequence(database, Termcap("ue"));
+    let exit_attribute_mode = sequence(database, Termcap("me"));
+    if standout_sequence.is_some()
+        && database
+            .get_termcap_number("sg")
+            .is_some_and(|value| value >= 0)
+    {
+        standout_sequence = None;
+        exit_standout_mode = None;
+    }
+    if underline_sequence.is_some()
+        && database
+            .get_termcap_number("ug")
+            .is_some_and(|value| value >= 0)
+    {
+        underline_sequence = None;
+        exit_underline_mode = None;
+    }
+    if standout_sequence.is_none() {
+        standout_sequence = underline_sequence.clone();
+        exit_standout_mode = exit_underline_mode.clone();
+    }
+    if exit_standout_mode.is_none() {
+        exit_standout_mode = exit_attribute_mode.clone();
+        if exit_standout_mode.is_none() {
+            standout_sequence = None;
+        }
+    }
+
     TtyAttributeCapabilities {
-        standout_sequence: sequence(database, Termcap("so")),
-        underline_sequence: sequence(database, Termcap("us")),
+        standout_sequence,
+        exit_standout_mode,
+        underline_sequence,
         bold_sequence: sequence(database, Termcap("md")),
         dim_sequence: sequence(database, Termcap("mh")),
         italic_sequence: sequence(database, Termcap("ZH")),
@@ -169,8 +204,8 @@ pub(crate) fn resolve_tty_attribute_capabilities(
         // matters is what TERMCAP answers, not what `infocmp` prints for
         // `sgr0`: ncurses' termcap layer normalises it, and `Eterm`'s `sgr0` is
         // `\E[m\017` while its `me` is `\E[0m` (ledger 188).
-        exit_attribute_mode: sequence(database, Termcap("me")),
-        exit_underline_mode: sequence(database, Termcap("ue")),
+        exit_attribute_mode,
+        exit_underline_mode,
         // GNU reads `Co` INSIDE this block and nowhere else, so the count
         // comes back with the setters rather than beside them (ledger 193).
         colors: resolve_tty_color_capabilities(database, colorterm),
@@ -319,7 +354,7 @@ fn resolve_tty_color_entry(
     ))
 }
 
-/// One capability's bytes with terminfo padding removed, or `None` when the
+/// One capability's bytes with terminfo padding retained, or `None` when the
 /// entry does not carry it.  The same reading [`rendition_sequence`] does for
 /// the appearance capabilities, which is what GNU's `tgetstr` gives it.
 fn rendition_capability(
@@ -333,37 +368,10 @@ fn rendition_capability(
         .filter(|value| !value.is_empty())
 }
 
-/// One rendition capability's bytes, as GNU emits them.
-///
-/// `turn_on_face` emits these with `OUTPUT1` / `OUTPUT1_IF`, which is `tputs`:
-/// it turns a `$<..>` padding marker into a DELAY rather than into bytes, and
-/// it does no parameter expansion at all -- `tparam` is a separate call GNU
-/// makes only for `cup`, `setaf`/`setab` and `Smulx`.  So the bytes to keep are
-/// the entry's own with padding removed, and a `%` construct (three entries in
-/// ncurses' database carry one in a rendition string) is passed through exactly
-/// as GNU passes it through.
-///
-/// This is deliberately NOT [`canonical_cap`], which also strips `%pN`: that
-/// normalization exists so the update planner can compare a terminfo spelling
-/// against its termcap translation, and it would corrupt a string that is
-/// emitted rather than compared.
+/// Preserve padding until the output boundary calls tputs. Capability bytes
+/// must remain distinct from glyph text, which may itself contain `$<...>`.
 pub(crate) fn rendition_sequence(entry: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(entry.len());
-    let mut i = 0;
-    while i < entry.len() {
-        if entry[i] == b'$' && entry.get(i + 1) == Some(&b'<') {
-            match entry[i + 2..].iter().position(|byte| *byte == b'>') {
-                Some(close) => {
-                    i += close + 3;
-                    continue;
-                }
-                None => break,
-            }
-        }
-        out.push(entry[i]);
-        i += 1;
-    }
-    out
+    entry.to_vec()
 }
 
 /// Canonicalize a termcap/terminfo capability string for byte comparison:
@@ -520,4 +528,4 @@ impl TerminalCapabilityDatabase for neomacs_terminfo::Database {
 
 #[cfg(test)]
 #[path = "terminal_capabilities_test.rs"]
-mod tests;
+pub(crate) mod tests;
