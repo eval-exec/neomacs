@@ -2,6 +2,8 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod environment;
+
 #[cfg(target_os = "android")]
 mod platform;
 
