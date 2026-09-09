@@ -1,6 +1,7 @@
 //! Android Activity, editor-session, and window lifecycle adapter.
 
 mod evaluator;
+mod ime;
 mod presentation;
 
 use neomacs_app::frontend_event::{
@@ -33,6 +34,7 @@ struct AndroidFrontend {
     input: Option<FrontendInputPort>,
     frames: Option<FrontendFrameInbox>,
     input_translation: WinitFrontendInput,
+    input_method: ime::InputMethod,
     target: FrontendFrameId,
     close_pending: bool,
     focused: bool,
@@ -55,6 +57,7 @@ impl AndroidFrontend {
             input: None,
             frames: None,
             input_translation: WinitFrontendInput::default(),
+            input_method: ime::InputMethod::default(),
             target: FrontendFrameId::PRIMARY,
             close_pending: false,
             focused: true,
@@ -288,6 +291,21 @@ impl ApplicationHandler for AndroidFrontend {
                         modifiers: 0,
                     },
                 );
+                if state == ElementState::Released
+                    && let Some(window) = self.window.as_ref()
+                {
+                    use winit::window::{
+                        ImeCapabilities, ImeEnableRequest, ImeRequest, ImeRequestData,
+                    };
+                    // A new touch establishes a new editor insertion context.
+                    let _ = window.request_ime_update(ImeRequest::Disable);
+                    let request =
+                        ImeEnableRequest::new(ImeCapabilities::new(), ImeRequestData::default())
+                            .expect("empty IME request is valid");
+                    if let Err(error) = window.request_ime_update(ImeRequest::Enable(request)) {
+                        eprintln!("Android IME could not be enabled: {error}");
+                    }
+                }
             }
             WindowEvent::PointerMoved {
                 primary: true,
@@ -338,6 +356,15 @@ impl ApplicationHandler for AndroidFrontend {
                 self.input_translation.set_modifiers(modifiers.state());
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed
+                    && matches!(
+                        event.logical_key,
+                        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+                    )
+                    && let Some(window) = self.window.as_ref()
+                {
+                    let _ = window.request_ime_update(winit::window::ImeRequest::Disable);
+                }
                 if let Some(event) = self.input_translation.translate_key(
                     &event.logical_key,
                     event.text.as_deref(),
@@ -347,8 +374,21 @@ impl ApplicationHandler for AndroidFrontend {
                     self.submit(event);
                 }
             }
-            WindowEvent::Ime(Ime::Commit(text)) => {
-                if let Some(event) = self.input_translation.committed_text(&text, self.target) {
+            WindowEvent::Ime(event) => {
+                let preedit = match &event {
+                    Ime::Preedit(text, _) => Some(text.clone()),
+                    Ime::Disabled => Some(String::new()),
+                    _ => None,
+                };
+                if let Some(text) = preedit {
+                    if let Some(presented) = self.presented.as_mut() {
+                        presented.set_preedit(text);
+                    }
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+                if let Some(event) = self.input_method.event(event, self.target) {
                     self.submit(event);
                 }
             }
