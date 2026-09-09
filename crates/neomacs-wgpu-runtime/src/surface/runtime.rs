@@ -11,13 +11,13 @@ std::cfg_select! {
         use std::rc::Rc;
 
         /// Shared ownership used for a browser window and its canvas.
-        pub type SurfaceWindow = Rc<Window>;
+        pub type SurfaceWindow = Rc<dyn Window>;
     }
     _ => {
         use std::sync::Arc;
 
         /// Shared ownership used for a native window.
-        pub type SurfaceWindow = Arc<Window>;
+        pub type SurfaceWindow = Arc<dyn Window>;
     }
 }
 
@@ -166,7 +166,7 @@ impl SurfaceRuntime {
                 trace: wgpu::Trace::Off,
             })
             .await?;
-        let size = window.inner_size();
+        let size = window.surface_size();
         let extent = SurfaceExtent::from_physical_size(size.width, size.height);
         let config = Self::surface_configuration(&surface.get_capabilities(&adapter), extent)
             .ok_or(SurfaceInitError::UnsupportedSurface)?;
