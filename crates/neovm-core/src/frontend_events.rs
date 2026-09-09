@@ -197,6 +197,7 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::TtyByte { .. }
         | InputEvent::TtyCharacter { .. }
         | InputEvent::KeyPress { .. }
+        | InputEvent::ImeDeleteSurrounding { .. }
         | InputEvent::MousePress { .. }
         | InputEvent::MouseRelease { .. }
         | InputEvent::MouseScroll { .. }

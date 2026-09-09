@@ -22,6 +22,34 @@ fn settled_point(
 use super::*;
 
 #[test]
+fn ime_deletion_counts_utf8_bytes_without_splitting_characters() {
+    let mut eval = crate::Context::new();
+    eval.eval_str("(progn (insert \"a你好😀z\") (goto-char 4))").unwrap();
+    eval.handle_read_char_input_event(
+        InputEvent::ImeDeleteSurrounding { before_bytes: 3, after_bytes: 4, emacs_frame_id: 0 },
+        TtyInputDecoding::KeyboardCodingSystem,
+    ).unwrap();
+    assert_eq!(eval.eval_str("(buffer-string)").unwrap().as_utf8_str(), Some("a你z"));
+}
+
+#[test]
+fn ime_deletion_preserves_partial_characters_and_honors_read_only() {
+    let mut eval = crate::Context::new();
+    eval.eval_str("(insert \"你好\")").unwrap();
+    eval.handle_read_char_input_event(
+        InputEvent::ImeDeleteSurrounding { before_bytes: 1, after_bytes: 0, emacs_frame_id: 0 },
+        TtyInputDecoding::KeyboardCodingSystem,
+    ).unwrap();
+    assert_eq!(eval.eval_str("(buffer-string)").unwrap().as_utf8_str(), Some("你好"));
+    eval.eval_str("(setq buffer-read-only t)").unwrap();
+    assert!(eval.handle_read_char_input_event(
+        InputEvent::ImeDeleteSurrounding { before_bytes: 3, after_bytes: 0, emacs_frame_id: 0 },
+        TtyInputDecoding::KeyboardCodingSystem,
+    ).is_err());
+    assert_eq!(eval.eval_str("(buffer-string)").unwrap().as_utf8_str(), Some("你好"));
+}
+
+#[test]
 fn help_prefix_echo_faces_semantic_key_bindings() {
     let mut eval = crate::emacs_core::Context::new();
     eval.assign("help-char", Value::fixnum(8));

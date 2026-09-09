@@ -131,6 +131,9 @@ impl<'a> EvaluatorInputBatch<'a> {
     /// Translate one host-neutral frontend event.
     pub fn from_frontend_event(event: &'a FrontendEvent) -> Self {
         match event {
+            FrontendEvent::ImeDeleteSurrounding { before_bytes, after_bytes, target } => Self::single(InputEvent::ImeDeleteSurrounding {
+                before_bytes: *before_bytes, after_bytes: *after_bytes, emacs_frame_id: target.get(),
+            }),
             FrontendEvent::Key(key) => {
                 Self::from_optional(keyboard::render_key_transport_to_input_event(
                     key.symbol().get(),
