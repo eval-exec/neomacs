@@ -22,6 +22,23 @@ fn settled_point(
 use super::*;
 
 #[test]
+fn ime_session_uses_target_encoding_for_point_and_owned_replacement_range() {
+    use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
+    let mut eval = crate::Context::new();
+    eval.eval_str("(progn (set-buffer-multibyte nil) (insert \"XYZ\") (goto-char 1))").unwrap();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin).unwrap();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Replace {
+        before_bytes: 0, after_bytes: 0, text: "é".into(),
+    }).unwrap();
+    assert_eq!(eval.eval_str("(point)").unwrap(), Value::fixnum(2));
+    assert_eq!(eval.eval_str("(aref (buffer-string) 0)").unwrap(), Value::fixnum(233));
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Replace {
+        before_bytes: 2, after_bytes: 0, text: String::new(),
+    }).unwrap();
+    assert_eq!(eval.eval_str("(buffer-string)").unwrap().as_utf8_str(), Some("XYZ"));
+}
+
+#[test]
 fn ime_session_reports_gnu_text_conversion_event_and_edit_list() {
     use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
     let mut eval = crate::Context::new();
