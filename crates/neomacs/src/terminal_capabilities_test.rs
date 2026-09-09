@@ -530,53 +530,72 @@ fn padding_and_parameter_markers_do_not_defeat_recognition() {
     assert_eq!(caps.scroll_region, Some(RegionScrollMethod::SuSd));
 }
 
-/// The two long capability names GNU reads, read from the REAL database.
-///
-/// Every other test in this file feeds a `FakeCapabilityDatabase` keyed by
-/// plain strings, which answers `Smulx` and `smxx` because a `HashMap` will
-/// answer any key.  The real database will not: `tgetstr` resolves two-letter
-/// TERMCAP names and nothing else, so it answers NULL for both of these on
-/// every entry in existence.  GNU reads them with `tigetstr`
-/// (src/term.c:4587 and :4694) for exactly that reason.
-///
-/// These two entries are ncurses' own and their contents are stable:
-/// `infocmp -x tmux-256color` carries `Smulx` and `smxx`, and
-/// `infocmp -x xterm-256color` carries `smxx` but not `Smulx`.  An entry that
-/// cannot be opened at all (no terminfo database on the machine) makes the
-/// assertion vacuous rather than red, since that is the one condition under
-/// which neomacs is right to answer "absent".
-#[test]
-fn styled_underline_and_strike_through_come_from_the_terminfo_database() {
-    let Some(tmux) = entry("tmux-256color", "") else {
-        return;
-    };
-    let styled = tmux
-        .styled_underline
-        .as_ref()
-        .expect("tmux-256color has Smulx; tgetstr cannot see it and tigetstr can");
-    assert_eq!(
-        styled.sequence(UnderlineStyle::Wave),
-        Some(b"\x1b[4:3m".as_slice()),
-        "and its own spelling, expanded through ncurses' tparm"
-    );
-    assert_eq!(
-        tmux.strike_through_sequence.as_deref(),
-        Some(b"\x1b[9m".as_slice()),
-        "tmux-256color has smxx; tgetstr cannot see it and tigetstr can"
-    );
-
-    let Some(xterm) = entry("xterm-256color", "") else {
-        return;
-    };
-    assert_eq!(
-        xterm.strike_through_sequence.as_deref(),
-        Some(b"\x1b[9m".as_slice()),
-        "xterm-256color has smxx even though it has no Smulx"
-    );
+/// Run native fixtures in a child process so TERMINFO is selected before
+/// threads start. This keeps environment mutation and additional unsafe code
+/// out of the tests, while making missing tools/entries an explicit failure.
+#[cfg(unix)]
+fn run_native_fixture_child() -> bool {
+    let thread = std::thread::current();
+    let name = thread.name().expect("named Rust test thread");
+    if std::env::var("NEOMACS_APP_TERMINFO_FIXTURE_TEST").as_deref() == Ok(name) {
+        return false;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let compiled = std::process::Command::new("tic")
+        .args(["-x", "-o"])
+        .arg(directory.path())
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/terminal-capabilities.src"
+        ))
+        .output()
+        .expect("ncurses tic is required for native fixtures");
     assert!(
-        xterm.styled_underline.is_none(),
-        "xterm-256color has no Smulx, so a styled underline must fall back"
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
     );
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture"])
+        .env("NEOMACS_APP_TERMINFO_FIXTURE_TEST", name)
+        .env("TERMINFO", directory.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
+/// Extended names must reach native tigetstr, rather than termcap lookup.
+#[test]
+#[cfg(unix)]
+fn styled_underline_and_strike_through_come_from_the_terminfo_database() {
+    if run_native_fixture_child() {
+        return;
+    }
+    let styled = entry("neo-app-styled", "").expect("compiled styled entry");
+    assert_eq!(
+        styled
+            .styled_underline
+            .as_ref()
+            .unwrap()
+            .sequence(UnderlineStyle::Wave),
+        Some(b"\x1b[4:3m".as_slice())
+    );
+    assert_eq!(
+        styled.strike_through_sequence.as_deref(),
+        Some(b"\x1b[9m".as_slice())
+    );
+    let plain = entry("neo-app-common", "").expect("compiled plain entry");
+    assert_eq!(
+        plain.strike_through_sequence.as_deref(),
+        Some(b"\x1b[9m".as_slice())
+    );
+    assert!(plain.styled_underline.is_none());
 }
 
 /// The two-letter names must keep going to termcap.
@@ -616,29 +635,8 @@ fn two_letter_capability_names_still_come_from_termcap() {
     assert_eq!(xterm.color_cells(), 256, "xterm-256color has Co#256");
 }
 
-/// The colour capabilities are the ENTRY's, expanded by the real ncurses
-/// `tparm` -- which in a terminfo build IS GNU's `tparam`
-/// (src/terminfo.c:43-55).
-///
-/// This is where the divergence ledger 155 recorded is measurable, because it
-/// is the only place ncurses is linked.  Ledger 188 counted it over the 927
-/// terminfo entries this port will start on (those whose `cm` canonicalizes to
-/// the ANSI `\E[%i%d;%dH`; the rest are refused by
-/// `check_terminal_powerful_enough`): 406 have colours, and **45 spell `setaf`
-/// or `setab` differently from the fixed rule this port applied, for at least
-/// one index inside their own palette**.  The four causes are one row each
-/// below.
-///
-/// An entry that cannot be opened at all makes the assertion vacuous rather
-/// than red, since that is the one condition under which neomacs is right to
-/// answer "absent".
-/// A real terminfo entry, resolved with COLORTERM given explicitly rather than
-/// inherited.
-///
-/// It has to be explicit: GNU's `Tc`/COLORTERM arm REPLACES `TS_set_foreground`
-/// with its own `\E[38;2;%p1%d;%p2%d;%p3%d%;m` literal (src/term.c:4655-4667),
-/// so an ambient `COLORTERM=truecolor` hides every entry's own spelling --
-/// measured, because this test failed that way first.
+/// Resolve a native entry with explicit COLORTERM so the environment cannot
+/// replace its own color spelling with GNU's truecolor fallback.
 fn entry(term: &str, colorterm: &str) -> Option<TtyAttributeCapabilities> {
     let mut database = open_terminal_capability_database(term)?;
     Some(resolve_tty_attribute_capabilities(
@@ -648,151 +646,112 @@ fn entry(term: &str, colorterm: &str) -> Option<TtyAttributeCapabilities> {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_colour_is_the_entrys_own_setaf_expanded_by_tparm() {
     use neomacs_display_protocol::TerminalColor;
     use neomacs_display_protocol::tty_capabilities::ColorGround;
-
-    // 1. A different SPELLING of the same palette: `foot` uses SGR colon
-    //    sub-parameters.  Captured from GNU Emacs 31.0.90 in a pty on
-    //    TERM=foot (`tmp/pw188/gnu-foot3.raw`) against this port's own pre-fix
-    //    release binary (`tmp/pw188/neo-before-foot.raw`):
-    //
-    //        GNU      ESC[38:5:100m PW188C100 ESC[39;49m
-    //        neomacs  ESC[7;1H ESC[0m ESC[38;5;100m ESC[49m PW188C100
-    if let Some(foot) = entry("foot", "") {
-        let colors = foot.colors.entry().expect("foot has op and setaf");
+    if run_native_fixture_child() {
+        return;
+    }
+    let rgb = TerminalColor::Direct {
+        r: 205,
+        g: 0,
+        b: 17,
+    };
+    for (term, ground, color, expected) in [
+        (
+            "neo-app-colon",
+            ColorGround::Foreground,
+            TerminalColor::Indexed(100),
+            "\x1b[38:5:100m",
+        ),
+        (
+            "neo-app-linux16",
+            ColorGround::Foreground,
+            TerminalColor::Indexed(1),
+            "\x1b[31;22m",
+        ),
+        (
+            "neo-app-linux16",
+            ColorGround::Background,
+            TerminalColor::Indexed(4),
+            "\x1b[44;25m",
+        ),
+        (
+            "neo-app-svr4",
+            ColorGround::Foreground,
+            TerminalColor::Indexed(1),
+            "\x1b[34m",
+        ),
+        (
+            "neo-app-separate",
+            ColorGround::Foreground,
+            rgb,
+            "\x1b[38:2:205:0:17m",
+        ),
+        (
+            "neo-app-packed",
+            ColorGround::Foreground,
+            rgb,
+            "\x1b[38:2::205:0:17m",
+        ),
+    ] {
+        let caps = entry(term, "").expect("compiled color entry");
+        let colors = caps
+            .colors
+            .entry()
+            .expect("fixture supplies color capabilities");
         assert_eq!(
-            colors.ground_sequence(ColorGround::Foreground, TerminalColor::Indexed(100)),
-            Some(b"\x1b[38:5:100m".to_vec()),
-            "foot spells the 256 range with colons"
+            colors.ground_sequence(ground, color),
+            Some(expected.as_bytes().to_vec()),
+            "{term}"
         );
         assert_eq!(colors.orig_pair(), b"\x1b[39;49m");
     }
-
-    // 2. A different PARAMETER LIST: `linux-16color` appends `;22` / `;25` to
-    //    take the console out of bold/blink, because the Linux console spells
-    //    its bright colours that way.  Captured from GNU on TERM=linux-16color
-    //    (`tmp/pw188/gnu-linux16.raw`) against the pre-fix binary
-    //    (`tmp/pw188/neo-before-linux16.raw`):
-    //
-    //        GNU      ESC[31;22m PW188RED ESC[39;49m
-    //        neomacs  ESC[2;1H ESC[0m ESC[31m ESC[49m PW188RED
-    if let Some(linux16) = entry("linux-16color", "") {
-        let colors = linux16.colors.entry().expect("linux-16color has op");
+    let indexed = entry("neo-app-indexed", "").unwrap();
+    let colors = indexed.colors.entry().unwrap();
+    for (index, expected) in [
+        (0, "\x1b[30m"),
+        (7, "\x1b[37m"),
+        (8, "\x1b[90m"),
+        (15, "\x1b[97m"),
+        (100, "\x1b[38;5;100m"),
+    ] {
         assert_eq!(
-            colors.ground_sequence(ColorGround::Foreground, TerminalColor::Indexed(1)),
-            Some(b"\x1b[31;22m".to_vec())
+            colors.ground_sequence(ColorGround::Foreground, TerminalColor::Indexed(index)),
+            Some(expected.as_bytes().to_vec()),
+            "index {index}"
         );
-        assert_eq!(
-            colors.ground_sequence(ColorGround::Background, TerminalColor::Indexed(4)),
-            Some(b"\x1b[44;25m".to_vec())
-        );
-    }
-
-    // 3. A different palette ORDER: `qansi` has no `setaf` at all, so GNU falls
-    //    back to SVr4 `Sf`/`Sb` (src/term.c:4609-4614), whose colour order is
-    //    not ANSI's -- index 1 is BLUE there and RED in the rule this port
-    //    applied.  17 of the 45 are in this class (`qansi` and its four
-    //    variants, `tw100`, the eight `wy370` entries, `gs6300`, `hft-old`,
-    //    `tek4205`).
-    if let Some(qansi) = entry("qansi", "") {
-        let colors = qansi.colors.entry().expect("qansi has op and setf");
-        assert_eq!(
-            colors.ground_sequence(ColorGround::Foreground, TerminalColor::Indexed(1)),
-            Some(b"\x1b[34m".to_vec()),
-            "GNU does not second-guess the index: setf index 1 is blue"
-        );
-    }
-
-    // 4. GNU's `TF_rgb_separate`, which is the THREE-argument `tparam` call
-    //    (src/term.c:2101).  `xterm-kitty` is the one reachable entry with
-    //    `setrgbf`, and its spelling is colon-separated where this port wrote
-    //    semicolons.
-    if let Some(kitty) = entry("xterm-kitty", "") {
-        let colors = kitty.colors.entry().expect("xterm-kitty has op");
-        assert_eq!(
-            colors.ground_sequence(
-                ColorGround::Foreground,
-                TerminalColor::Direct {
-                    r: 205,
-                    g: 0,
-                    b: 17
-                }
-            ),
-            Some(b"\x1b[38:2:205:0:17m".to_vec())
-        );
-    }
-
-    // 5. `RGB`, which replaces nothing: the entry's own `setaf` receives the
-    //    PACKED pixel as one parameter.  20 of the 45 are `*-direct` entries in
-    //    this class.
-    if let Some(direct) = entry("xterm-direct", "") {
-        let colors = direct.colors.entry().expect("xterm-direct has op");
-        assert_eq!(
-            colors.ground_sequence(
-                ColorGround::Foreground,
-                TerminalColor::Direct {
-                    r: 205,
-                    g: 0,
-                    b: 17
-                }
-            ),
-            Some(b"\x1b[38:2::205:0:17m".to_vec()),
-            "xterm-direct's own setaf, given the packed pixel"
-        );
-    }
-
-    // The control, and the reason the 45 is not larger: on the entries this
-    // port is usually run under, the fixed rule and the entry AGREE, which is
-    // why nothing looked wrong.
-    if let Some(xterm) = entry("xterm-256color", "") {
-        let colors = xterm.colors.entry().expect("xterm-256color has op");
-        for (index, expected) in [
-            (0u16, "\x1b[30m"),
-            (7, "\x1b[37m"),
-            (8, "\x1b[90m"),
-            (15, "\x1b[97m"),
-            (100, "\x1b[38;5;100m"),
-        ] {
-            assert_eq!(
-                colors.ground_sequence(ColorGround::Foreground, TerminalColor::Indexed(index)),
-                Some(expected.as_bytes().to_vec()),
-                "index {index}"
-            );
-        }
     }
 }
 
-/// `me` and `ue` come from the entry, and the string GNU reads is the one
-/// TERMCAP answers -- not the `sgr0` `infocmp` prints.
-///
-/// The two differ and the difference is the whole reason this is measured
-/// rather than read off `infocmp`: `Eterm`'s terminfo `sgr0` is `\E[m\017`
-/// while `tgetstr ("me")` answers `\E[0m`, because ncurses' termcap layer
-/// trims the charset half.  A count taken over `sgr0` therefore prices the
-/// wrong string; the recomputed one, over the 927 reachable entries, is 460
-/// spelling `me` exactly `\E[0m`, 305 `\E[m`, 50 emitting nothing, and 112
-/// other bytes entirely (ledger 188, `tmp/pw188/mesweep.c`).
+/// The application must preserve native termcap normalization and custom
+/// reset bytes. Installed `linux` and `xterm` entries vary across ncurses releases.
 #[test]
+#[cfg(unix)]
 fn the_exit_attribute_string_is_the_entrys_own_me() {
-    if let Some(linux) = entry("linux", "") {
-        assert_eq!(
-            linux.exit_attribute_mode.as_deref(),
-            Some(b"\x1b[m\x0f".as_slice()),
-            "TERM=linux's `me` carries an SI, and GNU emits it"
-        );
-        assert_eq!(
-            linux.exit_underline_mode.as_deref(),
-            Some(b"\x1b[24m".as_slice())
-        );
+    if run_native_fixture_child() {
+        return;
     }
-    if let Some(xterm) = entry("xterm-256color", "") {
-        assert_eq!(
-            xterm.exit_attribute_mode.as_deref(),
-            Some(b"\x1b[0m".as_slice()),
-            "and on xterm-256color it really is \\E[0m -- 460 of 927 are"
-        );
-    }
+    let normalized = entry("neo-app-normalized-reset", "").unwrap();
+    assert_eq!(
+        normalized.exit_attribute_mode.as_deref(),
+        Some(b"\x1b[0m".as_slice()),
+        "native termcap strips the alternate-charset reset"
+    );
+    assert_eq!(
+        normalized.exit_underline_mode.as_deref(),
+        Some(b"\x1b[24m".as_slice())
+    );
+    let custom = entry("neo-app-custom-reset", "").unwrap();
+    assert_eq!(
+        custom.exit_attribute_mode.as_deref(),
+        Some(b"CUSTOM-RESET".as_slice())
+    );
+    assert_eq!(
+        custom.exit_underline_mode.as_deref(),
+        Some(b"UNDERLINE-OFF".as_slice())
+    );
 }
 
 /// GNU reads the whole colour block behind `if (tty->TS_orig_pair)` and
