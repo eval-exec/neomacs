@@ -68,7 +68,16 @@ fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
     assert_eq!(restored_modes.c_iflag, original_modes.c_iflag);
     assert_eq!(restored_modes.c_oflag, original_modes.c_oflag);
     assert_eq!(restored_modes.c_cflag, original_modes.c_cflag);
-    assert_eq!(restored_modes.c_lflag, original_modes.c_lflag);
+    // Darwin sets PENDIN when tcsetattr restores ICANON; it is pending-input
+    // state, not a mode that the application failed to restore (XNU tty.c).
+    #[cfg(target_os = "macos")]
+    let transient_flags = libc::PENDIN;
+    #[cfg(not(target_os = "macos"))]
+    let transient_flags = 0;
+    assert_eq!(
+        restored_modes.c_lflag & !transient_flags,
+        original_modes.c_lflag & !transient_flags
+    );
     assert_eq!(restored_modes.c_cc, original_modes.c_cc);
 }
 
