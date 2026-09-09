@@ -8,8 +8,8 @@
 
 pub mod clipboard;
 pub mod cursor;
-pub mod display_scale;
 pub mod display_identity;
+pub mod display_scale;
 pub mod dma_buf;
 pub mod effect_command;
 pub mod effect_config;
@@ -43,14 +43,15 @@ pub mod types;
 pub mod ui_types;
 pub mod visual_config;
 pub mod window_animation;
+pub mod window_chrome;
 pub mod xterm_palette;
 pub mod xwidget_extent;
 pub use glyph_matrix::*;
 pub mod tty_capabilities;
 
 pub use clipboard::*;
-pub use display_scale::*;
 pub use display_identity::*;
+pub use display_scale::*;
 pub use dma_buf::*;
 pub use effect_command::*;
 pub use effect_config::*;
@@ -63,6 +64,11 @@ pub use image::*;
 pub use interaction_projection::*;
 pub use popup_placement::*;
 pub use present_mapping::*;
+pub use window_chrome::*;
+
+#[cfg(test)]
+#[path = "window_chrome_test.rs"]
+mod window_chrome_test;
 pub use presented_frame::*;
 pub use presented_pointer::*;
 pub use scene::*;

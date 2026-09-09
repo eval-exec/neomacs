@@ -157,6 +157,14 @@ fn render_frame_window_contents_to_surface(
         FrameLifecycle::Active { native, .. } => native,
         _ => return Err(FrameRenderFailure::WindowNotReady),
     };
+    let surface_state = native.surface_state();
+    render.set_surface_state(surface_state);
+    if matches!(
+        surface_state,
+        neomacs_display_protocol::SurfaceState::Suspended
+    ) {
+        return Err(FrameRenderFailure::WindowNotReady);
+    }
     RenderApp::begin_fps_cpu_span(&mut render.overlays.fps);
     RenderApp::update_fps_counter(&mut render.overlays.fps, renderer.frame_sample());
     // Read the one bit the offscreen decision needs straight out of the
@@ -182,6 +190,24 @@ fn render_frame_window_contents_to_surface(
     let feature_plan =
         render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
 
+    // Validate and reserve the content target before acquisition and before
+    // advancing presentation motion. Obscured content is not drawable.
+    let native_mapping = render
+        .present_mapping()
+        .ok_or(FrameRenderFailure::AwaitingContent)?;
+    let content_surface = native_mapping
+        .surface()
+        .content_surface()
+        .ok_or(FrameRenderFailure::WindowNotReady)?;
+    let native_content =
+        composition_targets::native_content_target(renderer, render, native_mapping.surface())?;
+    let present_mapping = neomacs_display_protocol::PresentMapping::top_left_clip(
+        content_surface,
+        neomacs_display_protocol::PresentationExtent::new(
+            native_mapping.presentation(),
+            native_mapping.content_logical_size(),
+        ),
+    );
     let surface::AcquiredSurface { output, acquired } =
         surface::acquire_current_texture(&native.surface, device_lost, render.emacs_frame_id)?;
 
@@ -222,11 +248,9 @@ fn render_frame_window_contents_to_surface(
     // route to — the search reads every glyph in the frame.
     if !pane_blits.is_empty()
         && renderer.has_shader_surfaces()
-        && let Some((glyphs, point)) = render.glyph_hit_target(
-            render.emacs_frame_id,
-            render.mouse_pos.0,
-            render.mouse_pos.1,
-        )
+        && let Some((x, y)) =
+            render.root_frame_point_from_surface(render.mouse_pos.0, render.mouse_pos.1)
+        && let Some((glyphs, point)) = render.glyph_hit_target(render.emacs_frame_id, x, y)
         && let Some((surface_id, u, v)) =
             super::pointer_events::surface_glyph_hit_test(glyphs, point)
     {
@@ -241,9 +265,6 @@ fn render_frame_window_contents_to_surface(
     // running.
     let need_offscreen = feature_plan.compose_offscreen || !pane_blits.is_empty();
 
-    let present_mapping = render
-        .present_mapping()
-        .ok_or(FrameRenderFailure::AwaitingContent)?;
     let mut frame = render
         .take_current_frame_for_render(&acquired)
         .ok_or(FrameRenderFailure::AwaitingContent)?;
@@ -258,15 +279,34 @@ fn render_frame_window_contents_to_surface(
         );
     }
 
-    let surface_view = output
+    let native_surface_view = output
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
+    let surface_view = native_content
+        .as_ref()
+        .map_or_else(|| native_surface_view.clone(), |lease| lease.view().clone());
+    let native_placement = native_content
+        .as_ref()
+        .map(|content| {
+            neomacs_renderer_wgpu::renderer::NativeContentPlacement::new(
+                neomacs_renderer_wgpu::renderer::RenderTarget::new(
+                    &native_surface_view,
+                    native_mapping.surface(),
+                ),
+                content,
+            )
+        })
+        .transpose()
+        .map_err(|error| {
+            tracing::error!(?error, "native content placement rejected");
+            FrameRenderFailure::WindowNotReady
+        })?;
     // Full-frame post shader: compose the ENTIRE frame (content,
     // transitions, overlays, cursor) into an intermediate texture and
     // shade it into the swapchain as the LAST step, so every present is
     // uniformly post-processed (Ghostty semantics — cursor included) and
     // partial-damage frames cannot mix shaded and unshaded regions.
-    let surface_size = SnapshotSize::new(native.width, native.height);
+    let surface_size = SnapshotSize::new(native.content_size().0, native.content_size().1);
     let frame_post_src = feature_plan
         .apply_frame_post
         .then(|| {
@@ -280,7 +320,7 @@ fn render_frame_window_contents_to_surface(
     let old_width = renderer.width();
     let old_height = renderer.height();
     renderer.set_scale_factor(native.scale_factor as f32);
-    renderer.resize(native.width, native.height);
+    renderer.resize(native.content_size().0, native.content_size().1);
     let cursor_visible = render.cursor.blink_on;
     composition_targets::report_unpooled_gpu_textures(renderer, render);
 
@@ -301,7 +341,9 @@ fn render_frame_window_contents_to_surface(
     // value. The scroll-bar highlight takes the *projected* answer rather than
     // this raw position — the two differ whenever a pane is in motion, which is
     // the bug that put the highlight on the wrong thumb.
-    let mouse_pos = render.mouse_pos;
+    let mouse_pos = render
+        .root_frame_point_from_surface(render.mouse_pos.0, render.mouse_pos.1)
+        .unwrap_or((-1.0, -1.0));
     if retained_static::is_eligible(compositor_only_hint, &pane_blits, render) {
         let hovered_scroll_bar = render.hovered_scroll_bar(&frame);
         retained_static::draw(
@@ -318,12 +360,15 @@ fn render_frame_window_contents_to_surface(
             renderer.frame_post_to_view(
                 &composition_view,
                 &surface_view,
-                native.width,
-                native.height,
+                native.content_size().0,
+                native.content_size().1,
                 mouse_pos,
             );
         }
         render.finish_pointer_paint_render();
+        if let Some(placement) = native_placement {
+            renderer.place_native_content(placement, frame.background);
+        }
         renderer.set_scale_factor(old_scale_factor);
         renderer.resize(old_width, old_height);
         // Forwarded, not discarded. Eligibility requires only that this frame
@@ -378,12 +423,15 @@ fn render_frame_window_contents_to_surface(
         renderer.frame_post_to_view(
             &composition_view,
             &surface_view,
-            native.width,
-            native.height,
-            render.mouse_pos,
+            native.content_size().0,
+            native.content_size().1,
+            mouse_pos,
         );
     }
     render.finish_pointer_paint_render();
+    if let Some(placement) = native_placement {
+        renderer.place_native_content(placement, frame.background);
+    }
     renderer.set_scale_factor(old_scale_factor);
     renderer.resize(old_width, old_height);
     Ok(RenderedFrameSurface {

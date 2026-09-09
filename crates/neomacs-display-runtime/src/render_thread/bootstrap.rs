@@ -207,6 +207,8 @@ impl RenderApp {
 
         self.frame_windows
             .populate_primary_native(GuiFrameNativeWindowState {
+                window_chrome: Default::default(),
+                content_insets: Default::default(),
                 window,
                 surface,
                 surface_config: config,
@@ -219,6 +221,20 @@ impl RenderApp {
                 },
             });
 
+        if let Some(state) = self.frame_windows.primary_window()
+            && let FrameLifecycle::Active { native, .. } = &state.lifecycle
+            && native.content_insets() != Default::default()
+        {
+            let (width, height) = native.content_size();
+            let (width, height) =
+                super::state::emacs_pixels_from_window_size(width, height, native.scale_factor);
+            self.comms.send_input(InputEvent::WindowResize {
+                width,
+                height,
+                scale_factor: native.scale_factor,
+                emacs_frame_id: state.render.emacs_frame_id,
+            });
+        }
         self.frame_windows
             .primary_window_mut()
             .unwrap()

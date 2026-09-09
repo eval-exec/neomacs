@@ -330,6 +330,46 @@ fn suspended_surface_cannot_retain_a_drawable_present_mapping() {
     assert!(render.present_mapping().is_none());
 }
 
+#[test]
+fn zero_size_observation_stays_suspended_after_scale_refresh() {
+    let mut window = GuiFrameWindowState {
+        lifecycle: FrameLifecycle::Pending {
+            width: 800,
+            height: 600,
+            scale_factor: 1.0,
+            mouse_hidden_for_typing: false,
+            ime_enabled: false,
+            last_ime_cursor_area: None,
+            chrome: Default::default(),
+            geometry_hints: None,
+        },
+        render: GuiFrameRenderState::new_without_device(
+            42,
+            false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        ),
+    };
+    window.render.set_current_frame(
+        Some(FrameGlyphBuffer::with_size(800.0, 600.0)),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    assert!(matches!(
+        window.observe_surface_size(800, 600),
+        SurfaceState::Drawable(_)
+    ));
+    assert_eq!(window.observe_surface_size(0, 600), SurfaceState::Suspended);
+    assert_eq!(window.lifecycle.native_size(), (0, 600));
+    window.set_scale_factor(2.0);
+    assert!(window.render.present_mapping().is_none());
+    assert!(matches!(
+        window.observe_surface_size(800, 600),
+        SurfaceState::Drawable(_)
+    ));
+    assert!(window.render.present_mapping().is_some());
+}
+
 fn set_parent_offset(frame: &mut FrameGlyphBuffer, x: f32, y: f32) {
     let placement = frame.frame_placement;
     frame.frame_placement = neomacs_display_protocol::PresentedFramePlacement::new(
@@ -1785,13 +1825,22 @@ fn scroll_bar_pane_displaced_by_200px(
     InteractionProjection::new(presentation, vec![pane])
 }
 
-fn render_at_pointer(x: f32, y: f32) -> GuiFrameRenderState {
+fn render_at_pointer(frame: &FrameGlyphBuffer, x: f32, y: f32) -> GuiFrameRenderState {
     let mut render = GuiFrameRenderState::new_without_device(
         0x42,
         false,
         neomacs_display_protocol::frame_time::observe_platform_now(),
     );
     render.set_mouse_pos((x, y));
+    render.set_surface_state(
+        SurfaceState::from_device_size(800, 600, DeviceScale::new(1.0).unwrap()).unwrap(),
+    );
+    render.set_current_frame(
+        Some(frame.clone()),
+        None,
+        Default::default(),
+        Default::default(),
+    );
     render
 }
 
@@ -1804,7 +1853,7 @@ fn the_scroll_bar_a_pointer_highlights_is_the_one_drawn_under_it_while_its_pane_
     // settled frames where the projection is the identity.
     let presentation = neomacs_display_protocol::PresentationId::new(11);
     let frame = frame_with_two_scroll_bars(presentation);
-    let mut render = render_at_pointer(250.0, 40.0);
+    let mut render = render_at_pointer(&frame, 250.0, 40.0);
     render.compositor.interaction = Some(scroll_bar_pane_displaced_by_200px(presentation));
 
     assert_eq!(
@@ -1823,7 +1872,7 @@ fn a_settled_frame_highlights_the_scroll_bar_at_the_pointers_own_coordinates() {
     // nothing is moving, which is every frame outside a layout morph.
     let presentation = neomacs_display_protocol::PresentationId::new(11);
     let frame = frame_with_two_scroll_bars(presentation);
-    let render = render_at_pointer(250.0, 40.0);
+    let render = render_at_pointer(&frame, 250.0, 40.0);
 
     assert_eq!(
         render.hovered_scroll_bar(&frame),
@@ -1841,7 +1890,7 @@ fn a_pointer_outside_every_scroll_bar_highlights_none_of_them() {
     // frame would match a "no bar" answer and light up at once.
     let presentation = neomacs_display_protocol::PresentationId::new(11);
     let frame = frame_with_two_scroll_bars(presentation);
-    let render = render_at_pointer(150.0, 40.0);
+    let render = render_at_pointer(&frame, 150.0, 40.0);
 
     assert_eq!(render.hovered_scroll_bar(&frame), None);
 }

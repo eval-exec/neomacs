@@ -1,5 +1,5 @@
-pub mod pure;
 mod config;
+pub mod pure;
 
 #[cfg(test)]
 mod tests;

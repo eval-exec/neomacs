@@ -74,7 +74,7 @@ pub(super) fn draw(
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
     toolbar: &ToolbarResources,
 ) {
-    let (width, height) = (native.width, native.height);
+    let (width, height) = (native.content_size().0, native.content_size().1);
     let native_chrome = &native.chrome;
     let titlebar_background = (frame.background.r, frame.background.g, frame.background.b);
 

@@ -29,7 +29,7 @@ mod dynamic_buffer;
 pub use draw::DrawContext;
 mod paint;
 mod target;
-pub use target::RenderTarget;
+pub use target::{NativeContentPlacement, NativePlacementError, RenderTarget};
 mod effect_common;
 mod effects_state;
 mod frame_pass;
@@ -653,43 +653,48 @@ impl WgpuRenderer {
             });
 
         // Create image pipeline (similar to glyph but for RGBA textures)
-        let image_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Image Pipeline"),
-            layout: Some(&image_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &image_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(GlyphVertex::desc())], // Reuse glyph vertex format
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &image_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            cache: None,
-            multiview_mask: None,
-        });
+        let make_image_pipeline = |blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Image Pipeline"),
+                layout: Some(&image_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &image_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(GlyphVertex::desc())], // Reuse glyph vertex format
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &image_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target_format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                cache: None,
+                multiview_mask: None,
+            })
+        };
+
+        let image_pipeline = make_image_pipeline(Some(wgpu::BlendState::ALPHA_BLENDING));
+        let surface_copy_pipeline = make_image_pipeline(None);
 
         #[cfg(feature = "video")]
         let bi_planar_video_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1131,6 +1136,7 @@ impl WgpuRenderer {
                 glyph: glyph_pipeline,
                 subpixel_glyph: subpixel_glyph_pipeline,
                 image: image_pipeline,
+                surface_copy: surface_copy_pipeline,
                 #[cfg(feature = "video")]
                 bi_planar_video: bi_planar_video_pipeline,
                 #[cfg(feature = "video")]

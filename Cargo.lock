@@ -3731,6 +3731,8 @@ dependencies = [
  "neomacs-video-model",
  "neomacs-webview",
  "neovm-core",
+ "objc2",
+ "objc2-app-kit",
  "parking_lot",
  "pollster",
  "portable-pty",

@@ -80,7 +80,8 @@ pub(super) fn draw(
     cursor_visible: bool,
     hovered_scroll_bar: Option<neomacs_display_protocol::ScrollBarIdentity>,
 ) {
-    let Some(native_size) = SnapshotSize::new(native.width, native.height) else {
+    let Some(native_size) = SnapshotSize::new(native.content_size().0, native.content_size().1)
+    else {
         // wgpu rejects a zero extent, so there is no scene to retain and
         // nothing to composite from. Reaching this would mean the window was
         // asked to draw at a size `resize` already refuses to configure.

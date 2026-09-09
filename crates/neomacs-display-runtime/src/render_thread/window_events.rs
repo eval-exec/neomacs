@@ -170,8 +170,9 @@ impl RenderApp {
                         ws.render.mark_dirty();
                     }
                     let scale_factor = ws.scale_factor();
+                    let (content_width, content_height) = ws.content_size();
                     let (emacs_w, emacs_h) =
-                        emacs_pixels_from_window_size(size.width, size.height, scale_factor);
+                        emacs_pixels_from_window_size(content_width, content_height, scale_factor);
                     self.comms.send_input(InputEvent::WindowResize {
                         width: emacs_w,
                         height: emacs_h,
@@ -682,7 +683,7 @@ impl RenderApp {
                     if is_primary && let Some(ref mut renderer) = self.renderer {
                         renderer.set_scale_factor(effective_scale as f32);
                     }
-                    let (native_width, native_height) = ws.native_size();
+                    let (native_width, native_height) = ws.content_size();
                     let (width, height) =
                         emacs_pixels_from_window_size(native_width, native_height, effective_scale);
                     self.comms.send_input(InputEvent::WindowResize {

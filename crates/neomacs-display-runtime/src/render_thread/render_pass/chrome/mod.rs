@@ -71,28 +71,34 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
     );
 
     frame_bands::draw(renderer, native, render, surface_view, frame, toolbar);
-    transient_overlays::draw_panels(renderer, render, surface_view, native.width, native.height);
+    transient_overlays::draw_panels(
+        renderer,
+        render,
+        surface_view,
+        native.content_size().0,
+        native.content_size().1,
+    );
     transient_overlays::draw_visual_bell(
         renderer,
         render,
         surface_view,
-        native.width,
-        native.height,
+        native.content_size().0,
+        native.content_size().1,
     );
     frame_bands::draw_corner_mask(
         renderer,
         surface_view,
         &native.chrome,
-        native.width,
-        native.height,
+        native.content_size().0,
+        native.content_size().1,
     );
     transient_overlays::draw_fps(
         renderer,
         render,
         surface_view,
         frame,
-        native.width,
-        native.height,
+        native.content_size().0,
+        native.content_size().1,
     );
     transient_overlays::draw_typing_speed(renderer, render, surface_view, frame);
 }

@@ -21,10 +21,20 @@ impl RenderApp {
         };
 
         let scale_factor = window_state.scale_factor();
+        let (x, y) = window_state
+            .render
+            .surface_point_from_frame(
+                target.x + ime_off_x as f32,
+                target.y + target.height + ime_off_y as f32,
+            )
+            .unwrap_or((
+                target.x + ime_off_x as f32,
+                target.y + target.height + ime_off_y as f32,
+            ));
 
         ImeCursorArea {
-            x: ((target.x as f64 + ime_off_x) * scale_factor).round() as i32,
-            y: ((target.y as f64 + target.height as f64 + ime_off_y) * scale_factor).round() as i32,
+            x: (x as f64 * scale_factor).round() as i32,
+            y: (y as f64 * scale_factor).round() as i32,
             width: ((target.width as f64 * scale_factor).max(1.0)).round() as u32,
             height: ((target.height as f64 * scale_factor).max(1.0)).round() as u32,
         }
@@ -32,32 +42,10 @@ impl RenderApp {
 
     /// Compute physical IME cursor rectangle for the current cursor target.
     pub(super) fn ime_cursor_area_for_target(&self, target: &CursorTarget) -> ImeCursorArea {
-        // If cursor is in a child frame, offset by the child's absolute position.
-        let (ime_off_x, ime_off_y) = if target.frame_id != 0 {
-            self.frame_windows
-                .primary_window()
-                .expect("primary child frames")
-                .render
-                .compositor
-                .child_frames
-                .frames
-                .get(&target.frame_id)
-                .map(|e| (e.abs_x as f64, e.abs_y as f64))
-                .unwrap_or((0.0, 0.0))
-        } else {
-            (0.0, 0.0)
-        };
-        let scale_factor = self
-            .frame_windows
-            .primary_window()
-            .map_or(1.0, |ws| ws.scale_factor());
-
-        ImeCursorArea {
-            x: ((target.x as f64 + ime_off_x) * scale_factor).round() as i32,
-            y: ((target.y as f64 + target.height as f64 + ime_off_y) * scale_factor).round() as i32,
-            width: ((target.width as f64 * scale_factor).max(1.0)).round() as u32,
-            height: ((target.height as f64 * scale_factor).max(1.0)).round() as u32,
-        }
+        Self::ime_cursor_area_for_window_target(
+            self.frame_windows.primary_window().expect("primary frame"),
+            target,
+        )
     }
 
     /// Update IME cursor area only when IME is active and the rectangle changed.

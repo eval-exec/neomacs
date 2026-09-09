@@ -61,6 +61,20 @@ impl RenderApp {
         let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) else {
             return PresentResult::Timeout;
         };
+        if let Some((width, height)) = window_state.synchronize_window_chrome() {
+            let (width, height) = crate::render_thread::state::emacs_pixels_from_window_size(
+                width,
+                height,
+                window_state.scale_factor(),
+            );
+            self.comms
+                .send_input(crate::thread_comm::InputEvent::WindowResize {
+                    emacs_frame_id,
+                    width,
+                    height,
+                    scale_factor: window_state.scale_factor(),
+                });
+        }
         #[cfg(feature = "video")]
         renderer.begin_video_surface_render();
         window_state

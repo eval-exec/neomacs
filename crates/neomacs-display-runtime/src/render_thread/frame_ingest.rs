@@ -79,7 +79,7 @@ fn collect_frame_webviews(
 ///
 /// The glyph walk in `collect_frame_webviews` is a function of the presented
 /// root frame, the presented child frames with their placement and clip, and
-/// the device scale -- nothing else.  Redisplay replaces a presentation
+/// the native presentation mapping and device scale. Redisplay replaces a presentation
 /// wholesale (a new `PresentationId`), so equal inputs mean equal glyphs and
 /// the walk can be skipped; that is what makes an idle session with one web
 /// view stop paying O(glyphs) per pass.
@@ -93,6 +93,7 @@ pub(super) struct WebViewPlacementInputs {
         f32,
     )>,
     scale: f32,
+    mapping: Option<neomacs_display_protocol::PresentMapping>,
     /// Child frames in renderer z-order: id, presentation, absolute offset,
     /// clip in root.
     children: Vec<(
@@ -167,17 +168,29 @@ impl RenderApp {
         else {
             return Vec::new();
         };
-        let Ok(root_clip) =
-            neomacs_display_protocol::RootSurfaceRect::new(0.0, 0.0, root.width, root.height)
-        else {
+        let Some(mapping) = render.present_mapping() else {
+            return Vec::new();
+        };
+        let Some(root_clip) = mapping.visible_content_rect() else {
+            return Vec::new();
+        };
+        let offset_x = root_clip.x();
+        let offset_y = root_clip.y();
+        // Child clips are expressed in the editor's root scene; native
+        // placements additionally include the occupied native chrome area.
+        let Ok(scene_to_native) = neomacs_display_protocol::SpaceTranslation::<
+            neomacs_display_protocol::RootSurfaceSpace,
+            neomacs_display_protocol::RootSurfaceSpace,
+            neomacs_display_protocol::LogicalPixels,
+        >::from_px(offset_x, offset_y) else {
             return Vec::new();
         };
         let mut occurrence = 0;
         let mut placements = std::collections::HashMap::new();
         collect_frame_webviews(
             root,
-            0.0,
-            0.0,
+            offset_x,
+            offset_y,
             root_clip,
             scale,
             &mut occurrence,
@@ -191,10 +204,16 @@ impl RenderApp {
                 neomacs_display_protocol::PresentedClip::Empty => continue,
                 neomacs_display_protocol::PresentedClip::Rect(clip) => clip,
             };
+            let Ok(clip) = scene_to_native.map_rect(clip) else {
+                continue;
+            };
+            let Ok(Some(clip)) = clip.try_intersection(root_clip) else {
+                continue;
+            };
             collect_frame_webviews(
                 &entry.frame,
-                entry.abs_x,
-                entry.abs_y,
+                entry.abs_x + offset_x,
+                entry.abs_y + offset_y,
                 clip,
                 scale,
                 &mut occurrence,
@@ -235,6 +254,7 @@ impl RenderApp {
         WebViewPlacementInputs {
             root,
             scale: window_state.scale_factor() as f32,
+            mapping: render.present_mapping(),
             children,
         }
     }

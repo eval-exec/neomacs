@@ -36,6 +36,23 @@ impl RenderApp {
                 });
                 if let Some(owner) = owner {
                     if let Some(parent) = owner.window() {
+                        let anchor = placement.anchor();
+                        let Some((x, y)) =
+                            owner.render.surface_point_from_frame(anchor.x, anchor.y)
+                        else {
+                            self.comms
+                                .send_input(crate::thread_comm::InputEvent::MenuSelection {
+                                    index: -1,
+                                    token: Some(token),
+                                });
+                            return;
+                        };
+                        let placement = neomacs_display_protocol::PopupPlacement::new(
+                            neomacs_display_protocol::Rect::new(x, y, anchor.width, anchor.height),
+                            placement.preferred_side(),
+                            placement.offset(),
+                            placement.constraint(),
+                        );
                         let (fs, lh, cw) = owner.render.font_metrics();
                         let mut session =
                             crate::menus::MenuSession::new(0.0, 0.0, items, title, fs, lh, cw);

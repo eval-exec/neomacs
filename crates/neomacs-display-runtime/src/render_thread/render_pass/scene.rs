@@ -106,8 +106,8 @@ pub(super) fn render_frame_content_overlays(
                     child_entry.abs_y,
                     clip_in_root,
                     render.compositor.glyph_atlas.as_mut().unwrap(),
-                    native.width,
-                    native.height,
+                    native.content_size().0,
+                    native.content_size().1,
                     cursor_visible,
                     animated_cursor.filter(|ac| ac.frame_id == DisplayFrameId::new(child_id)),
                     child_frame_style.corner_radius,
@@ -139,8 +139,8 @@ pub(super) fn render_frame_content_overlays(
             surface_view,
             frame,
             render.compositor.glyph_atlas.as_mut().unwrap(),
-            native.width,
-            native.height,
+            native.content_size().0,
+            native.content_size().1,
             scroll_indicators_enabled,
         );
     });

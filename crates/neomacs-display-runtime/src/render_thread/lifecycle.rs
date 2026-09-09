@@ -148,6 +148,8 @@ impl RenderApp {
                 .with_surface_size(window_size_from_emacs_pixels(width, height))
                 .with_decorations(decorations_enabled)
                 .with_transparent(true);
+            let attrs =
+                crate::window_chrome::WindowChromeController::prepare(attrs, decorations_enabled);
             let attrs = crate::window_identity::apply_platform_window_identity(attrs, event_loop);
 
             tracing::info!(
@@ -318,6 +320,7 @@ impl RenderApp {
             }
             self.frame_windows.process_creates(
                 event_loop,
+                &self.comms,
                 &mut self.window_icon,
                 &gpu.instance,
                 &gpu.device,

@@ -16,8 +16,8 @@
 pub mod backend;
 pub(crate) mod clipboard;
 pub mod core;
-pub mod display_scale;
 pub mod display_identity;
+pub mod display_scale;
 pub mod macos_bundle_runtime;
 mod menus;
 mod presentation;
@@ -27,6 +27,7 @@ mod tooltips;
 pub mod tty_input;
 #[cfg(target_os = "linux")]
 mod wayland_toplevel_icon;
+mod window_chrome;
 mod window_icon;
 mod window_identity;
 

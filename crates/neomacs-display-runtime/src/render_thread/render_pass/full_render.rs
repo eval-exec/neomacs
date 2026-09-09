@@ -87,8 +87,8 @@ pub(super) fn through_composition_ring(
             previous.as_ref(),
             composition_view,
             (
-                native.width as f32 / native.scale_factor as f32,
-                native.height as f32 / native.scale_factor as f32,
+                native.content_size().0 as f32 / native.scale_factor as f32,
+                native.content_size().1 as f32 / native.scale_factor as f32,
             ),
             pane_blits,
         );
@@ -97,8 +97,8 @@ pub(super) fn through_composition_ring(
         renderer,
         &mut render.compositor.transitions,
         composition_view,
-        native.width,
-        native.height,
+        native.content_size().0,
+        native.content_size().1,
     );
     if render.compositor.transitions.has_active() {
         render.mark_dirty();

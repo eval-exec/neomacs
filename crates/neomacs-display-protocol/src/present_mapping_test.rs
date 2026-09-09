@@ -108,3 +108,53 @@ fn mapping_types_keep_frame_device_and_root_surface_spaces_distinct() {
     let _: crate::GeometryRect<RootSurfaceSpace, LogicalPixels> =
         mapping.visible_content_rect().unwrap();
 }
+
+#[test]
+fn native_titlebar_reserves_surface_space_without_scaling_editor_coordinates() {
+    let surface =
+        drawable(1600, 1200, 2.0).with_content_insets(crate::ContentInsets::new(0, 56, 0, 0));
+    let mapping = PresentMapping::top_left_clip(surface, content(13, 800.0, 600.0));
+    let visible = mapping.visible_content_rect().unwrap();
+    assert_eq!(
+        (visible.x(), visible.y(), visible.width(), visible.height()),
+        (0.0, 28.0, 800.0, 572.0)
+    );
+    let point = mapping
+        .device_from_frame(PresentedFramePoint::from_px(10.0, 20.0).unwrap())
+        .unwrap();
+    assert_eq!((point.x(), point.y()), (20.0, 96.0));
+    let round_trip = mapping.frame_from_device(point).unwrap();
+    assert_eq!((round_trip.x(), round_trip.y()), (10.0, 20.0));
+    assert!(
+        mapping
+            .frame_from_device(DeviceSurfacePoint::from_px(20.0, 40.0).unwrap())
+            .is_none()
+    );
+}
+
+#[test]
+fn native_content_viewport_handles_fullscreen_and_oversized_insets() {
+    let content = content(15, 800.0, 600.0);
+    let surface = drawable(1600, 1200, 2.0);
+    let covered = surface.with_content_insets(crate::ContentInsets::new(0, u32::MAX, 0, 0));
+    assert!(covered.content_surface().is_none());
+    assert!(
+        PresentMapping::top_left_clip(covered, content)
+            .visible_content_rect()
+            .is_none()
+    );
+    let fullscreen = PresentMapping::top_left_clip(surface, content);
+    assert_eq!(fullscreen.visible_content_rect().unwrap().height(), 600.0);
+}
+
+#[test]
+fn native_viewport_maps_popup_and_ime_origins_using_the_same_transform() {
+    let surface =
+        drawable(1000, 800, 1.25).with_content_insets(crate::ContentInsets::new(5, 35, 0, 0));
+    let mapping = PresentMapping::top_left_clip(surface, content(16, 700.0, 600.0));
+    let frame = PresentedFramePoint::from_px(80.0, 100.0).unwrap();
+    let root = mapping.surface_from_frame(frame).unwrap();
+    assert_eq!((root.x(), root.y()), (84.0, 128.0));
+    let ime = mapping.device_from_frame(frame).unwrap();
+    assert_eq!((ime.x(), ime.y()), (105.0, 160.0));
+}

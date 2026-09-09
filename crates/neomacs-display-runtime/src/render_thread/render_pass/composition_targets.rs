@@ -20,6 +20,36 @@ use neomacs_renderer_wgpu::{
     WgpuRenderer,
 };
 
+/// Overlay chrome needs a real content target; allocation failure must not
+/// silently place editor pixels beneath native controls.
+pub(super) fn native_content_target(
+    renderer: &mut WgpuRenderer,
+    render: &mut GuiFrameRenderState,
+    surface: neomacs_display_protocol::DrawableSurface,
+) -> Result<Option<SnapshotLease>, super::surface::FrameRenderFailure> {
+    if surface.content_insets() == Default::default() {
+        render.native_content_src = None;
+        return Ok(None);
+    }
+    let content = surface
+        .content_surface()
+        .ok_or(super::surface::FrameRenderFailure::WindowNotReady)?;
+    let size =
+        SnapshotSize::new(content.device_width().get(), content.device_height().get()).unwrap();
+    if !render
+        .native_content_src
+        .as_ref()
+        .is_some_and(|lease| lease.size() == size)
+    {
+        render.native_content_src = None;
+        render.native_content_src = Some(renderer.acquire_snapshot(size).map_err(|exceeded| {
+            note_refused_full_frame_texture(&exceeded, "native content viewport");
+            super::surface::FrameRenderFailure::WindowNotReady
+        })?);
+    }
+    Ok(render.native_content_src.clone())
+}
+
 /// Lease the intermediate composition texture for the full-frame post
 /// shader at the window's physical size; returns its view.
 ///

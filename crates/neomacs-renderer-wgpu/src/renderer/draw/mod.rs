@@ -13,6 +13,22 @@ pub struct DrawContext<'r, 't> {
 }
 
 impl WgpuRenderer {
+    /// Copy an already-validated composition into the native content viewport.
+    /// No scaling, alpha blending, or native-window calls occur here.
+    pub fn place_native_content(
+        &mut self,
+        placement: super::NativeContentPlacement<'_>,
+        background: neomacs_display_protocol::Color,
+    ) {
+        let draw = self.begin_draw(placement.target);
+        draw.renderer.paint_blit(
+            draw.target,
+            &draw.parameters,
+            placement.source.bind_group(),
+            super::paint::BlitPlacement::NativeContent(background),
+        );
+    }
+
     pub fn begin_draw<'r, 't>(&'r mut self, target: RenderTarget<'t>) -> DrawContext<'r, 't> {
         assert_eq!(
             target.view.texture().format(),
@@ -40,7 +56,11 @@ impl DrawContext<'_, '_> {
     }
 
     pub fn blit_retained(&mut self, source: &wgpu::BindGroup) {
-        self.renderer
-            .paint_blit(self.target, &self.parameters, source);
+        self.renderer.paint_blit(
+            self.target,
+            &self.parameters,
+            source,
+            super::paint::BlitPlacement::Retained,
+        );
     }
 }

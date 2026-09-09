@@ -48,6 +48,34 @@ pub enum DeviceSurfaceSpace {}
 pub type DeviceSurfacePoint = GeometryPoint<DeviceSurfaceSpace, DevicePixels>;
 pub type PresentedFramePoint = GeometryPoint<FrameSpace, LogicalPixels>;
 
+/// Native occupied space, in physical pixels. Insets are clamped to each
+/// observed surface: transient fullscreen/resize observations may exceed it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContentInsets {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+}
+
+impl ContentInsets {
+    pub const fn new(left: u32, top: u32, right: u32, bottom: u32) -> Self {
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    pub fn content_size(self, width: u32, height: u32) -> (u32, u32) {
+        (
+            width.saturating_sub(self.left).saturating_sub(self.right),
+            height.saturating_sub(self.top).saturating_sub(self.bottom),
+        )
+    }
+}
+
 impl DeviceSurfacePoint {
     pub fn from_px(x: f32, y: f32) -> Result<Self, GeometryError> {
         Self::try_from_units(DevicePixels::new(x)?, DevicePixels::new(y)?)
@@ -71,6 +99,7 @@ pub struct DrawableSurface {
     device_height: NonZeroU32,
     device_scale: DeviceScale,
     logical_size: GeometrySize<LogicalPixels>,
+    content_insets: ContentInsets,
 }
 
 impl DrawableSurface {
@@ -88,6 +117,7 @@ impl DrawableSurface {
             device_height,
             device_scale,
             logical_size,
+            content_insets: ContentInsets::default(),
         })
     }
 
@@ -109,6 +139,38 @@ impl DrawableSurface {
     #[must_use]
     pub const fn logical_size(self) -> GeometrySize<LogicalPixels> {
         self.logical_size
+    }
+
+    #[must_use]
+    pub fn with_content_insets(mut self, insets: ContentInsets) -> Self {
+        self.content_insets = ContentInsets {
+            left: insets.left.min(self.device_width().get()),
+            top: insets.top.min(self.device_height().get()),
+            right: insets
+                .right
+                .min(self.device_width().get().saturating_sub(insets.left)),
+            bottom: insets
+                .bottom
+                .min(self.device_height().get().saturating_sub(insets.top)),
+        };
+        self
+    }
+
+    pub const fn content_insets(self) -> ContentInsets {
+        self.content_insets
+    }
+
+    /// Unobscured editor target, without the native-surface offset.
+    pub fn content_surface(self) -> Option<Self> {
+        let (width, height) = self
+            .content_insets
+            .content_size(self.device_width().get(), self.device_height().get());
+        Self::new(
+            NonZeroU32::new(width)?,
+            NonZeroU32::new(height)?,
+            self.device_scale,
+        )
+        .ok()
     }
 }
 
@@ -176,16 +238,24 @@ pub struct PresentMapping {
 impl PresentMapping {
     #[must_use]
     pub fn top_left_clip(surface: DrawableSurface, content: PresentationExtent) -> Self {
-        let surface_size = surface.logical_size();
+        let (width, height) = surface
+            .content_insets
+            .content_size(surface.device_width().get(), surface.device_height().get());
+        let scale = surface.device_scale().get();
         let content_size = content.logical_size();
-        let width = surface_size.width().min(content_size.width());
-        let height = surface_size.height().min(content_size.height());
+        let width = (width as f32 / scale).min(content_size.width());
+        let height = (height as f32 / scale).min(content_size.height());
         let visible_content = if width == 0.0 || height == 0.0 {
             None
         } else {
             Some(
-                GeometryRect::<RootSurfaceSpace, LogicalPixels>::new(0.0, 0.0, width, height)
-                    .expect("minimums of validated extents remain valid geometry"),
+                GeometryRect::<RootSurfaceSpace, LogicalPixels>::new(
+                    surface.content_insets.left as f32 / scale,
+                    surface.content_insets.top as f32 / scale,
+                    width,
+                    height,
+                )
+                .expect("minimums of validated extents remain valid geometry"),
             )
         };
         Self {
@@ -227,7 +297,10 @@ impl PresentMapping {
         point: PresentedFramePoint,
     ) -> Result<DeviceSurfacePoint, GeometryError> {
         let scale = self.surface.device_scale().get();
-        DeviceSurfacePoint::from_px(point.x() * scale, point.y() * scale)
+        DeviceSurfacePoint::from_px(
+            point.x() * scale + self.surface.content_insets.left as f32,
+            point.y() * scale + self.surface.content_insets.top as f32,
+        )
     }
 
     #[must_use]
@@ -239,6 +312,18 @@ impl PresentMapping {
         )
         .ok()?;
         self.frame_from_surface(surface_point)
+    }
+
+    pub fn surface_from_frame(
+        self,
+        point: PresentedFramePoint,
+    ) -> Result<GeometryPoint<RootSurfaceSpace, LogicalPixels>, GeometryError> {
+        let device = self.device_from_frame(point)?;
+        let scale = self.surface.device_scale().get();
+        GeometryPoint::<RootSurfaceSpace, LogicalPixels>::from_px(
+            device.x() / scale,
+            device.y() / scale,
+        )
     }
 
     #[must_use]

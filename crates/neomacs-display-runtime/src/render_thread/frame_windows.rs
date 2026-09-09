@@ -42,6 +42,8 @@ const TITLEBAR_DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration:
 
 /// Native window/surface state for a top-level GUI frame.
 pub(crate) struct GuiFrameNativeWindowState {
+    pub(super) window_chrome: crate::window_chrome::WindowChromeController,
+    pub(super) content_insets: neomacs_display_protocol::ContentInsets,
     pub window: Arc<dyn Window>,
     pub surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
@@ -50,6 +52,38 @@ pub(crate) struct GuiFrameNativeWindowState {
     pub scale_factor: f64,
     /// Borderless native-window chrome state for this frame window.
     pub(super) chrome: WindowChrome,
+}
+
+impl GuiFrameNativeWindowState {
+    pub(super) fn content_insets(&self) -> neomacs_display_protocol::ContentInsets {
+        self.content_insets
+    }
+
+    pub(super) fn refresh_content_geometry(&mut self) {
+        self.content_insets = crate::window_chrome::WindowChromeController::insets(
+            self.window.as_ref(),
+            self.chrome.decorations_enabled,
+        );
+    }
+
+    pub(super) fn content_size(&self) -> (u32, u32) {
+        self.content_insets().content_size(self.width, self.height)
+    }
+
+    pub(super) fn surface_state(&self) -> SurfaceState {
+        match SurfaceState::from_device_size(
+            self.width,
+            self.height,
+            DeviceScale::new(self.scale_factor as f32).expect("validated native scale"),
+        )
+        .expect("validated native surface")
+        {
+            SurfaceState::Drawable(surface) => {
+                SurfaceState::Drawable(surface.with_content_insets(self.content_insets()))
+            }
+            SurfaceState::Suspended => SurfaceState::Suspended,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +213,7 @@ pub(crate) struct GuiFrameRenderState {
     /// installed: the whole frame renders here, then the post pass shades it
     /// into the swapchain as the final step. Recreated on resize.
     pub(super) frame_post_src: Option<neomacs_renderer_wgpu::SnapshotLease>,
+    pub(super) native_content_src: Option<neomacs_renderer_wgpu::SnapshotLease>,
     /// The current native input-method composition, if any.
     ///
     /// `Option` is the active-state invariant: a preedit cannot be "active"
@@ -187,7 +222,7 @@ pub(crate) struct GuiFrameRenderState {
     pub(super) input_method: InputMethodState,
     /// Text cursor animation and blink state for this frame window.
     pub(super) cursor: CursorState,
-    /// Last known pointer position in this frame's logical coordinates.
+    /// Last known pointer position in native root-surface logical coordinates.
     pub mouse_pos: (f32, f32),
     /// Whether the native window currently owns the pointer. The last position
     /// remains useful for input coordinates after leave, but must not reactivate
@@ -390,6 +425,7 @@ impl GuiFrameRenderState {
                 idle_dim: IdleDimState::new(at),
             },
             frame_post_src: None,
+            native_content_src: None,
             input_method: InputMethodState::default(),
             cursor: CursorState::new(at),
             mouse_pos: (0.0, 0.0),
@@ -453,6 +489,12 @@ impl GuiFrameRenderState {
         self.present_mapping()?
             .frame_from_surface(surface_point)
             .map(|point| (point.x(), point.y()))
+    }
+
+    pub(super) fn surface_point_from_frame(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let point = neomacs_display_protocol::PresentedFramePoint::from_px(x, y).ok()?;
+        let point = self.present_mapping()?.surface_from_frame(point).ok()?;
+        Some((point.x(), point.y()))
     }
 
     // Retained for focused render-state tests; production callers inspect the
@@ -574,9 +616,8 @@ impl GuiFrameRenderState {
         &self,
         frame: &FrameGlyphBuffer,
     ) -> Option<neomacs_display_protocol::ScrollBarIdentity> {
-        let point = self
-            .inverse_map(frame, self.mouse_pos.0, self.mouse_pos.1)?
-            .in_frame_space();
+        let (x, y) = self.root_frame_point_from_surface(self.mouse_pos.0, self.mouse_pos.1)?;
+        let point = self.inverse_map(frame, x, y)?.in_frame_space();
         let (x, y) = (point.x(), point.y());
         // Last glyph first, so the bar drawn on top wins where two overlap.
         // The draw site could not choose: it re-ran the same test per glyph and
@@ -1269,24 +1310,47 @@ impl FrameLifecycle {
 }
 
 impl GuiFrameWindowState {
-    pub fn handle_resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    /// Redraw is also winit's safe-area-change notification. Observe native
+    /// chrome here so an inset-only change reaches layout without requiring
+    /// a surface resize event.
+    pub(super) fn synchronize_window_chrome(&mut self) -> Option<(u32, u32)> {
+        let FrameLifecycle::Active { native, .. } = &mut self.lifecycle else {
+            return None;
+        };
+        let previous_size = native.content_size();
+        if let Some(frame) = self.render.compositor.current_frame.as_ref() {
+            native.window_chrome.synchronize(
+                native.window.as_ref(),
+                native.chrome.decorations_enabled,
+                frame.background,
+            );
+        }
+        native.refresh_content_geometry();
+        self.render.set_surface_state(native.surface_state());
+        let size = native.content_size();
+        (size != previous_size).then_some(size)
+    }
+
+    pub(super) fn content_size(&self) -> (u32, u32) {
+        match &self.lifecycle {
+            FrameLifecycle::Active { native, .. } => native.content_size(),
+            FrameLifecycle::Pending { width, height, .. } => (*width, *height),
+        }
+    }
+
+    /// Record every native observation, including suspension, independently
+    /// of whether a GPU surface can be configured for it.
+    fn observe_surface_size(&mut self, width: u32, height: u32) -> SurfaceState {
         let scale = DeviceScale::new(self.lifecycle.scale_factor() as f32)
             .expect("effective window scale is finite and positive");
         let surface_state = SurfaceState::from_device_size(width, height, scale)
             .expect("wgpu surface dimensions have finite logical extents");
-        self.render.set_surface_state(surface_state);
-        if matches!(surface_state, SurfaceState::Suspended) {
-            return;
-        }
-        match &mut self.lifecycle {
+        let surface_state = match &mut self.lifecycle {
             FrameLifecycle::Active { native, .. } => {
                 native.width = width;
                 native.height = height;
-                native.surface_config.width = width;
-                native.surface_config.height = height;
-                native.surface.configure(device, &native.surface_config);
-                clear_frame_transition_textures(&mut self.render.compositor.transitions);
-                self.render.compositor.dirty = true;
+                native.refresh_content_geometry();
+                native.surface_state()
             }
             FrameLifecycle::Pending {
                 width: pw,
@@ -1295,7 +1359,23 @@ impl GuiFrameWindowState {
             } => {
                 *pw = width;
                 *ph = height;
+                surface_state
             }
+        };
+        self.render.set_surface_state(surface_state);
+        surface_state
+    }
+
+    pub fn handle_resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let SurfaceState::Drawable(surface) = self.observe_surface_size(width, height) else {
+            return;
+        };
+        if let FrameLifecycle::Active { native, .. } = &mut self.lifecycle {
+            native.surface_config.width = surface.device_width().get();
+            native.surface_config.height = surface.device_height().get();
+            native.surface.configure(device, &native.surface_config);
+            clear_frame_transition_textures(&mut self.render.compositor.transitions);
+            self.render.compositor.dirty = true;
         }
     }
 
@@ -1304,6 +1384,7 @@ impl GuiFrameWindowState {
         match &mut self.lifecycle {
             FrameLifecycle::Active { native, .. } => {
                 native.scale_factor = effective_scale;
+                native.refresh_content_geometry();
                 if let Some(atlas) = self.render.compositor.glyph_atlas.as_mut() {
                     atlas.set_scale_factor(effective_scale as f32);
                 }
@@ -1321,6 +1402,9 @@ impl GuiFrameWindowState {
         let surface_state = SurfaceState::from_device_size(width, height, scale)
             .expect("native surface dimensions have finite logical extents");
         self.render.set_surface_state(surface_state);
+        if let FrameLifecycle::Active { native, .. } = &self.lifecycle {
+            self.render.set_surface_state(native.surface_state());
+        }
     }
 
     pub(super) fn set_title(&mut self, title: String) {
@@ -1371,8 +1455,20 @@ impl GuiFrameWindowState {
     pub(super) fn request_inner_size(&mut self, width: u32, height: u32) {
         match &mut self.lifecycle {
             FrameLifecycle::Active { native, .. } => {
-                let size = window_size_from_emacs_pixels(width, height);
-                let _ = native.window.request_surface_size(size);
+                let content: PhysicalSize<u32> = window_size_from_emacs_pixels(width, height)
+                    .to_physical(native.window.scale_factor());
+                let insets = native.content_insets();
+                let size = PhysicalSize::new(
+                    content
+                        .width
+                        .saturating_add(insets.left)
+                        .saturating_add(insets.right),
+                    content
+                        .height
+                        .saturating_add(insets.top)
+                        .saturating_add(insets.bottom),
+                );
+                let _ = native.window.request_surface_size(size.into());
             }
             FrameLifecycle::Pending {
                 width: pw,
@@ -1402,6 +1498,7 @@ impl GuiFrameWindowState {
         match &mut self.lifecycle {
             FrameLifecycle::Active { native, .. } => {
                 native.chrome.decorations_enabled = decorated;
+                native.window_chrome.invalidate();
                 native.window.set_decorations(decorated);
                 self.render.compositor.dirty = true;
             }
@@ -1717,17 +1814,12 @@ impl GuiFrameWindowManager {
         self.sync_primary_mapping();
     }
 
-    pub(super) fn populate_primary_native(&mut self, native: GuiFrameNativeWindowState) {
+    pub(super) fn populate_primary_native(&mut self, mut native: GuiFrameNativeWindowState) {
+        native.refresh_content_geometry();
         let key = self.primary_frame_key();
         if let Some(window_state) = self.windows.get_mut(&key) {
             let winit_id = native.window.id();
-            let surface_state = SurfaceState::from_device_size(
-                native.width,
-                native.height,
-                DeviceScale::new(native.scale_factor as f32)
-                    .expect("effective window scale is finite and positive"),
-            )
-            .expect("native surface dimensions have finite logical extents");
+            let surface_state = native.surface_state();
             self.primary_winit_id = Some(winit_id);
             window_state.lifecycle = FrameLifecycle::Active {
                 native,
@@ -1799,6 +1891,7 @@ impl GuiFrameWindowManager {
     pub fn process_creates(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
+        comms: &crate::thread_comm::RenderComms,
         window_icon: &mut crate::window_icon::WindowIconService,
         instance: &wgpu::Instance,
         device: &wgpu::Device,
@@ -1819,6 +1912,10 @@ impl GuiFrameWindowManager {
                 .with_surface_size(window_size_from_emacs_pixels(req.width, req.height))
                 .with_transparent(true)
                 .with_decorations(self.chrome_defaults.decorations_enabled);
+            let attrs = crate::window_chrome::WindowChromeController::prepare(
+                attrs,
+                self.chrome_defaults.decorations_enabled,
+            );
             let attrs = crate::window_identity::apply_platform_window_identity(attrs, event_loop);
 
             match event_loop.create_window(attrs) {
@@ -1914,6 +2011,8 @@ impl GuiFrameWindowManager {
                         GuiFrameWindowState {
                             lifecycle: FrameLifecycle::Active {
                                 native: GuiFrameNativeWindowState {
+                                    window_chrome: Default::default(),
+                                    content_insets: Default::default(),
                                     window,
                                     surface,
                                     surface_config: config,
@@ -1929,6 +2028,27 @@ impl GuiFrameWindowManager {
                             render,
                         },
                     );
+                    if let Some(state) =
+                        self.windows.get_mut(&FrameKey::Adopted(req.emacs_frame_id))
+                        && let FrameLifecycle::Active { native, .. } = &mut state.lifecycle
+                    {
+                        native.refresh_content_geometry();
+                        state.render.set_surface_state(native.surface_state());
+                        if native.content_insets != Default::default() {
+                            let (width, height) = native.content_size();
+                            let (width, height) = super::state::emacs_pixels_from_window_size(
+                                width,
+                                height,
+                                native.scale_factor,
+                            );
+                            comms.send_input(crate::thread_comm::InputEvent::WindowResize {
+                                width,
+                                height,
+                                scale_factor: native.scale_factor,
+                                emacs_frame_id: req.emacs_frame_id,
+                            });
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::error!(
@@ -2302,6 +2422,7 @@ impl GuiFrameWindowManager {
             clear_frame_transition_textures(&mut render.compositor.transitions);
             // Full-frame post shader composition target.
             render.frame_post_src = None;
+            render.native_content_src = None;
             render.compositor.dirty = true;
         });
     }

@@ -23,6 +23,7 @@ pub(crate) struct Pipelines {
     pub(crate) glyph: wgpu::RenderPipeline,
     pub(crate) subpixel_glyph: wgpu::RenderPipeline,
     pub(crate) image: wgpu::RenderPipeline,
+    pub(crate) surface_copy: wgpu::RenderPipeline,
     #[cfg(feature = "video")]
     pub(crate) bi_planar_video: wgpu::RenderPipeline,
     #[cfg(feature = "video")]

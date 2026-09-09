@@ -269,6 +269,10 @@ mod shader_surface_tests {
     }
 }
 
+#[cfg(test)]
+#[path = "pointer_events_test.rs"]
+mod native_chrome_tests;
+
 impl PointerOwner {
     pub(super) fn target(self) -> Option<(f32, f32, u64)> {
         match self {
@@ -752,12 +756,11 @@ impl RenderApp {
                 .frame_windows
                 .get_by_winit(parent)
                 .is_some_and(|window| {
-                    Self::frame_window_point_in_band(
-                        window,
-                        FrameChromeKind::CompactBar,
-                        anchor.x,
-                        anchor.y,
-                    )
+                    let Some((x, y)) = window.render.surface_point_from_frame(anchor.x, anchor.y)
+                    else {
+                        return false;
+                    };
+                    Self::frame_window_point_in_band(window, FrameChromeKind::CompactBar, x, y)
                 });
             self.activate_native_heading(
                 MenuBarHit {
@@ -803,15 +806,24 @@ impl RenderApp {
     fn frame_window_band_bounds(
         window_state: &GuiFrameWindowState,
         kind: FrameChromeKind,
-    ) -> Option<neomacs_display_protocol::frame_chrome::FrameRect> {
-        window_state
+    ) -> Option<
+        neomacs_display_protocol::GeometryRect<
+            neomacs_display_protocol::RootSurfaceSpace,
+            neomacs_display_protocol::LogicalPixels,
+        >,
+    > {
+        let bounds = window_state
             .render
             .compositor
             .current_frame
             .as_ref()?
             .frame_chrome
             .band(kind)
-            .map(|band| band.bounds())
+            .map(|band| band.bounds())?;
+        let (x, y) = window_state
+            .render
+            .surface_point_from_frame(bounds.x(), bounds.y())?;
+        neomacs_display_protocol::GeometryRect::new(x, y, bounds.width(), bounds.height()).ok()
     }
 
     fn frame_window_point_in_band(
@@ -943,10 +955,21 @@ impl RenderApp {
         x: f32,
         y: f32,
     ) -> Option<InputEvent> {
-        let target = Self::frame_window_tab_bar_hit_test(window_state, x, y);
-        window_state.render.capture_presented(target);
+        let (frame_x, frame_y) = window_state.render.root_frame_point_from_surface(x, y)?;
+        let target = Self::frame_window_tab_bar_hit_test(window_state, frame_x, frame_y);
+        if let Some(target) = target {
+            window_state
+                .render
+                .capture_presented_at(target, (x - frame_x, y - frame_y));
+        }
         target.map(|target| {
-            Self::presented_pointer_input_event(&window_state.render, target, true, x, y)
+            Self::presented_pointer_input_event(
+                &window_state.render,
+                target,
+                true,
+                frame_x,
+                frame_y,
+            )
         })
     }
 
@@ -978,6 +1001,7 @@ impl RenderApp {
         x: f32,
         y: f32,
     ) -> Option<u32> {
+        let (x, y) = window_state.render.root_frame_point_from_surface(x, y)?;
         let frame = window_state.render.compositor.current_frame.as_ref()?;
         match frame_chrome_hit(frame, x, y)?.0 {
             ChromeAction::InvokeToolBarItem { index } => Some(*index),
@@ -990,6 +1014,7 @@ impl RenderApp {
         x: f32,
         y: f32,
     ) -> Option<MenuBarHit> {
+        let (x, y) = window_state.render.root_frame_point_from_surface(x, y)?;
         let frame = window_state.render.compositor.current_frame.as_ref()?;
         let (ChromeAction::OpenMenu { index, key }, bounds) = frame_chrome_hit(frame, x, y)? else {
             return None;
@@ -1437,8 +1462,11 @@ impl RenderApp {
                 && self.effects.click_halo.enabled
                 && delivered_mouse_button
                 && let Some(window_state) = self.frame_windows.get_by_winit_mut(window_id)
+                && let Some((x, y)) = window_state.render.root_frame_point_from_surface(
+                    window_state.render.mouse_pos.0,
+                    window_state.render.mouse_pos.1,
+                )
             {
-                let (x, y) = window_state.render.mouse_pos;
                 window_state.render.trigger_click_halo(
                     x,
                     y,

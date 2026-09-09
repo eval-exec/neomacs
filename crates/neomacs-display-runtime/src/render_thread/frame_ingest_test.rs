@@ -30,6 +30,7 @@ fn inputs(root: u64, children: &[u64]) -> WebViewPlacementInputs {
     WebViewPlacementInputs {
         root: Some((PresentationId::new(root), 800.0, 600.0)),
         scale: 2.0,
+        mapping: None,
         children: children
             .iter()
             .map(|child| {
@@ -168,4 +169,66 @@ fn a_cropped_xwidget_slot_keeps_the_native_content_width_behind_the_clip() {
         "clip_right = text_area_x + text_area_width - x"
     );
     assert_eq!(placement.visible_rect().x(), 8.0);
+}
+
+#[test]
+fn native_chrome_moves_webviews_and_invalidates_the_scene_cache() {
+    use super::RenderApp;
+    use crate::render_thread::frame_windows::{
+        FrameLifecycle, GuiFrameRenderState, GuiFrameWindowState,
+    };
+    use neomacs_display_protocol::{ContentInsets, SurfaceState};
+    let mut frame = FrameGlyphBuffer::with_size(800.0, 600.0);
+    frame.set_draw_context(DisplayWindowId::new(1), GlyphRowRole::Text, None);
+    frame.add_xwidget(
+        XwidgetId::new(7),
+        WebViewId::new(91),
+        XwidgetPresentationGeometry::new(
+            GeometryPoint::<FrameSpace, LogicalPixels>::from_px(8.0, 16.0).unwrap(),
+            XwidgetContentExtent::new(100.0, 40.0).unwrap(),
+            XwidgetLayoutAdvance::new(Px(100.0)).unwrap(),
+            None,
+        ),
+    );
+    let mut render = GuiFrameRenderState::new_without_device(
+        42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.set_current_frame(Some(frame), None, Default::default(), Default::default());
+    let SurfaceState::Drawable(surface) =
+        SurfaceState::from_device_size(1600, 1200, DeviceScale::new(2.0).unwrap()).unwrap()
+    else {
+        unreachable!()
+    };
+    render.set_surface_state(SurfaceState::Drawable(surface));
+    let mut window = GuiFrameWindowState {
+        lifecycle: FrameLifecycle::Pending {
+            width: 1600,
+            height: 1200,
+            scale_factor: 2.0,
+            mouse_hidden_for_typing: false,
+            ime_enabled: false,
+            last_ime_cursor_area: None,
+            chrome: Default::default(),
+            geometry_hints: None,
+        },
+        render,
+    };
+    let initial_inputs = RenderApp::webview_placement_inputs(&window);
+    assert_eq!(
+        RenderApp::resolved_webview_placements(&window)[0]
+            .content_rect()
+            .y(),
+        16.0
+    );
+    window.render.set_surface_state(SurfaceState::Drawable(
+        surface.with_content_insets(ContentInsets::new(0, 56, 0, 0)),
+    ));
+    let placement = &RenderApp::resolved_webview_placements(&window)[0];
+    assert_eq!(placement.content_rect().y(), 44.0);
+    assert_eq!(placement.visible_rect().y(), 44.0);
+    assert_ne!(initial_inputs, RenderApp::webview_placement_inputs(&window));
+    window.render.set_surface_state(SurfaceState::Suspended);
+    assert!(RenderApp::resolved_webview_placements(&window).is_empty());
 }
