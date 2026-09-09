@@ -1142,14 +1142,29 @@ pub(crate) fn builtin_old_selected_window(
     let old_wid = eval.frames.old_selected_window().unwrap_or(selected_wid);
     Ok(window_value(old_wid))
 }
-/// `(frame-selected-window &optional FRAME)` -> selected window of FRAME.
+/// `(frame-selected-window &optional FRAME-OR-WINDOW)` -> selected window of
+/// FRAME-OR-WINDOW's frame.
+///
+/// GNU `Fframe_selected_window` (`src/window.c`) takes FRAME-OR-WINDOW, not a
+/// frame: `nil` means the selected frame, a `WINDOW_VALID_P` argument names its
+/// own frame, and only anything else is checked with `CHECK_LIVE_FRAME`.
+/// `WINDOW_VALID_P` admits INTERNAL windows, which is the arm `window--transpose`
+/// (`lisp/window-x.el`) depends on when it asks for the selected window of the
+/// parent window it is rotating -- without it `C-x w r <right>`
+/// (`window-layout-rotate-clockwise`) died with
+/// "Wrong type argument: frame-live-p, #<window N>".
+///
+/// Resolve through the shared frame-or-window decoder, the same one
+/// `frame-root-window` and `frame-first-window` use; this subr was the one
+/// member of that family still going through the frame-only decoder.
 pub(crate) fn builtin_frame_selected_window(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-selected-window", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid =
+        resolve_frame_or_window_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;

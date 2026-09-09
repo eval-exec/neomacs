@@ -418,6 +418,55 @@ fn frame_selected_window_arity_and_designators() {
 }
 
 #[test]
+fn frame_selected_window_accepts_any_valid_window_as_its_own_frame() {
+    // GNU `Fframe_selected_window` (src/window.c:416-438) takes FRAME-OR-WINDOW
+    // and branches three ways: nil, `WINDOW_VALID_P` -> that window's frame,
+    // else `CHECK_LIVE_FRAME`.  `WINDOW_VALID_P` covers INTERNAL windows too,
+    // which is the branch `window--transpose` (lisp/window-x.el) relies on when
+    // it asks for the selected window of the parent window it is rotating.
+    // Ground truth taken from GNU Emacs 31.1: a live, an internal and the
+    // minibuffer window all answer the frame's selected window, and only a
+    // deleted window falls through to the frame type check.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let out = ev
+        .eval_str_each(
+            "(progn (split-window-internal (selected-window) nil nil nil)
+                (windowp (selected-window)))
+         (eq (frame-selected-window (selected-window)) (frame-selected-window))
+         (window-valid-p (window-parent (selected-window)))
+         (window-live-p (window-parent (selected-window)))
+         (eq (frame-selected-window (window-parent (selected-window)))
+             (frame-selected-window))
+         (eq (frame-selected-window (minibuffer-window)) (frame-selected-window))
+         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+           (delete-window-internal doomed)
+           (list (window-valid-p doomed)
+                 (condition-case err (frame-selected-window doomed) (error (car err)))))",
+        )
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(out[0], "OK t");
+    assert_eq!(
+        out[1], "OK t",
+        "a live window names its own frame, GNU src/window.c:429-430"
+    );
+    assert_eq!(out[2], "OK t", "an internal window is still window-valid-p");
+    assert_eq!(out[3], "OK nil", "and is not window-live-p");
+    assert_eq!(
+        out[4], "OK t",
+        "an internal window names its own frame too -- the window--transpose case"
+    );
+    assert_eq!(out[5], "OK t", "so does the minibuffer window");
+    assert_eq!(
+        out[6], "OK (nil wrong-type-argument)",
+        "a deleted window is no longer window-valid-p, so it falls through to \
+         GNU's CHECK_LIVE_FRAME and is rejected"
+    );
+}
+
+#[test]
 fn minibuffer_window_frame_first_window_and_window_minibuffer_p_semantics() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
