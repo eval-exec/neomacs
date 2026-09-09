@@ -467,6 +467,58 @@ fn frame_selected_window_accepts_any_valid_window_as_its_own_frame() {
 }
 
 #[test]
+fn window_new_size_slots_decode_a_valid_window_and_default_to_the_selected_one() {
+    // GNU decodes WINDOW for `window-new-pixel` / `-total` / `-normal` and all
+    // three setters with `decode_valid_window` (src/window.c): nil means the
+    // SELECTED window, an internal window is accepted, and anything else --
+    // a deleted window, a symbol -- signals `window-valid-p`.
+    //
+    // Ground truth from GNU Emacs 31.1:
+    //   nil-default-roundtrip pixel=4242 total=77 normal=0.5
+    //   internal-window       pixel=t normal=nil
+    //   dead-window           err=window-valid-p
+    //   symbol                err=window-valid-p
+    //
+    // Neomacs decoded through a private designator helper with no nil arm and
+    // no validity check, so a nil WINDOW read back 0/nil and -- worse -- a nil
+    // WINDOW *write* was dropped on the floor.  window.el's resize engine sets
+    // these slots with an omitted WINDOW constantly.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let out = ev
+        .eval_str_each(
+            "(progn (split-window-internal (selected-window) nil nil nil) t)
+         (progn (set-window-new-pixel nil 4242) (window-new-pixel (selected-window)))
+         (progn (set-window-new-total nil 77) (window-new-total (selected-window)))
+         (progn (set-window-new-normal nil 0.5) (window-new-normal (selected-window)))
+         (integerp (window-new-pixel (window-parent (selected-window))))
+         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+           (delete-window-internal doomed)
+           (condition-case err (window-new-pixel doomed) (error (car (cdr err)))))
+         (condition-case err (window-new-pixel 'foo) (error (car (cdr err))))",
+        )
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(out[0], "OK t");
+    assert_eq!(
+        out[1], "OK 4242",
+        "a nil WINDOW must write to, and read back from, the selected window"
+    );
+    assert_eq!(out[2], "OK 77", "same for the total-size slot");
+    assert_eq!(out[3], "OK 0.5", "and for the normal-size slot");
+    assert_eq!(
+        out[4], "OK t",
+        "decode_valid_window accepts an internal window"
+    );
+    assert_eq!(
+        out[5], "OK window-valid-p",
+        "a deleted window is rejected against window-valid-p, not silently read as 0"
+    );
+    assert_eq!(out[6], "OK window-valid-p", "and so is a non-window");
+}
+
+#[test]
 fn minibuffer_window_frame_first_window_and_window_minibuffer_p_semantics() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();

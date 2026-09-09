@@ -331,81 +331,6 @@ thread_local! {
     static NEOMACS_MONITORS: RefCell<Vec<NeomacsMonitorInfo>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Resolve a Lisp window designator to a `WindowId`.
-///
-/// Mirrors GNU's `decode_any_window` for the new_pixel / new_total
-/// / new_normal accessor family. A bare integer is interpreted as a
-/// raw window id (matching the long-standing test fixtures), and a
-/// real window value is unwrapped via `as_window_id`.
-fn window_designator_to_id(value: &Value) -> Option<crate::window::WindowId> {
-    if let Some(wid) = value.as_window_id() {
-        return Some(crate::window::WindowId(wid));
-    }
-    match value.kind() {
-        ValueKind::Fixnum(id) if id >= 0 => Some(crate::window::WindowId(id as u64)),
-        _ => None,
-    }
-}
-
-pub(super) fn window_new_normal_value(
-    eval: &super::eval::Context,
-    window: Option<&Value>,
-) -> Value {
-    let Some(id) = window.and_then(window_designator_to_id) else {
-        return Value::NIL;
-    };
-    eval.frames.window_new_normal(id)
-}
-
-pub(super) fn set_window_new_normal_value(
-    eval: &mut super::eval::Context,
-    window: &Value,
-    value: Value,
-) -> Value {
-    if let Some(id) = window_designator_to_id(window) {
-        eval.frames.set_window_new_normal(id, value);
-    }
-    value
-}
-
-pub(super) fn window_new_pixel_value(eval: &super::eval::Context, window: Option<&Value>) -> Value {
-    let Some(id) = window.and_then(window_designator_to_id) else {
-        return Value::fixnum(0);
-    };
-    Value::fixnum(eval.frames.window_new_pixel(id).unwrap_or(0))
-}
-
-pub(super) fn set_window_new_pixel_value(
-    eval: &mut super::eval::Context,
-    window: &Value,
-    size: i64,
-    add: bool,
-) -> Value {
-    let Some(id) = window_designator_to_id(window) else {
-        return Value::fixnum(size);
-    };
-    Value::fixnum(eval.frames.set_window_new_pixel(id, size, add))
-}
-
-pub(super) fn window_new_total_value(eval: &super::eval::Context, window: Option<&Value>) -> Value {
-    let Some(id) = window.and_then(window_designator_to_id) else {
-        return Value::fixnum(0);
-    };
-    Value::fixnum(eval.frames.window_new_total(id).unwrap_or(0))
-}
-
-pub(super) fn set_window_new_total_value(
-    eval: &mut super::eval::Context,
-    window: &Value,
-    size: i64,
-    add: bool,
-) -> Value {
-    let Some(id) = window_designator_to_id(window) else {
-        return Value::fixnum(size);
-    };
-    Value::fixnum(eval.frames.set_window_new_total(id, size, add))
-}
-
 fn fillarray_character_code_from_value(value: &Value) -> Result<u32, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n)
@@ -1518,39 +1443,6 @@ pub(crate) fn builtin_window_lines_pixel_dimensions(args: Vec<Value>) -> EvalRes
         expect_window_live_or_nil(window)?;
     }
     Ok(Value::NIL)
-}
-
-pub(crate) fn builtin_window_new_normal(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("window-new-normal", &args, 0, 1)?;
-    if let Some(window) = args.first() {
-        expect_window_valid_or_nil(window)?;
-    }
-    Ok(window_new_normal_value(eval, args.first()))
-}
-
-pub(crate) fn builtin_window_new_pixel(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("window-new-pixel", &args, 0, 1)?;
-    if let Some(window) = args.first() {
-        expect_window_valid_or_nil(window)?;
-    }
-    Ok(window_new_pixel_value(eval, args.first()))
-}
-
-pub(crate) fn builtin_window_new_total(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("window-new-total", &args, 0, 1)?;
-    if let Some(window) = args.first() {
-        expect_window_valid_or_nil(window)?;
-    }
-    Ok(window_new_total_value(eval, args.first()))
 }
 
 pub(crate) fn builtin_window_old_body_pixel_height(args: Vec<Value>) -> EvalResult {

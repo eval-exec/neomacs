@@ -48,10 +48,7 @@ fn lisp_char_pos_from_one_based_usize(pos: usize) -> LispCharPos1 {
     LispCharPos1::from_one_based_usize(pos)
 }
 
-pub(crate) use super::builtins::symbols::{
-    builtin_resize_mini_window_internal, builtin_set_window_new_normal,
-    builtin_set_window_new_pixel, builtin_set_window_new_total,
-};
+pub(crate) use super::builtins::symbols::builtin_resize_mini_window_internal;
 pub(crate) use super::builtins::{
     builtin_coordinates_in_window_p, builtin_current_window_configuration,
     builtin_run_window_scroll_functions, builtin_set_window_configuration,
@@ -59,11 +56,112 @@ pub(crate) use super::builtins::{
     builtin_window_configuration_frame, builtin_window_configuration_p,
 };
 pub(crate) use super::builtins::{
-    builtin_window_lines_pixel_dimensions, builtin_window_new_normal, builtin_window_new_pixel,
-    builtin_window_new_total, builtin_window_old_body_pixel_height,
+    builtin_window_lines_pixel_dimensions, builtin_window_old_body_pixel_height,
     builtin_window_old_body_pixel_width, builtin_window_old_pixel_height,
     builtin_window_old_pixel_width,
 };
+
+// ---------------------------------------------------------------------------
+// The new-size slots (GNU `src/window.c`)
+//
+// `window-new-pixel`, `window-new-total`, `window-new-normal` and their three
+// setters all decode WINDOW with GNU's `decode_valid_window`: a nil or omitted
+// WINDOW is the SELECTED window, an internal window is accepted, and anything
+// else -- a deleted window included -- signals `window-valid-p`.  Resolving
+// through the shared window decoder with the `window-valid-p` predicate *is*
+// that contract; a private designator helper used to stand in for it, and
+// because it had no nil arm a `(set-window-new-pixel nil SIZE)` silently
+// discarded the write that `window.el`'s resize engine depends on.
+// ---------------------------------------------------------------------------
+
+fn decode_valid_window_id(
+    eval: &mut super::eval::Context,
+    arg: Option<&Value>,
+) -> Result<WindowId, Flow> {
+    resolve_window_id_with_pred(eval, arg, "window-valid-p").map(|(_frame, window)| window)
+}
+
+/// `(window-new-pixel &optional WINDOW)` -> WINDOW's pending pixel size.
+pub(crate) fn builtin_window_new_pixel(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-new-pixel", &args, 1)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    Ok(Value::fixnum(
+        eval.frames.window_new_pixel(window).unwrap_or(0),
+    ))
+}
+
+/// `(window-new-total &optional WINDOW)` -> WINDOW's pending total size.
+pub(crate) fn builtin_window_new_total(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-new-total", &args, 1)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    Ok(Value::fixnum(
+        eval.frames.window_new_total(window).unwrap_or(0),
+    ))
+}
+
+/// `(window-new-normal &optional WINDOW)` -> WINDOW's pending normal size.
+pub(crate) fn builtin_window_new_normal(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-new-normal", &args, 1)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    Ok(eval.frames.window_new_normal(window))
+}
+
+/// `(set-window-new-pixel WINDOW SIZE &optional ADD)` -> the stored size.
+///
+/// GNU decodes WINDOW before it range-checks SIZE, and returns the slot rather
+/// than the argument, so an ADD sum is what comes back.
+pub(crate) fn builtin_set_window_new_pixel(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-window-new-pixel", &args, 2)?;
+    expect_max_args("set-window-new-pixel", &args, 3)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    let size = expect_int(&args[1])?;
+    let add = args.get(2).is_some_and(|value| value.is_truthy());
+    Ok(Value::fixnum(
+        eval.frames.set_window_new_pixel(window, size, add),
+    ))
+}
+
+/// `(set-window-new-total WINDOW SIZE &optional ADD)` -> the stored size.
+pub(crate) fn builtin_set_window_new_total(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-window-new-total", &args, 2)?;
+    expect_max_args("set-window-new-total", &args, 3)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    let size = expect_fixnum(&args[1])?;
+    let add = args.get(2).is_some_and(|value| value.is_truthy());
+    Ok(Value::fixnum(
+        eval.frames.set_window_new_total(window, size, add),
+    ))
+}
+
+/// `(set-window-new-normal WINDOW &optional SIZE)` -> SIZE.
+///
+/// GNU returns the argument here, not the slot.
+pub(crate) fn builtin_set_window_new_normal(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-window-new-normal", &args, 1)?;
+    expect_max_args("set-window-new-normal", &args, 2)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    let size = args.get(1).copied().unwrap_or(Value::NIL);
+    eval.frames.set_window_new_normal(window, size);
+    Ok(size)
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
