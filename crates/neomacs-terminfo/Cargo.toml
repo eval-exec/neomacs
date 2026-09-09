@@ -11,6 +11,9 @@ links = "neomacs_terminfo"
 [dependencies]
 regex.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+rustix = { workspace = true, features = ["termios"] }
+
 [build-dependencies]
 pkg-config.workspace = true
 
