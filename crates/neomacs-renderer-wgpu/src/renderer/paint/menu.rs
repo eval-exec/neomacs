@@ -94,6 +94,8 @@ impl WgpuRenderer {
         {
             let panel = menu.panel;
             let (mx, my, mw, mh) = panel.bounds;
+            let indicator_width = panel.indicator_width(menu.all_items);
+            let shortcut_right = panel.shortcut_right(menu.all_items, char_width);
 
             // === Pass 1: Background rectangles ===
             let mut rect_vertices: Vec<RectVertex> = Vec::new();
@@ -140,7 +142,7 @@ impl WgpuRenderer {
 
             // Separators
             for (i, &item_idx) in panel.item_indices.iter().enumerate() {
-                if menu.all_items[item_idx].separator {
+                if menu.all_items[item_idx].separator() {
                     let iy = my + panel.item_offsets[i] + 3.0;
                     self.add_rect(
                         &mut rect_vertices,
@@ -149,6 +151,32 @@ impl WgpuRenderer {
                         mw - 16.0,
                         1.0,
                         &separator_color,
+                    );
+                }
+            }
+
+            for (i, &item_idx) in panel.item_indices.iter().enumerate() {
+                let item = &menu.all_items[item_idx];
+                let color = if item.enabled() {
+                    text_color
+                } else {
+                    disabled_color
+                };
+                indicators::paint(
+                    &mut rect_vertices,
+                    item.indicator(),
+                    mx + padding * 2.0,
+                    my + panel.item_offsets[i],
+                    panel.item_height,
+                    color,
+                );
+                if item.submenu() {
+                    indicators::submenu_arrow(
+                        &mut rect_vertices,
+                        mx + mw - padding * 2.0,
+                        my + panel.item_offsets[i],
+                        panel.item_height,
+                        color,
                     );
                 }
             }
@@ -237,17 +265,17 @@ impl WgpuRenderer {
             // Menu items
             for (i, &item_idx) in panel.item_indices.iter().enumerate() {
                 let item = &menu.all_items[item_idx];
-                if item.separator {
+                if item.separator() {
                     continue;
                 }
                 let iy = my + panel.item_offsets[i];
-                let color = if !item.enabled {
+                let color = if !item.enabled() {
                     disabled_color
                 } else {
                     text_color
                 };
 
-                let label_x = mx + padding * 2.0;
+                let label_x = mx + padding * 2.0 + indicator_width;
                 for (ci, ch) in item.label.chars().enumerate() {
                     let key = GlyphKey {
                         charcode: ch as u32,
@@ -275,7 +303,7 @@ impl WgpuRenderer {
 
                 if !item.shortcut.is_empty() {
                     let shortcut_x =
-                        mx + mw - padding * 2.0 - (item.shortcut.len() as f32 * char_width);
+                        shortcut_right - item.shortcut.chars().count() as f32 * char_width;
                     for (ci, ch) in item.shortcut.chars().enumerate() {
                         let key = GlyphKey {
                             charcode: ch as u32,
@@ -301,27 +329,6 @@ impl WgpuRenderer {
                         }
                     }
                 }
-
-                if item.submenu {
-                    let arrow_x = mx + mw - padding * 2.0 - char_width;
-                    let key = GlyphKey {
-                        charcode: '\u{25B8}' as u32,
-                        face_id: FaceId::new(0),
-                        font_size_bits,
-                        font_identity: glyph_font_identity(menu.font_face),
-                        x_bin: SubpixelBin::Zero,
-                        y_bin: SubpixelBin::Zero,
-                    };
-                    if let Some(handle) = glyph_atlas.get_or_create_atlas(
-                        &self.device,
-                        &self.queue,
-                        &key,
-                        menu.font_face,
-                        SubpixelRequest::Disabled,
-                    ) {
-                        overlay_glyphs.push((handle, arrow_x, iy + 2.0, text_color));
-                    }
-                }
             }
 
             self.render_overlay_glyphs_scaled(
@@ -334,3 +341,4 @@ impl WgpuRenderer {
         }
     }
 }
+mod indicators;

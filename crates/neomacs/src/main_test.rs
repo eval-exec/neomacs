@@ -2428,12 +2428,13 @@ fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
     };
 
     let entry = PopupMenuEntry {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+            availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+            indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+        },
         label: "Open".to_string(),
         shortcut: "C-x C-f".to_string(),
         help: None,
-        enabled: true,
-        separator: false,
-        submenu: false,
         depth: 0,
     };
     for frame_id in [FrameId(0x100000001), FrameId(0x100000002)] {

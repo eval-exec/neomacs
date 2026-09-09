@@ -193,7 +193,7 @@ impl MenuSession {
             }
             let item_idx = indices[idx as usize];
             let item = &self.all_items[item_idx];
-            if !item.separator && item.enabled {
+            if !item.separator() && item.enabled() {
                 if idx != current_hover {
                     self.active_panel_mut().hover_index = idx;
                     return true;
@@ -220,7 +220,7 @@ impl MenuSession {
             return false;
         };
         let parent = &self.all_items[parent_global_idx];
-        if !parent.submenu {
+        if !parent.enabled() || !parent.submenu() {
             return self.truncate_submenus_after(depth);
         }
 
@@ -286,7 +286,7 @@ impl MenuSession {
         for (i, &offset_y) in panel.item_offsets.iter().enumerate() {
             let item_idx = panel.item_indices[i];
             let item = &all_items[item_idx];
-            if item.separator {
+            if item.separator() {
                 continue;
             }
             let iy = by + offset_y;
@@ -322,7 +322,7 @@ impl MenuSession {
         self.set_panel_hover(depth, local);
         if local >= 0 {
             let global = self.panel(depth).unwrap().item_indices[local as usize];
-            if self.all_items[global].enabled {
+            if self.all_items[global].enabled() {
                 self.open_submenu_for(depth, local as usize);
             }
         }
@@ -334,14 +334,27 @@ impl MenuSession {
             .item_indices
             .get(usize::try_from(panel.hover_index).ok()?)?;
         let item = &self.all_items[global];
-        if !item.enabled || item.separator {
-            return None;
-        }
-        if item.submenu {
-            self.open_submenu_for(depth, panel.hover_index as usize);
-            None
-        } else {
-            Some(global as i32)
+        use neomacs_display_protocol::menu::{MenuAvailability, MenuItemKind};
+        match item.kind {
+            MenuItemKind::Command {
+                availability: MenuAvailability::Enabled,
+                ..
+            } => Some(global as i32),
+            MenuItemKind::Submenu {
+                availability: MenuAvailability::Enabled,
+            } => {
+                self.open_submenu_for(depth, panel.hover_index as usize);
+                None
+            }
+            MenuItemKind::Command {
+                availability: MenuAvailability::Disabled,
+                ..
+            }
+            | MenuItemKind::Submenu {
+                availability: MenuAvailability::Disabled,
+            }
+            | MenuItemKind::Label
+            | MenuItemKind::Separator => None,
         }
     }
 }

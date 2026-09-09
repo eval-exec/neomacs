@@ -1,3 +1,8 @@
+mod menu_buttons_test;
+mod menu_semantics_test;
+mod menu_submenu_test;
+mod menu_test_support;
+
 use super::*;
 use crate::EvalError;
 use crate::emacs_core::dispnew::pure::{
@@ -4135,20 +4140,21 @@ fn x_popup_menu_interactive_keymap_returns_selected_event() {
 
 #[test]
 fn old_style_menu_help_keeps_the_real_submenu_definition() {
+    let mut eval = Context::new();
     let submenu = crate::emacs_core::keymap::make_sparse_list_keymap();
     let definition = Value::cons(
         Value::string("Parent"),
         Value::cons(Value::string("Open child choices"), submenu),
     );
 
-    let (entry, parsed_submenu) =
-        super::popup_menu_item_from_binding(Value::symbol("parent"), definition, 0, true)
-            .expect("parse old-style menu item");
+    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
+    crate::emacs_core::keymap::list_keymap_define(menu, Value::symbol("parent"), definition);
+    let resolved = crate::emacs_core::menu::resolve(&mut eval, menu, true).unwrap();
+    let entry = &resolved.entries()[0];
 
     assert_eq!(entry.help.as_deref(), Some("Open child choices"));
-    assert_eq!(
-        parsed_submenu,
-        Some(submenu),
+    assert!(
+        entry.submenu(),
         "GNU parse_menu_item removes the old-format help cell before reading DEF"
     );
 }
@@ -4358,7 +4364,7 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
     // inlined — and the label gains the GNU `" >"` suffix.
     assert_eq!(shown[0].entries.len(), 1);
     assert_eq!(shown[0].entries[0].label, "Line Wrapping in this Buffer >");
-    assert!(shown[0].entries[0].submenu);
+    assert!(shown[0].entries[0].submenu());
     assert_eq!(shown[0].entries[0].depth, 0);
 }
 

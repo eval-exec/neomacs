@@ -1176,19 +1176,35 @@ pub(super) fn builtin_map_keymap(eval: &mut super::eval::Context, args: Vec<Valu
     expect_min_args("map-keymap", &args, 2)?;
     expect_max_args("map-keymap", &args, 3)?;
     let function = args[0];
-    let mut keymap = expect_keymap(eval, &args[1])?;
+    let keymap = expect_keymap(eval, &args[1])?;
 
-    // Traverse this keymap and all parents.
-    loop {
-        keymap = map_keymap_internal_impl(eval, function, keymap)?;
-        if keymap.is_nil() {
-            break;
-        }
-        // keymap is the parent; continue if it's a valid keymap.
-        if !is_list_keymap(&keymap) {
-            break;
-        }
-    }
+    // Unlike map-keymap-internal, map-keymap descends into each composed
+    // map and then resumes the enclosing spine. Treating the first embedded
+    // map as the sole parent loses later maps (and inherited submenu items).
+    let mut bindings = Vec::new();
+    super::keymap::list_keymap_for_each_binding_recursive(
+        &keymap,
+        Some(eval.obarray()),
+        |event, binding| {
+            let event = if event.is_cons() {
+                Value::cons(event.cons_car(), event.cons_cdr())
+            } else {
+                event
+            };
+            bindings.push((event, binding));
+        },
+    );
+    let holder = Value::list(
+        bindings
+            .iter()
+            .map(|(key, value)| Value::cons(*key, *value))
+            .collect(),
+    );
+    let root_scope = eval.save_specpdl_roots();
+    eval.push_specpdl_root(holder);
+    let result = execute_keymap_iteration_callbacks(eval, function, &bindings);
+    eval.restore_specpdl_roots(root_scope);
+    result?;
     Ok(Value::NIL)
 }
 

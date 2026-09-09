@@ -1044,30 +1044,30 @@ fn render_command_set_window_decorated() {
 fn render_command_show_popup_menu() {
     let items = vec![
         PopupMenuItem {
+            kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+                availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+                indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+            },
             help: None,
             label: "Open".to_string(),
             shortcut: "C-x C-f".to_string(),
-            enabled: true,
-            separator: false,
-            submenu: false,
             depth: 0,
         },
         PopupMenuItem {
+            kind: neomacs_display_protocol::menu::MenuItemKind::Separator,
             help: None,
             label: String::new(),
             shortcut: String::new(),
-            enabled: false,
-            separator: true,
-            submenu: false,
             depth: 0,
         },
         PopupMenuItem {
+            kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+                availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+                indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+            },
             help: None,
             label: "Quit".to_string(),
             shortcut: "C-x C-c".to_string(),
-            enabled: true,
-            separator: false,
-            submenu: false,
             depth: 0,
         },
     ];
@@ -1107,9 +1107,9 @@ fn render_command_show_popup_menu() {
             assert_eq!(menu_items.len(), 3);
             assert_eq!(menu_items[0].label, "Open");
             assert_eq!(menu_items[0].shortcut, "C-x C-f");
-            assert!(menu_items[0].enabled);
-            assert!(menu_items[1].separator);
-            assert!(!menu_items[1].enabled);
+            assert!(menu_items[0].enabled());
+            assert!(menu_items[1].separator());
+            assert!(!menu_items[1].enabled());
             assert_eq!(title, Some("File".to_string()));
             assert_eq!(fg, Some((1.0, 1.0, 1.0)));
             assert_eq!(bg, Some((0.1, 0.1, 0.1)));
@@ -1396,61 +1396,61 @@ fn render_command_debug() {
 #[test]
 fn popup_menu_item_construction() {
     let item = PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+            availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+            indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+        },
         help: None,
         label: "Save".to_string(),
         shortcut: "C-x C-s".to_string(),
-        enabled: true,
-        separator: false,
-        submenu: false,
         depth: 0,
     };
     assert_eq!(item.label, "Save");
     assert_eq!(item.shortcut, "C-x C-s");
-    assert!(item.enabled);
-    assert!(!item.separator);
-    assert!(!item.submenu);
+    assert!(item.enabled());
+    assert!(!item.separator());
+    assert!(!item.submenu());
     assert_eq!(item.depth, 0);
 }
 
 #[test]
 fn popup_menu_item_separator() {
     let sep = PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Separator,
         help: None,
         label: String::new(),
         shortcut: String::new(),
-        enabled: false,
-        separator: true,
-        submenu: false,
         depth: 0,
     };
-    assert!(sep.separator);
-    assert!(!sep.enabled);
+    assert!(sep.separator());
+    assert!(!sep.enabled());
 }
 
 #[test]
 fn popup_menu_item_submenu() {
     let sub = PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Submenu {
+            availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+        },
         help: None,
         label: "Recent Files".to_string(),
         shortcut: String::new(),
-        enabled: true,
-        separator: false,
-        submenu: true,
         depth: 1,
     };
-    assert!(sub.submenu);
+    assert!(sub.submenu());
     assert_eq!(sub.depth, 1);
 }
 
 #[test]
 fn popup_menu_item_clone() {
     let item = PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+            availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+            indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+        },
         help: None,
         label: "Test".to_string(),
         shortcut: "M-x".to_string(),
-        enabled: true,
-        separator: false,
-        submenu: false,
         depth: 2,
     };
     let cloned = item.clone();
@@ -1461,12 +1461,13 @@ fn popup_menu_item_clone() {
 #[test]
 fn popup_menu_item_debug() {
     let item = PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+            availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+            indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+        },
         help: None,
         label: "Debug".to_string(),
         shortcut: String::new(),
-        enabled: true,
-        separator: false,
-        submenu: false,
         depth: 0,
     };
     let debug = format!("{:?}", item);

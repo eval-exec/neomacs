@@ -67,6 +67,8 @@ pub mod image_catalog;
 pub mod image_path;
 #[path = "display/invisibility/mod.rs"]
 pub mod invisibility;
+#[path = "display/menu/mod.rs"]
+pub(crate) mod menu;
 #[path = "display/neo/mod.rs"]
 pub(crate) mod neo;
 #[path = "display/shader_surface/mod.rs"]

@@ -1,5 +1,8 @@
 //! Plain menu presentation data shared by the runtime and painter.
 
+mod item;
+pub use item::{MenuAvailability, MenuItemKind};
+
 /// Correlates a native heading intent with the evaluator's menu response.
 /// Distinct from MenuToken: one intent can produce multiple menu revisions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,21 +62,31 @@ impl MenuResult {
     }
 }
 
+/// Lisp-owned button state, distinct from runtime hover or keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuCheckState {
+    Off,
+    On,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MenuIndicator {
+    #[default]
+    None,
+    Toggle(MenuCheckState),
+    Radio(MenuCheckState),
+}
+
 /// A single item in a popup menu.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PopupMenuItem {
+    pub kind: MenuItemKind,
     /// Help belongs to the item snapshot, including disabled items.
     pub help: Option<String>,
     /// Display label for the item
     pub label: String,
     /// Keyboard shortcut text (e.g., "C-x C-s"), or empty
     pub shortcut: String,
-    /// Whether the item is enabled (selectable)
-    pub enabled: bool,
-    /// Whether this is a separator line
-    pub separator: bool,
-    /// Whether this is a submenu header (has children)
-    pub submenu: bool,
     /// Nesting depth (0 = top-level, 1 = first submenu, etc.)
     pub depth: u32,
 }
@@ -93,6 +106,34 @@ pub struct MenuPanel {
     pub item_offsets: Vec<f32>,
     /// Item height
     pub item_height: f32,
+}
+
+impl MenuPanel {
+    pub fn shortcut_right(&self, items: &[PopupMenuItem], advance: f32) -> f32 {
+        let arrow = if self
+            .item_indices
+            .iter()
+            .any(|&index| items[index].submenu())
+        {
+            3.0 * advance
+        } else {
+            0.0
+        };
+        self.bounds.0 + self.bounds.2 - 8.0 - arrow
+    }
+
+    /// A panel-wide gutter: ordinary labels align with check/radio labels.
+    pub fn indicator_width(&self, items: &[PopupMenuItem]) -> f32 {
+        if self
+            .item_indices
+            .iter()
+            .any(|&index| items[index].indicator() != MenuIndicator::None)
+        {
+            self.item_height
+        } else {
+            0.0
+        }
+    }
 }
 
 /// One measured panel. Coordinates are local to its drawing target.

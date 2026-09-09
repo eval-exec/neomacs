@@ -1445,180 +1445,6 @@ fn popup_menu_string(value: Value) -> Option<String> {
         .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
 }
 
-fn popup_menu_key_event_from_path(path: &[Value]) -> Value {
-    Value::list(path.to_vec())
-}
-
-fn popup_menu_help_from_properties(mut properties: Value) -> Option<String> {
-    while properties.is_cons() {
-        let property = properties.cons_car();
-        properties = properties.cons_cdr();
-        if !properties.is_cons() {
-            break;
-        }
-        let value = properties.cons_car();
-        properties = properties.cons_cdr();
-        if super::keymap::MenuItemProperty::Help.is_value(property) {
-            return popup_menu_string(value);
-        }
-    }
-    None
-}
-
-fn popup_menu_item_from_binding(
-    _key: Value,
-    def: Value,
-    depth: u32,
-    is_tty: bool,
-) -> Option<(PopupMenuEntry, Option<Value>)> {
-    if !def.is_cons() {
-        return None;
-    }
-
-    let car = def.cons_car();
-    let cdr = def.cons_cdr();
-
-    if super::keymap::KeymapMarker::MenuItem.is_value(car) && cdr.is_cons() {
-        let label = popup_menu_string(cdr.cons_car())?;
-        let tail = cdr.cons_cdr();
-        let command = if tail.is_cons() {
-            tail.cons_car()
-        } else {
-            Value::NIL
-        };
-        let mut properties = if tail.is_cons() {
-            tail.cons_cdr()
-        } else {
-            Value::NIL
-        };
-        // GNU accepts an obsolete key-equivalence cache between DEF and the
-        // property list. It is a cons rather than a keyword/value pair.
-        if properties.is_cons() && properties.cons_car().is_cons() {
-            properties = properties.cons_cdr();
-        }
-        let submenu = super::keymap::is_list_keymap(&command);
-        return Some((
-            PopupMenuEntry {
-                label: submenu_label(label, submenu, is_tty),
-                shortcut: String::new(),
-                help: popup_menu_help_from_properties(properties),
-                enabled: !command.is_nil(),
-                separator: false,
-                submenu,
-                depth,
-            },
-            submenu.then_some(command),
-        ));
-    }
-
-    let label = popup_menu_string(car)?;
-    let (help, command) = if cdr.is_cons() && cdr.cons_car().is_string() {
-        (popup_menu_string(cdr.cons_car()), cdr.cons_cdr())
-    } else {
-        (None, cdr)
-    };
-    let submenu = super::keymap::is_list_keymap(&command);
-    Some((
-        PopupMenuEntry {
-            label: submenu_label(label, submenu, is_tty),
-            shortcut: String::new(),
-            help,
-            enabled: !command.is_nil(),
-            separator: false,
-            submenu,
-            depth,
-        },
-        submenu.then_some(command),
-    ))
-}
-
-/// Append GNU's submenu indicator to a TTY menu label.
-///
-/// GNU `single_menu_item` (src/menu.c:407-413): when the menu-updating frame is
-/// a TTY frame and the item is itself a keymap (a submenu), it concatenates the
-/// `AUTO_STRING (" >")` suffix so the collapsed line shows it opens a submenu.
-/// On window-system frames the toolkit draws the submenu arrow itself, so no
-/// suffix is added there.
-fn submenu_label(label: String, submenu: bool, is_tty: bool) -> String {
-    if submenu && is_tty {
-        format!("{label} >")
-    } else {
-        label
-    }
-}
-
-fn popup_menu_from_keymap(
-    menu: Value,
-    is_tty: bool,
-    obarray: &crate::emacs_core::symbol::Obarray,
-) -> Option<(Vec<PopupMenuEntry>, Vec<Value>)> {
-    if !super::keymap::is_list_keymap(&menu) {
-        return None;
-    }
-    let mut entries = Vec::new();
-    let mut events = Vec::new();
-
-    fn append_keymap(
-        menu: Value,
-        depth: u32,
-        is_tty: bool,
-        obarray: &crate::emacs_core::symbol::Obarray,
-        path: &mut Vec<Value>,
-        entries: &mut Vec<PopupMenuEntry>,
-        events: &mut Vec<Value>,
-    ) {
-        if depth > 32 {
-            return;
-        }
-
-        super::keymap::list_keymap_for_each_binding(&menu, Some(obarray), |key, def| {
-            let Some((entry, submenu)) = popup_menu_item_from_binding(key, def, depth, is_tty)
-            else {
-                return;
-            };
-
-            path.push(key);
-            entries.push(entry);
-            events.push(popup_menu_key_event_from_path(path));
-
-            // GNU `single_menu_item` (src/menu.c:422-433) recurses into a
-            // submenu's panes (`single_keymap_panes`) only inside the
-            // `#if USE_X_TOOLKIT || USE_GTK || HAVE_NS || ...` block, i.e.
-            // exclusively for window-system frames whose toolkit renders nested
-            // panes. For a TTY frame that code is compiled out: the submenu is
-            // pushed as a single collapsed line (ending in `" >"`) and its
-            // children are shown on demand by `tty_menu_activate` (src/term.c).
-            // So on TTY we must NOT inline the submenu's children here —
-            // recursing flattens, e.g., all of Help -> Describe's items into
-            // the parent pane and pushes later items off-screen.
-            if !is_tty && let Some(child_menu) = submenu {
-                append_keymap(
-                    child_menu,
-                    depth + 1,
-                    is_tty,
-                    obarray,
-                    path,
-                    entries,
-                    events,
-                );
-            }
-
-            path.pop();
-        });
-    }
-
-    append_keymap(
-        menu,
-        0,
-        is_tty,
-        obarray,
-        &mut Vec::new(),
-        &mut entries,
-        &mut events,
-    );
-    Some((entries, events))
-}
-
 #[derive(Clone, Copy)]
 struct PopupMenuPosition {
     request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
@@ -1919,23 +1745,19 @@ fn popup_dialog_from_contents(
         let item = rest.cons_car();
         if item.is_nil() {
             entries.push(PopupMenuEntry {
+                kind: neomacs_display_protocol::menu::MenuItemKind::Separator,
                 label: String::new(),
                 shortcut: String::new(),
                 help: None,
-                enabled: false,
-                separator: true,
-                submenu: false,
                 depth: 0,
             });
             values.push(Value::NIL);
         } else if item.is_string() {
             entries.push(PopupMenuEntry {
+                kind: neomacs_display_protocol::menu::MenuItemKind::Label,
                 label: popup_menu_string(item)?,
                 shortcut: String::new(),
                 help: None,
-                enabled: false,
-                separator: false,
-                submenu: false,
                 depth: 0,
             });
             values.push(Value::NIL);
@@ -1943,12 +1765,13 @@ fn popup_dialog_from_contents(
             && let Some(label) = popup_menu_string(item.cons_car())
         {
             entries.push(PopupMenuEntry {
+                kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+                    availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+                    indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+                },
                 label,
                 shortcut: String::new(),
                 help: None,
-                enabled: true,
-                separator: false,
-                submenu: false,
                 depth: 0,
             });
             values.push(item.cons_cdr());
@@ -1980,15 +1803,15 @@ fn popup_dialog_position(ctx: &Context, position: Value) -> (FrameId, f32, f32) 
 
 /// One complete native popup transaction.
 ///
-/// Owning the menu data here makes the modal invariants impossible for dialog
-/// and menu call sites to apply differently: event values remain GC-rooted,
+/// Borrowing the menu data keeps its owner alive for the entire transaction.
+/// Dialog and menu call sites share the modal invariants: event values remain GC-rooted,
 /// ordinary redisplay stays inhibited while the host owns the glass, and all
 /// dynamic bindings are restored before the editor redraws the exposed frame.
-struct NativePopupSession {
+struct NativePopupSession<'menu> {
     request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     position: Value,
-    entries: Vec<PopupMenuEntry>,
-    events: Vec<Value>,
+    entries: &'menu [PopupMenuEntry],
+    events: &'menu [Value],
     visible_rows: usize,
     placement: neomacs_display_protocol::PopupPlacement,
     frame_id: FrameId,
@@ -1996,10 +1819,10 @@ struct NativePopupSession {
     selected: usize,
 }
 
-impl NativePopupSession {
+impl NativePopupSession<'_> {
     fn run(mut self, ctx: &mut Context) -> EvalResult {
         let specpdl_count = ctx.specpdl.len();
-        for event in &self.events {
+        for event in self.events {
             ctx.push_specpdl_root(*event);
         }
         // GNU's native popup is modal in the display layer.  Its terminal
@@ -2021,8 +1844,8 @@ impl NativePopupSession {
             ctx,
             self.request_id,
             self.position,
-            &self.entries,
-            &self.events,
+            self.entries,
+            self.events,
             self.visible_rows,
             self.placement,
             self.frame_id,
@@ -2094,14 +1917,14 @@ pub(crate) fn builtin_x_popup_dialog(ctx: &mut Context, args: Vec<Value>) -> Eva
 
     let selected = entries
         .iter()
-        .position(|entry| entry.enabled && !entry.separator)
+        .position(|entry| entry.enabled() && !entry.separator())
         .unwrap_or(0);
 
     NativePopupSession {
         position: args[0],
         request_id: None,
-        entries,
-        events: values,
+        entries: &entries,
+        events: &values,
         visible_rows,
         placement,
         frame_id,
@@ -2118,10 +1941,9 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
     // None). On TTY each submenu collapses to one `" >"` line instead of being
     // inlined; on a window-system frame the toolkit owns nested panes.
     let is_tty = selected_frame_window_system_symbol(ctx).is_none();
-    let Some((entries, events)) = popup_menu_from_keymap(menu, is_tty, ctx.obarray()) else {
-        tracing::info!("x-popup-menu interactive: menu is not a keymap");
-        return Ok(Value::NIL);
-    };
+    let resolved = super::menu::resolve(ctx, menu, is_tty)?;
+    let entries = resolved.entries();
+    let events = resolved.events();
     if entries.is_empty() {
         tracing::info!("x-popup-menu interactive: menu has no entries");
         return Ok(Value::NIL);
@@ -2197,6 +2019,7 @@ fn x_popup_menu_interactive_loop(
     token: &mut neomacs_display_protocol::menu::MenuToken,
 ) -> EvalResult {
     let mut help = TtyMenuHelpTracker::default();
+    let submenus_are_selections = selected_frame_window_system_symbol(ctx).is_none();
     show_popup_menu_selection(
         ctx, request_id, frame_id, placement, title, entries, *selected, &mut help, token,
     )?;
@@ -2230,8 +2053,17 @@ fn x_popup_menu_interactive_loop(
                 NativePopupSelection::Stale => continue,
                 NativePopupSelection::Cancelled => return Ok(Value::NIL),
                 NativePopupSelection::Entry(index) => {
+                    if !entries.get(index).is_some_and(|entry| {
+                        if submenus_are_selections {
+                            entry.enabled()
+                        } else {
+                            entry.actionable()
+                        }
+                    }) {
+                        continue;
+                    }
                     let Some(event) = events.get(index).copied() else {
-                        return Ok(Value::NIL);
+                        continue;
                     };
                     *selected = index;
                     // The host has already dismissed its popup with this
@@ -2341,7 +2173,7 @@ fn show_popup_menu_selection(
 fn popup_menu_entry_selectable(entries: &[PopupMenuEntry], index: usize) -> bool {
     entries
         .get(index)
-        .is_some_and(|entry| entry.enabled && !entry.separator)
+        .is_some_and(|entry| entry.enabled() && !entry.separator())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2632,9 +2464,11 @@ pub(crate) fn builtin_x_popup_menu(ctx: &mut Context, args: Vec<Value>) -> EvalR
     let position = args[0];
     let menu = args[1];
 
-    if ctx.display_host.is_some() && ctx.input_rx.is_some() && super::keymap::is_list_keymap(&menu)
-    {
-        return x_popup_menu_interactive(ctx, position, menu);
+    if ctx.display_host.is_some() && ctx.input_rx.is_some() && !position.is_nil() {
+        let map = super::keymap::get_keymap_in_runtime(ctx, &menu, false, true)?;
+        if !map.is_nil() {
+            return x_popup_menu_interactive(ctx, position, map);
+        }
     }
 
     builtin_x_popup_menu_batch(ctx, args)

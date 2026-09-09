@@ -1645,19 +1645,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         } else {
             FrameRef::Frame(menu.frame_id.0)
         };
-        let items = menu
-            .entries
-            .into_iter()
-            .map(|entry| neomacs_display_protocol::ui_types::PopupMenuItem {
-                help: entry.help,
-                label: entry.label,
-                shortcut: entry.shortcut,
-                enabled: entry.enabled,
-                separator: entry.separator,
-                submenu: entry.submenu,
-                depth: entry.depth,
-            })
-            .collect();
+        let items = menu.entries;
         self.send_render_command(
             RenderCommand::Ui(UiCommand::ShowPopupMenu {
                 tooltips: menu.tooltips,

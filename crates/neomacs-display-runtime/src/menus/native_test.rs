@@ -306,18 +306,21 @@ impl ApplicationHandler for Smoke {
                 panic!("initial heading request")
             };
             let mut root = neomacs_display_protocol::PopupMenuItem {
+                kind: neomacs_display_protocol::menu::MenuItemKind::Submenu {
+                    availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+                },
                 help: self
                     .with_tooltips
                     .then(|| "Native tooltip outside the small owner frame".into()),
                 label: "Submenu wider than the parent window".into(),
                 shortcut: String::new(),
-                enabled: true,
-                separator: false,
-                submenu: true,
                 depth: 0,
             };
             let mut items = vec![root.clone()];
-            root.submenu = false;
+            root.kind = neomacs_display_protocol::menu::MenuItemKind::Command {
+                availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+                indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+            };
             root.depth = 1;
             for i in 0..30 {
                 root.label = format!("Native submenu item {i}");

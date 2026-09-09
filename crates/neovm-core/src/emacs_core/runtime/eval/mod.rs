@@ -2557,21 +2557,9 @@ pub struct ResolvedSurface {
     pub surface_id: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PopupMenuEntry {
-    pub label: String,
-    pub shortcut: String,
-    /// Echo-area help attached to this menu item.
-    ///
-    /// This is owned editor state, not renderer state: the display host may
-    /// ignore it, while the modal popup controller publishes it through
-    /// GNU's `show-help-function` contract as selection changes.
-    pub help: Option<String>,
-    pub enabled: bool,
-    pub separator: bool,
-    pub submenu: bool,
-    pub depth: u32,
-}
+/// The evaluator and GUI share one owned presentation record. Lisp event
+/// values remain in the evaluator's rooted session, never in this record.
+pub type PopupMenuEntry = neomacs_display_protocol::menu::PopupMenuItem;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopupMenuRequest {

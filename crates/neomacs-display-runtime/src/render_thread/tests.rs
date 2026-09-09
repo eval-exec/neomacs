@@ -876,12 +876,13 @@ fn popup_without_native_owner_is_not_presented() {
             neomacs_display_protocol::Point::new(10.0, 20.0),
         ),
         items: vec![PopupMenuItem {
+            kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+                availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+                indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+            },
             help: None,
             label: "Open".to_string(),
             shortcut: String::new(),
-            enabled: true,
-            separator: false,
-            submenu: false,
             depth: 0,
         }],
         title: None,
@@ -1072,12 +1073,13 @@ fn popup_menu_for_unknown_secondary_does_not_fall_back_to_primary() {
             neomacs_display_protocol::Point::new(10.0, 20.0),
         ),
         items: vec![PopupMenuItem {
+            kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+                availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+                indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+            },
             help: None,
             label: "Open".to_string(),
             shortcut: String::new(),
-            enabled: true,
-            separator: false,
-            submenu: false,
             depth: 0,
         }],
         title: None,

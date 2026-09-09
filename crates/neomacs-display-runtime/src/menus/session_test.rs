@@ -4,50 +4,66 @@ use super::*;
 // Helpers
 // -----------------------------------------------------------------------
 
+#[test]
+fn disabled_submenu_cannot_open_from_keyboard_after_pointer_hover() {
+    let mut disabled = submenu_item("Disabled submenu", 0);
+    disabled.kind = neomacs_display_protocol::menu::MenuItemKind::Submenu {
+        availability: neomacs_display_protocol::menu::MenuAvailability::Disabled,
+    };
+    let mut session = simple_menu(vec![disabled, item("Child", true, 1)]);
+    let y = session.root_panel.item_offsets[0] + 2.0;
+    session.hover_panel(0, 10.0, y);
+    assert!(
+        !session.open_submenu(),
+        "disabled submenu must not open on Right"
+    );
+    assert!(session.submenu_panels.is_empty());
+}
+
 fn item(label: &str, enabled: bool, depth: u32) -> PopupMenuItem {
     PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+            availability: neomacs_display_protocol::menu::MenuAvailability::from(enabled),
+            indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+        },
         help: None,
         label: label.to_string(),
         shortcut: String::new(),
-        enabled,
-        separator: false,
-        submenu: false,
         depth,
     }
 }
 
 fn separator(depth: u32) -> PopupMenuItem {
     PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Separator,
         help: None,
         label: String::new(),
         shortcut: String::new(),
-        enabled: false,
-        separator: true,
-        submenu: false,
         depth,
     }
 }
 
 fn submenu_item(label: &str, depth: u32) -> PopupMenuItem {
     PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Submenu {
+            availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+        },
         help: None,
         label: label.to_string(),
         shortcut: String::new(),
-        enabled: true,
-        separator: false,
-        submenu: true,
         depth,
     }
 }
 
 fn item_with_shortcut(label: &str, shortcut: &str, depth: u32) -> PopupMenuItem {
     PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+            availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+            indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+        },
         help: None,
         label: label.to_string(),
         shortcut: shortcut.to_string(),
-        enabled: true,
-        separator: false,
-        submenu: false,
         depth,
     }
 }
@@ -238,6 +254,30 @@ fn layout_panel_width_accounts_for_shortcut() {
         "width was {} expected {}",
         panel.bounds.2,
         expected_w
+    );
+}
+
+#[test]
+fn menu_columns_reserve_the_widest_label_and_shortcut_independently() {
+    let items = vec![
+        item_with_shortcut("A very long command label", "", 0),
+        item_with_shortcut("B", "C-x C-s C-a C-b", 0),
+    ];
+    let panel = super::super::layout::measure_panel(
+        0.0,
+        0.0,
+        &items,
+        &[0, 1],
+        None,
+        FONT_SIZE,
+        LINE_HEIGHT,
+        CHAR_WIDTH,
+    );
+    let required = (25.0 + 15.0 + 4.0) * CHAR_WIDTH + 16.0;
+    assert!(
+        panel.bounds.2 >= required,
+        "shortcut column must not consume the label column: {} < {required}",
+        panel.bounds.2
     );
 }
 

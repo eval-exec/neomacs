@@ -167,7 +167,7 @@ impl MenuPresentation {
                         .ok()
                         .and_then(|i| panel.item_indices.get(i))
                         .and_then(|i| r.session.all_items.get(*i))
-                        .is_some_and(|item| item.enabled && item.submenu)
+                        .is_some_and(|item| item.enabled() && item.submenu())
                 });
                 (!has_submenu).then_some(1)
             }

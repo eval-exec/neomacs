@@ -10,6 +10,8 @@
 //! Skips (passes) cleanly where no GPU adapter is available.
 
 use neomacs_display_protocol::face::BoxVerticalEdges;
+#[path = "offscreen_frame/menu_test.rs"]
+mod menu_test;
 use neomacs_display_protocol::frame_chrome::PresentationId;
 use neomacs_display_protocol::frame_glyphs::{
     CursorStyle, DisplaySlotId, FrameGlyph, FrameGlyphBuffer, GlyphRowRole, PhysCursor,
@@ -1551,12 +1553,13 @@ fn popup_redraw_preserves_unchanged_main_frame_pixels() {
         item_height: 18.0,
     };
     let items = [PopupMenuItem {
+        kind: neomacs_display_protocol::menu::MenuItemKind::Command {
+            availability: neomacs_display_protocol::menu::MenuAvailability::Enabled,
+            indicator: neomacs_display_protocol::menu::MenuIndicator::None,
+        },
         help: None,
         label: "H".into(),
         shortcut: String::new(),
-        enabled: true,
-        separator: false,
-        submenu: false,
         depth: 0,
     }];
     let paint = MenuPanelPaint {
