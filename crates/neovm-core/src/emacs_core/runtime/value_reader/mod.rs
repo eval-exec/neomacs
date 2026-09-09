@@ -2758,14 +2758,26 @@ impl<'a> Reader<'a> {
                 String::from_utf8_lossy(&input[start..end]).into_owned()
             }
             ReaderSource::LispString(input) => {
-                let slice = input
-                    .slice(start, end)
-                    .expect("reader slice should stay within source");
                 // Issue #131: `source_slice_string` only feeds ASCII numeric
                 // sub-parsers (hex/radix-digit escapes), so a lossy UTF-8
                 // rendering is byte-exact here and avoids the storage-string
                 // sentinel scheme.
-                crate::emacs_core::emacs_char::to_utf8_lossy(slice.as_bytes())
+                //
+                // Read those bytes out of the source directly.  Going through
+                // `LispString::slice` built a whole substring first, and that
+                // is not free: it converts both ends from byte to character
+                // positions, and each conversion counts lead bytes across the
+                // entire prefix of the source string.  So extracting the two
+                // or three ASCII digits of `#x41` cost two scans of everything
+                // read so far, plus a copy of the digits and a slice of the
+                // text-property table that nothing here looks at.
+                let bytes = input.as_bytes();
+                assert!(
+                    end <= bytes.len(),
+                    "reader slice end {end} exceeds source length {}",
+                    bytes.len()
+                );
+                crate::emacs_core::emacs_char::to_utf8_lossy(&bytes[start..end])
             }
             ReaderSource::Buffer(input) => {
                 let mut bytes = Vec::with_capacity(end - start);
