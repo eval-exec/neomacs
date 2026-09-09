@@ -229,8 +229,7 @@ struct TtyDevice {
 
 #[cfg(unix)]
 impl TtyDevice {
-    fn open(path: &str, capabilities: super::tty_output::Capabilities) -> Result<Self, String> {
-        use std::io::Write;
+    fn open(path: &str, mut capabilities: super::tty_output::Capabilities) -> Result<Self, String> {
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
 
@@ -240,6 +239,9 @@ impl TtyDevice {
             .custom_flags(libc::O_NOCTTY)
             .open(path)
             .map_err(|error| format!("cannot open {path}: {error}"))?;
+        capabilities
+            .attach(&file)
+            .map_err(|error| error.to_string())?;
         let mut original_termios = unsafe { std::mem::zeroed::<libc::termios>() };
         if unsafe { libc::tcgetattr(file.as_raw_fd(), &mut original_termios) } != 0 {
             return Err(format!(
@@ -257,10 +259,11 @@ impl TtyDevice {
             active: true,
             capabilities,
         };
+        let height = query_size(device.file.as_raw_fd()).map_or(24, |size| size.rows() as usize);
         device
-            .file
-            .write_all(&device.capabilities.enter())
-            .and_then(|()| device.file.flush())
+            .capabilities
+            .enter(height)
+            .write_to(&mut device.file, &device.capabilities)
             .map_err(|error| format!("cannot initialize {path}: {error}"))?;
         Ok(device)
     }
@@ -270,16 +273,15 @@ impl TtyDevice {
     }
 
     fn suspend(&mut self) -> Result<(), String> {
-        use std::io::Write;
         use std::os::fd::AsRawFd;
 
         if !self.active {
             return Ok(());
         }
         let leave_result = self
-            .file
-            .write_all(&self.capabilities.leave())
-            .and_then(|()| self.file.flush())
+            .capabilities
+            .leave()
+            .write_to(&mut self.file, &self.capabilities)
             .map_err(|error| format!("cannot suspend TTY renderer: {error}"));
         let restore_result = if unsafe {
             libc::tcsetattr(self.file.as_raw_fd(), libc::TCSANOW, &self.original_termios)
@@ -297,7 +299,6 @@ impl TtyDevice {
     }
 
     fn resume(&mut self) -> Result<(), String> {
-        use std::io::Write;
         use std::os::fd::AsRawFd;
 
         if self.active {
@@ -305,10 +306,11 @@ impl TtyDevice {
         }
         set_raw_mode(self.file.as_raw_fd(), &self.original_termios)?;
         self.active = true;
+        let height = query_size(self.file.as_raw_fd()).map_or(24, |size| size.rows() as usize);
         if let Err(error) = self
-            .file
-            .write_all(&self.capabilities.enter())
-            .and_then(|()| self.file.flush())
+            .capabilities
+            .enter(height)
+            .write_to(&mut self.file, &self.capabilities)
         {
             let _ = self.suspend();
             return Err(format!("cannot resume TTY renderer: {error}"));

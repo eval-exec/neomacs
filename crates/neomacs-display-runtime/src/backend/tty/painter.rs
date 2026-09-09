@@ -62,19 +62,41 @@ pub fn encode_cells(
     cells: &[TtyCell],
     capabilities: &TtyAttributeCapabilities,
 ) {
+    encode_cells_with(cells, capabilities, |part| match part {
+        CellOutput::Control(bytes) | CellOutput::Text(bytes) => output.extend_from_slice(bytes),
+    });
+}
+
+/// Control sequences may contain tputs padding; text is always literal.
+pub enum CellOutput<'a> {
+    Control(&'a [u8]),
+    Text(&'a [u8]),
+}
+
+pub fn encode_cells_with(
+    cells: &[TtyCell],
+    capabilities: &TtyAttributeCapabilities,
+    mut emit: impl FnMut(CellOutput<'_>),
+) {
     let mut previous: Option<CellAttrs> = None;
+    let mut bytes = Vec::new();
     for cell in cells.iter().filter(|cell| !cell.padding) {
         if previous.as_ref() != Some(&cell.attrs) {
             if let Some(attrs) = previous {
-                super::write_turn_off_face(output, &attrs, capabilities);
+                super::write_turn_off_face(&mut bytes, &attrs, capabilities);
             }
-            super::write_turn_on_face(output, &cell.attrs, capabilities);
+            super::write_turn_on_face(&mut bytes, &cell.attrs, capabilities);
+            emit(CellOutput::Control(&bytes));
+            bytes.clear();
             previous = Some(cell.attrs);
         }
-        super::write_cell_contents(output, cell);
+        super::write_cell_contents(&mut bytes, cell);
+        emit(CellOutput::Text(&bytes));
+        bytes.clear();
     }
     if let Some(attrs) = previous {
-        super::write_turn_off_face(output, &attrs, capabilities);
+        super::write_turn_off_face(&mut bytes, &attrs, capabilities);
+        emit(CellOutput::Control(&bytes));
     }
 }
 

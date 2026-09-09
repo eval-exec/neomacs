@@ -505,12 +505,14 @@ pub struct TtyFaceAppearance {
 /// Fields mirror the terminfo capabilities GNU reads in `init_tty`: `so`, `us`,
 /// `Smulx`, `md`, `mh`, `ZH`, `smxx`, `me`, `ue`, `op`, `AF`, `AB`, `Co` and
 /// `NC`.  Each string capability is carried as its own bytes, terminfo padding
-/// removed, because that is what GNU emits and because presence is not
+/// retained until output calls tputs, because presence is not
 /// separable from spelling.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TtyAttributeCapabilities {
     /// `so` — GNU `TS_standout_mode`.
     pub standout_sequence: Option<Vec<u8>>,
+    /// Paired standout exit: `se`, underline fallback `ue`, or `me`.
+    pub exit_standout_mode: Option<Vec<u8>>,
     /// `us` — GNU `TS_enter_underline_mode`.
     pub underline_sequence: Option<Vec<u8>>,
     /// `md` — GNU `TS_enter_bold_mode`.
@@ -539,6 +541,45 @@ pub struct TtyAttributeCapabilities {
 }
 
 impl TtyAttributeCapabilities {
+    /// Padded terminals must use a renderer that preserves control/text
+    /// boundaries; the optimized ANSI byte stream has no delay events.
+    pub fn requires_padding(&self) -> bool {
+        let padded = |bytes: &[u8]| bytes.windows(2).any(|pair| pair == b"$<");
+        let attributes = [
+            &self.standout_sequence,
+            &self.exit_standout_mode,
+            &self.underline_sequence,
+            &self.bold_sequence,
+            &self.dim_sequence,
+            &self.italic_sequence,
+            &self.strike_through_sequence,
+            &self.exit_attribute_mode,
+            &self.exit_underline_mode,
+        ];
+        attributes.into_iter().flatten().any(|bytes| padded(bytes))
+            || self.styled_underline.as_ref().is_some_and(|styles| {
+                [
+                    &styles.double_line,
+                    &styles.wave,
+                    &styles.dots,
+                    &styles.dashes,
+                ]
+                .into_iter()
+                .any(|bytes| padded(bytes))
+            })
+            || self.colors.entry().is_some_and(|colors| {
+                padded(&colors.orig_pair)
+                    || colors
+                        .set_foreground
+                        .as_ref()
+                        .is_some_and(|bytes| padded(bytes))
+                    || colors
+                        .set_background
+                        .as_ref()
+                        .is_some_and(|bytes| padded(bytes))
+            })
+    }
+
     /// Every attribute available, no `ncv` restrictions, 24-bit color.
     ///
     /// This is the assumption neomacs shipped with before capabilities existed,
@@ -567,6 +608,7 @@ impl TtyAttributeCapabilities {
     pub fn full_with_color_cells(max_colors: i64) -> Self {
         Self {
             standout_sequence: Some(b"\x1b[7m".to_vec()),
+            exit_standout_mode: Some(b"\x1b[27m".to_vec()),
             underline_sequence: Some(b"\x1b[4m".to_vec()),
             bold_sequence: Some(b"\x1b[1m".to_vec()),
             dim_sequence: Some(b"\x1b[2m".to_vec()),
@@ -586,6 +628,7 @@ impl TtyAttributeCapabilities {
     pub fn none() -> Self {
         Self {
             standout_sequence: None,
+            exit_standout_mode: None,
             underline_sequence: None,
             bold_sequence: None,
             dim_sequence: None,

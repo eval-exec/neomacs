@@ -3,11 +3,15 @@
 //! Load a finite set of queries into an owned snapshot. All ncurses operations
 //! are serialized, including copying their results. This crate must be the only
 //! owner of ncurses access in the process; independent FFI callers cannot share
-//! its lock. No terminal I/O, renderer policy, or environment mutation occurs.
+//! its lock. Optional padding output delegates to native tputs; no renderer
+//! policy or environment mutation occurs.
 #![deny(unsafe_code)]
 
 use std::collections::BTreeMap;
 use std::fmt;
+
+mod padding;
+pub use padding::Padding;
 
 mod numeric;
 pub use numeric::expand_numeric;

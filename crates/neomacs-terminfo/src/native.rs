@@ -5,6 +5,9 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::{Database, Error, FlagCapability, Query, StringCapability};
 
+mod padding;
+pub(super) use padding::write_padded;
+
 static NATIVE: Mutex<()> = Mutex::new(());
 
 unsafe extern "C" {

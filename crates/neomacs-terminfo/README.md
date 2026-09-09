@@ -35,3 +35,11 @@ For implicit termcap formats, preflight checks all possible initial argument
 counts (0 through 9), conservatively rejecting a call if any count could trap.
 Explicit parameter formats use their actual stack. Width/precision limits and
 string-parameter restrictions remain; this is not unrestricted native tparm.
+
+
+Padded output is available through `Padding`, independently of the owned lookup
+snapshot. It keeps a duplicated output descriptor, creates a temporary native
+terminal under the existing mutex, and calls `tputs` only for control sequences.
+Text must be written directly. See
+[the output design](../../docs/design/terminal-capability-completion.md) for native
+state restoration, arithmetic bounds, callback contracts, and platform tests.

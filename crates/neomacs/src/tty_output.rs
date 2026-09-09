@@ -1,7 +1,9 @@
 //! Terminal output selected before screen operations become ANSI bytes.
 use super::terminal_capabilities::{StringCapability, TerminalCapabilityDatabase};
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
-use neomacs_display_runtime::backend::tty::rif::painter::{TtyPainter, encode_cells};
+use neomacs_display_runtime::backend::tty::rif::painter::{
+    CellOutput, TtyPainter, encode_cells_with,
+};
 use neomacs_display_runtime::backend::tty::rif::{TerminalCursorShape, TtyCell, TtyRif};
 use std::io::{self, Write};
 
@@ -14,12 +16,64 @@ pub(crate) const CONTROL_NAMES: &[&str] = &[
     "ke", "ic", "IC", "im", "ei", "ip", "se",
 ];
 
+/// Bytes plus ranges belonging to padded controls. Text, including literal
+/// `$<...>`, is never passed to tputs. Unpadded output remains one write.
+#[derive(Default, Debug)]
+pub(crate) struct Output {
+    bytes: Vec<u8>,
+    padded: Vec<(std::ops::Range<usize>, usize)>,
+}
+impl Output {
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+    fn control(&mut self, bytes: &[u8], affected_lines: usize) {
+        let start = self.bytes.len();
+        self.bytes.extend_from_slice(bytes);
+        if bytes.windows(2).any(|pair| pair == b"$<") {
+            self.padded.push((start..self.bytes.len(), affected_lines));
+        }
+    }
+    pub(crate) fn write_to(&self, output: &mut impl Write, caps: &Capabilities) -> io::Result<()> {
+        let mut start = 0;
+        for (range, lines) in &self.padded {
+            output.write_all(&self.bytes[start..range.start])?;
+            let padding = caps
+                .padding
+                .as_ref()
+                .ok_or_else(|| io::Error::other("padding requires an attached terminal"))?;
+            padding.write(output, &self.bytes[range.clone()], *lines)?;
+            start = range.end;
+        }
+        output.write_all(&self.bytes[start..])?;
+        output.flush()
+    }
+}
+impl Write for Output {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+fn encode_cells(output: &mut Output, cells: &[TtyCell], caps: &TtyAttributeCapabilities) {
+    encode_cells_with(cells, caps, |part| match part {
+        CellOutput::Control(bytes) => output.control(bytes, 1),
+        CellOutput::Text(bytes) => output.extend_from_slice(bytes),
+    });
+}
+
 #[derive(Clone)]
 pub(crate) struct Capabilities {
     strings: std::collections::BTreeMap<&'static str, Vec<u8>>,
     pub(crate) attributes: TtyAttributeCapabilities,
     pub(crate) ansi: bool,
     auto_wrap: bool,
+    needs_padding: bool,
+    term: String,
+    padding: Option<neomacs_terminfo::Padding>,
 }
 
 impl Capabilities {
@@ -29,10 +83,12 @@ impl Capabilities {
         }
         let mut database = super::terminal_capabilities::open_terminal_capability_database(term)
             .ok_or_else(|| format!("Terminal type \"{term}\" is not defined, or its terminfo database cannot be read"))?;
-        Self::from_database(
+        let mut caps = Self::from_database(
             database.as_mut(),
             &std::env::var("COLORTERM").unwrap_or_default(),
-        )
+        )?;
+        caps.term = term.to_owned();
+        Ok(caps)
     }
 
     fn from_database(
@@ -63,13 +119,20 @@ impl Capabilities {
             strings.insert("le", value);
         }
         let backward_wrap = database.get_flag(Termcap("bw"));
+        let attributes =
+            super::terminal_capabilities::resolve_tty_attribute_capabilities(database, colorterm);
+        let needs_padding = attributes.requires_padding()
+            || strings
+                .values()
+                .any(|bytes| bytes.windows(2).any(|pair| pair == b"$<"));
         let result = Self {
             strings,
             ansi,
             auto_wrap: database.get_flag(Termcap("am")),
-            attributes: super::terminal_capabilities::resolve_tty_attribute_capabilities(
-                database, colorterm,
-            ),
+            attributes,
+            needs_padding,
+            term: String::new(),
+            padding: None,
         };
         if result.control("cm").is_empty()
             && ["up", "do", "le", "nd"]
@@ -89,26 +152,32 @@ impl Capabilities {
             return Err("Relative cursor addressing needs home or carriage return on a terminal with backward wrapping".to_owned());
         }
         // Validate the program before raw mode or alternate-screen entry.
-        let mut probe = Vec::new();
+        let mut probe = Output::default();
         result
             .goto(&mut probe, 0, 0, 80, 24)
             .map_err(|error| error.to_string())?;
         Ok(result)
     }
 
+    #[cfg(unix)]
+    pub(crate) fn attach(&mut self, output: &impl std::os::fd::AsFd) -> io::Result<()> {
+        if self.needs_padding {
+            self.padding = Some(neomacs_terminfo::Padding::new(&self.term, output)?);
+        }
+        Ok(())
+    }
+
     fn control(&self, name: &str) -> &[u8] {
         self.strings.get(name).map_or(&[], Vec::as_slice)
     }
 
-    fn append(&self, output: &mut Vec<u8>, name: &str) {
-        output.extend_from_slice(&super::terminal_capabilities::rendition_sequence(
-            self.control(name),
-        ));
+    fn append(&self, output: &mut Output, name: &str) {
+        output.control(self.control(name), 1);
     }
 
     fn goto(
         &self,
-        output: &mut Vec<u8>,
+        output: &mut Output,
         row: usize,
         col: usize,
         width: usize,
@@ -120,7 +189,7 @@ impl Capabilities {
             parameters[1] = i32::try_from(col).map_err(io::Error::other)?;
             let sequence = neomacs_terminfo::expand_numeric(self.control("cm"), parameters)
                 .map_err(io::Error::other)?;
-            output.extend_from_slice(&super::terminal_capabilities::rendition_sequence(&sequence));
+            output.control(&sequence, 1);
         } else {
             // Re-anchor each run, including after a failed/partial previous
             // write. Home is preferred; relative movement clamps at margins.
@@ -148,25 +217,27 @@ impl Capabilities {
         Ok(())
     }
 
-    fn reset_modes(&self, output: &mut Vec<u8>) {
+    fn reset_modes(&self, output: &mut Output) {
         self.append(output, "ei");
         if let Some(sequence) = &self.attributes.exit_attribute_mode {
-            output.extend_from_slice(sequence);
+            output.control(sequence, 1);
         } else {
             if let Some(sequence) = &self.attributes.exit_underline_mode {
-                output.extend_from_slice(sequence);
+                output.control(sequence, 1);
             }
-            self.append(output, "se");
+            if let Some(sequence) = &self.attributes.exit_standout_mode {
+                output.control(sequence, 1);
+            }
         }
         if let Some(colors) = self.attributes.colors.entry() {
-            output.extend_from_slice(colors.orig_pair());
+            output.control(colors.orig_pair(), 1);
         }
     }
 
-    pub(crate) fn enter(&self) -> Vec<u8> {
-        let mut output = Vec::new();
+    pub(crate) fn enter(&self, height: usize) -> Output {
+        let mut output = Output::default();
         for name in ["ti", "ks", "vi", "cl"] {
-            self.append(&mut output, name);
+            output.control(self.control(name), if name == "cl" { height } else { 1 });
         }
         if self.ansi {
             output.extend_from_slice(b"\x1b[?2004h");
@@ -174,8 +245,8 @@ impl Capabilities {
         output
     }
 
-    pub(crate) fn leave(&self) -> Vec<u8> {
-        let mut output = Vec::new();
+    pub(crate) fn leave(&self) -> Output {
+        let mut output = Output::default();
         self.reset_modes(&mut output);
         if self.ansi {
             output.extend_from_slice(b"\x1b[?2004l");
@@ -190,9 +261,14 @@ impl Capabilities {
 #[cfg(not(windows))]
 pub(crate) fn primary() -> Result<&'static Capabilities, String> {
     static CAPS: std::sync::OnceLock<Result<Capabilities, String>> = std::sync::OnceLock::new();
-    CAPS.get_or_init(|| Capabilities::load(&std::env::var("TERM").unwrap_or_default()))
-        .as_ref()
-        .map_err(Clone::clone)
+    CAPS.get_or_init(|| {
+        let mut caps = Capabilities::load(&std::env::var("TERM").unwrap_or_default())?;
+        caps.attach(&io::stdout())
+            .map_err(|error| error.to_string())?;
+        Ok(caps)
+    })
+    .as_ref()
+    .map_err(Clone::clone)
 }
 
 pub(crate) fn render_to(
@@ -200,12 +276,12 @@ pub(crate) fn render_to(
     output: &mut impl Write,
     caps: &Capabilities,
 ) -> io::Result<()> {
-    if caps.ansi {
+    if caps.ansi && !caps.needs_padding {
         rif.diff_and_render();
-        let mut bytes = Vec::new();
+        let mut bytes = Output::default();
         caps.reset_modes(&mut bytes);
         bytes.extend_from_slice(&rif.take_output());
-        if let Err(error) = output.write_all(&bytes).and_then(|()| output.flush()) {
+        if let Err(error) = bytes.write_to(output, caps) {
             rif.force_redraw();
             return Err(error);
         }
@@ -225,7 +301,7 @@ pub(crate) fn paint_to(
     rif.paint(&mut TerminfoPainter {
         output,
         caps,
-        bytes: Vec::new(),
+        bytes: Output::default(),
         width: 0,
         height: 0,
     })
@@ -234,7 +310,7 @@ pub(crate) fn paint_to(
 struct TerminfoPainter<'a, W> {
     output: &'a mut W,
     caps: &'a Capabilities,
-    bytes: Vec<u8>,
+    bytes: Output,
     width: usize,
     height: usize,
 }
@@ -261,10 +337,7 @@ impl<W: Write> TerminfoPainter<'_, W> {
                 let sequence =
                     neomacs_terminfo::expand_numeric(self.caps.control("IC"), parameters)
                         .map_err(io::Error::other)?;
-                self.bytes
-                    .extend_from_slice(&super::terminal_capabilities::rendition_sequence(
-                        &sequence,
-                    ));
+                self.bytes.control(&sequence, 1);
             } else {
                 // Some terminals require insert mode even for their single-
                 // character insertion command; GNU uses im together with ic.
@@ -359,8 +432,7 @@ impl<W: Write> TtyPainter for TerminfoPainter<'_, W> {
             }
             self.caps.append(&mut self.bytes, "ve");
         }
-        self.output.write_all(&self.bytes)?;
-        self.output.flush()
+        self.bytes.write_to(self.output, self.caps)
     }
 }
 
@@ -373,7 +445,7 @@ pub(crate) fn popup_line(row: usize, col: usize, text: &str) -> io::Result<()> {
     {
         let caps = primary().map_err(io::Error::other)?;
         let (width, height) = super::tty_init::query_terminal_size_cells().unwrap_or((80, 24));
-        let mut bytes = Vec::new();
+        let mut bytes = Output::default();
         caps.goto(&mut bytes, row, col, width as usize, height as usize)?;
         let cells: Vec<_> = text
             .chars()
@@ -389,8 +461,7 @@ pub(crate) fn popup_line(row: usize, col: usize, text: &str) -> io::Result<()> {
         encode_cells(&mut bytes, &cells, &caps.attributes);
         caps.reset_modes(&mut bytes);
         let mut stdout = io::stdout();
-        stdout.write_all(&bytes)?;
-        stdout.flush()
+        bytes.write_to(&mut stdout, caps)
     }
 }
 
@@ -421,6 +492,62 @@ mod tests {
         }
     }
     #[test]
+    fn standout_closes_before_plain_text_with_dedicated_or_borrowed_exit() {
+        for (enter, exit) in [("so", "se"), ("us", "ue"), ("so", "me")] {
+            let mut database = Database(
+                [
+                    ("cm", b"G%p1%d,%p2%d;".as_slice()),
+                    (enter, b"ON"),
+                    (exit, b"OFF"),
+                ]
+                .into(),
+            );
+            let caps = Capabilities::from_database(&mut database, "").unwrap();
+            let mut row = cells("AB");
+            row[0].attrs.inverse = true;
+            let mut bytes = Output::default();
+            encode_cells(&mut bytes, &row, &caps.attributes);
+            assert_eq!(bytes.bytes, b"ONAOFFB", "{enter}/{exit}");
+        }
+    }
+
+    #[test]
+    fn native_padded_output_keeps_literal_text_and_scales_clear_screen() {
+        if super::super::terminal_capabilities::tests::run_native_fixture_child() {
+            return;
+        }
+        let mut caps = Capabilities::load("neo-app-padding").unwrap();
+        assert!(caps.ansi && caps.needs_padding);
+        // npc uses a sleep rather than baud-dependent padding bytes.
+        let file = tempfile::tempfile().unwrap();
+        caps.attach(&file).unwrap();
+        let mut output = Vec::new();
+        caps.enter(2).write_to(&mut output, &caps).unwrap();
+        assert_eq!(output, b"CLEAR\x1b[?2004h");
+        output.clear();
+        let mut row = cells("A$<10/>B");
+        row[0].attrs.inverse = true;
+        let mut painter = TerminfoPainter {
+            output: &mut output,
+            caps: &caps,
+            bytes: Output::default(),
+            width: 0,
+            height: 0,
+        };
+        painter.begin(8, 1).unwrap();
+        painter.row(0, &row).unwrap();
+        painter.finish(None).unwrap();
+        assert_eq!(output, b"OFF\x1b[1;1HONAOFF$<10/>B");
+        output.clear();
+        // ANSI cursor spelling with padding still uses the native painter.
+        render_to(&mut TtyRif::new(8, 1), &mut output, &caps).unwrap();
+        assert!(!output.windows(2).any(|pair| pair == b"$<"));
+        output.clear();
+        caps.leave().write_to(&mut output, &caps).unwrap();
+        assert_eq!(output, b"OFF\x1b[?2004l");
+    }
+
+    #[test]
     fn vt52_output_and_lifecycle_use_native_capabilities() {
         let mut database = Database(
             [
@@ -434,13 +561,13 @@ mod tests {
         );
         let caps = Capabilities::from_database(&mut database, "").unwrap();
         assert!(!caps.ansi);
-        assert_eq!(caps.enter(), b"ENTERKEYS");
-        assert_eq!(caps.leave(), b"NORMALLEAVE");
+        assert_eq!(caps.enter(24).bytes, b"ENTERKEYS");
+        assert_eq!(caps.leave().bytes, b"NORMALLEAVE");
         let mut output = Vec::new();
         let mut painter = TerminfoPainter {
             output: &mut output,
             caps: &caps,
-            bytes: Vec::new(),
+            bytes: Output::default(),
             width: 0,
             height: 0,
         };
@@ -468,9 +595,9 @@ mod tests {
             .into(),
         );
         let caps = Capabilities::from_database(&mut database, "").unwrap();
-        let mut bytes = Vec::new();
+        let mut bytes = Output::default();
         caps.goto(&mut bytes, 2, 3, 80, 24).unwrap();
-        assert_eq!(bytes, b"HOMEDDRRR");
+        assert_eq!(bytes.bytes, b"HOMEDDRRR");
         database.0.remove("up");
         assert!(Capabilities::from_database(&mut database, "").is_err());
     }
@@ -480,7 +607,7 @@ mod tests {
         let mut painter = TerminfoPainter {
             output: &mut output,
             caps: &caps,
-            bytes: Vec::new(),
+            bytes: Output::default(),
             width: 0,
             height: 0,
         };
@@ -560,9 +687,9 @@ mod tests {
             .into(),
         );
         let caps = Capabilities::from_database(&mut database, "").unwrap();
-        let mut output = Vec::new();
+        let mut output = Output::default();
         caps.goto(&mut output, 1, 1, 2, 2).unwrap();
-        assert_eq!(output, b"UULLDR");
+        assert_eq!(output.bytes, b"UULLDR");
         database.0.insert("bs", b"");
         let caps = Capabilities::from_database(&mut database, "").unwrap();
         assert_eq!(caps.control("le"), b"\x08");

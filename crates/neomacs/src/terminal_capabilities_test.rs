@@ -29,6 +29,7 @@ impl FakeCapabilityDatabase {
         Self {
             strings: HashMap::from([
                 ("so", "\x1b[3m"),
+                ("se", "\x1b[23m"),
                 ("us", "\x1b[4m"),
                 ("md", "\x1b[1m"),
                 ("mh", "\x1b[2m"),
@@ -163,13 +164,14 @@ fn screen_terminfo_reports_no_italics_but_keeps_bold_and_underline() {
 fn complete_standout_sequence_is_preserved() {
     let mut database = FakeCapabilityDatabase::bare()
         .with_string("so", "\x1b[0;1;3m$<2>")
+        .with_string("se", "\x1b[27m")
         .with_number("Co", 256);
 
     let caps = resolve_tty_attribute_capabilities(&mut database, "");
 
     assert_eq!(
         caps.standout_sequence.as_deref(),
-        Some(b"\x1b[0;1;3m".as_slice()),
+        Some(b"\x1b[0;1;3m$<2>".as_slice()),
     );
     assert!(caps.supports(TtyCapability::Inverse));
 }
@@ -264,7 +266,7 @@ fn the_su_flag_is_a_styled_underline_where_smulx_is_absent_like_gnu() {
 /// (src/term.c:2061) is one field answering both "does this terminal have
 /// bold?" and "what is bold spelled as here?".
 ///
-/// Terminfo padding is dropped and nothing else is: `OUTPUT1` is `tputs`,
+/// Terminfo padding survives until output: `OUTPUT1` is `tputs`,
 /// which turns `$<..>` into a DELAY and does no parameter expansion at all.
 /// That is a different rule from [`canonical_cap`], which also strips `%pN` so
 /// the update planner can compare a terminfo spelling with its termcap
@@ -273,6 +275,7 @@ fn the_su_flag_is_a_styled_underline_where_smulx_is_absent_like_gnu() {
 fn every_rendition_capability_carries_the_entrys_own_bytes() {
     let mut database = FakeCapabilityDatabase::bare()
         .with_string("so", "\x1b[7;31m")
+        .with_string("se", "\x1b[27m")
         .with_string("us", "\x1bG8$<10>")
         .with_string("md", "\x1b[1;43m")
         .with_string("mh", "\x1bGp")
@@ -287,8 +290,8 @@ fn every_rendition_capability_carries_the_entrys_own_bytes() {
     );
     assert_eq!(
         caps.underline_sequence.as_deref(),
-        Some(b"\x1bG8".as_slice()),
-        "padding is a delay, not bytes"
+        Some(b"\x1bG8$<10>".as_slice()),
+        "padding must survive until tputs emits this control"
     );
     assert_eq!(
         caps.bold_sequence.as_deref(),
@@ -534,7 +537,7 @@ fn padding_and_parameter_markers_do_not_defeat_recognition() {
 /// threads start. This keeps environment mutation and additional unsafe code
 /// out of the tests, while making missing tools/entries an explicit failure.
 #[cfg(unix)]
-fn run_native_fixture_child() -> bool {
+pub(crate) fn run_native_fixture_child() -> bool {
     let thread = std::thread::current();
     let name = thread.name().expect("named Rust test thread");
     if std::env::var("NEOMACS_APP_TERMINFO_FIXTURE_TEST").as_deref() == Ok(name) {
@@ -1094,4 +1097,34 @@ fn real_entries_answer_gnus_own_colour_count() {
              (display-color-cells) {cells} in a pty"
         );
     }
+}
+
+#[test]
+fn standout_requires_an_exit_and_falls_back_after_cookie_checks() {
+    let mut db = FakeCapabilityDatabase::bare()
+        .with_string("so", "SO")
+        .with_string("se", "SE")
+        .with_string("us", "US")
+        .with_string("ue", "UE");
+    let caps = resolve_tty_attribute_capabilities(&mut db, "");
+    assert_eq!(caps.standout_sequence.as_deref(), Some(b"SO".as_slice()));
+    assert_eq!(caps.exit_standout_mode.as_deref(), Some(b"SE".as_slice()));
+    for cookie in [0, 1, 2] {
+        db.numbers.insert("sg", cookie);
+        let caps = resolve_tty_attribute_capabilities(&mut db, "");
+        assert_eq!(caps.standout_sequence.as_deref(), Some(b"US".as_slice()));
+        assert_eq!(caps.exit_standout_mode.as_deref(), Some(b"UE".as_slice()));
+    }
+    db.numbers.insert("ug", 0);
+    let caps = resolve_tty_attribute_capabilities(&mut db, "");
+    assert!(!caps.supports(TtyCapability::Inverse));
+    assert!(!caps.supports(TtyCapability::Underline));
+    assert!(caps.exit_underline_mode.is_none());
+    db.numbers.clear();
+    db.strings.remove("se");
+    assert!(!resolve_tty_attribute_capabilities(&mut db, "").supports(TtyCapability::Inverse));
+    db.strings.insert("me", "ME");
+    let caps = resolve_tty_attribute_capabilities(&mut db, "");
+    assert_eq!(caps.standout_sequence.as_deref(), Some(b"SO".as_slice()));
+    assert_eq!(caps.exit_standout_mode.as_deref(), Some(b"ME".as_slice()));
 }
