@@ -425,6 +425,7 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
                 fallback_metrics: self.default_face_metrics,
             },
             factor,
+            source_render.concrete_font_metrics(),
         ) else {
             return active_face_state.clone();
         };

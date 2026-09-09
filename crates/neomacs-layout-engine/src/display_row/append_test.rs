@@ -2959,6 +2959,7 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
             Color::from_pixel(0x00FFFFFF),
             -1,
             '|',
+            8.0,
         ),
     )
     .render_and_apply(

@@ -1629,6 +1629,10 @@ pub(crate) struct BufferSourceLineBreakRenderContext<'a> {
     frame_background: Color,
     fill_column_indicator: i32,
     fill_column_indicator_char: char,
+    /// Default-face character advance, the unit GNU locates the
+    /// fill-column indicator column in (`fill_column_indicator_column` uses
+    /// `default_face->font->average_width`, src/xdisp.c:24540-24546).
+    default_char_width: f32,
 }
 
 impl<'a> BufferSourceLineBreakRenderContext<'a> {
@@ -1652,6 +1656,7 @@ impl<'a> BufferSourceLineBreakRenderContext<'a> {
         frame_background: Color,
         fill_column_indicator: i32,
         fill_column_indicator_char: char,
+        default_char_width: f32,
     ) -> Self {
         Self {
             text,
@@ -1672,6 +1677,7 @@ impl<'a> BufferSourceLineBreakRenderContext<'a> {
             frame_background,
             fill_column_indicator,
             fill_column_indicator_char,
+            default_char_width,
         }
     }
 }
@@ -1806,6 +1812,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 height_px: metrics.row_height(),
                 ascent_px: metrics.ascent(),
                 fill_char_width: metrics.char_width(),
+                indicator_char_width: context.default_char_width,
             };
             source_render.render_line_end(&line_end_ctx, line_end_geometry, face_ids);
         }
@@ -1989,6 +1996,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                     height_px: metrics.row_height(),
                     ascent_px: metrics.ascent(),
                     fill_char_width: metrics.char_width(),
+                    indicator_char_width: context.default_char_width,
                 },
                 face_ids,
             );

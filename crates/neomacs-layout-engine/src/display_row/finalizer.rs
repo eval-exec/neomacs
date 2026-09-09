@@ -131,6 +131,7 @@ impl DisplayRowLineEndFinalizer {
                         .char_width_px(self.fallback_metrics.char_width())
                 })
                 .unwrap_or_else(|| self.fallback_metrics.char_width()),
+            indicator_char_width: self.fallback_metrics.char_width(),
         };
         plan(&ctx)
             .resolve(&ctx, geometry, &mut NoNamedLineEndFaces)
