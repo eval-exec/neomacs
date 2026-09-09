@@ -228,12 +228,14 @@ impl RenderApp {
             let (width, height) = native.content_size();
             let (width, height) =
                 super::state::emacs_pixels_from_window_size(width, height, native.scale_factor);
-            self.comms.send_input(InputEvent::WindowResize {
-                width,
-                height,
-                scale_factor: native.scale_factor,
-                emacs_frame_id: state.render.emacs_frame_id,
-            });
+            self.comms.send_input(
+                crate::thread_comm::InputEvent::viewport_changed(
+                    neovm_host_abi::frontend_event::FrontendLogicalExtent::new(width, height),
+                    native.scale_factor,
+                    state.render.emacs_frame_id,
+                )
+                .expect("native window has a valid scale"),
+            );
         }
         self.frame_windows
             .primary_window_mut()

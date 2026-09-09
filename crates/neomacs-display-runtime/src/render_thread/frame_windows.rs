@@ -2041,12 +2041,16 @@ impl GuiFrameWindowManager {
                                 height,
                                 native.scale_factor,
                             );
-                            comms.send_input(crate::thread_comm::InputEvent::WindowResize {
-                                width,
-                                height,
-                                scale_factor: native.scale_factor,
-                                emacs_frame_id: req.emacs_frame_id,
-                            });
+                            comms.send_input(
+                                crate::thread_comm::InputEvent::viewport_changed(
+                                    neovm_host_abi::frontend_event::FrontendLogicalExtent::new(
+                                        width, height,
+                                    ),
+                                    native.scale_factor,
+                                    req.emacs_frame_id,
+                                )
+                                .expect("native window has a valid scale"),
+                            );
                         }
                     }
                 }

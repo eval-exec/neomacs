@@ -67,13 +67,14 @@ impl RenderApp {
                 height,
                 window_state.scale_factor(),
             );
-            self.comms
-                .send_input(crate::thread_comm::InputEvent::WindowResize {
+            self.comms.send_input(
+                crate::thread_comm::InputEvent::viewport_changed(
+                    neovm_host_abi::frontend_event::FrontendLogicalExtent::new(width, height),
+                    window_state.scale_factor(),
                     emacs_frame_id,
-                    width,
-                    height,
-                    scale_factor: window_state.scale_factor(),
-                });
+                )
+                .expect("native window has a valid scale"),
+            );
         }
         #[cfg(feature = "video")]
         renderer.begin_video_surface_render();
