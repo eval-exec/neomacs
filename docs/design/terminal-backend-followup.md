@@ -32,8 +32,9 @@ even when their cursor addressing is ANSI.
 ## Windows
 
 The backend uses published `crossterm` and `crossterm_winapi` APIs, adding no local
-unsafe code. Microsoft's [windows-version](https://docs.rs/windows-version/0.1.7/windows_version/)
-provides the OS-version check without a handwritten native call. The latter was already a transitive dependency. The
+unsafe code. `crossterm_winapi` was already a transitive dependency. Microsoft's
+[windows-version](https://docs.rs/windows-version/0.1.7/windows_version/)
+provides the OS-version check without a handwritten native call. The
 [crate research](windows-terminal-renderer-research.md) explains why termwiz's
 public renderer and crossterm's generic style commands did not fit these needs.
 
@@ -51,14 +52,15 @@ GNU's realized-face behavior.
 
 Linux fixtures cover VT52 bytes and lifecycle, relative motion aliases and anchors,
 bottom-right insertion/erase, and wide first glyphs. Windows library and test code
-cross-compile with cargo-xwin. CI adds a native console test in a newly allocated
-Windows console, including legacy fallback and restoration. That test has not
-been executed on Windows locally; cross-compilation is not runtime evidence.
+cross-compile with cargo-xwin. Native GitHub CI also executes the macOS application
+fixtures and Windows VT/legacy console tests successfully; see the recorded run
+below. Windows tests allocate a real console and run serially to avoid sharing
+console state between concurrent tests.
 
 This branch does not establish full GNU terminal parity. Remaining work includes:
 
-- Native macOS and Windows execution, real terminal screen comparisons, and a
-  Windows input/modifier audit.
+- Full editor screen comparisons on real terminals and a Windows input/modifier
+  audit. The hosted smoke tests do not establish complete interactive parity.
 - Physical serial-terminal padding delays. Existing capability normalization
   removes padding markers; the new byte painter retains that limitation.
 - GNU attribute postprocessing (`sg`/`ug`, underline-as-standout, `se`/`me`) and
@@ -82,7 +84,7 @@ improvement or a different safe writer.
 - All 882 enabled display-runtime library tests pass; two remain ignored.
 - Numeric crate Clippy passes with warnings denied; the workflow passes actionlint.
 - Windows x86_64 MSVC library and test code pass cargo-xwin checking with the
-  locked dependency graph. Native Windows execution remains pending CI.
+  locked dependency graph. Native Windows execution is recorded separately below.
 - A broad changed-crate library run was interrupted after repeated Lisp bootstrap
   `file-missing` errors: 118 tests passed; failing and interrupted tests are not
   counted as successful validation. This reproduces the earlier checkout's
@@ -91,3 +93,38 @@ improvement or a different safe writer.
 Independent Standards and Spec reviews found no remaining actionable findings in
 the reviewed fixes. Legacy cursor size and the other documented parity gaps remain
 open; a clean review does not establish complete GNU compatibility.
+
+## Native GitHub CI results
+
+On 2026-09-09, all five focused jobs passed in
+[run 34338028185](https://github.com/eval-exec/neomacs/actions/runs/34338028185),
+testing commit `b529663e752463dc92caaed3fb08e9f000c029bd`.
+
+| Native environment | Checks | Passed |
+| --- | --- | ---: |
+| Linux | Numeric expansion and snapshots | 19 |
+| macOS, Apple system ncurses | Numeric expansion and snapshots | 19 |
+| macOS, Homebrew ncurses | Numeric expansion and snapshots | 19 |
+| macOS ARM64 | Application terminal output and capability policy | 43 |
+| Windows MSVC x86_64 | Palette mapping, native legacy restoration, VT negotiation/output/restoration | 3 |
+
+The Windows job forces legacy mode for one test even though the hosted console
+supports VT. This exercises both implementations on a modern Windows runner;
+it does not test every older Windows release. The opt-in installed-database scan
+remains ignored in CI. All Rust tests run through cargo nextest.
+
+The first run exposed assumptions about installed terminfo contents in three
+application tests: Apple's tmux entry lacked `Smulx`, its Linux palette used a
+different brightness-reset code, and its Linux reset string was normalized
+differently. Those tests now compile controlled entries with native `tic` and
+load them in child processes with an explicit TERMINFO, without unsafe environment
+mutation. Assertions remain mandatory. Windows log forwarding also now writes
+UTF-8 explicitly so nextest's Unicode separators cannot fail under CP1252.
+
+Run this focused suite without launching the unrelated full CI matrix:
+
+```sh
+gh workflow run ci.yml --ref fix/gnu-terminal-parity -f terminal_only=true
+```
+
+The native jobs also run during ordinary pull-request and main-branch CI.
