@@ -7,7 +7,6 @@
 //! Raw input uses crossterm. Output uses native terminfo capabilities on Unix
 //! and negotiated VT or native screen buffers on Windows.
 
-#[cfg(not(windows))]
 #[cfg(test)]
 use super::terminal_capabilities::StringCapability;
 use super::terminal_capabilities::TerminalCapabilityDatabase;
