@@ -201,7 +201,7 @@ pub(super) fn validate_badging(badging: &str) -> Result<()> {
         "compileSdkVersion='36'",
         "minSdkVersion:'24'",
         "targetSdkVersion:'36'",
-        "launchable-activity: name='com.google.androidgamesdk.GameActivity'",
+        "launchable-activity: name='org.neomacs.NeomacsActivity'",
         "native-code: 'arm64-v8a'",
     ] {
         if !badging.contains(required) {
