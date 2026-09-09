@@ -16,8 +16,8 @@ use wasm_bindgen_futures::spawn_local;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
-use winit::window::{Window, WindowId};
+use winit::platform::web::WindowAttributesWeb;
+use winit::window::{WindowAttributes, WindowId};
 
 use crate::presentation_readiness::{
     BrowserFrameProvenance, BrowserPresentationAttempt, BrowserPresentationFailure,
@@ -169,11 +169,11 @@ pub fn browser_pointer_input(
     pressed: bool,
     modifiers: u32,
 ) -> Result<Vec<u8>, JsValue> {
+    use neomacs_display_protocol::geometry::{GeometryPoint, LogicalPixels, RootSurfaceSpace};
+    use neomacs_display_protocol::interaction_projection::InteractionProjection;
     use neomacs_display_protocol::{
         PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, PresentedHitQuery,
     };
-    use neomacs_display_protocol::geometry::{GeometryPoint, LogicalPixels, RootSurfaceSpace};
-    use neomacs_display_protocol::interaction_projection::InteractionProjection;
     if !x.is_finite() || !y.is_finite() || button > 5 {
         return Err(JsValue::from_str("invalid browser pointer"));
     }
@@ -226,19 +226,22 @@ pub fn browser_pointer_input(
 }
 
 impl ApplicationHandler for BrowserFrontend {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.lifecycle.transition(LifecycleEvent::Resumed) != LifecycleAction::CreateFrontend {
             return;
         }
 
-        let attributes = Window::default_attributes()
+        let attributes = WindowAttributes::default()
             .with_title("Neomacs")
-            .with_append(true)
-            .with_focusable(true)
-            .with_prevent_default(true);
+            .with_platform_attributes(Box::new(
+                WindowAttributesWeb::default()
+                    .with_append(true)
+                    .with_focusable(true)
+                    .with_prevent_default(true),
+            ));
         match event_loop.create_window(attributes) {
             Ok(window) => {
-                let window = SurfaceWindow::new(window);
+                let window = SurfaceWindow::from(window);
                 let display = event_loop.owned_display_handle();
                 let presented_slot = Rc::clone(&self.presented);
                 let surface_window = window.clone();
@@ -270,7 +273,7 @@ impl ApplicationHandler for BrowserFrontend {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -298,7 +301,7 @@ impl ApplicationHandler for BrowserFrontend {
                     event_loop.exit();
                 }
             }
-            WindowEvent::Resized(size) => {
+            WindowEvent::SurfaceResized(size) => {
                 if let Some(presented) = self.presented.borrow_mut().as_mut() {
                     if let Err(failure) = presented.resize_physical(size.width, size.height) {
                         report_presentation_failure(failure);
@@ -309,7 +312,11 @@ impl ApplicationHandler for BrowserFrontend {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let size = self.window.as_ref().expect("validated window").inner_size();
+                let size = self
+                    .window
+                    .as_ref()
+                    .expect("validated window")
+                    .surface_size();
                 if let Some(presented) = self.presented.borrow_mut().as_mut() {
                     let resized = presented
                         .renderer
@@ -495,6 +502,9 @@ pub fn start() -> Result<(), JsValue> {
     .map_err(|error| JsValue::from_str(&error.to_string()))?;
     FIRST_EDITOR_PRESENTATION.with(|latch| *latch.borrow_mut() = Default::default());
     let event_loop = EventLoop::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
-    event_loop.spawn_app(BrowserFrontend::default());
+    // On web, winit 0.31 registers the application and returns immediately.
+    event_loop
+        .run_app(BrowserFrontend::default())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
     Ok(())
 }
