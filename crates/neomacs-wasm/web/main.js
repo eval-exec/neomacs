@@ -62,11 +62,11 @@ function flushInput() {
   inputInFlight = true;
 }
 
-function inputAccepted(sequence) {
+function inputSettled(sequence) {
   const expected = inputQueue[0]?.sequence;
   if (!inputInFlight || expected !== sequence) {
     throw new Error(
-      `editor Worker acknowledged input ${String(sequence)}; expected ${String(expected)}`,
+      `editor Worker settled input ${String(sequence)}; expected ${String(expected)}`,
     );
   }
   inputQueue.shift();
@@ -159,9 +159,12 @@ async function start() {
       });
       sendViewport();
       flushInput();
-    } else if (message?.type === "input-accepted") {
+    } else if (message?.type === "input-accepted" || message?.type === "input-rejected") {
       try {
-        inputAccepted(message.sequence);
+        if (message.type === "input-rejected") {
+          console.error("Editor rejected browser input:", message.message);
+        }
+        inputSettled(message.sequence);
       } catch (error) {
         showFailure(error);
         worker.terminate();
