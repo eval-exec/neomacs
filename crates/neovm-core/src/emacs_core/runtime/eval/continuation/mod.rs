@@ -5,11 +5,13 @@
 //! and linear binding-cleanup ownership. The Context remains on its VM thread.
 
 use super::apply::ActiveInterpretedLambdaCall;
+use super::special_forms::ActiveLetScope;
 use super::*;
 
 pub(super) enum PreparedForm {
     Value(Value),
     Call(PreparedCall),
+    LetBody { body: Value, scope: ActiveLetScope },
 }
 
 pub(super) struct PreparedCall {
@@ -53,6 +55,14 @@ enum Continuation {
     Lambda {
         call: ActiveInterpretedLambdaCall,
         operands: usize,
+    },
+    Let {
+        scope: ActiveLetScope,
+        sequence: SequenceTempRootScopeState,
+        operands: usize,
+    },
+    Sequence {
+        cursor: usize,
     },
 }
 
@@ -134,6 +144,24 @@ impl Context {
                         match prepared {
                             Err(flow) => Step::Return(Err(flow)),
                             Ok(PreparedForm::Value(value)) => Step::Return(Ok(value)),
+                            Ok(PreparedForm::LetBody { body, scope }) => {
+                                let cursor = self.bc_buf.len();
+                                self.bc_buf.push(body);
+                                let sequence = self.save_sequence_temp_roots();
+                                continuations.push(Continuation::Let {
+                                    scope,
+                                    sequence,
+                                    operands: cursor,
+                                });
+                                if body.is_cons() {
+                                    continuations.push(Continuation::Sequence { cursor });
+                                    Step::Eval(body.cons_car())
+                                } else if body.is_nil() {
+                                    Step::Return(Ok(Value::NIL))
+                                } else {
+                                    Step::Return(Err(self.listp_error(body)))
+                                }
+                            }
                             Ok(PreparedForm::Call(call)) => {
                                 let cursor = self.bc_buf.len();
                                 self.bc_buf.push(call.arguments);
@@ -270,6 +298,39 @@ impl Context {
                         },
                         Continuation::Lambda { call, operands } => {
                             let result = self.finish_interpreted_lambda(call, result);
+                            self.bc_buf.truncate(operands);
+                            Step::Return(result)
+                        }
+                        Continuation::Sequence { cursor } => match result {
+                            Ok(value) => {
+                                let remaining = self.bc_buf[cursor].cons_cdr();
+                                self.bc_buf[cursor] = remaining;
+                                if remaining.is_cons() {
+                                    continuations.push(Continuation::Sequence { cursor });
+                                    Step::Eval(remaining.cons_car())
+                                } else if remaining.is_nil() {
+                                    Step::Return(Ok(value))
+                                } else {
+                                    Step::Return(Err(self.listp_error(remaining)))
+                                }
+                            }
+                            Err(Flow::ThreadBlocked(blocked)) => {
+                                let remaining = if blocked.remaining_forms.is_nil() {
+                                    self.bc_buf[cursor].cons_cdr()
+                                } else {
+                                    blocked.remaining_forms
+                                };
+                                Step::Return(Err(Flow::thread_blocked(blocked.blocker, remaining)))
+                            }
+                            Err(flow) => Step::Return(Err(flow)),
+                        },
+                        Continuation::Let {
+                            scope,
+                            sequence,
+                            operands,
+                        } => {
+                            self.restore_sequence_temp_roots(sequence);
+                            let result = self.finish_let_scope(scope, result);
                             self.bc_buf.truncate(operands);
                             Step::Return(result)
                         }

@@ -5,22 +5,39 @@
 
 use super::*;
 
+/// Owns the bindings and transient roots installed for one `let` body.
+/// Consumed exactly once, whether the body returns normally or unwinds.
+pub(super) struct ActiveLetScope {
+    specpdl: usize,
+    temp_roots: EvalTempRootScopeState,
+}
+
 impl Context {
+    pub(super) fn prepare_special_form_with_surface(
+        &mut self,
+        surface_id: SymId,
+        target_id: SymId,
+        tail: Value,
+    ) -> Option<Result<continuation::PreparedForm, Flow>> {
+        if matches!(
+            evaluator_handler(target_id),
+            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::Let))
+        ) {
+            return Some(
+                self.begin_let_value_named(surface_id, tail)
+                    .map(|(body, scope)| continuation::PreparedForm::LetBody { body, scope }),
+            );
+        }
+        self.try_special_form_with_surface(surface_id, target_id, tail)
+            .map(|result| result.map(continuation::PreparedForm::Value))
+    }
+
     pub(super) fn try_special_form_value_id(
         &mut self,
         sym_id: SymId,
         tail: Value,
     ) -> Option<EvalResult> {
         self.try_special_form_with_surface(sym_id, sym_id, tail)
-    }
-
-    pub(super) fn try_aliased_special_form_value_id(
-        &mut self,
-        surface_id: SymId,
-        target_id: SymId,
-        tail: Value,
-    ) -> Option<EvalResult> {
-        self.try_special_form_with_surface(surface_id, target_id, tail)
     }
 
     /// The single special-form dispatch table. `target_id` selects the form
@@ -168,6 +185,16 @@ impl Context {
     }
 
     pub(super) fn sf_let_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
+        let (body, scope) = self.begin_let_value_named(call_name, tail)?;
+        let result = self.sf_progn_value(body);
+        self.finish_let_scope(scope, result)
+    }
+
+    fn begin_let_value_named(
+        &mut self,
+        call_name: SymId,
+        tail: Value,
+    ) -> Result<(Value, ActiveLetScope), Flow> {
         if tail.is_nil() {
             return Err(signal(
                 LispCondition::WrongNumberOfArguments,
@@ -334,13 +361,27 @@ impl Context {
             if let Err(flow) = self.try_specbind(*sym_id, *value) {
                 let result = self.unbind_to_with_result(specpdl_count, Err(flow));
                 self.restore_eval_temp_roots_to_sequence(temp_scope);
-                return result;
+                return result
+                    .map(|_| unreachable!("unwinding a binding error cannot return a value"));
             }
         }
 
-        let result = self.sf_progn_value(body);
-        let result = self.unbind_to_with_result(specpdl_count, result);
-        self.restore_eval_temp_roots_to_sequence(temp_scope);
+        Ok((
+            body,
+            ActiveLetScope {
+                specpdl: specpdl_count,
+                temp_roots: temp_scope,
+            },
+        ))
+    }
+
+    pub(super) fn finish_let_scope(
+        &mut self,
+        scope: ActiveLetScope,
+        result: EvalResult,
+    ) -> EvalResult {
+        let result = self.unbind_to_with_result(scope.specpdl, result);
+        self.restore_eval_temp_roots_to_sequence(scope.temp_roots);
         result
     }
 

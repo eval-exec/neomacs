@@ -4571,7 +4571,6 @@ impl Context {
         refresh_features_from_variable_in_state(&self.obarray, &mut self.features);
     }
 
-
     fn has_feature(&mut self, name: &str) -> bool {
         feature_present_in_state(&self.obarray, &mut self.features, name)
     }
@@ -5547,7 +5546,6 @@ impl Context {
         Ok(())
     }
 
-
     fn prepare_eval_sub_cons_dispatch(
         &mut self,
         original_fun: Value,
@@ -5634,8 +5632,10 @@ impl Context {
                 if list_length(&original_args).is_none() {
                     return Err(self.listp_error(original_args));
                 }
-                if let Some(result) = self.try_special_form_value_id(sym_id, original_args) {
-                    return result.map(PreparedForm::Value);
+                if let Some(result) =
+                    self.prepare_special_form_with_surface(sym_id, sym_id, original_args)
+                {
+                    return result;
                 }
             }
             if let Some((target_sym_id, entry)) = subr
@@ -5660,7 +5660,10 @@ impl Context {
                 return Ok(PreparedForm::Call(PreparedCall {
                     function: func,
                     arguments: original_args,
-                    target: CallTarget::Subr { sym_id: target_sym_id, entry },
+                    target: CallTarget::Subr {
+                        sym_id: target_sym_id,
+                        entry,
+                    },
                 }));
             }
             if func.get_bytecode_data().is_some() {
@@ -5761,13 +5764,13 @@ impl Context {
             // argument forms. Special forms leave the frame UNEVALLED
             // throughout (no `set_backtrace_args_evalled` call),
             // matching GNU eval.c:2618-2619.
-            let result = if surface_sym_id == target_sym_id {
-                self.try_special_form_value_id(surface_sym_id, original_args)
-            } else {
-                self.try_aliased_special_form_value_id(surface_sym_id, target_sym_id, original_args)
-            };
+            let result = self.prepare_special_form_with_surface(
+                surface_sym_id,
+                target_sym_id,
+                original_args,
+            );
             if let Some(result) = result {
-                return result.map(PreparedForm::Value);
+                return result;
             }
         }
 
@@ -5793,7 +5796,9 @@ impl Context {
             let expanded_root_count = self.specpdl.len();
             self.push_specpdl_root(expanded);
             let result = self.eval_sub(expanded);
-            return self.unbind_to_with_result(expanded_root_count, result).map(PreparedForm::Value);
+            return self
+                .unbind_to_with_result(expanded_root_count, result)
+                .map(PreparedForm::Value);
         }
         if cons_head_symbol_id(&func) == Some(macro_symbol()) {
             // Cons-cell macro: (macro . fn) — GNU eval.c:2730
@@ -5812,7 +5817,9 @@ impl Context {
             let expanded_root_count = self.specpdl.len();
             self.push_specpdl_root(expanded);
             let result = self.eval_sub(expanded);
-            return self.unbind_to_with_result(expanded_root_count, result).map(PreparedForm::Value);
+            return self
+                .unbind_to_with_result(expanded_root_count, result)
+                .map(PreparedForm::Value);
         }
 
         // GNU eval.c:2606-2614: for SUBRP `fun`, check arity
