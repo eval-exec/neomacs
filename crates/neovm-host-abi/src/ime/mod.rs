@@ -9,7 +9,7 @@ mod snapshot;
 pub use identity::{ImeSessionId, ImeSnapshotId};
 pub use offset::ImeUtf16Offset;
 pub use operation::ImeOperation;
-pub use request::{ImeSelection, ImeSelectionOutcome};
+pub use request::{ImeSelection, ImeSelectionAcknowledgement, ImeSelectionOutcome};
 pub use snapshot::ImeTextSnapshot;
 
 #[cfg(test)]

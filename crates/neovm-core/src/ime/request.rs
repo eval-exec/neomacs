@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, bounded};
-use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome, ImeTextSnapshot};
+use neovm_host_abi::ime::{
+    ImeSelection, ImeSelectionAcknowledgement, ImeSelectionOutcome, ImeTextSnapshot,
+};
 
 /// A request failed inside Lisp. The original nonlocal exit stays on the VM
 /// thread and follows normal editor error/quit handling.
@@ -44,6 +46,12 @@ impl<T> ImeReplySender<T> {
 /// Lisp can itself read input, including inside a recursive minibuffer.
 #[derive(Clone, Debug)]
 pub enum ImeRequest {
+    /// Apply a selection and capture its resulting observation without a
+    /// second round trip. The existing selection-only request stays unchanged.
+    SelectAndObserve {
+        selection: ImeSelection,
+        reply: ImeReplySender<Result<ImeSelectionAcknowledgement, ImeEditorError>>,
+    },
     /// Obtain a bounded snapshot of the current insertion context.
     SurroundingText(ImeReplySender<Option<ImeTextSnapshot>>),
     /// Apply a selection only to the exact captured editor context.
@@ -54,6 +62,19 @@ pub enum ImeRequest {
 }
 
 impl ImeRequest {
+    /// Apply a selection and capture a fresh observation in input order.
+    /// The notification follows the same contract as `surrounding_text`.
+    pub fn select_and_observe(
+        selection: ImeSelection,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> (
+        Self,
+        Receiver<Result<ImeSelectionAcknowledgement, ImeEditorError>>,
+    ) {
+        let (reply, receiver) = ImeReplySender::channel(notify);
+        (Self::SelectAndObserve { selection, reply }, receiver)
+    }
+
     /// Create a query and its nonblocking frontend reply channel.
     /// The notification must be a short, non-panicking event-loop wake.
     pub fn surrounding_text(
@@ -75,6 +96,18 @@ impl ImeRequest {
 
     pub(crate) fn dispatch(self, context: &mut crate::Context) -> Result<(), crate::Flow> {
         match self {
+            Self::SelectAndObserve { selection, reply } => {
+                match context.ime_set_selection(selection) {
+                    Ok(outcome) => reply.complete(Ok(ImeSelectionAcknowledgement {
+                        outcome,
+                        snapshot: context.ime_surrounding_text(),
+                    })),
+                    Err(flow) => {
+                        reply.complete(Err(ImeEditorError));
+                        return Err(flow);
+                    }
+                }
+            }
             Self::SurroundingText(reply) => reply.complete(context.ime_surrounding_text()),
             Self::SetSelection { selection, reply } => {
                 let result = context.ime_set_selection(selection);

@@ -9,6 +9,86 @@ use neomacs_app::session::{EditorSession, ImeReply};
 use neovm_core::emacs_core::eval::Context;
 
 #[test]
+fn stale_selection_acknowledges_the_current_snapshot_in_input_order() {
+    use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome};
+    let mut evaluator = Context::new();
+    evaluator.eval_str(r##"(insert "old")"##).unwrap();
+    let old = evaluator.ime_surrounding_text().unwrap();
+    evaluator
+        .eval_str(
+            r##"(progn (insert "new")
+      (setq noninteractive t top-level '(progn (read-event) (kill-emacs 0))))"##,
+        )
+        .unwrap();
+    let (session, frontend) =
+        EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    let reply = frontend
+        .input()
+        .ime_client(|| {})
+        .select_and_observe(ImeSelection {
+            snapshot: old.id(),
+            cursor: 0,
+            anchor: 0,
+        })
+        .unwrap();
+    frontend
+        .input()
+        .submit(&FrontendEvent::TextCommitted {
+            text: "z".into(),
+            target: FrontendFrameId::PRIMARY,
+        })
+        .unwrap();
+    assert!(session.run().is_success());
+    let ImeReply::Ready(Ok(ack)) = reply.try_receive() else {
+        panic!("missing acknowledgement")
+    };
+    assert_eq!(ack.outcome, ImeSelectionOutcome::StaleSnapshot);
+    let current = ack.snapshot.unwrap();
+    assert_ne!(current.id(), old.id());
+    assert_eq!(current.text(), "oldnew");
+    assert_eq!(current.cursor(), 6);
+}
+
+#[test]
+fn selection_acknowledgement_does_not_export_private_input() {
+    use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome};
+    let mut evaluator = Context::new();
+    evaluator.eval_str(r##"(insert "secret")"##).unwrap();
+    let old = evaluator.ime_surrounding_text().unwrap();
+    evaluator
+        .eval_str(
+            r##"(setq noninteractive t top-level
+      '(progn (let ((overriding-text-conversion-style 'password)) (read-event))
+              (kill-emacs 0)))"##,
+        )
+        .unwrap();
+    let (session, frontend) =
+        EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    let reply = frontend
+        .input()
+        .ime_client(|| {})
+        .select_and_observe(ImeSelection {
+            snapshot: old.id(),
+            cursor: 0,
+            anchor: 0,
+        })
+        .unwrap();
+    frontend
+        .input()
+        .submit(&FrontendEvent::TextCommitted {
+            text: "z".into(),
+            target: FrontendFrameId::PRIMARY,
+        })
+        .unwrap();
+    assert!(session.run().is_success());
+    let ImeReply::Ready(Ok(ack)) = reply.try_receive() else {
+        panic!("missing acknowledgement")
+    };
+    assert_eq!(ack.outcome, ImeSelectionOutcome::StaleSnapshot);
+    assert!(ack.snapshot.is_none());
+}
+
+#[test]
 fn snapshot_request_honors_dynamic_password_bindings_during_input() {
     let mut evaluator = Context::new();
     evaluator
@@ -139,6 +219,15 @@ fn queued_selection_cannot_target_a_buffer_switched_by_preceding_input() {
 
 #[test]
 fn selection_failure_replies_without_swallowing_lisp_quit() {
+    check_selection_failure(false);
+}
+
+#[test]
+fn selection_acknowledgement_preserves_lisp_quit() {
+    check_selection_failure(true);
+}
+
+fn check_selection_failure(observe: bool) {
     use neovm_host_abi::ime::ImeSelection;
     let mut evaluator = Context::new();
     evaluator
@@ -155,15 +244,19 @@ fn selection_failure_replies_without_swallowing_lisp_quit() {
     let snapshot = evaluator.ime_surrounding_text().unwrap();
     let (session, frontend) =
         EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
-    let reply = frontend
-        .input()
-        .ime_client(|| {})
-        .select(ImeSelection {
-            snapshot: snapshot.id(),
-            cursor: 0,
-            anchor: 0,
-        })
-        .unwrap();
+    let client = frontend.input().ime_client(|| {});
+    let selection = ImeSelection {
+        snapshot: snapshot.id(),
+        cursor: 0,
+        anchor: 0,
+    };
+    let failed: Box<dyn FnOnce() -> bool> = if observe {
+        let reply = client.select_and_observe(selection).unwrap();
+        Box::new(move || matches!(reply.try_receive(), ImeReply::Ready(Err(_))))
+    } else {
+        let reply = client.select(selection).unwrap();
+        Box::new(move || matches!(reply.try_receive(), ImeReply::Ready(Err(_))))
+    };
     // If the transport swallows quit, read-event consumes this instead.
     frontend
         .input()
@@ -174,7 +267,7 @@ fn selection_failure_replies_without_swallowing_lisp_quit() {
         .unwrap();
     let (exit, mut evaluator) = session.run_until_stopped(|_| {}).into_parts();
     assert!(exit.is_success());
-    assert!(matches!(reply.try_receive(), ImeReply::Ready(Err(_))));
+    assert!(failed());
     assert!(evaluator.eval_str("observed-quit").unwrap().is_truthy());
 }
 
