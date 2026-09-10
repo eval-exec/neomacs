@@ -17,7 +17,15 @@ def main():
     parser.add_argument("--limits", type=int, nargs="+", default=[200, 400, 800, 1600])
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--bytecompiled", action="store_true")
-    parser.add_argument("--call-style", choices=["direct", "argument", "conditional", "funcall", "binding", "protected"], default="direct")
+    parser.add_argument("--lexical", action="store_true")
+    parser.add_argument(
+        "--call-style",
+        choices=[
+            "direct", "argument", "conditional", "funcall", "binding",
+            "initializer", "sequential-binding", "sequential-initializer", "protected",
+        ],
+        default="direct",
+    )
     args = parser.parse_args()
     driver = webdriver.Chrome(options=chrome_options(args.chrome, args.headless))
     editor = BrowserEditorHarness(driver, args.timeout)
@@ -36,6 +44,9 @@ def main():
             "conditional": "(if t (neomacs-stack-probe))",
             "funcall": "(funcall #'neomacs-stack-probe)",
             "binding": "(let ((neomacs-stack-local 42)) (neomacs-stack-probe))",
+            "initializer": "(let ((neomacs-stack-local (neomacs-stack-probe))) neomacs-stack-local)",
+            "sequential-binding": "(let* ((neomacs-stack-local 42)) (neomacs-stack-probe))",
+            "sequential-initializer": "(let* ((neomacs-stack-local (neomacs-stack-probe))) neomacs-stack-local)",
             "protected": "(unwind-protect (neomacs-stack-probe) (setq neomacs-stack-cleanups (1+ neomacs-stack-cleanups)))",
         }[args.call_style]
         for limit in args.limits:
@@ -51,8 +62,9 @@ def main():
             editor.eval_expression(
                 f"""(progn
                       (setq neomacs-stack-cleanups 0)
+                      (setq neomacs-stack-local 'outside)
                       (defalias 'neomacs-stack-probe
-                        (lambda () {body}))
+                        (eval '(function (lambda () {body})) {"t" if args.lexical else "nil"}))
                       {compile_probe}
                       (unwind-protect
                           (condition-case err
@@ -67,6 +79,13 @@ def main():
                 failure_marker="STACK-FAIL:",
             )
             print(f"PASS: Lisp recursion limit {limit} signals without trapping", flush=True)
+            if args.call_style in {
+                "binding", "initializer", "sequential-binding", "sequential-initializer",
+            }:
+                editor.eval_expression(
+                    '(if (eq neomacs-stack-local \'outside) (message (concat "STACK-" "BINDING-PASS")) (message (concat "STACK-" "FAIL: leaked binding")))',
+                    "STACK-BINDING-PASS", failure_marker="STACK-FAIL:",
+                )
             if args.call_style == "protected":
                 editor.eval_expression(
                     '(if (> neomacs-stack-cleanups 0) (message (concat "STACK-" "CLEANUP-PASS")) (message (concat "STACK-" "FAIL: missing cleanup")))',
