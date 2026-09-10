@@ -578,6 +578,90 @@ fn window_old_buffer_decodes_any_window_including_internal_and_deleted_ones() {
 }
 
 #[test]
+fn coordinates_in_window_p_decodes_a_live_window_before_its_coordinates() {
+    // GNU: `w = decode_live_window (window); CHECK_CONS (coordinates);`
+    // (src/window.c) -- the WINDOW is decoded FIRST, and `decode_live_window`
+    // rejects an internal window, a deleted window, a frame and a symbol alike,
+    // all against `window-live-p`.
+    //
+    // Measured on GNU Emacs 31.1:
+    //   nil (0 . 0)   live (0 . 0)
+    //   internal ERR:window-live-p   dead ERR:window-live-p
+    //   frame    ERR:window-live-p   symbol ERR:window-live-p
+    //
+    // Neomacs never decoded the window itself: it delegated to
+    // `window-total-width`, which decodes with `window-valid-p`, so an internal
+    // window was ACCEPTED and everything else reported the wrong predicate.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let out = ev
+        .eval_str_each(
+            "(progn (split-window-internal (selected-window) nil nil nil) t)
+         (coordinates-in-window-p '(0 . 0) nil)
+         (coordinates-in-window-p '(0 . 0) (selected-window))
+         (condition-case err (coordinates-in-window-p '(0 . 0) (window-parent (selected-window)))
+           (error (car (cdr err))))
+         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+           (delete-window-internal doomed)
+           (condition-case err (coordinates-in-window-p '(0 . 0) doomed) (error (car (cdr err)))))
+         (condition-case err (coordinates-in-window-p '(0 . 0) (selected-frame))
+           (error (car (cdr err))))
+         (condition-case err (coordinates-in-window-p '(0 . 0) 'foo) (error (car (cdr err))))
+         (condition-case err (coordinates-in-window-p 'not-a-cons 'foo) (error (car (cdr err))))",
+        )
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(out[0], "OK t");
+    assert_eq!(out[1], "OK (0 . 0)", "nil means the selected window");
+    assert_eq!(out[2], "OK (0 . 0)", "a live window answers");
+    assert_eq!(
+        out[3], "OK window-live-p",
+        "an internal window is NOT live, so decode_live_window rejects it"
+    );
+    assert_eq!(out[4], "OK window-live-p", "nor is a deleted window");
+    assert_eq!(out[5], "OK window-live-p", "a frame is not a window at all");
+    assert_eq!(out[6], "OK window-live-p", "nor is a symbol");
+    assert_eq!(
+        out[7], "OK window-live-p",
+        "and the WINDOW is decoded before the coordinates are type-checked"
+    );
+}
+
+#[test]
+fn lower_frame_decodes_a_live_frame() {
+    // GNU `Flower_frame` opens with `decode_live_frame (frame)`
+    // (src/frame.c), so a window or a symbol is rejected against
+    // `frame-live-p` before any lowering is attempted.  Measured on GNU
+    // Emacs 31.1: nil => nil, frame => nil, live-window => ERR:frame-live-p,
+    // symbol => ERR:frame-live-p.
+    //
+    // Neomacs accepted anything: the subr was a stub that checked its arity
+    // and returned nil, so a caller passing the wrong object got silence.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let out = ev
+        .eval_str_each(
+            "(lower-frame)
+         (lower-frame nil)
+         (lower-frame (selected-frame))
+         (condition-case err (lower-frame (selected-window)) (error (car (cdr err))))
+         (condition-case err (lower-frame 'foo) (error (car (cdr err))))",
+        )
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(out[0], "OK nil", "omitted means the selected frame");
+    assert_eq!(out[1], "OK nil", "and so does nil");
+    assert_eq!(out[2], "OK nil", "a live frame is accepted");
+    assert_eq!(
+        out[3], "OK frame-live-p",
+        "a window is not a frame -- GNU signals rather than doing nothing"
+    );
+    assert_eq!(out[4], "OK frame-live-p", "nor is a symbol");
+}
+
+#[test]
 fn minibuffer_window_frame_first_window_and_window_minibuffer_p_semantics() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();

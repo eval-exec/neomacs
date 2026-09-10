@@ -2417,9 +2417,18 @@ pub(crate) fn builtin_coordinates_in_window_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    expect_args("coordinates-in-window-p", &args, 2)?;
+    // GNU decodes the WINDOW before it type-checks COORDINATES:
+    //     w = decode_live_window (window);
+    //     CHECK_CONS (coordinates);
+    // (src/window.c).  `decode_live_window` is `CHECK_LIVE_WINDOW`, so an
+    // internal window, a deleted window, a frame and a symbol are all rejected
+    // against `window-live-p`.  Deriving the answer from `window-total-width`
+    // instead -- which decodes with `window-valid-p` -- silently ACCEPTED an
+    // internal window and misreported the predicate for everything else.
+    super::window_cmds::decode_live_window_id(eval, args.get(1))?;
     let frames = &mut eval.frames;
     let buffers = &mut eval.buffers;
-    expect_args("coordinates-in-window-p", &args, 2)?;
 
     let (x, y) = if args[0].is_cons() {
         let car = args[0].cons_car();

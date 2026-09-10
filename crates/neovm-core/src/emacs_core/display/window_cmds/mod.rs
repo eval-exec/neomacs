@@ -74,6 +74,22 @@ pub(crate) use super::builtins::{
 // discarded the write that `window.el`'s resize engine depends on.
 // ---------------------------------------------------------------------------
 
+/// GNU's `decode_live_window` (`src/window.c`): nil is the SELECTED window and
+/// everything else must be a LIVE window -- an internal window, a deleted
+/// window, a frame and a symbol are all rejected against `window-live-p`.
+///
+/// This exists as its own decoder rather than going through
+/// `validate_optional_window_designator_in_state`, whose `predicate` argument
+/// only chooses the error TEXT: its check is `find_window`, which matches any
+/// node of the window tree, so asking it for `window-live-p` still accepts an
+/// internal window and merely misreports the reason when it fails.
+pub(crate) fn decode_live_window_id(
+    eval: &mut super::eval::Context,
+    arg: Option<&Value>,
+) -> Result<WindowId, Flow> {
+    resolve_window_id_with_pred(eval, arg, "window-live-p").map(|(_frame, window)| window)
+}
+
 fn decode_valid_window_id(
     eval: &mut super::eval::Context,
     arg: Option<&Value>,
