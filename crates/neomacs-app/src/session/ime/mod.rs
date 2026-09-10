@@ -5,7 +5,9 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, TryRecvError};
 pub use neovm_core::ImeEditorError;
 use neovm_core::{ImeRequest, keyboard::InputEvent};
-use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome, ImeTextSnapshot};
+use neovm_host_abi::ime::{
+    ImeSelection, ImeSelectionAcknowledgement, ImeSelectionOutcome, ImeTextSnapshot,
+};
 
 use super::{FrontendInputDisconnected, FrontendInputPort};
 use crate::evaluator_input::EvaluatorInputBatch;
@@ -30,6 +32,23 @@ impl FrontendInputPort {
 }
 
 impl ImeClient {
+    /// Apply a snapshot-qualified selection and return the current observation
+    /// in the same VM turn. A stale selection is not retried. The observation
+    /// may be absent under privacy or presentation restrictions; it retires
+    /// earlier observations just like `surrounding_text`.
+    pub fn select_and_observe(
+        &self,
+        selection: ImeSelection,
+    ) -> Result<
+        PendingImeReply<Result<ImeSelectionAcknowledgement, ImeEditorError>>,
+        FrontendInputDisconnected,
+    > {
+        let (request, receiver) = ImeRequest::select_and_observe(selection, self.notify.clone());
+        self.input
+            .submit_batch(EvaluatorInputBatch::single(InputEvent::ImeRequest(request)))?;
+        Ok(PendingImeReply { receiver })
+    }
+
     /// Apply offsets from a previously observed snapshot in input order.
     /// Stale snapshots are rejected; failures never retry against current text.
     pub fn select(
