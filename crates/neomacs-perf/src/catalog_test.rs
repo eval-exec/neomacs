@@ -7,7 +7,7 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 14);
+    assert_eq!(scenarios.len(), 16);
 
     let rust_lsp = scenario(ScenarioId::RustLspTyping);
     assert_eq!(rust_lsp.id, ScenarioId::RustLspTyping);
@@ -70,6 +70,11 @@ fn catalog_commits_the_editor_workflow_scenario_family() {
         ("large-file-editing", ScenarioId::LargeFileEditing),
         ("indentation", ScenarioId::Indentation),
         ("regex-search", ScenarioId::RegexSearch),
+        ("magit-status-compiled", ScenarioId::MagitStatusCompiled),
+        (
+            "org-journal-open-compiled",
+            ScenarioId::OrgJournalOpenCompiled,
+        ),
     ];
 
     for (name, id) in expected {
@@ -162,4 +167,50 @@ fn catalog_exposes_the_org_journal_open_workload() {
 fn unknown_scenario_names_are_rejected_instead_of_silently_falling_back() {
     let error = ScenarioId::from_str("rust-typing").expect_err("unknown scenario must fail");
     assert!(error.to_string().contains("rust-typing"));
+}
+
+/// The byte-code rows must mirror the source rows they exist to correct, and
+/// must differ from them in exactly one way: which of the package's files
+/// `load` prefers.
+///
+/// The plain `magit-status` and `org-journal-open` rows force
+/// `load-suffixes '(".el")`, inherited from the MELPA parity tests, so they
+/// measure loading and tree-walking source -- a configuration no user runs.
+/// Measured against the pinned GNU Emacs 31.1, whole-run instructions:u,
+/// magit goes from 1.306x on source to 0.891x on byte-code and org-journal
+/// from 1.178x to 0.871x, which is the difference between the board's two
+/// worst rows and two wins.
+#[test]
+fn the_byte_code_rows_mirror_the_source_rows_they_correct() {
+    for (compiled, source) in [
+        (ScenarioId::MagitStatusCompiled, ScenarioId::MagitStatus),
+        (
+            ScenarioId::OrgJournalOpenCompiled,
+            ScenarioId::OrgJournalOpen,
+        ),
+    ] {
+        let compiled_spec = scenario(compiled);
+        let source_spec = scenario(source);
+        assert_eq!(
+            compiled_spec.id, compiled,
+            "the catalog index must return the spec it was asked for"
+        );
+        assert_eq!(
+            compiled_spec.default_frontend, source_spec.default_frontend,
+            "{compiled} must run the same frontend as {source}"
+        );
+        assert_eq!(
+            compiled_spec.default_iterations, source_spec.default_iterations,
+            "{compiled} must run the same number of operations as {source}"
+        );
+        assert_eq!(
+            compiled_spec.primary_metric, source_spec.primary_metric,
+            "{compiled} must be judged by the same metric as {source}"
+        );
+        assert_eq!(
+            ScenarioId::from_str(&compiled.to_string()),
+            Ok(compiled),
+            "{compiled} must round-trip through its name"
+        );
+    }
 }

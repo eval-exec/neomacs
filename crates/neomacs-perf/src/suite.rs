@@ -73,6 +73,9 @@ const STANDARD_SCENARIOS: &[SuiteScenario] = &[
     suite_scenario(ScenarioId::LargeFileEditing, 8.0),
     suite_scenario(ScenarioId::Indentation, 8.0),
     suite_scenario(ScenarioId::RegexSearch, 8.0),
+    // Byte-code rows carry the same budgets as the source rows they mirror.
+    suite_scenario(ScenarioId::MagitStatusCompiled, 10.0),
+    suite_scenario(ScenarioId::OrgJournalOpenCompiled, 10.0),
 ];
 
 const fn suite_scenario(scenario: ScenarioId, maximum_regression_percent: f64) -> SuiteScenario {

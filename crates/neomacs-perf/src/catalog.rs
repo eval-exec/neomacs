@@ -45,9 +45,32 @@ pub enum ScenarioId {
     Indentation,
     RegexSearch,
     SustainedNativeVideo,
+    /// `magit-status` with the package loaded as byte-code, which is what a
+    /// user's session does.  The plain row forces `load-suffixes '(".el")`,
+    /// inherited from the MELPA parity tests, and so measures loading and
+    /// tree-walking source instead.
+    MagitStatusCompiled,
+    /// `org-journal-open` with the package loaded as byte-code, for the same
+    /// reason.
+    OrgJournalOpenCompiled,
 }
 
 impl ScenarioId {
+    /// The workload this scenario runs, which is not always its own name.
+    ///
+    /// The `-compiled` rows differ from the rows they mirror only in which of
+    /// the package's files `load` prefers; they execute the same fixture
+    /// branch. Fixtures dispatch on this name and end in an
+    /// `(error "unknown editor workload")`, so a variant that reported its own
+    /// id would fail the run rather than measure it.
+    pub const fn workload_str(self) -> &'static str {
+        match self {
+            Self::MagitStatusCompiled => Self::MagitStatus.as_str(),
+            Self::OrgJournalOpenCompiled => Self::OrgJournalOpen.as_str(),
+            other => other.as_str(),
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::RustLspTyping => "rust-lsp-typing",
@@ -64,6 +87,8 @@ impl ScenarioId {
             Self::Indentation => "indentation",
             Self::RegexSearch => "regex-search",
             Self::SustainedNativeVideo => "sustained-native-video",
+            Self::MagitStatusCompiled => "magit-status-compiled",
+            Self::OrgJournalOpenCompiled => "org-journal-open-compiled",
         }
     }
 }
@@ -104,6 +129,8 @@ impl FromStr for ScenarioId {
             "indentation" => Ok(Self::Indentation),
             "regex-search" => Ok(Self::RegexSearch),
             "sustained-native-video" => Ok(Self::SustainedNativeVideo),
+            "magit-status-compiled" => Ok(Self::MagitStatusCompiled),
+            "org-journal-open-compiled" => Ok(Self::OrgJournalOpenCompiled),
             unknown => Err(UnknownScenarioId(unknown.to_string())),
         }
     }
@@ -270,6 +297,29 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::P99VideoPresentationInterval,
         cross_editor_parity_metrics: &[],
     },
+    // The two byte-code rows below exist because the plain `magit-status` and
+    // `org-journal-open` rows force `load-suffixes '(".el")` -- deliberate for
+    // the MELPA parity tests, where reading source keeps a package comparable
+    // between engines without either byte-compiler in the picture, but wrong
+    // for performance, because no user's session runs that way. They are added
+    // as new ids rather than by flipping the existing rows so the published
+    // instruction series stays comparable and the parity rationale survives.
+    ScenarioSpec {
+        id: ScenarioId::MagitStatusCompiled,
+        description: "Revision-pinned Magit status refresh with the package loaded as byte-code, as a user's session loads it",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(10).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::OrgJournalOpenCompiled,
+        description: "Revision-pinned org-journal yearly file open with the packages loaded as byte-code, as a user's session loads them",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(5).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -297,5 +347,7 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::Indentation => &SCENARIOS[11],
         ScenarioId::RegexSearch => &SCENARIOS[12],
         ScenarioId::SustainedNativeVideo => &SCENARIOS[13],
+        ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
+        ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],
     }
 }

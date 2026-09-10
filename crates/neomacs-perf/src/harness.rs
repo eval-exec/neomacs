@@ -145,12 +145,20 @@ impl RunRequest {
             )),
         }?;
         match (self.scenario, self.journal_file.as_ref()) {
-            (ScenarioId::OrgJournalOpen, Some(path)) if path.is_file() => Ok(()),
-            (ScenarioId::OrgJournalOpen, Some(path)) => Err(format!(
-                "org-journal-open requires an existing readable journal file at {}",
-                path.display()
-            )),
-            (ScenarioId::OrgJournalOpen, None) | (_, None) => Ok(()),
+            (ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled, Some(path))
+                if path.is_file() =>
+            {
+                Ok(())
+            }
+            (ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled, Some(path)) => {
+                Err(format!(
+                    "org-journal-open requires an existing readable journal file at {}",
+                    path.display()
+                ))
+            }
+            (ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled, None) | (_, None) => {
+                Ok(())
+            }
             (scenario, Some(path)) => Err(format!(
                 "scenario {scenario} does not accept journal input {}",
                 path.display()
@@ -497,12 +505,13 @@ impl PerfHarness {
             | ScenarioId::GuiInputLatency
             | ScenarioId::OrgEditing
             | ScenarioId::MagitStatus
+            | ScenarioId::MagitStatusCompiled
             | ScenarioId::LargeFileEditing
             | ScenarioId::Indentation
             | ScenarioId::RegexSearch => {
                 scenarios::editor_workload::prepare(&self.workspace_root, request, run_directory)
             }
-            ScenarioId::OrgJournalOpen => {
+            ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
                 scenarios::org_journal_open::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::SustainedNativeVideo => scenarios::sustained_native_video::prepare(
@@ -1225,7 +1234,7 @@ fn frontend_command(
         .env_remove("EMACSLOADPATH")
         .env("SENTINEL", &prepared.sentinel)
         .env("NEOMACS_PERF_RESULT", &prepared.result)
-        .env("NEOMACS_PERF_WORKLOAD", request.scenario.as_str())
+        .env("NEOMACS_PERF_WORKLOAD", request.scenario.workload_str())
         .env(
             "NEOMACS_PERF_ITERATIONS",
             request.iterations().get().to_string(),
@@ -1534,10 +1543,13 @@ fn parse_scenario_result(
         | ScenarioId::GuiInputLatency
         | ScenarioId::OrgEditing
         | ScenarioId::MagitStatus
+        | ScenarioId::MagitStatusCompiled
         | ScenarioId::LargeFileEditing
         | ScenarioId::Indentation
         | ScenarioId::RegexSearch => serde_json::from_str(raw).map(ScenarioResult::EditorWorkload),
-        ScenarioId::OrgJournalOpen => serde_json::from_str(raw).map(ScenarioResult::OrgJournalOpen),
+        ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
+            serde_json::from_str(raw).map(ScenarioResult::OrgJournalOpen)
+        }
         ScenarioId::SustainedNativeVideo => {
             serde_json::from_str(raw).map(ScenarioResult::SustainedNativeVideo)
         }

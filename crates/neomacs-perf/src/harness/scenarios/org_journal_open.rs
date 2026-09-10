@@ -60,7 +60,9 @@ pub(crate) fn prepare(
     let gnu_emacs = EmacsRuntime::gnu_emacs();
     let mut packages =
         PreparedPackageSet::from_locked_melpa(&gnu_emacs, org_journal.package(), "org-journal.el")?
-            .with_load_suffixes(super::editor_workload::scenario_load_suffixes());
+            .with_load_suffixes(super::editor_workload::scenario_load_suffixes(
+                request.scenario,
+            ));
     for dependency in [org_superstar, git_gutter] {
         let directory = prepare_cached_locked_melpa_package(&gnu_emacs, dependency.package())?;
         packages = packages.with_prepared_dependency(dependency.package(), directory)?;
@@ -524,11 +526,15 @@ pub(crate) fn validate_org_journal_open_result(
         SCENARIO_RESULT_SCHEMA_VERSION,
         result.schema_version,
     );
+    // The workload name, not the scenario id: a `-compiled` row runs the same
+    // fixture branch as the row it mirrors and reports that branch's name.
+    // Comparing against the workload still catches a result produced by the
+    // WRONG workload, which is what this invariant is for.
     mismatch(
         &mut mismatches,
         "scenario-id",
-        request.scenario,
-        result.scenario,
+        request.scenario.workload_str(),
+        result.scenario.as_str(),
     );
     mismatch(
         &mut mismatches,

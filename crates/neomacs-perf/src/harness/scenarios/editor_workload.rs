@@ -73,7 +73,10 @@ pub(crate) fn prepare(
     let mut package_provenance = None;
     let mut startup = None;
     let mut packages = None;
-    let repository = if request.scenario == ScenarioId::MagitStatus {
+    let repository = if matches!(
+        request.scenario,
+        ScenarioId::MagitStatus | ScenarioId::MagitStatusCompiled
+    ) {
         let magit_source = locked_melpa_sources()?
             .into_iter()
             .find(|source| source.package().0 == "magit")
@@ -81,7 +84,7 @@ pub(crate) fn prepare(
         let package = magit_source.package();
         let prepared =
             PreparedPackageSet::from_locked_melpa(&EmacsRuntime::gnu_emacs(), package, "magit.el")?
-                .with_load_suffixes(scenario_load_suffixes());
+                .with_load_suffixes(scenario_load_suffixes(request.scenario));
         startup = Some(prepared.write_startup_file(run_directory)?);
         package_provenance = Some(PackageProvenance {
             name: package.0,
@@ -303,11 +306,15 @@ pub(crate) fn validate_editor_workload_result(
         SCENARIO_RESULT_SCHEMA_VERSION,
         result.schema_version,
     );
+    // The workload name, not the scenario id: a `-compiled` row runs the same
+    // fixture branch as the row it mirrors and reports that branch's name.
+    // Comparing against the workload still catches a result produced by the
+    // WRONG workload, which is what this invariant is for.
     mismatch(
         &mut mismatches,
         "scenario-id",
-        request.scenario,
-        result.scenario,
+        request.scenario.workload_str(),
+        result.scenario.as_str(),
     );
     mismatch(
         &mut mismatches,
@@ -391,7 +398,7 @@ pub(crate) fn validate_editor_workload_result(
         ScenarioId::SustainedEditing | ScenarioId::OrgEditing => {
             require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
         }
-        ScenarioId::MagitStatus | ScenarioId::RegexSearch => {
+        ScenarioId::MagitStatus | ScenarioId::MagitStatusCompiled | ScenarioId::RegexSearch => {
             require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
         }
         ScenarioId::LargeFileEditing => {
@@ -403,7 +410,7 @@ pub(crate) fn validate_editor_workload_result(
             require_positive_phase(&mut mismatches, "indent-phase-time", result.indent_phase_us);
         }
         ScenarioId::Startup | ScenarioId::GuiInputLatency => {}
-        ScenarioId::OrgJournalOpen => {
+        ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
             unreachable!("org-journal-open has a dedicated result validator")
         }
         ScenarioId::SustainedNativeVideo => {
@@ -566,7 +573,17 @@ pub(crate) fn valid_editor_workload_measurements(
 /// packages interpreted -- a configuration no user runs.  Setting
 /// `NEOMACS_PERF_LOAD_COMPILED=1` measures the byte-compiled files instead.
 /// The default is unchanged so the published series stays comparable.
-pub(crate) fn scenario_load_suffixes() -> LoadSuffixes {
+pub(crate) fn scenario_load_suffixes(scenario: ScenarioId) -> LoadSuffixes {
+    // The `-compiled` rows exist precisely to load byte-code, so the choice is
+    // part of their identity rather than an ambient setting.
+    if matches!(
+        scenario,
+        ScenarioId::MagitStatusCompiled | ScenarioId::OrgJournalOpenCompiled
+    ) {
+        return LoadSuffixes::EmacsDefault;
+    }
+    // The escape hatch stays for measuring an existing row both ways without
+    // adding a scenario.
     match std::env::var("NEOMACS_PERF_LOAD_COMPILED").as_deref() {
         Ok("1") => LoadSuffixes::EmacsDefault,
         _ => LoadSuffixes::Source,
