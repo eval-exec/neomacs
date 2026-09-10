@@ -66,6 +66,14 @@ impl FrontendEventQueue {
         self.events.is_empty()
     }
 
+    /// Control work must return to read_char without masquerading as Lisp
+    /// command input. Inspect only the head so it cannot overtake an event.
+    pub(crate) fn has_read_control_front(&self) -> bool {
+        self.events
+            .front()
+            .is_some_and(|event| semantics(event).class == FrontendEventClass::ReadControl)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.events.len()
     }
@@ -148,6 +156,7 @@ impl InternalEventEffects {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FrontendEventClass {
     Command,
+    ReadControl,
     LispSpecial,
     Internal,
 }
@@ -191,6 +200,15 @@ const fn special(
     }
 }
 
+const fn read_control() -> FrontendEventSemantics {
+    FrontendEventSemantics {
+        class: FrontendEventClass::ReadControl,
+        pending: PendingPolicy::Never,
+        interrupts: false,
+        wait_special: false,
+    }
+}
+
 /// Return the complete semantic policy for an input transport variant.
 ///
 /// This match is deliberately exhaustive: adding a frontend event must force
@@ -207,14 +225,12 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
             crate::ImeRequest::ReplaceAndObserve { .. } => command(),
             crate::ImeRequest::SurroundingText(_)
             | crate::ImeRequest::SetSelection { .. }
-            | crate::ImeRequest::SelectAndObserve { .. } => {
-                special(PendingPolicy::Never, false, false)
-            }
+            | crate::ImeRequest::SelectAndObserve { .. } => read_control(),
         },
         InputEvent::MousePress { .. } => command(),
         InputEvent::MouseRelease { .. } => command(),
         InputEvent::MouseMove { .. } => special(PendingPolicy::TrackMouse, false, true),
-        InputEvent::PresentedRegion { .. } => special(PendingPolicy::Never, false, false),
+        InputEvent::PresentedRegion { .. } => read_control(),
         InputEvent::MouseScroll { .. } => command(),
         InputEvent::PixelScroll { .. } => special(PendingPolicy::Always, true, false),
         InputEvent::LayoutInvalidated | InputEvent::ImageStateChanged { .. } => {

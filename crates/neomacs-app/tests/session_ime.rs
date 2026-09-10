@@ -572,6 +572,17 @@ fn replacement_is_pending_user_input() {
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn native_worker_answers_without_moving_context_to_the_frontend() {
+    check_native_worker_snapshot(false);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn native_worker_answers_snapshot_while_already_waiting() {
+    check_native_worker_snapshot(true);
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn check_native_worker_snapshot(query_after_idle: bool) {
     use neomacs_app::session::{NativeEditorWorker, NativeEditorWorkerEvent};
     use std::{sync::mpsc, time::Duration};
     let frontend_thread = std::thread::current().id();
@@ -605,6 +616,11 @@ fn native_worker_answers_without_moving_context_to_the_frontend() {
     let ime = frontend.input().ime_client(move || {
         wake_tx.send(std::thread::current().id()).unwrap();
     });
+    if query_after_idle {
+        // Exercise arrival after the worker has had time to enter its wait,
+        // not just the easier case where input is queued before read-event.
+        std::thread::sleep(Duration::from_millis(50));
+    }
     let reply = ime.surrounding_text().unwrap();
     assert_ne!(
         wake_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
