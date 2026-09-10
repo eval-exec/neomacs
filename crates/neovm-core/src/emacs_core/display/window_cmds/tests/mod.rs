@@ -519,6 +519,65 @@ fn window_new_size_slots_decode_a_valid_window_and_default_to_the_selected_one()
 }
 
 #[test]
+fn window_old_buffer_decodes_any_window_including_internal_and_deleted_ones() {
+    // GNU decodes WINDOW with `decode_any_window` -- `CHECK_WINDOW`, the
+    // loosest of its three decoders -- so "WINDOW can be any window and
+    // defaults to the selected one" (src/window.c).  Internal and DELETED
+    // windows are answers, not errors; only a non-window signals, and it
+    // signals `windowp` rather than `window-live-p` or `window-valid-p`.
+    //
+    // Measured on GNU Emacs 31.1:
+    //   decoder-arms: nil="ok" internal="ok" dead="ok"
+    //   rejects:      symbol=windowp string=windowp buffer=windowp
+    //
+    // Neomacs decoded with `window-live-p`, so an internal or deleted window
+    // signalled where GNU answers.
+    //
+    // NOT asserted here: GNU returns t for a window that was live and has
+    // since been deleted, and the old buffer itself otherwise.  That needs
+    // per-window `old_buffer`/`change_stamp` state which neomacs does not keep
+    // yet -- see the audit note at crates/neovm-core/src/window/mod.rs and
+    // `drafts/window-system-audit.md` Phase 4.  Returning nil is what this
+    // build actually knows; inventing a `t` here would make the test pass
+    // while the state behind it stayed missing.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let out = ev
+        .eval_str_each(
+            "(progn (split-window-internal (selected-window) nil nil nil) t)
+         (condition-case err (progn (window-old-buffer nil) 'ok) (error (car (cdr err))))
+         (condition-case err (progn (window-old-buffer (selected-window)) 'ok)
+           (error (car (cdr err))))
+         (condition-case err (progn (window-old-buffer (window-parent (selected-window))) 'ok)
+           (error (car (cdr err))))
+         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+           (delete-window-internal doomed)
+           (condition-case err (progn (window-old-buffer doomed) 'ok) (error (car (cdr err)))))
+         (condition-case err (window-old-buffer 'foo) (error (car (cdr err))))
+         (condition-case err (window-old-buffer (current-buffer)) (error (car (cdr err))))",
+        )
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(out[0], "OK t");
+    assert_eq!(out[1], "OK ok", "nil defaults to the selected window");
+    assert_eq!(out[2], "OK ok", "a live window is accepted");
+    assert_eq!(
+        out[3], "OK ok",
+        "decode_any_window accepts an internal window"
+    );
+    assert_eq!(
+        out[4], "OK ok",
+        "and a deleted window -- GNU answers for it rather than signalling"
+    );
+    assert_eq!(
+        out[5], "OK windowp",
+        "a non-window signals windowp, not window-live-p"
+    );
+    assert_eq!(out[6], "OK windowp", "a buffer is not a window either");
+}
+
+#[test]
 fn minibuffer_window_frame_first_window_and_window_minibuffer_p_semantics() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -2838,9 +2897,18 @@ fn window_use_time_and_old_state_queries_match_batch_defaults_and_error_predicat
         .collect::<Vec<_>>();
     assert_eq!(out[0], "OK (1 0 1 1 nil nil nil nil nil nil)");
     assert_eq!(out[1], "OK (1 0 0 1 1 1 nil nil nil nil nil nil)");
+    // The third entry is `window-old-buffer`, and its predicate is `windowp`
+    // rather than `window-live-p`: GNU decodes it with `decode_any_window`
+    // (`CHECK_WINDOW`) where its four neighbours here use `decode_live_window`.
+    // Confirmed against GNU Emacs 31.1 for this exact argument:
+    //   (window-old-buffer 999999) => (wrong-type-argument windowp 999999)
+    //   (window-use-time   999999) => (wrong-type-argument window-live-p 999999)
+    //   (window-old-point  999999) => (wrong-type-argument window-live-p 999999)
+    // This expectation previously pinned `window-live-p` for all five, which
+    // is what let the wrong decoder survive here.
     assert_eq!(
         out[2],
-        "OK ((wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-number-of-arguments window-use-time 2) (wrong-number-of-arguments window-old-point 2) (wrong-number-of-arguments window-old-buffer 2) (wrong-number-of-arguments window-prev-buffers 2) (wrong-number-of-arguments window-next-buffers 2))"
+        "OK ((wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument windowp 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-number-of-arguments window-use-time 2) (wrong-number-of-arguments window-old-point 2) (wrong-number-of-arguments window-old-buffer 2) (wrong-number-of-arguments window-prev-buffers 2) (wrong-number-of-arguments window-next-buffers 2))"
     );
 }
 

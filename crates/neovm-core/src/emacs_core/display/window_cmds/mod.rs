@@ -2362,7 +2362,31 @@ pub(crate) fn builtin_window_old_point(
         _ => Ok(Value::fixnum(1)),
     }
 }
-/// `(window-old-buffer &optional WINDOW)` -> nil in batch.
+/// `(window-old-buffer &optional WINDOW)` -> the buffer WINDOW last showed.
+///
+/// GNU decodes WINDOW with `decode_any_window` -- `CHECK_WINDOW`, the loosest
+/// of its three decoders -- so the docstring can say "WINDOW can be any window
+/// and defaults to the selected one" (`src/window.c`).  An internal window is
+/// an answer (always nil), and so is a window that has since been DELETED;
+/// only a non-window signals, and it signals `windowp`, not `window-live-p`.
+///
+/// The value is still a stub.  GNU answers from `w->old_buffer` and
+/// `w->change_stamp`:
+///
+/// ```c
+///   return (NILP (w->old_buffer)                                   ? Qnil
+///           : (w->change_stamp != WINDOW_XFRAME (w)->change_stamp) ? Qt
+///           : w->old_buffer);
+/// ```
+///
+/// Neomacs keeps the equivalent of `old_buffer` -- `WindowHookSnapshot::buffer_id`
+/// in `frame.window_hook_record`, written where GNU runs
+/// `run_window_change_functions` -- but has no per-window change stamp to
+/// decide the `t` arm, which GNU uses for a window restored from a window
+/// configuration.  Wiring that up is tracked as Phase 4 of
+/// `drafts/window-system-audit.md`; returning nil is what this build honestly
+/// knows, and inventing a `t` here would report a distinction nothing behind
+/// it can make.
 pub(crate) fn builtin_window_old_buffer(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -2370,8 +2394,8 @@ pub(crate) fn builtin_window_old_buffer(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-old-buffer", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, _wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+    let _window =
+        resolve_window_object_id_with_pred_in_state(frames, buffers, args.first(), "windowp")?;
     Ok(Value::NIL)
 }
 /// `(window-prev-buffers &optional WINDOW)` -> previous buffer list or nil.
