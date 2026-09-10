@@ -8,6 +8,14 @@ use super::*;
 cached_symbol_id!(optional_arg_symbol, "&optional");
 cached_symbol_id!(rest_arg_symbol, "&rest");
 
+/// Ownership of one interpreted call's bindings. Consumed exactly once by
+/// finish_interpreted_lambda, whether its body returns or raises a Lisp flow.
+pub(super) struct ActiveInterpretedLambdaCall {
+    pub(super) body: Value,
+    call_state: ActiveLambdaCallState,
+    root_count: usize,
+}
+
 impl Context {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(super) fn make_interpreted_closure_with_expr_runtime_hook(
@@ -2950,6 +2958,16 @@ impl Context {
     }
 
     pub(super) fn apply_lambda(&mut self, func_value: Value, args: LispArgVec) -> EvalResult {
+        let call = self.begin_interpreted_lambda(func_value, &args)?;
+        let result = self.eval_lambda_body_value(call.body);
+        self.finish_interpreted_lambda(call, result)
+    }
+
+    pub(super) fn begin_interpreted_lambda(
+        &mut self,
+        func_value: Value,
+        args: &[Value],
+    ) -> Result<ActiveInterpretedLambdaCall, Flow> {
         let raw_cons_lambda = func_value.is_cons();
         let (arglist, body, env) = if raw_cons_lambda {
             let tail = func_value.cons_cdr();
@@ -2976,13 +2994,21 @@ impl Context {
             self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
         }
 
-        let call_state = match self.begin_lambda_call(func_value, arglist, env, &args) {
+        let call_state = match self.begin_lambda_call(func_value, arglist, env, args) {
             Ok(state) => state,
             Err(err) => {
-                return self.unbind_to_with_result(root_count, Err(err));
+                return self.unbind_to_with_result(root_count, Err(err)).map(|_| unreachable!());
             }
         };
-        let result = match self.eval_lambda_body_value(body) {
+        Ok(ActiveInterpretedLambdaCall { body, call_state, root_count })
+    }
+
+    pub(super) fn finish_interpreted_lambda(
+        &mut self,
+        call: ActiveInterpretedLambdaCall,
+        result: EvalResult,
+    ) -> EvalResult {
+        let result = match result {
             Err(Flow::ThreadBlocked(blocked))
                 if !blocked.remaining_forms.is_nil()
                     && crate::emacs_core::threads::thread_condition_case_continuation_parts(
@@ -3005,8 +3031,8 @@ impl Context {
             }
             other => other,
         };
-        let result = self.finish_lambda_call(call_state, result);
-        self.unbind_to_with_result(root_count, result)
+        let result = self.finish_lambda_call(call.call_state, result);
+        self.unbind_to_with_result(call.root_count, result)
     }
 
     #[inline]

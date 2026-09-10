@@ -3289,6 +3289,7 @@ pub struct Context {
     /// Pooled backing stores for the interpreter's per-entry stacks (see
     /// `vm::InterpreterStackPool`).
     pub(crate) interpreter_stacks: crate::emacs_core::bytecode::vm::InterpreterStackPool,
+    evaluation_stacks: continuation::EvaluationStackPool,
     /// specpdl depths of the dynamic bindings generated code has made in
     /// the current native frames (`neovm_jit_varbind` pushes, `Op::Unbind`
     /// pops N, a frame exit truncates to its base).  A Context field, not a
@@ -5443,7 +5444,7 @@ impl Context {
             // Route the variable-lookup result through the signal dispatcher so a
             // void-variable enters the debugger (debug-on-error) at signal time,
             // while dynamic bindings are still active — symmetric with the cons
-            // path (eval_sub_cons) and GNU's Fsignal. `search_complete` keeps this
+            // continuation and GNU's Fsignal. `search_complete` keeps this
             // idempotent, so an already-dispatched signal is not re-dispatched.
             let result = self.eval_symbol_by_id(sym_id);
             return self.dispatch_signal_result_if_needed(result);
@@ -5454,17 +5455,7 @@ impl Context {
             return Ok(form_unwrapped);
         }
 
-        self.enter_interpreted_eval_depth()?;
-
-        let result = self.maybe_grow_eval_stack(|ctx| {
-            ctx.maybe_quit_before_gc()?;
-            if ctx.gc_safe_point_exact_should_collect() {
-                ctx.collect_at_eval_safe_point(form);
-            }
-            ctx.eval_sub_cons(form)
-        });
-        self.depth -= 1;
-        result
+        self.maybe_grow_eval_stack(|ctx| ctx.eval_with_continuations(form))
     }
 
     /// GNU `maybe_gc` inside `eval_sub`, with FORM rooted for the collection
@@ -5556,72 +5547,13 @@ impl Context {
         Ok(())
     }
 
-    fn eval_sub_cons(&mut self, form: Value) -> EvalResult {
-        let original_fun = self.unwrap_symbol(form.cons_car());
-        let original_args = form.cons_cdr();
 
-        // GNU eval.c:2583-2585 records an UNEVALLED backtrace frame on
-        // every `eval_sub` cons-form evaluation. The frame starts in
-        // UNEVALLED shape holding the surface function symbol and the
-        // raw argument-form cons list, then transitions to EVALD in
-        // place via `set_backtrace_args` once arguments have been
-        // evaluated (eval.c:2638, 2660, 3299). Special forms leave
-        // the frame UNEVALLED throughout.
-        let outer_bt_count = self.specpdl.len();
-        let stack_base = self.bc_buf.len();
-        self.push_unevalled_backtrace_frame(original_fun, original_args);
-        // GNU eval.c:2601-2602, immediately after `record_in_backtrace` and
-        // before any dispatch: `if (debug_on_next_call) do_debug_on_call (Qt,
-        // count)`.  Taking the arm IS the disarm (see `debug_on_call`), and
-        // the same call flags this frame's `debug_on_exit`.
-        let dispatch_result = match self.take_debug_on_call_arm(DebugOnCallCode::EvalForm) {
-            Some(arm) => self.do_debug_on_call(arm).and_then(|()| {
-                self.eval_sub_cons_dispatch(original_fun, original_args, outer_bt_count)
-            }),
-            None => self.eval_sub_cons_dispatch(original_fun, original_args, outer_bt_count),
-        };
-        let result = self.dispatch_signal_result_if_needed(dispatch_result);
-        self.record_sequence_call_roots(outer_bt_count);
-        let result = self.unbind_to_with_result(outer_bt_count, result);
-        // The evaluated call parked its function and arguments on the VM
-        // operand stack (see `eval_sub_cons_dispatch`); the frame that
-        // referenced them is gone, so is their span.
-        self.bc_buf.truncate(stack_base);
-        result
-    }
-
-    /// Evaluate a call's argument forms onto the VM operand stack, FUNC
-    /// parked beneath them (both rooted by the stack), and return the first
-    /// argument's slot and the count.  An improper tail signals `listp` at
-    /// the point GNU's `eval_sub` loop reaches it.
-    #[inline]
-    fn eval_call_args_onto_stack(
-        &mut self,
-        func: Value,
-        original_args: Value,
-    ) -> Result<(usize, usize), Flow> {
-        let func_slot = self.bc_buf.len();
-        self.bc_buf.push(func);
-        let first_arg = func_slot + 1;
-        let mut cursor = original_args;
-        while cursor.is_cons() {
-            let arg_form = cursor.cons_car();
-            let arg_val = self.eval_sub(arg_form)?;
-            self.bc_buf.push(arg_val);
-            cursor = cursor.cons_cdr();
-        }
-        if !cursor.is_nil() {
-            return Err(self.listp_error(cursor));
-        }
-        Ok((first_arg, self.bc_buf.len() - first_arg))
-    }
-
-    fn eval_sub_cons_dispatch(
+    fn prepare_eval_sub_cons_dispatch(
         &mut self,
         original_fun: Value,
         original_args: Value,
-        outer_bt_count: usize,
-    ) -> EvalResult {
+    ) -> Result<continuation::PreparedForm, Flow> {
+        use continuation::{CallTarget, PreparedCall, PreparedForm};
         // Resolve function (GNU eval.c:2600-2605)
         let sym_id = original_fun.as_symbol_id();
 
@@ -5677,7 +5609,7 @@ impl Context {
             )
             && let Some(result) = self.try_special_form_value_id(sym_id, original_args)
         {
-            return result;
+            return result.map(PreparedForm::Value);
         }
 
         // GNU `eval_sub` (`src/eval.c:2600-2680`): the symbol's function cell
@@ -5703,7 +5635,7 @@ impl Context {
                     return Err(self.listp_error(original_args));
                 }
                 if let Some(result) = self.try_special_form_value_id(sym_id, original_args) {
-                    return result;
+                    return result.map(PreparedForm::Value);
                 }
             }
             if let Some((target_sym_id, entry)) = subr
@@ -5725,27 +5657,21 @@ impl Context {
                         vec![original_fun, Value::fixnum(numargs as i64)],
                     ));
                 }
-                let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
-                self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
-                return self.maybe_grow_eval_stack(|ctx| {
-                    ctx.dispatch_subr_entry_from_bc_stack(entry, first_arg, nargs)
-                        .unwrap_or_else(|| {
-                            Err(signal(
-                                LispCondition::VoidFunction,
-                                vec![Value::from_sym_id(target_sym_id)],
-                            ))
-                        })
-                });
+                return Ok(PreparedForm::Call(PreparedCall {
+                    function: func,
+                    arguments: original_args,
+                    target: CallTarget::Subr { sym_id: target_sym_id, entry },
+                }));
             }
-            if let Some(bc_data) = func.get_bytecode_data() {
+            if func.get_bytecode_data().is_some() {
                 if list_length(&original_args).is_none() {
                     return Err(self.listp_error(original_args));
                 }
-                let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
-                self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
-                return self.maybe_grow_eval_stack(|ctx| {
-                    ctx.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func)
-                });
+                return Ok(PreparedForm::Call(PreparedCall {
+                    function: func,
+                    arguments: original_args,
+                    target: CallTarget::Function,
+                }));
             }
         }
 
@@ -5830,8 +5756,8 @@ impl Context {
             if list_length(&original_args).is_none() {
                 return Err(self.listp_error(original_args));
             }
-            // The outer eval_sub_cons UNEVALLED frame (pushed by the
-            // wrapper) already records the surface function and raw
+            // The outer UNEVALLED frame (pushed by the continuation driver)
+            // already records the surface function and raw
             // argument forms. Special forms leave the frame UNEVALLED
             // throughout (no `set_backtrace_args_evalled` call),
             // matching GNU eval.c:2618-2619.
@@ -5841,7 +5767,7 @@ impl Context {
                 self.try_aliased_special_form_value_id(surface_sym_id, target_sym_id, original_args)
             };
             if let Some(result) = result {
-                return result;
+                return result.map(PreparedForm::Value);
             }
         }
 
@@ -5867,7 +5793,7 @@ impl Context {
             let expanded_root_count = self.specpdl.len();
             self.push_specpdl_root(expanded);
             let result = self.eval_sub(expanded);
-            return self.unbind_to_with_result(expanded_root_count, result);
+            return self.unbind_to_with_result(expanded_root_count, result).map(PreparedForm::Value);
         }
         if cons_head_symbol_id(&func) == Some(macro_symbol()) {
             // Cons-cell macro: (macro . fn) — GNU eval.c:2730
@@ -5886,7 +5812,7 @@ impl Context {
             let expanded_root_count = self.specpdl.len();
             self.push_specpdl_root(expanded);
             let result = self.eval_sub(expanded);
-            return self.unbind_to_with_result(expanded_root_count, result);
+            return self.unbind_to_with_result(expanded_root_count, result).map(PreparedForm::Value);
         }
 
         // GNU eval.c:2606-2614: for SUBRP `fun`, check arity
@@ -5951,33 +5877,9 @@ impl Context {
             return Err(signal(LispCondition::InvalidFunction, vec![original_fun]));
         }
 
-        // Regular function call: evaluate args, promote the outer
-        // UNEVALLED frame to EVALD in place, then dispatch directly.
-        // Matches GNU `eval_sub` non-UNEVALLED SUBRP path
-        // (eval.c:2631-2640) and CLOSUREP → apply_lambda
-        // (eval.c:2715, 3292-3300) which both mutate the outer
-        // record_in_backtrace entry via `set_backtrace_args`.
-        //
-        // `func` and each evaluated arg are rooted on the specpdl via
-        // `push_specpdl_root`. GNU relies on conservative stack
-        // scanning of `SAFE_ALLOCA_LISP (vals, numargs)` plus the
-        // `fun` C local; neomacs uses exact GC, so a local
-        // `Vec<Value>` and the Rust-local `func` Value are invisible
-        // to the tracer.
-        //
-        // `func` is rooted BEFORE the arg loop so it survives GC
-        // triggered by any arg evaluator, and stays rooted through
-        // `funcall_general_untraced` below -- it only gets popped by
-        // the outer `eval_sub_cons` `unbind_to(outer_bt_count)`. This
-        // is specifically needed when `original_fun` is a cons
-        // (lambda-literal head): the resolved Lambda Value lives only
-        // on the Rust stack, and the outer UNEVALLED frame records
-        // `original_fun`, not `func`.
-        //
-        // Per-arg roots are popped once `set_backtrace_args_evalled`
-        // transfers ownership to the outer frame's args slot.
-        // GNU uses SAFE_ALLOCA_LISP for evaluated arguments here. Keep the
-        // common arities inline instead of allocating a heap Vec per call.
+        // The continuation driver roots this resolved function and its
+        // argument cursor on bc_buf, evaluates arguments in order, then
+        // promotes the UNEVALLED backtrace frame to its EVALD stack span.
         // GNU validates the argument-list structure UP FRONT, before
         // evaluating any argument: the subr path runs a single
         // `list_length (args_left)` (eval.c:2624) and `apply_lambda` runs
@@ -5994,61 +5896,13 @@ impl Context {
         if direct_subr_entry.is_none() && list_length(&original_args).is_none() {
             return Err(self.listp_error(original_args));
         }
-        // GNU eval.c:2640-2680 evaluates the arguments into a C array
-        // (`argvals`, or `vals` from SAFE_ALLOCA) and records that array as
-        // the frame's EVALD args before the call.  The port's array is the VM
-        // operand stack: the precise root walk traces it in full, so a push
-        // roots an argument -- no specpdl entry per argument -- and
-        // `eval_sub_cons` truncates the stack back once the frame is gone.
-        // The function value sits below the arguments for the same reason
-        // (GNU's `fun` is a C local).
-        let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
-        self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
-
-        if let Some((sym_id, entry)) = direct_subr_entry
-            && Self::subr_entry_uses_fixed_value_call(entry)
-        {
-            return self.maybe_grow_eval_stack(|ctx| {
-                ctx.dispatch_subr_entry_from_bc_stack(entry, first_arg, nargs)
-                    .unwrap_or_else(|| {
-                        Err(signal(
-                            LispCondition::VoidFunction,
-                            vec![Value::from_sym_id(sym_id)],
-                        ))
-                    })
-            });
-        }
-
-        if let Some((sym_id, entry)) = direct_subr_entry {
-            return self.maybe_grow_eval_stack(|ctx| {
-                let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..first_arg + nargs]);
-                if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
-                    return ctx.apply_evaluator_callable_by_id(sym_id, args);
-                }
-                ctx.dispatch_subr_entry_unchecked(entry, args)
-                    .unwrap_or_else(|| {
-                        Err(signal(
-                            LispCondition::VoidFunction,
-                            vec![Value::from_sym_id(sym_id)],
-                        ))
-                    })
-            });
-        }
-
-        // A byte-code callee takes its arguments where they lie, through the
-        // same stack path as a `Bcall` (leaf slot and tiered plan included);
-        // the frame recorded above is its backtrace frame, as GNU's
-        // `apply_lambda` adds none of its own.
-        if let Some(bc_data) = func.get_bytecode_data() {
-            return self.maybe_grow_eval_stack(|ctx| {
-                ctx.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func)
-            });
-        }
-
-        self.maybe_grow_eval_stack(|ctx| {
-            let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..first_arg + nargs]);
-            ctx.funcall_general_untraced(func, args)
-        })
+        Ok(PreparedForm::Call(PreparedCall {
+            function: func,
+            arguments: original_args,
+            target: direct_subr_entry.map_or(CallTarget::Function, |(sym_id, entry)| {
+                CallTarget::Subr { sym_id, entry }
+            }),
+        }))
     }
 
     /// Legacy eval_value: delegates to eval_sub.
@@ -7856,6 +7710,7 @@ mod specpdl;
 mod special_forms;
 
 mod apply;
+mod continuation;
 
 mod command_loop;
 
