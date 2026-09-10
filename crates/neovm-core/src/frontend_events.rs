@@ -208,7 +208,12 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::PresentedPointer { .. }
         | InputEvent::MenuBarClick { .. } => Command,
         // Answer ordered control requests at the next input read, after edits.
-        InputEvent::ImeRequest(_) => FrontendEventSemantics::ReadControl,
+        InputEvent::ImeRequest(request) => match request {
+            crate::ImeRequest::ReplaceAndObserve { .. } => Command,
+            crate::ImeRequest::SurroundingText(_)
+            | crate::ImeRequest::SetSelection { .. }
+            | crate::ImeRequest::SelectAndObserve { .. } => FrontendEventSemantics::ReadControl,
+        },
         InputEvent::MouseMove { .. } => MouseMotion,
         InputEvent::PixelScroll { .. } => special_input(PendingInputPolicy::Always, true, false),
         InputEvent::PresentedRegion {
