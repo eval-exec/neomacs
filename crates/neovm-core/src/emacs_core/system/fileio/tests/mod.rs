@@ -2537,7 +2537,7 @@ fn test_builtin_file_modes_semantics() {
 }
 
 #[test]
-fn installed_filesystem_reports_unsupported_posix_metadata_explicitly() {
+fn installed_filesystem_synthesizes_modes_but_rejects_unsupported_metadata_changes() {
     let persistent = MemoryFileSystem::new();
     persistent
         .write(
@@ -2557,8 +2557,9 @@ fn installed_filesystem_reports_unsupported_posix_metadata_explicitly() {
     eval.install_editor_file_system(Box::new(filesystem));
     let path = Value::string("/neomacs-fake/note");
 
+    assert_eq!(builtin_file_modes(&mut eval, vec![path]).unwrap(), Value::fixnum(0o600));
+
     for result in [
-        builtin_file_modes(&mut eval, vec![path]),
         builtin_set_file_modes(&mut eval, vec![path, Value::fixnum(0o600)]),
         builtin_set_file_times(&mut eval, vec![path, Value::fixnum(0)]),
     ] {
@@ -2570,16 +2571,12 @@ fn installed_filesystem_reports_unsupported_posix_metadata_explicitly() {
 }
 
 #[test]
-fn installed_filesystem_reports_unsupported_capacity_explicitly() {
+fn installed_filesystem_reports_unavailable_capacity_as_nil_like_gnu() {
     let mut eval = Context::new();
     eval.install_editor_file_system(Box::new(MemoryFileSystem::new()));
 
-    match builtin_file_system_info(&mut eval, vec![Value::string("/")])
-        .expect_err("unsupported host capacity must be explicit")
-    {
-        Flow::Signal(signal) => assert_eq!(signal.symbol_name(), "file-error"),
-        other => panic!("expected file-error signal, got {other:?}"),
-    }
+    // GNU Ffile_system_info returns nil for ENOSYS/unavailable fsusage.
+    assert_eq!(builtin_file_system_info(&mut eval, vec![Value::string("/")]).unwrap(), Value::NIL);
 }
 
 #[cfg(unix)]

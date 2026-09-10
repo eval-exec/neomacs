@@ -217,6 +217,20 @@ const BOTH_EDITORS_DECLARE_IT: &[BothEditorsDeclareItButTheDocTableCannotSeeIt] 
 ///
 /// 23 xwidget names + `x-load-color-file` + 40 port names = 64.
 const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
+    // Browser HTTP request/response transport is a Neomacs extension, not a
+    // claim to implement GNU's socket-backed process interface.
+    DeclaredHere {
+        name: "neomacs-http-start",
+        why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
+    },
+    DeclaredHere {
+        name: "neomacs-http-take",
+        why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
+    },
+    DeclaredHere {
+        name: "neomacs-http-cancel",
+        why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
+    },
     DeclaredHere {
         name: "delete-xwidget-view",
         why: WhyThisBuildDeclaresIt::GnuDeclaresItInThisBuildsOwnBranch {

@@ -31,8 +31,12 @@ fn ime_session_reports_gnu_text_conversion_event_and_edit_list() {
         operation: ImeOperation::Replace { before_bytes: 0, after_bytes: 0, text: "你好".into() },
     }, TtyInputDecoding::KeyboardCodingSystem).unwrap();
     assert_eq!(event, Some(Value::symbol("text-conversion")));
-    assert_eq!(eval.eval_str("(nth 1 (car text-conversion-edits))").unwrap(), Value::fixnum(1));
-    assert_eq!(eval.eval_str("(nth 2 (car text-conversion-edits))").unwrap(), Value::fixnum(3));
+    // GNU textconv.c records live markers, not integer positions.
+    assert_eq!(eval.eval_str("(markerp (nth 1 (car text-conversion-edits)))").unwrap(), Value::T);
+    assert_eq!(eval.eval_str("(markerp (nth 2 (car text-conversion-edits)))").unwrap(), Value::T);
+    assert_eq!(eval.eval_str("(marker-position (nth 1 (car text-conversion-edits)))").unwrap(), Value::fixnum(1));
+    assert_eq!(eval.eval_str("(marker-position (nth 2 (car text-conversion-edits)))").unwrap(), Value::fixnum(3));
+    assert_eq!(eval.eval_str("(marker-insertion-type (nth 2 (car text-conversion-edits)))").unwrap(), Value::T);
     assert_eq!(eval.eval_str("(nth 3 (car text-conversion-edits))").unwrap().as_utf8_str(), Some("你好"));
 }
 
