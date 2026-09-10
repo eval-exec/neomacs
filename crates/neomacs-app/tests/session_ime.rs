@@ -9,6 +9,65 @@ use neomacs_app::session::{EditorSession, ImeReply};
 use neovm_core::emacs_core::eval::Context;
 
 #[test]
+fn acknowledged_replacement_delivers_a_text_conversion_event() {
+    use neovm_host_abi::ime::{ImeReplacement, ImeReplacementOutcome};
+    let mut evaluator = neovm_core::emacs_core::load::create_runtime_startup_evaluator_cached()
+        .expect("load GNU text-conversion support");
+    evaluator
+        .eval_str(
+            r##"(progn
+      (erase-buffer) (insert "prefix😀tail")
+      (put-text-property 1 (point-max) 'face 'bold)
+      (setq noninteractive t top-level
+        '(progn (setq observed-ime-event (read-event)) (kill-emacs 0))))"##,
+        )
+        .unwrap();
+    let old = evaluator.ime_surrounding_text().unwrap();
+    let (session, frontend) =
+        EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    let reply = frontend
+        .input()
+        .ime_client(|| {})
+        .replace_and_observe(ImeReplacement {
+            snapshot: old.id(),
+            start: 6,
+            end: 10,
+            text: "X".into(),
+            cursor: 7,
+        })
+        .unwrap();
+    frontend
+        .input()
+        .submit(&FrontendEvent::TextCommitted {
+            text: "z".into(),
+            target: FrontendFrameId::PRIMARY,
+        })
+        .unwrap();
+    let (exit, mut evaluator) = session.run_until_stopped(|_| {}).into_parts();
+    assert!(exit.is_success());
+    let ImeReply::Ready(Ok(ack)) = reply.try_receive() else {
+        panic!("missing replacement acknowledgement")
+    };
+    assert_eq!(ack.outcome, ImeReplacementOutcome::Applied);
+    let current = ack.snapshot.unwrap();
+    assert_ne!(current.id(), old.id());
+    assert_eq!(current.text(), "prefixXtail");
+    assert_eq!(current.cursor(), 7);
+    assert!(
+        evaluator
+            .eval_str("(get-text-property 7 'face)")
+            .unwrap()
+            .is_symbol_named("bold")
+    );
+    assert!(
+        evaluator
+            .eval_str("observed-ime-event")
+            .unwrap()
+            .is_symbol_named("text-conversion")
+    );
+}
+
+#[test]
 fn applied_selection_acknowledges_the_resulting_cursor() {
     use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome};
     let mut evaluator = neovm_core::emacs_core::load::create_runtime_startup_evaluator_cached()
@@ -49,6 +108,111 @@ fn applied_selection_acknowledges_the_resulting_cursor() {
     assert_eq!(current.text(), "a😀b");
     assert_eq!(current.cursor(), 5);
     assert_eq!(current.anchor(), 5);
+}
+
+#[test]
+fn replacement_hook_cannot_redirect_an_observed_range() {
+    use neovm_host_abi::ime::{ImeReplacement, ImeReplacementOutcome};
+    let mut evaluator = neovm_core::emacs_core::load::create_runtime_startup_evaluator_cached()
+        .expect("load GNU text-conversion support");
+    evaluator
+        .eval_str(
+            r##"(progn
+      (erase-buffer) (insert "original")
+      (setq before-change-functions
+        (list (lambda (_start _end) (set-buffer (get-buffer-create "hook-target")))))
+      (setq noninteractive t top-level '(progn (read-event) (kill-emacs 0))))"##,
+        )
+        .unwrap();
+    let old = evaluator.ime_surrounding_text().unwrap();
+    let (session, frontend) =
+        EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    let reply = frontend
+        .input()
+        .ime_client(|| {})
+        .replace_and_observe(ImeReplacement {
+            snapshot: old.id(),
+            start: 0,
+            end: 8,
+            text: "wrong".into(),
+            cursor: 5,
+        })
+        .unwrap();
+    frontend
+        .input()
+        .submit(&FrontendEvent::TextCommitted {
+            text: "z".into(),
+            target: FrontendFrameId::PRIMARY,
+        })
+        .unwrap();
+    let (exit, mut evaluator) = session.run_until_stopped(|_| {}).into_parts();
+    assert!(exit.is_success());
+    let ImeReply::Ready(Ok(ack)) = reply.try_receive() else {
+        panic!("missing stale replacement acknowledgement")
+    };
+    assert_eq!(ack.outcome, ImeReplacementOutcome::StaleSnapshot);
+    assert_eq!(
+        evaluator.eval_str("(buffer-string)").unwrap().as_utf8_str(),
+        Some("")
+    );
+    assert_eq!(
+        evaluator
+            .eval_str(r##"(with-current-buffer "*scratch*" (buffer-string))"##)
+            .unwrap()
+            .as_utf8_str(),
+        Some("original")
+    );
+}
+
+#[test]
+fn replacement_rejects_invalid_observed_coordinates_without_editing() {
+    use ImeReplacementOutcome::{InvalidCursor, InvalidRange};
+    use neovm_host_abi::ime::{ImeReplacement, ImeReplacementOutcome};
+    for (start, end, text, cursor, expected) in [
+        (0, 2, "x", 1, InvalidRange),
+        (5, 1, "x", 1, InvalidRange),
+        (1, 5, "😀", 2, InvalidCursor),
+        (1, 5, "X", 99, InvalidCursor),
+        (1, 5, "X", usize::MAX, InvalidCursor),
+    ] {
+        let mut evaluator = Context::new();
+        evaluator
+            .eval_str(
+                r##"(progn (insert "a😀b")
+          (setq noninteractive t top-level '(progn (read-event) (kill-emacs 0))))"##,
+            )
+            .unwrap();
+        let old = evaluator.ime_surrounding_text().unwrap();
+        let (session, frontend) =
+            EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+        let reply = frontend
+            .input()
+            .ime_client(|| {})
+            .replace_and_observe(ImeReplacement {
+                snapshot: old.id(),
+                start,
+                end,
+                text: text.into(),
+                cursor,
+            })
+            .unwrap();
+        frontend
+            .input()
+            .submit(&FrontendEvent::TextCommitted {
+                text: "z".into(),
+                target: FrontendFrameId::PRIMARY,
+            })
+            .unwrap();
+        assert!(session.run().is_success());
+        let ImeReply::Ready(Ok(ack)) = reply.try_receive() else {
+            panic!("missing rejected replacement acknowledgement")
+        };
+        assert_eq!(ack.outcome, expected);
+        let current = ack.snapshot.unwrap();
+        assert_eq!(current.text(), "a😀b");
+        assert_eq!(current.cursor(), 6);
+        assert_ne!(current.id(), old.id());
+    }
 }
 
 #[test]
@@ -367,6 +531,42 @@ fn query_is_not_pending_user_input_and_shutdown_disconnects_its_reply() {
     drop(evaluator);
     assert!(matches!(reply.try_receive(), ImeReply::Disconnected));
     assert!(ime.surrounding_text().is_err());
+}
+
+#[test]
+fn replacement_is_pending_user_input() {
+    use neovm_host_abi::ime::ImeReplacement;
+    let mut evaluator = Context::new();
+    evaluator
+        .eval_str(
+            r##"(setq noninteractive t top-level
+      '(progn (setq replacement-pending (input-pending-p)) (kill-emacs 0)))"##,
+        )
+        .unwrap();
+    let snapshot = evaluator.ime_surrounding_text().unwrap();
+    let (session, frontend) =
+        EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    let reply = frontend
+        .input()
+        .ime_client(|| {})
+        .replace_and_observe(ImeReplacement {
+            snapshot: snapshot.id(),
+            start: 0,
+            end: 0,
+            text: "x".into(),
+            cursor: 1,
+        })
+        .unwrap();
+    let (exit, mut evaluator) = session.run_until_stopped(|_| {}).into_parts();
+    assert!(exit.is_success());
+    assert!(
+        evaluator
+            .eval_str("replacement-pending")
+            .unwrap()
+            .is_truthy()
+    );
+    drop(evaluator);
+    assert!(matches!(reply.try_receive(), ImeReply::Disconnected));
 }
 
 #[cfg(not(target_family = "wasm"))]

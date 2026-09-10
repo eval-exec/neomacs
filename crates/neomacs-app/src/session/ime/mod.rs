@@ -6,7 +6,8 @@ use crossbeam_channel::{Receiver, TryRecvError};
 pub use neovm_core::ImeEditorError;
 use neovm_core::{ImeRequest, keyboard::InputEvent};
 use neovm_host_abi::ime::{
-    ImeSelection, ImeSelectionAcknowledgement, ImeSelectionOutcome, ImeTextSnapshot,
+    ImeReplacement, ImeReplacementAcknowledgement, ImeSelection, ImeSelectionAcknowledgement,
+    ImeSelectionOutcome, ImeTextSnapshot,
 };
 
 use super::{FrontendInputDisconnected, FrontendInputPort};
@@ -32,6 +33,21 @@ impl FrontendInputPort {
 }
 
 impl ImeClient {
+    /// Replace a snapshot-qualified range through normal VM change handling.
+    /// The acknowledgement does not bypass the text-conversion command event.
+    pub fn replace_and_observe(
+        &self,
+        replacement: ImeReplacement,
+    ) -> Result<
+        PendingImeReply<Result<ImeReplacementAcknowledgement, ImeEditorError>>,
+        FrontendInputDisconnected,
+    > {
+        let (request, receiver) = ImeRequest::replace_and_observe(replacement, self.notify.clone());
+        self.input
+            .submit_batch(EvaluatorInputBatch::single(InputEvent::ImeRequest(request)))?;
+        Ok(PendingImeReply { receiver })
+    }
+
     /// Apply a snapshot-qualified selection and return the current observation
     /// in the same VM turn. A stale selection is not retried. The observation
     /// may be absent under privacy or presentation restrictions; it retires
