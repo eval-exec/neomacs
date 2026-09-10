@@ -9,6 +9,49 @@ use neomacs_app::session::{EditorSession, ImeReply};
 use neovm_core::emacs_core::eval::Context;
 
 #[test]
+fn applied_selection_acknowledges_the_resulting_cursor() {
+    use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome};
+    let mut evaluator = neovm_core::emacs_core::load::create_runtime_startup_evaluator_cached()
+        .expect("load GNU point/mark functions");
+    evaluator
+        .eval_str(
+            r##"(progn
+      (erase-buffer) (insert "a😀b")
+      (setq noninteractive t top-level '(progn (read-event) (kill-emacs 0))))"##,
+        )
+        .unwrap();
+    let old = evaluator.ime_surrounding_text().unwrap();
+    let (session, frontend) =
+        EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    let reply = frontend
+        .input()
+        .ime_client(|| {})
+        .select_and_observe(ImeSelection {
+            snapshot: old.id(),
+            cursor: 5,
+            anchor: 5,
+        })
+        .unwrap();
+    frontend
+        .input()
+        .submit(&FrontendEvent::TextCommitted {
+            text: "z".into(),
+            target: FrontendFrameId::PRIMARY,
+        })
+        .unwrap();
+    assert!(session.run().is_success());
+    let ImeReply::Ready(Ok(ack)) = reply.try_receive() else {
+        panic!("missing selection acknowledgement")
+    };
+    assert_eq!(ack.outcome, ImeSelectionOutcome::Applied);
+    let current = ack.snapshot.unwrap();
+    assert_ne!(current.id(), old.id());
+    assert_eq!(current.text(), "a😀b");
+    assert_eq!(current.cursor(), 5);
+    assert_eq!(current.anchor(), 5);
+}
+
+#[test]
 fn stale_selection_acknowledges_the_current_snapshot_in_input_order() {
     use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome};
     let mut evaluator = Context::new();
