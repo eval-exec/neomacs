@@ -5629,6 +5629,24 @@ fn resolve_live_window_display_context(
     let Some((fid, wid)) = resolve_live_window_identity(frames, window)? else {
         return Ok(None);
     };
+    live_window_display_context_for(frames, buffers, fid, wid)
+}
+
+/// Build the approximate display context for a window that has ALREADY been
+/// resolved.
+///
+/// Callers that decoded their own argument must use this rather than
+/// re-deriving an identity from the raw `Value`: `posn-at-x-y` takes a
+/// FRAME-OR-WINDOW, and re-resolving its argument through the window-only rule
+/// discarded the frame it had already accepted, so `(posn-at-x-y X Y FRAME)`
+/// signalled `window-live-p` against a perfectly live frame.  One argument, one
+/// decode.
+fn live_window_display_context_for(
+    frames: &crate::window::FrameManager,
+    buffers: &crate::buffer::BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+) -> Result<Option<ApproxWindowDisplayContext>, Flow> {
     let Some(frame) = frames.get(fid) else {
         return Ok(None);
     };
@@ -6429,19 +6447,49 @@ fn resolve_posn_at_xy_window(
             .selected_frame()
             .map(|frame| (frame.id, frame.selected_window, true)));
     }
-    if frameish.as_frame_id().is_none()
-        && let Some(windowish) = resolve_live_window_identity(frames, Some(frameish))?
-    {
-        return Ok(Some((windowish.0, windowish.1, true)));
+    // GNU dispatches on WINDOWP, not on "is it a frame"
+    // (`Fposn_at_x_y`, src/keyboard.c):
+    //
+    //     if (WINDOWP (frame_or_window))
+    //       { struct window *w = decode_live_window (frame_or_window); ... }
+    //     CHECK_LIVE_FRAME (frame_or_window);
+    //
+    // Those two guards agree only for values that are a window or a frame.
+    // Anything that is NEITHER -- a symbol, a buffer, a window that has been
+    // deleted -- is "not a frame", so guarding on that sent it into the window
+    // decoder and it came back reporting `window-live-p` (or `framep`) where
+    // GNU reports `frame-live-p`.  An internal window slipped through with no
+    // signal at all, which is worse: the caller reads a missing position
+    // rather than a type error.
+    if frameish.is_window() {
+        // WINDOWP: from here GNU runs `decode_live_window`, which is
+        // `CHECK_LIVE_WINDOW` -- an internal or deleted window is rejected.
+        // `resolve_live_window_identity` cannot stand in for that on its own:
+        // it resolves through `find_window`, which matches ANY node of the
+        // window tree, so an internal window resolved happily and only turned
+        // into nil further down where a leaf was required.  A caller then
+        // could not tell a type error from "no position at those coordinates".
+        let live = frameish
+            .as_window_id()
+            .map(crate::window::WindowId)
+            .and_then(|wid| frames.find_window_frame_id(wid).map(|fid| (fid, wid)));
+        let Some((fid, wid)) = live else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), *frameish],
+            ));
+        };
+        return Ok(Some((fid, wid, true)));
     }
     let fid = if let Some(id) = frameish.as_frame_id() {
         FrameId(id)
     } else if let Some(id) = frameish.as_fixnum().filter(|&id| id >= 0) {
         FrameId(id as u64)
     } else {
+        // CHECK_LIVE_FRAME: everything that is not a window lands here.
         return Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("framep"), *frameish],
+            vec![Value::symbol("frame-live-p"), *frameish],
         ));
     };
     let Some(frame) = frames.get(fid) else {
@@ -6954,8 +7002,10 @@ fn posn_at_x_y_impl(
                 // coordinate resolved to and nothing to approximate it from.
                 return Ok(Value::NIL);
             }
-            let Some(ctx) = resolve_live_window_display_context(frames, buffers, args.get(2))?
-            else {
+            // Use the identity `resolve_posn_at_xy_window` already produced
+            // for this call.  Re-resolving `args.get(2)` here would apply the
+            // window-only rule to a FRAME-OR-WINDOW argument.
+            let Some(ctx) = live_window_display_context_for(frames, buffers, fid, wid)? else {
                 return Ok(Value::NIL);
             };
             let Some(metrics) = approximate_point_at_coords(&ctx, at.text_area_x(), at.window_y())

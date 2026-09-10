@@ -4027,6 +4027,83 @@ fn gui_posn_at_point_uses_next_presented_glyph_only_within_the_same_body_row() {
 }
 
 #[test]
+fn posn_at_x_y_decodes_frame_or_window_the_way_gnu_dispatches_it() {
+    // GNU `Fposn_at_x_y` (src/keyboard.c) dispatches on WINDOWP, not on
+    // "is it a frame":
+    //
+    //     if (NILP (frame_or_window)) frame_or_window = selected_window;
+    //     if (WINDOWP (frame_or_window))
+    //       { struct window *w = decode_live_window (frame_or_window);
+    //         ... ; frame_or_window = w->frame; }
+    //     CHECK_LIVE_FRAME (frame_or_window);
+    //
+    // So a WINDOW-shaped argument is checked against `window-live-p` -- which
+    // rejects internal and deleted windows -- and everything else falls
+    // through to `frame-live-p`.  Measured on GNU Emacs 31.1:
+    //
+    //     nil   cons                 live   cons
+    //     mini  cons                 frame  cons
+    //     internal ERR:window-live-p dead   ERR:window-live-p
+    //     symbol   ERR:frame-live-p  buffer ERR:frame-live-p
+    //
+    // Neomacs guarded the window branch on "not a frame" rather than "is a
+    // window", so anything that is NEITHER -- a symbol, a buffer, a deleted
+    // window -- entered the window decoder and reported its predicate.
+    //
+    // The predicate lives in the signal DATA, so this drives the subr from
+    // Lisp: `(car (cdr err))` is the only place the two arms are visibly
+    // different, and asserting the condition alone (`wrong-type-argument`)
+    // passes on both the correct and the broken implementation.
+    crate::test_utils::init_test_tracing();
+    let mut eval = interactive_context();
+    let out = eval
+        .eval_str_each(
+            "(progn (split-window-internal (selected-window) nil nil nil) t)
+         (if (consp (posn-at-x-y 0 0 nil)) 'cons 'other)
+         (if (consp (posn-at-x-y 0 0 (selected-window))) 'cons 'other)
+         (if (consp (posn-at-x-y 0 0 (minibuffer-window))) 'cons 'other)
+         (if (consp (posn-at-x-y 0 0 (selected-frame))) 'cons 'other)
+         (condition-case err (posn-at-x-y 0 0 (window-parent (selected-window)))
+           (error (car (cdr err))))
+         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+           (delete-window-internal doomed)
+           (condition-case err (posn-at-x-y 0 0 doomed) (error (car (cdr err)))))
+         (condition-case err (posn-at-x-y 0 0 'foo) (error (car (cdr err))))
+         (condition-case err (posn-at-x-y 0 0 (current-buffer)) (error (car (cdr err))))",
+        )
+        .iter()
+        .map(|result| match result {
+            Ok(value) => format!("OK {}", super::super::print::print_value(value)),
+            Err(err) => format!("ERR {err:?}"),
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(out[1], "OK cons", "nil means the selected window");
+    assert_eq!(out[2], "OK cons", "a live window is accepted");
+    assert_eq!(out[3], "OK cons", "so is the minibuffer window");
+    assert_eq!(
+        out[4], "OK cons",
+        "a live FRAME is accepted -- this is why the argument is FRAME-OR-WINDOW"
+    );
+    assert_eq!(
+        out[5], "OK window-live-p",
+        "an internal window IS a window, so it is rejected by decode_live_window"
+    );
+    assert_eq!(
+        out[6], "OK window-live-p",
+        "and so is a deleted window -- not framep"
+    );
+    assert_eq!(
+        out[7], "OK frame-live-p",
+        "a symbol is not a window, so it falls through to CHECK_LIVE_FRAME"
+    );
+    assert_eq!(
+        out[8], "OK frame-live-p",
+        "nor is a buffer -- neither may reach the window decoder"
+    );
+}
+
+#[test]
 fn tty_posn_at_x_y_uses_the_named_live_grid_approximation() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
