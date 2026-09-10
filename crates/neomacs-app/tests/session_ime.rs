@@ -9,6 +9,34 @@ use neomacs_app::session::{EditorSession, ImeReply};
 use neovm_core::emacs_core::eval::Context;
 
 #[test]
+fn live_ime_keeps_accepting_commits_after_gnu_post_insert_hooks_edit_the_buffer() {
+    use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
+    let mut evaluator = neovm_core::emacs_core::load::create_runtime_startup_evaluator_cached()
+        .expect("load actual GNU text-conversion command and hooks");
+    evaluator.eval_str(r##"(progn
+      (setq noninteractive t top-level nil)
+      (erase-buffer)
+      (setq-local post-self-insert-hook (list (lambda () (insert "!"))))
+      (define-key (current-global-map) "z" (lambda () (interactive) (kill-emacs 0))))"##).unwrap();
+    let (session, frontend) = EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    for operation in [
+        ImeOperation::Begin,
+        ImeOperation::Replace { before_bytes: 0, after_bytes: 0, text: "a".into() },
+        ImeOperation::Replace { before_bytes: 0, after_bytes: 0, text: "b".into() },
+    ] {
+        frontend.input().submit(&FrontendEvent::Ime {
+            target: FrontendFrameId::PRIMARY, session: ImeSessionId(1), operation,
+        }).unwrap();
+    }
+    frontend.input().submit(&FrontendEvent::TextCommitted {
+        text: "z".into(), target: FrontendFrameId::PRIMARY,
+    }).unwrap();
+    let (exit, mut evaluator) = session.run_until_stopped(|_| {}).into_parts();
+    assert!(exit.is_success(), "{exit:?}");
+    assert_eq!(evaluator.eval_str("(buffer-string)").unwrap().as_utf8_str(), Some("a!b!"));
+}
+
+#[test]
 fn acknowledged_replacement_delivers_a_text_conversion_event() {
     use neovm_host_abi::ime::{ImeReplacement, ImeReplacementOutcome};
     let mut evaluator = neovm_core::emacs_core::load::create_runtime_startup_evaluator_cached()
