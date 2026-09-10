@@ -221,6 +221,26 @@ export class OriginPrivateFileSystem {
       }
       throw error;
     }
+    if (request.mode === WRITE_MODE.TRUNCATE || request.mode === WRITE_MODE.CREATE_NEW) {
+      // Whole-file replacement must not destroy the previous version before
+      // quota/write/close succeeds. The browser stages this stream and publishes
+      // it on close: https://fs.spec.whatwg.org/#api-filesystemfilehandle-createwritable
+      // Do not fall back to truncate(0) on browsers without this contract.
+      if (typeof fileHandle.createWritable !== "function") {
+        throw new HostFileSystemError(HOST_STATUS.UNSUPPORTED, "staged OPFS writes are unavailable");
+      }
+      const stream = await fileHandle.createWritable({ keepExistingData: false });
+      try {
+        await stream.write(contents);
+        await stream.close();
+      } catch (error) {
+        // A rejected write may already have errored the stream. Cleanup must
+        // not replace the original storage error with a secondary abort error.
+        await stream.abort().catch(() => {});
+        throw error;
+      }
+      return this.stat(path);
+    }
     if (typeof fileHandle.createSyncAccessHandle !== "function") {
       throw new HostFileSystemError(
         HOST_STATUS.UNSUPPORTED,
@@ -230,9 +250,7 @@ export class OriginPrivateFileSystem {
     const access = await fileHandle.createSyncAccessHandle();
     try {
       let offset = 0;
-      if (request.mode === WRITE_MODE.TRUNCATE || request.mode === WRITE_MODE.CREATE_NEW) {
-        access.truncate(0);
-      } else if (request.mode === WRITE_MODE.APPEND) {
+      if (request.mode === WRITE_MODE.APPEND) {
         offset = access.getSize();
       } else {
         offset = request.offset;
