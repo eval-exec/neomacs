@@ -57,7 +57,10 @@ impl crate::Context {
             }) else {
                 return Ok(Value::NIL);
             };
-            active = ActiveComposition { start: anchor.point, anchor };
+            active = ActiveComposition {
+                start: anchor.point,
+                anchor,
+            };
             if before_bytes != 0 || after_bytes != 0 {
                 self.composition.active = Some(active);
                 return Ok(Value::NIL);
@@ -130,6 +133,16 @@ impl crate::Context {
             active.anchor.buffer,
             change.old_range(),
             &replacement,
+        );
+        // GNU textconv.c inserts with inheritance, just like ordinary editor
+        // insertion and the snapshot-qualified replacement path.
+        crate::emacs_core::buffer::apply_inherited_text_properties(
+            &self.obarray,
+            &[],
+            &mut self.buffers,
+            active.anchor.buffer,
+            start.get(),
+            replacement.sbytes(),
         );
         if let Some(buffer) = self.buffers.get_mut(active.anchor.buffer) {
             buffer.goto_emacs_byte_pos(
