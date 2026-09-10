@@ -49,10 +49,34 @@
     (funcall function)
     (max 1 (- (neomacs-perf-workload--cpu-us) started))))
 
+(defvar neomacs-perf-workload--latency-trace nil
+  "Reverse-ordered per-keystroke records, when latency tracing is on.")
+
 (defun neomacs-perf-workload--latency-time (function)
-  (let ((started (float-time)))
+  "Wall-clock microseconds spent in FUNCTION: one input-to-redisplay sample.
+
+When NEOMACS_PERF_LATENCY_TRACE_FILE names a path, also record what that
+wall time was made of.  A keystroke whose wall time is CPU time is doing
+work a profiler can attribute; one whose wall time is not is waiting on
+something outside this process -- the compositor, the GPU queue, the page
+cache, the scheduler -- and no amount of profiling the editor will find
+it.  Percentiles alone cannot tell those two tails apart, and they call
+for opposite work.  Collection is broken out because it is the usual
+first suspect and deserves to be confirmed or cleared by number."
+  (let ((started-wall (float-time))
+        (started-cpu (neomacs-perf-workload--cpu-us))
+        (started-gcs gcs-done)
+        (started-gc-us (round (* 1000000 gc-elapsed))))
     (funcall function)
-    (max 1 (round (* 1000000 (- (float-time) started))))))
+    (let ((wall-us (max 1 (round (* 1000000 (- (float-time) started-wall))))))
+      (when (getenv "NEOMACS_PERF_LATENCY_TRACE_FILE")
+        (push (list wall-us
+                    (- (neomacs-perf-workload--cpu-us) started-cpu)
+                    (- gcs-done started-gcs)
+                    (- (round (* 1000000 gc-elapsed)) started-gc-us)
+                    (round (* 1000000 started-wall)))
+              neomacs-perf-workload--latency-trace))
+      wall-us)))
 
 (defun neomacs-perf-workload--restore (text point)
   (unless (equal text (buffer-substring-no-properties (point-min) (point-max)))
@@ -344,6 +368,19 @@ Both engines run the same code here, so the number is comparable."
         (error . ,error-message))
       :false-object :json-false :null-object nil))))
 
+(defun neomacs-perf-workload--maybe-write-latency-trace ()
+  "Write the per-keystroke latency decomposition, when one was collected.
+
+One space-separated record per sample, in the order the keystrokes ran,
+so a slow sample can be lined up against the frames around it."
+  (let ((path (getenv "NEOMACS_PERF_LATENCY_TRACE_FILE")))
+    (when (and path neomacs-perf-workload--latency-trace)
+      (with-temp-file path
+        (insert "wall_us cpu_us gcs gc_us start_us\n")
+        (dolist (record (nreverse neomacs-perf-workload--latency-trace))
+          (insert (format "%d %d %d %d %d\n" (nth 0 record) (nth 1 record)
+                          (nth 2 record) (nth 3 record) (nth 4 record))))))))
+
 (defun neomacs-perf-workload--maybe-release-startup-gc-ceiling ()
   "Lift Neomacs' startup GC ceiling before measuring, when asked.
 
@@ -407,6 +444,7 @@ GNU has no such variable and ignores this."
      result-path scenario status iterations elapsed-us elapsed-wall-us iterations
      initial-checksum final-checksum point-restored expected-mode actual-mode phases
      error-message)
+    (neomacs-perf-workload--maybe-write-latency-trace)
     (write-region "done\n" nil sentinel-path nil 'silent)
     (kill-emacs exit-code)))
 

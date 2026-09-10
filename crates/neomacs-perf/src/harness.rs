@@ -1265,6 +1265,10 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Per-frame layout telemetry (relaid rows, fast-path classification), for
     // attributing an input-latency tail to relayout rather than guessing.
     "NEOMACS_LAYOUT_STATS_FILE",
+    // Per-keystroke latency decomposition: wall, CPU, and collection work.
+    // Percentiles cannot say whether a slow keystroke was computing or
+    // waiting, and those call for opposite work.
+    "NEOMACS_PERF_LATENCY_TRACE_FILE",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {
