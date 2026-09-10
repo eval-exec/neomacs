@@ -27,6 +27,7 @@ pub mod window;
 pub use emacs_core::error::{EvalError, Flow, FlowKind, FlowRef, FlowResultExt};
 pub use emacs_core::eval::Context;
 pub use emacs_core::value::{Value, ValueKind};
+pub use ime::{ImeEditorError, ImeRequest};
 
 pub const CORE_BACKEND: &str = "rust";
 
