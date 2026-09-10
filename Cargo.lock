@@ -3726,6 +3726,7 @@ dependencies = [
  "neomacs-layout-engine",
  "neomacs-wgpu-runtime",
  "neovm-core",
+ "neovm-host-abi",
  "pollster",
  "winit",
 ]

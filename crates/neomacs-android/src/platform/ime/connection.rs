@@ -1,6 +1,14 @@
 //! UI-thread connection authority. No JNI or evaluator state lives here.
 
+use super::decode::{self, DecodeError};
 use neomacs_app::frontend_event::ImeSessionId;
+use neovm_host_abi::ime::{ImeSelection, ImeTextSnapshot};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SelectionError {
+    Connection(ConnectionError),
+    Decode(DecodeError),
+}
 
 /// Issued by one connection owner; never relabel an existing connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +43,20 @@ pub(super) struct Connections {
 }
 
 impl Connections {
+    /// Validate source authority before interpreting any offsets. The caller
+    /// supplies this connection's observed snapshot; the VM still validates
+    /// its identity and editor revision when applying the returned request.
+    pub(super) fn selection(
+        &self,
+        id: ConnectionId,
+        snapshot: &ImeTextSnapshot,
+        start: i32,
+        end: i32,
+    ) -> Result<ImeSelection, SelectionError> {
+        self.validate(id).map_err(SelectionError::Connection)?;
+        decode::selection(snapshot, start, end).map_err(SelectionError::Decode)
+    }
+
     pub(super) fn open(&mut self, session: ImeSessionId) -> Result<ConnectionId, ConnectionError> {
         let generation = self
             .generation
