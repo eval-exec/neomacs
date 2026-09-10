@@ -4997,8 +4997,7 @@ impl crate::emacs_core::eval::Context {
 
         match event {
             InputEvent::ImeRequest(request) => {
-                request.dispatch(self)?;
-                Ok(None)
+                request.dispatch(self)
             }
             InputEvent::Ime { session, operation, emacs_frame_id } => {
                 self.route_keyboard_input_to_frame(emacs_frame_id);

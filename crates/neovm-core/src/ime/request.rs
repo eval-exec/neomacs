@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, bounded};
 use neovm_host_abi::ime::{
-    ImeSelection, ImeSelectionAcknowledgement, ImeSelectionOutcome, ImeTextSnapshot,
+    ImeReplacement, ImeReplacementAcknowledgement, ImeSelection, ImeSelectionAcknowledgement,
+    ImeSelectionOutcome, ImeTextSnapshot,
 };
 
 /// A request failed inside Lisp. The original nonlocal exit stays on the VM
@@ -46,6 +47,11 @@ impl<T> ImeReplySender<T> {
 /// Lisp can itself read input, including inside a recursive minibuffer.
 #[derive(Clone, Debug)]
 pub enum ImeRequest {
+    /// Apply one observed replacement, returning its command event to Lisp.
+    ReplaceAndObserve {
+        replacement: ImeReplacement,
+        reply: ImeReplySender<Result<ImeReplacementAcknowledgement, ImeEditorError>>,
+    },
     /// Apply a selection and capture its resulting observation without a
     /// second round trip. The existing selection-only request stays unchanged.
     SelectAndObserve {
@@ -62,6 +68,18 @@ pub enum ImeRequest {
 }
 
 impl ImeRequest {
+    /// Replace observed text and capture the result in the same input turn.
+    pub fn replace_and_observe(
+        replacement: ImeReplacement,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> (
+        Self,
+        Receiver<Result<ImeReplacementAcknowledgement, ImeEditorError>>,
+    ) {
+        let (reply, receiver) = ImeReplySender::channel(notify);
+        (Self::ReplaceAndObserve { replacement, reply }, receiver)
+    }
+
     /// Apply a selection and capture a fresh observation in input order.
     /// The notification follows the same contract as `surrounding_text`.
     pub fn select_and_observe(
@@ -94,8 +112,26 @@ impl ImeRequest {
         (Self::SetSelection { selection, reply }, receiver)
     }
 
-    pub(crate) fn dispatch(self, context: &mut crate::Context) -> Result<(), crate::Flow> {
+    pub(crate) fn dispatch(
+        self,
+        context: &mut crate::Context,
+    ) -> Result<Option<crate::Value>, crate::Flow> {
         match self {
+            Self::ReplaceAndObserve { replacement, reply } => {
+                match context.ime_replace(replacement) {
+                    Ok((outcome, event)) => {
+                        reply.complete(Ok(ImeReplacementAcknowledgement {
+                            outcome,
+                            snapshot: context.ime_surrounding_text(),
+                        }));
+                        return Ok(event);
+                    }
+                    Err(flow) => {
+                        reply.complete(Err(ImeEditorError));
+                        return Err(flow);
+                    }
+                }
+            }
             Self::SelectAndObserve { selection, reply } => {
                 match context.ime_set_selection(selection) {
                     Ok(outcome) => reply.complete(Ok(ImeSelectionAcknowledgement {
@@ -115,6 +151,6 @@ impl ImeRequest {
                 result?;
             }
         }
-        Ok(())
+        Ok(None)
     }
 }

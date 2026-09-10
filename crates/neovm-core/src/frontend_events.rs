@@ -203,7 +203,14 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         InputEvent::KeyPress { .. } | InputEvent::Ime { .. } => command(),
         // Do not overtake preceding keyboard edits through wait servicing or
         // the eager internal-event drain. Answer at the next input read.
-        InputEvent::ImeRequest(_) => special(PendingPolicy::Never, false, false),
+        InputEvent::ImeRequest(request) => match request {
+            crate::ImeRequest::ReplaceAndObserve { .. } => command(),
+            crate::ImeRequest::SurroundingText(_)
+            | crate::ImeRequest::SetSelection { .. }
+            | crate::ImeRequest::SelectAndObserve { .. } => {
+                special(PendingPolicy::Never, false, false)
+            }
+        },
         InputEvent::MousePress { .. } => command(),
         InputEvent::MouseRelease { .. } => command(),
         InputEvent::MouseMove { .. } => special(PendingPolicy::TrackMouse, false, true),
