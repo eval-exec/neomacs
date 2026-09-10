@@ -18,8 +18,8 @@
 mod host_input;
 pub use host_input::{HostInputWaitBackend, HostInputWaitError};
 
-use std::time::Duration;
 use neomacs_host_runtime::time::Instant;
+use std::time::Duration;
 
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::{Context, GnuTimerTimestamp};
@@ -148,6 +148,14 @@ impl Context {
             let special_activity = self.service_portable_input(true, false)?;
             if self.stage_pending_command_input_for_wait_request()? {
                 return Ok(CommandInputWaitOutcome::InputPending);
+            }
+            if self
+                .command_loop
+                .keyboard
+                .pending_input_events
+                .has_read_control_front()
+            {
+                return Ok(CommandInputWaitOutcome::Interrupted);
             }
             if special_activity {
                 return Ok(CommandInputWaitOutcome::Interrupted);
