@@ -373,7 +373,7 @@ pub(crate) fn layout_mock_frame_content(
         let sizing = crate::font::sizing::FontSizing::native_gui();
         face.font_size =
             crate::font::sizing::points_to_layout_pixels(face.font_size, sizing.layout_dpi());
-        builder.publish_output_face(face.id, face);
+        builder.import_output_face(face);
     }
 
     let default_face = content.faces.first();
@@ -569,7 +569,7 @@ pub(crate) fn layout_mock_frame_content(
         );
         cb.set_output_background_color(Color::new(0.0, 0.0, 0.0, 0.0));
         for face in &content.faces {
-            cb.publish_output_face(face.id, face.clone());
+            cb.import_output_face(face.clone());
         }
         let nrows = cf.window.lines.len();
         let ncols = mock_frame_pixel_width_to_columns(cf.window.pixel_bounds.width, char_w);

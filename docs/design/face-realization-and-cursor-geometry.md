@@ -82,6 +82,66 @@ claim of native GUI input or Treemacs mouse-session coverage.
 
 ## Verification and next stages
 
+### Arena-owned realized faces
+
+The truncation fix protected one producer. The subsequent ownership refactor
+adds `RealizedFrameFace`, an opaque immutable value owned by one attempt.
+Row fragments and pointer-face publication carry this value rather than mutable
+protocol faces. `DisplayOutputBuilder::publish_output_face` no longer accepts
+independent IDs and attributes.
+
+The existing `frame_face_arena` module owns these operations:
+
+- `prepare_face` validates a row realization without publishing speculative
+  metrics. Discarding a measured row leaves the published table unchanged.
+- `publish_face` checks the destination attempt and publishes the realization
+  when output accepts the row.
+- `intern_resolved_face` assigns identity and registers rendering together.
+  Named line-end, margin, and fringe decorations use this operation.
+- `import_face` / `import_output_face` explicitly validate raw inputs from
+  producers not yet migrated at their resolution sites. Content-bound dynamic
+  IDs are checked in release builds, not only through debug assertions.
+- Retained admission validates frame ownership, the destination generation,
+  and the exact predecessor snapshot. Sibling speculative layouts can share a
+  generation counter while containing different face tables.
+- Sealing preserves styling identity, table membership, and IDs. It permits
+  font enrichment but rejects replacement or erasure of an existing exact font
+  binding. Invalid finalization leaves the accepted arena unchanged.
+
+Keep one assignment authority: the arena's existing persistent identity map.
+Do not add another cache or a general backend trait. Semantic selection stays
+in `display_face_policy.rs`; registration, handles, identity validation, and
+sealing stay together in `frame_face_arena.rs`. Font selection and measurement
+stay in their existing modules. Protocol `FaceId` remains a compact transport
+identifier, not proof of producer ownership.
+
+The agreed test seams are real buffer-to-frame output and the arena's
+caller-facing interface. `frame_face_arena_test.rs` contains the arena tests,
+including wrong-owner handles, stale and sibling retained snapshots, immutable
+styling, permitted enrichment, checked imports, and discarded preparations.
+Row-append fixtures explicitly share an attempt with their output builder;
+test-only constructors that silently created unrelated arenas were removed.
+
+`ResolvedFrameFace` now also binds the source attributes to that realization.
+Resolved-face installers, measured-face construction, and synthetic-text
+requests consume this validated value instead of independently supplied IDs
+and attributes. Measurement can enrich ascent/descent but cannot re-key or
+replace styling. The arena's `bind_resolved_face` is the checked admission
+point for identities produced by existing resolvers; it does not publish probe
+results. Existing source-selection and low-level geometry recipes are not
+publication capabilities: they must pass this validation before installation.
+
+The ownership migration preserves basic-face remapping and stable identities
+across accepted redisplays. Further source-selection simplification should
+reuse these types and the same arena, not add another cache or wrap arbitrary
+pairs in unchecked constructors.
+
+Private construction prevents consumers from manufacturing or modifying the
+opaque handle. Dynamic ownership, generation, and raw-import checks remain
+runtime validation; an ordinary Rust lifetime alone does not prove arena
+identity. Closed error cases use enums and exhaustive matching. Strum is not
+needed for these private state variants.
+
 Tests live out-of-line and cover lossy face-merge sequences, terminal defaults,
 RTL full/replay physical snapshots, row indentation, wide/padding index mapping,
 hscroll clipping and EOL, and provenance serialization. Truncated rows remain

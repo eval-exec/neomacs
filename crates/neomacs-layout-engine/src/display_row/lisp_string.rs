@@ -784,7 +784,10 @@ pub(crate) fn apply_pending_display_source_faces(
 ) {
     for pending in pending_faces.drain(..) {
         let (face_id, resolved) = pending.into_parts();
-        install_output_resolved_face(builder, face_id, &resolved, None);
+        {
+            let bound = builder.bind_resolved_face(face_id, &resolved);
+            install_output_resolved_face(builder, &bound, None)
+        };
     }
 }
 

@@ -241,7 +241,10 @@ impl<'a> EndOfBufferRowsFillRequest<'a> {
             let resolved = faces.resolve_named_face("fringe");
             let face_id =
                 crate::display_row::face_state::stable_face_id_for_resolved(face_ids, &resolved);
-            output.install_resolved_face(face_id, &resolved, None);
+            {
+                let bound = output.builder().bind_resolved_face(face_id, &resolved);
+                output.install_resolved_face(&bound, None)
+            };
             FringeBitmapInfo {
                 bitmap_index: bitmap_index as u16,
                 face_id,
@@ -254,7 +257,10 @@ impl<'a> EndOfBufferRowsFillRequest<'a> {
                 let face_id = crate::display_row::face_state::stable_face_id_for_resolved(
                     face_ids, &resolved,
                 );
-                output.install_resolved_face(face_id, &resolved, None);
+                {
+                    let bound = output.builder().bind_resolved_face(face_id, &resolved);
+                    output.install_resolved_face(&bound, None)
+                };
                 Some(
                     prefix
                         .padded_text()

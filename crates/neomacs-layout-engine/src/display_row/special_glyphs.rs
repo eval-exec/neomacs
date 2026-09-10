@@ -492,7 +492,10 @@ pub(crate) fn install_text_window_terminal_right_border(
         render_services.face_ids(),
         &border_face,
     );
-    install_output_resolved_face(output_builder, border_face_id, &border_face, None);
+    {
+        let bound = output_builder.bind_resolved_face(border_face_id, &border_face);
+        install_output_resolved_face(output_builder, &bound, None)
+    };
     install_text_window_right_border_rows(
         output_builder,
         render_services.reborrow(),

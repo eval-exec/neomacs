@@ -84,6 +84,7 @@ fn rendered_display_row_content_height(rendered: &RenderedDisplayRow) -> f32 {
         let face_metrics = rendered
             .faces()
             .iter()
+            .map(|face| face.face())
             .find(|face| face.id == glyph.face_id)
             .map(|face| {
                 (
@@ -264,7 +265,12 @@ mod tests {
             row,
             DisplayRowOutputProgress::new(10.0, 1, 0.0, 12.0),
             Vec::new(),
-            vec![face],
+            vec![
+                crate::frame_face_arena::FrameFaceArena::default()
+                    .begin_attempt()
+                    .import_face(face)
+                    .unwrap(),
+            ],
         );
 
         assert_eq!(rendered_display_row_content_height(&rendered), 12.0);

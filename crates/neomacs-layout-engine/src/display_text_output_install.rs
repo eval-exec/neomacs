@@ -1,11 +1,9 @@
-use crate::display_row::face_state::resolved_display_row_face;
 use crate::font::metrics::FontMetrics;
-use crate::neovm_bridge::ResolvedFace;
+use crate::frame_face_arena::ResolvedFrameFace;
 use crate::output::builder::DisplayOutputBuilder;
 use crate::output::row_request::OutputRowLifecycleRequest;
 use crate::output::window_request::OutputWindowLifecycleRequest;
 use neomacs_display_protocol::glyph_matrix::GlyphRow;
-use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::types::Rect;
 
 pub(crate) struct DisplayRowOutputInstall<'a> {
@@ -166,10 +164,8 @@ pub(crate) fn install_display_row(
 
 pub(crate) fn install_output_resolved_face(
     builder: &mut DisplayOutputBuilder,
-    face_id: FaceId,
-    face: &ResolvedFace,
+    face: &ResolvedFrameFace,
     metrics: Option<FontMetrics>,
 ) {
-    let render_face = resolved_display_row_face(face_id, face, metrics);
-    builder.publish_output_face(render_face.face_id, render_face.render_face());
+    builder.publish_output_face(&face.realized(metrics));
 }

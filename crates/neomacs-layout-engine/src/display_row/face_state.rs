@@ -867,16 +867,15 @@ impl DisplayRowMeasurementPolicy {
 
     pub(crate) fn resolved_measured_face(
         self,
-        face_id: FaceId,
-        face: ResolvedFace,
+        face: crate::frame_face_arena::ResolvedFrameFace,
         metrics: Option<FontMetrics>,
         fallback_char_width: f32,
         fallback_metrics: DisplayRowFallbackMetrics,
         font_metrics: &mut Option<FontMetricsService>,
     ) -> DisplayRowResolvedMeasuredFace {
         let measured_face = self.measured_face(
-            face_id,
-            &face,
+            face.face_id(),
+            face.resolved(),
             metrics,
             fallback_char_width,
             fallback_metrics,
@@ -1032,22 +1031,23 @@ impl DisplayRowMeasuredFace {
 
 #[derive(Clone, Debug)]
 pub(crate) struct DisplayRowResolvedMeasuredFace {
-    face: ResolvedFace,
+    face: crate::frame_face_arena::ResolvedFrameFace,
     metrics: Option<FontMetrics>,
     measured_face: DisplayRowMeasuredFace,
 }
 
 impl DisplayRowResolvedMeasuredFace {
+    pub(crate) fn binding(&self) -> &crate::frame_face_arena::ResolvedFrameFace {
+        &self.face
+    }
+
+    #[cfg(test)]
     pub(crate) fn face_id(&self) -> FaceId {
         self.measured_face.face_id()
     }
 
     pub(crate) fn into_active_face_state(self) -> DisplayRowActiveFaceState {
-        DisplayRowActiveFaceState::new(self.face, self.measured_face)
-    }
-
-    pub(crate) fn resolved_face(&self) -> &ResolvedFace {
-        &self.face
+        DisplayRowActiveFaceState::new(self.face.into_resolved(), self.measured_face)
     }
 
     pub(crate) fn font_metrics(&self) -> Option<FontMetrics> {

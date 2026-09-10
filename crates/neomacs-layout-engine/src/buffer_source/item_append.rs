@@ -24,8 +24,6 @@ use crate::display_source_item_append::{
     DisplaySourceSpecialCharAppendPlan, DisplaySourceSpecialCharPreparedAppend,
     DisplaySourceTextCharAppendPlan, DisplaySourceTextCharPreparedAppend,
 };
-#[cfg(test)]
-use crate::frame_face_arena::FrameFaceArena;
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{LayoutBufferView, ResolvedFace};
 use neomacs_display_protocol::types::FaceId;
@@ -131,7 +129,7 @@ impl<'a> BufferSourceItemFace<'a> {
 impl<'source, 'surface, B: LayoutBufferView + ?Sized>
     BufferSourceRowAppendContext<'source, 'surface, B>
 {
-    fn new_with_face_attempt(
+    pub(crate) fn new_with_face_attempt(
         buffer: &'source B,
         buffer_id: BufferId,
         append_surface: &'surface DisplayRowAppendSurface,
@@ -150,26 +148,6 @@ impl<'source, 'surface, B: LayoutBufferView + ?Sized>
             fallback_metrics,
             face_attempt,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new(
-        buffer: &'source B,
-        buffer_id: BufferId,
-        append_surface: &'surface DisplayRowAppendSurface,
-        active_face: &'source DisplayRowActiveFaceState,
-        glyph_y_offset: f32,
-        fallback_metrics: DisplayRowFallbackMetrics,
-    ) -> Self {
-        Self::new_with_face_attempt(
-            buffer,
-            buffer_id,
-            append_surface,
-            active_face,
-            glyph_y_offset,
-            fallback_metrics,
-            FrameFaceArena::default().begin_attempt(),
-        )
     }
 
     pub(crate) fn from_active_face_row(

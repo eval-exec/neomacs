@@ -29,8 +29,6 @@ use crate::display_source_overflow::{
 };
 use crate::display_source_progress::DisplaySourceProgressState;
 use crate::display_text_run_measurement::ComplexTextRunAdvanceResolver;
-#[cfg(test)]
-use crate::frame_face_arena::FrameFaceArena;
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::ResolvedFace;
 use crate::types::{LineWrapMode, WindowParams};
@@ -864,20 +862,6 @@ impl<'a> DisplaySourceItemAppendContext<'a> {
             single_item: SingleDisplayItemAppendContext::new(base_face, face_id, frame),
             face_attempt,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new(
-        face_id: FaceId,
-        base_face: &'a ResolvedFace,
-        frame: DisplayRowAppendFrame,
-    ) -> Self {
-        Self::with_face_attempt(
-            face_id,
-            base_face,
-            frame,
-            FrameFaceArena::default().begin_attempt(),
-        )
     }
 
     #[cfg(test)]

@@ -158,13 +158,15 @@ impl<'a, B: LayoutBufferView> BufferSourceFaceResolutionContext<'a, B> {
         face_id: FaceId,
         resolved: ResolvedFace,
     ) -> DisplayRowActiveFaceState {
-        source_render.resolve_measured_face_without_install(
-            self.measurement_policy,
-            face_id,
-            resolved,
-            self.window_metrics.char_width(),
-            self.window_metrics,
-        )
+        {
+            let bound = source_render.bind_resolved_face(face_id, &resolved);
+            source_render.resolve_measured_face_without_install(
+                self.measurement_policy,
+                bound,
+                self.window_metrics.char_width(),
+                self.window_metrics,
+            )
+        }
     }
 
     pub(crate) fn resolve_at_checkpoint(
@@ -186,13 +188,15 @@ impl<'a, B: LayoutBufferView> BufferSourceFaceResolutionContext<'a, B> {
         );
         let face_id = stable_face_id_for_resolved(state.face_ids, &resolved);
         let resolved_box_type = resolved.box_type;
-        *state.active_face_state = state.source_render.resolve_and_install_measured_face(
-            self.measurement_policy,
-            face_id,
-            resolved,
-            self.window_metrics.char_width(),
-            self.window_metrics,
-        );
+        *state.active_face_state = {
+            let bound = state.source_render.bind_resolved_face(face_id, &resolved);
+            state.source_render.resolve_and_install_measured_face(
+                self.measurement_policy,
+                bound,
+                self.window_metrics.char_width(),
+                self.window_metrics,
+            )
+        };
         let face_metrics = state.active_face_state.metrics();
         state
             .row_geometry
@@ -263,13 +267,15 @@ impl<'a, B: LayoutBufferView> BufferSourceFaceResolutionContext<'a, B> {
     ) {
         for pending in pending_faces {
             let (face_id, resolved) = pending.into_parts();
-            let active_face = source_render.resolve_and_install_measured_face(
-                self.measurement_policy,
-                face_id,
-                resolved,
-                self.window_metrics.char_width(),
-                self.window_metrics,
-            );
+            let active_face = {
+                let bound = source_render.bind_resolved_face(face_id, &resolved);
+                source_render.resolve_and_install_measured_face(
+                    self.measurement_policy,
+                    bound,
+                    self.window_metrics.char_width(),
+                    self.window_metrics,
+                )
+            };
             let metrics = active_face.metrics();
             row_geometry.include_row_extents(metrics.row_height(), metrics.ascent());
         }
@@ -432,13 +438,15 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
 
         let face_id = stable_face_id_for_resolved(face_ids, &resolved);
         item.face = RenderFaceRef::FaceId(face_id);
-        let resolved_active_face = source_render.resolve_and_install_measured_face(
-            self.measurement_policy,
-            face_id,
-            resolved,
-            self.window_metrics.char_width(),
-            self.window_metrics,
-        );
+        let resolved_active_face = {
+            let bound = source_render.bind_resolved_face(face_id, &resolved);
+            source_render.resolve_and_install_measured_face(
+                self.measurement_policy,
+                bound,
+                self.window_metrics.char_width(),
+                self.window_metrics,
+            )
+        };
         let metrics = resolved_active_face.metrics();
         row_geometry.include_row_extents(metrics.row_height(), metrics.ascent());
         resolved_active_face
@@ -482,13 +490,15 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
     ) -> DisplayRowActiveFaceState {
         let face_id = stable_face_id_for_resolved(face_ids, &merged);
         item.face = RenderFaceRef::FaceId(face_id);
-        let resolved_active_face = source_render.resolve_and_install_measured_face(
-            self.measurement_policy,
-            face_id,
-            merged,
-            self.window_metrics.char_width(),
-            self.window_metrics,
-        );
+        let resolved_active_face = {
+            let bound = source_render.bind_resolved_face(face_id, &merged);
+            source_render.resolve_and_install_measured_face(
+                self.measurement_policy,
+                bound,
+                self.window_metrics.char_width(),
+                self.window_metrics,
+            )
+        };
         let metrics = resolved_active_face.metrics();
         row_geometry.include_row_extents(metrics.row_height(), metrics.ascent());
         resolved_active_face

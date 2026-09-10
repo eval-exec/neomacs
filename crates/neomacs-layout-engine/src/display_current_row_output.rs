@@ -110,7 +110,7 @@ pub(crate) fn append_rendered_display_row_fragment_to_current_row(
     _display_row_index: usize,
 ) -> DisplayRowPosition {
     for face in rendered.faces() {
-        builder.publish_output_face(face.id, face.clone());
+        builder.publish_output_face(face);
     }
     let end = DisplayRowCurrentRowOutput::from_output_builder(builder)
         .append_rendered_fragment(rendered)

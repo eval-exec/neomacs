@@ -4086,8 +4086,10 @@ impl LayoutEngine {
                 metrics.ascent(),
                 metrics.row_height(),
             );
-            self.frame_output
-                .install_pointer_face(face_id, realized.render_face());
+            let registered = face_ids
+                .import_face(realized.render_face())
+                .expect("pointer face must preserve its realized identity");
+            self.frame_output.install_pointer_face(&registered);
             realized_mouse_faces.push((value, face_id));
         }
         let actual_tab_bar_height = measured.bounds().height;

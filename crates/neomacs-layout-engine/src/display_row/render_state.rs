@@ -9,8 +9,8 @@ use crate::display_row::finalizer::{RowTrailingFaceFill, RowTrailingFaceFillResu
 use crate::display_row::geometry::{
     DisplayRowGeometryState, DisplayRowMaxX, DisplayRowTextAreaOrigin,
 };
+use crate::frame_face_arena::RealizedFrameFace;
 use crate::glyph_row_writer;
-use neomacs_display_protocol::face::Face;
 #[cfg(test)]
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::{
@@ -64,7 +64,7 @@ pub(crate) struct RenderedDisplayRow {
     row: GlyphRow,
     progress: DisplayRowOutputProgress,
     source_slots: Vec<DisplayRowGlyphSlot>,
-    faces: Vec<Face>,
+    faces: Vec<RealizedFrameFace>,
 }
 
 impl RenderedDisplayRow {
@@ -72,7 +72,7 @@ impl RenderedDisplayRow {
         row: GlyphRow,
         progress: DisplayRowOutputProgress,
         source_slots: Vec<DisplayRowGlyphSlot>,
-        faces: Vec<Face>,
+        faces: Vec<RealizedFrameFace>,
     ) -> Self {
         Self {
             row,
@@ -196,7 +196,7 @@ impl RenderedDisplayRow {
         display_row_output_end_position(self.progress())
     }
 
-    pub(crate) fn faces(&self) -> &[Face] {
+    pub(crate) fn faces(&self) -> &[RealizedFrameFace] {
         &self.faces
     }
 
@@ -240,7 +240,7 @@ pub(crate) enum DisplayRowRenderStop {
 pub(crate) struct DisplayRowRenderIntoRowResult {
     progress: DisplayRowOutputProgress,
     source_slots: Vec<DisplayRowGlyphSlot>,
-    faces: Vec<Face>,
+    faces: Vec<RealizedFrameFace>,
     stop: DisplayRowRenderStop,
 }
 
@@ -248,7 +248,7 @@ impl DisplayRowRenderIntoRowResult {
     pub(crate) fn new(
         progress: DisplayRowOutputProgress,
         source_slots: Vec<DisplayRowGlyphSlot>,
-        faces: Vec<Face>,
+        faces: Vec<RealizedFrameFace>,
         stop: DisplayRowRenderStop,
     ) -> Self {
         Self {
@@ -259,7 +259,7 @@ impl DisplayRowRenderIntoRowResult {
         }
     }
 
-    pub(crate) fn faces(&self) -> &[Face] {
+    pub(crate) fn faces(&self) -> &[RealizedFrameFace] {
         &self.faces
     }
 
@@ -286,7 +286,7 @@ impl DisplayRowRenderIntoRowResult {
     ) -> (
         DisplayRowOutputProgress,
         Vec<DisplayRowGlyphSlot>,
-        Vec<Face>,
+        Vec<RealizedFrameFace>,
         DisplayRowRenderStop,
     ) {
         (self.progress, self.source_slots, self.faces, self.stop)

@@ -217,7 +217,10 @@ impl BufferWindowBackground {
         if geometry.text_height <= 0.0 {
             return;
         }
-        output.install_resolved_face(*face_id, face, None);
+        {
+            let bound = output.builder().bind_resolved_face(*face_id, face);
+            output.install_resolved_face(&bound, None)
+        };
         output.builder().add_output_face_fill(FaceFillItem {
             window_id: DisplayWindowId::new(params.window_id),
             row_role: GlyphRowRole::Text,
@@ -1348,7 +1351,10 @@ impl BufferSourceOutputSetup {
                     render_services.face_ids(),
                     &resolved,
                 );
-                output.install_resolved_face(face_id, &resolved, None);
+                {
+                    let bound = output.builder().bind_resolved_face(face_id, &resolved);
+                    output.install_resolved_face(&bound, None)
+                };
                 face_id
             },
         ) {

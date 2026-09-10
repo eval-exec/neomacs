@@ -1,8 +1,8 @@
 use crate::display_row::measured_state::{
     DisplayRowOwner, FrameChromeKind, MeasuredDisplayRow, WindowChromeKind,
 };
+use crate::frame_face_arena::RealizedFrameFace;
 use crate::output::builder::{DisplayOutputBuilder, FRAME_CHROME_WINDOW_ID};
-use neomacs_display_protocol::face::Face;
 use neomacs_display_protocol::frame_chrome::ChromeDisplayRow;
 
 pub(crate) fn install_measured_window_display_row(
@@ -34,7 +34,7 @@ pub(crate) fn frame_chrome_display_row(measured: &MeasuredDisplayRow) -> ChromeD
 
 pub(crate) fn install_rendered_display_row_fragment_assets(
     builder: &mut DisplayOutputBuilder,
-    faces: &[Face],
+    faces: &[RealizedFrameFace],
 ) {
     install_faces(builder, faces);
 }
@@ -84,8 +84,8 @@ impl MeasuredFrameChromeAssetsInstallRequest<'_> {
     }
 }
 
-fn install_faces(builder: &mut DisplayOutputBuilder, faces: &[Face]) {
+fn install_faces(builder: &mut DisplayOutputBuilder, faces: &[RealizedFrameFace]) {
     for face in faces {
-        builder.publish_output_face(face.id, face.clone());
+        builder.publish_output_face(face);
     }
 }

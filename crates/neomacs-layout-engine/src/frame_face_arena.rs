@@ -15,7 +15,7 @@ use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::Hasher;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 /// Entries above this drop the whole identity map at the next seal. Content
@@ -119,6 +119,8 @@ impl FrameFaceGeneration {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FrameFaceArena {
+    owner: Arc<FrameFaceOwner>,
+    snapshot: Arc<FrameFaceSnapshot>,
     generation: FrameFaceGeneration,
     faces: Arc<HashMap<FaceId, Face>>,
     /// Persistent realization-identity -> stable id map (GNU face_cache
@@ -135,8 +137,67 @@ pub(crate) struct FrameFaceAttempt {
     state: Rc<RefCell<FrameFaceAttemptState>>,
 }
 
+/// An immutable realization owned by exactly one speculative attempt.
+/// Only the arena can construct this value. Raw IDs are extracted after
+/// checking the destination attempt, never paired with replacement styling.
+#[derive(Clone, Debug)]
+pub(crate) struct RealizedFrameFace {
+    face: Face,
+    attempt: Weak<RefCell<FrameFaceAttemptState>>,
+}
+
+impl RealizedFrameFace {
+    pub(crate) fn face(&self) -> &Face {
+        &self.face
+    }
+}
+
+/// Resolved source attributes bound to a validated rendering identity.
+/// Measurement may enrich metrics, but cannot select a different face ID.
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedFrameFace {
+    resolved: crate::neovm_bridge::ResolvedFace,
+    realized: RealizedFrameFace,
+}
+
+impl ResolvedFrameFace {
+    pub(crate) fn into_resolved(self) -> crate::neovm_bridge::ResolvedFace {
+        self.resolved
+    }
+    pub(crate) fn face_id(&self) -> FaceId {
+        self.realized.face.id
+    }
+    pub(crate) fn resolved(&self) -> &crate::neovm_bridge::ResolvedFace {
+        &self.resolved
+    }
+    pub(crate) fn realized(
+        &self,
+        metrics: Option<crate::font::metrics::FontMetrics>,
+    ) -> RealizedFrameFace {
+        let mut face = self.realized.clone();
+        if let Some(metrics) = metrics {
+            face.face.font_ascent = metrics.ascent as i32;
+            face.face.font_descent = metrics.descent.max(0.0).ceil() as i32;
+        }
+        face
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameFaceUseError {
+    ForeignAttempt,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum FrameFacePublicationError {
+    ForeignAttempt,
+    Conflict(FrameFaceConflict),
+}
+
 #[derive(Debug)]
 struct FrameFaceAttemptState {
+    owner: Arc<FrameFaceOwner>,
+    base_snapshot: Arc<FrameFaceSnapshot>,
     generation: FrameFaceGeneration,
     next_face_id: u32,
     faces: HashMap<FaceId, Face>,
@@ -157,7 +218,59 @@ struct FrameFaceAttemptState {
     resolved_memo: HashMap<u64, Vec<(crate::neovm_bridge::ResolvedFace, FaceId)>>,
 }
 
+/// Allocation identity, deliberately independent of the presentation counter.
+#[derive(Debug)]
+struct FrameFaceOwner;
+
+/// Distinguishes sibling attempts sealed from the same predecessor.
+#[derive(Debug)]
+struct FrameFaceSnapshot;
+
 impl FrameFaceAttemptState {
+    fn validate_face(&self, face: &Face) -> Result<(), FrameFaceConflict> {
+        let face_id = face.id;
+        if self.faces.get(&face_id) == Some(face) {
+            return Ok(());
+        }
+        // Dynamic IDs are content-bound even before first publication.
+        // Use the content index on the hot path. Only a mismatched/imported ID
+        // needs a reverse search to produce a useful conflict diagnostic.
+        if face_id.get() >= BasicFaceId::SENTINEL {
+            let identity = face_realization_identity(&face);
+            let hash = face_identity_hash(&identity);
+            let matched = realized_identity_lookup(&self.fresh_realized, hash, &identity)
+                .or_else(|| realized_identity_lookup(&self.realized, hash, &identity));
+            if matched != Some(face_id) {
+                if let Some((bound, _)) = self
+                    .fresh_realized
+                    .values()
+                    .flatten()
+                    .chain(self.realized.values().flatten())
+                    .find(|(_, id)| *id == face_id)
+                {
+                    let mut existing = bound.clone();
+                    existing.id = face_id;
+                    return Err(FrameFaceConflict {
+                        face_id,
+                        existing: Box::new(existing),
+                        replacement: Box::new(face.clone()),
+                    });
+                }
+            }
+        }
+        if let Some(existing) = self.faces.get(&face_id) {
+            let mut merged = existing.clone();
+            if !merge_compatible_realization(&mut merged, face) {
+                return Err(FrameFaceConflict {
+                    face_id,
+                    existing: Box::new(existing.clone()),
+                    replacement: Box::new(face.clone()),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn reserve_dynamic_face(&mut self) -> FaceId {
         while self.faces.contains_key(&FaceId::new(self.next_face_id)) {
             self.next_face_id = self.next_face_id.saturating_add(1);
@@ -177,6 +290,12 @@ pub(crate) struct FrameFaceConflict {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FrameFaceReuseError {
+    ForeignArena,
+    ForeignSnapshot,
+    AttemptGenerationMismatch {
+        attempt: FrameFaceGeneration,
+        source: FrameFaceGeneration,
+    },
     StaleGeneration {
         retained: FrameFaceGeneration,
         current: FrameFaceGeneration,
@@ -187,6 +306,8 @@ pub(crate) enum FrameFaceReuseError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FrameFaceSealError {
+    ChangedRealization(FaceId),
+    ChangedFontBinding(FaceId),
     FaceSetChanged {
         published: Vec<FaceId>,
         finalized: Vec<FaceId>,
@@ -200,6 +321,8 @@ pub(crate) enum FrameFaceSealError {
 impl Default for FrameFaceArena {
     fn default() -> Self {
         Self {
+            owner: Arc::new(FrameFaceOwner),
+            snapshot: Arc::new(FrameFaceSnapshot),
             generation: FrameFaceGeneration(1),
             faces: Arc::new(HashMap::new()),
             realized: Arc::new(HashMap::new()),
@@ -216,6 +339,8 @@ impl FrameFaceArena {
     pub(crate) fn begin_attempt(&self) -> FrameFaceAttempt {
         FrameFaceAttempt {
             state: Rc::new(RefCell::new(FrameFaceAttemptState {
+                owner: Arc::clone(&self.owner),
+                base_snapshot: Arc::clone(&self.snapshot),
                 generation: self.generation,
                 next_face_id: self.next_face_id.max(BasicFaceId::SENTINEL),
                 faces: HashMap::new(),
@@ -229,6 +354,8 @@ impl FrameFaceArena {
     #[cfg(test)]
     pub(crate) fn invalidate(&self) -> Self {
         Self {
+            owner: Arc::clone(&self.owner),
+            snapshot: Arc::new(FrameFaceSnapshot),
             generation: self.generation.next(),
             faces: Arc::new(HashMap::new()),
             realized: Arc::new(HashMap::new()),
@@ -238,10 +365,76 @@ impl FrameFaceArena {
 }
 
 impl FrameFaceAttempt {
+    /// Checked admission of an existing resolver identity; no output is
+    /// published. This is the sole constructor for a resolved binding.
+    pub(crate) fn bind_resolved_face(
+        &self,
+        id: FaceId,
+        resolved: crate::neovm_bridge::ResolvedFace,
+    ) -> Result<ResolvedFrameFace, FrameFaceConflict> {
+        let face = crate::display_row::face_state::resolved_display_row_face(id, &resolved, None)
+            .render_face();
+        let realized = self.prepare_face(face)?;
+        Ok(ResolvedFrameFace { resolved, realized })
+    }
+
+    /// Validate a row's realization without publishing speculative metrics.
+    /// Dropping this handle leaves the published face table unchanged.
+    pub(crate) fn prepare_face(&self, face: Face) -> Result<RealizedFrameFace, FrameFaceConflict> {
+        self.state.borrow().validate_face(&face)?;
+        Ok(RealizedFrameFace {
+            face,
+            attempt: Rc::downgrade(&self.state),
+        })
+    }
+
+    pub(crate) fn publish_face(
+        &mut self,
+        face: &RealizedFrameFace,
+    ) -> Result<FaceId, FrameFacePublicationError> {
+        self.use_face(face)
+            .map_err(|_| FrameFacePublicationError::ForeignAttempt)?;
+        self.publish(face.face.clone())
+            .map_err(FrameFacePublicationError::Conflict)
+    }
+
+    /// Resolve identity and register rendering in the same operation.
+    pub(crate) fn intern_resolved_face(
+        &mut self,
+        resolved: &crate::neovm_bridge::ResolvedFace,
+    ) -> Result<RealizedFrameFace, FrameFaceConflict> {
+        let id = crate::display_row::face_state::stable_face_id_for_resolved(self, resolved);
+        let face = crate::display_row::face_state::resolved_display_row_face(id, resolved, None)
+            .render_face();
+        self.import_face(face)
+    }
+
+    /// Checked import for row realizations and protocol fixtures that already
+    /// carry IDs. New dynamic resolution should use `intern_resolved_face`.
+    pub(crate) fn import_face(
+        &mut self,
+        face: Face,
+    ) -> Result<RealizedFrameFace, FrameFaceConflict> {
+        self.publish(face.clone())?;
+        Ok(RealizedFrameFace {
+            face,
+            attempt: Rc::downgrade(&self.state),
+        })
+    }
+
+    pub(crate) fn use_face(&self, face: &RealizedFrameFace) -> Result<FaceId, FrameFaceUseError> {
+        if !Weak::ptr_eq(&face.attempt, &Rc::downgrade(&self.state)) {
+            return Err(FrameFaceUseError::ForeignAttempt);
+        }
+        Ok(face.face.id)
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test_with_next_id(next_face_id: u32) -> Self {
         Self {
             state: Rc::new(RefCell::new(FrameFaceAttemptState {
+                owner: Arc::new(FrameFaceOwner),
+                base_snapshot: Arc::new(FrameFaceSnapshot),
                 generation: FrameFaceGeneration(1),
                 next_face_id: next_face_id.max(BasicFaceId::SENTINEL),
                 faces: HashMap::new(),
@@ -330,6 +523,19 @@ impl FrameFaceAttempt {
         face_ids: impl IntoIterator<Item = FaceId>,
         arena: &FrameFaceArena,
     ) -> Result<(), FrameFaceReuseError> {
+        if !Arc::ptr_eq(&self.state.borrow().owner, &arena.owner) {
+            return Err(FrameFaceReuseError::ForeignArena);
+        }
+        let attempt_generation = self.state.borrow().generation;
+        if attempt_generation != arena.generation {
+            return Err(FrameFaceReuseError::AttemptGenerationMismatch {
+                attempt: attempt_generation,
+                source: arena.generation,
+            });
+        }
+        if !Arc::ptr_eq(&self.state.borrow().base_snapshot, &arena.snapshot) {
+            return Err(FrameFaceReuseError::ForeignSnapshot);
+        }
         if generation != arena.generation {
             return Err(FrameFaceReuseError::StaleGeneration {
                 retained: generation,
@@ -361,26 +567,13 @@ impl FrameFaceAttempt {
         Ok(())
     }
 
-    pub(crate) fn publish(&mut self, face: Face) -> Result<FaceId, FrameFaceConflict> {
+    fn publish(&mut self, face: Face) -> Result<FaceId, FrameFaceConflict> {
         let mut state = self.state.borrow_mut();
         let face_id = face.id;
-        // An id handed out by stable_face_id is bound to its realization
-        // identity for the arena's lifetime; publishing different content
-        // under it would silently corrupt the content-addressed map.
-        #[cfg(debug_assertions)]
-        {
-            let identity = face_realization_identity(&face);
-            for map in [&state.fresh_realized, &*state.realized] {
-                for (bound_identity, bound_id) in
-                    map.values().flatten().filter(|(_, id)| *id == face_id)
-                {
-                    debug_assert_eq!(
-                        *bound_identity, identity,
-                        "face id {bound_id:?} is content-bound; published face diverges from its realization identity"
-                    );
-                }
-            }
+        if state.faces.get(&face_id) == Some(&face) {
+            return Ok(face_id);
         }
+        state.validate_face(&face)?;
         match state.faces.entry(face_id) {
             std::collections::hash_map::Entry::Vacant(slot) => {
                 slot.insert(face);
@@ -419,6 +612,8 @@ impl FrameFaceAttempt {
     pub(crate) fn commit(&self) -> FrameFaceArena {
         let state = self.state.borrow();
         FrameFaceArena {
+            owner: Arc::clone(&state.owner),
+            snapshot: Arc::new(FrameFaceSnapshot),
             generation: state.generation.next(),
             faces: Arc::new(state.faces.clone()),
             realized: Self::fold_realized(&state),
@@ -469,7 +664,26 @@ impl FrameFaceAttempt {
         {
             return Err(FrameFaceSealError::MismatchedFaceId { table_id, face_id });
         }
+        for (id, finalized) in &finalized_faces {
+            if face_realization_identity(&state.faces[id]) != face_realization_identity(finalized) {
+                return Err(FrameFaceSealError::ChangedRealization(*id));
+            }
+            let published = &state.faces[id];
+            if published
+                .font_file_path
+                .as_ref()
+                .is_some_and(|path| finalized.font_file_path.as_ref() != Some(path))
+                || published
+                    .default_resolved_font_id
+                    .as_ref()
+                    .is_some_and(|font| finalized.default_resolved_font_id.as_ref() != Some(font))
+            {
+                return Err(FrameFaceSealError::ChangedFontBinding(*id));
+            }
+        }
         Ok(FrameFaceArena {
+            owner: Arc::clone(&state.owner),
+            snapshot: Arc::new(FrameFaceSnapshot),
             generation: state.generation.next(),
             faces: Arc::new(finalized_faces),
             realized: Self::fold_realized(&state),
@@ -527,277 +741,5 @@ fn merge_compatible_realization(existing: &mut Face, replacement: &Face) -> bool
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use neomacs_display_protocol::types::Color;
-
-    fn identity_with_fg(pixel: u32) -> Face {
-        let mut face = Face::new(FaceId::new(0));
-        face.foreground = Color::from_pixel(pixel);
-        face_realization_identity(&face)
-    }
-
-    #[test]
-    fn stable_ids_survive_realization_order_across_attempts() {
-        // The GNU face_cache property: the same realization identity keeps
-        // its id across layout passes even when the passes encounter faces
-        // in a different order. Without it, one extra early checkpoint
-        // renumbered every later face and the renderer diffed dozens of
-        // "modified" faces per keystroke.
-        let red = identity_with_fg(0x00FF0000);
-        let blue = identity_with_fg(0x000000FF);
-
-        let arena = FrameFaceArena::default();
-        let mut first = arena.begin_attempt();
-        let red_id = first.stable_face_id(red.clone());
-        let blue_id = first.stable_face_id(blue.clone());
-        assert_ne!(red_id, blue_id);
-        let mut red_face = red.clone();
-        red_face.id = red_id;
-        first.publish(red_face).expect("publish red");
-        let mut blue_face = blue.clone();
-        blue_face.id = blue_id;
-        first.publish(blue_face).expect("publish blue");
-        let sealed = first.commit();
-
-        // Opposite realization order, same ids.
-        let mut second = sealed.begin_attempt();
-        assert_eq!(second.stable_face_id(blue.clone()), blue_id);
-        assert_eq!(second.stable_face_id(red.clone()), red_id);
-
-        // A never-seen identity gets a fresh id above every previous one.
-        let green = identity_with_fg(0x0000FF00);
-        let green_id = second.stable_face_id(green);
-        assert!(green_id.get() > red_id.get().max(blue_id.get()));
-    }
-
-    #[test]
-    fn stable_ids_ignore_enrichment_but_not_content() {
-        // Metrics, the exact font file, and the resolved font handle are
-        // filled in after row construction; they must not fork identity.
-        let base = identity_with_fg(0x00123456);
-        let mut enriched = base.clone();
-        enriched.font_ascent = 12;
-        enriched.font_descent = 3;
-        enriched.font_file_path = Some("/tmp/font.ttf".to_owned());
-
-        let arena = FrameFaceArena::default();
-        let mut attempt = arena.begin_attempt();
-        let id = attempt.stable_face_id(base.clone());
-        assert_eq!(
-            attempt.stable_face_id(face_realization_identity(&enriched)),
-            id
-        );
-
-        // A genuinely different rendering is a different face.
-        let mut bold = base.clone();
-        bold.font_weight = 700;
-        assert_ne!(attempt.stable_face_id(bold), id);
-    }
-
-    #[test]
-    fn publishing_enriched_faces_under_stable_ids_merges_cleanly() {
-        // The id key is computed pre-enrichment; the published face carries
-        // metrics. publish() must accept that (merge_compatible_realization
-        // treats enrichment as compatible) and the debug verification must
-        // compare identities, not raw faces.
-        let identity = identity_with_fg(0x00ABCDEF);
-        let arena = FrameFaceArena::default();
-        let mut attempt = arena.begin_attempt();
-        let id = attempt.stable_face_id(identity.clone());
-
-        let mut published = identity;
-        published.id = id;
-        published.font_ascent = 14;
-        published.font_descent = 4;
-        published.default_resolved_font_id =
-            Some(neomacs_display_protocol::font::ResolvedFontId(7));
-        attempt.publish(published).expect("enriched publish");
-    }
-
-    #[test]
-    fn one_attempt_cannot_rebind_a_face_id_to_different_rendering() {
-        let arena = FrameFaceArena::default();
-        let mut attempt = arena.begin_attempt();
-        let face_id = attempt.reserve_dynamic_face();
-
-        let mut original = Face::new(face_id);
-        original.foreground = Color::from_pixel(0x00112233);
-        attempt
-            .publish(original.clone())
-            .expect("first publication");
-
-        let mut replacement = Face::new(face_id);
-        replacement.foreground = Color::from_pixel(0x00445566);
-        assert!(
-            attempt.publish(replacement).is_err(),
-            "a frame face id is immutable once published"
-        );
-        assert_eq!(
-            attempt.faces().get(&face_id),
-            Some(&original),
-            "rejected publication must preserve the original face"
-        );
-    }
-
-    #[test]
-    fn one_attempt_can_complete_missing_metrics_for_the_same_face() {
-        let arena = FrameFaceArena::default();
-        let mut attempt = arena.begin_attempt();
-        let face_id = attempt.reserve_dynamic_face();
-        let incomplete = Face::new(face_id);
-        attempt
-            .publish(incomplete)
-            .expect("publish semantic face before measurement");
-
-        let mut measured = Face::new(face_id);
-        measured.font_ascent = 13;
-        measured.font_descent = 5;
-        attempt
-            .publish(measured.clone())
-            .expect("measurement may complete missing metrics");
-        assert_eq!(attempt.face(face_id), Some(measured));
-    }
-
-    #[test]
-    fn later_realization_replaces_metrics_without_clearing_exact_font_identity() {
-        let arena = FrameFaceArena::default();
-        let mut attempt = arena.begin_attempt();
-        let face_id = attempt.reserve_dynamic_face();
-        let mut earlier = Face::new(face_id);
-        earlier.font_ascent = 7;
-        earlier.font_descent = 3;
-        earlier.font_file_path = Some("/fonts/exact.ttf".to_owned());
-        attempt
-            .publish(earlier)
-            .expect("publish earlier realization");
-
-        let mut later = Face::new(face_id);
-        later.font_ascent = 4;
-        later.font_descent = 2;
-        attempt
-            .publish(later)
-            .expect("publish later realization of the same face");
-
-        let realized = attempt.face(face_id).expect("realized face");
-        assert_eq!((realized.font_ascent, realized.font_descent), (4, 2));
-        assert_eq!(realized.font_file_path.as_deref(), Some("/fonts/exact.ttf"));
-    }
-
-    #[test]
-    fn retained_faces_occupy_their_slots_before_fresh_allocation() {
-        let arena = FrameFaceArena::default();
-        let mut first = arena.begin_attempt();
-        let retained_id = first.reserve_dynamic_face();
-        let mut retained_face = Face::new(retained_id);
-        retained_face.foreground = Color::from_pixel(0x00112233);
-        first
-            .publish(retained_face.clone())
-            .expect("publish retained face");
-        let committed = first.commit();
-
-        let mut next = committed.begin_attempt();
-        next.admit_retained(committed.generation, [retained_id], &committed)
-            .expect("admit retained face");
-
-        let fresh_id = next.reserve_dynamic_face();
-        assert_ne!(
-            fresh_id, retained_id,
-            "fresh allocation must not alias an admitted retained face"
-        );
-        assert_eq!(next.faces().get(&retained_id), Some(&retained_face));
-    }
-
-    #[test]
-    fn invalidated_arena_rejects_stale_retained_handles_before_admission() {
-        let arena = FrameFaceArena::default();
-        let mut first = arena.begin_attempt();
-        let retained_id = first.reserve_dynamic_face();
-        first
-            .publish(Face::new(retained_id))
-            .expect("publish retained face");
-        let committed = first.commit();
-        let stale_generation = committed.generation();
-        let invalidated = committed.invalidate();
-        let mut next = invalidated.begin_attempt();
-
-        assert_eq!(
-            next.admit_retained(stale_generation, [retained_id], &invalidated),
-            Err(FrameFaceReuseError::StaleGeneration {
-                retained: stale_generation,
-                current: invalidated.generation(),
-            })
-        );
-        assert!(
-            next.faces().is_empty(),
-            "failed admission must not partially publish retained faces"
-        );
-    }
-
-    #[test]
-    fn retained_admission_cannot_overwrite_an_attempt_publication() {
-        let arena = FrameFaceArena::default();
-        let mut first = arena.begin_attempt();
-        let face_id = first.reserve_dynamic_face();
-        let mut retained = Face::new(face_id);
-        retained.foreground = Color::from_pixel(0x00112233);
-        first.publish(retained).expect("publish retained face");
-        let committed = first.commit();
-
-        let mut next = committed.begin_attempt();
-        let mut fresh = Face::new(face_id);
-        fresh.foreground = Color::from_pixel(0x00445566);
-        next.publish(fresh.clone()).expect("publish fresh face");
-        assert_eq!(
-            next.admit_retained(committed.generation(), [face_id], &committed),
-            Err(FrameFaceReuseError::ConflictingFace(face_id))
-        );
-        assert_eq!(
-            next.face(face_id),
-            Some(fresh),
-            "failed retained admission must preserve the attempt publication"
-        );
-    }
-
-    #[test]
-    fn sealing_commits_the_finalized_face_table_for_future_replay() {
-        let arena = FrameFaceArena::default();
-        let mut attempt = arena.begin_attempt();
-        let face_id = attempt.reserve_dynamic_face();
-        attempt
-            .publish(Face::new(face_id))
-            .expect("publish semantic face");
-
-        let mut finalized_faces = attempt.faces();
-        finalized_faces
-            .get_mut(&face_id)
-            .expect("published face")
-            .font_file_path = Some("/fonts/exact.ttf".to_owned());
-        let sealed = attempt
-            .seal(finalized_faces)
-            .expect("sealing may enrich a published face");
-
-        let mut replay = sealed.begin_attempt();
-        replay
-            .admit_retained(sealed.generation(), [face_id], &sealed)
-            .expect("admit face from sealed arena");
-        assert_eq!(
-            replay.face(face_id).and_then(|face| face.font_file_path),
-            Some("/fonts/exact.ttf".to_owned())
-        );
-    }
-
-    #[test]
-    fn sealing_advances_the_generation() {
-        let arena = FrameFaceArena::default();
-        let attempt = arena.begin_attempt();
-
-        let sealed = attempt.seal(HashMap::new()).expect("seal empty attempt");
-
-        assert_ne!(
-            sealed.generation(),
-            arena.generation(),
-            "each accepted presentation needs a distinct retained-face generation"
-        );
-    }
-}
+#[path = "frame_face_arena_test.rs"]
+mod tests;

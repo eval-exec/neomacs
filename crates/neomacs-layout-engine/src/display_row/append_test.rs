@@ -334,6 +334,7 @@ fn buffer_line_number_text_prefix_renders_and_consumes_pending_request() {
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut line_numbers = LineNumberRenderState::new(true, 12, 9);
     let mut face_scan = FaceScanCheckpoint::initial();
     let mut font_metrics = None;
@@ -397,6 +398,7 @@ fn buffer_line_number_text_prefix_renders_blank_field_on_continuation_row() {
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut line_numbers = LineNumberRenderState::new(true, 12, 9);
     let mut face_scan = FaceScanCheckpoint::initial();
     let mut font_metrics = None;
@@ -616,6 +618,7 @@ fn buffer_current_face_resolution_context_skips_before_checkpoint() {
     *face_scan.next_check_mut() = 99;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("face-resolution-not-due", 80, 40, buf_id);
@@ -693,6 +696,7 @@ fn buffer_current_face_resolution_context_resolves_due_face() {
     let mut face_scan = FaceScanCheckpoint::initial();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("face-resolution-due", 80, 40, buf_id);
@@ -1250,6 +1254,7 @@ fn buffer_hscroll_skip_render_request_appends_left_truncation_marker() {
     let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
+    context.builder.set_face_attempt(face_ids.clone());
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
         1,
@@ -1512,6 +1517,8 @@ fn buffer_hscroll_skip_action_appends_left_truncation_marker_and_marks_row() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -1537,11 +1544,12 @@ fn buffer_hscroll_skip_action_appends_left_truncation_marker_and_marks_row() {
     };
 
     action.append_left_truncation_marker_to_text_row_and_apply(
-        BufferSyntheticTextRenderContext::new(
+        BufferSyntheticTextRenderContext::with_face_attempt(
             &surface,
             &active_face,
             0.0,
             DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+            face_attempt.clone(),
         ),
         &geometry,
         &mut source_render,
@@ -1917,6 +1925,7 @@ fn buffer_invisible_text_render_request_appends_ellipsis_and_captures_cursor() {
     let mut cursor_info = CursorCaptureState::new();
     let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut row_extend = DisplayRowScopedValue::inactive();
     let mut box_face = BoxFaceRowState::inactive();
     let mut line_numbers = LineNumberRenderState::new(false, 0, 0);
@@ -2936,6 +2945,7 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
         4,
     );
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
 
     let continuation = BufferSourceLineBreakRenderRequest::new(
@@ -3097,6 +3107,7 @@ fn buffer_selective_display_tail_render_request_appends_marker_and_transitions_r
     let mut face_scan = FaceScanCheckpoint::initial();
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
+    context.builder.set_face_attempt(face_ids.clone());
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
         1,
@@ -3663,6 +3674,7 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
     let mut font_metrics = None;
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
+    context.builder.set_face_attempt(face_ids.clone());
     let surface = test_advance_resolution_surface();
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
@@ -3915,6 +3927,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
     let mut font_metrics = None;
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
+    context.builder.set_face_attempt(face_ids.clone());
     let surface = test_advance_resolution_surface();
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
@@ -4442,14 +4455,17 @@ fn buffer_text_source_append_context_resolves_natural_measurement_for_ascii() {
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     let mut append_state = DisplaySourceRowAppendState::default();
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let source_item =
         buffer_source_mapped_display_item(buf_id, 0, 1, "x", RenderFaceRef::FaceId(FaceId::new(7)));
@@ -4493,14 +4509,17 @@ fn buffer_text_source_append_context_resolves_complex_text_measurement() {
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     let mut append_state = DisplaySourceRowAppendState::default();
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let source_item = buffer_source_mapped_display_item(
         buf_id,
@@ -4615,6 +4634,8 @@ fn synthetic_text_append_context_renders_fragment_and_emits_slots() {
     let mut font_metrics = None;
 
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -4622,12 +4643,13 @@ fn synthetic_text_append_context_renders_fragment_and_emits_slots() {
         DisplayTabPolicy::every(8),
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
-    let append_context = SyntheticTextRowAppendContext::new(
+    let append_context = SyntheticTextRowAppendContext::with_face_attempt(
         &surface,
         &geometry,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let progress = append_context
         .append_request_to_text_row_and_emit(
@@ -4703,6 +4725,8 @@ fn buffer_synthetic_text_render_context_renders_active_marker() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -4711,11 +4735,12 @@ fn buffer_synthetic_text_render_context_renders_active_marker() {
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
 
-    let end = BufferSyntheticTextRenderContext::new(
+    let end = BufferSyntheticTextRenderContext::with_face_attempt(
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     )
     .render_active_marker_to_text_row(
         &mut text_row_source_render_state(
@@ -4767,6 +4792,8 @@ fn buffer_synthetic_text_render_context_renders_hscroll_marker() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -4775,11 +4802,12 @@ fn buffer_synthetic_text_render_context_renders_hscroll_marker() {
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
 
-    let end = BufferSyntheticTextRenderContext::new(
+    let end = BufferSyntheticTextRenderContext::with_face_attempt(
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     )
     .render_hscroll_truncation_marker_to_text_row(
         &mut text_row_source_render_state(
@@ -4854,6 +4882,7 @@ fn buffer_line_prefix_render_context_renders_default_prefix_and_clears_request()
     let mut font_metrics = None;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -4935,6 +4964,7 @@ fn buffer_line_prefix_render_context_appends_gnu_space_align_to_prefix() {
     let mut font_metrics = None;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 248, Rect::new(0.0, 0.0, 248.0, 34.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -5032,6 +5062,7 @@ fn buffer_line_prefix_render_request_applies_rendered_position() {
     let mut font_metrics = None;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -5114,12 +5145,20 @@ fn synthetic_text_append_context_composes_with_current_row_tail() {
     let mut font_metrics = None;
 
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     write_char_to_current_row_with_width(&mut builder, 'e', FaceId::new(7), 0, 8.0);
     let frame = test_append_frame(8.0, 8.0, DisplayTabPolicy::every(8));
 
-    let append_context = SyntheticTextAppendContext::new(FaceId::new(7), base_face, frame);
+    let append_context = SyntheticTextAppendContext::with_face_attempt(
+        face_attempt
+            .bind_resolved_face(FaceId::new(7), base_face.clone())
+            .unwrap(),
+        frame,
+        face_attempt.clone(),
+    );
     let progress = append_context
         .append_to_text_row_and_emit(
             &mut text_row_source_render_state(
@@ -5309,6 +5348,7 @@ fn render_natural_display_item_source_into_current_text_row_and_emit_uses_curren
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(8);
 
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     write_char_to_current_row_with_width(&mut builder, 'e', FaceId::new(7), 0, 8.0);
@@ -5391,6 +5431,7 @@ fn render_natural_display_item_source_into_current_text_row_stamps_slots_at_curr
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(8);
 
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     write_char_to_current_row_with_width(&mut builder, 'a', FaceId::new(7), 0, 8.0);
@@ -5547,6 +5588,7 @@ fn append_rendered_display_row_fragment_to_text_row_and_emit_appends_glyphs_and_
     output_emitter.begin_text_row(&mut eval, 0, 2, 0.0, 16.0);
 
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     write_char_to_current_row_with_width(&mut builder, 'X', FaceId::new(7), 0, 8.0);
@@ -6429,6 +6471,7 @@ fn display_row_source_walker_reuses_face_cache_across_items() {
     let base_face = face_resolver.default_face();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let face_value = Value::list(vec![Value::keyword("foreground"), Value::string("#ff0000")]);
@@ -6515,6 +6558,7 @@ fn append_lisp_string_to_text_row_appends_propertized_string_items() {
     let base_face = face_resolver.default_face();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let value = Value::string_with_text_properties(
@@ -6595,6 +6639,7 @@ fn lisp_string_append_context_appends_fragment_items() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let active_face = test_active_face_state(FaceId::new(0), 8.0);
@@ -6675,6 +6720,8 @@ fn buffer_text_source_append_context_appends_source_char() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -6683,13 +6730,14 @@ fn buffer_text_source_append_context_appends_source_char() {
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
 
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let source_char = DisplaySourceTextChar::new(
         'a',
@@ -6916,6 +6964,7 @@ fn buffer_text_source_render_request_appends_plain_text_run_with_cursor_inside()
     let mut font_metrics = None;
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
@@ -7066,6 +7115,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_trailing_enabled
     let mut font_metrics = None;
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
@@ -7223,6 +7273,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_word_wrap_enable
     let mut font_metrics = None;
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
@@ -7382,6 +7433,7 @@ fn buffer_text_source_render_request_renders_fit_prefix_before_overflow() {
     let mut font_metrics = None;
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
@@ -7501,6 +7553,8 @@ fn buffer_text_source_append_context_prepares_current_text_row_source_char() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let mut output_emitter =
@@ -7510,13 +7564,14 @@ fn buffer_text_source_append_context_prepares_current_text_row_source_char() {
         DisplayTabPolicy::every(8),
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let source_char = DisplaySourceTextChar::new(
         'a',
@@ -7693,6 +7748,7 @@ fn buffer_end_of_buffer_tail_render_request_captures_cursor_and_renders_overlay(
     let mut cursor_info = CursorCaptureState::new();
     let mut row_source_start = DisplayRowSourceStart::new(0);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut line_numbers = LineNumberRenderState::new(false, 1, 1);
     let mut face_scan = FaceScanCheckpoint::initial();
     let mut font_metrics = None;
@@ -7934,6 +7990,7 @@ fn buffer_text_window_body_install_request_records_positions_and_edge_markers() 
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(10);
+    builder.set_face_attempt(face_ids.clone());
     let mut font_metrics = None;
     let positions = TextWindowBodyInstallRequest::new(TextWindowBodyInstallRenderContext::new(
         41,
@@ -8100,6 +8157,7 @@ fn buffer_text_window_terminal_right_border_request_installs_face_and_border() {
     builder.end_window();
 
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(10);
+    builder.set_face_attempt(face_ids.clone());
     let effective_default_face = crate::display_face_policy::EffectiveWindowDefaultFace::resolve(
         &face_resolver,
         face_resolver.default_face(),
@@ -8143,6 +8201,7 @@ fn terminal_right_border_decoration_preserves_the_rows_semantic_role() {
     builder.end_window();
 
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(10);
+    builder.set_face_attempt(face_ids.clone());
     let effective_default_face = crate::display_face_policy::EffectiveWindowDefaultFace::resolve(
         &face_resolver,
         face_resolver.default_face(),
@@ -8192,6 +8251,7 @@ fn terminal_right_border_face_id_comes_from_the_shared_frame_allocator() {
     builder.end_window();
 
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_ids.clone());
     let effective_default_face = crate::display_face_policy::EffectiveWindowDefaultFace::resolve(
         &face_resolver,
         face_resolver.default_face(),
@@ -8239,6 +8299,7 @@ fn buffer_text_window_terminal_right_border_request_pads_blank_rows_and_preserve
     builder.end_window();
 
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(10);
+    builder.set_face_attempt(face_ids.clone());
     let effective_default_face = crate::display_face_policy::EffectiveWindowDefaultFace::resolve(
         &face_resolver,
         face_resolver.default_face(),
@@ -8330,6 +8391,7 @@ fn terminal_right_border_padding_uses_the_effective_window_default_face() {
     builder.end_window();
 
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(10);
+    builder.set_face_attempt(face_ids.clone());
     let effective_default_face = crate::display_face_policy::EffectiveWindowDefaultFace::resolve(
         &face_resolver,
         &padding_face,
@@ -8628,6 +8690,8 @@ fn measure_buffer_text_source_range_append_uses_shared_renderer_without_mutating
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     write_char_to_current_row_with_width(&mut builder, 'x', FaceId::new(7), 0, 8.0);
@@ -8636,13 +8700,14 @@ fn measure_buffer_text_source_range_append_uses_shared_renderer_without_mutating
     let source_item =
         buffer_source_mapped_display_item(buf_id, 1, 2, "b", RenderFaceRef::FaceId(FaceId::new(7)));
 
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let mut append_state = DisplaySourceRowAppendState::default();
     let measured_width = append_context
@@ -8734,16 +8799,19 @@ fn buffer_text_source_append_context_uses_resolved_render_plan() {
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
 
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let progress = append_context
         .append_source_text_request_to_text_row(
@@ -8813,16 +8881,19 @@ fn buffer_text_source_append_context_uses_resolved_item_face_for_fragment_base()
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
 
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     )
     .with_resolved_item_face(FaceId::new(32), item_face);
     let item = buffer_display_item(
@@ -8904,7 +8975,7 @@ fn buffer_text_source_append_context_never_rebinds_an_unknown_item_face_id() {
     let mut existing = Face::new(unknown_id);
     existing.foreground = Color::from_pixel(0x0051afef);
     face_attempt
-        .publish(existing.clone())
+        .import_face(existing.clone())
         .expect("publish the existing immutable rendering");
 
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
@@ -8997,17 +9068,20 @@ fn buffer_text_source_append_context_composes_with_current_row_tail() {
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     write_char_to_current_row_with_width(&mut builder, 'e', FaceId::new(7), 0, 8.0);
 
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let progress = append_context
         .append_source_text_request_to_text_row(
@@ -9087,8 +9161,16 @@ fn buffer_text_item_append_context_builds_control_char_item() {
         item.clone(),
     );
 
-    let append_context =
-        BufferSourceRequestAppendContext::new(&snapshot, buf_id, FaceId::new(7), base_face, frame);
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
+    let append_context = BufferSourceRequestAppendContext::new(
+        &snapshot,
+        buf_id,
+        FaceId::new(7),
+        base_face,
+        frame,
+        face_attempt,
+    );
     let measured_width = append_context
         .try_measure_source_request_width_to_text_row(
             &mut text_row_source_measure_state(
@@ -9501,6 +9583,8 @@ fn buffer_text_item_append_context_builds_mapped_item() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -9508,13 +9592,14 @@ fn buffer_text_item_append_context_builds_mapped_item() {
         DisplayTabPolicy::every(8),
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let source_char = DisplaySourceTextChar::new(
         '\u{00A0}',
@@ -9632,15 +9717,18 @@ fn buffer_text_special_source_append_preserves_direct_control_item() {
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let source_char = DisplaySourceTextChar::new(
         '\u{0007}',
@@ -9718,6 +9806,8 @@ fn buffer_text_item_append_context_builds_glyphless_item() {
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -9725,13 +9815,14 @@ fn buffer_text_item_append_context_builds_glyphless_item() {
         DisplayTabPolicy::every(8),
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
-    let append_context = BufferSourceRowAppendContext::new(
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
         &snapshot,
         buf_id,
         &surface,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_attempt.clone(),
     );
     let source_char = DisplaySourceTextChar::new(
         '\u{fffc}',
@@ -9840,6 +9931,7 @@ fn append_lisp_string_to_text_row_stops_at_row_break() {
     let base_face = face_resolver.default_face();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let frame = test_append_frame(8.0, 8.0, DisplayTabPolicy::every(8));
@@ -9912,6 +10004,7 @@ fn lisp_string_source_append_context_preserves_source_after_row_break() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -10037,6 +10130,7 @@ fn append_lisp_string_to_text_row_resolves_image_display_property_through_displa
     let base_face = face_resolver.default_face();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     let text_bounds = Rect::new(10.0, 20.0, 160.0, 64.0);
     builder.begin_window_with_text_bounds(
         77,
@@ -10546,6 +10640,7 @@ fn display_property_replacement_row_render_request_builds_append_plan() {
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("display-property-replacement-plan", 80, 40, buf_id);
@@ -10653,6 +10748,7 @@ fn display_property_replacement_resolve_request_appends_and_reports_outcome() {
     let mut font_metrics = None;
 
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 32.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -10767,6 +10863,7 @@ fn buffer_display_property_replacement_render_outcome_updates_progress() {
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut font_metrics = None;
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 32.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -11348,6 +11445,7 @@ fn display_replacement_append_context_walks_string_faces_and_measurements() {
     let base_face = face_resolver.default_face();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_ids.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let value = Value::string_with_text_properties(
@@ -11445,6 +11543,7 @@ fn display_replacement_append_context_uses_face_fallback() {
     let append_context = DisplayReplacementAppendContext::new(FaceId::new(7), base_face, frame);
 
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(8);
+    builder.set_face_attempt(face_ids.clone());
     let progress = append_context
         .append_replacement_item_kind_to_text_row_and_emit(
             &mut text_row_source_render_state(
@@ -11531,6 +11630,7 @@ fn display_replacement_append_context_advances_stretch_output() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
     );
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(4);
+    builder.set_face_attempt(face_ids.clone());
     let progress = append_context
         .append_stretch_source_item_to_text_row_and_emit(
             &mut text_row_source_render_state(
@@ -11614,6 +11714,7 @@ fn display_replacement_append_context_advances_source_mapped_text_output() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
     );
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(4);
+    builder.set_face_attempt(face_ids.clone());
     let progress = append_context
         .append_source_mapped_text_item_to_text_row_and_emit(
             &mut text_row_source_render_state(
@@ -11675,6 +11776,8 @@ fn synthetic_text_append_context_uses_source_append_render_request() {
     let mut font_metrics = None;
 
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let face_attempt = FrameFaceAttempt::for_test_with_next_id(20);
+    builder.set_face_attempt(face_attempt.clone());
     builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
     builder.begin_row(0, GlyphRowRole::Text);
     let surface = DisplayRowAppendSurface::new(
@@ -11684,12 +11787,13 @@ fn synthetic_text_append_context_uses_source_append_render_request() {
     let active_face = test_active_face_state(FaceId::new(3), 8.0);
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 18.0, 13.0);
 
-    let append_context = SyntheticTextRowAppendContext::new(
+    let append_context = SyntheticTextRowAppendContext::with_face_attempt(
         &surface,
         &geometry,
         &active_face,
         0.0,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 10.0, 8.0),
+        face_attempt.clone(),
     );
     let progress = append_context
         .append_request_to_text_row_and_emit(
@@ -11703,8 +11807,9 @@ fn synthetic_text_append_context_uses_source_append_render_request() {
             SyntheticTextAppendRequest::text_row_metrics_source(
                 DisplayRowPosition::new(0.0, 0),
                 SyntheticTextSource::new(9, "x"),
-                FaceId::new(7),
-                base_face,
+                face_attempt
+                    .bind_resolved_face(FaceId::new(7), base_face.clone())
+                    .unwrap(),
                 DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
             ),
         )
@@ -11789,6 +11894,7 @@ fn display_replacement_append_context_installs_xwidget_replacements() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
     );
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(4);
+    builder.set_face_attempt(face_ids.clone());
     let progress = append_context
         .append_media_source_item_to_text_row_and_emit(
             &mut text_row_source_render_state(
@@ -11948,6 +12054,7 @@ fn display_replacement_append_context_installs_image_replacements() {
     );
     let append_context = DisplayReplacementAppendContext::new(FaceId::new(3), base_face, frame);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(4);
+    builder.set_face_attempt(face_ids.clone());
     let progress = append_context
         .append_replacement_item_kind_to_text_row_and_emit(
             &mut text_row_source_render_state(
@@ -12100,6 +12207,7 @@ fn display_replacement_append_context_installs_video_replacements() {
     );
     let append_context = DisplayReplacementAppendContext::new(FaceId::new(3), base_face, frame);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(4);
+    builder.set_face_attempt(face_ids.clone());
     let progress = append_context
         .append_replacement_item_kind_to_text_row_and_emit(
             &mut text_row_source_render_state(
@@ -12269,13 +12377,18 @@ impl<'a, B: crate::neovm_bridge::LayoutBufferView + ?Sized>
         face_id: FaceId,
         base_face: &'a crate::neovm_bridge::ResolvedFace,
         frame: DisplayRowAppendFrame,
+        face_attempt: FrameFaceAttempt,
     ) -> Self {
         Self {
             buffer,
             buffer_id,
-            item_context: crate::display_source_item_append::DisplaySourceItemAppendContext::new(
-                face_id, base_face, frame,
-            ),
+            item_context:
+                crate::display_source_item_append::DisplaySourceItemAppendContext::with_face_attempt(
+                    face_id,
+                    base_face,
+                    frame,
+                    face_attempt,
+                ),
         }
     }
 
@@ -12430,6 +12543,7 @@ fn display_property_live_render_outcome(
     let mut font_metrics = None;
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
+    context.builder.set_face_attempt(face_ids.clone());
     let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
 
     let mut continued = Vec::new();

@@ -1279,7 +1279,12 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         let progress = display_row_progress(position, geometry.y(), progress_height);
         let faces = row_faces
             .into_iter()
-            .map(|face| face.render_face())
+            .map(|face| {
+                context
+                    .face_ids()
+                    .prepare_face(face.render_face())
+                    .expect("row rendering must preserve its realized face identity")
+            })
             .collect();
         Some(DisplayRowRenderIntoRowResult::new(
             progress,

@@ -75,7 +75,10 @@ impl BufferLineNumberTextPrefixRenderRequest {
             face_ids,
             &line_number_face,
         );
-        source_render.insert_resolved_face(line_number_face_id, &line_number_face);
+        {
+            let bound = source_render.bind_resolved_face(line_number_face_id, &line_number_face);
+            source_render.insert_resolved_face(&bound)
+        };
 
         let text = line_number_request.padded_text();
         let mut source = LineNumberTextPrefixItemSource::new(&text, line_number_face_id);

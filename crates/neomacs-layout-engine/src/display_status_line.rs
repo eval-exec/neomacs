@@ -1818,6 +1818,7 @@ pub(crate) fn tab_bar_image_relief_styles(
                 rendered
                     .faces()
                     .iter()
+                    .map(|face| face.face())
                     .find(|face| face.id == glyph.face_id)
             });
             let background = gnu_image_relief_background(

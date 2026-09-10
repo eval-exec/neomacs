@@ -137,10 +137,9 @@ impl FrameOutputOwner {
 
     pub(crate) fn install_pointer_face(
         &mut self,
-        face_id: neomacs_display_protocol::types::FaceId,
-        face: neomacs_display_protocol::face::Face,
+        face: &crate::frame_face_arena::RealizedFrameFace,
     ) {
-        self.builder.publish_output_face(face_id, face);
+        self.builder.publish_output_face(face);
     }
 
     pub(crate) fn render_frame_tab_bar_row(
@@ -284,11 +283,10 @@ impl<'a> FrameOutputTarget<'a> {
 
     fn install_resolved_face(
         &mut self,
-        face_id: FaceId,
-        face: &ResolvedFace,
+        face: &crate::frame_face_arena::ResolvedFrameFace,
         metrics: Option<FontMetrics>,
     ) {
-        install_output_resolved_face(self.builder(), face_id, face, metrics);
+        install_output_resolved_face(self.builder(), face, metrics);
     }
 
     fn add_background(&mut self, bounds: Rect, color: Color) {
@@ -397,7 +395,12 @@ impl<'a> FrameOutputStateRenderRequest<'a> {
         }
         state.set_background_color(self.background_color);
         state.set_font_pixel_size(self.font_pixel_size);
-        state.install_resolved_face(FaceId::new(0), self.default_face, self.default_metrics);
+        {
+            let bound = state
+                .builder()
+                .bind_resolved_face(FaceId::new(0), self.default_face);
+            state.install_resolved_face(&bound, self.default_metrics)
+        };
     }
 }
 

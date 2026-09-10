@@ -736,16 +736,13 @@ impl<'a> TextRowOutputRenderState<'a> {
         install_text_window_row_decoration_request(self.output, request);
     }
 
-    fn insert_resolved_face(&mut self, face_id: FaceId, face: &ResolvedFace) {
-        self.output.install_resolved_face(face_id, face, None);
+    fn insert_resolved_face(&mut self, face: &crate::frame_face_arena::ResolvedFrameFace) {
+        self.output.install_resolved_face(face, None);
     }
 
     fn install_resolved_measured_face(&mut self, face: &DisplayRowResolvedMeasuredFace) {
-        self.output.install_resolved_face(
-            face.face_id(),
-            face.resolved_face(),
-            face.font_metrics(),
-        );
+        self.output
+            .install_resolved_face(face.binding(), face.font_metrics());
     }
 
     fn display_host(&self) -> Option<&dyn DisplayHost> {
@@ -881,10 +878,7 @@ struct TextRowLineEndFaceResolver<'render, 'a, 'ids> {
 
 impl TextRowLineEndFaceResolver<'_, '_, '_> {
     fn install_named_face(&mut self, face: &ResolvedFace) -> FaceId {
-        let face_id =
-            crate::display_row::face_state::stable_face_id_for_resolved(self.face_ids, face);
-        self.render.insert_resolved_face(face_id, face);
-        face_id
+        self.render.intern_and_install_face(self.face_ids, face)
     }
 }
 
@@ -1012,38 +1006,69 @@ impl<'a> TextRowSourceRenderState<'a> {
         )
     }
 
-    pub(crate) fn insert_resolved_face(&mut self, face_id: FaceId, face: &ResolvedFace) {
-        self.output_render.insert_resolved_face(face_id, face);
+    pub(crate) fn bind_resolved_face(
+        &mut self,
+        id: FaceId,
+        face: &ResolvedFace,
+    ) -> crate::frame_face_arena::ResolvedFrameFace {
+        self.output_render
+            .output
+            .builder()
+            .bind_resolved_face(id, face)
+    }
+
+    pub(crate) fn insert_resolved_face(
+        &mut self,
+        face: &crate::frame_face_arena::ResolvedFrameFace,
+    ) {
+        self.output_render.insert_resolved_face(face);
+    }
+
+    fn intern_and_install_face(
+        &mut self,
+        face_ids: &mut FrameFaceAttempt,
+        face: &ResolvedFace,
+    ) -> FaceId {
+        let registered = face_ids
+            .intern_resolved_face(face)
+            .expect("resolved face registration must preserve identity");
+        self.output_render
+            .output
+            .builder()
+            .publish_output_face(&registered);
+        face_ids
+            .use_face(&registered)
+            .expect("face was registered in this attempt")
     }
 
     fn install_pending_display_string_base_face(&mut self, base_face: &DisplayStringBaseFace) {
         if let Some(pending_face) = base_face.pending_face() {
-            self.insert_resolved_face(pending_face.face_id(), pending_face.resolved());
+            let bound = self.bind_resolved_face(pending_face.face_id(), pending_face.resolved());
+            self.insert_resolved_face(&bound);
         }
     }
 
     fn resolved_measured_face(
         &mut self,
         measurement_policy: DisplayRowMeasurementPolicy,
-        face_id: FaceId,
-        face: ResolvedFace,
+        face: crate::frame_face_arena::ResolvedFrameFace,
         fallback_char_width: f32,
         fallback_metrics: DisplayRowFallbackMetrics,
     ) -> DisplayRowResolvedMeasuredFace {
+        let resolved = face.resolved();
         let metrics = if measurement_policy.uses_concrete_font_geometry() {
             self.font_metrics.as_mut().map(|svc| {
                 svc.font_metrics(
-                    &face.font_family,
-                    face.font_weight,
-                    face.italic,
-                    face.font_size,
+                    &resolved.font_family,
+                    resolved.font_weight,
+                    resolved.italic,
+                    resolved.font_size,
                 )
             })
         } else {
             None
         };
         measurement_policy.resolved_measured_face(
-            face_id,
             face,
             metrics,
             fallback_char_width,
@@ -1059,14 +1084,12 @@ impl<'a> TextRowSourceRenderState<'a> {
     pub(crate) fn resolve_measured_face_without_install(
         &mut self,
         measurement_policy: DisplayRowMeasurementPolicy,
-        face_id: FaceId,
-        face: ResolvedFace,
+        face: crate::frame_face_arena::ResolvedFrameFace,
         fallback_char_width: f32,
         fallback_metrics: DisplayRowFallbackMetrics,
     ) -> DisplayRowActiveFaceState {
         self.resolved_measured_face(
             measurement_policy,
-            face_id,
             face,
             fallback_char_width,
             fallback_metrics,
@@ -1077,14 +1100,12 @@ impl<'a> TextRowSourceRenderState<'a> {
     pub(crate) fn resolve_and_install_measured_face(
         &mut self,
         measurement_policy: DisplayRowMeasurementPolicy,
-        face_id: FaceId,
-        face: ResolvedFace,
+        face: crate::frame_face_arena::ResolvedFrameFace,
         fallback_char_width: f32,
         fallback_metrics: DisplayRowFallbackMetrics,
     ) -> DisplayRowActiveFaceState {
         let resolved_face = self.resolved_measured_face(
             measurement_policy,
-            face_id,
             face,
             fallback_char_width,
             fallback_metrics,
@@ -1109,10 +1130,6 @@ impl<'a> TextRowSourceRenderState<'a> {
         face_name: &str,
     ) -> ResolvedFace {
         self.faces.merge_named_face_over(base, face_name)
-    }
-
-    pub(crate) fn default_face(&self) -> ResolvedFace {
-        self.faces.default_face()
     }
 
     pub(crate) fn effective_default_face(
@@ -1303,9 +1320,7 @@ impl<'a> TextRowSourceRenderState<'a> {
         // GNU initializes marginal display strings from the named `margin`
         // face, then lets the string's own face properties refine it.
         let margin_face = self.resolve_named_face("margin");
-        let margin_face_id =
-            crate::display_row::face_state::stable_face_id_for_resolved(face_ids, &margin_face);
-        self.insert_resolved_face(margin_face_id, &margin_face);
+        let margin_face_id = self.intern_and_install_face(face_ids, &margin_face);
 
         let columns = capacity.columns();
         let char_width = (capacity.width_px() / columns as f32).max(1.0);
@@ -1643,20 +1658,14 @@ impl<'a> TextRowSourceRenderState<'a> {
     ) -> FaceId {
         if let Some(name) = override_name {
             let resolved = self.faces.resolve_named_face(name);
-            let face_id =
-                crate::display_row::face_state::stable_face_id_for_resolved(face_ids, &resolved);
-            self.insert_resolved_face(face_id, &resolved);
-            return face_id;
+            return self.intern_and_install_face(face_ids, &resolved);
         }
         if let Some(face_value) = spec_face
             && let Some(resolved) = self
                 .faces
                 .resolve_face_value_over(&self.faces.default_face(), &face_value)
         {
-            let face_id =
-                crate::display_row::face_state::stable_face_id_for_resolved(face_ids, &resolved);
-            self.insert_resolved_face(face_id, &resolved);
-            return face_id;
+            return self.intern_and_install_face(face_ids, &resolved);
         }
         fallback_face_id
     }

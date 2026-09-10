@@ -649,14 +649,17 @@ fn display_row_render_context_builds_source_resolve_params() {
 
 #[test]
 fn display_row_resolved_measured_face_installs_render_and_measurement_identity() {
+    let face_attempt = crate::frame_face_arena::FrameFaceArena::default().begin_attempt();
     let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.set_face_attempt(face_attempt.clone());
     let mut font_metrics = None;
     let policy = DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::ConcreteFont);
     let face = base_face();
 
     let realized = policy.resolved_measured_face(
-        FaceId::new(12),
-        face,
+        face_attempt
+            .bind_resolved_face(FaceId::new(12), face)
+            .unwrap(),
         Some(FontMetrics {
             ascent: 11.0,
             descent: 4.0,
@@ -673,11 +676,7 @@ fn display_row_resolved_measured_face_installs_render_and_measurement_identity()
         &mut font_metrics,
     );
 
-    builder.install_output_resolved_display_row_face(
-        realized.face_id(),
-        realized.resolved_face(),
-        realized.font_metrics(),
-    );
+    builder.publish_output_face(&realized.binding().realized(realized.font_metrics()));
 
     let rendered = builder
         .output_face(FaceId::new(12))
@@ -690,14 +689,16 @@ fn display_row_resolved_measured_face_installs_render_and_measurement_identity()
 
 #[test]
 fn display_row_resolved_measured_face_builds_active_face_state_directly() {
+    let face_attempt = crate::frame_face_arena::FrameFaceArena::default().begin_attempt();
     let mut font_metrics = None;
     let policy = DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::ConcreteFont);
     let face = base_face();
 
     let active = policy
         .resolved_measured_face(
-            FaceId::new(12),
-            face.clone(),
+            face_attempt
+                .bind_resolved_face(FaceId::new(12), face.clone())
+                .unwrap(),
             Some(FontMetrics {
                 ascent: 11.0,
                 descent: 4.0,
@@ -722,6 +723,7 @@ fn display_row_resolved_measured_face_builds_active_face_state_directly() {
 
 #[test]
 fn display_row_active_face_groups_resolved_measurement_metrics_and_colors() {
+    let face_attempt = crate::frame_face_arena::FrameFaceArena::default().begin_attempt();
     let mut font_metrics = None;
     let policy = DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::LogicalCells);
     let mut face = base_face();
@@ -730,8 +732,9 @@ fn display_row_active_face_groups_resolved_measurement_metrics_and_colors() {
 
     let active = policy
         .resolved_measured_face(
-            FaceId::new(14),
-            face.clone(),
+            face_attempt
+                .bind_resolved_face(FaceId::new(14), face.clone())
+                .unwrap(),
             None,
             7.0,
             DisplayRowFallbackMetrics {
@@ -754,6 +757,7 @@ fn display_row_active_face_groups_resolved_measurement_metrics_and_colors() {
 
 #[test]
 fn display_row_active_face_state_exposes_render_and_measurement_accessors() {
+    let face_attempt = crate::frame_face_arena::FrameFaceArena::default().begin_attempt();
     let mut font_metrics = None;
     let policy = DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::LogicalCells);
     let mut face = base_face();
@@ -762,8 +766,9 @@ fn display_row_active_face_state_exposes_render_and_measurement_accessors() {
 
     let active = policy
         .resolved_measured_face(
-            FaceId::new(14),
-            face.clone(),
+            face_attempt
+                .bind_resolved_face(FaceId::new(14), face.clone())
+                .unwrap(),
             None,
             7.0,
             DisplayRowFallbackMetrics {
@@ -3028,6 +3033,7 @@ fn display_row_baseline_tab_bar_preserves_lisp_string_height_property() {
     let raised_face = rendered
         .faces()
         .iter()
+        .map(|face| face.face())
         .find(|face| face.id == glyphs[1].face_id)
         .expect("height-adjusted face");
     assert_eq!(raised_face.font_size, 28.0);
@@ -4185,7 +4191,12 @@ fn measured_display_row_content_policy_ignores_allocated_row_height() {
             row,
             DisplayRowOutputProgress::new(24.0, 1, 0.0, 120.0),
             Vec::new(),
-            vec![face],
+            vec![
+                crate::frame_face_arena::FrameFaceArena::default()
+                    .begin_attempt()
+                    .import_face(face)
+                    .unwrap(),
+            ],
         ),
         DisplayRowBoundsPolicy::MeasureContent,
     );

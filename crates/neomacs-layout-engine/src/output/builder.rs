@@ -435,7 +435,9 @@ impl DisplayOutputBuilder {
 
     #[cfg(test)]
     pub(crate) fn install_output_face(&mut self, id: FaceId, face: Face) {
-        self.publish_output_face(id, face);
+        let mut face = face;
+        face.id = id;
+        self.import_output_face(face);
     }
 
     #[cfg(test)]
@@ -446,7 +448,7 @@ impl DisplayOutputBuilder {
         metrics: Option<FontMetrics>,
     ) {
         let render_face = resolved_display_row_face(face_id, face, metrics);
-        self.publish_output_face(render_face.face_id, render_face.render_face());
+        self.import_output_face(render_face.render_face());
     }
 
     pub(crate) fn add_output_background(&mut self, bounds: Rect, color: Color) {
@@ -570,11 +572,31 @@ impl DisplayOutputBuilder {
         self.frame_state.install_frame_state(request);
     }
 
-    pub(crate) fn publish_output_face(&mut self, id: FaceId, mut face: Face) {
-        face.id = id;
+    pub(crate) fn publish_output_face(
+        &mut self,
+        face: &crate::frame_face_arena::RealizedFrameFace,
+    ) {
         self.face_attempt
-            .publish(face)
+            .publish_face(face)
+            .expect("published face must belong to the output attempt");
+    }
+
+    pub(crate) fn import_output_face(&mut self, face: Face) {
+        let face = self
+            .face_attempt
+            .import_face(face)
             .expect("one frame face id must have one immutable rendering");
+        self.publish_output_face(&face);
+    }
+
+    pub(crate) fn bind_resolved_face(
+        &self,
+        id: FaceId,
+        face: &crate::neovm_bridge::ResolvedFace,
+    ) -> crate::frame_face_arena::ResolvedFrameFace {
+        self.face_attempt
+            .bind_resolved_face(id, face.clone())
+            .expect("resolver identity must match its rendering")
     }
 
     pub(crate) fn window_content_height_px(

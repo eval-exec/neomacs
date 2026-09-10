@@ -575,7 +575,15 @@ fn tab_bar_image_relief_styles_resolve_color_source_per_image_slot() {
         row,
         DisplayRowOutputProgress::new(24.0, 3, 0.0, 18.0),
         Vec::new(),
-        vec![background, boxed],
+        vec![background, boxed]
+            .into_iter()
+            .map(|face| {
+                crate::frame_face_arena::FrameFaceArena::default()
+                    .begin_attempt()
+                    .import_face(face)
+                    .unwrap()
+            })
+            .collect(),
     );
 
     let styles = tab_bar_image_relief_styles(&rendered, 0, 0xaa_bb_cc, 2.0, 3.0, 1.0);
@@ -622,7 +630,15 @@ fn tab_bar_image_relief_uses_glyph_at_visual_column_after_wide_stretch() {
         row,
         DisplayRowOutputProgress::new(32.0, 4, 0.0, 18.0),
         Vec::new(),
-        vec![fallback, image],
+        vec![fallback, image]
+            .into_iter()
+            .map(|face| {
+                crate::frame_face_arena::FrameFaceArena::default()
+                    .begin_attempt()
+                    .import_face(face)
+                    .unwrap()
+            })
+            .collect(),
     );
 
     let styles = tab_bar_image_relief_styles(&rendered, 0, 0xaa_bb_cc, 1.0, 1.0, 1.0);

@@ -34,7 +34,6 @@ use crate::display_text_output_install::{
     DisplayOutputTextWindowBeginInstallRequest, TextWindowRowDecorationRequest,
     install_output_resolved_face,
 };
-use crate::neovm_bridge::ResolvedFace;
 use crate::output::builder::DisplayOutputBuilder;
 use crate::output::install_request::{
     OutputCursorInstallRequest, OutputFrameArtifactInstallRequest, OutputFrameStateInstallRequest,
@@ -45,10 +44,8 @@ use crate::output::window_request::OutputWindowLifecycleRequest;
 use crate::types::LayoutCharPos0;
 use crate::window_layout::WindowChromeMetrics;
 use neomacs_display_protocol::effect_config::EffectsConfig;
-use neomacs_display_protocol::face::Face;
 use neomacs_display_protocol::frame_glyphs::{CursorStyle, DisplaySlotId, PhysCursor};
 use neomacs_display_protocol::glyph_matrix::CursorItemRole;
-use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::types::{Color, DisplayWindowId, Rect};
 use neovm_core::buffer::{CharPos0, EmacsBytePos, LispCharPos1, TextPositionAnchor};
 use neovm_core::emacs_core::Context;
@@ -331,14 +328,16 @@ impl<'a> TextWindowOutputTarget<'a> {
 
     pub(crate) fn install_resolved_face(
         &mut self,
-        face_id: FaceId,
-        face: &ResolvedFace,
+        face: &crate::frame_face_arena::ResolvedFrameFace,
         metrics: Option<crate::font::metrics::FontMetrics>,
     ) {
-        install_output_resolved_face(self.builder(), face_id, face, metrics);
+        install_output_resolved_face(self.builder(), face, metrics);
     }
 
-    pub(crate) fn install_rendered_fragment_assets(&mut self, faces: &[Face]) {
+    pub(crate) fn install_rendered_fragment_assets(
+        &mut self,
+        faces: &[crate::frame_face_arena::RealizedFrameFace],
+    ) {
         install_rendered_display_row_fragment_assets(self.builder(), faces);
     }
 
