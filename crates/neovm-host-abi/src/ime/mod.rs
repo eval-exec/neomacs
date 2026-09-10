@@ -1,12 +1,16 @@
 //! Ordered input-method protocol. No editor pointers cross this interface.
 
+mod identity;
 mod offset;
+mod operation;
 mod request;
 mod snapshot;
 
+pub use identity::{ImeSessionId, ImeSnapshotId};
 pub use offset::ImeUtf16Offset;
-pub use request::{ImeOperation, ImeSelection, ImeSelectionOutcome, ImeSessionId};
-pub use snapshot::{ImeSnapshotId, ImeTextSnapshot};
+pub use operation::ImeOperation;
+pub use request::{ImeSelection, ImeSelectionOutcome};
+pub use snapshot::ImeTextSnapshot;
 
 #[cfg(test)]
 mod tests;
