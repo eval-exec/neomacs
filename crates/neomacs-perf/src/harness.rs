@@ -1257,6 +1257,11 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "GST_PLUGIN_SCANNER_1_0",
     "SYSTEMROOT",
     "WINDIR",
+    // Measurement knobs the fixtures read. The environment is cleared before
+    // the editor runs, so a knob absent from this list is silently ignored --
+    // the experiment then compares a binary against itself and reads as "no
+    // effect" rather than as a mistake.
+    "NEOMACS_PERF_RELEASE_STARTUP_GC_CEILING",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

@@ -344,7 +344,23 @@ Both engines run the same code here, so the number is comparable."
         (error . ,error-message))
       :false-object :json-false :null-object nil))))
 
+(defun neomacs-perf-workload--maybe-release-startup-gc-ceiling ()
+  "Lift Neomacs' startup GC ceiling before measuring, when asked.
+
+Neomacs caps its GC allocation interval at 4 MB while
+`neomacs--startup-gc-ceiling-active' is set, and releases it 30 seconds
+after startup settles.  Every workload here finishes well inside that
+window -- gui-input-latency takes about 1.2 seconds -- so by default these
+rows measure the STARTUP collection policy rather than the steady-state
+one a user's session runs under.  Setting
+NEOMACS_PERF_RELEASE_STARTUP_GC_CEILING=1 measures the other side of that.
+GNU has no such variable and ignores this."
+  (when (and (equal (getenv "NEOMACS_PERF_RELEASE_STARTUP_GC_CEILING") "1")
+             (boundp 'neomacs--startup-gc-ceiling-active))
+    (setq neomacs--startup-gc-ceiling-active nil)))
+
 (defun neomacs-perf-workload--run ()
+  (neomacs-perf-workload--maybe-release-startup-gc-ceiling)
   (let* ((scenario (neomacs-perf-workload--required-environment "NEOMACS_PERF_WORKLOAD"))
          (iterations (string-to-number
                       (neomacs-perf-workload--required-environment
