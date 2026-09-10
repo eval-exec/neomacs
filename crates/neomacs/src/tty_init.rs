@@ -269,10 +269,19 @@ fn terminal_size_from_env() -> Option<(u32, u32)> {
 /// Query the terminal size in character cells via crossterm.
 /// Falls back to `COLUMNS`/`LINES` environment variables.
 pub fn query_terminal_size_cells() -> Option<(u32, u32)> {
-    crossterm::terminal::size()
-        .ok()
+    resolve_terminal_size_cells(crossterm::terminal::size().ok(), terminal_size_from_env)
+}
+
+fn resolve_terminal_size_cells(
+    queried: Option<(u16, u16)>,
+    fallback: impl FnOnce() -> Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    queried
+        // GNU's init_tty also treats zero ioctl dimensions as unavailable.
+        // In particular, newly allocated PTYs may report a successful 0x0.
+        .filter(|(cols, rows)| *cols > 0 && *rows > 0)
         .map(|(cols, rows)| (cols as u32, rows as u32))
-        .or_else(terminal_size_from_env)
+        .or_else(fallback)
 }
 
 // ── TTY terminal lifecycle (raw mode, alt screen) ────────────────────────
