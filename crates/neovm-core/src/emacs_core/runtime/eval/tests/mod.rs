@@ -20505,6 +20505,48 @@ fn gc_explicit_huge_cons_threshold_stays_the_floor_after_startup() {
 }
 
 #[test]
+fn gc_startup_ceiling_is_released_by_the_first_command() {
+    crate::test_utils::init_test_tracing();
+    // `startup.el` puts the release on `pre-command-hook` as well as on the
+    // settling timer: the ceiling is worth its cost while initialization is
+    // still consing and nobody is waiting, and stops being worth it the moment
+    // a command runs. This needs the real preloaded `startup.el` definition and
+    // the real command loop, so it runs on a bootstrap evaluator and drives a
+    // key through `execute-kbd-macro` rather than calling the hook by hand.
+    let mut ev =
+        crate::emacs_core::load::create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    assert_eq!(
+        format_eval_result(&ev.eval_str("(fboundp 'neomacs--release-startup-gc-ceiling)")),
+        "OK t",
+        "startup.el should preload the release function"
+    );
+
+    ev.eval_str_each(
+        "(setq gc-cons-percentage nil)
+         (setq gc-cons-threshold 268435456)
+         (setq neomacs--startup-gc-ceiling-active t)
+         (add-hook 'pre-command-hook #'neomacs--release-startup-gc-ceiling)",
+    );
+    assert_eq!(
+        ev.tagged_heap.gc_threshold(),
+        GC_STARTUP_THRESHOLD_CEILING_BYTES,
+        "the ceiling should still bound the interval before any command runs"
+    );
+
+    ev.eval_str_each("(with-temp-buffer (execute-kbd-macro (kbd \"a\")))");
+    assert_eq!(
+        format_eval_result(&ev.eval_str("neomacs--startup-gc-ceiling-active")),
+        "OK nil",
+        "the first command should release the ceiling"
+    );
+    assert_eq!(
+        ev.tagged_heap.gc_threshold(),
+        268_435_456,
+        "and hand the allocation interval back to the user's setting"
+    );
+}
+
+#[test]
 fn gc_runtime_setting_mutation_reloads_threshold_immediately() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();

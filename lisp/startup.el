@@ -43,6 +43,7 @@
 
 (defun neomacs--release-startup-gc-ceiling ()
   "Restore the user's GC allocation interval after startup settles."
+  (remove-hook 'pre-command-hook #'neomacs--release-startup-gc-ceiling)
   (setq neomacs--startup-gc-ceiling-active nil))
 
 (defgroup initialization nil
@@ -860,8 +861,21 @@ It is the default value of the variable `top-level'."
 
     ;; Doom and other configurations continue initialization from timers after
     ;; the GNU startup hooks return.  Keep Neomacs' internal allocation-interval
-    ;; ceiling through a bounded settling window, then restore the user's
+    ;; ceiling through that settling window, then restore the user's
     ;; `gc-cons-threshold' unchanged.
+    ;;
+    ;; Release on the first command as well as on the timer, whichever comes
+    ;; first.  The ceiling exists to bound memory while initialization is still
+    ;; consing, and nobody is waiting on latency during it; the moment a command
+    ;; runs, somebody is.  Holding it for the rest of a fixed window past that
+    ;; point is the expensive half: it clamps the allocation interval to 4 MB,
+    ;; which on a settled heap doubles the collection count -- measured at 118
+    ;; collections against 59, and about 40% of wall time, to hold peak memory
+    ;; 0.9% lower.  Deferred initialization still runs from timers before any
+    ;; keystroke, so it keeps the ceiling it was given.  The timer stays as the
+    ;; backstop for a session that allocates heavily without ever being typed
+    ;; at.
+    (add-hook 'pre-command-hook #'neomacs--release-startup-gc-ceiling)
     (run-at-time neomacs--startup-gc-ceiling-grace-seconds nil
                  #'neomacs--release-startup-gc-ceiling)
 
