@@ -1,4 +1,34 @@
 #[test]
+fn ime_surrounding_snapshot_does_not_export_password_input() {
+    for privacy in [
+        "(setq overriding-text-conversion-style 'password)",
+        "(setq text-conversion-style 'password)",
+        "(setq read-hide-char ?*)",
+    ] {
+        let mut eval = crate::Context::new();
+        eval.eval_str(r##"(insert "secret")"##).unwrap();
+        eval.eval_str(privacy).unwrap();
+        assert!(eval.ime_surrounding_text().is_none(), "{privacy}");
+    }
+}
+
+#[test]
+fn ime_surrounding_snapshot_is_confined_to_the_input_field() {
+    let mut eval = crate::Context::new();
+    eval.eval_str(
+        r##"(progn
+        (insert "prompt: abc history")
+        (put-text-property 1 9 'field 'prompt)
+        (put-text-property 9 12 'field 'input)
+        (goto-char 10))"##,
+    )
+    .unwrap();
+    let snapshot = eval.ime_surrounding_text().unwrap();
+    assert_eq!(snapshot.text(), "abc");
+    assert_eq!(snapshot.cursor(), 1);
+}
+
+#[test]
 fn ime_surrounding_snapshot_is_bounded_and_does_not_truncate_selection() {
     use neovm_host_abi::ime::ImeTextSnapshot;
     let mut eval = crate::Context::new();
