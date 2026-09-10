@@ -21,7 +21,9 @@ impl crate::Context {
             return Ok(ImeSelectionOutcome::StaleSnapshot);
         }
         let captured = self.composition.surrounding.captured.take().unwrap();
-        if self.ime_anchor() != Some(captured.source) {
+        if self.ime_export_revision() != Some(captured.export_revision)
+            || self.ime_anchor() != Some(captured.source)
+        {
             return Ok(ImeSelectionOutcome::StaleSnapshot);
         }
         let locate = |offset| {
@@ -48,7 +50,8 @@ impl crate::Context {
             point: cursor,
             ..captured.source
         };
-        if self.ime_anchor() != Some(expected)
+        if self.ime_export_revision() != Some(captured.export_revision)
+            || self.ime_anchor() != Some(expected)
             || self.composition.operation_revision != operation_revision
         {
             return Ok(ImeSelectionOutcome::StaleSnapshot);

@@ -2,6 +2,7 @@
 
 mod composition;
 mod context;
+mod export;
 mod request;
 mod selection;
 mod surrounding;
