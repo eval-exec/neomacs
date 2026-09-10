@@ -5,14 +5,21 @@
 //! and linear binding-cleanup ownership. The Context remains on its VM thread.
 
 use super::apply::ActiveInterpretedLambdaCall;
-use super::special_forms::{ActiveLetScope, ConditionalForms};
+use super::special_forms::{ActiveCleanupScope, ActiveLetScope, ConditionalForms};
 use super::*;
 
 pub(super) enum PreparedForm {
     Value(Value),
     Call(PreparedCall),
-    LetBody { body: Value, scope: ActiveLetScope },
+    LetBody {
+        body: Value,
+        scope: ActiveLetScope,
+    },
     Conditional(ConditionalForms),
+    ProtectedBody {
+        body: Value,
+        scope: ActiveCleanupScope,
+    },
 }
 
 pub(super) struct PreparedCall {
@@ -63,6 +70,9 @@ enum Continuation {
     },
     Conditional {
         branches: usize,
+    },
+    Cleanup {
+        scope: ActiveCleanupScope,
     },
     SequenceScope {
         sequence: SequenceTempRootScopeState,
@@ -168,6 +178,10 @@ impl Context {
                         match prepared {
                             Err(flow) => Step::Return(Err(flow)),
                             Ok(PreparedForm::Value(value)) => Step::Return(Ok(value)),
+                            Ok(PreparedForm::ProtectedBody { body, scope }) => {
+                                continuations.push(Continuation::Cleanup { scope });
+                                Step::Eval(body)
+                            }
                             Ok(PreparedForm::Conditional(forms)) => {
                                 let branches = self.bc_buf.len();
                                 self.bc_buf.push(forms.then_form);
@@ -346,6 +360,9 @@ impl Context {
                             Ok(_) => Step::Sequence(self.bc_buf[branches + 1]),
                             Err(flow) => Step::Return(Err(flow)),
                         },
+                        Continuation::Cleanup { scope } => {
+                            Step::Return(self.finish_cleanup_scope(scope, result))
+                        }
                         Continuation::Let { scope } => {
                             Step::Return(self.finish_let_scope(scope, result))
                         }
