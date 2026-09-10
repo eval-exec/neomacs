@@ -4237,25 +4237,32 @@ impl Context {
     }
 
     pub(crate) fn pop_unread_command_event(&mut self) -> Option<Value> {
-        let event = self.pop_unread_command_event_unrecorded()?;
-        self.record_input_event(event);
-        Some(event)
+        use crate::keyboard::UnreadCommandEvent;
+        let unread = self.take_unread_command_event()?;
+        match unread {
+            UnreadCommandEvent::Fresh(event) | UnreadCommandEvent::Reread(event) => {
+                self.record_input_event(event);
+            }
+            UnreadCommandEvent::AlreadyRecorded(event) => {
+                self.assign("last-input-event", event);
+            }
+        }
+        Some(unread.event())
     }
 
-    pub(crate) fn pop_unread_command_event_unrecorded(&mut self) -> Option<Value> {
+    pub(crate) fn take_unread_command_event(
+        &mut self,
+    ) -> Option<crate::keyboard::UnreadCommandEvent> {
         let current = match self.eval_symbol("unread-command-events") {
             Ok(value) => value,
             Err(_) => Value::NIL,
         };
         match current.kind() {
             ValueKind::Cons => {
-                let mut head = current.cons_car();
+                let head = current.cons_car();
                 let tail = current.cons_cdr();
                 self.assign("unread-command-events", tail);
-                if head.is_cons() && head.cons_car() == Value::T {
-                    head = head.cons_cdr();
-                }
-                Some(head)
+                Some(crate::keyboard::UnreadCommandEvent::decode(head))
             }
             _ => None,
         }
@@ -4267,7 +4274,9 @@ impl Context {
             Err(_) => Value::NIL,
         };
         match current.kind() {
-            ValueKind::Cons => Some(current.cons_car()),
+            ValueKind::Cons => {
+                Some(crate::keyboard::UnreadCommandEvent::decode(current.cons_car()).event())
+            }
             _ => None,
         }
     }

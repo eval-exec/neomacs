@@ -34,6 +34,8 @@ mod files_dired;
 mod frame_visibility;
 #[path = "help_describe.rs"]
 mod help_describe;
+#[path = "input_methods.rs"]
+mod input_methods;
 #[path = "issue_140_hscroll.rs"]
 mod issue_140_hscroll;
 #[path = "issue_170_centered_buffer.rs"]

@@ -22,6 +22,10 @@ use crate::heap_types::LispString;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+mod input_method;
+mod unread;
+pub(crate) use unread::UnreadCommandEvent;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrontendWebValue {
     Null,
@@ -744,6 +748,14 @@ struct ReadCharEvent {
     event: Value,
     allow_input_method: bool,
     command_key_recording: CommandKeyRecording,
+    input_history: InputHistoryRecording,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InputHistoryRecording {
+    BeforeInputMethod,
+    AfterInputMethod,
+    AlreadyRecorded,
 }
 
 /// Whether a TTY read returns the bytes supplied by the terminal or characters
@@ -770,6 +782,7 @@ impl ReadCharEvent {
             event,
             allow_input_method: true,
             command_key_recording: CommandKeyRecording::Append,
+            input_history: InputHistoryRecording::BeforeInputMethod,
         }
     }
 
@@ -778,6 +791,7 @@ impl ReadCharEvent {
             event,
             allow_input_method: true,
             command_key_recording: CommandKeyRecording::AppendIfEmpty,
+            input_history: InputHistoryRecording::AfterInputMethod,
         }
     }
 
@@ -786,6 +800,23 @@ impl ReadCharEvent {
             event,
             allow_input_method: false,
             command_key_recording: CommandKeyRecording::AppendIfEmpty,
+            input_history: InputHistoryRecording::AlreadyRecorded,
+        }
+    }
+
+    fn unread_command(unread: UnreadCommandEvent) -> Self {
+        match unread {
+            UnreadCommandEvent::Fresh(event) => Self {
+                // The t wrapper changes command-key bookkeeping, but still
+                // jumps past GNU's physical-input recording block.
+                input_history: InputHistoryRecording::AfterInputMethod,
+                ..Self::fresh_input_method_candidate(event)
+            },
+            UnreadCommandEvent::Reread(event) => Self::reread_input_method_candidate(event),
+            UnreadCommandEvent::AlreadyRecorded(event) => Self {
+                input_history: InputHistoryRecording::AlreadyRecorded,
+                ..Self::reread_input_method_candidate(event)
+            },
         }
     }
 }
@@ -1590,11 +1621,9 @@ pub struct KBoard {
     /// handle that `open-dribble-file` opens and
     /// `record_input_event` writes to. Keyboard audit Finding 11.
     dribble: Option<std::fs::File>,
-    /// Recursion guard for `input-method-function`. GNU
-    /// `keyboard.c` uses the `immediate_echo` flag to suppress
-    /// re-entry; we use a dedicated bool so an input-method that
-    /// calls `read-event` recursively does not re-translate the
-    /// character it was given. Keyboard audit Finding 10.
+    /// Neomacs's recursion guard for `input-method-function`.
+    /// Quail also binds the Lisp function to nil during its nested reads.
+    /// The saved-reader call scopes this flag across normal and error returns.
     pub in_input_method_function: bool,
     /// Last mouse down event seen by the event-ingest path. GNU
     /// `keyboard.c:6041-6130` (`make_lispy_event` / the
@@ -3508,17 +3537,13 @@ impl crate::emacs_core::eval::Context {
             return Ok(InputMethodEvent::NotApplied);
         }
 
-        // Guard against recursive input-method invocation. GNU
-        // uses the `immediate_echo` flag; we use a dedicated bool
-        // on CommandLoop so a pathological input-method that
-        // re-reads input via `read-event` does not re-enter.
+        // Retain the existing recursion guard. GNU instead documents that
+        // input methods should bind input-method-function to nil for subreads;
+        // its immediate_echo flag is saved display state, not such a guard.
         if self.command_loop.keyboard.kboard.in_input_method_function {
             return Ok(InputMethodEvent::NotApplied);
         }
-        self.command_loop.keyboard.kboard.in_input_method_function = true;
-        let call_result = self.apply(im_fn, vec![event]);
-        self.command_loop.keyboard.kboard.in_input_method_function = false;
-        let result = call_result?;
+        let result = self.apply_input_method_with_saved_reader(im_fn, event)?;
 
         if !result.is_cons() {
             return Ok(InputMethodEvent::Consumed);
@@ -4380,6 +4405,17 @@ impl crate::emacs_core::eval::Context {
                     continue;
                 }
 
+                // GNU records the original input before invoking Quail.
+                // Its no-record rereads must still enter key lookup, but must
+                // not duplicate recent-keys or the macro being defined.
+                match read_event.input_history {
+                    InputHistoryRecording::BeforeInputMethod => {
+                        self.record_input_event_history(emacs_event);
+                    }
+                    InputHistoryRecording::AfterInputMethod
+                    | InputHistoryRecording::AlreadyRecorded => {}
+                }
+
                 // Keyboard audit Finding 10: input-method-function.
                 // GNU `keyboard.c:3237-3311` applies the input method only to
                 // the first printable character in a key sequence, replaces
@@ -4418,7 +4454,13 @@ impl crate::emacs_core::eval::Context {
                 // event before keymap lookup, including keyboard-macro events.
                 // The recording layer independently suppresses macro playback
                 // from recent-keys and the non-macro input counter.
-                self.record_input_event(emacs_event);
+                match read_event.input_history {
+                    InputHistoryRecording::AfterInputMethod => self.record_input_event(emacs_event),
+                    InputHistoryRecording::BeforeInputMethod
+                    | InputHistoryRecording::AlreadyRecorded => {
+                        self.assign("last-input-event", emacs_event);
+                    }
+                }
 
                 tracing::debug!(
                     "read_key_sequence: event={} starting translation",
@@ -4817,10 +4859,10 @@ impl crate::emacs_core::eval::Context {
                 ReadCharEvent::post_input_method(event),
             ));
         }
-        if let Some(event) = self.pop_unread_command_event_unrecorded() {
-            return Ok(QueuedReadCharEvent::Event(
-                ReadCharEvent::reread_input_method_candidate(event),
-            ));
+        if let Some(event) = self.take_unread_command_event() {
+            return Ok(QueuedReadCharEvent::Event(ReadCharEvent::unread_command(
+                event,
+            )));
         }
         if let Some(event) = self.pop_unread_input_method_event_unrecorded() {
             return Ok(QueuedReadCharEvent::Event(
@@ -6943,6 +6985,13 @@ impl crate::emacs_core::eval::Context {
 
     pub(crate) fn record_input_event(&mut self, event: Value) {
         self.assign("last-input-event", event);
+        self.record_input_event_history(event);
+    }
+
+    /// GNU `record_char` does not publish `last_input_event`. Input methods
+    /// observe the newly recorded physical key and the previously accepted
+    /// last-input-event until `read_char` accepts their translated result.
+    fn record_input_event_history(&mut self, event: Value) {
         match self.command_loop.record_input_event(event) {
             NonmacroInputEvent::Counted => self.advance_num_nonmacro_input_events(),
             NonmacroInputEvent::SuppressedByMacroPlayback => {}
