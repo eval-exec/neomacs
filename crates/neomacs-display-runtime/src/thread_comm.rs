@@ -1029,6 +1029,7 @@ impl RenderComms {
     fn event_name(event: &InputEvent) -> &'static str {
         match event {
             InputEvent::Frontend(event) => match event {
+                FrontendEvent::Ime { .. } => "ime",
                 FrontendEvent::Key(_) => "key",
                 FrontendEvent::TextCommitted { .. } => "text-committed",
                 FrontendEvent::ViewportChanged(_) => "viewport-changed",
